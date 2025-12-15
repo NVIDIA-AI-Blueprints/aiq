@@ -91,6 +91,33 @@ helm install aiq-aira aiq-aira/ \
 --set backendEnvVars.RAG_INGEST_URL=<INGESTOR_SERVER_URL> -n aiq
 ```
 
+##### Deploy with NIM Operator 
+
+The [NVIDIA nim-operator 3.0 and above](https://docs.nvidia.com/nim-operator/latest/install.html) must also be installed and configured in your cluster to ensure that the Nvidia NIM LLM is properly deployed.
+
+```bash
+helm install aiq-aira aiq-aira/ \
+--username='$oauthtoken'  \
+--password=$NGC_API_KEY \
+--set imagePullSecret.password=$NGC_API_KEY \
+--set ngcApiSecret.password=$NGC_API_KEY \
+--set tavilyApiSecret.password=$TAVILY_API_KEY \
+--set nim-llm.enabled=false \
+--set backendEnvVars.INSTRUCT_MODEL_NAME="meta/llama-3.3-70b-instruct" \
+--set nimOperator.enabled=true -n aiq
+```
+
+Use the below command to download the specfic NIM LLM Profile with NIM Operator
+
+Example: 
+```bash
+helm install aiq-aira aiq-aira/ \
+  --set imagePullSecret.password=$NGC_API_KEY \
+  --set ngcApiSecret.password=$NGC_API_KEY \
+  --set tavilyApiSecret.password=$TAVILY_API_KEY \
+  -f values-nim-operator.yaml -n aiq
+```
+
 #### Instruct LLM profile selection
 
 By default, the deployment of the instruct LLM attempts to automatically select the most suitable profile from the list of compatible profiles based on the detected hardware. Because of a known issue, vllm-based profiles are selected, so we recommend that you manually select a tensorrt_llm profile before you start the nim-llm service. 
@@ -184,6 +211,10 @@ To stop all services, run the following commands:
 ```bash
 helm delete aiq-aira -n aiq
 ```
+  1a. Delete the NIM Operator Cache if it's been used above
+  ```bash
+  kubectl delete nimcache meta-llama3-70b-instruct -n aiq
+  ```
 
 2. Delete the RAG deployment:
 ```bash

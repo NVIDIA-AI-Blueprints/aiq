@@ -1,0 +1,48 @@
+{{ if and (.Capabilities.APIVersions.Has "apps.nvidia.com/v1alpha1") (eq .Values.nimOperator.enabled true) -}}
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMCache
+metadata:
+  name: meta-llama3-70b-instruct
+  annotations:
+    helm.sh/resource-policy: keep
+spec:
+  source:
+    ngc:
+      modelPuller: "{{ index .Values "nim-llm" "image" "repository" }}:{{ index .Values "nim-llm" "image" "tag" | default "1.13.1" }}"
+      pullSecret: {{ .Values.imagePullSecret.name }}
+      authSecret: {{ .Values.ngcApiSecret.name }}
+      model:
+{{ toYaml .Values.nimOperator.model | nindent 8 }}
+  storage:
+    pvc:
+      create: true
+      size: {{ .Values.nimOperator.pvc.size | default "120Gi" }}
+      volumeAccessMode: {{ .Values.nimOperator.pvc.volumeAccessMode | default "ReadWriteOnce" }}
+  resources: {}
+---
+apiVersion: apps.nvidia.com/v1alpha1
+kind: NIMService
+metadata:
+  name: {{ index .Values "nim-llm" "service" "name" }}
+spec:
+  image:
+    repository: {{ index .Values "nim-llm" "image" "repository" }}
+    tag: {{ index .Values "nim-llm" "image" "tag" }}
+    pullPolicy: IfNotPresent
+    pullSecrets:
+      - {{ .Values.imagePullSecret.name }}
+  authSecret: {{ .Values.ngcApiSecret.name }}
+  storage:
+    nimCache:
+      name: meta-llama3-70b-instruct
+    sharedMemorySizeLimit: 16Gi
+  env:
+  {{ toYaml (index .Values "nim-llm" "env") | nindent 4 }}
+  replicas: 1
+  resources:
+{{ toYaml (index .Values "nim-llm" "resources") | nindent 4 }}
+  expose:
+    service:
+      type: ClusterIP
+      port: 8000
+{{- end }}

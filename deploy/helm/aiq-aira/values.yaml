@@ -45,7 +45,15 @@ backendEnvVars:
   AIRA_APPLY_GUARDRAIL: "false"
   RAG_SERVER_URL: "http://rag-server.rag.svc.cluster.local:8081"
   RAG_INGEST_URL: "http://ingestor-server.rag.svc.cluster.local:8082"
-  
+
+nimOperator:
+  enabled: false
+  pvc:
+    size: "120Gi"
+    volumeAccessMode: ReadWriteOnce
+  model:
+    engine: tensorrt_llm
+    profiles: []
 nim-llm:
   enabled: true
   service:

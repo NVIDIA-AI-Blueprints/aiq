@@ -1,0 +1,18 @@
+backendEnvVars:
+  INSTRUCT_MODEL_NAME: "meta/llama-3.3-70b-instruct"
+nim-llm:
+  enabled: false
+  env:
+  - name: NIM_MODEL_PROFILE
+    value: ""
+  # This is to ensure that the NIM Operator uses the correct 2 GPUs for the NIM LLM
+  - name: CUDA_VISIBLE_DEVICES
+    value: ""
+  image:
+    tag: "1.13.1"
+nimOperator:
+  enabled: true
+  model:
+    engine: tensorrt_llm
+    profiles:
+    - ''
