@@ -1,7 +1,7 @@
 services:
   aira-instruct-llm:
     container_name: aira-instruct-llm
-    image: nvcr.io/nim/meta/llama-3.3-70b-instruct:1.13.1
+    image: nvcr.io/nim/meta/llama-3.3-70b-instruct:1.14.0
     runtime: nvidia
     volumes:
     - ${MODEL_DIRECTORY:-./}:/opt/nim/.cache
@@ -12,8 +12,6 @@ services:
     - "8050"
     environment:
       NGC_API_KEY: ${NGC_API_KEY}
-      # Automatic profile detection
-      NIM_MODEL_PROFILE: ${NIM_MODEL_PROFILE-""}
     shm_size: 20gb
     deploy:
       resources:

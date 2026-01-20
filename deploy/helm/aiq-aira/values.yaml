@@ -33,7 +33,7 @@ service:
   port: 3838
 
 backendEnvVars:
-  INSTRUCT_MODEL_NAME: "meta-llama/llama-3.3-70b-instruct"
+  INSTRUCT_MODEL_NAME: "meta/llama-3.3-70b-instruct"
   INSTRUCT_MODEL_TEMP: "0.0"
   NEMOTRON_MAX_TOKENS: "5000"
   INSTRUCT_MAX_TOKENS: "20000"
@@ -61,19 +61,15 @@ nim-llm:
   image:
       repository: nvcr.io/nim/meta/llama-3.3-70b-instruct
       pullPolicy: IfNotPresent
-      tag: "1.13.1"
+      tag: "1.14.0"
   resources:
     limits:
       nvidia.com/gpu: 2
     requests:
       nvidia.com/gpu: 2
-  # Configure NIM Model Profile for optimal performance
-  env:
-    - name: NIM_MODEL_PROFILE
-      value: ""  # Empty for automatic selection, or specify tensorrt_llm profile
   model:
     ngcAPIKey: ""
-    name: "meta-llama/llama-3.3-70b-instruct"
+    name: "meta/llama-3.3-70b-instruct"
 
 # -----------------------------------------------------------
 # The following values are for the AIQ AIRA frontend service.

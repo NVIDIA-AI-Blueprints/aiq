@@ -8,4 +8,4 @@ dependencies:
 description: A Helm chart for NVIDIA AI-Q Research Assistant Blueprint
 name: aiq-aira
 type: application
-version: v1.2.0
+version: v1.2.1

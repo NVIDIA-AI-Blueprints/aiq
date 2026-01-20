@@ -76,7 +76,7 @@ export MODEL_DIRECTORY=~/.cache/model-cache
 Before deploying the AI-Q Research Assistant, deploy RAG by following [these instructions](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/deploy-docker-self-hosted.md).
 
 ```bash
-git clone https://github.com/NVIDIA-AI-Blueprints/rag.git
+git clone https://github.com/NVIDIA-AI-Blueprints/rag.git -b main
 ```
 
 Open the file `rag/deploy/compose/.env` and confirm that all of the values in the section `# ==== Endpoints for using cloud NIMs ===` are commented out. Then source this file:
@@ -165,19 +165,31 @@ Next deploy the instruct model. *This step can take up to 45 minutes*.
 
 #### Model profile selection
 
-By default, the deployment of the instruct LLM attempts to automatically select the most suitable profile from the list of compatible profiles based on the detected hardware. Because of a known issue, vllm-based profiles are selected, so we recommend that you manually select a tensorrt_llm profile before you start the nim-llm service. 
+By default, the deployment of the instruct LLM automatically selects the most suitable profile from the list of compatible profiles based on the detected hardware. If you encounter issues with the selected profile or prefer to use a different compatible profile, you can explicitly select the profile by setting the `NIM_MODEL_PROFILE` environment variable before deploying.
 
 You can list available profiles by running the NIM container directly:
 ```bash
 USERID=$(id -u) docker run --rm --gpus all \
-  nvcr.io/nim/meta/llama-3.3-70b-instruct:1.13.1 \
+  nvcr.io/nim/meta/llama-3.3-70b-instruct:1.14.0 \
   list-model-profiles
 ```
 
 Using the list of model profiles from the previous step, set the NIM_MODEL_PROFILE. It is ideal to select one of the tensorrt_llm profiles for best performance. Here is an example of selecting one of these profiles for two H100 GPUs:
 
 ```bash
-export NIM_MODEL_PROFILE="tensorrt_llm-h100-fp8-tp2-pp1-throughput-2330:10de-bedaf1e0ba87272295f4fcb590e781436120751026098f448fd8bc4d711ba5d7-4"
+export NIM_MODEL_PROFILE="tensorrt_llm-h100-fp8-tp2-pp1-throughput-2330:10de-0013e870ea929584ec13dad6948450024cdc6c2f03a865f1b050fb08b9f64312-2"
+```
+
+Then update `deploy/compose/docker-compose.yaml` to add the `NIM_MODEL_PROFILE` environment variable to the `aira-instruct-llm` service environment section:
+
+```yaml
+aira-instruct-llm:
+  container_name: aira-instruct-llm
+  image: nvcr.io/nim/meta/llama-3.3-70b-instruct:1.14.0
+  # ... other configuration ...
+  environment:
+    NGC_API_KEY: ${NGC_API_KEY}
+    NIM_MODEL_PROFILE: ${NIM_MODEL_PROFILE-""}  # Add this line
 ```
 
 #### Hardware-Specific Profiles
@@ -186,27 +198,27 @@ The following tensorrt_llm profiles are optimized for different common GPU confi
 
 ##### 2xH100 NVL
 ```
-tensorrt_llm-h100_nvl-fp8-tp2-pp1-throughput-2321:10de-5e20634213cb4c32e86f048dbc274eb8bff74720af81fe400d8924e766f3e723-4
+tensorrt_llm-h100_nvl-fp8-tp2-pp1-throughput-2321:10de-3035d73242fb579040fb3f341adc36a7073f780419e73dd97edb7ce35cb0f550-2
 ```
 
 ##### 2xH100 SXM
 ```
-tensorrt_llm-h100-fp8-tp2-pp1-throughput-2330:10de-bedaf1e0ba87272295f4fcb590e781436120751026098f448fd8bc4d711ba5d7-4
+tensorrt_llm-h100-fp8-tp2-pp1-throughput-2330:10de-0013e870ea929584ec13dad6948450024cdc6c2f03a865f1b050fb08b9f64312-2
 ```
 
 ##### 4xA100
 ```
-tensorrt_llm-a100-bf16-tp4-pp1-throughput-20b2:10de-8dfffd86cd28a6ea7086f8d3d33f0d60c66df738652cea44c722766b77508b5c-4
+tensorrt_llm-a100-bf16-tp4-pp1-throughput-20b2:10de-f14e1bad1a0e78da150aeedfee7919ab3ef21def09825caffef460b93fdde9b7-4
 ```
 
 ##### 2xRTX PRO 6000
 ```
-tensorrt_llm-rtx6000_blackwell_sv-nvfp4-tp2-pp1-latency-2bb5:10de-b5d32ce12a99b422e2c5a9a772bfd29493467cd5f22248ed936e2d43c5747771-2
+tensorrt_llm-rtx6000_blackwell_sv-fp8-tp2-pp1-throughput-2bb5:10de-77ab630b949b0a58ad580a22ea055bc392a30fbf57357d6398814e00775aab8c-2
 ```
 
 ##### 2xB200
 ```
-tensorrt_llm-b200-bf16-tp2-pp1-latency-2901:10de-d89dfd90f9f326864bc6051f45b5aca8e758fdb009b1da43d93b1d5a2236026e-2
+tensorrt_llm-b200-bf16-tp2-pp1-throughput-2901:10de-6d1452af26f860b53df112c90f6b92f22a41156c09dafa2582c2c1194e56a673-2
 ```
 
 More information about model profile selection can be found [here](https://docs.nvidia.com/nim/large-language-models/latest/profiles.html#profile-selection) in the NVIDIA NIM for Large Language Models (LLMs) documentation.

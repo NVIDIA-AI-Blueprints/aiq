@@ -58,7 +58,7 @@ llms:
   # Update if you are deploying differently or using hosted NVIDIA NIM microservices.
   instruct_llm:
     _type: nim
-    model_name: meta-llama/llama-3.3-70b-instruct
+    model_name: meta/llama-3.3-70b-instruct
     temperature: 0.0
     base_url: ${INSTRUCT_LLM_BASE_URL:-http://aira-instruct-llm:8000/v1}
     max_tokens: 20000

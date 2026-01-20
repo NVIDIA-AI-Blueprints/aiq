@@ -1,7 +1,7 @@
 services:
   aira-instruct-llm:
     container_name: aira-instruct-llm
-    image: nvcr.io/nim/meta/llama-3.3-70b-instruct:1.13.1
+    image: nvcr.io/nim/meta/llama-3.3-70b-instruct:1.14.0
     volumes:
     - ${MODEL_DIRECTORY:-/tmp}:/opt/nim/.cache
     user: "${USERID}"

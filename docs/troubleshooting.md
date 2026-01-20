@@ -77,10 +77,10 @@ Ensure you have provided a valid Taviliy API key, and have set the `TAVILY_API_K
 **Workarounds**:
 1. **Increase file descriptor limits**: Add `--ulimit nofile=65536:65536` to your Docker run command
 2. **Retry the deployment**: Sometimes the download succeeds on subsequent attempts  
-3. **Pin to an earlier version**: As a last resort, use a specific working version from the [NGC catalog](https://catalog.ngc.nvidia.com/orgs/nim/teams/meta/containers/llama-3.3-70b-instruct?version=1.13.1):
+3. **Pin to an earlier version**: As a last resort, use a specific working version from the [NGC catalog](https://catalog.ngc.nvidia.com/orgs/nim/teams/meta/containers/llama-3.3-70b-instruct?version=1.14.0):
    ```yaml
    # In docker-compose.yaml
-   image: nvcr.io/nim/meta/llama-3.3-70b-instruct:1.13.1
+   image: nvcr.io/nim/meta/llama-3.3-70b-instruct:1.14.0
    ```
 
 ## Checking Model Profiles
@@ -92,7 +92,7 @@ You can check available profiles for your system to ensure compatibility and opt
 ```bash
 # List available profiles for Llama 3.3 70B Instruct
 docker run --rm --gpus=all -e NGC_API_KEY=$NGC_API_KEY \
-  nvcr.io/nim/meta/llama-3.3-70b-instruct:1.13.1 \
+  nvcr.io/nim/meta/llama-3.3-70b-instruct:1.14.0 \
   list-model-profiles
 ```
 
