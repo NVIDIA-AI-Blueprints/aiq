@@ -20,43 +20,44 @@
    palette tokens. These unlayered declarations guarantee the brand green
    resolves correctly for: buttons (color="brand"), switch toggles, spinners.
 
-   Green palette values use lab() from the KUI design spec.
+   Values match the canonical KUI hex palette from @kui/foundations-design-tokens.
    ============================================================================= */
 
 /* Green palette — used by theme tokens below via var() */
 :root {
   --color-brand: #76b900;
-  --color-green-100: lab(96.1861% -13.8464 6.52365);
-  --color-green-200: lab(92.4222% -26.4702 12.9427);
-  --color-green-300: lab(86.9953% -47.2691 25.0054);
-  --color-green-400: lab(78.503% -64.9265 39.7492);
-  --color-green-500: lab(70.5521% -66.5147 45.8073);
-  --color-green-600: lab(59.0978% -58.6621 41.2579);
-  --color-green-700: lab(47.0329% -47.0239 31.4788);
-  --color-green-800: lab(37.4616% -36.7971 22.9692);
-  --color-green-900: lab(30.797% -29.6927 17.382);
+  --color-green-025: #dafb7d;
+  --color-green-050: #cfff40;
+  --color-green-100: #bff230;
+  --color-green-200: #a5de15;
+  --color-green-300: #76b900;
+  --color-green-400: #549a00;
+  --color-green-500: #3f8500;
+  --color-green-600: #327100;
+  --color-green-700: #265600;
+  --color-green-800: #193800;
+  --color-green-900: #142700;
+  --color-green-950: #0d1a00;
 }
 
-/* Light theme brand tokens */
+/* Light theme brand tokens — per KUI spec */
 :where(:root, .nv-light) {
   --background-color-interaction-primary-base: var(--color-green-300);
-  --background-color-interaction-primary-hover: var(--color-green-200);
-  --background-color-interaction-primary-pressed: var(--color-green-400);
-  --background-color-interaction-primary-selected: var(--color-green-400);
+  --background-color-interaction-primary-hover: var(--color-green-400);
+  --background-color-interaction-primary-selected: var(--color-green-500);
   --border-color-interaction-primary-base: var(--color-green-300);
-  --text-color-brand: var(--color-green-300);
-  --border-color-brand: var(--color-green-300);
+  --text-color-brand: var(--color-brand);
+  --border-color-brand: var(--color-brand);
 }
 
-/* Dark theme brand tokens — uses darker greens for contrast */
+/* Dark theme brand tokens — per KUI spec (same primary stops as light) */
 .nv-dark {
-  --background-color-interaction-primary-base: var(--color-green-500);
-  --background-color-interaction-primary-hover: var(--color-green-600);
-  --background-color-interaction-primary-pressed: var(--color-green-700);
-  --background-color-interaction-primary-selected: var(--color-green-700);
-  --border-color-interaction-primary-base: var(--color-green-500);
-  --text-color-brand: var(--color-green-500);
-  --border-color-brand: var(--color-green-500);
+  --background-color-interaction-primary-base: var(--color-green-300);
+  --background-color-interaction-primary-hover: var(--color-green-400);
+  --background-color-interaction-primary-selected: var(--color-green-500);
+  --border-color-interaction-primary-base: var(--color-green-300);
+  --text-color-brand: var(--color-brand);
+  --border-color-brand: var(--color-brand);
 }
 
 /* Custom global styles */
