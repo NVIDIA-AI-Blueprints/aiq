@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Customization
 
-```{admonition} Customization vs. Extending
+## Customization vs Extending
 **Customization** is for changing what already exists in the blueprint — models, prompts, tool configuration, and agent behavior. No new code or plugins required.
 
 **Extending** is for adding new functionality — new tools, data sources, or integrations that don't exist today. Refer to [Extending](../extending/index.md).
-```
+
 
 - **[Configuration Reference](./configuration-reference.md)** — Complete YAML schema with all parameters
 - **[Swapping Models](./swapping-models.md)** — Use different LLMs (hosted NIM, self-hosted NIM, mixing models)

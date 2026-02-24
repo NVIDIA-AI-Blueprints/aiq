@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-
 http://www.apache.org/licenses/LICENSE-2.0
+
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -17,8 +17,12 @@ limitations under the License.
 -->
 <h1>NVIDIA AI-Q Blueprint</h1>
 
+> **IMPORTANT**
+>
+> **Active Development Branch**
+> You are viewing the **`develop`** branch. This branch contains the latest features and experimental updates. For the most stable enterprise-ready version, please switch to the [main branch](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/main).
 
-## Table of Contents <!-- omit in toc -->
+## Table of Contents 
 - [Overview](#overview)
 - [Software Components](#software-components)
 - [Target Audience](#target-audience)
@@ -33,7 +37,7 @@ limitations under the License.
   - [Command-line interface (CLI)](#command-line-interface-cli)
   - [Web UI](#web-ui)
   - [Async Deep Research Jobs](#async-deep-research-jobs)
-  - [Benchmarks](#benchmarks)
+  - [Benchmarks](#available-benchmarks)
 - [Evaluating the Workflow](#evaluating-the-workflow)
   - [Available Benchmarks](#available-benchmarks)
   - [Running Evaluations](#running-evaluations)
@@ -58,7 +62,6 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 - **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
 - **Frontend options** — Run through CLI, web UI, or async jobs; the [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
 - **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as helm deployment.
-
 
 ## Software Components
 
@@ -96,14 +99,16 @@ This project is for:
 If these optional API keys are not provided, the agent continues to operate without the corresponding search capabilities. Refer to [Obtain API Keys](#obtain-api-keys) for details.
 
 ## Hardware Requirements
+
 Generalized minimum requirements.
 
 **Local Development**
 - Typical developer machine for AI-Q workflow (no GPU required)
 - Llamaindex (no GPU required)
-- Self / Remote Hosted Models 
+- Self / Remote Hosted Models
 
 **Self Hosted**
+
 - Typical server for AI-Q workflow (no GPU required)
 - [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
 - [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
@@ -112,6 +117,7 @@ Generalized minimum requirements.
 - [NVIDIA RAG Blueprint Requirements](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/support-matrix.md) (if used)
 
 **Remote Hosted**
+
 - Typical server for workflow (no GPU required)
 - Provider LLM API keys (if used)
 - [NVIDIA RAG Blueprint Requirements](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/support-matrix.md) (if used)
@@ -143,6 +149,7 @@ Run the setup script to initialize the environment:
 ```
 
 This script:
+
 - Creates a Python virtual environment with uv
 - Installs all Python dependencies (core, frontends, benchmarks, data sources)
 - Installs UI dependencies (if Node.js is available)
@@ -176,11 +183,13 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 
 ### Obtain API Keys
 
-| API | Environment Variable | Purpose | Required |
-|-----|---------------------|---------|----------|
-| NVIDIA API | `NVIDIA_API_KEY` | LLM inference through NIM | Yes |
-| Tavily | `TAVILY_API_KEY` | Web search | No (if not specified, agent continues without web search) |
-| Serper | `SERPER_API_KEY` | Academic paper search | No (if not specified, agent continues without paper search) |
+
+| API        | Environment Variable | Purpose                   | Required                                                    |
+| ---------- | -------------------- | ------------------------- | ----------------------------------------------------------- |
+| NVIDIA API | `NVIDIA_API_KEY`     | LLM inference through NIM | Yes                                                         |
+| Tavily     | `TAVILY_API_KEY`     | Web search                | No (if not specified, agent continues without web search)   |
+| Serper     | `SERPER_API_KEY`     | Academic paper search     | No (if not specified, agent continues without paper search) |
+
 
 #### Obtain an NVIDIA API Key
 
@@ -205,6 +214,7 @@ Create a `.env` file in `deploy/` directory:
 ```bash
 cp deploy/.env.example deploy/.env
 ```
+
 Replace your API keys.
 
 > **Note:** If you do not want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to disable it.
@@ -231,7 +241,6 @@ source .venv/bin/activate
 nat run --config_file configs/config_cli_default.yml
 ```
 
-
 The CLI frontend source is in `frontends/cli/`.
 
 ### Web UI
@@ -243,6 +252,7 @@ For a full web-based experience:
 ```
 
 This starts:
+
 - Backend API server at `http://localhost:8000`
 - Frontend UI at `http://localhost:3000`
 
@@ -263,20 +273,16 @@ docker compose --env-file ../.env -f docker-compose.yaml up -d --build
 ```
 
 For more details, refer to:
+
 - `deploy/compose/README.md`
 
 ### Async Deep Research Jobs
 
 Endpoints, SSE streaming, and debug console: refer to [frontends/aiq_api/README.md](frontends/aiq_api/README.md).
 
-### Benchmarks
-
-To run agents in evaluation mode, refer to the [Evaluating the Workflow](#evaluating-the-workflow) section.
-
-
 ## Evaluating the Workflow
 
-The `frontends/benchmarks/` directory contains evaluation pipelines for assessing agent performance.
+To run agents in evaluation mode, refer to the [Evaluating the Workflow](#evaluating-the-workflow) section.
 
 ### Available Benchmarks
 
@@ -297,12 +303,12 @@ Then run the evaluation with one of the available configurations:
 
 ```bash
 dotenv -f deploy/.env run nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench.yml
+
 ```
 
 For detailed benchmark documentation, refer to:
 - [Deep Research Bench README](frontends/benchmarks/deepresearch_bench/README.md)
 - [FreshQA README](frontends/benchmarks/freshqa/README.md)
-
 
 ## Development
 

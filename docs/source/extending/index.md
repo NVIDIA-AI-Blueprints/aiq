@@ -5,11 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Extending the Blueprint
 
-```{admonition} Extending vs. Customization
+## Customization vs Extending
 **Extending** is for adding new functionality to the blueprint — new tools, data sources, and integrations that don't exist today. Extensions use the NeMo Agent Toolkit plugin system or require custom code.
 
 **Customization** is for changing what already exists — models, prompts, tool configuration, and agent behavior. Refer to [Customization](../customization/index.md).
-```
+
 
 ## Plugin System Extensions
 
