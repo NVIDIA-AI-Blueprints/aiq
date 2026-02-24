@@ -1,0 +1,240 @@
+@import 'tailwindcss/theme.css';
+@import 'tailwindcss/preflight.css';
+@import 'tailwindcss/utilities.css';
+
+/* KUI Foundations 0.600 — extracted from @kui/foundations-tailwind-plugin.
+   Generated once, frozen as static CSS. No build-time plugin dependency.
+   Contains: component styles, theme tokens, dark mode, density, animations. */
+@import '../styles/kui-generated.css';
+
+/* Layout variables */
+:root {
+  --header-height: 3.5rem;
+}
+
+/* =============================================================================
+   NVIDIA brand color overrides (unlayered — highest cascade priority)
+
+   The KUI theme variables are defined inside @layer base in kui-generated.css,
+   but Tailwind v4's own @layer theme can shadow the underlying --color-green-*
+   palette tokens. These unlayered declarations guarantee the brand green
+   resolves correctly for: buttons (color="brand"), switch toggles, spinners.
+
+   Green palette values use lab() from the KUI design spec.
+   ============================================================================= */
+
+/* Green palette — used by theme tokens below via var() */
+:root {
+  --color-brand: #76b900;
+  --color-green-100: lab(96.1861% -13.8464 6.52365);
+  --color-green-200: lab(92.4222% -26.4702 12.9427);
+  --color-green-300: lab(86.9953% -47.2691 25.0054);
+  --color-green-400: lab(78.503% -64.9265 39.7492);
+  --color-green-500: lab(70.5521% -66.5147 45.8073);
+  --color-green-600: lab(59.0978% -58.6621 41.2579);
+  --color-green-700: lab(47.0329% -47.0239 31.4788);
+  --color-green-800: lab(37.4616% -36.7971 22.9692);
+  --color-green-900: lab(30.797% -29.6927 17.382);
+}
+
+/* Light theme brand tokens */
+:where(:root, .nv-light) {
+  --background-color-interaction-primary-base: var(--color-green-300);
+  --background-color-interaction-primary-hover: var(--color-green-200);
+  --background-color-interaction-primary-pressed: var(--color-green-400);
+  --background-color-interaction-primary-selected: var(--color-green-400);
+  --border-color-interaction-primary-base: var(--color-green-300);
+  --text-color-brand: var(--color-green-300);
+  --border-color-brand: var(--color-green-300);
+}
+
+/* Dark theme brand tokens — uses darker greens for contrast */
+.nv-dark {
+  --background-color-interaction-primary-base: var(--color-green-500);
+  --background-color-interaction-primary-hover: var(--color-green-600);
+  --background-color-interaction-primary-pressed: var(--color-green-700);
+  --background-color-interaction-primary-selected: var(--color-green-700);
+  --border-color-interaction-primary-base: var(--color-green-500);
+  --text-color-brand: var(--color-green-500);
+  --border-color-brand: var(--color-green-500);
+}
+
+/* Custom global styles */
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+#__next {
+  height: 100%;
+}
+
+/* Smooth scrolling */
+html {
+  scroll-behavior: smooth;
+}
+
+/* Focus visible styles for accessibility */
+:focus-visible {
+  outline: 2px solid var(--border-color-interaction-selected);
+  outline-offset: 2px;
+}
+
+/* Hide scrollbar utility */
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* =============================================================================
+   Theme-aware text color utilities
+   Using KUI Foundations theme CSS variables for light/dark theme support
+   ============================================================================= */
+
+@utility text-primary {
+  color: var(--text-color-primary);
+}
+
+@utility text-secondary {
+  color: var(--text-color-secondary);
+}
+
+@utility text-subtle {
+  color: var(--text-color-subtle);
+}
+
+@utility text-default {
+  color: var(--text-color-base);
+}
+
+@utility text-success {
+  color: var(--text-color-feedback-success);
+}
+
+@utility text-error {
+  color: var(--text-color-feedback-danger);
+}
+
+@utility text-warning {
+  color: var(--text-color-feedback-warning);
+}
+
+@utility text-info {
+  color: var(--text-color-feedback-info);
+}
+
+@utility text-accent-primary {
+  color: var(--text-color-brand);
+}
+
+/* =============================================================================
+   Theme-aware background color utilities
+   ============================================================================= */
+
+@utility bg-interaction-base {
+  background-color: var(--background-color-interaction-base);
+}
+
+@utility bg-surface-base {
+  background-color: var(--background-color-surface-base);
+}
+
+@utility bg-surface-raised {
+  background-color: var(--background-color-surface-raised);
+}
+
+@utility bg-surface-sunken {
+  background-color: var(--background-color-surface-sunken);
+}
+
+/* Opaque variant for chat bubbles - ensures full opacity to prevent bleed-through in light theme */
+@utility bg-surface-sunken-opaque {
+  /* Force 100% opacity using color-mix, preventing transparency bleed-through */
+  background-color: color-mix(in srgb, var(--background-color-surface-sunken) 100%, var(--background-color-surface-base));
+}
+
+/* Background utilities with opacity variants */
+@utility bg-surface-raised-30 {
+  background-color: color-mix(in srgb, var(--background-color-surface-raised) 30%, transparent);
+}
+
+@utility bg-surface-raised-50 {
+  background-color: color-mix(in srgb, var(--background-color-surface-raised) 50%, transparent);
+}
+
+@utility bg-surface-raised-90 {
+  background-color: color-mix(in srgb, var(--background-color-surface-raised) 90%, transparent);
+}
+
+/* =============================================================================
+   Theme-aware border color utilities
+   ============================================================================= */
+
+@utility border-base {
+  border-color: var(--border-color-base);
+}
+
+@utility border-subtle {
+  border-color: var(--border-color-base);
+}
+
+@utility border-error {
+  border-color: var(--border-color-feedback-danger);
+}
+
+@utility border-success {
+  border-color: var(--border-color-feedback-success);
+}
+
+@utility border-l-success {
+  border-left-color: var(--border-color-feedback-success);
+}
+
+@utility border-info {
+  border-color: var(--border-color-feedback-info);
+}
+
+@utility border-warning {
+  border-color: var(--border-color-feedback-warning);
+}
+
+@utility border-brand {
+  border-color: var(--border-color-brand);
+}
+
+@utility border-accent-primary {
+  border-color: var(--border-color-brand);
+}
+
+@utility ring-brand {
+  --tw-ring-color: var(--border-color-brand);
+}
+
+/* Force NVIDIA green on inlined SVG icons whose paths use fill="currentColor" */
+.nv-icon-green {
+  color: #76b900 !important;
+}
+
+/* Global scrollbar styles */
+*::-webkit-scrollbar {
+  width: 8px;
+  background: var(--background-color-surface-overlay);
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--background-color-surface-overlay);
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--background-color-accent-gray);
+  border-radius: 4px;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--background-color-accent-gray-hover);
+}

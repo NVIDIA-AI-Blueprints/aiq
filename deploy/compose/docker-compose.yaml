@@ -1,0 +1,136 @@
+# =============================================================================
+# AI-Q Blueprint - Docker Compose
+# =============================================================================
+#
+# Services:
+#   aiq-agent - Backend API server
+#   frontend               - Next.js UI (aiq-blueprint-ui)
+#   postgres               - PostgreSQL for jobs and checkpoints
+#
+# Build targets (backend only):
+#   dev     - Development build (includes CLI)
+#   release - Production build (web only, validates env vars)
+#
+# Usage:
+#   # Build locally (default)
+#   cd deploy/compose
+#   docker compose --env-file ../.env -f docker-compose.yaml up -d --build
+#   BUILD_TARGET=release docker compose --env-file ../.env -f docker-compose.yaml up -d --build
+#
+#   # Use pre-built images from registry (skip --build)
+#   BACKEND_IMAGE=nvcr.io/nvstaging/blueprint/aiq-agent:2603.7.rc0 \
+#   FRONTEND_IMAGE=nvcr.io/nvstaging/blueprint/aiq-frontend-v2:2603.7.rc0 \
+#   docker compose --env-file ../.env -f docker-compose.yaml up -d
+#
+# Frontend image:
+#   The frontend is built from frontends/ui/Dockerfile.
+#
+# =============================================================================
+
+services:
+  aiq-agent:
+    image: ${BACKEND_IMAGE:-}
+    build:
+      context: ../..
+      dockerfile: deploy/Dockerfile
+      target: ${BUILD_TARGET:-dev}
+    container_name: aiq-agent
+    env_file:
+      - ../.env
+    environment:
+      - APP_ENV=${APP_ENV:-production}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      # Database config (with Docker defaults)
+      - NAT_JOB_STORE_DB_URL=${NAT_JOB_STORE_DB_URL:-postgresql+asyncpg://aiq:aiq_dev@postgres:5432/aiq_jobs}
+      - AIQ_CHECKPOINT_DB=${AIQ_CHECKPOINT_DB:-postgresql://aiq:aiq_dev@postgres:5432/aiq_checkpoints}
+      - AIQ_SUMMARY_DB=${AIQ_SUMMARY_DB:-postgresql+psycopg://aiq:aiq_dev@postgres:5432/aiq_jobs}
+      # LlamaIndex persistence (used by config_web_default_llamaindex.yml)
+      - AIQ_CHROMA_DIR=${AIQ_CHROMA_DIR:-/app/data/chroma_data}
+      # Server config
+      # LlamaIndex (default)
+      - CONFIG_FILE=${BACKEND_CONFIG:-/app/configs/config_web_default_llamaindex.yml}
+      - HOST=0.0.0.0
+      - PORT=8000
+      # RAG config
+      # - RAG_SERVER_URL=${RAG_SERVER_URL:-https://rag-backend}
+      # - RAG_INGEST_URL=${RAG_INGEST_URL:-https://rag-ingest}
+      # Dask worker config
+      - DASK_NWORKERS=${DASK_NWORKERS:-1}
+      - DASK_NTHREADS=${DASK_NTHREADS:-4}
+    ports:
+      - "${PORT:-8000}:8000"
+    volumes:
+      - ../../configs:/app/configs:ro
+      - aiq-data:/app/data
+    networks:
+      - aiq-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    image: ${FRONTEND_IMAGE:-aiq-blueprint-ui:local}
+    build:
+      context: ../../frontends/ui
+      dockerfile: deploy/Dockerfile
+    container_name: aiq-blueprint-ui
+    environment:
+      - REQUIRE_AUTH=${REQUIRE_AUTH:-false}
+      - BACKEND_URL=${BACKEND_URL:-http://aiq-agent:8000}
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    networks:
+      - aiq-network
+    depends_on:
+      - aiq-agent
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.1'
+          memory: 256M
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiq-postgres
+    environment:
+      POSTGRES_USER: aiq
+      POSTGRES_PASSWORD: aiq_dev
+      POSTGRES_DB: aiq_jobs
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    networks:
+      - aiq-network
+    stdin_open: true
+    tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aiq -d aiq_jobs && pg_isready -U aiq -d aiq_checkpoints"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  aiq-data:
+    driver: local
+  postgres-data:
+    driver: local
+
+networks:
+  aiq-network:
+    driver: bridge

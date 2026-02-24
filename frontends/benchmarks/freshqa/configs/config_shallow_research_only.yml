@@ -1,0 +1,65 @@
+# FreshQA shallow-research-only
+# Nemotron on integrate.api; add judge (OpenAI or Gemini) for evaluator.
+
+general:
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+    tracing:
+      weave:
+        _type: weave
+        project: "AIQ_v2_freshqa"
+
+llms:
+  nemotron_llm_non_thinking:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.7
+    top_p: 0.7
+    max_tokens: 8192
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
+
+  judge_llm:
+    _type: openai
+    model_name: "gpt-4o"
+    api_key: ${OPENAI_API_KEY}
+    temperature: 0.1
+
+functions:
+  web_search_tool:
+    _type: tavily_internet_search
+    max_results: 5
+
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: nemotron_llm_non_thinking
+    max_llm_turns: 20
+    tools:
+      - web_search_tool
+
+workflow:
+  _type: shallow_research_workflow
+
+eval:
+  general:
+    workflow_alias: "freshqa_eval_shallow_research_only"
+    output_dir: frontends/benchmarks/freshqa/results
+    max_concurrency: 4
+    dataset:
+      _type: json
+      file_path: frontends/benchmarks/freshqa/data/FreshQA_v112425.json
+      structure:
+        question_key: question
+        answer_key: expected_output
+        generated_answer_key: generated_answer
+
+  evaluators:
+    freshqa:
+      _type: freshqa_evaluator
+      llm_name: judge_llm
+      dataset_file: frontends/benchmarks/freshqa/data/FreshQA_v112425.json

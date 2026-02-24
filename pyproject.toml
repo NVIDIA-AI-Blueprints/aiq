@@ -1,0 +1,200 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[project]
+name = "aiq-agent"
+version = "2.0.0"
+description = "NVIDIA AI-Q Blueprint - An enterprise-grade agent for intelligent research assistance"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "nvidia-nat[langchain,telemetry,weave,async_endpoints]==1.4.0",
+    "deepagents>=0.3.0",
+    "langgraph-checkpoint-postgres>=3.0.0",
+    "langgraph-checkpoint-sqlite>=2.0.0",
+    "psycopg[binary]>=3.0.0",
+    "asyncpg>=0.29.0",
+    "aiosqlite>=0.19.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "pytest-env>=1.1.0",
+    "pre-commit>=3.5.0",
+    "ruff~=0.12",
+    "yapf>=0.40.0",
+    "mypy>=1.5.0",
+]
+docs = [
+    "sphinx>=7.0",
+    "myst-parser>=3.0",
+    "sphinx-copybutton>=0.5",
+    "sphinx-mermaid>=0.0.8",
+    "sphinx-rtd-theme>=2.0",
+]
+viz = [
+    "pygraphviz>=1.11",
+]
+
+# -----------------------------------------------------------------------------
+# Workspace members are installed via: uv sync
+# Individual packages: uv pip install -e ./frontends/cli
+# See [tool.uv.workspace] below for auto-discovered packages
+# -----------------------------------------------------------------------------
+
+[project.entry-points."nat.plugins"]
+aiq_chat_researcher = "aiq_agent.agents.chat_researcher.register"
+aiq_shallow_researcher = "aiq_agent.agents.shallow_researcher.register"
+aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
+aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
+aiq_clarifier = "aiq_agent.agents.clarifier.register"
+
+[tool.pytest.ini_options]
+testpaths = ["tests", "sources/**/tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+
+
+[tool.ruff]
+# Set the maximum line length to 120.
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+
+select = [
+  # The E, F, W categories are flake8 rules.
+  "E",
+  "F",
+  "W",
+  # Enable isort support
+  "I",
+  # Enable partial pylint support
+  "PL",
+  # Enable pyupgrade support
+  "UP"
+]
+
+extend-ignore = [
+  "PLC0415", # Allow lazy imports inside functions
+  # Disable all the "too-*" checks, as they are too strict for our codebase
+  "PLR0904", # too-many-public-methods
+  "PLR0911", # too-many-return-statements
+  "PLR0912", # too-many-branches
+  "PLR0913", # too-many-arguments
+  "PLR0914", # too-many-locals
+  "PLR0915", # too-many-statements
+  "PLR0917", # too-many-positional-arguments
+  "PLR1702", # too-many-nested-blocks
+  "PLR2004", # Magic value used in comparison this happens a lot within unittests
+  "PLW0108", # unnecessary-lambda
+  "PLW2901", # allow re-assigning a loop variable
+  "PLW0603",
+  "PLE1205"
+]
+
+# Notebooks: allow long lines (shell/code) and imports after other statements
+[tool.ruff.lint.per-file-ignores]
+"docs/notebooks/*.ipynb" = ["E501", "E402"]
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+default-section = "third-party"
+force-single-line = true
+known-first-party = ["aiq", "nat", "nat_*", "_utils"]
+known-third-party = [
+  "agno",
+  "autogen",
+  "crewai",
+  "google",
+  "langchain",
+  "llama_index",
+  "mem0ai",
+  "redis",
+  "semantic_kernel",
+  "zep_cloud",
+]
+order-by-type = true
+
+[tool.yapf]
+based_on_style = "pep8"
+column_limit = 120
+split_all_top_level_comma_separated_values = true
+join_multiple_lines = true
+indent_dictionary_value = true
+
+# -----------------------------------------------------------------------------
+# uv Workspace Configuration
+# Auto-discovers packages in sources/ and frontends/ directories
+#
+# Usage:
+#   uv sync                              # Install root + all workspace members
+#   uv sync --package aiq-agent  # Install only the root package
+#   uv pip install -e ./frontends/cli    # Install a specific package
+#   uv pip install -e "./frontends/aiq_api[postgres]"  # With extras
+# -----------------------------------------------------------------------------
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "pytest-env>=1.1.0",
+    "pre-commit>=3.5.0",
+    "ruff~=0.12",
+    "yapf>=0.40.0",
+    "mypy>=1.5.0",
+    "dask[distributed]>=2024.1.0",
+    # Workspace packages for testing
+    "google-scholar-paper-search",
+    "tavily-web-search",
+    "knowledge-layer[all]",
+    "aiq-api",
+    "aiq-research-cli",
+    "aiq-debug",
+]
+
+[tool.uv]
+prerelease = "if-necessary-or-explicit"
+
+[tool.uv.pip]
+prerelease = "if-necessary-or-explicit"
+
+[tool.uv.workspace]
+members = [
+    "sources/*",
+    "frontends/aiq_api",
+    "frontends/cli",
+    "frontends/debug",
+]
+
+[tool.uv.sources]
+aiq-agent = { workspace = true }
+google-scholar-paper-search = { workspace = true }
+tavily-web-search = { workspace = true }
+knowledge-layer = { workspace = true }
+aiq-api = { workspace = true }
+aiq-research-cli = { workspace = true }
+aiq-debug = { workspace = true }

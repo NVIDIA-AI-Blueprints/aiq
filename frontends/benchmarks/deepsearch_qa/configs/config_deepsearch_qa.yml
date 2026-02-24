@@ -1,0 +1,80 @@
+# DeepSearch QA Evaluation Configuration
+# Uses integrate.api.nvidia.com for agent. Add a judge model (OpenAI or Gemini) and set eval.evaluators.deepsearchqa.llm_name.
+
+general:
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+    tracing:
+      weave:
+        _type: weave
+        project: "nvidia-aiq/AIQ_v2_deepsearch_qa"
+  use_uvloop: true
+
+llms:
+  nemotron_llm_non_thinking:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.7
+    top_p: 0.7
+    max_tokens: 8192
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
+
+  nemotron_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 128000
+    max_retries: 10
+    timeout: 600
+    chat_template_kwargs:
+      enable_thinking: true
+
+  # Judge model: set OPENAI_API_KEY or add a Gemini LLM (base_url + api_key) and set llm_name below.
+  judge_llm:
+    _type: openai
+    model_name: "gpt-4o"
+    api_key: ${OPENAI_API_KEY}
+    temperature: 0.1
+    max_retries: 5
+
+functions:
+  web_search_tool:
+    _type: tavily_web_search
+    max_results: 5
+
+  deep_research_agent:
+    _type: deep_research_agent
+    llm: nemotron_llm
+    report_llm: nemotron_llm
+    max_loops: 2
+    tools:
+      - web_search_tool
+
+workflow:
+  _type: deep_research_workflow
+
+eval:
+  general:
+    output_dir: frontends/benchmarks/deepsearch_qa/results
+    max_concurrency: 3
+    dataset:
+      _type: csv
+      file_path: frontends/benchmarks/deepsearch_qa/data/DSQA-full.csv
+      structure:
+        question_key: problem
+        answer_key: answer
+        generated_answer_key: generated_answer
+
+  evaluators:
+    deepsearchqa:
+      _type: deepsearchqa_evaluator
+      llm_name: judge_llm
+      max_retries: 5

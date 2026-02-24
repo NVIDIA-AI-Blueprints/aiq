@@ -1,0 +1,31 @@
+{
+    "ignorePatterns": [
+        {
+            "pattern": "^https?://localhost"
+        },
+        {
+            "pattern": "^https?://127\\.0\\.0\\.1"
+        },
+        {
+            "pattern": "^https?://www\\.npmjs\\.com/package/@nvidia/foundations-react-core$"
+        }
+    ],
+    "replacementPatterns": [
+        {
+            "pattern": "^/",
+            "replacement": "{{BASEURL}}/"
+        }
+    ],
+    "httpHeaders": [
+        {
+            "urls": ["https://github.com"],
+            "headers": {
+                "Accept-Encoding": "zstd, br, gzip, deflate"
+            }
+        }
+    ],
+    "timeout": "20s",
+    "retryOn429": true,
+    "retryCount": 3,
+    "fallbackRetryDelay": "30s"
+}

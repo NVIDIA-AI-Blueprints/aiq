@@ -1,0 +1,85 @@
+# Deep Research Bench (DRB) Evaluation Configuration
+# Uses Langchain Deep Agents for deep research evaluation
+
+general:
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+    # tracing:
+      # phoenix:
+      #   _type: phoenix
+      #   endpoint: http://localhost:6006/v1/traces
+      #   project: dev
+      # weave:
+      #   _type: weave
+      #   project: "nvidia-aiq/AIQ_v2_deepresearch_bench"
+  use_uvloop: true
+
+llms:
+  nemotron_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 128000
+    max_retries: 10
+    timeout: 600
+    chat_template_kwargs:
+      enable_thinking: true
+
+  openai_gpt_5:
+    _type: openai
+    model_name: "gpt-5" # Update the model name
+    api_key: ${OPENAI_API_KEY}
+    timeout: 600
+    max_retries: 10
+    temperature: 0.1
+
+functions:
+  paper_search_tool:
+    _type: paper_search
+    max_results: 5
+    serper_api_key: ${SERPER_API_KEY}
+
+  advanced_web_search_tool:
+    _type: tavily_web_search
+    max_results: 2
+    advanced_search: true
+
+  deep_research_agent:
+    _type: deep_research_agent
+    orchestrator_llm: nemotron_llm
+    max_loops: 2
+    tools:
+      - paper_search_tool
+      - advanced_web_search_tool
+
+workflow:
+  _type: deep_research_workflow
+
+eval:
+  general:
+    workflow_alias: "aiq-deepresearcher"
+    output_dir: frontends/benchmarks/deepresearch_bench/results
+    max_concurrency: 4
+    dataset:
+      _type: json
+      file_path: frontends/benchmarks/deepresearch_bench/data/drb_full_dataset.json
+      structure:
+        question_key: question
+        answer_key: expected_output
+        generated_answer_key: generated_answer
+
+  evaluators:
+    race:
+      _type: drb_race_evaluator
+      llm_name: openai_gpt_5
+      criteria_file: frontends/benchmarks/deepresearch_bench/data/criteria.jsonl
+
+    # fact:
+    #   _type: drb_fact_evaluator
+    #   llm_name: openai_gpt_5
+    #   jina_api_key: ${JINA_API_KEY}

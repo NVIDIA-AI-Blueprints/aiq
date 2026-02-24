@@ -1,0 +1,93 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+!frontends/ui/src/**/lib/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+# Logs
+*.log
+logs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Ruff
+.ruff_cache/
+
+# Pre-commit
+.pre-commit-config.yaml.bak
+
+# Docker
+*.pid
+*.seed
+*.pid.lock
+
+# Data
+*.db
+*.sqlite
+*.db-*
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+
+# ============================================================================
+# Evaluation Results and Outputs (Added for evaluation suite)
+# ============================================================================
+
+# Large result directories (regeneratable)
+frontends/benchmarks/*/results/
+frontends/benchmarks/*/aggregated_results_*/
+
+# Large analysis outputs (optional - comment out if you want to track specific files)
+frontends/benchmarks/*/analysis/*_scored_*.csv
+frontends/benchmarks/*/analysis/*_output_*.csv
+frontends/benchmarks/*/analysis/freshqa_output_*.csv
+frontends/benchmarks/*/analysis/freshqa_scored_*.csv
+frontends/benchmarks/*/analysis/*.csv
+
+# Configs created in notebooks
+docs/notebooks/config_*.yml
+# Local images (not committed) for notebooks
+docs/notebooks/local_assets/
