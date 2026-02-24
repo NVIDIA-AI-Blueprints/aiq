@@ -1,0 +1,491 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.  # noqa: E501
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Unit tests for reconnectable websocket handling."""
+
+# pylint: disable=protected-access
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import AsyncGenerator
+
+import pytest
+from aiq_api import websocket_reconnect
+from aiq_api.websocket_reconnect import ReconnectableWebSocketMessageHandler
+from aiq_api.websocket_reconnect import WebSocketSessionRegistry
+from pydantic import BaseModel
+from starlette.websockets import WebSocketDisconnect
+
+from nat.data_models.api_server import TextContent
+from nat.data_models.api_server import UserMessageContent
+from nat.data_models.api_server import UserMessageContentRoleType
+from nat.data_models.api_server import UserMessages
+from nat.data_models.api_server import WebSocketMessageType
+from nat.data_models.api_server import WebSocketUserInteractionResponseMessage
+from nat.data_models.api_server import WebSocketUserMessage
+from nat.data_models.api_server import WorkflowSchemaType
+
+
+class DummySocket:
+    """Minimal websocket stand-in for handler testing."""
+
+    def __init__(
+        self,
+        messages: list[dict] | None = None,
+        raise_on_send: bool = False,
+    ) -> None:
+        self._messages = messages or []
+        self._index = 0
+        self.raise_on_send = raise_on_send
+        self.sent: list[dict] = []
+
+    async def receive_json(self) -> dict:
+        if self._index >= len(self._messages):
+            raise WebSocketDisconnect(1000)
+        value = self._messages[self._index]
+        self._index += 1
+        return value
+
+    async def send_json(self, payload: dict) -> None:
+        if self.raise_on_send:
+            raise RuntimeError("send failed")
+        self.sent.append(payload)
+
+
+class DummySessionManager:
+    """Minimal session manager stub for handler initialization."""
+
+    def get_workflow_single_output_schema(self):
+        return None
+
+    def get_workflow_streaming_output_schema(self):
+        return None
+
+
+class DummyStepAdaptor:
+    """Minimal step adaptor stub."""
+
+
+class DummyMessage(BaseModel):
+    """Simple pydantic message for tests."""
+
+    content: str = "ok"
+
+
+@pytest.fixture(name="event_loop")
+def fixture_event_loop() -> AsyncGenerator[asyncio.AbstractEventLoop, None]:
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+@pytest.fixture(name="dummy_socket")
+def fixture_dummy_socket() -> DummySocket:
+    return DummySocket()
+
+
+@pytest.mark.asyncio
+async def test_registry_set_send_clear_socket(
+    dummy_socket: DummySocket,
+) -> None:
+    registry = WebSocketSessionRegistry()
+    await registry.set_socket("conv-1", dummy_socket)
+
+    message = DummyMessage()
+    assert await registry.send("conv-1", message) is True
+    assert dummy_socket.sent == [message.model_dump()]
+
+    await registry.clear_socket("conv-1", dummy_socket)
+    assert await registry.send("conv-1", message) is False
+
+
+@pytest.mark.asyncio
+async def test_registry_clear_socket_mismatch(
+    dummy_socket: DummySocket,
+) -> None:
+    registry = WebSocketSessionRegistry()
+    other_socket = DummySocket()
+    await registry.set_socket("conv-1", dummy_socket)
+    await registry.clear_socket("conv-1", other_socket)
+
+    assert await registry.send("conv-1", DummyMessage()) is True
+
+
+@pytest.mark.asyncio
+async def test_registry_send_handles_missing_and_error() -> None:
+    registry = WebSocketSessionRegistry()
+    assert await registry.send(None, DummyMessage()) is False
+    assert await registry.send("missing", DummyMessage()) is False
+
+    failing_socket = DummySocket(raise_on_send=True)
+    await registry.set_socket("conv-1", failing_socket)
+    assert await registry.send("conv-1", DummyMessage()) is False
+
+
+@pytest.mark.asyncio
+async def test_registry_pending_interaction_resolve() -> None:
+    registry = WebSocketSessionRegistry()
+    future: asyncio.Future[TextContent] = asyncio.get_running_loop().create_future()
+    await registry.register_pending_interaction("conv-1", future)
+
+    response = TextContent(text="hello")
+    assert await registry.resolve_pending_interaction("conv-1", response) is True
+    assert future.result() == response
+    assert await registry.resolve_pending_interaction("conv-1", response) is False
+
+    await registry.clear_pending_interaction("conv-1")
+    assert await registry.resolve_pending_interaction("conv-1", response) is False
+
+
+@pytest.mark.asyncio
+async def test_handler_create_websocket_message_uses_registry_send(
+    monkeypatch,
+    dummy_socket: DummySocket,
+) -> None:
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = "conv-1"
+
+    async def fake_send(_conversation_id, _message):
+        return True
+
+    async def fake_resolve_message_type(_data_model):
+        return "response"
+
+    async def fake_get_schema(_message_type):
+        from nat.data_models.api_server import WebSocketSystemResponseTokenMessage
+
+        return WebSocketSystemResponseTokenMessage
+
+    async def fake_convert_data(_data_model):
+        return DummyMessage()
+
+    async def fake_create_response_message(**_kwargs):
+        return DummyMessage(content="sent")
+
+    monkeypatch.setattr(
+        websocket_reconnect,
+        "_registry",
+        WebSocketSessionRegistry(),
+    )
+    monkeypatch.setattr(websocket_reconnect._registry, "send", fake_send)
+    monkeypatch.setattr(
+        handler._message_validator,
+        "resolve_message_type_by_data",
+        fake_resolve_message_type,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "get_message_schema_by_type",
+        fake_get_schema,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "convert_data_to_message_content",
+        fake_convert_data,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "create_system_response_token_message",
+        fake_create_response_message,
+    )
+
+    await handler.create_websocket_message(data_model=DummyMessage())
+    assert dummy_socket.sent == []
+
+
+@pytest.mark.asyncio
+async def test_handler_create_websocket_message_falls_back_to_socket(
+    monkeypatch,
+) -> None:
+    failing_registry = WebSocketSessionRegistry()
+    dummy_socket = DummySocket()
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = "conv-1"
+
+    async def fake_send(_conversation_id, _message):
+        return False
+
+    async def fake_resolve_message_type(_data_model):
+        return "response"
+
+    async def fake_get_schema(_message_type):
+        from nat.data_models.api_server import WebSocketSystemResponseTokenMessage
+
+        return WebSocketSystemResponseTokenMessage
+
+    async def fake_convert_data(_data_model):
+        return DummyMessage()
+
+    async def fake_create_response_message(**_kwargs):
+        return DummyMessage(content="sent")
+
+    monkeypatch.setattr(websocket_reconnect, "_registry", failing_registry)
+    monkeypatch.setattr(websocket_reconnect._registry, "send", fake_send)
+    monkeypatch.setattr(
+        handler._message_validator,
+        "resolve_message_type_by_data",
+        fake_resolve_message_type,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "get_message_schema_by_type",
+        fake_get_schema,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "convert_data_to_message_content",
+        fake_convert_data,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "create_system_response_token_message",
+        fake_create_response_message,
+    )
+
+    await handler.create_websocket_message(data_model=DummyMessage())
+    assert dummy_socket.sent == [{"content": "sent"}]
+
+
+@pytest.mark.asyncio
+async def test_handler_create_websocket_message_handles_socket_failure(
+    monkeypatch,
+) -> None:
+    failing_registry = WebSocketSessionRegistry()
+    dummy_socket = DummySocket(raise_on_send=True)
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = "conv-1"
+
+    async def fake_send(_conversation_id, _message):
+        return False
+
+    async def fake_resolve_message_type(_data_model):
+        return "response"
+
+    async def fake_get_schema(_message_type):
+        from nat.data_models.api_server import WebSocketSystemResponseTokenMessage
+
+        return WebSocketSystemResponseTokenMessage
+
+    async def fake_convert_data(_data_model):
+        return DummyMessage()
+
+    async def fake_create_response_message(**_kwargs):
+        return DummyMessage(content="sent")
+
+    monkeypatch.setattr(websocket_reconnect, "_registry", failing_registry)
+    monkeypatch.setattr(websocket_reconnect._registry, "send", fake_send)
+    monkeypatch.setattr(
+        handler._message_validator,
+        "resolve_message_type_by_data",
+        fake_resolve_message_type,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "get_message_schema_by_type",
+        fake_get_schema,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "convert_data_to_message_content",
+        fake_convert_data,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "create_system_response_token_message",
+        fake_create_response_message,
+    )
+
+    await handler.create_websocket_message(data_model=DummyMessage())
+    assert dummy_socket.sent == []
+
+
+@pytest.mark.asyncio
+async def test_handler_run_resolves_pending_future(monkeypatch) -> None:
+    dummy_socket = DummySocket(messages=[{"ok": True}])
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = "conv-1"
+
+    content = UserMessageContent(
+        messages=[
+            UserMessages(
+                role=UserMessageContentRoleType.USER,
+                content=[TextContent(text="response")],
+            )
+        ]
+    )
+    response_message = WebSocketUserInteractionResponseMessage(
+        type=WebSocketMessageType.USER_INTERACTION_MESSAGE,
+        id="msg-1",
+        thread_id="thread-1",
+        parent_id="parent-1",
+        conversation_id="conv-1",
+        content=content,
+    )
+
+    future: asyncio.Future[TextContent] = asyncio.get_running_loop().create_future()
+    handler._user_interaction_response = future
+
+    async def fake_validate_message(_message):
+        return response_message
+
+    async def fake_set_socket(_conversation_id, _socket):
+        return None
+
+    monkeypatch.setattr(
+        handler._message_validator,
+        "validate_message",
+        fake_validate_message,
+    )
+    monkeypatch.setattr(
+        websocket_reconnect._registry,
+        "set_socket",
+        fake_set_socket,
+    )
+
+    await handler.run()
+    assert future.done()
+    assert future.result().text == "response"
+
+
+@pytest.mark.asyncio
+async def test_handler_run_uses_registry_when_no_future(
+    monkeypatch,
+) -> None:
+    dummy_socket = DummySocket(messages=[{"ok": True}])
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = "conv-1"
+
+    content = UserMessageContent(
+        messages=[
+            UserMessages(
+                role=UserMessageContentRoleType.USER,
+                content=[TextContent(text="response")],
+            )
+        ]
+    )
+    response_message = WebSocketUserInteractionResponseMessage(
+        type=WebSocketMessageType.USER_INTERACTION_MESSAGE,
+        id="msg-1",
+        thread_id="thread-1",
+        parent_id="parent-1",
+        conversation_id="conv-1",
+        content=content,
+    )
+
+    async def fake_validate_message(_message):
+        return response_message
+
+    async def fake_set_socket(_conversation_id, _socket):
+        return None
+
+    async def fake_resolve_pending(_conversation_id, _user_content):
+        return True
+
+    monkeypatch.setattr(
+        handler._message_validator,
+        "validate_message",
+        fake_validate_message,
+    )
+    monkeypatch.setattr(
+        websocket_reconnect._registry,
+        "set_socket",
+        fake_set_socket,
+    )
+    monkeypatch.setattr(
+        websocket_reconnect._registry,
+        "resolve_pending_interaction",
+        fake_resolve_pending,
+    )
+
+    await handler.run()
+
+
+@pytest.mark.asyncio
+async def test_handler_run_processes_user_message(monkeypatch) -> None:
+    dummy_socket = DummySocket(messages=[{"ok": True}])
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+
+    content = UserMessageContent(
+        messages=[
+            UserMessages(
+                role=UserMessageContentRoleType.USER,
+                content=[TextContent(text="start")],
+            )
+        ]
+    )
+    user_message = WebSocketUserMessage(
+        type=WebSocketMessageType.USER_MESSAGE,
+        schema_type=WorkflowSchemaType.CHAT_STREAM,
+        id="msg-1",
+        conversation_id="conv-1",
+        content=content,
+    )
+    processed: list[WebSocketUserMessage] = []
+    sockets: list[str] = []
+
+    async def fake_validate_message(_message):
+        return user_message
+
+    async def fake_process_workflow(_message):
+        processed.append(_message)
+
+    async def fake_set_socket(conversation_id, _socket):
+        sockets.append(conversation_id)
+
+    monkeypatch.setattr(handler._message_validator, "validate_message", fake_validate_message)
+    monkeypatch.setattr(handler, "process_workflow_request", fake_process_workflow)
+    monkeypatch.setattr(websocket_reconnect._registry, "set_socket", fake_set_socket)
+
+    await handler.run()
+
+    assert processed == [user_message]
+    assert sockets == ["conv-1"]
+
+
+def test_install_reconnectable_handler(monkeypatch) -> None:
+    from nat.front_ends.fastapi import fastapi_front_end_plugin_worker as worker_module
+
+    original_handler = worker_module.WebSocketMessageHandler
+    monkeypatch.setattr(websocket_reconnect, "_installed", False)
+    websocket_reconnect.install_reconnectable_handler()
+
+    assert worker_module.WebSocketMessageHandler is ReconnectableWebSocketMessageHandler
+    worker_module.WebSocketMessageHandler = original_handler
+    monkeypatch.setattr(websocket_reconnect, "_installed", False)

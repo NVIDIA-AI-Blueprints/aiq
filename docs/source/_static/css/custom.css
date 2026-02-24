@@ -1,0 +1,91 @@
+/*
+ * SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Override the maximum width of the main content area */
+.bd-page-width {
+    max-width: 100% !important;
+    width: 100%;
+}
+
+.bd-container__inner {
+    max-width: 100% !important;
+    width: 100%;
+}
+
+.bd-main .bd-content {
+    max-width: 100% !important;
+    width: 100%;
+}
+
+.bd-container {
+    max-width: 100% !important;
+    width: 100%;
+}
+
+.bd-article-container {
+    max-width: 100% !important;
+    width: 100%;
+}
+
+.wy-nav-content {
+    max-width: 100% !important;
+    width: 100%;
+}
+
+/* Mermaid diagrams: click to expand fullscreen */
+.mermaid {
+    cursor: pointer;
+    transition: all 0.3s ease;
+    position: relative;
+}
+
+.mermaid::after {
+    content: "Click to expand";
+    position: absolute;
+    top: 4px;
+    right: 8px;
+    font-size: 0.7em;
+    color: #999;
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+.mermaid:hover::after {
+    opacity: 1;
+}
+
+.mermaid.fullscreen {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw !important;
+    height: 100vh !important;
+    z-index: 9999;
+    background: white;
+    padding: 2rem;
+    overflow: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.mermaid.fullscreen::after {
+    content: "Click to close";
+    opacity: 1;
+    position: fixed;
+    top: 12px;
+    right: 20px;
+    font-size: 0.9em;
+    color: #666;
+    background: #f0f0f0;
+    padding: 4px 12px;
+    border-radius: 4px;
+    z-index: 10000;
+}
+
+.mermaid.fullscreen svg {
+    max-width: 95vw;
+    max-height: 90vh;
+}

@@ -1,0 +1,32 @@
+#!/usr/bin/env sh
+
+echo "Running pre-commit checks..."
+
+# Run lint and type-check in parallel
+npm run lint &
+LINT_PID=$!
+
+npm run type-check &
+TYPECHECK_PID=$!
+
+# Wait for both and capture exit codes
+LINT_EXIT=0
+TYPECHECK_EXIT=0
+
+wait $LINT_PID || LINT_EXIT=$?
+wait $TYPECHECK_PID || TYPECHECK_EXIT=$?
+
+# Report results
+if [ $LINT_EXIT -ne 0 ]; then
+  echo "❌ ESLint failed"
+fi
+
+if [ $TYPECHECK_EXIT -ne 0 ]; then
+  echo "❌ TypeScript type-check failed"
+fi
+
+if [ $LINT_EXIT -ne 0 ] || [ $TYPECHECK_EXIT -ne 0 ]; then
+  exit 1
+fi
+
+echo "✅ Pre-commit checks passed!"

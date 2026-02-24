@@ -1,0 +1,60 @@
+# =============================================================================
+# Docker Build Context Exclusions
+# =============================================================================
+# Prevents secrets, build artifacts, and unnecessary files from being
+# copied into Docker images via COPY . .
+# =============================================================================
+
+# Environment files — CRITICAL: these contain secrets (OAuth, SSA, etc.)
+.env
+.env.*
+!.env.example
+
+# Dependencies (re-installed in container via npm ci)
+node_modules/
+
+# Next.js build output (rebuilt in container)
+.next/
+out/
+
+# Build artifacts
+build/
+dist/
+coverage/
+
+# Version control
+.git/
+.gitignore
+
+# IDE / editor
+.idea/
+.vscode/
+.cursor/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+*.log
+
+# TypeScript incremental
+*.tsbuildinfo
+
+# Keys / certs
+*.pem
+*.key
+
+# Misc
+TODO.md
+.vercel/
+.cache/
+*.cache
