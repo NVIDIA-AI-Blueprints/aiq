@@ -1,0 +1,234 @@
+# Generated WEB mode deployment for STG
+
+aiq:
+  appname: aiq
+  project:
+    name: aiq
+    deploymentEnv: stg
+    cluster_name: in-cluster
+    cloud_provider: kind
+    primary_owner: developer@localhost
+    secondary_owner: developer@localhost
+    blueprint_type: web
+    deploymentTarget: kubernetes
+    orientation: external
+    profile: web
+    services:
+    - backend
+    - frontend
+    - postgres
+    - rag
+  sharedSecrets:
+    enabled: true
+    autoMount: true
+    refreshInterval: 5m
+    dataFrom: []
+  apps:
+    backend:
+      enabled: true
+      replicas: 1
+      image:
+        repository: ""
+        tag: 2602.23.ext.rc0
+        pullPolicy: IfNotPresent
+      imagePullSecrets: []
+      service:
+        type: ClusterIP
+        port: 8000
+        targetPort: 8000
+      port: 8000
+      healthCheck:
+        enabled: false
+      resources:
+        requests:
+          cpu: 500m
+          memory: 1Gi
+        limits:
+          cpu: '2'
+          memory: 4Gi
+      env:
+        APP_ENV: production
+        LOG_LEVEL: INFO
+        CONFIG_FILE: configs/config_web_default_llamaindex.yml
+        DASK_NWORKERS: '1'
+        DASK_NTHREADS: '4'
+        NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        RAG_SERVER_URL: http://rag-server:8080
+        RAG_INGEST_URL: http://rag-ingest:8080
+        COLLECTION_NAME: default_collection
+        AIQ_CHROMA_DIR: /app/data/chroma
+        MODE: web
+      labels:
+        component: backend
+      route:
+        enabled: false
+        host: localhost
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+        annotations: {}
+      ingress:
+        enabled: false
+        annotations: {}
+      volumes:
+      - name: postgres-init
+        configMap:
+          name: aiq-postgres-init
+      initContainers:
+      - name: db-init
+        image: bitnami/postgresql:16.4.0
+        command:
+        - sh
+        - -c
+        - "echo \"Waiting for postgres...\"\nuntil pg_isready -h aiq-postgres -U aiq\
+          \ -d aiq_jobs; do\n  sleep 2\ndone\necho \"Running init script...\"\npsql\
+          \ -h aiq-postgres -U aiq -d aiq_jobs -f /db-init/init.sql\n"
+        env:
+        - name: PGPASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: aiq-credentials
+              key: DB_USER_PASSWORD
+        - name: DB_USER_NAME
+          valueFrom:
+            secretKeyRef:
+              name: aiq-credentials
+              key: DB_USER_NAME
+        volumeMounts:
+        - name: postgres-init
+          mountPath: /db-init
+          readOnly: true
+      stdin: false
+      tty: false
+      podSecurityContext: null
+    postgres:
+      enabled: true
+      replicas: 1
+      image:
+        repository: bitnami/postgresql
+        tag: "16.4.0"
+        pullPolicy: IfNotPresent
+      service:
+        type: ClusterIP
+        ports:
+        - name: postgres
+          port: 5432
+          targetPort: 5432
+      ports:
+      - name: postgres
+        containerPort: 5432
+        protocol: TCP
+      secretEnv:
+        POSTGRES_USER: DB_USER_NAME
+        POSTGRES_PASSWORD: DB_USER_PASSWORD
+      env:
+        POSTGRES_DB: aiq_jobs
+      configMaps:
+      - name: aiq-postgres-init
+        data:
+          init.sql: "-- =============================================================================\n\
+            -- AI-Q - Database Initialization\n-- This script runs on first PostgreSQL\
+            \ startup (fresh volume only)\n-- =============================================================================\n\
+            --\n-- What this script handles (requires admin privileges):\n--   - Creating\
+            \ databases (aiq_checkpoints)\n--   - Granting permissions\n--   - Creating\
+            \ NAT JobStore table (job_info)\n--   - Creating performance indices\n\
+            --\n-- What the app handles automatically:\n--   - job_events table (event_store.py\
+            \ creates via SQLAlchemy)\n--   - LangGraph checkpoint tables (AsyncPostgresSaver\
+            \ creates them)\n--   - summaries table (summary_store.py creates if not\
+            \ exists)\n--\n-- =============================================================================\n\
+            \n-- Create checkpoints database for LangGraph agent state\nCREATE DATABASE\
+            \ aiq_checkpoints;\n\n-- Grant permissions\nGRANT ALL PRIVILEGES ON DATABASE\
+            \ aiq_jobs TO aiq;\nGRANT ALL PRIVILEGES ON DATABASE aiq_checkpoints TO\
+            \ aiq;\n\n-- =============================================================================\n\
+            -- Create job store table in aiq_jobs database\n-- Note: job_events table\
+            \ is created by the app (event_store.py)\n-- =============================================================================\n\
+            \\connect aiq_jobs\n\n-- Job metadata table (NAT JobStore - not auto-created\
+            \ by NAT)\nCREATE TABLE IF NOT EXISTS job_info (\n    job_id VARCHAR PRIMARY\
+            \ KEY,\n    status VARCHAR NOT NULL,\n    config_file VARCHAR,\n    error\
+            \ VARCHAR,\n    output_path VARCHAR,\n    created_at TIMESTAMP WITH TIME\
+            \ ZONE,\n    updated_at TIMESTAMP WITH TIME ZONE,\n    expiry_seconds\
+            \ INTEGER,\n    output VARCHAR,\n    is_expired BOOLEAN DEFAULT FALSE\n\
+            );\n\n-- Performance indices\nCREATE INDEX IF NOT EXISTS idx_job_info_status\
+            \ ON job_info(status);\nCREATE INDEX IF NOT EXISTS idx_job_info_created_at\
+            \ ON job_info(created_at);\n"
+      persistence:
+      - name: aiq-postgres-data
+        accessModes:
+        - ReadWriteOnce
+        size: 10Gi
+      volumes:
+      - name: postgres-data
+        persistentVolumeClaim:
+          claimName: aiq-postgres-data
+      volumeMounts:
+      - name: postgres-data
+        mountPath: /var/lib/postgresql/data
+      healthCheck:
+        enabled: true
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - pg_isready -U aiq -d aiq_jobs
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - pg_isready -U aiq -d aiq_jobs
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 5
+      labels:
+        component: postgres
+      podSecurityContext: null
+    frontend:
+      replicas: 1
+      image:
+        repository: ""
+        tag: 2602.23.ext.rc0
+        pullPolicy: IfNotPresent
+      imagePullSecrets: []
+      service:
+        type: ClusterIP
+        port: 3000
+        targetPort: 3000
+      port: 3000
+      healthCheck:
+        enabled: false
+      resources:
+        requests:
+          cpu: 100m
+          memory: 256Mi
+        limits:
+          cpu: 500m
+          memory: 512Mi
+      env:
+        BACKEND_URL: http://aiq-backend:8000
+        NODE_ENV: production
+        DISABLE_AUTH: 'true'
+        NEXT_PUBLIC_DATADOG_ENABLED: 'false'
+      labels:
+        component: frontend
+      route:
+        enabled: false
+        host: localhost
+        annotations: {}
+        tls:
+          termination: edge
+          insecureEdgeTerminationPolicy: Redirect
+      enabled: true
+      ingress:
+        enabled: true
+        className: nginx
+        annotations: {}
+      podSecurityContext: null
+  secretEnvAsEnv: false
