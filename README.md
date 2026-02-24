@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
 You may obtain a copy of the License at
-http://www.apache.org/licenses/LICENSE-2.0
 
+http://www.apache.org/licenses/LICENSE-2.0
 
 Unless required by applicable law or agreed to in writing, software
 distributed under the License is distributed on an "AS IS" BASIS,
@@ -37,7 +37,7 @@ limitations under the License.
   - [Command-line interface (CLI)](#command-line-interface-cli)
   - [Web UI](#web-ui)
   - [Async Deep Research Jobs](#async-deep-research-jobs)
-  - [Benchmarks](#available-benchmarks)
+  - [Benchmarks](#benchmarks)
 - [Evaluating the Workflow](#evaluating-the-workflow)
   - [Available Benchmarks](#available-benchmarks)
   - [Running Evaluations](#running-evaluations)
@@ -62,6 +62,7 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 - **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
 - **Frontend options** — Run through CLI, web UI, or async jobs; the [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
 - **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as helm deployment.
+
 
 ## Software Components
 
@@ -108,7 +109,6 @@ Generalized minimum requirements.
 - Self / Remote Hosted Models
 
 **Self Hosted**
-
 - Typical server for AI-Q workflow (no GPU required)
 - [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
 - [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
@@ -117,7 +117,6 @@ Generalized minimum requirements.
 - [NVIDIA RAG Blueprint Requirements](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/support-matrix.md) (if used)
 
 **Remote Hosted**
-
 - Typical server for workflow (no GPU required)
 - Provider LLM API keys (if used)
 - [NVIDIA RAG Blueprint Requirements](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/support-matrix.md) (if used)
@@ -149,7 +148,6 @@ Run the setup script to initialize the environment:
 ```
 
 This script:
-
 - Creates a Python virtual environment with uv
 - Installs all Python dependencies (core, frontends, benchmarks, data sources)
 - Installs UI dependencies (if Node.js is available)
@@ -252,7 +250,6 @@ For a full web-based experience:
 ```
 
 This starts:
-
 - Backend API server at `http://localhost:8000`
 - Frontend UI at `http://localhost:3000`
 
@@ -273,16 +270,20 @@ docker compose --env-file ../.env -f docker-compose.yaml up -d --build
 ```
 
 For more details, refer to:
-
 - `deploy/compose/README.md`
 
 ### Async Deep Research Jobs
 
 Endpoints, SSE streaming, and debug console: refer to [frontends/aiq_api/README.md](frontends/aiq_api/README.md).
 
-## Evaluating the Workflow
+### Benchmarks
 
 To run agents in evaluation mode, refer to the [Evaluating the Workflow](#evaluating-the-workflow) section.
+
+
+## Evaluating the Workflow
+
+The `frontends/benchmarks/` directory contains evaluation pipelines for assessing agent performance.
 
 ### Available Benchmarks
 
@@ -303,7 +304,6 @@ Then run the evaluation with one of the available configurations:
 
 ```bash
 dotenv -f deploy/.env run nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench.yml
-
 ```
 
 For detailed benchmark documentation, refer to:
