@@ -17,6 +17,7 @@ import { createDocumentsClient } from '@/adapters/api'
 import { useDocumentsStore } from '../store'
 import { useAuth } from '@/adapters/auth'
 import { useAppConfig } from '@/shared/context'
+import { useLayoutStore } from '@/features/layout/store'
 import type { TrackedFile } from '../types'
 import { validateFileUpload, type ValidationContext } from '../validation'
 import { UploadOrchestrator } from '../orchestrator'
@@ -97,6 +98,18 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
       previousSessionIdRef.current = sessionId
     }
   }, [sessionId])
+
+  // Retry file loading when knowledgeLayerAvailable becomes true.
+  // On browser refresh, the initial loadFilesForSession call may fire before
+  // fetchDataSources completes, causing it to skip because
+  // knowledgeLayerAvailable is still false. This effect ensures we retry
+  // once the knowledge layer is confirmed available.
+  const knowledgeLayerAvailable = useLayoutStore((state) => state.knowledgeLayerAvailable)
+  useEffect(() => {
+    if (knowledgeLayerAvailable && sessionId) {
+      UploadOrchestrator.loadFilesForSession(sessionId)
+    }
+  }, [knowledgeLayerAvailable, sessionId])
 
   // Note: We intentionally don't cleanup the orchestrator on unmount.
   // The orchestrator is a singleton that manages polling across component lifecycles.
