@@ -50,7 +50,7 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
   const { idToken } = useAuth()
   const { fileUpload: fileUploadConfig } = useAppConfig()
   const clientRef = useRef(createDocumentsClient({ authToken: idToken }))
-  const previousSessionIdRef = useRef<string | undefined>(sessionId)
+  const previousSessionIdRef = useRef<string | undefined>(undefined)
 
   const {
     trackedFiles,
