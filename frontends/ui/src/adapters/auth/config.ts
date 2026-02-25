@@ -26,7 +26,7 @@ import CredentialsProvider from 'next-auth/providers/credentials'
 import './types'
 
 export const isAuthRequired = (): boolean => {
-  return process.env.REQUIRE_AUTH === 'true'
+  return process.env.REQUIRE_AUTH?.toLowerCase() === 'true'
 }
 
 /**

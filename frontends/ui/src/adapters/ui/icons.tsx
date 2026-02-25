@@ -225,7 +225,7 @@ export const StopCircle = createIcon('shape-circle-off')
 // ---------------------------------------------------------------------------
 
 /** Thinking/Reasoning icon for research panel */
-export const ThinkingReasoning = createIcon('neural-network-1')
+export const ThinkingReasoning = createIcon('neural-network')
 
 // ---------------------------------------------------------------------------
 // Loading spinner

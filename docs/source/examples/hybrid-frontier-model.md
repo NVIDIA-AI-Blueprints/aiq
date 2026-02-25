@@ -11,7 +11,7 @@ This example uses NVIDIA NIM models for intent classification and shallow resear
 ## Prerequisites
 
 - `NVIDIA_API_KEY` for NIM models
-- `INFERENCE_NVIDIA_API_KEY` for frontier model access through NVIDIA Inference API
+- `LLM_API_KEY_FOR_FRONTIER_MODEL` for frontier model (state-of-the-art models for high-quality outputs; examples include GPT-5.2 from OpenAI, OPUS-4.6 from Anthropic, etc.)
 - `TAVILY_API_KEY` for web search
 
 ## Configuration
@@ -36,9 +36,9 @@ llms:
   # Frontier model for deep research (higher quality)
   frontier_llm:
     _type: openai
-    model_name: "azure/openai/gpt-4o"
-    api_key: ${INFERENCE_NVIDIA_API_KEY}
-    base_url: "https://inference-api.nvidia.com/v1"
+    model_name: ${FRONTIER_MODEL_NAME}
+    api_key: ${LLM_API_KEY_FOR_FRONTIER_MODEL}
+    base_url: ${API_URL_FOR_FRONTIER_MODEL}
     temperature: 1.0
     max_tokens: 128000
 
@@ -117,7 +117,3 @@ dotenv -f deploy/.env run .venv/bin/nat serve \
 
 The hybrid setup keeps shallow queries fast and cheap (NIM models respond in seconds) while
 routing complex deep research to a frontier model that produces higher-quality reports.
-
-The `openai` LLM type with `base_url: "https://inference-api.nvidia.com/v1"` routes through
-NVIDIA's Inference API, which provides access to frontier models. You need an
-`INFERENCE_NVIDIA_API_KEY` -- refer to [NVIDIA Inference API](https://build.nvidia.com/) to obtain one.

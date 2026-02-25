@@ -15,10 +15,24 @@ else
     echo "uv is already installed"
 fi
 
+# Resolve uv binary for non-interactive shells (e.g., Jupyter).
+# The installer may place uv in ~/.local/bin, which isn't always on PATH yet.
+UV_BIN="$(command -v uv || true)"
+if [ -z "${UV_BIN}" ] && [ -x "${HOME}/.local/bin/uv" ]; then
+    export PATH="${HOME}/.local/bin:${PATH}"
+    UV_BIN="${HOME}/.local/bin/uv"
+fi
+
+if [ -z "${UV_BIN}" ]; then
+    echo "Error: uv was not found after installation."
+    echo "Add uv to PATH (typically ${HOME}/.local/bin) and re-run setup."
+    exit 1
+fi
+
 # Create virtual environment
 echo ""
 echo "Creating virtual environment..."
-uv venv --python 3.13 --seed .venv
+"${UV_BIN}" venv --python 3.13 --seed .venv
 echo "Virtual environment created"
 
 # Activate virtual environment
@@ -29,31 +43,31 @@ source .venv/bin/activate
 # Install core framework with dev dependencies
 echo ""
 echo "Installing core framework with dev dependencies..."
-uv pip install -e ".[dev]"
+"${UV_BIN}" pip install -e ".[dev]"
 echo "Core framework installed"
 
 # Install frontends
 echo ""
 echo "Installing frontends..."
-uv pip install -e ./frontends/cli
-uv pip install -e ./frontends/debug
-uv pip install -e ./frontends/aiq_api
+"${UV_BIN}" pip install -e ./frontends/cli
+"${UV_BIN}" pip install -e ./frontends/debug
+"${UV_BIN}" pip install -e ./frontends/aiq_api
 echo "Frontends installed (CLI, Debug, AI-Q API)"
 
 # Install benchmarks
 echo ""
 echo "Installing benchmarks..."
-uv pip install -e ./frontends/benchmarks/deepresearch_bench
-uv pip install -e ./frontends/benchmarks/freshqa
-uv pip install -e ./frontends/benchmarks/deepsearch_qa
+"${UV_BIN}" pip install -e ./frontends/benchmarks/deepresearch_bench
+"${UV_BIN}" pip install -e ./frontends/benchmarks/freshqa
+"${UV_BIN}" pip install -e ./frontends/benchmarks/deepsearch_qa
 echo "Benchmarks installed"
 
 # Install data sources
 echo ""
 echo "Installing data sources..."
-uv pip install -e ./sources/tavily_web_search
-uv pip install -e ./sources/google_scholar_paper_search
-uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
+"${UV_BIN}" pip install -e ./sources/tavily_web_search
+"${UV_BIN}" pip install -e ./sources/google_scholar_paper_search
+"${UV_BIN}" pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 echo "Data Sources installed"
 
 # Setup pre-commit

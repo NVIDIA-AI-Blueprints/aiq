@@ -304,6 +304,12 @@ First, install the benchmark package:
 uv pip install -e ./frontends/benchmarks/deepresearch_bench
 ```
 
+Download the dataset files:
+
+```bash
+python frontends/benchmarks/deepresearch_bench/scripts/download_drb_dataset.py
+```
+
 Then run the evaluation with one of the available configurations:
 
 ```bash
