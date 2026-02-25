@@ -81,7 +81,7 @@ aiq:
 Or pass them inline:
 
 ```bash
-helm upgrade --install aiq deployment-k8s/stg/ -n aiq --create-namespace \
+helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq --create-namespace \
   --set aiq.apps.backend.image.repository=aiq-research-assistant \
   --set aiq.apps.backend.image.tag=dev \
   --set aiq.apps.backend.image.pullPolicy=Never \
@@ -95,13 +95,13 @@ helm upgrade --install aiq deployment-k8s/stg/ -n aiq --create-namespace \
 Follow the [Setup](#setup) and [Deploy](#deploy) sections below, then verify with:
 
 ```bash
-kubectl get pods -n aiq
+kubectl get pods -n ns-aiq
 ```
 
 After a rebuild, reload the updated image with `kind load docker-image ...` and restart the affected deployment:
 
 ```bash
-kubectl rollout restart deployment -n aiq aiq-backend   # or aiq-frontend
+kubectl rollout restart deployment -n ns-aiq aiq-backend   # or aiq-frontend
 ```
 
 ---
@@ -115,7 +115,7 @@ kubectl rollout restart deployment -n aiq aiq-backend   # or aiq-frontend
 The deployment reads API keys and database credentials from a Kubernetes Secret named `aiq-credentials`.
 
 ```bash
-kubectl create secret generic aiq-credentials -n aiq \
+kubectl create secret generic aiq-credentials -n ns-aiq \
   --from-literal=NVIDIA_API_KEY="your-nvidia-api-key" \
   --from-literal=TAVILY_API_KEY="your-tavily-api-key" \
   --from-literal=DB_USER_NAME="aiq" \
@@ -125,7 +125,7 @@ kubectl create secret generic aiq-credentials -n aiq \
 Or from environment variables:
 
 ```bash
-kubectl create secret generic aiq-credentials -n aiq \
+kubectl create secret generic aiq-credentials -n ns-aiq \
   --from-literal=NVIDIA_API_KEY="$NVIDIA_API_KEY" \
   --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY" \
   --from-literal=DB_USER_NAME="$DB_USER_NAME" \
@@ -135,13 +135,13 @@ kubectl create secret generic aiq-credentials -n aiq \
 ## Deploy
 
 ```bash
-helm install aiq deployment-k8s/stg/ -n aiq --create-namespace
+helm install aiq deployment-k8s/stg/ -n ns-aiq --create-namespace
 ```
 
 ### Verify
 
 ```bash
-kubectl get pods -n aiq
+kubectl get pods -n ns-aiq
 ```
 
 Expected output:
@@ -177,24 +177,24 @@ aiq-postgres-xxx                1/1     Running   0          30s
 ### Updating Secrets
 
 ```bash
-kubectl delete secret aiq-credentials -n aiq
-kubectl create secret generic aiq-credentials -n aiq \
+kubectl delete secret aiq-credentials -n ns-aiq
+kubectl create secret generic aiq-credentials -n ns-aiq \
   --from-literal=NVIDIA_API_KEY="new-key" \
   --from-literal=TAVILY_API_KEY="new-key" \
   --from-literal=DB_USER_NAME="aiq" \
   --from-literal=DB_USER_PASSWORD="new-password"
 
-kubectl rollout restart deployment -n aiq aiq-backend aiq-frontend
+kubectl rollout restart deployment -n ns-aiq aiq-backend aiq-frontend
 ```
 
 ## Accessing the Application
 
 ```bash
 # Frontend UI
-kubectl port-forward -n aiq svc/aiq-frontend 3000:3000
+kubectl port-forward -n ns-aiq svc/aiq-frontend 3000:3000
 
 # Backend API
-kubectl port-forward -n aiq svc/aiq-backend 8000:8000
+kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000
 ```
 
 Then open: http://localhost:3000
@@ -202,20 +202,20 @@ Then open: http://localhost:3000
 ## Upgrade
 
 ```bash
-helm upgrade aiq deployment-k8s/stg/ -n aiq
+helm upgrade aiq deployment-k8s/stg/ -n ns-aiq
 ```
 
 ## Override Values
 
 ```bash
-helm upgrade --install aiq deployment-k8s/stg/ -n aiq \
+helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq \
   --set aiq.apps.backend.replicas=2
 ```
 
 ## Uninstall
 
 ```bash
-helm uninstall aiq -n aiq
+helm uninstall aiq -n ns-aiq
 
 # Optionally remove namespace and secrets
 kubectl delete namespace aiq
