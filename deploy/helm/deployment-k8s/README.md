@@ -218,5 +218,5 @@ helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq \
 helm uninstall aiq -n ns-aiq
 
 # Optionally remove namespace and secrets
-kubectl delete namespace aiq
+kubectl delete namespace ns-aiq
 ```
