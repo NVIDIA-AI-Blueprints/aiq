@@ -117,7 +117,6 @@ Then edit `deploy/.env` and fill in your keys.
 |----------|----------|---------|
 | `TAVILY_API_KEY` | [Tavily](https://tavily.com/) | Web search |
 | `SERPER_API_KEY` | [Serper](https://serper.dev/) | Academic paper search (Google Scholar). To enable, uncomment `paper_search_tool` in your config file |
-| `INFERENCE_NVIDIA_API_KEY` | NVIDIA Inference API | Required only for configs that use `inference-api.nvidia.com` |
 
 At minimum, you need `NVIDIA_API_KEY` for LLM inference and `TAVILY_API_KEY` for web search. Paper search (`SERPER_API_KEY`) is disabled by default in the shipped configs -- refer to the comments in your config file to enable it.
 
