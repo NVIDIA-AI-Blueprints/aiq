@@ -78,7 +78,7 @@ aiq:
           name: aiq-postgres-init
       initContainers:
       - name: db-init
-        image: bitnami/postgresql:16.4.0
+        image: bitnami/postgresql:latest
         command:
         - sh
         - -c
@@ -108,7 +108,7 @@ aiq:
       replicas: 1
       image:
         repository: bitnami/postgresql
-        tag: "16.4.0"
+        tag: "latest"
         pullPolicy: IfNotPresent
       service:
         type: ClusterIP

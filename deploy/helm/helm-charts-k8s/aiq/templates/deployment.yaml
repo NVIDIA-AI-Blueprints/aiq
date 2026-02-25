@@ -191,11 +191,22 @@ spec:
           value: {{ $value | quote }}
         {{- end }}
         {{- end }}
-        {{- /* Also check per-app secretEnv */ -}}
         {{- range $key, $value := $appConfig.secretEnv }}
         {{- if $value }}
         - name: {{ $key }}
           value: {{ $value | quote }}
+        {{- end }}
+        {{- end }}
+        {{- else }}
+        {{- /* When secretEnvAsEnv is false, per-app secretEnv renders as valueFrom.secretKeyRef */ -}}
+        {{- $secretName := $.Values.sharedSecrets.targetSecretName | default (printf "%s-credentials" $.Values.project.name) }}
+        {{- range $key, $value := $appConfig.secretEnv }}
+        {{- if $value }}
+        - name: {{ $key }}
+          valueFrom:
+            secretKeyRef:
+              name: {{ $secretName }}
+              key: {{ $value }}
         {{- end }}
         {{- end }}
         {{- end }}
