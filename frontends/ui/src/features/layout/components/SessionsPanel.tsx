@@ -12,7 +12,7 @@
 
 import { type FC, type KeyboardEvent, useCallback, useMemo, useState, useRef, useEffect } from 'react'
 import { Flex, Text, Button, SidePanel } from '@/adapters/ui'
-import { Chat, Edit, Trash, Plus, Refresh, Search } from '@/adapters/ui/icons'
+import { Chat, Edit, Trash, Plus, Search, LoadingSpinner } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 import { useChatStore } from '@/features/chat'
 import { checkStorageHealth } from '@/features/chat/lib/storage-manager'
@@ -403,10 +403,8 @@ const SessionItem: FC<SessionItemProps> = ({
         <>
           {/* Loading indicator for active deep research */}
           {session.hasActiveDeepResearch && (
-            <Refresh 
-              height={16} 
-              width={16} 
-              className="shrink-0 animate-spin text-accent-primary" 
+            <LoadingSpinner 
+              className="shrink-0 text-accent-primary" 
               aria-label="Deep research in progress"
             />
           )}

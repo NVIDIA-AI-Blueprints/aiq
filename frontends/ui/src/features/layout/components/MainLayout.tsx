@@ -169,7 +169,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
           <ChatArea isAuthenticated={isAuthenticated} onSignIn={onSignIn} />
 
           {/* No sources warning - shown when no data sources or files available */}
-          <NoSourcesBanner />
+          <NoSourcesBanner isAuthenticated={isAuthenticated} />
 
           {/* Input Area - Fixed at bottom of chat */}
           {/* Using WebSocket mode for full HITL (human-in-the-loop) support */}

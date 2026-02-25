@@ -1,6 +1,6 @@
 # NVIDIA AI-Q Blueprint UI
 
-A modern research assistant interface built with Next.js 16+, React 18+, TypeScript, TailwindCSS, and NVIDIA KUI Foundations.
+A modern research assistant interface built with Next.js, React, TypeScript, TailwindCSS, and NVIDIA KUI Foundations.
 
 ## Overview
 
@@ -15,8 +15,8 @@ The AI-Q Blueprint UI provides an accessible, feature-rich frontend for the AI-Q
 
 ## Prerequisites
 
-- Node.js 18+
-- npm or pnpm
+- Node.js
+- npm
 - AI-Q Blueprint running (default: `http://localhost:8000`)
 
 ## Quick Start
@@ -29,7 +29,25 @@ npm install
 
 ### 2. Configure Environment
 
-Review `.env.local` configs are in the project root.
+Review the `.env` config in the project root to ensure values are set correctly for local development.
+
+Key variables for local development:
+
+```bash
+# Backend URL (must match where your backend is running)
+BACKEND_URL=http://localhost:8000
+
+# Skip authentication for local development (uses Default User)
+REQUIRE_AUTH=false
+
+# File upload settings (should match backend limits)
+FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.txt,.md,.docx,.pptx
+FILE_UPLOAD_MAX_SIZE_MB=100
+FILE_UPLOAD_MAX_FILE_COUNT=10
+FILE_EXPIRATION_CHECK_INTERVAL_HOURS=24
+```
+
+See `.env.example` for the full list of available frontend variables including authentication and file upload configuration.
 
 
 ### 3. Start Servers
@@ -41,13 +59,77 @@ Review `.env.local` configs are in the project root.
 cd ../../
 ./scripts/start_e2e.sh
 ```
->**NOTE:** For UI development it may be more useful to use `./scripts/start_server_in_debug_mode.sh` with `npm run dev` in separate terminals. 
+>**NOTE:** For UI development it may be more useful to use `./scripts/start_server_in_debug_mode.sh` with `npm run dev` in separate terminals.
+
+#### Separate terminal env setup
+
+When running the backend with `./scripts/start_server_in_debug_mode.sh` and the UI with `npm run dev` in a separate terminal, load the root env file in the UI terminal first:
+
+```bash
+set -a; source ../../deploy/.env; set +a
+npm run dev
+```
 
 **URLs:**
 
 - Frontend: http://localhost:3000
 - Backend: http://localhost:8000
 
+## NPM Scripts
+
+| Script               | Description                                            |
+| -------------------- | ------------------------------------------------------ |
+| `npm run dev`        | Start gateway + Next.js dev server (with HMR)          |
+| `npm run build`      | Build for production                                   |
+| `npm run start`      | Start production server (gateway with WebSocket proxy) |
+| `npm run lint`       | Run ESLint                                             |
+| `npm run lint:fix`   | Run ESLint with auto-fix                               |
+| `npm run format`     | Format code with Prettier                              |
+| `npm run type-check` | Run TypeScript type checking                           |
+| `npm run test`       | Run tests once (Vitest)                                |
+| `npm run test:watch` | Run tests in watch mode                                |
+| `npm run test:ci`    | Run tests with coverage                                |
+
+## Project Structure
+
+```
+src/
+├── adapters/           # External interface boundaries
+│   ├── api/            # Backend API clients (chat, documents, websocket, deep-research)
+│   ├── auth/           # NextAuth configuration, session, and types
+│   ├── datadog/        # Real User Monitoring integration (optional)
+│   └── ui/             # KUI component re-exports, icons, logo
+├── app/                # Next.js App Router pages and API routes
+│   ├── api/            # Route handlers (auth, chat, health, proxy, jobs)
+│   └── auth/           # Sign-in and error pages
+├── features/           # Business logic modules
+│   ├── chat/           # Chat functionality (components, hooks, store, types)
+│   ├── documents/      # File upload, validation, and persistence
+│   └── layout/         # App layout components (panels, tabs, navigation)
+├── hooks/              # Shared React hooks (PDF download, session URL)
+├── lib/                # Utilities (PDF generation)
+├── mocks/              # MSW mock handlers and database for testing
+├── pages/              # API routes (PDF generation)
+├── shared/             # Shared components, config, context, hooks, and utilities
+│   ├── components/     # MarkdownRenderer, StarfieldAnimation
+│   ├── config/         # File upload configuration
+│   ├── context/        # AppConfigContext
+│   ├── hooks/          # Backend health check hook
+│   └── utils/          # Shared utilities (time formatting)
+├── styles/             # KUI-generated CSS and safelist
+├── test-utils/         # Test helper utilities
+└── utils/              # General utilities (markdown download)
+```
+
+## Architecture
+
+The UI acts as a **gateway/proxy** between the browser and backend:
+
+- All HTTP API requests go through Next.js API routes (`/api/*`)
+- WebSocket connections are proxied through the custom server (`/websocket`)
+- Backend URL is runtime configurable via `BACKEND_URL` environment variable
+
+This architecture ensures the backend doesn't need public exposure - only the UI container needs ingress. See the [Docker Deployment](#docker-deployment) section for details.
 
 ## Session Storage Management
 
@@ -75,8 +157,6 @@ Sessions are stored with optimized data to minimize storage usage:
 - Citations, tasks, tool calls (replayed from SSE stream)
 - Agent traces and file artifacts
 
-This optimization reduces storage usage by ~96% per session, preventing quota errors while maintaining full functionality.
-
 ### Automatic Cleanup
 
 When creating a new session, if storage exceeds 4MB:
@@ -93,6 +173,7 @@ To manually clear sessions:
 2. Click "Delete All Sessions" button
 3. Or delete individual sessions one at a time
 
+
 ### How Research Data Loading Works
 
 When you reopen a session after a page refresh:
@@ -103,25 +184,9 @@ When you reopen a session after a page refresh:
 
 The lazy loading is automatic and seamless - you don't need to do anything special.
 
+
+
 ## Docker Deployment
-
-### Architecture
-
-The UI container acts as a **full proxy** between the browser and backend:
-
-```
-+---------+     +-------------------------------+     +---------+
-| Browser |---->|         UI Container          |---->| Backend |
-|         |     |  (HTTP + WebSocket Proxy)     |     |         |
-+---------+     +-------------------------------+     +---------+
-                         |
-                    Ingress only
-```
-
-**All traffic flows through the UI container:**
-- HTTP API requests -> `/api/*` routes -> Backend
-- WebSocket connections -> `/websocket` proxy -> Backend
-
 
 ### Build
 
@@ -247,61 +312,6 @@ All environment variables are **runtime configurable** - no container rebuild ne
 
 > **Note:** When `OAUTH_ISSUER` is set, the app uses OIDC auto-discovery to resolve authorization, token, and userinfo endpoints automatically. No additional endpoint URLs are needed for standard OIDC providers.
 
-## Project Structure
-
-```
-src/
-├── adapters/           # External interface boundaries
-│   ├── api/            # Backend API clients (chat, websocket)
-│   ├── auth/           # NextAuth configuration and hooks
-│   └── ui/             # KUI component re-exports
-├── features/           # Business logic modules
-│   ├── chat/           # Chat functionality (components, hooks, store, types)
-│   ├── documents/      # File upload and management
-│   ├── layout/         # App layout components (panels, tabs, navigation)
-│   └── auth/           # Authentication components
-├── app/                # Next.js App Router pages
-├── shared/             # Internal utilities and types
-└── tests/              # Test files
-```
-
-### Import Rules
-
-Features should **never** import external packages directly. All external calls go through adapters:
-
-```typescript
-// Correct
-import { Button, Flex, Text } from '@/adapters/ui'
-import { streamChat } from '@/adapters/api'
-import { useSession } from '@/adapters/auth'
-
-// Wrong
-import { Button } from '@nvidia/foundations-react-core'
-import { signIn } from 'next-auth/react'
-```
-
-## Available Scripts
-
-### NPM Scripts
-
-| Script               | Description                                              |
-| -------------------- | -------------------------------------------------------- |
-| `npm run dev`        | Start gateway + Next.js dev server (with HMR)            |
-| `npm run build`      | Build for production                                     |
-| `npm run start`      | Start production server (gateway with WebSocket proxy)   |
-| `npm run lint`       | Run ESLint                                               |
-| `npm run format`     | Format code with Prettier                                |
-| `npm run type-check` | Run TypeScript type checking                             |
-
-## Architecture
-
-The UI acts as a **gateway/proxy** between the browser and backend:
-
-- All HTTP API requests go through Next.js API routes (`/api/*`)
-- WebSocket connections are proxied through the custom server (`/websocket`)
-- Backend URL is runtime configurable via `BACKEND_URL` environment variable
-
-This architecture ensures the backend doesn't need public exposure - only the UI container needs ingress. See the [Docker Deployment](#docker-deployment) section for details.
 
 ## API Communication
 
@@ -356,7 +366,7 @@ To enable OAuth authentication:
 2. Configure your OIDC provider credentials:
 
 ```bash
-# .env.local
+# .env
 REQUIRE_AUTH=true
 NEXTAUTH_SECRET=<generate-with-openssl-rand-base64-32>
 NEXTAUTH_URL=http://localhost:3000
@@ -387,6 +397,38 @@ const MyComponent = () => {
 
 >**NOTE:** Above Authentication docs are reference only and implementation depends on environment specifics. 
 
+
+## Development
+
+### Adding a New Feature
+
+1. Create a directory under `src/features/[feature-name]/`
+2. Add subdirectories: `components/`, `hooks/`
+3. Create `types.ts` for feature-specific types
+4. Create `store.ts` for Zustand state (if needed)
+
+### Adding a New API Endpoint
+
+1. Add Zod schema in `src/adapters/api/schemas.ts`
+2. Create client function in appropriate adapter file
+3. Export from `src/adapters/api/index.ts`
+
+## Import Rules
+
+Features should **never** import external packages directly. All external calls go through adapters:
+
+```typescript
+// Correct
+import { Button, Flex, Text } from '@/adapters/ui'
+import { streamChat } from '@/adapters/api'
+import { useSession } from '@/adapters/auth'
+
+// Wrong
+import { Button } from '@nvidia/foundations-react-core'
+import { signIn } from 'next-auth/react'
+```
+
+
 ## Styling
 
 This project uses KUI Foundations for styling:
@@ -406,20 +448,27 @@ This project uses KUI Foundations for styling:
 <Button className="bg-blue-500 text-white">Submit</Button>
 ```
 
-## Development
+## Testing
 
-### Adding a New Feature
+The project uses **Vitest** with **Testing Library** and **MSW** (Mock Service Worker):
 
-1. Create a directory under `src/features/[feature-name]/`
-2. Add subdirectories: `components/`, `hooks/`
-3. Create `types.ts` for feature-specific types
-4. Create `store.ts` for Zustand state (if needed)
+```bash
+# Run tests once
+npm run test
 
-### Adding a New API Endpoint
+# Run tests in watch mode
+npm run test:watch
 
-1. Add Zod schema in `src/adapters/api/schemas.ts`
-2. Create client function in appropriate adapter file
-3. Export from `src/adapters/api/index.ts`
+# Run tests with coverage
+npm run test:ci
+```
+
+- **Vitest** -- Test runner with coverage via `@vitest/coverage-v8`
+- **Testing Library** -- `@testing-library/react` and `@testing-library/user-event` for component testing
+- **MSW** -- Mock Service Worker for API mocking in tests (handlers in `src/mocks/`)
+- **happy-dom** -- DOM environment for tests
+
+Test utilities are in `src/test-utils/` and MSW mock handlers/database are in `src/mocks/`.
 
 ## Troubleshooting
 

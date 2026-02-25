@@ -32,7 +32,11 @@ const WARNING_MESSAGE =
  * Warning banner shown when no data sources or files are available.
  * Self-contained: reads state from layout, documents, and chat stores.
  */
-export const NoSourcesBanner: FC = () => {
+interface NoSourcesBannerProps {
+  isAuthenticated?: boolean
+}
+
+export const NoSourcesBanner: FC<NoSourcesBannerProps> = ({ isAuthenticated = false }) => {
   const [isDismissedByUser, setIsDismissedByUser] = useState(false)
 
   const enabledDataSourceIds = useLayoutStore((state) => state.enabledDataSourceIds)
@@ -66,7 +70,7 @@ export const NoSourcesBanner: FC = () => {
     setIsDismissedByUser(true)
   }
 
-  if (!shouldShow || isDismissedByUser) return null
+  if (!isAuthenticated || !shouldShow || isDismissedByUser) return null
 
   return (
     <div className="mx-auto w-full max-w-3xl px-4">
