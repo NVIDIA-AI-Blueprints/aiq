@@ -6,16 +6,15 @@ Deploy AI-Q to a Kubernetes cluster using the Helm charts in this repository.
 
 ```
 deployment-k8s/
-├── stg/                  # Helm chart for the STG environment
-│   ├── Chart.yaml        # Chart definition (depends on ../helm-charts-k8s/aiq)
-│   └── values.yaml       # Deployment values for this environment
+├── Chart.yaml        # Chart definition (depends on ../helm-charts-k8s/aiq)
+├── values.yaml       # Deployment values
 └── README.md
 
 helm-charts-k8s/
-└── aiq/                  # Base application Helm chart
+└── aiq/              # Base application Helm chart
 ```
 
-The `stg/` chart references `helm-charts-k8s/aiq` as a local file dependency. Both directories must be present at the same level.
+The `deployment-k8s/` chart references `helm-charts-k8s/aiq` as a local file dependency. Both directories must be present at the same level.
 
 ## Prerequisites
 
@@ -53,7 +52,7 @@ kubectl create secret generic aiq-credentials -n ns-aiq \
 ## Deploy
 
 ```bash
-helm install aiq deployment-k8s/stg/ -n ns-aiq --create-namespace
+helm install aiq deployment-k8s/ -n ns-aiq --create-namespace
 ```
 
 ### Verify
@@ -120,13 +119,13 @@ Then open: http://localhost:3000
 ## Upgrade
 
 ```bash
-helm upgrade aiq deployment-k8s/stg/ -n ns-aiq
+helm upgrade aiq deployment-k8s/ -n ns-aiq
 ```
 
 ## Override Values
 
 ```bash
-helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq \
+helm upgrade --install aiq deployment-k8s/ -n ns-aiq \
   --set aiq.apps.backend.replicas=2
 ```
 
@@ -178,7 +177,7 @@ kind load docker-image aiq-frontend:dev --name <your-cluster-name>
 
 ### 3. Configure values to use the local images
 
-Edit `deployment-k8s/stg/values.yaml` (or pass `--set` flags at deploy time) so the image references match what you loaded:
+Edit `deployment-k8s/values.yaml` (or pass `--set` flags at deploy time) so the image references match what you loaded:
 
 ```yaml
 aiq:
@@ -187,24 +186,24 @@ aiq:
       image:
         repository: aiq-research-assistant
         tag: dev
-        pullPolicy: Never      # <-- critical: tells k8s not to pull from a registry
+        pullPolicy: IfNotPresent
     frontend:
       image:
         repository: aiq-frontend
         tag: dev
-        pullPolicy: Never
+        pullPolicy: IfNotPresent
 ```
 
 Or pass them inline during deployment:
 
 ```bash
-helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq --create-namespace \
+helm upgrade --install aiq deployment-k8s/ -n ns-aiq --create-namespace \
   --set aiq.apps.backend.image.repository=aiq-research-assistant \
   --set aiq.apps.backend.image.tag=dev \
-  --set aiq.apps.backend.image.pullPolicy=Never \
+  --set aiq.apps.backend.image.pullPolicy=IfNotPresent \
   --set aiq.apps.frontend.image.repository=aiq-frontend \
   --set aiq.apps.frontend.image.tag=dev \
-  --set aiq.apps.frontend.image.pullPolicy=Never
+  --set aiq.apps.frontend.image.pullPolicy=IfNotPresent
 ```
 
 ### 4. Create the credentials secret and deploy

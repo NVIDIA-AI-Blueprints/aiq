@@ -1,11 +1,11 @@
 apiVersion: v2
 name: aiq-web
-description: AI-Q - WEB Profile (STG)
+description: AI-Q - WEB Profile ()
 type: application
 version: 0.0.4
 appVersion: '1.0'
 dependencies:
 - name: aiq
   version: 0.0.4
-  repository: file://../../helm-charts-k8s/aiq
+  repository: file://../helm-charts-k8s/aiq
   alias: aiq

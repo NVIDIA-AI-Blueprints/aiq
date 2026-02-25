@@ -1,10 +1,10 @@
-# Generated WEB mode deployment for STG
+# Generated WEB mode deployment
 
 aiq:
   appname: aiq
   project:
     name: aiq
-    deploymentEnv: stg
+    deploymentEnv: ''
     cluster_name: in-cluster
     cloud_provider: kind
     primary_owner: developer@localhost
@@ -78,13 +78,14 @@ aiq:
           name: aiq-postgres-init
       initContainers:
       - name: db-init
-        image: bitnami/postgresql:16.4.0
+        image: bitnami/postgresql:latest
         command:
         - sh
         - -c
-        - "echo \"Waiting for postgres...\"\nuntil pg_isready -h aiq-postgres -U aiq\
+        - "echo \"Waiting for postgres...\"\nuntil pg_isready -h aiq-postgres -U $(DB_USER_NAME)\
           \ -d aiq_jobs; do\n  sleep 2\ndone\necho \"Running init script...\"\npsql\
-          \ -h aiq-postgres -U aiq -d aiq_jobs -f /db-init/init.sql\n"
+          \ -h aiq-postgres -U $(DB_USER_NAME) -d aiq_jobs -v db_user=$(DB_USER_NAME)\
+          \ -f /db-init/init.sql\n"
         env:
         - name: PGPASSWORD
           valueFrom:
@@ -108,7 +109,7 @@ aiq:
       replicas: 1
       image:
         repository: bitnami/postgresql
-        tag: "16.4.0"
+        tag: latest
         pullPolicy: IfNotPresent
       service:
         type: ClusterIP
@@ -140,8 +141,8 @@ aiq:
             \ exists)\n--\n-- =============================================================================\n\
             \n-- Create checkpoints database for LangGraph agent state\nCREATE DATABASE\
             \ aiq_checkpoints;\n\n-- Grant permissions\nGRANT ALL PRIVILEGES ON DATABASE\
-            \ aiq_jobs TO aiq;\nGRANT ALL PRIVILEGES ON DATABASE aiq_checkpoints TO\
-            \ aiq;\n\n-- =============================================================================\n\
+            \ aiq_jobs TO :\"db_user\";\nGRANT ALL PRIVILEGES ON DATABASE aiq_checkpoints\
+            \ TO :\"db_user\";\n\n-- =============================================================================\n\
             -- Create job store table in aiq_jobs database\n-- Note: job_events table\
             \ is created by the app (event_store.py)\n-- =============================================================================\n\
             \\connect aiq_jobs\n\n-- Job metadata table (NAT JobStore - not auto-created\
@@ -172,7 +173,7 @@ aiq:
             command:
             - sh
             - -c
-            - pg_isready -U aiq -d aiq_jobs
+            - pg_isready -U $POSTGRES_USER -d aiq_jobs
           initialDelaySeconds: 10
           periodSeconds: 5
           timeoutSeconds: 5
@@ -182,7 +183,7 @@ aiq:
             command:
             - sh
             - -c
-            - pg_isready -U aiq -d aiq_jobs
+            - pg_isready -U $POSTGRES_USER -d aiq_jobs
           initialDelaySeconds: 5
           periodSeconds: 5
           timeoutSeconds: 5
