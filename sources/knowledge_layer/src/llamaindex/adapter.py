@@ -1004,6 +1004,10 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
         This removes all chunks that have the matching file_name in metadata.
         Handles both exact file names and names with tmp prefix stripped.
         Uses same tmp pattern as Foundational RAG: tmp[8 random chars]_filename
+
+        The file_id parameter may be either a backend UUID or a human-readable
+        filename (the frontend sends filenames). Both are handled: UUID is looked
+        up directly in self._files, while a filename triggers a value-based search.
         """
         import re
 
@@ -1016,11 +1020,21 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                 logger.warning(f"Collection {collection_name} not found")
                 return False
 
-            # Get file_name from tracking or use file_id directly
+            # Resolve file_name from tracking dict.
+            # The caller may pass a UUID (direct key) or a filename (value search).
             file_name = None
+            tracking_ids_to_remove: list[str] = []
             with self._lock:
-                if hasattr(self, "_files") and file_id in self._files:
-                    file_name = self._files[file_id].file_name
+                if hasattr(self, "_files"):
+                    if file_id in self._files:
+                        file_name = self._files[file_id].file_name
+                        tracking_ids_to_remove.append(file_id)
+                    else:
+                        # file_id is likely a filename — search by value
+                        for fid, fi in self._files.items():
+                            if fi.file_name == file_id and fi.collection_name == collection_name:
+                                file_name = fi.file_name
+                                tracking_ids_to_remove.append(fid)
             if not file_name:
                 file_name = file_id
 
@@ -1041,17 +1055,30 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                     if tmp_pattern.match(meta.get("file_name", ""))
                 ]
                 if not matching_ids:
-                    logger.warning(f"No chunks found for file_name={file_name}")
-                    return False
+                    if not tracking_ids_to_remove:
+                        logger.warning(f"No chunks found for file_name={file_name}")
+                        return False
+                    # No chunks in ChromaDB but tracking entries exist (e.g. FAILED files).
+                    # Clean them up and report success.
+                    with self._lock:
+                        for tid in tracking_ids_to_remove:
+                            self._files.pop(tid, None)
+                    logger.info(f"Removed {len(tracking_ids_to_remove)} tracking entries for file {file_name}")
+
+                    from aiq_agent.knowledge import unregister_summary
+
+                    unregister_summary(collection_name, file_name)
+                    return True
                 results = {"ids": matching_ids}
 
             collection.delete(ids=results["ids"])
             logger.info(f"Deleted {len(results['ids'])} chunks for file {file_name}")
 
-            # Remove from tracking if it was there
+            # Remove all matching tracking entries
             with self._lock:
-                if hasattr(self, "_files") and file_id in self._files:
-                    del self._files[file_id]
+                if hasattr(self, "_files"):
+                    for tid in tracking_ids_to_remove:
+                        self._files.pop(tid, None)
 
             # Remove from centralized summary registry
             from aiq_agent.knowledge import unregister_summary
@@ -1155,7 +1182,8 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                         )
                     )
 
-            # Also include FAILED files from tracking (they won't have chunks in Chroma)
+            # Also include FAILED files from tracking (they won't have chunks in Chroma).
+            # Track seen names to avoid duplicates when the same file was uploaded multiple times.
             with self._lock:
                 if hasattr(self, "_files"):
                     existing_names = {f.file_name for f in result}
@@ -1166,6 +1194,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                             and fi.status == FileStatus.FAILED
                         ):
                             result.append(fi)
+                            existing_names.add(fi.file_name)
 
             logger.info(f"Listed {len(result)} files in {collection_name}")
             return result

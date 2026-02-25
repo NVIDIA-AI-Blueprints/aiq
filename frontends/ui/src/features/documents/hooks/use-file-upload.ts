@@ -265,7 +265,8 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
       const collectionName = file.collectionName
 
       try {
-        await clientRef.current.deleteFiles(collectionName, [file.fileName])
+        const deleteId = file.serverFileId || file.fileName
+        await clientRef.current.deleteFiles(collectionName, [deleteId])
         removeTrackedFile(fileId)
 
         // File deletion is handled silently - no status message needed
