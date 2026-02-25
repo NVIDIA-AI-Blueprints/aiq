@@ -291,7 +291,7 @@ export const AgentCard: FC<AgentCardProps> = ({ agent, defaultExpanded = true })
                         <ToolIcon className="h-3 w-3 text-subtle shrink-0 mt-0.5" />
                         <Text
                           kind="body/regular/sm"
-                          className={`${isToolComplete ? 'text-subtle' : ''} line-clamp-2`}
+                          className={`${isToolComplete ? 'text-subtle' : 'text-primary'} line-clamp-2`}
                         >
                           {isSearchType ? (
                             description

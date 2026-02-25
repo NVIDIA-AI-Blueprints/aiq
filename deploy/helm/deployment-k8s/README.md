@@ -19,14 +19,131 @@ The `stg/` chart references `helm-charts-k8s/aiq` as a local file dependency. Bo
 
 ## Prerequisites
 
-- Kubernetes cluster (Kind, EKS, GKE, AKS, etc.)
+- Kubernetes cluster (EKS, GKE, AKS, etc.) or local cluster (Kind, Minikube)
 - `kubectl` configured with cluster access
 - `helm` v3.x installed
 - Required API keys (see [Secrets](#secrets) section)
 
-## Building and Loading Images for Kind
+## Setup
 
-For local development with a [Kind](https://kind.sigs.k8s.io/) cluster, you build images locally and load them directly into the cluster — no registry push required.
+> **Note:** If you generated these charts using the blueprint generator, `helm dependency update` was already run automatically. Only run it manually if you re-package or move the charts.
+
+### 1. Create the credentials secret
+
+The deployment reads API keys and database credentials from a Kubernetes Secret named `aiq-credentials`.
+
+```bash
+kubectl create secret generic aiq-credentials -n ns-aiq \
+  --from-literal=NVIDIA_API_KEY="your-nvidia-api-key" \
+  --from-literal=TAVILY_API_KEY="your-tavily-api-key" \
+  --from-literal=DB_USER_NAME="aiq" \
+  --from-literal=DB_USER_PASSWORD="your-db-password"
+```
+
+Or from environment variables:
+
+```bash
+kubectl create secret generic aiq-credentials -n ns-aiq \
+  --from-literal=NVIDIA_API_KEY="$NVIDIA_API_KEY" \
+  --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY" \
+  --from-literal=DB_USER_NAME="$DB_USER_NAME" \
+  --from-literal=DB_USER_PASSWORD="$DB_USER_PASSWORD"
+```
+
+## Deploy
+
+```bash
+helm install aiq deployment-k8s/stg/ -n ns-aiq --create-namespace
+```
+
+### Verify
+
+```bash
+kubectl get pods -n ns-aiq
+```
+
+Expected output:
+
+```
+NAME                            READY   STATUS    RESTARTS   AGE
+aiq-backend-xxx                 1/1     Running   0          30s
+aiq-frontend-xxx                1/1     Running   0          30s
+aiq-postgres-xxx                1/1     Running   0          30s
+```
+
+## Secrets
+
+### Required
+
+| Key | Description |
+|-----|-------------|
+| `NVIDIA_API_KEY` | API key for NIM inference models |
+| `TAVILY_API_KEY` | Tavily API key for web search |
+| `DB_USER_NAME` | PostgreSQL username |
+| `DB_USER_PASSWORD` | PostgreSQL password |
+
+### Optional
+
+| Key | Description |
+|-----|-------------|
+| `SERPER_API_KEY` | Serper API key for Google search |
+| `JINA_API_KEY` | Jina API key |
+| `WANDB_API_KEY` | Weights & Biases API key |
+| `NVIDIA_INFERENCE_API_KEY` | Alternative inference key (defaults to `NVIDIA_API_KEY`) |
+| `INFERENCE_NVIDIA_API_KEY` | Alternative inference key (defaults to `NVIDIA_API_KEY`) |
+
+### Updating Secrets
+
+```bash
+kubectl delete secret aiq-credentials -n ns-aiq
+kubectl create secret generic aiq-credentials -n ns-aiq \
+  --from-literal=NVIDIA_API_KEY="new-key" \
+  --from-literal=TAVILY_API_KEY="new-key" \
+  --from-literal=DB_USER_NAME="aiq" \
+  --from-literal=DB_USER_PASSWORD="new-password"
+
+kubectl rollout restart deployment -n ns-aiq aiq-backend aiq-frontend
+```
+
+## Accessing the Application
+
+```bash
+# Frontend UI
+kubectl port-forward -n ns-aiq svc/aiq-frontend 3000:3000
+
+# Backend API
+kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000
+```
+
+Then open: http://localhost:3000
+
+## Upgrade
+
+```bash
+helm upgrade aiq deployment-k8s/stg/ -n ns-aiq
+```
+
+## Override Values
+
+```bash
+helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq \
+  --set aiq.apps.backend.replicas=2
+```
+
+## Uninstall
+
+```bash
+helm uninstall aiq -n ns-aiq
+
+# Optionally remove namespace and secrets
+kubectl delete namespace ns-aiq
+```
+
+---
+
+## Getting Started with Minimal K8s (Kind)
+
+For local development with a [Kind](https://kind.sigs.k8s.io/) cluster, you can build images locally and load them directly into the cluster — no registry push required.
 
 ### 1. Build the images
 
@@ -78,10 +195,10 @@ aiq:
         pullPolicy: Never
 ```
 
-Or pass them inline:
+Or pass them inline during deployment:
 
 ```bash
-helm upgrade --install aiq deployment-k8s/stg/ -n aiq --create-namespace \
+helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq --create-namespace \
   --set aiq.apps.backend.image.repository=aiq-research-assistant \
   --set aiq.apps.backend.image.tag=dev \
   --set aiq.apps.backend.image.pullPolicy=Never \
@@ -92,131 +209,10 @@ helm upgrade --install aiq deployment-k8s/stg/ -n aiq --create-namespace \
 
 ### 4. Create the credentials secret and deploy
 
-Follow the [Setup](#setup) and [Deploy](#deploy) sections below, then verify with:
-
-```bash
-kubectl get pods -n aiq
-```
+Follow the main [Setup](#setup) section to create your secrets, then deploy.
 
 After a rebuild, reload the updated image with `kind load docker-image ...` and restart the affected deployment:
 
 ```bash
-kubectl rollout restart deployment -n aiq aiq-backend   # or aiq-frontend
-```
-
----
-
-## Setup
-
-> **Note:** If you generated these charts using the blueprint generator, `helm dependency update` was already run automatically. Only run it manually if you re-package or move the charts.
-
-### 1. Create the credentials secret
-
-The deployment reads API keys and database credentials from a Kubernetes Secret named `aiq-credentials`.
-
-```bash
-kubectl create secret generic aiq-credentials -n aiq \
-  --from-literal=NVIDIA_API_KEY="your-nvidia-api-key" \
-  --from-literal=TAVILY_API_KEY="your-tavily-api-key" \
-  --from-literal=DB_USER_NAME="aiq" \
-  --from-literal=DB_USER_PASSWORD="your-db-password"
-```
-
-Or from environment variables:
-
-```bash
-kubectl create secret generic aiq-credentials -n aiq \
-  --from-literal=NVIDIA_API_KEY="$NVIDIA_API_KEY" \
-  --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY" \
-  --from-literal=DB_USER_NAME="$DB_USER_NAME" \
-  --from-literal=DB_USER_PASSWORD="$DB_USER_PASSWORD"
-```
-
-## Deploy
-
-```bash
-helm install aiq deployment-k8s/stg/ -n aiq --create-namespace
-```
-
-### Verify
-
-```bash
-kubectl get pods -n aiq
-```
-
-Expected output:
-
-```
-NAME                            READY   STATUS    RESTARTS   AGE
-aiq-backend-xxx                 1/1     Running   0          30s
-aiq-frontend-xxx                1/1     Running   0          30s
-aiq-postgres-xxx                1/1     Running   0          30s
-```
-
-## Secrets
-
-### Required
-
-| Key | Description |
-|-----|-------------|
-| `NVIDIA_API_KEY` | API key for NIM inference models |
-| `TAVILY_API_KEY` | Tavily API key for web search |
-| `DB_USER_NAME` | PostgreSQL username |
-| `DB_USER_PASSWORD` | PostgreSQL password |
-
-### Optional
-
-| Key | Description |
-|-----|-------------|
-| `SERPER_API_KEY` | Serper API key for Google search |
-| `JINA_API_KEY` | Jina API key |
-| `WANDB_API_KEY` | Weights & Biases API key |
-| `NVIDIA_INFERENCE_API_KEY` | Alternative inference key (defaults to `NVIDIA_API_KEY`) |
-| `INFERENCE_NVIDIA_API_KEY` | Alternative inference key (defaults to `NVIDIA_API_KEY`) |
-
-### Updating Secrets
-
-```bash
-kubectl delete secret aiq-credentials -n aiq
-kubectl create secret generic aiq-credentials -n aiq \
-  --from-literal=NVIDIA_API_KEY="new-key" \
-  --from-literal=TAVILY_API_KEY="new-key" \
-  --from-literal=DB_USER_NAME="aiq" \
-  --from-literal=DB_USER_PASSWORD="new-password"
-
-kubectl rollout restart deployment -n aiq aiq-backend aiq-frontend
-```
-
-## Accessing the Application
-
-```bash
-# Frontend UI
-kubectl port-forward -n aiq svc/aiq-frontend 3000:3000
-
-# Backend API
-kubectl port-forward -n aiq svc/aiq-backend 8000:8000
-```
-
-Then open: http://localhost:3000
-
-## Upgrade
-
-```bash
-helm upgrade aiq deployment-k8s/stg/ -n aiq
-```
-
-## Override Values
-
-```bash
-helm upgrade --install aiq deployment-k8s/stg/ -n aiq \
-  --set aiq.apps.backend.replicas=2
-```
-
-## Uninstall
-
-```bash
-helm uninstall aiq -n aiq
-
-# Optionally remove namespace and secrets
-kubectl delete namespace aiq
+kubectl rollout restart deployment -n ns-aiq aiq-backend   # or aiq-frontend
 ```

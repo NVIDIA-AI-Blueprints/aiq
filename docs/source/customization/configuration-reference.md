@@ -103,7 +103,7 @@ llms:
 | `_type` | `str` | **required** | LLM provider type. Use `nim` for NVIDIA NIM endpoints, `openai` for OpenAI-compatible endpoints. |
 | `model_name` | `str` | **required** | Model identifier (for example, `nvidia/nemotron-3-nano-30b-a3b`, `azure/openai/gpt-4.1-mini`). |
 | `base_url` | `str` | `None` | API endpoint URL. Should always be set explicitly for NVIDIA NIM endpoints. |
-| `api_key` | `str` | -- | API key. If omitted, uses `NVIDIA_API_KEY` or `INFERENCE_NVIDIA_API_KEY` from the environment. |
+| `api_key` | `str` | -- | API key. If omitted, uses `NVIDIA_API_KEY` from the environment. |
 | `temperature` | `float` | `None` | Sampling temperature. Lower values produce more deterministic output. When `None`, the API uses its server-side default. |
 | `top_p` | `float` | `None` | Nucleus sampling threshold. When `None`, the API uses its server-side default. |
 | `max_tokens` | `int` | `300` | Maximum tokens in the response. Set higher values (for example, `16384` or `128000`) for research agents. |

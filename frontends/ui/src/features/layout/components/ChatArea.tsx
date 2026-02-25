@@ -111,7 +111,7 @@ export const ChatArea: FC<ChatAreaProps> = ({ isAuthenticated = false, onSignIn 
       {isEmpty ? (
         <WelcomeState isAuthenticated={isAuthenticated} onSignIn={onSignIn} />
       ) : (
-        <Flex direction="col" gap="4" className="mx-auto w-full max-w-3xl p-4">
+        <Flex direction="col" gap="4" className="mx-auto w-full max-w-3xl px-4 pt-4 pb-24">
           {displayableMessages.map((message, index) => {
             const isUserMessage = message.messageType === 'user' || message.role === 'user'
             const messageSteps = isUserMessage ? getStepsForUserMessage(message.id) : []
@@ -328,9 +328,6 @@ interface WelcomeStateProps {
   onSignIn?: () => void
 }
 
-const DISCLAIMER_TEXT =
-  'Disclaimer: AI models generate responses and outputs based on complex algorithms and machine learning techniques, and these responses or outputs may be inaccurate, harmful, biased, or indecent. By testing this model, you assume the risk of any harm caused by any response or output of the model. We may capture interaction analytics to improve the application experience. We will not retain your content, documents or output for analysis for training, but may retain it to enable session history. For more information visit the Docs page.'
-
 const WelcomeState: FC<WelcomeStateProps> = ({ isAuthenticated = false, onSignIn }) => {
   if (!isAuthenticated) {
     // Logged out state - prompt to sign in
@@ -367,13 +364,6 @@ const WelcomeState: FC<WelcomeStateProps> = ({ isAuthenticated = false, onSignIn
           </Button>
         </Flex>
 
-        {/* Disclaimer */}
-        <Text
-          kind="body/regular/sm"
-          className="text-subtle absolute bottom-4 left-1/2 z-10 w-full max-w-3xl -translate-x-1/2 px-4 text-center opacity-70"
-        >
-          {DISCLAIMER_TEXT}
-        </Text>
       </Flex>
     )
   }
@@ -399,13 +389,6 @@ const WelcomeState: FC<WelcomeStateProps> = ({ isAuthenticated = false, onSignIn
         </Text>
       </Flex>
 
-      {/* Disclaimer */}
-      <Text
-        kind="body/regular/sm"
-        className="text-subtle absolute bottom-4 left-1/2 z-10 w-full max-w-3xl -translate-x-1/2 px-4 text-center opacity-70"
-      >
-        {DISCLAIMER_TEXT}
-      </Text>
     </Flex>
   )
 }

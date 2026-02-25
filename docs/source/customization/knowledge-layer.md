@@ -371,7 +371,6 @@ Configuration values are resolved in the following order (highest to lowest prio
 | Variable | Backend | Description |
 |----------|---------|-------------|
 | `NVIDIA_API_KEY` | All | Required for embeddings/VLM |
-| `INFERENCE_NVIDIA_API_KEY` | All | Required for LLM calls through inference API |
 | `KNOWLEDGE_RETRIEVER_BACKEND` | All | Default retriever backend (fallback if not in YAML) |
 | `KNOWLEDGE_INGESTOR_BACKEND` | All | Default ingestor backend (fallback if not in YAML) |
 | `AIQ_CHROMA_DIR` | llamaindex | ChromaDB persistence path |

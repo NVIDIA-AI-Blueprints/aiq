@@ -49,7 +49,6 @@ The sections below explain each group of variables.
 
 | Variable | Description |
 |----------|-------------|
-| `INFERENCE_NVIDIA_API_KEY` | Required when configs reference `inference-api.nvidia.com`. |
 | `OPENAI_API_KEY` | Required only if your config uses OpenAI models directly. |
 | `JINA_API_KEY` | Required only if you enable the evaluation suite. |
 | `WANDB_API_KEY` | Required only if you enable experiment tracking. |
