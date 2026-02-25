@@ -11,7 +11,7 @@ This example uses NVIDIA NIM models for intent classification and shallow resear
 ## Prerequisites
 
 - `NVIDIA_API_KEY` for NIM models
-- `LLM_API_KEY_FOR_FRONTIER_MODEL` for frontier model
+- `LLM_API_KEY_FOR_FRONTIER_MODEL` for frontier model (state-of-the-art models for high-quality outputs; examples include GPT-5.2 from OpenAI, OPUS-4.6 from Anthropic, etc.)
 - `TAVILY_API_KEY` for web search
 
 ## Configuration
