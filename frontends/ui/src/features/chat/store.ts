@@ -51,7 +51,7 @@ import {
   logStoreHydration,
 } from './lib/storage-logger'
 import { pruneMessageForStorage } from './lib/prune-message-for-storage'
-import { ensureStorageCapacity } from './lib/storage-manager'
+import { ensureStorageCapacity, checkStorageHealth } from './lib/storage-manager'
 import { useLayoutStore } from '@/features/layout/store'
 import { WEB_SEARCH_SOURCE_ID } from '@/features/layout/data-sources'
 
@@ -395,14 +395,11 @@ export const useChatStore = create<ChatStore>()(
           if (currentConversation?.id) {
             return currentConversation.id
           }
-          // Create a new conversation if none exists
           if (!currentUserId) {
             return undefined
           }
           
-          // Check storage capacity before creating new session
-          // This will auto-cleanup old sessions if storage is over 4MB
-          ensureStorageCapacity(currentConversation?.id ?? null)
+          ensureStorageCapacity(currentConversation?.id ?? null, currentUserId)
           
           const layoutState = useLayoutStore.getState()
           const defaultEnabledDataSourceIds = getDefaultEnabledDataSourceIds()
@@ -456,10 +453,8 @@ export const useChatStore = create<ChatStore>()(
             deepResearchLastEventId,
           } = get()
           
-          // Check storage capacity when switching to a different session
-          // This will auto-cleanup old sessions if storage is over 4MB
           if (currentConversation?.id !== conversationId) {
-            ensureStorageCapacity(conversationId)
+            ensureStorageCapacity(conversationId, currentUserId)
           }
           
           const conversation = conversations.find((c) => c.id === conversationId)
@@ -1322,6 +1317,13 @@ export const useChatStore = create<ChatStore>()(
             false,
             'addAgentResponse'
           )
+
+          // Proactive storage check after response — this is when storage
+          // meaningfully grows, not just on session create/switch.
+          if (!checkStorageHealth().isHealthy) {
+            const { currentUserId } = get()
+            ensureStorageCapacity(currentConversation.id, currentUserId)
+          }
         },
 
         addAgentResponseWithMeta: (

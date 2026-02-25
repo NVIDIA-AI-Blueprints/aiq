@@ -9,8 +9,36 @@ import {
   getOldestSession,
   cleanupOldSessions,
   ensureStorageCapacity,
+  getBusySessionIds,
 } from './storage-manager'
-import type { Conversation } from '../types'
+import type { Conversation, ChatMessage } from '../types'
+
+const makeConversation = (
+  id: string,
+  userId: string,
+  updatedAt: string | Date,
+  messages: ChatMessage[] = []
+): Conversation => ({
+  id,
+  userId,
+  title: `Session ${id}`,
+  messages,
+  createdAt: new Date(updatedAt),
+  updatedAt: new Date(updatedAt),
+})
+
+const setStoreData = (conversations: Conversation[], currentId: string | null = null) => {
+  const storeData = {
+    state: {
+      conversations,
+      currentConversation: conversations.find((c) => c.id === currentId) ?? null,
+      currentUserId: 'user1',
+      pendingInteraction: null,
+    },
+    version: 0,
+  }
+  localStorage.setItem('aiq-chat-store', JSON.stringify(storeData))
+}
 
 describe('storage-manager', () => {
   beforeEach(() => {
@@ -55,7 +83,6 @@ describe('storage-manager', () => {
 
   describe('checkStorageHealth', () => {
     test('returns healthy when under threshold', () => {
-      // Create small storage (< 4MB)
       localStorage.setItem('aiq-chat-store', 'small data')
 
       const health = checkStorageHealth()
@@ -66,7 +93,6 @@ describe('storage-manager', () => {
     })
 
     test('returns unhealthy when over threshold', () => {
-      // Mock large storage (> 4MB = 4,194,304 bytes)
       const largeData = 'x'.repeat(2_500_000) // ~5MB
       localStorage.setItem('aiq-chat-store', largeData)
 
@@ -79,183 +105,161 @@ describe('storage-manager', () => {
 
   describe('getOldestSession', () => {
     test('returns session with oldest updatedAt', () => {
-      const conversations: Conversation[] = [
-        {
-          id: 's_new',
-          userId: 'user1',
-          title: 'New Session',
-          messages: [],
-          createdAt: new Date('2026-02-09T12:00:00Z'),
-          updatedAt: new Date('2026-02-09T12:00:00Z'),
-        },
-        {
-          id: 's_old',
-          userId: 'user1',
-          title: 'Old Session',
-          messages: [],
-          createdAt: new Date('2026-02-08T10:00:00Z'),
-          updatedAt: new Date('2026-02-08T10:00:00Z'),
-        },
-        {
-          id: 's_middle',
-          userId: 'user1',
-          title: 'Middle Session',
-          messages: [],
-          createdAt: new Date('2026-02-08T15:00:00Z'),
-          updatedAt: new Date('2026-02-08T15:00:00Z'),
-        },
+      const conversations = [
+        makeConversation('s_new', 'user1', '2026-02-09T12:00:00Z'),
+        makeConversation('s_old', 'user1', '2026-02-08T10:00:00Z'),
+        makeConversation('s_middle', 'user1', '2026-02-08T15:00:00Z'),
       ]
 
-      const oldest = getOldestSession(conversations, null)
+      const oldest = getOldestSession(conversations, new Set())
 
       expect(oldest?.id).toBe('s_old')
     })
 
-    test('excludes current session from selection', () => {
-      const conversations: Conversation[] = [
-        {
-          id: 's_current',
-          userId: 'user1',
-          title: 'Current Session',
-          messages: [],
-          createdAt: new Date('2026-02-07T10:00:00Z'),
-          updatedAt: new Date('2026-02-07T10:00:00Z'),
-        },
-        {
-          id: 's_older',
-          userId: 'user1',
-          title: 'Older Session',
-          messages: [],
-          createdAt: new Date('2026-02-08T10:00:00Z'),
-          updatedAt: new Date('2026-02-08T10:00:00Z'),
-        },
+    test('excludes protected sessions from selection', () => {
+      const conversations = [
+        makeConversation('s_current', 'user1', '2026-02-07T10:00:00Z'),
+        makeConversation('s_older', 'user1', '2026-02-08T10:00:00Z'),
       ]
 
-      // s_current is older but is current session, so should return s_older
-      const oldest = getOldestSession(conversations, 's_current')
+      const oldest = getOldestSession(conversations, new Set(['s_current']))
 
       expect(oldest?.id).toBe('s_older')
     })
 
-    test('returns null when only current session exists', () => {
-      const conversations: Conversation[] = [
-        {
-          id: 's_current',
-          userId: 'user1',
-          title: 'Current Session',
-          messages: [],
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        },
+    test('excludes multiple protected sessions', () => {
+      const conversations = [
+        makeConversation('s_protected_1', 'user1', '2026-02-01'),
+        makeConversation('s_protected_2', 'user1', '2026-02-02'),
+        makeConversation('s_eligible', 'user1', '2026-02-03'),
       ]
 
-      const oldest = getOldestSession(conversations, 's_current')
+      const oldest = getOldestSession(conversations, new Set(['s_protected_1', 's_protected_2']))
+
+      expect(oldest?.id).toBe('s_eligible')
+    })
+
+    test('returns null when only protected sessions exist', () => {
+      const conversations = [
+        makeConversation('s_current', 'user1', new Date()),
+      ]
+
+      const oldest = getOldestSession(conversations, new Set(['s_current']))
 
       expect(oldest).toBeNull()
     })
 
     test('returns null for empty conversations array', () => {
-      const oldest = getOldestSession([], null)
+      const oldest = getOldestSession([], new Set())
       expect(oldest).toBeNull()
+    })
+  })
+
+  describe('getBusySessionIds', () => {
+    test('returns empty set when no sessions have active jobs', () => {
+      const conversations = [
+        makeConversation('s1', 'user1', new Date()),
+        makeConversation('s2', 'user1', new Date()),
+      ]
+
+      const busy = getBusySessionIds(conversations)
+
+      expect(busy.size).toBe(0)
+    })
+
+    test('identifies sessions with active deep research jobs', () => {
+      const busyMessages: ChatMessage[] = [
+        {
+          id: 'msg1',
+          role: 'assistant',
+          content: 'Running...',
+          timestamp: new Date(),
+          messageType: 'agent_response',
+          deepResearchJobId: 'job_1',
+          deepResearchJobStatus: 'running',
+        },
+      ]
+
+      const conversations = [
+        makeConversation('s_busy', 'user1', new Date(), busyMessages),
+        makeConversation('s_idle', 'user1', new Date()),
+      ]
+
+      const busy = getBusySessionIds(conversations)
+
+      expect(busy.size).toBe(1)
+      expect(busy.has('s_busy')).toBe(true)
+    })
+
+    test('does not flag completed jobs as busy', () => {
+      const completedMessages: ChatMessage[] = [
+        {
+          id: 'msg1',
+          role: 'assistant',
+          content: 'Done',
+          timestamp: new Date(),
+          messageType: 'agent_response',
+          deepResearchJobId: 'job_1',
+          deepResearchJobStatus: 'success',
+        },
+      ]
+
+      const conversations = [
+        makeConversation('s1', 'user1', new Date(), completedMessages),
+      ]
+
+      const busy = getBusySessionIds(conversations)
+
+      expect(busy.size).toBe(0)
     })
   })
 
   describe('cleanupOldSessions', () => {
     test('removes oldest sessions when over threshold', () => {
-      // Setup: create store with multiple sessions
-      const conversations: Conversation[] = [
-        {
-          id: 's_newest',
-          userId: 'user1',
-          title: 'Newest',
-          messages: [],
-          createdAt: new Date('2026-02-09'),
-          updatedAt: new Date('2026-02-09'),
-        },
-        {
-          id: 's_old_1',
-          userId: 'user1',
-          title: 'Old 1',
-          messages: [],
-          createdAt: new Date('2026-02-01'),
-          updatedAt: new Date('2026-02-01'),
-        },
-        {
-          id: 's_old_2',
-          userId: 'user1',
-          title: 'Old 2',
-          messages: [],
-          createdAt: new Date('2026-02-02'),
-          updatedAt: new Date('2026-02-02'),
-        },
+      const conversations = [
+        makeConversation('s_newest', 'user1', '2026-02-09'),
+        makeConversation('s_old_1', 'user1', '2026-02-01'),
+        makeConversation('s_old_2', 'user1', '2026-02-02'),
       ]
 
-      const storeData = {
-        state: {
-          conversations,
-          currentConversation: conversations[0],
-          currentUserId: 'user1',
-          pendingInteraction: null,
-        },
-        version: 0,
-      }
+      setStoreData(conversations, 's_newest')
 
-      localStorage.setItem('aiq-chat-store', JSON.stringify(storeData))
+      const deletedCount = cleanupOldSessions('s_newest', 'user1')
 
-      // Note: In real scenario, cleanup triggers when storage > 4MB
-      // For testing, we just verify the cleanup logic works
-      const deletedCount = cleanupOldSessions('s_newest')
-
-      // Verify oldest sessions were deleted (but test won't actually delete due to size threshold)
+      // Under test storage won't be above threshold, so no deletions
       expect(deletedCount).toBeGreaterThanOrEqual(0)
     })
 
     test('protects current session from deletion', () => {
-      const conversations: Conversation[] = [
-        {
-          id: 's_current',
-          userId: 'user1',
-          title: 'Current (oldest)',
-          messages: [],
-          createdAt: new Date('2026-02-01'),
-          updatedAt: new Date('2026-02-01'),
-        },
-        {
-          id: 's_newer',
-          userId: 'user1',
-          title: 'Newer',
-          messages: [],
-          createdAt: new Date('2026-02-09'),
-          updatedAt: new Date('2026-02-09'),
-        },
+      const conversations = [
+        makeConversation('s_current', 'user1', '2026-02-01'),
+        makeConversation('s_newer', 'user1', '2026-02-09'),
       ]
 
-      const storeData = {
-        state: {
-          conversations,
-          currentConversation: conversations[0],
-          currentUserId: 'user1',
-          pendingInteraction: null,
-        },
-        version: 0,
-      }
+      setStoreData(conversations, 's_current')
 
-      localStorage.setItem('aiq-chat-store', JSON.stringify(storeData))
-
-      // Even though s_current is oldest, it should be protected
-      cleanupOldSessions('s_current')
+      cleanupOldSessions('s_current', 'user1')
 
       const stored = JSON.parse(localStorage.getItem('aiq-chat-store') || '{}')
       const remainingIds = stored.state?.conversations?.map((c: Conversation) => c.id) || []
 
-      // s_current should still exist (protected)
       expect(remainingIds).toContain('s_current')
+    })
+
+    test('accepts null userId for Tier 2 gracefully', () => {
+      const conversations = [
+        makeConversation('s1', 'user1', '2026-02-01'),
+      ]
+
+      setStoreData(conversations, 's1')
+
+      // Should not throw with null userId
+      expect(() => cleanupOldSessions('s1', null)).not.toThrow()
     })
   })
 
   describe('ensureStorageCapacity', () => {
     test('calls cleanup when storage is over threshold', () => {
-      // Mock large storage
       const largeConversations = Array.from({ length: 10 }, (_, i) => ({
         id: `s_${i}`,
         userId: 'user1',
@@ -263,37 +267,31 @@ describe('storage-manager', () => {
         messages: Array.from({ length: 50 }, (_, j) => ({
           id: `msg_${i}_${j}`,
           role: 'user' as const,
-          content: 'x'.repeat(1000), // 1KB per message
-          timestamp: new Date(`2026-02-0${i + 1}`),
+          content: 'x'.repeat(1000),
+          timestamp: new Date(`2026-02-0${Math.min(i + 1, 9)}`),
           messageType: 'user' as const,
         })),
-        createdAt: new Date(`2026-02-0${i + 1}`),
-        updatedAt: new Date(`2026-02-0${i + 1}`),
+        createdAt: new Date(`2026-02-0${Math.min(i + 1, 9)}`),
+        updatedAt: new Date(`2026-02-0${Math.min(i + 1, 9)}`),
       }))
 
-      const storeData = {
-        state: {
-          conversations: largeConversations,
-          currentConversation: largeConversations[0],
-          currentUserId: 'user1',
-          pendingInteraction: null,
-        },
-        version: 0,
-      }
+      setStoreData(largeConversations, 's_0')
 
-      localStorage.setItem('aiq-chat-store', JSON.stringify(storeData))
+      ensureStorageCapacity('s_0', 'user1')
 
-      // Should trigger cleanup if storage is large enough
-      ensureStorageCapacity('s_0')
-
-      // Test passes if no errors thrown
       expect(true).toBe(true)
     })
 
     test('does not throw error when storage is healthy', () => {
       localStorage.setItem('aiq-chat-store', '{"state":{"conversations":[]}}')
 
-      expect(() => ensureStorageCapacity(null)).not.toThrow()
+      expect(() => ensureStorageCapacity(null, null)).not.toThrow()
+    })
+
+    test('accepts userId parameter', () => {
+      localStorage.setItem('aiq-chat-store', '{"state":{"conversations":[]}}')
+
+      expect(() => ensureStorageCapacity('s_1', 'user1')).not.toThrow()
     })
   })
 })
