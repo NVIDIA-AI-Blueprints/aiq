@@ -19,92 +19,10 @@ The `stg/` chart references `helm-charts-k8s/aiq` as a local file dependency. Bo
 
 ## Prerequisites
 
-- Kubernetes cluster (Kind, EKS, GKE, AKS, etc.)
+- Kubernetes cluster (EKS, GKE, AKS, etc.) or local cluster (Kind, Minikube)
 - `kubectl` configured with cluster access
 - `helm` v3.x installed
 - Required API keys (see [Secrets](#secrets) section)
-
-## Building and Loading Images for Kind
-
-For local development with a [Kind](https://kind.sigs.k8s.io/) cluster, you build images locally and load them directly into the cluster — no registry push required.
-
-### 1. Build the images
-
-Run the following from the **repository root**:
-
-```bash
-# Backend
-docker build --platform linux/amd64 \
-  -f deploy/Dockerfile \
-  -t aiq-research-assistant:dev \
-  .
-
-# Frontend
-docker build --platform linux/amd64 \
-  -f frontends/ui/deploy/Dockerfile \
-  -t aiq-frontend:dev \
-  frontends/ui
-```
-
-This produces two local images:
-- `aiq-research-assistant:dev` — backend (Python / FastAPI)
-- `aiq-frontend:dev` — frontend (Next.js)
-
-### 2. Load the images into Kind
-
-```bash
-kind load docker-image aiq-research-assistant:dev --name <your-cluster-name>
-kind load docker-image aiq-frontend:dev --name <your-cluster-name>
-```
-
-> Run `kind get clusters` if you are unsure of the cluster name.
-
-### 3. Configure values to use the local images
-
-Edit `deployment-k8s/stg/values.yaml` (or pass `--set` flags at deploy time) so the image references match what you loaded:
-
-```yaml
-aiq:
-  apps:
-    backend:
-      image:
-        repository: aiq-research-assistant
-        tag: dev
-        pullPolicy: Never      # <-- critical: tells k8s not to pull from a registry
-    frontend:
-      image:
-        repository: aiq-frontend
-        tag: dev
-        pullPolicy: Never
-```
-
-Or pass them inline:
-
-```bash
-helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq --create-namespace \
-  --set aiq.apps.backend.image.repository=aiq-research-assistant \
-  --set aiq.apps.backend.image.tag=dev \
-  --set aiq.apps.backend.image.pullPolicy=Never \
-  --set aiq.apps.frontend.image.repository=aiq-frontend \
-  --set aiq.apps.frontend.image.tag=dev \
-  --set aiq.apps.frontend.image.pullPolicy=Never
-```
-
-### 4. Create the credentials secret and deploy
-
-Follow the [Setup](#setup) and [Deploy](#deploy) sections below, then verify with:
-
-```bash
-kubectl get pods -n ns-aiq
-```
-
-After a rebuild, reload the updated image with `kind load docker-image ...` and restart the affected deployment:
-
-```bash
-kubectl rollout restart deployment -n ns-aiq aiq-backend   # or aiq-frontend
-```
-
----
 
 ## Setup
 
@@ -219,4 +137,82 @@ helm uninstall aiq -n ns-aiq
 
 # Optionally remove namespace and secrets
 kubectl delete namespace ns-aiq
+```
+
+---
+
+## Getting Started with Minimal K8s (Kind)
+
+For local development with a [Kind](https://kind.sigs.k8s.io/) cluster, you can build images locally and load them directly into the cluster — no registry push required.
+
+### 1. Build the images
+
+Run the following from the **repository root**:
+
+```bash
+# Backend
+docker build --platform linux/amd64 \
+  -f deploy/Dockerfile \
+  -t aiq-research-assistant:dev \
+  .
+
+# Frontend
+docker build --platform linux/amd64 \
+  -f frontends/ui/deploy/Dockerfile \
+  -t aiq-frontend:dev \
+  frontends/ui
+```
+
+This produces two local images:
+- `aiq-research-assistant:dev` — backend (Python / FastAPI)
+- `aiq-frontend:dev` — frontend (Next.js)
+
+### 2. Load the images into Kind
+
+```bash
+kind load docker-image aiq-research-assistant:dev --name <your-cluster-name>
+kind load docker-image aiq-frontend:dev --name <your-cluster-name>
+```
+
+> Run `kind get clusters` if you are unsure of the cluster name.
+
+### 3. Configure values to use the local images
+
+Edit `deployment-k8s/stg/values.yaml` (or pass `--set` flags at deploy time) so the image references match what you loaded:
+
+```yaml
+aiq:
+  apps:
+    backend:
+      image:
+        repository: aiq-research-assistant
+        tag: dev
+        pullPolicy: Never      # <-- critical: tells k8s not to pull from a registry
+    frontend:
+      image:
+        repository: aiq-frontend
+        tag: dev
+        pullPolicy: Never
+```
+
+Or pass them inline during deployment:
+
+```bash
+helm upgrade --install aiq deployment-k8s/stg/ -n ns-aiq --create-namespace \
+  --set aiq.apps.backend.image.repository=aiq-research-assistant \
+  --set aiq.apps.backend.image.tag=dev \
+  --set aiq.apps.backend.image.pullPolicy=Never \
+  --set aiq.apps.frontend.image.repository=aiq-frontend \
+  --set aiq.apps.frontend.image.tag=dev \
+  --set aiq.apps.frontend.image.pullPolicy=Never
+```
+
+### 4. Create the credentials secret and deploy
+
+Follow the main [Setup](#setup) section to create your secrets, then deploy.
+
+After a rebuild, reload the updated image with `kind load docker-image ...` and restart the affected deployment:
+
+```bash
+kubectl rollout restart deployment -n ns-aiq aiq-backend   # or aiq-frontend
 ```
