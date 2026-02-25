@@ -703,12 +703,12 @@ describe('useChatStore', () => {
         conversations: [conv],
       })
 
-      // Wait for initial persist
+      // Wait for initial persist (currentConversation stored as ID string)
       await vi.waitFor(() => {
         const stored = localStorage.getItem(STORAGE_KEY)
         expect(stored).not.toBeNull()
         const parsed = JSON.parse(stored!)
-        expect(parsed.state.currentConversation?.id).toBe('conv-current')
+        expect(parsed.state.currentConversation).toBe('conv-current')
       })
 
       // Delete the current conversation

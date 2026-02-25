@@ -106,9 +106,11 @@ const getChatStoreData = (): { conversations: Conversation[]; currentConversatio
     if (!stored) return null
 
     const parsed = JSON.parse(stored)
+    const currentConversationId: string | null = parsed.state?.currentConversation ?? null
+
     return {
       conversations: parsed.state?.conversations ?? [],
-      currentConversationId: parsed.state?.currentConversation?.id ?? null,
+      currentConversationId,
     }
   } catch {
     return null
@@ -127,12 +129,12 @@ const saveChatStoreData = (
     if (!stored) return
 
     const parsed = JSON.parse(stored)
-    const currentConversation = conversations.find((c) => c.id === currentConversationId) ?? null
 
+    // Store only the ID reference (matches prunePersistedChatState format)
     parsed.state = {
       ...parsed.state,
       conversations,
-      currentConversation,
+      currentConversation: currentConversationId,
     }
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed))
