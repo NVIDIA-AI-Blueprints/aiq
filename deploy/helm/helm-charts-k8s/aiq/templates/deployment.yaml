@@ -124,9 +124,6 @@ spec:
         - name: http
           containerPort: {{ $appConfig.port }}
           protocol: TCP
-        {{- else }}
-        {{- fail (printf "App '%s': either 'port' or 'ports' must be configured" $appName) }}
-        {{- end }}
         {{- end }}
         {{- /* Health checks with defaults and smart port handling */ -}}
         {{- $defaultHealthCheck := $defaults.healthCheck | default dict }}
