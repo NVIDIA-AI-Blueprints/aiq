@@ -25,8 +25,6 @@ The `deployment-k8s/` chart references `helm-charts-k8s/aiq` as a local file dep
 
 ## Setup
 
-> **Note:** If you generated these charts using the blueprint generator, `helm dependency update` was already run automatically. Only run it manually if you re-package or move the charts.
-
 ### 1. Create the credentials secret
 
 The deployment reads API keys and database credentials from a Kubernetes Secret named `aiq-credentials`.
