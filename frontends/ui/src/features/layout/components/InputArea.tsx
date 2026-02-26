@@ -293,12 +293,12 @@ export const InputArea: FC<InputAreaProps> = ({
         return
       }
 
-      // uploadFiles validates internally and sets error if invalid
-      await uploadFiles(files, sessionId)
-
-      // Open the data sources panel and switch to files tab
+      // Open the files tab immediately so the user sees instant feedback
       setDataSourcesPanelTab('files')
       openRightPanel('data-sources')
+
+      // uploadFiles validates internally and sets error if invalid
+      await uploadFiles(files, sessionId)
     },
     [
       ensureSession,

@@ -175,32 +175,34 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
 
       const trackedFileMap: Map<string, TrackedFile> = new Map()
 
+      // Add tracked files to the store immediately so uploading cards appear
+      // in the UI before any network calls (collection creation, upload POST)
+      for (const file of validFiles) {
+        const trackedFile: TrackedFile = {
+          id: uuidv4(),
+          file,
+          fileName: file.name,
+          fileSize: file.size,
+          status: 'uploading',
+          progress: 0,
+          collectionName,
+          uploadedAt: new Date().toISOString(),
+        }
+        addTrackedFile(trackedFile)
+        trackedFileMap.set(file.name, trackedFile)
+      }
+
+      // Show informational banner in chat as soon as upload starts
+      const chatStore = useChatStore.getState()
+      chatStore.addFileUploadStatusCard(
+        'uploaded',
+        validFiles.length,
+        `upload-${Date.now()}`,
+        collectionName
+      )
+
       try {
         await ensureCollectionExists(collectionName)
-
-        for (const file of validFiles) {
-          const trackedFile: TrackedFile = {
-            id: uuidv4(),
-            file,
-            fileName: file.name,
-            fileSize: file.size,
-            status: 'uploading',
-            progress: 0,
-            collectionName,
-            uploadedAt: new Date().toISOString(),
-          }
-          addTrackedFile(trackedFile)
-          trackedFileMap.set(file.name, trackedFile)
-        }
-
-        // Show informational banner in chat as soon as upload starts
-        const chatStore = useChatStore.getState()
-        chatStore.addFileUploadStatusCard(
-          'uploaded',
-          validFiles.length,
-          `upload-${Date.now()}`,
-          collectionName
-        )
 
         const { job_id, file_ids } = await clientRef.current.uploadFiles(collectionName, validFiles)
 
