@@ -49,6 +49,7 @@ jobs:
           uv pip install nbconvert
           uv pip install -e ./frontends/aiq_api
           uv pip install -e ./sources/google_scholar_paper_search
+          uv pip install -e "./sources/knowledge_layer[all]"
 
       - name: Ruff checks
         run: |
