@@ -57,7 +57,7 @@ These topics apply to all deployment methods and are documented in the [Helm REA
 
 - [Configuration](../README.md#configuration) — switching workflow configs (LlamaIndex vs FRAG)
 - [FRAG Integration](../README.md#frag-integration) — connecting to a RAG Blueprint deployment
-- [Secrets](../README.md#secrets) — required and optional API keys
+- [Secrets](../README.md#secrets) — required API keys and database credentials (`DB_USER_NAME=aiq`, `DB_USER_PASSWORD=aiq-dev` by default)
 - [Access the application](../README.md#access-the-application) — port-forwarding to the UI and API
 
 ## Upgrade

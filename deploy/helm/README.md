@@ -62,7 +62,9 @@ API credentials for the application:
 ```bash
 kubectl create secret generic aiq-credentials -n ns-aiq \
   --from-literal=NVIDIA_API_KEY="$NGC_API_KEY" \
-  --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY"
+  --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY" \
+  --from-literal=DB_USER_NAME="aiq" \
+  --from-literal=DB_USER_PASSWORD="aiq-dev"
 ```
 
 Image pull secret for the NGC container registry:
@@ -270,13 +272,13 @@ helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n n
 |-----|-------------|
 | `NVIDIA_API_KEY` | API key for NIM inference models |
 | `TAVILY_API_KEY` | Tavily API key for web search |
+| `DB_USER_NAME` | PostgreSQL username (default: `aiq`) |
+| `DB_USER_PASSWORD` | PostgreSQL password (default: `aiq-dev`) |
 
 ### Optional
 
 | Key | Description |
 |-----|-------------|
-| `DB_USER_NAME` | PostgreSQL username (defaults to built-in value) |
-| `DB_USER_PASSWORD` | PostgreSQL password (defaults to built-in value) |
 | `SERPER_API_KEY` | Serper API key for Google search |
 | `JINA_API_KEY` | Jina API key |
 | `WANDB_API_KEY` | Weights & Biases API key |
