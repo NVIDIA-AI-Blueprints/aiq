@@ -291,7 +291,9 @@ helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n n
 kubectl delete secret aiq-credentials -n ns-aiq
 kubectl create secret generic aiq-credentials -n ns-aiq \
   --from-literal=NVIDIA_API_KEY="new-key" \  # pragma: allowlist secret
-  --from-literal=TAVILY_API_KEY="new-key"   # pragma: allowlist secret
+  --from-literal=TAVILY_API_KEY="new-key" \  # pragma: allowlist secret
+  --from-literal=DB_USER_NAME="aiq" \
+  --from-literal=DB_USER_PASSWORD="aiq-dev"
 
 kubectl rollout restart deployment -n ns-aiq aiq-backend aiq-frontend
 ```
