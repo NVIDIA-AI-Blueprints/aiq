@@ -14,7 +14,7 @@ This guide walks through setting up the AI-Q blueprint for local development. Fo
 | Python | 3.11 -- 3.13 | 3.13 recommended |
 | [uv](https://github.com/astral-sh/uv) | latest | Python package manager (installed automatically by the setup script if missing) |
 | Git | 2.x+ | |
-| Node.js | 18+ | Optional -- only needed for the web UI |
+| Node.js | 22+ | Optional -- only needed for the web UI |
 
 You also need at least one LLM API key. Refer to [API key setup](#api-key-setup) below.
 
@@ -24,7 +24,7 @@ The setup script handles everything -- virtual environment, Python dependencies,
 
 ```bash
 git clone <repository-url>
-cd aiq-bp
+cd aiq
 
 ./scripts/setup.sh
 ```
@@ -55,7 +55,7 @@ If you prefer to install components selectively, follow these steps.
 
 ```bash
 git clone <repository-url>
-cd aiq-bp
+cd aiq
 ```
 
 ### 2. Create the Virtual Environment
