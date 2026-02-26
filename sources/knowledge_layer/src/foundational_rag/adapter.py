@@ -857,7 +857,7 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
         failed_count = sum(1 for fd in job.file_details if fd.status == FileStatus.FAILED)
         if failed_count == job.total_files:
             job.status = JobState.FAILED
-            job.error_message = "All file uploads failed"
+            job.error_message = "File upload failed"
             job.completed_at = datetime.now()
         # Otherwise keep as PROCESSING - get_job_status will poll FRAG and update
 
@@ -911,21 +911,54 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
                     if response.status_code == 200:
                         status_data = response.json()
                         state = status_data.get("state", "").lower()
-                        logger.debug(f"FRAG task {task_id[:8]} state={state}")
+                        logger.debug(f"FRAG task {task_id[:8]} state={state}, response={status_data}")
 
                         if state in ("success", "completed", "finished"):
-                            # Mark all files in this batch task as succeeded
+                            result = status_data.get("result", {})
+                            failed_docs = result.get("failed_documents", [])
+                            failed_names: dict[str, str] = {}
+                            for fdoc in failed_docs:
+                                fname = fdoc.get("document_name", "")
+                                ferr = fdoc.get("error_message", "Ingestion failed")
+                                if fname:
+                                    failed_names[fname] = ferr
+
+                            if failed_names:
+                                logger.warning(
+                                    f"FRAG task {task_id[:8]} completed with "
+                                    f"{len(failed_names)} failed file(s): {list(failed_names.keys())}"
+                                )
+
                             if file_indices:
                                 for idx in file_indices:
                                     if (
                                         idx < len(job.file_details)
                                         and job.file_details[idx].status == FileStatus.INGESTING
                                     ):
-                                        job.file_details[idx].status = FileStatus.SUCCESS
-                                logger.debug(f"Batch ingestion succeeded ({len(file_indices)} files)")
+                                        fd = job.file_details[idx]
+                                        # Check if this file appears in failed_documents
+                                        matched_error = next(
+                                            (err for fname, err in failed_names.items() if fname in fd.file_name),
+                                            None,
+                                        )
+                                        if matched_error:
+                                            fd.status = FileStatus.FAILED
+                                            fd.error_message = matched_error
+                                        else:
+                                            fd.status = FileStatus.SUCCESS
+                                succeeded = sum(
+                                    1
+                                    for i in file_indices
+                                    if i < len(job.file_details) and job.file_details[i].status == FileStatus.SUCCESS
+                                )
+                                failed = sum(
+                                    1
+                                    for i in file_indices
+                                    if i < len(job.file_details) and job.file_details[i].status == FileStatus.FAILED
+                                )
+                                logger.debug(f"Batch ingestion done: {succeeded} succeeded, {failed} failed")
                             else:
                                 # Fallback: match by document name
-                                result = status_data.get("result", {})
                                 docs = result.get("documents", [])
                                 for doc in docs:
                                     doc_name = doc.get("document_name", "")
@@ -933,6 +966,12 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
                                         if doc_name in fd.file_name and fd.status == FileStatus.INGESTING:
                                             fd.status = FileStatus.SUCCESS
                                             logger.debug("File ingestion succeeded")
+                                for fname, ferr in failed_names.items():
+                                    for fd in job.file_details:
+                                        if fname in fd.file_name and fd.status == FileStatus.INGESTING:
+                                            fd.status = FileStatus.FAILED
+                                            fd.error_message = ferr
+                                            logger.warning(f"File ingestion failed: {ferr}")
                         elif state == "failed":
                             result = status_data.get("result", {})
                             # Try multiple fields for error message
@@ -996,7 +1035,7 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
                 job.processed_files = total_done
                 if failed_count == job.total_files:
                     job.status = JobState.FAILED
-                    job.error_message = "All file ingestions failed"
+                    job.error_message = "File ingestion failed"
                 else:
                     job.status = JobState.COMPLETED
                 job.completed_at = datetime.now()
@@ -1463,6 +1502,26 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
                         metadata=enriched_metadata,
                     )
                 )
+
+            # Include failed files from local job tracking.
+            # The FRAG server only returns successfully ingested documents, so
+            # files that failed ingestion would otherwise vanish from the UI.
+            existing_names = {f.file_name for f in files}
+            for job in self._jobs.values():
+                if job.collection_name != collection_name:
+                    continue
+                for fd in job.file_details:
+                    if fd.status == FileStatus.FAILED and fd.file_name not in existing_names:
+                        files.append(
+                            FileInfo(
+                                file_id=fd.file_name,
+                                file_name=fd.file_name,
+                                collection_name=collection_name,
+                                status=FileStatus.FAILED,
+                                error_message=fd.error_message,
+                            )
+                        )
+                        existing_names.add(fd.file_name)
 
             return files
 

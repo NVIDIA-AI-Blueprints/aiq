@@ -171,7 +171,8 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
     onDelete(id)
   }
 
-  const deleteDisabled = isBusy
+  const isProcessing = status === 'uploading' || status === 'ingesting'
+  const deleteDisabled = isBusy || isProcessing
 
   return (
     <Flex
@@ -269,7 +270,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
           onClick={handleDelete}
           disabled={deleteDisabled}
           aria-label={deleteDisabled ? `Delete ${title} (disabled)` : `Delete ${title}`}
-          title={deleteDisabled ? "Cannot delete files during active operations" : "Delete file"}
+          title={isProcessing ? "Wait for upload to complete" : deleteDisabled ? "Cannot delete files during active operations" : "Delete file"}
           className="ml-2 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
         >
           <Trash width={16} height={16} className="text-subtle hover:text-error" />

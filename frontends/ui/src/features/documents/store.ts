@@ -169,7 +169,19 @@ export const useDocumentsStore = create<DocumentsStore>()(
                 .map((f) => [f.serverFileId || f.id, f])
             )
 
-            // Remove any existing files for this collection
+            // Separate in-progress files (uploading/ingesting) that the server
+            // doesn't know about yet. These must survive the replace so the UI
+            // keeps showing upload progress cards.
+            const serverFileIds = new Set(files.map((f) => f.file_id))
+            const inProgressFiles = state.trackedFiles.filter(
+              (f) =>
+                f.collectionName === collectionName &&
+                (f.status === 'uploading' || f.status === 'ingesting') &&
+                !serverFileIds.has(f.serverFileId ?? '') &&
+                !serverFileIds.has(f.id)
+            )
+
+            // Remove existing files for this collection (except in-progress ones kept above)
             const otherFiles = state.trackedFiles.filter((f) => f.collectionName !== collectionName)
 
             // Convert FileInfo to TrackedFile, preserving jobId from existing files
@@ -194,7 +206,7 @@ export const useDocumentsStore = create<DocumentsStore>()(
             })
 
             return {
-              trackedFiles: [...otherFiles, ...serverFiles],
+              trackedFiles: [...otherFiles, ...serverFiles, ...inProgressFiles],
             }
           },
           false,
