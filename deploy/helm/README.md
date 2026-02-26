@@ -3,24 +3,15 @@ SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Kubernetes (Helm)
+# AI-Q Helm Deployment
 
-Deploy the AI-Q blueprint to a Kubernetes cluster using the Helm charts included in the repository.
+This directory contains Helm charts for deploying AI-Q to a Kubernetes cluster.
 
-## Prerequisites
-
-- Kubernetes cluster (EKS, GKE, AKS, or a local cluster such as Kind or Minikube).
-- `kubectl` configured with cluster access.
-- `helm` v3.x installed.
-- API keys for the models and tools you plan to use (refer to [Installation -- API Key Setup](../get-started/installation.md#api-key-setup)).
-
-## Chart Structure
-
-The Helm deployment lives under `deploy/helm/`:
+## Directory Structure
 
 ```
 deploy/helm/
-├── README.md                  # NGC chart install & shared configuration
+├── README.md                  # This file — NGC chart install & shared configuration
 ├── deployment-k8s/            # Source chart wrapper (for repo-based deployments)
 │   ├── Chart.yaml             #   Depends on helm-charts-k8s/aiq
 │   ├── values.yaml            #   Deployment values
@@ -29,42 +20,24 @@ deploy/helm/
     └── aiq/                   # Base application Helm chart (templates, helpers)
 ```
 
-## Setup
+## Deployment Methods
 
-### 1. Create a namespace
+| Method | When to use |
+|--------|-------------|
+| [NGC Helm chart](#install-from-ngc-helm-repository) | Install a pre-built chart from the NGC Helm repository |
+| [Source chart](deployment-k8s/README.md) | You cloned the repository and want to build/deploy from source |
 
-```bash
-kubectl create namespace ns-aiq --dry-run=client -o yaml | kubectl apply -f -
-```
+## Prerequisites
 
-### 2. Create the credentials secret
+- Kubernetes cluster (EKS, GKE, AKS, or a local cluster such as Kind or Minikube)
+- `kubectl` configured with cluster access
+- `helm` v3.x installed
+- NGC API key (`NGC_API_KEY` environment variable)
+- Required API keys (see [Secrets](#secrets) below)
 
-The deployment reads API keys from a Kubernetes Secret named `aiq-credentials`:
+## Install from NGC Helm Repository
 
-```bash
-kubectl create secret generic aiq-credentials -n ns-aiq \
-  --from-literal=NVIDIA_API_KEY="$NGC_API_KEY" \
-  --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY"
-```
-
-### 3. Create an image pull secret (NGC registry)
-
-If you are pulling pre-built images from the NGC container registry, create a Docker registry secret:
-
-```bash
-kubectl create secret docker-registry ngc-secret -n ns-aiq \
-  --docker-server=nvcr.io \
-  --docker-username='$oauthtoken' \
-  --docker-password=$NGC_API_KEY
-```
-
-## Deploy
-
-### Using the NGC Helm repository
-
-Add the NGC Helm repository and install the chart directly. This is the recommended approach for pre-built releases.
-
-**1. Add the repository:**
+### 1. Add the NGC Helm repository
 
 ```bash
 helm repo add <ngc-helm-repo> https://helm.ngc.nvidia.com/<ngc-org>/<ngc-team> \
@@ -76,18 +49,36 @@ helm repo update <ngc-helm-repo>
 
 Replace `<ngc-helm-repo>` with a local name for the repository, and `<ngc-org>/<ngc-team>` with the NGC organization and team provided to you.
 
-**2. Install the chart:**
-
-Install directly from the repository:
+### 2. Create the namespace
 
 ```bash
-helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n ns-aiq \
-  --wait --timeout 10m \
-  --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
-  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+kubectl create namespace ns-aiq --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-Or fetch the chart archive first, then install from the local `.tgz` file:
+### 3. Create secrets
+
+API credentials for the application:
+
+```bash
+kubectl create secret generic aiq-credentials -n ns-aiq \
+  --from-literal=NVIDIA_API_KEY="$NGC_API_KEY" \
+  --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY"
+```
+
+Image pull secret for the NGC container registry:
+
+```bash
+kubectl create secret docker-registry ngc-secret -n ns-aiq \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password=$NGC_API_KEY
+```
+
+### 4. Install the chart
+
+**Option A — Fetch then install:**
+
+Download the chart archive first, then install from the local `.tgz` file:
 
 ```bash
 helm pull <ngc-helm-repo>/<chart-name> --version <version>
@@ -98,42 +89,47 @@ helm upgrade --install aiq <chart-name>-<version>.tgz -n ns-aiq \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
 ```
 
+**Option B — Install directly from the repository:**
+
+```bash
+helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n ns-aiq \
+  --wait --timeout 10m \
+  --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+```
+
 Replace `<chart-name>` and `<version>` with the values provided to you (for example, `aiq-web` and `2603.7.0`).
 
-For the full NGC chart workflow (value overrides, upgrades, troubleshooting), see [`deploy/helm/README.md`](../../../deploy/helm/README.md).
+### Override values
 
-### Using the source chart
-
-If you cloned the repository, you can deploy from the local source chart. See the [source chart README](../../../deploy/helm/deployment-k8s/README.md) for full details including Kind local development.
+Pass additional `--set` flags to customize the deployment:
 
 ```bash
-cd deploy/helm
-
-helm dependency update deployment-k8s/
-
-helm install aiq deployment-k8s/ -n ns-aiq --create-namespace
-```
-
-To use NGC container images with the source chart:
-
-```bash
-helm install aiq deployment-k8s/ -n ns-aiq --create-namespace \
+helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n ns-aiq \
+  --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
-  --set aiq.apps.backend.image.repository=nvcr.io/nvidia/blueprint/aiq-agent \
-  --set aiq.apps.frontend.image.repository=nvcr.io/nvidia/blueprint/aiq-frontend
+  --set aiq.apps.backend.image.tag=<tag>
 ```
 
-To use locally built images (see [Docker Build System](./docker-build.md)):
+Or supply a custom values file:
 
 ```bash
-helm install aiq deployment-k8s/ -n ns-aiq --create-namespace \
-  --set aiq.apps.backend.image.repository=aiq-agent \
-  --set aiq.apps.backend.image.tag=dev \
-  --set aiq.apps.backend.image.pullPolicy=IfNotPresent \
-  --set aiq.apps.frontend.image.repository=aiq-frontend \
-  --set aiq.apps.frontend.image.tag=dev \
-  --set aiq.apps.frontend.image.pullPolicy=IfNotPresent
+helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n ns-aiq \
+  --wait --timeout 10m \
+  -f custom-values.yaml
+```
+
+### Inspect default values
+
+To see what values a chart supports before installing:
+
+```bash
+# From the repository
+helm show values <ngc-helm-repo>/<chart-name> --version <version>
+
+# From a local .tgz file
+helm show values <chart-name>-<version>.tgz
 ```
 
 ### Verify
@@ -152,8 +148,6 @@ aiq-postgres-xxx                1/1     Running   0          30s
 ```
 
 ### Health check
-
-Once all pods are running, verify the backend is responding:
 
 ```bash
 kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000 &
@@ -174,21 +168,44 @@ kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000
 
 Open [http://localhost:3000](http://localhost:3000) to access the web UI.
 
+### Upgrade
+
+To upgrade an existing release to a newer chart version:
+
+```bash
+helm repo update <ngc-helm-repo>
+
+helm upgrade aiq <ngc-helm-repo>/<chart-name> --version <new-version> -n ns-aiq \
+  --wait --timeout 10m \
+  --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+```
+
+### Uninstall
+
+```bash
+helm uninstall aiq -n ns-aiq
+
+# Optionally remove namespace and secrets
+kubectl delete namespace ns-aiq
+```
+
 ## Configuration
 
 The backend loads a workflow config at startup. Switch configs with `--set`:
 
 | Config file | Description |
 |-------------|-------------|
-| `configs/config_web_default_llamaindex.yml` | Default -- LlamaIndex backend (no external RAG required) |
+| `configs/config_web_default_llamaindex.yml` | Default — LlamaIndex backend (no external RAG required) |
 | `configs/config_web_frag.yml` | Foundational RAG mode (requires a running RAG service) |
 
 ```bash
-helm upgrade --install aiq <release-or-chart> -n ns-aiq \
+helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n ns-aiq \
+  --wait --timeout 10m \
+  --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml
 ```
-
-Replace `<release-or-chart>` with the NGC repo reference, `.tgz` file path, or `deployment-k8s/` directory depending on your [deployment method](#deploy).
 
 ## FRAG Integration
 
@@ -199,7 +216,10 @@ To use the Foundational RAG (FRAG) config, you need a running NVIDIA RAG Bluepri
 If the RAG Blueprint is deployed in the same Kubernetes cluster, use internal service DNS:
 
 ```bash
-helm upgrade --install aiq <release-or-chart> -n ns-aiq \
+helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n ns-aiq \
+  --wait --timeout 10m \
+  --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml \
   --set aiq.apps.backend.env.RAG_SERVER_URL=http://rag-server.<rag-namespace>.svc.cluster.local:8081/v1 \
   --set aiq.apps.backend.env.RAG_INGEST_URL=http://ingestor-server.<rag-namespace>.svc.cluster.local:8082/v1
@@ -212,7 +232,10 @@ Replace `<rag-namespace>` with the namespace where the RAG Blueprint is deployed
 If the RAG service is running outside the cluster:
 
 ```bash
-helm upgrade --install aiq <release-or-chart> -n ns-aiq \
+helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n ns-aiq \
+  --wait --timeout 10m \
+  --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml \
   --set aiq.apps.backend.env.RAG_SERVER_URL=http://<rag-host>:8081/v1 \
   --set aiq.apps.backend.env.RAG_INGEST_URL=http://<rag-ingest-host>:8082/v1
@@ -234,12 +257,12 @@ aiq:
 ```
 
 ```bash
-helm upgrade --install aiq <release-or-chart> -n ns-aiq -f aiq-frag-values.yaml
+helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n ns-aiq \
+  --wait --timeout 10m \
+  -f aiq-frag-values.yaml
 ```
 
-For complete examples with NGC-specific flags, see [`deploy/helm/README.md`](../../../deploy/helm/README.md#frag-integration).
-
-## Secrets Reference
+## Secrets
 
 ### Required
 
@@ -266,37 +289,9 @@ For complete examples with NGC-specific flags, see [`deploy/helm/README.md`](../
 kubectl delete secret aiq-credentials -n ns-aiq
 kubectl create secret generic aiq-credentials -n ns-aiq \
   --from-literal=NVIDIA_API_KEY="new-key" \  # pragma: allowlist secret
-  --from-literal=TAVILY_API_KEY="new-key"    # pragma: allowlist secret
+  --from-literal=TAVILY_API_KEY="new-key"   # pragma: allowlist secret
 
 kubectl rollout restart deployment -n ns-aiq aiq-backend aiq-frontend
-```
-
-## Upgrade
-
-For NGC Helm chart releases:
-
-```bash
-helm repo update <ngc-helm-repo>
-
-helm upgrade aiq <ngc-helm-repo>/<chart-name> --version <new-version> -n ns-aiq \
-  --wait --timeout 10m \
-  --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
-  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
-```
-
-For source chart deployments:
-
-```bash
-helm upgrade aiq deployment-k8s/ -n ns-aiq
-```
-
-## Uninstall
-
-```bash
-helm uninstall aiq -n ns-aiq
-
-# Optionally remove namespace and secrets
-kubectl delete namespace ns-aiq
 ```
 
 ## Troubleshooting
@@ -322,13 +317,6 @@ kubectl logs -n ns-aiq -l component=frontend -f
 kubectl logs -n ns-aiq <backend-pod> -c db-init
 ```
 
-### PVC inspection
-
-```bash
-kubectl get pvc -n ns-aiq
-kubectl describe pvc aiq-postgres-data -n ns-aiq
-```
-
 ### Common issues
 
 | Symptom | Cause | Fix |
@@ -338,3 +326,7 @@ kubectl describe pvc aiq-postgres-data -n ns-aiq
 | Pod stuck in `Pending` | Insufficient cluster resources or PVC not bound | Check `kubectl describe pod <pod>` for scheduling errors. Verify PVC status with `kubectl get pvc -n ns-aiq`. |
 | FRAG mode: RAG connection refused | RAG service not reachable | Verify RAG pods are running and service DNS resolves. Test with `kubectl exec` into the backend pod and `curl` the RAG URL. |
 | Health check fails | Backend not fully started | Wait for init containers to complete. Check `kubectl logs <pod> -c db-init -n ns-aiq` for database init issues. |
+
+## Source Chart Deployment
+
+For deploying from the cloned repository (building from source charts, local images, NGC images), see the [deployment-k8s README](deployment-k8s/README.md).
