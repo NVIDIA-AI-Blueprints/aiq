@@ -5,11 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # Deployment
 
-The AI-Q blueprint supports two deployment methods. Choose the one that best fits your environment and operational requirements.
+The AI-Q blueprint supports multiple deployment methods. Choose the one that best fits your environment and operational requirements.
 
 | Method | Best For | Prerequisites |
 |--------|----------|---------------|
 | [Docker Compose](./docker-compose.md) | Local development, team demos, single-node deployments | Docker Engine, Docker Compose v2 |
+| [Kubernetes (Helm)](./kubernetes.md) | Multi-node clusters, production | Kubernetes cluster, Helm v3.x |
 | Manual (no containers) | Development and debugging | Python 3.11--3.13, system dependencies (refer to [Installation](../get-started/installation.md)) |
 
 ## Architecture Overview
@@ -23,6 +24,8 @@ All containerized deployments run the same three services:
 ## Deployment Guides
 
 - **[Docker Compose](./docker-compose.md)** -- Full Docker Compose reference covering environment setup, the standard LlamaIndex stack, Foundational RAG (FRAG) integration, database configuration, and troubleshooting.
+
+- **[Kubernetes (Helm)](./kubernetes.md)** -- Helm chart deployment for Kubernetes clusters, including NGC image pull secrets, configuration switching, FRAG integration, and troubleshooting.
 
 - **[Docker Build System](./docker-build.md)** -- Multi-stage Dockerfile architecture, build targets (dev vs. release), base images, and startup scripts (`entrypoint.py` and `start_web.py`).
 
