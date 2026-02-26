@@ -129,7 +129,7 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
 
   // Tabs that require full stream data (tasks, thinking, citations)
   const tabRequiresStream = ['tasks', 'thinking', 'citations'].includes(config.buttonTab)
-  
+
   // Job is complete if banner type indicates completion (success, failure, cancelled)
   // 'starting' banner means job is still in progress - don't try to load archived data
   const isJobComplete = bannerType !== 'starting'
@@ -137,7 +137,7 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   const handleButtonClick = useCallback(async () => {
     setResearchPanelTab(config.buttonTab)
     openRightPanel('research')
-    
+
     // Only load data for completed jobs
     if (isJobComplete) {
       if (config.buttonTab === 'report' && !reportContent.trim()) {

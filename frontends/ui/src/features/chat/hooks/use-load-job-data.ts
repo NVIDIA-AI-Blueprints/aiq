@@ -442,13 +442,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
       // Check ephemeral cache first - if we have data for this job, just show it
       const currentState = useChatStore.getState()
-      const hasReportData = 
-        currentState.deepResearchJobId === jobId && 
-        currentState.reportContent && 
+      const hasReportData =
+        currentState.deepResearchJobId === jobId &&
+        currentState.reportContent &&
         currentState.reportContent.trim().length > 0
-      
+
       // For stream requests, also check if stream is already loaded
-      const hasStreamData = 
+      const hasStreamData =
         currentState.deepResearchJobId === jobId &&
         currentState.deepResearchStreamLoaded
 

@@ -13,4 +13,3 @@ Use Docker Compose to run the backend, UI, and PostgreSQL locally:
 Deploy to a Kubernetes cluster using pre-built NGC Helm charts or the source chart:
 
 - [helm/README.md](helm/README.md)
-

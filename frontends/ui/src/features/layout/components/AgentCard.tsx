@@ -126,18 +126,18 @@ const getToolDisplayName = (toolName: string): string => {
  */
 const dedupeToolCalls = (toolCalls: DeepResearchToolCall[]): DeepResearchToolCall[] => {
   const seen = new Map<string, DeepResearchToolCall>()
-  
+
   for (const tc of toolCalls) {
     const key = getToolCallDescription(tc, false)
     const existing = seen.get(key)
-    
+
     if (!existing) {
       seen.set(key, tc)
     } else if (tc.status === 'complete' && existing.status !== 'complete') {
       seen.set(key, tc)
     }
   }
-  
+
   return Array.from(seen.values())
 }
 

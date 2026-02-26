@@ -16,7 +16,7 @@ Release v1.2.0
 - Adopted RAG 2.3.0
 - Tested for compatability with RTX Pro 6000
 
-Release v1.1.0 
+Release v1.1.0
 - Tested for compatability with RAG 2.2.0 release and B200
 - Adds support for NVIDIA Workbench
 

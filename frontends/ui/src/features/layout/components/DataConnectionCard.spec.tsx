@@ -254,4 +254,3 @@ describe('DataConnectionCard - Busy Session State', () => {
     expect(screen.getByRole('button')).toHaveAttribute('aria-disabled', 'true')
   })
 })
-

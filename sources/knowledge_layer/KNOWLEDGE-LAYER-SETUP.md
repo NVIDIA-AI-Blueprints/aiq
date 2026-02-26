@@ -83,7 +83,7 @@ functions:
     backend: llamaindex             # Required: which adapter to use
     collection_name: my_docs        # Required: target collection
     top_k: 5                        # Results to return
-    
+
     # Backend-specific options (each backend uses different fields):
     chroma_dir: /tmp/chroma_data              # llamaindex only
     rag_url: http://localhost:8081/v1         # foundational_rag only
@@ -395,7 +395,7 @@ from typing import Any, Dict, List, Optional
 from aiq_agent.knowledge.base import BaseRetriever, BaseIngestor
 from aiq_agent.knowledge.factory import register_retriever, register_ingestor
 from aiq_agent.knowledge.schema import (
-    Chunk, RetrievalResult, CollectionInfo, FileInfo, 
+    Chunk, RetrievalResult, CollectionInfo, FileInfo,
     FileStatus, ContentType, IngestionJobStatus
 )
 
@@ -403,35 +403,35 @@ from aiq_agent.knowledge.schema import (
 @register_retriever("my_backend")  # <-- This name goes in YAML config
 class MyRetriever(BaseRetriever):
     """My custom retriever implementation."""
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         # Initialize your vector store client here
         self.endpoint = self.config.get("endpoint", "http://localhost:8000")
-    
+
     @property
     def backend_name(self) -> str:
         return "my_backend"  # Should match registration name
-    
+
     async def retrieve(
-        self, 
-        query: str, 
-        collection_name: str, 
-        top_k: int = 5, 
+        self,
+        query: str,
+        collection_name: str,
+        top_k: int = 5,
         filters: Optional[Dict] = None
     ) -> RetrievalResult:
         """Query your vector store and return normalized results."""
         # Your search logic here
         raw_results = []  # Get from your backend
-        
+
         chunks = [self.normalize(r) for r in raw_results]
         return RetrievalResult(
-            chunks=chunks, 
-            query=query, 
+            chunks=chunks,
+            query=query,
             backend=self.backend_name,
             total_tokens=sum(len(c.content.split()) for c in chunks)
         )
-    
+
     def normalize(self, raw_result: Any) -> Chunk:
         """Convert backend-specific result to universal Chunk schema."""
         return Chunk(
@@ -447,53 +447,53 @@ class MyRetriever(BaseRetriever):
 @register_ingestor("my_backend")  # <-- Same registration name
 class MyIngestor(BaseIngestor):
     """My custom ingestor implementation."""
-    
+
     def __init__(self, config: Optional[Dict[str, Any]] = None):
         super().__init__(config)
         self._jobs: Dict[str, FileInfo] = {}  # Track async jobs
         self.endpoint = self.config.get("endpoint", "http://localhost:8000")
-    
+
     @property
     def backend_name(self) -> str:
         return "my_backend"
-    
+
     # --- Collection Management ---
-    
+
     def create_collection(self, name: str, description: str = None, **kwargs) -> CollectionInfo:
         """Create a new collection in your vector store."""
         # Your creation logic
         return CollectionInfo(
-            name=name, 
+            name=name,
             description=description,
             backend=self.backend_name,
             file_count=0,
             chunk_count=0
         )
-    
+
     def delete_collection(self, name: str) -> bool:
         """Delete a collection."""
         # Your deletion logic
         return True
-    
+
     def list_collections(self) -> List[CollectionInfo]:
         """List all collections."""
         return []
-    
+
     def get_collection(self, name: str) -> Optional[CollectionInfo]:
         """Get collection metadata."""
         return None
-    
+
     # --- File Management ---
-    
+
     def upload_file(self, file_path: str, collection_name: str, **kwargs) -> str:
         """Upload and ingest a file. Returns job_id for status tracking."""
         import uuid
         from datetime import datetime
         import os
-        
+
         job_id = str(uuid.uuid4())
         filename = os.path.basename(file_path)
-        
+
         # Track the job
         self._jobs[job_id] = FileInfo(
             file_id=job_id,
@@ -502,31 +502,31 @@ class MyIngestor(BaseIngestor):
             status=FileStatus.UPLOADING,
             uploaded_at=datetime.now()
         )
-        
+
         # Start async ingestion (e.g., in a thread)
         # Update self._jobs[job_id].status as processing progresses
-        
+
         return job_id
-    
+
     def delete_file(self, filename: str, collection_name: str) -> bool:
         """Delete a file's chunks from collection."""
         return True
-    
+
     def list_files(self, collection_name: str) -> List[FileInfo]:
         """List files in a collection."""
         return [f for f in self._jobs.values() if f.collection_name == collection_name]
-    
+
     def get_file_status(self, job_id: str, collection_name: str) -> Optional[FileInfo]:
         """Get status of an ingestion job."""
         return self._jobs.get(job_id)
-    
+
     # --- Legacy Job API (optional, for backwards compat) ---
-    
+
     def submit_job(self, file_paths: List[str], collection_name: str, **kwargs) -> str:
         """Batch submit - calls upload_file for each."""
         # Implementation...
         pass
-    
+
     def get_job_status(self, job_id: str) -> IngestionJobStatus:
         """Overall job status."""
         # Implementation...
@@ -548,7 +548,7 @@ class MyIngestor(BaseIngestor):
 > if backend_status == "failed":
 >     error_msg = (
 >         response.get("error")
->         or response.get("message") 
+>         or response.get("message")
 >         or response.get("result", {}).get("message")
 >         or "Unknown error"
 >     )
@@ -616,9 +616,9 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
     backend: BackendType = Field(default="llamaindex", ...)  # Uses the Literal type
     collection_name: str = Field(...)
     top_k: int = Field(...)
-    
+
     # ... existing backend fields (chroma_dir, rag_url, etc.) ...
-    
+
     # ADD YOUR BACKEND'S CONFIG FIELDS HERE:
     my_backend_endpoint: str = Field(
         default="http://localhost:8000",
@@ -633,12 +633,12 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
 # 3. Add your backend case to _setup_backend() function
 def _setup_backend(config: KnowledgeRetrievalConfig):
     backend = config.backend.lower()
-    
+
     if backend == "llamaindex":
         # ... existing ...
     elif backend == "foundational_rag":
         # ... existing ...
-    
+
     # ADD YOUR BACKEND CASE HERE:
     elif backend == "my_backend":
         import knowledge_layer.my_backend.adapter  # noqa: F401
@@ -646,10 +646,10 @@ def _setup_backend(config: KnowledgeRetrievalConfig):
             "endpoint": config.my_backend_endpoint,
             "api_key": config.my_backend_api_key,
         }
-    
+
     else:
         raise ValueError(f"Unknown backend: {backend}")
-    
+
     return backend, backend_config
 ```
 
@@ -771,7 +771,7 @@ from aiq_agent.knowledge.schema import (
     Chunk,           # Retrieved content piece (15+ fields)
     RetrievalResult, # Query result container
     ContentType,     # TEXT, IMAGE, TABLE, CHART
-    
+
     # Ingestion
     CollectionInfo,  # Collection metadata
     FileInfo,        # File/job status
@@ -788,16 +788,16 @@ class Chunk(BaseModel):
     chunk_id: str              # Unique ID for citation tracking
     content: str               # Main text (or caption for visuals)
     score: float               # Similarity score 0.0-1.0
-    
+
     # Citation (required)
     file_name: str             # Original filename
     page_number: Optional[int] # Page number (1-based)
     display_citation: str      # User-facing citation label
-    
+
     # Content typing (required)
     content_type: ContentType  # TEXT, TABLE, CHART, IMAGE
     content_subtype: Optional[str]  # e.g., "bar_chart", "pie_chart"
-    
+
     # Optional rich data
     structured_data: Optional[str]  # Raw data for tables/charts
     image_url: Optional[str]        # Presigned URL for images

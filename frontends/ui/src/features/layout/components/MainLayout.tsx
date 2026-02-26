@@ -128,13 +128,13 @@ export const MainLayout: FC<MainLayoutProps> = ({
     const lastDeepResearchMessage = [...conv.messages]
       .reverse()
       .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId)
-    
-    const hasActiveJob = 
+
+    const hasActiveJob =
       lastDeepResearchMessage?.deepResearchJobId &&
-      (lastDeepResearchMessage.deepResearchJobStatus === 'submitted' || 
+      (lastDeepResearchMessage.deepResearchJobStatus === 'submitted' ||
        lastDeepResearchMessage.deepResearchJobStatus === 'running' ||
        lastDeepResearchMessage.isDeepResearchActive === true)
-    
+
     return {
       id: conv.id,
       title: conv.title,

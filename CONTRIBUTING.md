@@ -1,7 +1,7 @@
 # Contributing Guidelines
 
-We're posting these examples on GitHub to support the NVIDIA LLM community and facilitate feedback. 
-We invite contributions! 
+We're posting these examples on GitHub to support the NVIDIA LLM community and facilitate feedback.
+We invite contributions!
 
 Use the following guidelines to contribute to this project.
 

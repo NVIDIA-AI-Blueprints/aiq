@@ -118,30 +118,30 @@ These questions have answers that remain constant over time.
 
 ### One-Hop Examples
 
-> **Q:** What is the largest mammal in the world?  
+> **Q:** What is the largest mammal in the world?
 > **A:** Blue whale
 
-> **Q:** Who founded Amazon?  
+> **Q:** Who founded Amazon?
 > **A:** Jeff Bezos
 
-> **Q:** What is the capital of the commonwealth of Massachusetts?  
+> **Q:** What is the capital of the commonwealth of Massachusetts?
 > **A:** Boston
 
-> **Q:** On what date did the Berlin Wall fall?  
+> **Q:** On what date did the Berlin Wall fall?
 > **A:** November 9, 1989
 
-> **Q:** Who painted The Starry Night?  
+> **Q:** Who painted The Starry Night?
 > **A:** Vincent van Gogh
 
 ### Multi-Hop Examples
 
-> **Q:** What's the capital of the largest state in America?  
+> **Q:** What's the capital of the largest state in America?
 > **A:** Juneau *(Alaska → capital is Juneau)*
 
-> **Q:** Which member of The Beatles was born first?  
+> **Q:** Which member of The Beatles was born first?
 > **A:** Ringo Starr
 
-> **Q:** Where was the primary designer of AlexNet born?  
+> **Q:** Where was the primary designer of AlexNet born?
 > **A:** Ukraine *(Alex Krizhevsky → born in Ukraine)*
 
 ---
@@ -152,27 +152,27 @@ These questions have answers that change infrequently, perhaps yearly or less of
 
 ### One-Hop Examples
 
-> **Q:** Who is the CEO of Google?  
+> **Q:** Who is the CEO of Google?
 > **A:** Sundar Pichai
 
-> **Q:** How many grand slams does Rafael Nadal have?  
+> **Q:** How many grand slams does Rafael Nadal have?
 > **A:** 22
 
-> **Q:** What is the best-selling video game franchise of all time?  
+> **Q:** What is the best-selling video game franchise of all time?
 > **A:** Mario
 
-> **Q:** What is the top-ranked university in the US according to the US News Ranking?  
+> **Q:** What is the top-ranked university in the US according to the US News Ranking?
 > **A:** Princeton University
 
-> **Q:** Who is the current German chancellor?  
+> **Q:** Who is the current German chancellor?
 > **A:** Friedrich Merz
 
 ### Multi-Hop Examples
 
-> **Q:** Which country has President Joe Biden visited the most during his presidency so far?  
+> **Q:** Which country has President Joe Biden visited the most during his presidency so far?
 > **A:** United Kingdom
 
-> **Q:** Who has the most liked post on Instagram?  
+> **Q:** Who has the most liked post on Instagram?
 > **A:** Lionel Messi
 
 ---
@@ -183,24 +183,24 @@ These questions have answers that can change frequently, sometimes daily or week
 
 ### One-Hop Examples
 
-> **Q:** Who is the richest man on earth?  
+> **Q:** Who is the richest man on earth?
 > **A:** Elon Musk *(as of dataset creation)*
 
-> **Q:** Who is the current No. 1 on the Billboard Artist 100?  
+> **Q:** Who is the current No. 1 on the Billboard Artist 100?
 > **A:** Taylor Swift *(as of dataset creation)*
 
-> **Q:** What is the latest highest-grossing movie of the week at the Box office?  
+> **Q:** What is the latest highest-grossing movie of the week at the Box office?
 > **A:** *(Changes weekly)*
 
-> **Q:** What is Geoff Hinton's h-index?  
+> **Q:** What is Geoff Hinton's h-index?
 > **A:** 192 *(as of dataset creation)*
 
 ### Multi-Hop Examples
 
-> **Q:** How old is the richest person in the world?  
+> **Q:** How old is the richest person in the world?
 > **A:** 54 years old *(Elon Musk's age at dataset creation)*
 
-> **Q:** In what country was the most recent Time Person of the Year born?  
+> **Q:** In what country was the most recent Time Person of the Year born?
 > **A:** USA *(Donald Trump → born in USA)*
 
 ---
@@ -211,29 +211,29 @@ These questions contain incorrect assumptions that the model must identify and a
 
 ### Factual Corrections
 
-> **Q:** What is the name of Leonardo DiCaprio's third child?  
+> **Q:** What is the name of Leonardo DiCaprio's third child?
 > **A:** Leonardo DiCaprio does not have any children.
 
-> **Q:** When did the UK adopt the Euro?  
+> **Q:** When did the UK adopt the Euro?
 > **A:** The United Kingdom has never adopted the Euro.
 
-> **Q:** How many home runs did Real Madrid score?  
+> **Q:** How many home runs did Real Madrid score?
 > **A:** Real Madrid is a professional soccer club and thus cannot score home runs. In soccer, players score goals, not home runs.
 
 ### Temporal Corrections
 
-> **Q:** When was the iPhone 9 released?  
+> **Q:** When was the iPhone 9 released?
 > **A:** Apple has never released an iPhone 9 nor does it plan to.
 
-> **Q:** When did the first human land on Mars?  
+> **Q:** When did the first human land on Mars?
 > **A:** No humans have been to Mars yet.
 
 ### Logical Corrections
 
-> **Q:** By how much is 3 bigger than 4?  
+> **Q:** By how much is 3 bigger than 4?
 > **A:** 3 is smaller than 4 by 1.
 
-> **Q:** Which antibiotics are most effective against the flu?  
+> **Q:** Which antibiotics are most effective against the flu?
 > **A:** Antibiotics are only effective against bacteria while the flu is a virus.
 
 ---
@@ -262,5 +262,3 @@ These questions contain incorrect assumptions that the model must identify and a
 FreshQA benchmark dataset: [FreshLLMs GitHub](https://github.com/freshllms/freshqa)
 
 For more information about the FreshQA benchmark methodology, see the original research paper.
-
-

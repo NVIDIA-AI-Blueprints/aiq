@@ -930,7 +930,7 @@ describe('useChatStore', () => {
 
       // Add user message
       const message = useChatStore.getState().addUserMessage('Test message')
-      
+
       // Add WebSocket thinking step (should be included)
       useChatStore.getState().addThinkingStep({
         category: 'agents',

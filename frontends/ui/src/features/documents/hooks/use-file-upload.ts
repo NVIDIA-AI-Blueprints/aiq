@@ -221,7 +221,7 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
         const message = err instanceof Error ? err.message : 'Upload failed'
         setError(message)
         onError?.(err instanceof Error ? err : new Error(message))
-        
+
         // Update all files that were added to 'failed' status
         for (const trackedFile of trackedFileMap.values()) {
           updateTrackedFile(trackedFile.id, {

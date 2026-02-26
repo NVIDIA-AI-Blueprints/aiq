@@ -66,4 +66,3 @@ case "$COMMAND" in
         echo ""
         ;;
 esac
-

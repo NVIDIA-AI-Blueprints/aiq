@@ -91,7 +91,7 @@ echo ""
 if [ -d "frontends/ui" ]; then
     echo "Setting up UI dependencies..."
     cd frontends/ui
-    
+
     if command -v npm &> /dev/null; then
         npm ci
         echo "UI dependencies installed"
@@ -99,7 +99,7 @@ if [ -d "frontends/ui" ]; then
         echo "npm not found. Skipping UI setup."
         echo "   Install Node.js 22+ to enable UI features"
     fi
-    
+
     cd ../..
 else
     echo "UI directory not found at frontends/ui"
@@ -116,4 +116,3 @@ echo "   - CLI mode:        ./scripts/start_cli.sh"
 echo "   - Server mode:     ./scripts/start_server_in_debug_mode.sh"
 echo "   - End-to-End (UI): ./scripts/start_e2e.sh"
 echo ""
-

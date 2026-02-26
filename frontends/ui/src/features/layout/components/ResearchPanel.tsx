@@ -112,7 +112,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
 
   const handleToggle = useCallback(() => {
     if (!isAuthenticated) return
-    
+
     if (isOpen) {
       closeRightPanel()
     } else {
@@ -247,7 +247,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
             <Flex direction="col" align="center" justify="center" className="h-full gap-4">
               <Spinner size="medium" aria-label="Loading research data" />
               <Text kind="body/regular/md" className="text-tertiary">
-                {TABS_REQUIRING_STREAM.includes(researchPanelTab) 
+                {TABS_REQUIRING_STREAM.includes(researchPanelTab)
                   ? 'Loading research data...'
                   : 'Loading report...'}
               </Text>

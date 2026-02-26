@@ -294,4 +294,3 @@ describe('storage-logger', () => {
     })
   })
 })
-

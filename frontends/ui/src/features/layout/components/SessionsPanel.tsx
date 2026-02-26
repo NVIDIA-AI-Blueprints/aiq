@@ -403,12 +403,12 @@ const SessionItem: FC<SessionItemProps> = ({
         <>
           {/* Loading indicator for active deep research */}
           {session.hasActiveDeepResearch && (
-            <LoadingSpinner 
-              className="shrink-0 text-accent-primary" 
+            <LoadingSpinner
+              className="shrink-0 text-accent-primary"
               aria-label="Deep research in progress"
             />
           )}
-          
+
           <Text kind="body/regular/sm" className="text-primary min-w-0 flex-1 truncate">
             {session.title}
           </Text>

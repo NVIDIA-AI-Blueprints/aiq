@@ -85,11 +85,11 @@ export const AgentResponse: FC<AgentResponseProps> = ({
 
     // For completed jobs, check if we have ALL research data for THIS specific job
     // Important: must verify job ID matches to avoid showing wrong data
-    const hasExistingDataForThisJob = 
-      jobId && 
-      deepResearchJobId === jobId && 
+    const hasExistingDataForThisJob =
+      jobId &&
+      deepResearchJobId === jobId &&
       deepResearchStreamLoaded &&
-      reportContent && 
+      reportContent &&
       reportContent.trim().length > 0
 
     if (hasExistingDataForThisJob) {

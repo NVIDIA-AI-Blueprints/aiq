@@ -20,13 +20,13 @@ limitations under the License.
 > **⚠️ IMPORTANT – Active Development Branch**
 >
 > You are currently viewing the **`develop`** branch for the pre-release version of **AI-Q v2.0**.
-> 
+>
 > This branch contains the latest features and experimental updates and may contain breaking changes.
 >
 > For production use, switch to the **v1.2.1 stable release** on the [`main branch`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/main).
 
 
-## Table of Contents 
+## Table of Contents
 - [Overview](#overview)
 - [Software Components](#software-components)
 - [Target Audience](#target-audience)
@@ -333,6 +333,6 @@ For development, contribution, and documentation, refer to:
 
 ## License
 
-This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use, found in [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY). 
+This project will download and install additional third-party open source software projects. Review the license terms of these open source projects before use, found in [LICENSE-THIRD-PARTY](LICENSE-THIRD-PARTY).
 
 GOVERNING TERMS: AIQ blueprint software and materials are governed by the [Apache License, Version 2.0](https://www.apache.org/licenses/LICENSE-2.0)

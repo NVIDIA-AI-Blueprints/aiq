@@ -221,23 +221,23 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           const state = useChatStore.getState()
           const currentPlanMessages = state.planMessages
           const currentConversation = state.currentConversation
-          
+
           // Extract research title from plan messages for conversation title
           // Try multiple sources: plan preview, any plan message, or original user query
           if (currentConversation) {
             let extractedTitle: string | null = null
-            
+
             // First, look at all plan messages for a title
             for (const planMsg of currentPlanMessages) {
               if (extractedTitle) break
-              
+
               // Pattern 1: JSON report_title field
               const jsonTitleMatch = planMsg.text.match(/"report_title":\s*"([^"]+)"/i)
               if (jsonTitleMatch) {
                 extractedTitle = jsonTitleMatch[1]
                 break
               }
-              
+
               // Pattern 2: Markdown Report Title heading
               const reportTitleMatch = planMsg.text.match(/\*\*Report Title[:\s]*\*\*\s*\n?\s*\*?([^*\n]+)/i)
                 || planMsg.text.match(/Report Title[:\s]*\n?\s*\*?([^*\n]+)/i)
@@ -245,7 +245,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
                 extractedTitle = reportTitleMatch[1].trim()
                 break
               }
-              
+
               // Pattern 3: First markdown heading
               const mdHeadingMatch = planMsg.text.match(/^#+\s+(.+?)(?:\n|$)/m)
               if (mdHeadingMatch) {
@@ -253,7 +253,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
                 break
               }
             }
-            
+
             // Fallback: Use the last user message if no title found in plan
             if (!extractedTitle) {
               const userMessages = currentConversation.messages.filter((m) => m.role === 'user')
@@ -263,28 +263,28 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
                 extractedTitle = lastUserMsg.content
               }
             }
-            
+
             if (extractedTitle) {
               // Clean up the title
               const cleanTitle = extractedTitle
                 .replace(/^\*+|\*+$/g, '') // Remove asterisks
                 .replace(/^["']|["']$/g, '') // Remove quotes
                 .trim()
-              
+
               // Truncate to reasonable length
-              const title = cleanTitle.length > 80 
-                ? cleanTitle.substring(0, 77) + '...' 
+              const title = cleanTitle.length > 80
+                ? cleanTitle.substring(0, 77) + '...'
                 : cleanTitle
-              
+
               if (title.length > 0) {
                 updateConversationTitle(currentConversation.id, title)
               }
             }
           }
-          
+
           // Add 'starting' banner as a persistent message
           addDeepResearchBanner('starting', jobId)
-          
+
           // Create tracking message with empty content (won't render due to content guard)
           // This message carries job metadata for session restoration
           const messageId = addAgentResponseWithMeta(

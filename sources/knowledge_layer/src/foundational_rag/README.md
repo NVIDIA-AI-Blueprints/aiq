@@ -203,11 +203,11 @@ while True:
     if status:
         raw_state = status.metadata.get("raw_state", "UNKNOWN")
         print(f"Status: {status.status.value} (Celery: {raw_state})")
-        
+
         # Check for terminal states
         if status.status in (FileStatus.SUCCESS, FileStatus.FAILED):
             break
-    
+
     time.sleep(5)
 
 if status.status == FileStatus.SUCCESS:

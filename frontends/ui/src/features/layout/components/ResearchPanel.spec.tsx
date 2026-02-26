@@ -39,12 +39,12 @@ const mockImportJobStream = vi.fn()
 const mockCancelCurrentJob = vi.fn()
 
 vi.mock('@/features/chat', () => ({
-  useChatStore: (selector: (state: { 
+  useChatStore: (selector: (state: {
     isDeepResearchStreaming: boolean
     deepResearchJobId: string | null
     deepResearchStreamLoaded: boolean
   }) => unknown) =>
-    selector({ 
+    selector({
       isDeepResearchStreaming: mockIsDeepResearchStreaming,
       deepResearchJobId: mockDeepResearchJobId,
       deepResearchStreamLoaded: mockDeepResearchStreamLoaded,

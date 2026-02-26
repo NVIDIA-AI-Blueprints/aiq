@@ -9,7 +9,7 @@ Return the final plan to the orchestrator in your final message.
 You have access to the following tools. You can ONLY use the tools provided. Do not assume access to tools not listed
 
 {%- if ns.has_knowledge_search %}
-- **knowledge_search** (Uploaded files): Highest priority. Use first for information from the user's documents. Queries about the uploaded file(s) must use **knowledge_search**.{% if (available_documents and available_documents | length > 0) %} 
+- **knowledge_search** (Uploaded files): Highest priority. Use first for information from the user's documents. Queries about the uploaded file(s) must use **knowledge_search**.{% if (available_documents and available_documents | length > 0) %}
 The user has uploaded the following documents that may be relevant to this research:{% for doc in available_documents %}
 - **{{ doc.file_name }}**: {{ doc.summary or "No summary available" }}{% endfor %}{% endif %}{% endif -%}
 {%- if ns.has_paper_search %}- **paper_search_tool**: For academic, scholarly, or research-oriented topics. **Do not use** for topics already identified as internal.

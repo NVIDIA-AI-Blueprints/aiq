@@ -152,4 +152,3 @@ jobs:
           . .venv/bin/activate
           chmod +x ci/scripts/test_scripts.sh
           ci/scripts/test_scripts.sh --skip-setup
-

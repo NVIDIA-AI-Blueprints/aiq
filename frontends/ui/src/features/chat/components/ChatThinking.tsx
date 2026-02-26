@@ -41,7 +41,7 @@ const formatDataSourceName = (sourceId: string): string => {
   // Handle special cases
   if (sourceId === 'web_search') return 'Web Search'
   if (sourceId === 'knowledge_layer') return 'Files'
-  
+
   // Convert snake_case to Title Case
   return sourceId
     .split('_')
@@ -52,8 +52,8 @@ const formatDataSourceName = (sourceId: string): string => {
 /**
  * ChatThinking - collapsible thinking steps panel with nvidia green border
  */
-export const ChatThinking: FC<ChatThinkingProps> = ({ 
-  steps, 
+export const ChatThinking: FC<ChatThinkingProps> = ({
+  steps,
   isThinking = true,
   isInterrupted = false,
   isWaiting = false,

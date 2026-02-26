@@ -97,12 +97,12 @@ check_env() {
 
 check_dependencies() {
     echo "Checking Python dependencies..."
-    
+
     if ! python -c "import nat" 2>/dev/null; then
         echo "NAT not installed. Installing dependencies..."
         pip install -e .
     fi
-    
+
     echo "Python dependencies installed"
 }
 
@@ -112,9 +112,9 @@ check_ui_dependencies() {
         echo "Skipping frontend startup"
         return 1
     fi
-    
+
     cd "$UI_DIR"
-    
+
     if [ ! -d "node_modules" ]; then
         echo "Installing UI dependencies..."
         if command -v npm &> /dev/null; then
@@ -129,7 +129,7 @@ check_ui_dependencies() {
     else
         echo "UI dependencies already installed"
     fi
-    
+
     cd "$PROJECT_ROOT"
     return 0
 }
@@ -144,7 +144,7 @@ start_backend() {
     echo "Backend will auto-reload on code changes"
     echo "Config: $CONFIG_FILE"
     echo ""
-    
+
     nat serve --config_file "$CONFIG_FILE" --host 0.0.0.0 --port 8000 &
     BACKEND_PID=$!
     echo "Backend PID: $BACKEND_PID"
@@ -154,7 +154,7 @@ wait_for_backend() {
     echo "Waiting for backend to be ready..."
     local max_attempts=150
     local attempt=1
-    
+
     while [ $attempt -le $max_attempts ]; do
         if curl -s -f http://localhost:8000/health > /dev/null 2>&1 || \
            curl -s -f http://localhost:8000/docs > /dev/null 2>&1; then
@@ -165,7 +165,7 @@ wait_for_backend() {
         sleep 1
         attempt=$((attempt + 1))
     done
-    
+
     echo ""
     echo "Backend health check timeout after ${max_attempts}s"
     echo "   Continuing anyway - frontend may encounter initial connection errors"
@@ -176,7 +176,7 @@ start_frontend() {
     if [ ! -d "$UI_DIR" ]; then
         return
     fi
-    
+
     echo ""
     echo "================================================"
     echo "Starting UI Frontend..."
@@ -184,37 +184,37 @@ start_frontend() {
     echo ""
     echo "Frontend will be available at: http://localhost:3000"
     echo ""
-    
+
     cd "$UI_DIR"
 
     npm run dev &
     FRONTEND_PID=$!
     echo "Frontend PID: $FRONTEND_PID"
-    
+
     cd "$PROJECT_ROOT"
 }
 
-main() {    
+main() {
     check_env
     echo ""
-    
+
     check_dependencies
     echo ""
-    
+
     if check_ui_dependencies; then
         HAS_UI=true
     else
         HAS_UI=false
     fi
     echo ""
-    
+
     start_backend
     wait_for_backend
-    
+
     if [ "$HAS_UI" = true ]; then
         start_frontend
     fi
-    
+
     echo ""
     echo "================================================"
     echo "Services Started"
@@ -227,9 +227,8 @@ main() {
     echo ""
     echo "Press Ctrl+C to stop all services"
     echo ""
-    
+
     wait
 }
 
 main
-

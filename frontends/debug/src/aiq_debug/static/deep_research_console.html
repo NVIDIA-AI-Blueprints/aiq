@@ -1485,8 +1485,8 @@ Usage:
         if (!dataSourcesList) return;
         dataSourcesList.innerHTML = '';
         // Filter out Knowledge Base - it's always included by default on backend
-        const filtered = options.filter(s => 
-          s.id !== 'knowledge_search' && 
+        const filtered = options.filter(s =>
+          s.id !== 'knowledge_search' &&
           s.name?.toLowerCase() !== 'knowledge base'
         );
         const sorted = [...filtered].sort((a, b) => a.name.localeCompare(b.name));
@@ -1750,7 +1750,7 @@ Usage:
       function setStreamMode(mode, intervalMs = null) {
         currentStreamMode = mode;
         streamModeBadge.style.display = mode ? 'flex' : 'none';
-        
+
         if (mode === 'pubsub') {
           streamModeBadge.classList.remove('polling');
           streamModeBadge.classList.add('pubsub');
@@ -1769,14 +1769,14 @@ Usage:
         if (latencyHistory.length > MAX_LATENCY_SAMPLES) {
           latencyHistory.shift();
         }
-        
+
         const avgLatency = Math.round(
           latencyHistory.reduce((a, b) => a + b, 0) / latencyHistory.length
         );
-        
+
         latencyIndicator.style.display = 'flex';
         latencyValue.textContent = `${avgLatency}ms`;
-        
+
         latencyIndicator.classList.remove('fast', 'medium', 'slow');
         if (avgLatency < 50) {
           latencyIndicator.classList.add('fast');
@@ -2239,7 +2239,7 @@ Usage:
           }
 
           const hasContent = todosContent || nestedContent;
-          
+
           return `
             <details class="agent-card ${isRunning ? 'running' : ''}" ${isRunning ? 'open' : ''}>
               <summary class="agent-header">
@@ -2625,12 +2625,12 @@ Usage:
         if (!agentName) return;
         const agentId = agentName.toLowerCase();
         const agentInstanceId = payload.metadata?.agent_id;
-        
+
         currentActiveAgent = agentId;
         if (agentInstanceId) {
           currentActiveAgentInstanceId = agentInstanceId;
         }
-        
+
         const existing = cachedState.subagents.find(a => a.id === agentId);
         if (existing) {
           existing.status = 'running';
@@ -2654,7 +2654,7 @@ Usage:
             agentInstanceIdToAgent.set(agentInstanceId, newAgent);
           }
         }
-        
+
         if (agentInstanceId) {
           const existingTask = cachedState.subagentTasks.find(t => t.agent_instance_id === agentInstanceId);
           if (!existingTask) {
@@ -2672,7 +2672,7 @@ Usage:
             console.log('[Debug] Created task from workflow.start:', agentId, 'agent_id:', agentInstanceId);
           }
         }
-        
+
         renderSubagents(cachedState.subagents);
       }
 
@@ -2681,7 +2681,7 @@ Usage:
         if (!agentName) return;
         const agentId = agentName.toLowerCase();
         const agentInstanceId = payload.metadata?.agent_id;
-        
+
         let existing = null;
         if (agentInstanceId) {
           existing = agentInstanceIdToAgent.get(agentInstanceId);
@@ -2689,29 +2689,29 @@ Usage:
         if (!existing) {
           existing = cachedState.subagents.find(a => a.id === agentId);
         }
-        
+
         if (existing) {
           existing.status = 'complete';
           existing.current_task = 'Done';
           existing.completedAt = new Date().toLocaleTimeString();
         }
-        
-        const tasksToComplete = agentInstanceId 
+
+        const tasksToComplete = agentInstanceId
           ? cachedState.subagentTasks.filter(t => t.agent_instance_id === agentInstanceId && t.status === 'running')
           : cachedState.subagentTasks.filter(t => t.agent === agentId && t.status === 'running');
-          
+
         tasksToComplete.forEach(t => {
           t.status = 'complete';
           t.completed_at = new Date().toLocaleTimeString();
         });
-        
+
         if (currentActiveAgent === agentId) {
           currentActiveAgent = null;
         }
         if (currentActiveAgentInstanceId === agentInstanceId) {
           currentActiveAgentInstanceId = null;
         }
-        
+
         renderSubagents(cachedState.subagents);
       }
 
@@ -2738,7 +2738,7 @@ Usage:
           console.log('[Debug] Search query:', tool, 'agent_id:', metadata.agent_id);
 
           let activeTask = findTaskByContext(metadata);
-          
+
           // Final fallback: use current active context (backward compatible)
           if (!activeTask && currentActiveAgent) {
             activeTask = cachedState.subagentTasks
@@ -2746,7 +2746,7 @@ Usage:
               .pop();
             console.log('[Debug] Fallback to currentActiveAgent:', currentActiveAgent, 'task:', activeTask?.id);
           }
-          
+
           if (activeTask) {
             const existingQuery = activeTask.queries.find(q => q.query === queryText);
             if (!existingQuery) {
@@ -2761,7 +2761,7 @@ Usage:
               console.log('[Debug] Added query to task', activeTask.id, 'total queries:', activeTask.queries.length);
             }
           }
-          
+
           renderSubagents(cachedState.subagents);
         }
 
@@ -2807,13 +2807,13 @@ Usage:
       function updateToolEndFromEvent(payload) {
         const tool = payload?.name || payload?.tool;
         if (!tool) return;
-        
+
         const lastCall = cachedState.toolCalls.find(c => c.name === tool && !c.result);
         if (lastCall) {
           lastCall.result = payload.data?.output || '';
         }
         renderToolCalls(cachedState.toolCalls);
-        
+
         // Handle search results - extract URLs (generic pattern matching)
         const isSearchTool = ['search', 'tavily', 'web_search', 'google', 'bing']
           .some(p => tool.toLowerCase().includes(p));
@@ -2831,7 +2831,7 @@ Usage:
             }
           });
           renderSources(cachedState.sources, cachedState.discoveredSources);
-          
+
           // Update query status using generic context matching
           let targetTask = findTaskByContext(metadata);
           if (!targetTask && currentActiveAgent) {
@@ -2839,7 +2839,7 @@ Usage:
               .filter(t => t.agent === currentActiveAgent)
               .pop();
           }
-          
+
           if (targetTask) {
             targetTask.queries.forEach(q => {
               if (q.status === 'running') q.status = 'complete';
@@ -2866,7 +2866,7 @@ Usage:
       function updateLLMChunkFromEvent(payload) {
         const chunk = payload.data?.chunk || '';
         if (!chunk) return;
-        
+
         // Append to reasoning view for real-time streaming
         if (!cachedState._streamingContent) {
           cachedState._streamingContent = '';
@@ -2889,12 +2889,12 @@ Usage:
         const content = payload.data?.output || '';
         const thinking = payload.metadata?.thinking || '';
         const agent = payload.metadata?.workflow || payload.name || 'unknown';
-        
+
         // Clear streaming state
         cachedState._streamingContent = '';
-        
+
         if (thinking || content) {
-          cachedState.reasoning = (thinking ? `💭 Thinking:\n${thinking}\n\n` : '') + 
+          cachedState.reasoning = (thinking ? `💭 Thinking:\n${thinking}\n\n` : '') +
                                    (content ? `💬 Output:\n${content}` : '');
           reasoningView.innerHTML = `
             ${thinking ? `
@@ -2921,9 +2921,9 @@ Usage:
         const artifactType = payload.data?.type;
         const content = payload.data?.content;
         if (!artifactType || content === undefined) return;
-        
+
         const workflow = payload.metadata?.workflow || payload.name || 'unknown';
-        
+
         switch (artifactType) {
           case 'file':
             const path = payload.data?.path || payload.name;
@@ -2932,12 +2932,12 @@ Usage:
               renderFiles(cachedState.files);
             }
             break;
-            
+
           case 'output':
             cachedState.report = content;
             renderReport(content);
             break;
-            
+
           case 'citation_source':
             const sourceUrl = payload.data?.url || content;
             if (sourceUrl && !cachedState.discoveredSources.some(s => s.url === sourceUrl)) {
@@ -2952,7 +2952,7 @@ Usage:
               renderSources(cachedState.sources, cachedState.discoveredSources);
             }
             break;
-            
+
           case 'citation_use':
             const citedUrl = payload.data?.url || content;
             if (citedUrl) {
@@ -2966,7 +2966,7 @@ Usage:
               renderSources(cachedState.sources, cachedState.discoveredSources);
             }
             break;
-            
+
           case 'todo':
             // Handle both array format (from write_todos tool) and individual item format
             if (Array.isArray(content)) {
@@ -2976,14 +2976,14 @@ Usage:
                 content: t.content || t.text || String(t),
                 status: t.status || 'pending',
               }));
-              
+
               // Determine if these todos belong to a subagent or orchestrator
-              const isSubagent = workflow && 
-                !workflow.includes('orchestrator') && 
+              const isSubagent = workflow &&
+                !workflow.includes('orchestrator') &&
                 !workflow.includes('deep-research');
-              
+
               // Check for orchestrator-specific patterns
-              const hasOrchestratorPatterns = todos.some(t => 
+              const hasOrchestratorPatterns = todos.some(t =>
                 t.content && (
                   t.content.includes('planner-agent') ||
                   t.content.includes('researcher-agent') ||
@@ -2993,7 +2993,7 @@ Usage:
                   t.content.includes('Save user request')
                 )
               );
-              
+
               if (isSubagent && !hasOrchestratorPatterns) {
                 // Assign to subagent
                 const subagent = cachedState.subagents.find(a => a.id === workflow);
@@ -3023,9 +3023,9 @@ Usage:
             }
             break;
         }
-        
-        appendConsole('sse', { 
-          event: 'artifact.update', 
+
+        appendConsole('sse', {
+          event: 'artifact.update',
           type: artifactType,
           workflow,
         });
@@ -3033,7 +3033,7 @@ Usage:
 
       function showJobBanner(jobId, status = 'running') {
         activeJobId = jobId;
-        
+
         const statusConfig = {
           running: {
             icon: '🚀',
@@ -3071,9 +3071,9 @@ Usage:
             borderColor: 'var(--warning)',
           },
         };
-        
+
         const config = statusConfig[status] || statusConfig.running;
-        
+
         const actionsHtml = config.showActions ? `
           <div class="job-banner-actions">
             <button class="btn btn-primary" onclick="startStream('${jobId}')">Stream</button>
@@ -3082,7 +3082,7 @@ Usage:
             <button class="btn btn-danger" onclick="cancelJob('${jobId}')">Cancel</button>
           </div>
         ` : '';
-        
+
         jobBannerContainer.innerHTML = `
           <div class="job-banner" style="border-color: ${config.borderColor};">
             <div class="job-banner-title">${config.icon} ${config.title}</div>
@@ -3095,7 +3095,7 @@ Usage:
         `;
         renderSubagents(cachedState.subagents);
       }
-      
+
       function hideJobBanner() {
         jobBannerContainer.innerHTML = '';
         activeJobId = '';
@@ -3163,16 +3163,16 @@ Usage:
           clearTimeout(reconnectTimer);
           reconnectTimer = null;
         }
-        
+
         if (eventSource) {
           eventSource.close();
           eventSource = null;
         }
-        
+
         activeJobId = jobId;
 
         // Use cleaner stream URL path instead of query params
-        const streamPath = lastEventId 
+        const streamPath = lastEventId
           ? `${apiPath(`/${jobId}/stream/${lastEventId}`)}`
           : `${apiPath(`/${jobId}/stream`)}`;
         const url = new URL(`${baseUrl()}${streamPath}`);
@@ -3184,9 +3184,9 @@ Usage:
           scheduleReconnect(jobId);
           return;
         }
-        
+
         setStatus(isReconnect ? 'Reconnecting...' : 'Streaming', true, true);
-        
+
         if (!isReconnect) {
           const startEvent = { event: 'stream.start', job_id: jobId, timestamp: new Date().toISOString() };
           addSSEEvent(startEvent);
@@ -3197,11 +3197,11 @@ Usage:
 
         const handleEvent = evt => {
           reconnectAttempts = 0;
-          
+
           if (evt.lastEventId) lastEventId = evt.lastEventId;
           let payload = evt.data;
           try { payload = JSON.parse(evt.data); } catch (e) {}
-          
+
           const eventEntry = { event: evt.type, id: evt.lastEventId, data: payload, timestamp: new Date().toISOString() };
           addSSEEvent(eventEntry);
           appendConsole('sse', eventEntry);
@@ -3299,31 +3299,31 @@ Usage:
             if (evt.type === 'workflow.start') {
               updateSubagentFromEvent(payload);
             }
-            
+
             if (evt.type === 'workflow.end') {
               markSubagentComplete(payload);
             }
-            
+
             if (evt.type === 'tool.start') {
               updateFromToolCall(payload);
             }
-            
+
             if (evt.type === 'tool.end') {
               updateToolEndFromEvent(payload);
             }
-            
+
             if (evt.type === 'llm.start') {
               updateLLMStartFromEvent(payload);
             }
-            
+
             if (evt.type === 'llm.chunk') {
               updateLLMChunkFromEvent(payload);
             }
-            
+
             if (evt.type === 'llm.end') {
               updateLLMEndFromEvent(payload);
             }
-            
+
             // Artifact tracking (files, output, citations, todos)
             if (evt.type === 'artifact.update') {
               handleArtifactUpdate(payload);
@@ -3361,9 +3361,9 @@ Usage:
             closeStream();
             return;
           }
-          
+
           appendConsole('error', { event: 'stream.error', readyState: eventSource?.readyState });
-          
+
           if (eventSource?.readyState === EventSource.CLOSED) {
             closeStream();
             scheduleReconnect(jobId);
@@ -3372,7 +3372,7 @@ Usage:
           }
         };
       }
-      
+
       function closeStream() {
         if (eventSource) {
           eventSource.close();
@@ -3380,26 +3380,26 @@ Usage:
         }
         resetStreamIndicators();
       }
-      
+
       function scheduleReconnect(jobId) {
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
           setStatus(`Reconnection failed after ${MAX_RECONNECT_ATTEMPTS} attempts`, true, false);
           appendConsole('error', { error: 'Max reconnection attempts reached' });
           return;
         }
-        
+
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
         reconnectAttempts++;
-        
+
         setStatus(`Reconnecting in ${delay/1000}s (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})...`, true, false);
-        
+
         reconnectTimer = setTimeout(() => {
           if (activeJobId === jobId) {
             startStream(jobId, true);
           }
         }, delay);
       }
-      
+
       function addSSEEvent(event) {
         sseEvents.push(event);
         if (sseEvents.length > MAX_SSE_EVENTS) {
@@ -3427,7 +3427,7 @@ Usage:
           });
           const data = await response.text();
           appendConsole('http', data || { status: response.status });
-          
+
           if (response.ok) {
             closeStream();
             setStatus('Cancelled', true, false);
@@ -3566,7 +3566,7 @@ Usage:
           reconnectTimer = null;
         }
         closeStream();
-        
+
         cachedState.subagents = [];
         cachedState.todos = [];
         cachedState.files = {};
@@ -3667,7 +3667,7 @@ Usage:
       disconnectBtn.addEventListener('click', disconnect);
       saveTokenBtn.addEventListener('click', setIdTokenCookie);
       clearConsoleBtn.addEventListener('click', () => { consoleEl.innerHTML = ''; sseEvents = []; wsEvents = []; });
-      
+
       function filterEvents(events, filterText) {
         if (!filterText) return events;
         const lower = filterText.toLowerCase();
@@ -3676,7 +3676,7 @@ Usage:
           return str.includes(lower);
         });
       }
-      
+
       copySSEBtn.addEventListener('click', () => {
         const filter = consoleFilter.value.trim();
         const filtered = filterEvents(sseEvents, filter);

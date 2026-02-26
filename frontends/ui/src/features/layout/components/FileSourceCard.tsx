@@ -231,7 +231,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
             <Flex align="center" gap="1">
               {status === 'available' && <span className="text-success text-xs">✓</span>}
               {status === 'error' && <span className="text-error text-xs">✕</span>}
-              <Text 
+              <Text
                 kind={config.showSpinner ? "body/regular/sm" : "body/regular/xs"}
                 style={{ color: config.color }}
               >

@@ -80,7 +80,7 @@ export const InputArea: FC<InputAreaProps> = ({
   const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const deepResearchOwnerConversationId = useChatStore((state) => state.deepResearchOwnerConversationId)
-  
+
   // Check for active deep research in conversation messages (persisted state)
   // This handles the case where ephemeral state has been reset (page refresh, session switch)
   const hasActiveDeepResearch = useChatStore((state) => {
@@ -106,7 +106,7 @@ export const InputArea: FC<InputAreaProps> = ({
           m.deepResearchJobStatus === 'interrupted')
     )
   })
-  
+
   // Research session is complete when:
   // 1. Ephemeral state shows terminal status AND stream has finished, OR
   // 2. Persisted message has terminal deep research job status
@@ -200,7 +200,7 @@ export const InputArea: FC<InputAreaProps> = ({
   // 1. Not authenticated
   // 2. Session is busy AND not in HITL response mode (user must be able to type approve/reject)
   // 3. Deep research has completed/failed
-  
+
   const isDisabledByAuth = !isAuthenticated
   const disabled = isDisabledByAuth || (isBusy && !isResponseMode) || isResearchSessionComplete
 

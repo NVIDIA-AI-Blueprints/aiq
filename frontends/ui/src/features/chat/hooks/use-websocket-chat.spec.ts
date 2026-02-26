@@ -280,14 +280,14 @@ describe('useWebSocketChat', () => {
 
   test('sendMessage does not add knowledge_layer when no files uploaded', async () => {
     mockWsClient.isConnected.mockReturnValue(true)
-    
+
     // Mock layout store without knowledge_layer (it's filtered out by API client)
     const mockLayoutStore = await import('@/features/layout/store')
     vi.mocked(mockLayoutStore.useLayoutStore.getState).mockReturnValue({
       enabledDataSourceIds: ['web', 'docs'],
       knowledgeLayerAvailable: true,
     } as ReturnType<typeof mockLayoutStore.useLayoutStore.getState>)
-    
+
     // Mock documents store with no files for this session
     const mockDocumentsStore = await import('@/features/documents/store')
     vi.mocked(mockDocumentsStore.useDocumentsStore.getState).mockReturnValue({
@@ -306,14 +306,14 @@ describe('useWebSocketChat', () => {
 
   test('sendMessage adds knowledge_layer when files are uploaded', async () => {
     mockWsClient.isConnected.mockReturnValue(true)
-    
+
     // Mock layout store without knowledge_layer (it's filtered out by API client)
     const mockLayoutStore = await import('@/features/layout/store')
     vi.mocked(mockLayoutStore.useLayoutStore.getState).mockReturnValue({
       enabledDataSourceIds: ['web', 'docs'],
       knowledgeLayerAvailable: true,
     } as ReturnType<typeof mockLayoutStore.useLayoutStore.getState>)
-    
+
     // Mock documents store with files for this session (status: success)
     const mockDocumentsStore = await import('@/features/documents/store')
     vi.mocked(mockDocumentsStore.useDocumentsStore.getState).mockReturnValue({
@@ -334,14 +334,14 @@ describe('useWebSocketChat', () => {
 
   test('sendMessage adds knowledge_layer when files are ingesting', async () => {
     mockWsClient.isConnected.mockReturnValue(true)
-    
+
     // Mock layout store without knowledge_layer (it's filtered out by API client)
     const mockLayoutStore = await import('@/features/layout/store')
     vi.mocked(mockLayoutStore.useLayoutStore.getState).mockReturnValue({
       enabledDataSourceIds: ['web'],
       knowledgeLayerAvailable: true,
     } as ReturnType<typeof mockLayoutStore.useLayoutStore.getState>)
-    
+
     // Mock documents store with files in ingesting state
     const mockDocumentsStore = await import('@/features/documents/store')
     vi.mocked(mockDocumentsStore.useDocumentsStore.getState).mockReturnValue({
@@ -362,14 +362,14 @@ describe('useWebSocketChat', () => {
 
   test('sendMessage does not add knowledge_layer when knowledgeLayerAvailable is false', async () => {
     mockWsClient.isConnected.mockReturnValue(true)
-    
+
     // Mock layout store with knowledgeLayerAvailable: false
     const mockLayoutStore = await import('@/features/layout/store')
     vi.mocked(mockLayoutStore.useLayoutStore.getState).mockReturnValue({
       enabledDataSourceIds: ['web', 'docs'],
       knowledgeLayerAvailable: false,
     } as ReturnType<typeof mockLayoutStore.useLayoutStore.getState>)
-    
+
     // Mock documents store with files (but knowledge layer not available)
     const mockDocumentsStore = await import('@/features/documents/store')
     vi.mocked(mockDocumentsStore.useDocumentsStore.getState).mockReturnValue({

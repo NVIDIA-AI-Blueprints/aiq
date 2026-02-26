@@ -395,7 +395,7 @@ const MyComponent = () => {
 }
 ```
 
->**NOTE:** Above Authentication docs are reference only and implementation depends on environment specifics. 
+>**NOTE:** Above Authentication docs are reference only and implementation depends on environment specifics.
 
 
 ## Development
@@ -493,4 +493,3 @@ lsof -ti :3000 | xargs kill -9  # Frontend
 - Use `host.docker.internal` instead of `localhost` to reach host machine services
 - Ensure backend is bound to `0.0.0.0`, not just `127.0.0.1`
 - Check Docker network configuration if using docker-compose
-

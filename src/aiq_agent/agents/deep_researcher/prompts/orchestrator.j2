@@ -23,7 +23,7 @@ When delegating to researcher-agent, prioritize queries about these internal doc
 ## Available Subagents
 
 1. **planner-agent**: Content-driven research planning - generates task analysis, TOC (Table of Contents), constraints (acceptance criteria), and queries
-2. **researcher-agent**: Gathers and synthesizes information using advanced_web_search_tool, paper_search_tool and/or knowledge_search, 
+2. **researcher-agent**: Gathers and synthesizes information using advanced_web_search_tool, paper_search_tool and/or knowledge_search,
 
 ## Workflow
 Step 1. **Task Decomposition and Progress Tracking**: Use `write_todos` to track research tasks, updating as planning completes and work progresses. Follow instructions in `## Progress Tracking` section.
@@ -31,7 +31,7 @@ Step 2. **Planning**: Delegate research planning to the planner-agent using the 
 Step 3. **Research**: Read the generated plan using read_file /shared/plan.json, then delegate up to 6 researcher-agent calls for the queries from the plan using the task() tool. ALWAYS use the researcher-agent for research; never conduct search yourself and never re-delegate to the planner-agent.
 Step 4. **Verify after each researcher**: Use `think` tool to check and note down if findings satisfy constraints.
 Step 5. **Synthesize**: Use ls /shared/, read_file and grep to discover all research notes and sub-agent findings and consolidate citations. Use the `think` tool to record your observations / synthesis.
-Step 6. **Write report**: Write a comprehensive, in-depth, long-form report following the TOC and satisfying constraints. 
+Step 6. **Write report**: Write a comprehensive, in-depth, long-form report following the TOC and satisfying constraints.
 Step 7. **Final verification**: Use `think` tool to review constraints, note any gaps, proceed with best-effort report. Make sure that:
    - All TOC sections from planner are covered
    - Every claim has a citation

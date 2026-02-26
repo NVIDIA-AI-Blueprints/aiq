@@ -278,4 +278,3 @@ describe('FileSourceCard - Busy Session State', () => {
     expect(onDelete).not.toHaveBeenCalled()
   })
 })
-

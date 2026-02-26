@@ -27,6 +27,17 @@ repos:
     hooks:
       - id: uv-lock
 
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+      - id: check-yaml
+        exclude: ^deploy/helm/helm-charts-k8s/.*/templates/.*\.ya?ml$
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
     hooks:
@@ -37,9 +48,20 @@ repos:
     hooks:
       - id: clear-notebook-output-cells
         name: Clear Jupyter Notebook Output Cells
-        entry: ci/scripts/clear_notebook_output_cells.sh
+        entry: jupyter nbconvert --ClearOutputPreprocessor.enabled=True --inplace
         files: "\\.ipynb$"
-        language: unsupported_script
+        language: python
+        additional_dependencies: [jupyter]
+      - id: helm-lint
+        name: helm lint (deploy charts)
+        entry: bash -c 'for chart in deploy/helm/helm-charts-k8s/*; do if [ -d "$chart" ]; then helm lint "$chart"; fi; done'
+        language: system
+        pass_filenames: false
+      - id: pytest
+        name: pytest
+        entry: pytest tests sources --cov=aiq_agent --cov-report=term --cov-fail-under=65
+        language: system
+        pass_filenames: false
 
   - repo: https://github.com/tcort/markdown-link-check
     rev: v3.11.2
@@ -49,4 +71,3 @@ repos:
 
 default_language_version:
   python: python3
-

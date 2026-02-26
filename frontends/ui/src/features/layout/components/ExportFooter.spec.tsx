@@ -143,4 +143,3 @@ describe('ExportFooter - Busy State (via useIsCurrentSessionBusy)', () => {
     expect(screen.getByRole('button', { name: /pdf/i })).toBeDisabled()
   })
 })
-
