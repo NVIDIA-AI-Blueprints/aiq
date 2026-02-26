@@ -97,6 +97,11 @@ export interface DocumentsState {
   isCreatingCollection: boolean
   isUploading: boolean
   isPolling: boolean
+  isLoadingFiles: boolean
+  /** Session ID for which files were last loaded from the server (null = never loaded) */
+  loadedSessionId: string | null
+  /** File IDs/names recently deleted — prevents stale server responses from resurrecting them */
+  recentlyDeletedIds: Set<string>
   /** Error message */
   error: string | null
   /** Tracks which banners have been shown for each job (NOT persisted) */
@@ -124,6 +129,7 @@ export interface DocumentsActions {
   setCreatingCollection: (loading: boolean) => void
   setUploading: (loading: boolean) => void
   setPolling: (polling: boolean) => void
+  setLoadingFiles: (loading: boolean) => void
 
   // Error handling
   setError: (error: string | null) => void

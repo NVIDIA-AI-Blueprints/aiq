@@ -93,9 +93,10 @@ class UploadOrchestratorImpl {
     this.currentSessionId = newSessionId ?? null
     this.lastLoadedSessionId = null
 
-    // Clear files for new session to ensure fresh state
-    if (newSessionId) {
-      this.getStore().clearFilesForCollection(newSessionId)
+    // Signal loading immediately so the UI shows a spinner before any async work.
+    // loadFilesForSession (or early returns below) will clear this.
+    if (newSessionId && sessionHasKnownCollection(newSessionId)) {
+      this.getStore().setLoadingFiles(true)
     }
 
     // Check for persisted job to resume
@@ -123,24 +124,29 @@ class UploadOrchestratorImpl {
    * This prevents unnecessary 404 errors for sessions that never had files uploaded.
    */
   async loadFilesForSession(sessionId: string): Promise<void> {
+    const store = this.getStore()
+
     // Skip if Knowledge Layer is not available (prevents 404 errors when backend
     // doesn't have knowledge_retrieval configured)
     const { knowledgeLayerAvailable } = useLayoutStore.getState()
     if (!knowledgeLayerAvailable) {
+      store.setLoadingFiles(false)
       return
     }
 
     if (sessionId === this.lastLoadedSessionId) {
+      store.setLoadingFiles(false)
       return
     }
 
-    const store = this.getStore()
     if (store.isUploading || store.isPolling) {
+      store.setLoadingFiles(false)
       return
     }
 
     // Check if session changed before making network request
     if (sessionId !== this.currentSessionId) {
+      store.setLoadingFiles(false)
       return
     }
 
@@ -151,11 +157,13 @@ class UploadOrchestratorImpl {
     const hasPersistedJob = getPersistedJobForCollection(sessionId) !== null
     if (!hasKnownCollection && !hasPersistedJob) {
       this.lastLoadedSessionId = sessionId
+      store.setLoadingFiles(false)
       return
     }
 
     const client = this.getClient()
 
+    store.setLoadingFiles(true)
     try {
       const collection = await client.getCollection(sessionId)
 
@@ -189,6 +197,8 @@ class UploadOrchestratorImpl {
       // Network/connection errors should still mark session as loaded to prevent retry loops.
       // Don't unmark the collection here - the backend may just be temporarily unavailable.
       this.lastLoadedSessionId = sessionId
+    } finally {
+      store.setLoadingFiles(false)
     }
   }
 

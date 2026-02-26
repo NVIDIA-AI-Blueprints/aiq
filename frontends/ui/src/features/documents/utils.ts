@@ -26,7 +26,7 @@ export const mapBackendStatus = (backendStatus: string): DocumentFileStatus => {
 /**
  * Map DocumentFileStatus to FileSourceCard display status
  */
-export const mapToDisplayStatus = (status: DocumentFileStatus): FileSourceStatus => {
+export const mapToDisplayStatus = (status: string): FileSourceStatus => {
   switch (status) {
     case 'uploading':
       return 'uploading'
@@ -36,6 +36,8 @@ export const mapToDisplayStatus = (status: DocumentFileStatus): FileSourceStatus
       return 'available'
     case 'failed':
       return 'error'
+    case 'deleting':
+      return 'deleting'
     default:
       return 'uploading'
   }

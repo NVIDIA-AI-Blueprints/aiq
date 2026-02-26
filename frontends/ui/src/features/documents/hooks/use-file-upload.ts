@@ -278,20 +278,23 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
       }
 
       const collectionName = file.collectionName
+      const deleteId = file.serverFileId || file.fileName
+
+      // Optimistic delete: remove from UI immediately, call API in background.
+      // This prevents the file from reappearing if a concurrent server reload
+      // returns stale data before the backend processes the delete.
+      removeTrackedFile(fileId)
 
       try {
-        const deleteId = file.serverFileId || file.fileName
         await clientRef.current.deleteFiles(collectionName, [deleteId])
-        removeTrackedFile(fileId)
-
-        // File deletion is handled silently - no status message needed
-        // (removed 'deleted' status type from FileUploadStatusType)
       } catch (err) {
+        // Restore the file on failure so the user can retry
+        addTrackedFile(file)
         const message = err instanceof Error ? err.message : 'Delete failed'
         setError(message)
       }
     },
-    [trackedFiles, removeTrackedFile, setError, addFileUploadStatusCard]
+    [trackedFiles, addTrackedFile, removeTrackedFile, setError, addFileUploadStatusCard]
   )
 
   const retryFile = useCallback(

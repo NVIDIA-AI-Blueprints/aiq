@@ -16,7 +16,7 @@ import { Document, Trash } from '@/adapters/ui/icons'
 import { useIsCurrentSessionBusy } from '@/features/chat'
 
 /** File source status types */
-export type FileSourceStatus = 'uploading' | 'ingesting' | 'available' | 'error'
+export type FileSourceStatus = 'uploading' | 'ingesting' | 'available' | 'error' | 'deleting'
 
 export interface FileSourceCardProps {
   /** Unique identifier for the file */
@@ -63,6 +63,11 @@ const STATUS_CONFIG: Record<
     label: 'Error',
     color: 'var(--text-color-feedback-danger)',
     showSpinner: false,
+  },
+  deleting: {
+    label: 'Deleting...',
+    color: 'var(--text-color-subtle)',
+    showSpinner: true,
   },
 }
 
@@ -172,7 +177,8 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
   }
 
   const isProcessing = status === 'uploading' || status === 'ingesting'
-  const deleteDisabled = isBusy || isProcessing
+  const isDeleting = status === 'deleting'
+  const deleteDisabled = isBusy || isProcessing || isDeleting
 
   return (
     <Flex
@@ -182,6 +188,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
         bg-surface-raised border-base rounded-lg border
         p-3 transition-colors
         ${status === 'error' ? 'border-error/50' : ''}
+        ${isDeleting ? 'opacity-50' : ''}
         group
       `}
     >

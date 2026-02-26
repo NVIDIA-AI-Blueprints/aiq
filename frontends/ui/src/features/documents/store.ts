@@ -21,6 +21,9 @@ const initialState: DocumentsState = {
   isCreatingCollection: false,
   isUploading: false,
   isPolling: false,
+  isLoadingFiles: false,
+  loadedSessionId: null,
+  recentlyDeletedIds: new Set<string>(),
   error: null,
   shownBannersForJobs: {},
 }
@@ -70,9 +73,19 @@ export const useDocumentsStore = create<DocumentsStore>()(
 
       removeTrackedFile: (id) => {
         set(
-          (state) => ({
-            trackedFiles: state.trackedFiles.filter((f) => f.id !== id),
-          }),
+          (state) => {
+            const file = state.trackedFiles.find((f) => f.id === id)
+            const nextDeleted = new Set(state.recentlyDeletedIds)
+            if (file) {
+              nextDeleted.add(file.id)
+              if (file.serverFileId) nextDeleted.add(file.serverFileId)
+              nextDeleted.add(file.fileName)
+            }
+            return {
+              trackedFiles: state.trackedFiles.filter((f) => f.id !== id),
+              recentlyDeletedIds: nextDeleted,
+            }
+          },
           false,
           'removeTrackedFile'
         )
@@ -86,6 +99,7 @@ export const useDocumentsStore = create<DocumentsStore>()(
         set(
           (state) => ({
             trackedFiles: state.trackedFiles.filter((f) => f.collectionName !== collectionName),
+            recentlyDeletedIds: new Set<string>(),
           }),
           false,
           'clearFilesForCollection'
@@ -116,6 +130,10 @@ export const useDocumentsStore = create<DocumentsStore>()(
         set({ isPolling: polling }, false, 'setPolling')
       },
 
+      setLoadingFiles: (loading) => {
+        set({ isLoadingFiles: loading }, false, 'setLoadingFiles')
+      },
+
       // --------------------------------------------------------------------------
       // Error Handling
       // --------------------------------------------------------------------------
@@ -136,6 +154,9 @@ export const useDocumentsStore = create<DocumentsStore>()(
         set(
           (state) => {
             const updatedFiles = state.trackedFiles.map((file) => {
+              // Never overwrite client-side transient states with backend data
+              if (file.status === 'deleting') return file
+
               // Find matching file in job details by server ID or filename
               const jobFile = jobStatus.file_details.find(
                 (jf) => jf.file_id === file.serverFileId || jf.file_name === file.fileName
@@ -169,24 +190,35 @@ export const useDocumentsStore = create<DocumentsStore>()(
                 .map((f) => [f.serverFileId || f.id, f])
             )
 
-            // Separate in-progress files (uploading/ingesting) that the server
-            // doesn't know about yet. These must survive the replace so the UI
-            // keeps showing upload progress cards.
+            // Separate client-side transient files that the server doesn't know
+            // about yet. These must survive the replace so the UI keeps showing
+            // upload progress cards and pending deletes.
             const serverFileIds = new Set(files.map((f) => f.file_id))
-            const inProgressFiles = state.trackedFiles.filter(
+            const transientStatuses = new Set(['uploading', 'ingesting', 'deleting'])
+            const preservedFiles = state.trackedFiles.filter(
               (f) =>
                 f.collectionName === collectionName &&
-                (f.status === 'uploading' || f.status === 'ingesting') &&
+                transientStatuses.has(f.status) &&
                 !serverFileIds.has(f.serverFileId ?? '') &&
                 !serverFileIds.has(f.id)
             )
 
-            // Remove existing files for this collection (except in-progress ones kept above)
+            // Remove existing files for this collection (except transient ones kept above)
             const otherFiles = state.trackedFiles.filter((f) => f.collectionName !== collectionName)
+
+            // Build set of file IDs to exclude from server data: transient files
+            // (e.g. actively deleting) and recently deleted files whose stale
+            // entries may still appear in the server response.
+            const excludedIds = new Set([
+              ...preservedFiles.flatMap((f) => [f.serverFileId ?? '', f.id, f.fileName]),
+              ...state.recentlyDeletedIds,
+            ])
 
             // Convert FileInfo to TrackedFile, preserving jobId from existing files
             // Use the collectionName parameter (sessionId) for consistency with sessionFiles filtering
-            const serverFiles: TrackedFile[] = files.map((file) => {
+            const serverFiles: TrackedFile[] = files.filter(
+              (f) => !excludedIds.has(f.file_id) && !excludedIds.has(f.file_name)
+            ).map((file) => {
               const existingFile = existingFilesMap.get(file.file_id)
               return {
                 id: file.file_id, // Use server ID as local ID
@@ -206,7 +238,8 @@ export const useDocumentsStore = create<DocumentsStore>()(
             })
 
             return {
-              trackedFiles: [...otherFiles, ...serverFiles, ...inProgressFiles],
+              trackedFiles: [...otherFiles, ...serverFiles, ...preservedFiles],
+              loadedSessionId: collectionName,
             }
           },
           false,
