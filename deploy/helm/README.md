@@ -64,7 +64,7 @@ kubectl create secret generic aiq-credentials -n ns-aiq \
   --from-literal=NVIDIA_API_KEY="$NGC_API_KEY" \
   --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY" \
   --from-literal=DB_USER_NAME="aiq" \
-  --from-literal=DB_USER_PASSWORD="aiq-dev"
+  --from-literal=DB_USER_PASSWORD="aiq_dev"
 ```
 
 Image pull secret for the NGC container registry:
@@ -273,7 +273,7 @@ helm upgrade --install aiq <ngc-helm-repo>/<chart-name> --version <version> -n n
 | `NVIDIA_API_KEY` | API key for NIM inference models |
 | `TAVILY_API_KEY` | Tavily API key for web search |
 | `DB_USER_NAME` | PostgreSQL username (default: `aiq`) |
-| `DB_USER_PASSWORD` | PostgreSQL password (default: `aiq-dev`) |
+| `DB_USER_PASSWORD` | PostgreSQL password (default: `aiq_dev`) |
 
 ### Optional
 
@@ -293,7 +293,7 @@ kubectl create secret generic aiq-credentials -n ns-aiq \
   --from-literal=NVIDIA_API_KEY="new-key" \  # pragma: allowlist secret
   --from-literal=TAVILY_API_KEY="new-key" \  # pragma: allowlist secret
   --from-literal=DB_USER_NAME="aiq" \
-  --from-literal=DB_USER_PASSWORD="aiq-dev"
+  --from-literal=DB_USER_PASSWORD="aiq_dev"
 
 kubectl rollout restart deployment -n ns-aiq aiq-backend aiq-frontend
 ```
