@@ -47,6 +47,8 @@ jobs:
           . .venv/bin/activate
           uv pip install -e ".[dev]"
           uv pip install nbconvert
+          uv pip install -e ./frontends/aiq_api
+          uv pip install -e ./sources/google_scholar_paper_search
 
       - name: Ruff checks
         run: |
