@@ -224,8 +224,8 @@ export const FileSourcesTab: FC<FileSourcesTabProps> = ({ onDeleteFile }) => {
           kind="tertiary"
           size="small"
           onClick={handleAddFileClick}
-          disabled={isUploading || isAwaitingFiles || !knowledgeLayerAvailable}
-          title={isAwaitingFiles ? "Loading files..." : knowledgeLayerAvailable ? "Add files" : "File upload not available"}
+          disabled={isLoadingFiles || !knowledgeLayerAvailable}
+          title={isLoadingFiles ? "Loading files..." : knowledgeLayerAvailable ? "Add files" : "File upload not available"}
         >
           + Add File
         </Button>

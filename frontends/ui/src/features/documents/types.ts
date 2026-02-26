@@ -52,8 +52,8 @@ export interface TrackedFile {
   fileName: string
   /** File size in bytes */
   fileSize: number
-  /** Current status */
-  status: DocumentFileStatus
+  /** Current status (includes client-only 'deleting' transient state) */
+  status: DocumentFileStatus | 'deleting'
   /** Progress percentage (0-100) */
   progress: number
   /** Error message if failed */
