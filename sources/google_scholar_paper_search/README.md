@@ -27,7 +27,7 @@ uv pip install -e sources/google_scholar_paper_search
 After installation, verify the plugin is registered:
 
 ```bash
-nat info functions | grep paper_search
+nat info components -t function | grep paper_search
 ```
 
 ## Configuration

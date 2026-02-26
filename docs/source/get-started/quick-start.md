@@ -62,7 +62,7 @@ This starts:
 Open [http://localhost:3000](http://localhost:3000) in your browser.
 
 ```{note}
-The web UI requires Node.js 18+ and npm. If these were available during `./scripts/setup.sh`, UI dependencies are already installed. Otherwise, run `cd frontends/ui && npm ci` first.
+The web UI requires Node.js 22+ and npm. If these were available during `./scripts/setup.sh`, UI dependencies are already installed. Otherwise, run `cd frontends/ui && npm ci` first.
 ```
 
 ## Step 3: Ask a Question

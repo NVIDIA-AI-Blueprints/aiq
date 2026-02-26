@@ -245,7 +245,7 @@ For more details, see the [Docker Compose README](../../deploy/compose/README.md
 
 Both LlamaIndex and Foundational RAG support session-based collections (`s_<uuid>`) created by the UI. Each browser session gets its own isolated collection.
 
-### TTL Cleanup (Foundational RAG Only)
+### TTL Cleanup
 
 Collections inactive for 24 hours are auto-deleted based on `last_indexed` timestamp. Background thread runs hourly.
 
@@ -253,8 +253,6 @@ Collections inactive for 24 hours are auto-deleted based on `last_indexed` times
 COLLECTION_TTL_HOURS = 24
 TTL_CLEANUP_INTERVAL_SECONDS = 3600
 ```
-
-> **Note:** LlamaIndex does not have TTL cleanup. Delete collections manually or implement cleanup in your application.
 
 ---
 

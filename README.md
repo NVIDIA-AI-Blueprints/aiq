@@ -65,7 +65,7 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 - **Modular workflows** — All agents (orchestration node, shallow researcher, deep researcher, clarifier) are composable; each can run standalone or as part of the full pipeline.
 - **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
 - **Frontend options** — Run through CLI, web UI, or async jobs; the [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
-- **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as helm deployment.
+- **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as [helm deployment](deploy/helm/deployment-k8s/).
 
 
 ## Software Components
@@ -93,7 +93,7 @@ This project is for:
 - Python 3.11–3.13
 - [uv](https://github.com/astral-sh/uv) package manager
 - NVIDIA API key from [NVIDIA AI](https://build.nvidia.com) (for NIM models)
-- Node.js 18+ and npm (optional, for web UI mode)
+- Node.js 22+ and npm (optional, for web UI mode)
 
 **Optional requirements:**
 - Tavily API key (for web search functionality)
