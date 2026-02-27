@@ -268,8 +268,6 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
     setUploading(false)
   }, [setUploading])
 
-  const addFileUploadStatusCard = useChatStore((state) => state.addFileUploadStatusCard)
-
   const deleteFile = useCallback(
     async (fileId: string) => {
       const file = trackedFiles.find((f) => f.id === fileId)
