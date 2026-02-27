@@ -217,6 +217,10 @@ aiq:
         NODE_ENV: production
         DISABLE_AUTH: 'true'
         NEXT_PUBLIC_DATADOG_ENABLED: 'false'
+        FILE_UPLOAD_ACCEPTED_TYPES: '.pdf,.docx,.txt,.md'
+        FILE_UPLOAD_MAX_SIZE_MB: '100'
+        FILE_UPLOAD_MAX_FILE_COUNT: '10'
+        FILE_EXPIRATION_CHECK_INTERVAL_HOURS: '0'
       labels:
         component: frontend
       route:

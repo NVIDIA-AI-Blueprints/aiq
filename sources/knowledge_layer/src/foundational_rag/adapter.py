@@ -51,6 +51,7 @@ import json
 import logging
 import os
 import re
+import threading
 import uuid
 from datetime import datetime
 from functools import partial
@@ -110,6 +111,10 @@ MAX_VDB_TOP_K = 100
 # Collection TTL settings (configurable via environment)
 COLLECTION_TTL_HOURS = float(os.environ.get("AIQ_COLLECTION_TTL_HOURS", "24"))
 TTL_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("AIQ_TTL_CLEANUP_INTERVAL_SECONDS", "3600"))
+
+# Completed jobs are retained for this long so list_files can include failed
+# files, then pruned to avoid unbounded memory growth.
+JOB_RETENTION_SECONDS = 3600  # 1 hour
 
 # Client-side summary settings (runs parallel to FRAG ingestion)
 SUMMARY_MAX_CHARS = 4000
@@ -639,6 +644,7 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
 
         # Local job tracking (for jobs submitted through this adapter)
         self._jobs: dict[str, IngestionJobStatus] = {}
+        self._lock = threading.RLock()
 
         # Start background TTL cleanup task
         self._start_ttl_cleanup_task(COLLECTION_TTL_HOURS, TTL_CLEANUP_INTERVAL_SECONDS)
@@ -655,6 +661,20 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
     @property
     def backend_name(self) -> str:
         return "foundational_rag"
+
+    def _prune_completed_jobs(self) -> None:
+        """Remove completed/failed jobs older than JOB_RETENTION_SECONDS."""
+        now = datetime.now()
+        with self._lock:
+            stale = [
+                jid
+                for jid, job in self._jobs.items()
+                if job.completed_at is not None and (now - job.completed_at).total_seconds() > JOB_RETENTION_SECONDS
+            ]
+            for jid in stale:
+                del self._jobs[jid]
+        if stale:
+            logger.debug("Pruned %d completed job(s) from tracking", len(stale))
 
     def _get_headers(self, content_type: str | None = None) -> dict[str, str]:
         """Get request headers including optional auth."""
@@ -719,11 +739,10 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
             backend=self.backend_name,
             metadata={"rag_url": self.rag_url},
         )
-        self._jobs[job_id] = job_status
+        with self._lock:
+            self._jobs[job_id] = job_status
 
         # Upload files in background
-        import threading
-
         thread = threading.Thread(
             target=self._upload_files_async,
             args=(job_id, file_paths, collection_name, config),
@@ -743,12 +762,12 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
         """Background thread to upload files to RAG server."""
         from concurrent.futures import ThreadPoolExecutor
 
-        job = self._jobs.get(job_id)
-        if not job:
-            return
-
-        job.status = JobState.PROCESSING
-        job.started_at = datetime.now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job:
+                return
+            job.status = JobState.PROCESSING
+            job.started_at = datetime.now()
         config = config or {}
 
         # Original filenames for temp file uploads
@@ -857,7 +876,7 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
         failed_count = sum(1 for fd in job.file_details if fd.status == FileStatus.FAILED)
         if failed_count == job.total_files:
             job.status = JobState.FAILED
-            job.error_message = "All file uploads failed"
+            job.error_message = "File upload failed"
             job.completed_at = datetime.now()
         # Otherwise keep as PROCESSING - get_job_status will poll FRAG and update
 
@@ -874,7 +893,10 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
         Returns:
             Current job status.
         """
-        job = self._jobs.get(job_id)
+        self._prune_completed_jobs()
+
+        with self._lock:
+            job = self._jobs.get(job_id)
         if not job:
             # Return a failed status for unknown jobs
             return IngestionJobStatus(
@@ -914,25 +936,64 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
                         logger.debug(f"FRAG task {task_id[:8]} state={state}")
 
                         if state in ("success", "completed", "finished"):
-                            # Mark all files in this batch task as succeeded
+                            result = status_data.get("result", {})
+                            failed_docs = result.get("failed_documents", [])
+                            failed_names: dict[str, str] = {}
+                            for fdoc in failed_docs:
+                                fname = fdoc.get("document_name", "")
+                                ferr = fdoc.get("error_message", "Ingestion failed")
+                                if fname:
+                                    failed_names[fname] = ferr
+
+                            if failed_names:
+                                logger.warning(
+                                    f"FRAG task {task_id[:8]} completed with "
+                                    f"{len(failed_names)} failed file(s): {list(failed_names.keys())}"
+                                )
+
                             if file_indices:
                                 for idx in file_indices:
                                     if (
                                         idx < len(job.file_details)
                                         and job.file_details[idx].status == FileStatus.INGESTING
                                     ):
-                                        job.file_details[idx].status = FileStatus.SUCCESS
-                                logger.debug(f"Batch ingestion succeeded ({len(file_indices)} files)")
+                                        fd = job.file_details[idx]
+                                        # Check if this file appears in failed_documents
+                                        matched_error = next(
+                                            (err for fname, err in failed_names.items() if fname == fd.file_name),
+                                            None,
+                                        )
+                                        if matched_error:
+                                            fd.status = FileStatus.FAILED
+                                            fd.error_message = matched_error
+                                        else:
+                                            fd.status = FileStatus.SUCCESS
+                                succeeded = sum(
+                                    1
+                                    for i in file_indices
+                                    if i < len(job.file_details) and job.file_details[i].status == FileStatus.SUCCESS
+                                )
+                                failed = sum(
+                                    1
+                                    for i in file_indices
+                                    if i < len(job.file_details) and job.file_details[i].status == FileStatus.FAILED
+                                )
+                                logger.debug(f"Batch ingestion done: {succeeded} succeeded, {failed} failed")
                             else:
                                 # Fallback: match by document name
-                                result = status_data.get("result", {})
                                 docs = result.get("documents", [])
                                 for doc in docs:
                                     doc_name = doc.get("document_name", "")
                                     for fd in job.file_details:
-                                        if doc_name in fd.file_name and fd.status == FileStatus.INGESTING:
+                                        if doc_name == fd.file_name and fd.status == FileStatus.INGESTING:
                                             fd.status = FileStatus.SUCCESS
                                             logger.debug("File ingestion succeeded")
+                                for fname, ferr in failed_names.items():
+                                    for fd in job.file_details:
+                                        if fname == fd.file_name and fd.status == FileStatus.INGESTING:
+                                            fd.status = FileStatus.FAILED
+                                            fd.error_message = ferr
+                                            logger.warning(f"File ingestion failed: {ferr}")
                         elif state == "failed":
                             result = status_data.get("result", {})
                             # Try multiple fields for error message
@@ -964,7 +1025,7 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
                                     doc_name = fdoc.get("document_name", "")
                                     doc_error = fdoc.get("error_message", error_msg)
                                     for fd in job.file_details:
-                                        if doc_name in fd.file_name and fd.status == FileStatus.INGESTING:
+                                        if doc_name == fd.file_name and fd.status == FileStatus.INGESTING:
                                             fd.status = FileStatus.FAILED
                                             fd.error_message = doc_error
                                             logger.warning(f"File ingestion failed: {doc_error}")
@@ -996,7 +1057,7 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
                 job.processed_files = total_done
                 if failed_count == job.total_files:
                     job.status = JobState.FAILED
-                    job.error_message = "All file ingestions failed"
+                    job.error_message = "File ingestion failed"
                 else:
                     job.status = JobState.COMPLETED
                 job.completed_at = datetime.now()
@@ -1391,6 +1452,16 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
             for file_id in file_ids:
                 unregister_summary(collection_name, file_id)
 
+            # Also purge failed files from local job tracking so they don't
+            # reappear via list_files (failed files only exist in _jobs, not
+            # on the FRAG server, so the FRAG delete above is a no-op for them)
+            deleted_set = set(file_ids)
+            with self._lock:
+                for job in self._jobs.values():
+                    if job.collection_name != collection_name:
+                        continue
+                    job.file_details = [fd for fd in job.file_details if fd.file_name not in deleted_set]
+
             logger.info(f"Deleted {len(file_ids)} files from {collection_name}")
             return {
                 "message": result.get("message", f"Deleted {len(file_ids)} files"),
@@ -1463,6 +1534,28 @@ class FoundationalRagIngestor(TTLCleanupMixin, BaseIngestor):
                         metadata=enriched_metadata,
                     )
                 )
+
+            # Include failed files from local job tracking.
+            # The FRAG server only returns successfully ingested documents, so
+            # files that failed ingestion would otherwise vanish from the UI.
+            existing_names = {f.file_name for f in files}
+            with self._lock:
+                jobs_snapshot = list(self._jobs.values())
+            for job in jobs_snapshot:
+                if job.collection_name != collection_name:
+                    continue
+                for fd in job.file_details:
+                    if fd.status == FileStatus.FAILED and fd.file_name not in existing_names:
+                        files.append(
+                            FileInfo(
+                                file_id=fd.file_name,
+                                file_name=fd.file_name,
+                                collection_name=collection_name,
+                                status=FileStatus.FAILED,
+                                error_message=fd.error_message,
+                            )
+                        )
+                        existing_names.add(fd.file_name)
 
             return files
 

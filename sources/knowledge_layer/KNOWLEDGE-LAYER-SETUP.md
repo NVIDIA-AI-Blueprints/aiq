@@ -317,6 +317,19 @@ Summaries are generated for the following file types:
 
 Other file types are ingested normally but do not receive summaries.
 
+> **Frontend file types:** The frontend file picker defaults to `.pdf,.docx,.txt,.md` (matching LlamaIndex). Set `FILE_UPLOAD_ACCEPTED_TYPES` to match your backend:
+>
+> | Deployment | Where to set |
+> |-----------|-------------|
+> | **CLI** (`start_e2e.sh`) | `deploy/.env`: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md` |
+> | **Docker Compose** | `deploy/.env` (passed to frontend container automatically) |
+> | **Helm** | `deploy/helm/deployment-k8s/values.yaml` under the frontend app's `env` section |
+>
+> Example for Foundational RAG:
+> ```bash
+> FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md
+> ```
+
 ### How It Works
 
 1. **Ingestion**: Backend extracts text from the document and generates a one-sentence summary using an LLM call

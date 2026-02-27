@@ -207,10 +207,22 @@ File type support depends on the configured backend:
 
 | Backend | Supported Types |
 |---------|----------------|
-| **LlamaIndex** | PDF, TXT, MD, DOCX, HTML, JSON, CSV |
+| **LlamaIndex** | PDF, DOCX, TXT, MD, HTML, JSON, CSV |
 | **Foundational RAG** | PDF, DOCX, PPTX, TXT, MD, HTML, images (PNG, JPG) |
 
 For custom backends, supported types are determined by the backend implementation.
+
+> **Note:** The backends support more types than the frontend currently allows. The frontend only supports uploading `.pdf,.docx,.txt,.md` (the common subset across both backends). Types like HTML, JSON, CSV, and images are supported by the backends but the frontend upload flow does not handle them yet -- this is a separate task.
+
+To change the accepted types in the frontend, set `FILE_UPLOAD_ACCEPTED_TYPES` for your deployment method:
+
+| Deployment | Where to set |
+|-----------|-------------|
+| **CLI** (`start_e2e.sh`) | `deploy/.env`: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md` |
+| **Docker Compose** | `deploy/.env` (passed to frontend container automatically) |
+| **Helm** | `deploy/helm/deployment-k8s/values.yaml` under the frontend app's `env` section |
+
+For Foundational RAG, add `.pptx` to include PowerPoint support: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md`
 
 ### Programmatic Usage
 

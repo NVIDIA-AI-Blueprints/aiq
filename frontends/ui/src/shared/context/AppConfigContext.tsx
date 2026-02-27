@@ -19,7 +19,7 @@ import { createContext, useContext, type ReactNode } from 'react'
  * File upload configuration for validation limits
  */
 export interface FileUploadConfig {
-  /** Accepted file extensions (e.g., ".pdf,.md,.docx,.html,.txt") */
+  /** Accepted file extensions (e.g., ".pdf,.docx,.txt,.md") */
   acceptedTypes: string
   /** Accepted MIME types for drag-drop validation */
   acceptedMimeTypes: string[]

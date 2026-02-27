@@ -16,7 +16,7 @@ import { Document, Trash } from '@/adapters/ui/icons'
 import { useIsCurrentSessionBusy } from '@/features/chat'
 
 /** File source status types */
-export type FileSourceStatus = 'uploading' | 'ingesting' | 'available' | 'error'
+export type FileSourceStatus = 'uploading' | 'ingesting' | 'available' | 'error' | 'deleting'
 
 export interface FileSourceCardProps {
   /** Unique identifier for the file */
@@ -63,6 +63,11 @@ const STATUS_CONFIG: Record<
     label: 'Error',
     color: 'var(--text-color-feedback-danger)',
     showSpinner: false,
+  },
+  deleting: {
+    label: 'Deleting...',
+    color: 'var(--text-color-subtle)',
+    showSpinner: true,
   },
 }
 
@@ -171,7 +176,9 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
     onDelete(id)
   }
 
-  const deleteDisabled = isBusy
+  const isProcessing = status === 'uploading' || status === 'ingesting'
+  const isDeleting = status === 'deleting'
+  const deleteDisabled = isBusy || isProcessing || isDeleting
 
   return (
     <Flex
@@ -181,6 +188,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
         bg-surface-raised border-base rounded-lg border
         p-3 transition-colors
         ${status === 'error' ? 'border-error/50' : ''}
+        ${isDeleting ? 'opacity-50' : ''}
         group
       `}
     >
@@ -269,7 +277,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
           onClick={handleDelete}
           disabled={deleteDisabled}
           aria-label={deleteDisabled ? `Delete ${title} (disabled)` : `Delete ${title}`}
-          title={deleteDisabled ? "Cannot delete files during active operations" : "Delete file"}
+          title={isProcessing ? "Wait for upload to complete" : deleteDisabled ? "Cannot delete files during active operations" : "Delete file"}
           className="ml-2 flex-shrink-0 opacity-0 transition-opacity group-hover:opacity-100"
         >
           <Trash width={16} height={16} className="text-subtle hover:text-error" />

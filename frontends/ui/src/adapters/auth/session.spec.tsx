@@ -33,7 +33,7 @@ import { useAuth } from './session'
  * Default file upload config for tests
  */
 const defaultFileUploadConfig = {
-  acceptedTypes: '.pdf,.md,.docx,.html,.txt',
+  acceptedTypes: '.pdf,.docx,.txt,.md',
   acceptedMimeTypes: ['application/pdf', 'text/plain', 'text/markdown'],
   maxTotalSizeMB: 100,
   maxFileSize: 100 * 1024 * 1024,

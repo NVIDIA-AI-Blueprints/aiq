@@ -254,10 +254,16 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
             if message is not None:
                 sent = await _registry.send(self._conversation_id, message)
                 if not sent:
-                    try:
-                        await self._socket.send_json(message.model_dump())
-                    except Exception as exc:  # pragma: no cover - socket may be closed
-                        logger.warning("Failed to send websocket message: %s", exc)
+                    if not self._conversation_id:
+                        try:
+                            await self._socket.send_json(message.model_dump())
+                        except Exception as exc:  # pragma: no cover - socket may be closed
+                            logger.warning("Failed to send websocket message: %s", exc)
+                    else:
+                        logger.debug(
+                            "Dropping message for disconnected conversation %s",
+                            self._conversation_id,
+                        )
 
     async def human_interaction_callback(self, prompt: InteractionPrompt) -> HumanResponse:
         """

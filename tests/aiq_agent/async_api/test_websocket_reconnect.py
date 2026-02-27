@@ -211,9 +211,11 @@ async def test_handler_create_websocket_message_uses_registry_send(
 
 
 @pytest.mark.asyncio
-async def test_handler_create_websocket_message_falls_back_to_socket(
+async def test_handler_create_websocket_message_drops_for_disconnected_conversation(
     monkeypatch,
 ) -> None:
+    """When registry.send fails for a valid conversation_id the message is dropped
+    instead of falling back to the (likely dead) direct socket."""
     failing_registry = WebSocketSessionRegistry()
     dummy_socket = DummySocket()
     handler = ReconnectableWebSocketMessageHandler(
@@ -222,6 +224,64 @@ async def test_handler_create_websocket_message_falls_back_to_socket(
         step_adaptor=DummyStepAdaptor(),
     )
     handler._conversation_id = "conv-1"
+
+    async def fake_send(_conversation_id, _message):
+        return False
+
+    async def fake_resolve_message_type(_data_model):
+        return "response"
+
+    async def fake_get_schema(_message_type):
+        from nat.data_models.api_server import WebSocketSystemResponseTokenMessage
+
+        return WebSocketSystemResponseTokenMessage
+
+    async def fake_convert_data(_data_model):
+        return DummyMessage()
+
+    async def fake_create_response_message(**_kwargs):
+        return DummyMessage(content="sent")
+
+    monkeypatch.setattr(websocket_reconnect, "_registry", failing_registry)
+    monkeypatch.setattr(websocket_reconnect._registry, "send", fake_send)
+    monkeypatch.setattr(
+        handler._message_validator,
+        "resolve_message_type_by_data",
+        fake_resolve_message_type,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "get_message_schema_by_type",
+        fake_get_schema,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "convert_data_to_message_content",
+        fake_convert_data,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "create_system_response_token_message",
+        fake_create_response_message,
+    )
+
+    await handler.create_websocket_message(data_model=DummyMessage())
+    assert dummy_socket.sent == []
+
+
+@pytest.mark.asyncio
+async def test_handler_create_websocket_message_falls_back_to_socket_without_conversation(
+    monkeypatch,
+) -> None:
+    """When conversation_id is None, fall back to the direct socket."""
+    failing_registry = WebSocketSessionRegistry()
+    dummy_socket = DummySocket()
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = None
 
     async def fake_send(_conversation_id, _message):
         return False

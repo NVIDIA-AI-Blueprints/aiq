@@ -11,7 +11,7 @@
  * - Max file size per individual file (default: 100MB)
  * - Max total size including existing session files (default: 100MB)
  * - Max files total including existing session files (default: 10)
- * - Accepted types (default: .pdf, .md, .docx, .html, .txt)
+ * - Accepted types (default: .pdf, .docx, .txt, .md)
  *
  * Behavior:
  * - File-level errors (duplicates, invalid types, oversized): Skip those files, upload others
