@@ -121,7 +121,22 @@ functions:
 
 #### Multimodal Extraction (LlamaIndex Only)
 
-By default, LlamaIndex ingests text only. To extract tables and images from PDFs, set environment variables before starting the server:
+By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding and VLM models. All options below can be overridden via environment variables:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| **Embedding** | | |
+| `AIQ_EMBED_MODEL` | `nvidia/llama-3.2-nv-embedqa-1b-v2` | NVIDIA embedding model |
+| `AIQ_EMBED_BASE_URL` | `https://integrate.api.nvidia.com/v1` | Embedding API base URL — override for local NIM |
+| **Extraction Flags** | | |
+| `AIQ_EXTRACT_TABLES` | `false` | Extract tables from PDFs as markdown using pdfplumber |
+| `AIQ_EXTRACT_IMAGES` | `false` | Extract embedded images from PDFs and caption them with a VLM |
+| `AIQ_EXTRACT_CHARTS` | `false` | Classify images as charts and extract structured data (chart type, axis labels, data points) |
+| **Vision Model** | | |
+| `AIQ_VLM_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` | VLM for image captioning |
+| `AIQ_VLM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | VLM API base URL — override for local NIM |
+
+You can also set these in `deploy/.env`:
 
 ```bash
 # In deploy/.env or export directly
@@ -129,13 +144,6 @@ AIQ_EXTRACT_TABLES=true    # Extract tables from PDFs using pdfplumber
 AIQ_EXTRACT_IMAGES=true    # Extract images from PDFs using pypdfium2 + VLM captioning
 AIQ_EXTRACT_CHARTS=true    # Classify extracted images as charts and extract structured data
 ```
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `AIQ_EXTRACT_TABLES` | `false` | Extract tables from PDFs as markdown using pdfplumber |
-| `AIQ_EXTRACT_IMAGES` | `false` | Extract embedded images from PDFs and caption them with a VLM |
-| `AIQ_EXTRACT_CHARTS` | `false` | Classify images as charts and extract structured data (chart type, axis labels, data points) |
-| `AIQ_VLM_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` | NVIDIA VLM model for image captioning |
 
 When enabled, the startup log shows the active mode:
 
