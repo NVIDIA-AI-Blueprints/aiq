@@ -62,6 +62,7 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
     addTrackedFile,
     updateTrackedFile,
     removeTrackedFile,
+    unmarkRecentlyDeleted,
     setUploading,
     setError,
     clearError,
@@ -288,13 +289,16 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
       try {
         await clientRef.current.deleteFiles(collectionName, [deleteId])
       } catch (err) {
-        // Restore the file on failure so the user can retry
+        // Restore the file on failure so the user can retry.
+        // Also undo the recentlyDeletedIds entry so the file isn't
+        // filtered out on the next server sync.
         addTrackedFile(file)
+        unmarkRecentlyDeleted(file)
         const message = err instanceof Error ? err.message : 'Delete failed'
         setError(message)
       }
     },
-    [trackedFiles, addTrackedFile, removeTrackedFile, setError, addFileUploadStatusCard]
+    [trackedFiles, addTrackedFile, removeTrackedFile, unmarkRecentlyDeleted, setError]
   )
 
   const retryFile = useCallback(

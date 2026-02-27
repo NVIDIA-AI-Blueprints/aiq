@@ -91,6 +91,20 @@ export const useDocumentsStore = create<DocumentsStore>()(
         )
       },
 
+      unmarkRecentlyDeleted: (file) => {
+        set(
+          (state) => {
+            const nextDeleted = new Set(state.recentlyDeletedIds)
+            nextDeleted.delete(file.id)
+            if (file.serverFileId) nextDeleted.delete(file.serverFileId)
+            nextDeleted.delete(file.fileName)
+            return { recentlyDeletedIds: nextDeleted }
+          },
+          false,
+          'unmarkRecentlyDeleted'
+        )
+      },
+
       clearTrackedFiles: () => {
         set({ trackedFiles: [] }, false, 'clearTrackedFiles')
       },

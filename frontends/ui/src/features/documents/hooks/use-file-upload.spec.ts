@@ -23,6 +23,7 @@ const { mockClient, mockDocumentsStoreState, mockOrchestratorFns } = vi.hoisted(
     addTrackedFile: vi.fn(),
     updateTrackedFile: vi.fn(),
     removeTrackedFile: vi.fn(),
+    unmarkRecentlyDeleted: vi.fn(),
     setUploading: vi.fn(),
     setError: vi.fn(),
     clearError: vi.fn(),

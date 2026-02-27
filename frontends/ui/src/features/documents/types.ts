@@ -118,6 +118,8 @@ export interface DocumentsActions {
   addTrackedFile: (file: TrackedFile) => void
   updateTrackedFile: (id: string, updates: Partial<TrackedFile>) => void
   removeTrackedFile: (id: string) => void
+  /** Remove a file's IDs from recentlyDeletedIds (used to undo optimistic delete on failure) */
+  unmarkRecentlyDeleted: (file: TrackedFile) => void
   clearTrackedFiles: () => void
   /** Clear files for a specific collection (used when switching sessions) */
   clearFilesForCollection: (collectionName: string) => void
