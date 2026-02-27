@@ -257,8 +257,31 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     @app.get("/health", tags=["health"], summary="Health check")
     async def health_check():
-        """Simple health check endpoint."""
-        return {"status": "ok", "dask_available": dask_available}
+        """Health check endpoint that validates DB connectivity."""
+        from sqlalchemy import text
+
+        from ..jobs import EventStore
+
+        result = {"status": "ok", "dask_available": dask_available, "db": "ok"}
+
+        # Check DB connectivity using any cached async engine
+        try:
+            cache = EventStore._async_engine_cache
+            if cache:
+                engine = next(iter(cache.values()))[0]
+                async with engine.connect() as conn:
+                    await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3.0)
+            else:
+                result["db"] = "no_engine"
+        except Exception:
+            logger.warning("Health check DB ping failed", exc_info=True)
+            result["status"] = "degraded"
+            result["db"] = "unreachable"
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=503, content=result)
+
+        return result
 
     @app.post(
         "/v1/jobs/async/submit",

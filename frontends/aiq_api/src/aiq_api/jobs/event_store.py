@@ -139,6 +139,7 @@ class EventStore:
                 pool_pre_ping=True,
                 pool_size=5,
                 max_overflow=10,
+                pool_recycle=1800,
                 connect_args=connect_args,
             )
             cls._sync_engine_cache[db_url] = (engine, time.monotonic())
@@ -165,6 +166,7 @@ class EventStore:
                 pool_pre_ping=True,
                 pool_size=5,
                 max_overflow=10,
+                pool_recycle=1800,
             )
             cls._async_engine_cache[db_url] = (engine, time.monotonic())
             logger.debug("Created async engine for %s", db_url[:50])
