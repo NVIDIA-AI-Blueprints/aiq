@@ -113,7 +113,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 
 RUN npm run build
 
-# Remove devDependencies — keeps GPL/unwanted packages out of the production image
+# Remove devDependencies — keeps dev-only packages out of the production image
 RUN npm ci --omit=dev --ignore-scripts
 
 # =============================================================================
