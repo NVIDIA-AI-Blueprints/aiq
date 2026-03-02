@@ -30,6 +30,7 @@ from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
+from nat.data_models.api_server import ChatResponse
 from nat.data_models.component_ref import FunctionGroupRef
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
@@ -143,8 +144,7 @@ async def deep_research_workflow(config: DeepResearchWorkflowConfig, builder: Bu
     """Wrapper workflow that accepts string queries for evaluation."""
     deep_research_agent_fn = await builder.get_function("deep_research_agent")
 
-    # TODO: return type is actually ChatResponse via _create_chat_response, align annotation later
-    async def _run(query: str) -> str:
+    async def _run(query: str) -> ChatResponse:
         """Run deep research on a query string."""
         state = DeepResearchAgentState(messages=[HumanMessage(content=query)])
         result = await deep_research_agent_fn.ainvoke(state)
