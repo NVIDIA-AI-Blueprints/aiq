@@ -153,7 +153,7 @@ functions:
 
 #### Multimodal Extraction (LlamaIndex Only)
 
-By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding and VLM models. All options below can be overridden via environment variables:
+By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding models. All options below can be overridden via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
