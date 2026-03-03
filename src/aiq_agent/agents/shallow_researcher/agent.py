@@ -309,6 +309,14 @@ class ShallowResearcherAgent:
                 sanitization = sanitize_report(content)
                 content = sanitization.sanitized_report
 
+                # Emit verified/sanitized report so the frontend shows the
+                # cleaned version (overwrites the raw draft auto-emitted
+                # during ainvoke).
+                for cb in self.callbacks:
+                    if hasattr(cb, "emit_final_report"):
+                        cb.emit_final_report(content)
+                        break
+
                 if hasattr(last_msg, "model_copy"):
                     validated_result["messages"][-1] = last_msg.model_copy(update={"content": content})
                 else:

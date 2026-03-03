@@ -435,6 +435,13 @@ class DeepResearcherAgent:
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report
 
+            # Re-emit the verified/sanitized report so the frontend overwrites
+            # the raw version that on_llm_end auto-emitted during ainvoke().
+            for cb in self.callbacks:
+                if hasattr(cb, "emit_final_report"):
+                    cb.emit_final_report(final_message)
+                    break
+
             if result and result.get("messages"):
                 last_msg = result["messages"][-1]
                 if hasattr(last_msg, "model_copy"):

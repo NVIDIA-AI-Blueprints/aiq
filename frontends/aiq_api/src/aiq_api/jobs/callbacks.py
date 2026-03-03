@@ -358,6 +358,19 @@ class AgentEventCallback(BaseCallbackHandler):
         """
         self._source_registry = registry
 
+    def emit_final_report(self, content: str) -> None:
+        """Emit the post-processed final report as an OUTPUT artifact.
+
+        Call this after citation verification and sanitisation so the
+        frontend receives the verified content (overwrites the earlier
+        auto-emitted version).
+        """
+        self._emit_artifact(
+            ArtifactType.OUTPUT,
+            content,
+            output_category="final_report",
+        )
+
     def _is_search_tool(self, tool_name: str) -> bool:
         """Check if tool is a search-related tool that returns URLs."""
         tool_lower = tool_name.lower()
@@ -426,12 +439,11 @@ class AgentEventCallback(BaseCallbackHandler):
 
         Returns:
             - "research_notes" for researcher-agent outputs
-            - "draft" for orchestrator intermediate outputs
-            - "final_report" for final outputs (when no workflow context)
+            - "draft" for orchestrator or unattributed outputs
         """
         workflow_name = agent_info[0] if agent_info else None
         if not workflow_name:
-            return "final_report"
+            return "draft"
         workflow_lower = workflow_name.lower()
         if "researcher" in workflow_lower or "research" in workflow_lower:
             return "research_notes"
