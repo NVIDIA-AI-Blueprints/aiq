@@ -28,6 +28,8 @@ from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common.citation_verification import SourceEntry
+from aiq_agent.common.citation_verification import SourceRegistry
 
 
 @tool
@@ -38,6 +40,23 @@ def web_search_tool(query: str) -> str:
 
 class TestShallowResearcherAgent:
     """Tests for the ShallowResearcherAgent class."""
+
+    @pytest.fixture(autouse=True)
+    def _bypass_citation_pipeline(self):
+        """Bypass citation verification for tests that don't test it.
+
+        These tests mock the LLM to return AIMessage directly (no tool calls),
+        so no tools execute and the source registry stays empty. Patching the
+        pipeline avoids EmptySourceRegistryError in run().
+        """
+        with (
+            patch.object(SourceRegistry, "all_sources", return_value=[SourceEntry(url="https://example.com")]),
+            patch("aiq_agent.agents.shallow_researcher.agent.verify_citations") as mock_verify,
+            patch("aiq_agent.agents.shallow_researcher.agent.sanitize_report") as mock_sanitize,
+        ):
+            mock_verify.side_effect = lambda content, reg: MagicMock(verified_report=content, removed_citations=[])
+            mock_sanitize.side_effect = lambda content: MagicMock(sanitized_report=content)
+            yield
 
     @pytest.fixture
     def mock_llm(self):
