@@ -186,10 +186,9 @@ class SourceRegistry:
 
         # 2. Prefix match — the LLM truncated the URL
         # Collect ALL candidates where the report URL is a prefix of a registry URL
-        truncated_prefix = normalized.rstrip("/")
         candidates: list[SourceEntry] = []
         for reg_normalized, entry in self._urls.items():
-            if reg_normalized.startswith(truncated_prefix):
+            if reg_normalized.startswith(normalized):
                 candidates.append(entry)
 
         if len(candidates) == 1:
