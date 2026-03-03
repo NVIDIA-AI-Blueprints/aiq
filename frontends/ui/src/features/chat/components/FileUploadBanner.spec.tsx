@@ -71,20 +71,6 @@ describe('FileUploadBanner', () => {
     })
   })
 
-  describe('deleted status', () => {
-    test('renders singular message for one file', () => {
-      render(<FileUploadBanner type="deleted" fileCount={1} />)
-
-      expect(screen.getByText(/your file has been deleted/i)).toBeInTheDocument()
-    })
-
-    test('renders plural message for multiple files', () => {
-      render(<FileUploadBanner type="deleted" fileCount={3} />)
-
-      expect(screen.getByText(/3 files have been deleted/i)).toBeInTheDocument()
-    })
-  })
-
   test('displays timestamp when provided', () => {
     const timestamp = new Date('2024-01-15T14:30:00')
 

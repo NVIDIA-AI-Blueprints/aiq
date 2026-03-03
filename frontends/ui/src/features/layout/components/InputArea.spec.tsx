@@ -34,6 +34,7 @@ vi.mock('@/features/chat', () => ({
     const state = {
       currentConversation: { id: 'session-1', messages: mockConversationMessages },
       ensureSession: vi.fn(() => 'session-1'),
+      setRespondToInteractionFn: vi.fn(),
       deepResearchStatus: mockDeepResearchStatus,
       isDeepResearchStreaming: mockIsDeepResearchStreaming,
       deepResearchOwnerConversationId: mockDeepResearchOwnerConversationId,

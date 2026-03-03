@@ -29,6 +29,7 @@ from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
+from nat.data_models.api_server import ChatResponse
 from nat.data_models.component_ref import FunctionGroupRef
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
@@ -134,8 +135,7 @@ async def shallow_research_workflow(config: ShallowResearchWorkflowConfig, build
     """Wrapper workflow that accepts string queries for evaluation."""
     shallow_research_agent_fn = await builder.get_function("shallow_research_agent")
 
-    # TODO: return type is actually ChatResponse via _create_chat_response, align annotation later
-    async def _run(query: str) -> str:
+    async def _run(query: str) -> ChatResponse:
         """Run shallow research on a query string."""
         result = await shallow_research_agent_fn.ainvoke(
             ShallowResearchAgentState(messages=[HumanMessage(content=query)])

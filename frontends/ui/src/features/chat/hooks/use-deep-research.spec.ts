@@ -36,6 +36,7 @@ const mockAddErrorCard = vi.fn()
 const mockPatchConversationMessage = vi.fn()
 const mockPersistDeepResearchToSession = vi.fn()
 const mockAddDeepResearchBanner = vi.fn()
+const mockSetStreamLoaded = vi.fn()
 
 let mockStoreState = {
   deepResearchJobId: null as string | null,
@@ -82,6 +83,7 @@ vi.mock('../store', () => ({
       patchConversationMessage: mockPatchConversationMessage,
       persistDeepResearchToSession: mockPersistDeepResearchToSession,
       addDeepResearchBanner: mockAddDeepResearchBanner,
+      setStreamLoaded: mockSetStreamLoaded,
     })),
     {
       getState: vi.fn(() => ({
@@ -92,6 +94,7 @@ vi.mock('../store', () => ({
         patchConversationMessage: mockPatchConversationMessage,
         completeDeepResearch: mockCompleteDeepResearch,
         setStreaming: mockSetStreaming,
+        setStreamLoaded: mockSetStreamLoaded,
       })),
       setState: vi.fn((updater: (state: typeof mockStoreState) => Partial<typeof mockStoreState>) => {
         if (typeof updater === 'function') {
@@ -604,9 +607,7 @@ describe('useDeepResearch', () => {
       expect(mockCompleteDeepResearch).toHaveBeenCalled()
       expect(mockAddErrorCard).toHaveBeenCalledWith(
         'agent.deep_research_failed',
-        'Something went wrong',
-        undefined,
-        true
+        'Something went wrong'
       )
     })
 
@@ -838,8 +839,7 @@ describe('useDeepResearch', () => {
       expect(mockAddErrorCard).toHaveBeenCalledWith(
         'agent.deep_research_failed',
         'Connection lost',
-        testError.stack,
-        true
+        testError.stack
       )
 
       consoleWarnSpy.mockRestore()

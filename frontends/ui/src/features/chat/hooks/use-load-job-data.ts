@@ -110,6 +110,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
     setLoadedJobId,
     setStreamLoaded,
     stopAllDeepResearchSpinners,
+    addErrorCard,
+    completeDeepResearch,
+    setStreaming,
   } = useChatStore()
 
   const { openRightPanel, setResearchPanelTab } = useLayoutStore()
@@ -484,9 +487,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         }
 
         // Defensive cleanup: loaded data may have stale 'running' items
-        // if the backend never sent completion events. Since we're loading
-        // a completed job, all items should be in terminal state.
-        stopAllDeepResearchSpinners(true)
+        // if the backend never sent completion events. Only treat as
+        // successful for success jobs; interrupted/failed jobs should
+        // leave un-attempted tasks as 'stopped'.
+        stopAllDeepResearchSpinners(jobStatus === 'success')
 
         // Set job ID for cache tracking (so subsequent clicks show cached data)
         setLoadedJobId(jobId)
@@ -497,6 +501,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         const errorMessage = err instanceof Error ? err.message : 'Failed to load job data'
         setError(errorMessage)
         console.error('Failed to load job data:', err)
+        addErrorCard('agent.deep_research_load_failed', errorMessage)
+        stopAllDeepResearchSpinners()
+        completeDeepResearch()
+        setStreaming(false)
       } finally {
         setIsLoading(false)
       }
@@ -511,6 +519,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       stopAllDeepResearchSpinners,
       setResearchPanelTab,
       openRightPanel,
+      addErrorCard,
+      completeDeepResearch,
+      setStreaming,
     ]
   )
 
@@ -573,19 +584,25 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
         clearDeepResearch()
         await streamFullJob(jobId)
-        // Defensive cleanup: loaded data may have stale 'running' items
-        stopAllDeepResearchSpinners(true)
+        // Defensive cleanup: loaded data may have stale 'running' items.
+        // Only mark as successful completion for success jobs; interrupted/failed
+        // jobs should leave un-attempted tasks as 'stopped'.
+        stopAllDeepResearchSpinners(jobStatus === 'success')
         setStreamLoaded(true)
         setLoadedJobId(jobId)
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Failed to load stream data'
         setError(errorMessage)
         console.error('Failed to load stream data:', err)
+        addErrorCard('agent.deep_research_load_failed', errorMessage)
+        stopAllDeepResearchSpinners()
+        completeDeepResearch()
+        setStreaming(false)
       } finally {
         setIsLoading(false)
       }
     },
-    [accessToken, clearDeepResearch, streamFullJob, stopAllDeepResearchSpinners, setStreamLoaded, setLoadedJobId]
+    [accessToken, clearDeepResearch, streamFullJob, stopAllDeepResearchSpinners, setStreamLoaded, setLoadedJobId, addErrorCard, completeDeepResearch, setStreaming]
   )
 
   return {

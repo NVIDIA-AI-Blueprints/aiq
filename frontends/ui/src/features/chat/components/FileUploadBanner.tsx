@@ -8,7 +8,6 @@
  * Variants:
  * - "uploaded": Informational banner shown when files start uploading/ingesting
  * - "pending_warning": Warning when user submits with pending files
- * - "deleted": Confirmation when files are deleted
  */
 
 'use client'
@@ -19,7 +18,7 @@ import { formatTime } from '@/shared/utils/format-time'
 import type { FileUploadStatusType } from '../types'
 
 export interface FileUploadBannerProps {
-  /** Type of status: uploaded, pending_warning, or deleted */
+  /** Type of status: uploaded or pending_warning */
   type: FileUploadStatusType
   /** Number of files in the batch */
   fileCount: number
@@ -29,12 +28,9 @@ export interface FileUploadBannerProps {
   onDismiss?: () => void
 }
 
-/** Banner status type for KUI Banner component */
-type BannerStatus = 'success' | 'info' | 'warning' | 'error'
-
 interface BannerContent {
   message: string
-  status: BannerStatus
+  status: 'info' | 'warning'
   dismissable: boolean
 }
 
@@ -43,7 +39,7 @@ interface BannerContent {
  * Returns null for unknown/legacy types (e.g. 'ingested' from persisted conversations)
  * so the component can skip rendering them.
  */
-const getBannerContent = (type: FileUploadStatusType, _fileCount: number): BannerContent | null => {
+const getBannerContent = (type: FileUploadStatusType): BannerContent | null => {
   switch (type) {
     case 'uploaded':
       return {
@@ -59,15 +55,6 @@ const getBannerContent = (type: FileUploadStatusType, _fileCount: number): Banne
         status: 'warning',
         dismissable: false,
       }
-    case 'deleted':
-      return {
-        message:
-          _fileCount === 1
-            ? 'Your file has been deleted.'
-            : `${_fileCount} files have been deleted.`,
-        status: 'info',
-        dismissable: false,
-      }
     default:
       // Legacy/unknown types from persisted conversations — skip silently
       return null
@@ -79,11 +66,10 @@ const getBannerContent = (type: FileUploadStatusType, _fileCount: number): Banne
  */
 export const FileUploadBanner: FC<FileUploadBannerProps> = ({
   type,
-  fileCount,
   timestamp,
   onDismiss,
 }) => {
-  const content = getBannerContent(type, fileCount)
+  const content = getBannerContent(type)
 
   // Skip rendering for unknown/legacy types
   if (!content) return null

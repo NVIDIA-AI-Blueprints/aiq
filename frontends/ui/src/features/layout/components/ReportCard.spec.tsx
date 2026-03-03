@@ -103,24 +103,34 @@ describe('ReportCard', () => {
       expect(screen.getByRole('button', { name: 'Export as PDF' })).toBeInTheDocument()
     })
 
-    test('calls downloadAsMarkdown when Markdown button clicked', async () => {
+    test('calls downloadAsMarkdown with content and title', async () => {
+      const user = userEvent.setup()
+
+      render(<ReportCard content="Report content" title="Market Analysis" />)
+
+      await user.click(screen.getByRole('button', { name: 'Export as Markdown' }))
+
+      expect(mockDownloadAsMarkdown).toHaveBeenCalledWith('Report content', 'Market Analysis')
+    })
+
+    test('calls downloadPdf with content and title', async () => {
+      const user = userEvent.setup()
+
+      render(<ReportCard content="Report content" title="Market Analysis" />)
+
+      await user.click(screen.getByRole('button', { name: 'Export as PDF' }))
+
+      expect(mockDownloadPdf).toHaveBeenCalledWith('Report content', 'Market Analysis')
+    })
+
+    test('calls downloadAsMarkdown with undefined title when not provided', async () => {
       const user = userEvent.setup()
 
       render(<ReportCard content="Report content" />)
 
       await user.click(screen.getByRole('button', { name: 'Export as Markdown' }))
 
-      expect(mockDownloadAsMarkdown).toHaveBeenCalledWith('Report content')
-    })
-
-    test('calls downloadPdf when PDF button clicked', async () => {
-      const user = userEvent.setup()
-
-      render(<ReportCard content="Report content" />)
-
-      await user.click(screen.getByRole('button', { name: 'Export as PDF' }))
-
-      expect(mockDownloadPdf).toHaveBeenCalledWith('Report content')
+      expect(mockDownloadAsMarkdown).toHaveBeenCalledWith('Report content', undefined)
     })
   })
 

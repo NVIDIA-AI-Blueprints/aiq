@@ -15,19 +15,9 @@ vi.mock('../lib/error-registry', () => ({
         defaultMessage: 'Unable to connect to the server. Please check your network connection.',
         status: 'error',
       },
-      'auth.session_expired': {
-        title: 'Session Expired',
-        defaultMessage: 'Your session has expired',
-        status: 'error',
-      },
-      'file.upload_failed': {
-        title: 'Upload Failed',
-        defaultMessage: 'File upload failed',
-        status: 'error',
-      },
-      'file.ingest_failed': {
-        title: 'Processing Failed',
-        defaultMessage: 'Failed to process the file contents',
+      'agent.response_interrupted': {
+        title: 'Response Interrupted',
+        defaultMessage: 'Your previous request was not completed.',
         status: 'warning',
       },
     }
@@ -85,11 +75,11 @@ describe('ErrorBanner', () => {
       expect(screen.getByText('Connection Failed')).toBeInTheDocument()
     })
 
-    test('renders warning status for processing errors', () => {
-      render(<ErrorBanner code="file.ingest_failed" />)
+    test('renders warning status for interrupted responses', () => {
+      render(<ErrorBanner code="agent.response_interrupted" />)
 
       // Banner should be visible with warning status
-      expect(screen.getByText('Processing Failed')).toBeInTheDocument()
+      expect(screen.getByText('Response Interrupted')).toBeInTheDocument()
     })
   })
 

@@ -32,6 +32,7 @@ import {
 } from '@/adapters/api/websocket-client'
 import { checkBackendHealthCached, invalidateHealthCache } from '@/shared/hooks/use-backend-health'
 import { useChatStore } from '../store'
+import { useConnectionRecovery } from './use-connection-recovery'
 import { useLayoutStore } from '@/features/layout/store'
 import { WEB_SEARCH_SOURCE_ID } from '@/features/layout/data-sources'
 import { useDocumentsStore } from '@/features/documents/store'
@@ -175,6 +176,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     findThinkingStepByFunctionName,
     addAgentPrompt,
     addErrorCard,
+    dismissConnectionErrors,
     setCurrentStatus,
     setPendingInteraction,
     clearPendingInteraction,
@@ -431,7 +433,6 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
             'connection.failed',
             errorContent.message,
             errorContent.details,
-            true
           )
           setCurrentStatus(null)
           setStreaming(false)
@@ -454,7 +455,6 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           errorCode,
           errorContent.message,
           errorContent.details,
-          true // Generally retryable - user can try sending another message
         )
 
         setCurrentStatus(null)
@@ -469,8 +469,8 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         setIsConnected(status === 'connected')
 
         if (status === 'connected') {
-          // Connection restored -- clear any stale health cache
           invalidateHealthCache()
+          dismissConnectionErrors()
           return
         }
 
@@ -507,6 +507,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     findThinkingStepByFunctionName,
     addAgentPrompt,
     addErrorCard,
+    dismissConnectionErrors,
     setCurrentStatus,
     setPendingInteraction,
     clearPendingInteraction,
@@ -625,7 +626,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           wsClientRef.current.sendMessage(content, dataSourcesForMessage)
           setLoading(false)
         } else {
-          addErrorCard('connection.failed', 'WebSocket connection failed', undefined, true)
+          addErrorCard('connection.failed', 'WebSocket connection failed')
           setStreaming(false)
           setLoading(false)
         }
@@ -655,7 +656,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         wsClientRef.current.connect()
       } else {
         // No conversation ID - shouldn't happen but handle gracefully
-        addErrorCard('system.unknown', 'No active conversation', undefined, false)
+        addErrorCard('system.unknown', 'No active conversation')
         setStreaming(false)
         setLoading(false)
       }
@@ -714,7 +715,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         setStreaming(true)
         setLoading(true)
       } else {
-        addErrorCard('connection.failed', 'WebSocket not connected', undefined, true)
+        addErrorCard('connection.failed', 'WebSocket not connected')
       }
     },
     [
@@ -743,6 +744,9 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       wsClientRef.current.connect()
     }
   }, [currentConversation, idToken, createCallbacks])
+
+  // Activate recovery polling when connection error cards are visible
+  useConnectionRecovery(connect)
 
   /**
    * Disconnect from WebSocket

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { useCallback, useState } from 'react'
+import { sanitizeFilename } from '@/utils/sanitize-filename'
 
 export const useDownloadPdfRoute = () => {
   const [isLoading, setIsLoading] = useState(false)
@@ -11,7 +12,7 @@ export const useDownloadPdfRoute = () => {
     setError(null)
   }, [])
 
-  const downloadPdf = async (markdown: string) => {
+  const downloadPdf = async (markdown: string, filename?: string) => {
     setIsLoading(true)
     setError(null)
 
@@ -28,10 +29,14 @@ export const useDownloadPdfRoute = () => {
 
       const blob = await response.blob()
 
+      const baseName = filename
+        ? sanitizeFilename(filename)
+        : `report-${new Date().toISOString().slice(0, 10)}`
+
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `report-${new Date().toISOString().slice(0, 10)}.pdf`
+      a.download = `${baseName}.pdf`
       document.body.appendChild(a)
       a.click()
       document.body.removeChild(a)

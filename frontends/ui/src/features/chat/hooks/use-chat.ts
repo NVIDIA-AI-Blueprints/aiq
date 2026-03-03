@@ -256,7 +256,7 @@ export const useChat = (options: UseChatOptions = {}): UseChatReturn => {
               currentThinkingStepIdRef.current = null
               currentStatusRef.current = null
 
-              addErrorCard('agent.response_failed', err.message, undefined, true)
+              addErrorCard('agent.response_failed', err.message)
               setCurrentStatus(null)
               setStreaming(false)
               setLoading(false)
@@ -273,7 +273,7 @@ export const useChat = (options: UseChatOptions = {}): UseChatReturn => {
         currentStatusRef.current = null
 
         if (err instanceof Error && err.name !== 'AbortError') {
-          addErrorCard('agent.response_failed', err.message, undefined, true)
+          addErrorCard('agent.response_failed', err.message)
           setCurrentStatus(null)
         }
         setStreaming(false)

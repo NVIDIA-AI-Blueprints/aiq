@@ -106,7 +106,7 @@ describe('useDownloadPdfRoute', () => {
     expect(result.current.error).toBeNull()
   })
 
-  test('sets download filename with current date', async () => {
+  test('sets download filename with current date when no title provided', async () => {
     const { result } = renderHook(() => useDownloadPdfRoute())
 
     const mockBlob = new Blob(['pdf content'], { type: 'application/pdf' })
@@ -126,6 +126,27 @@ describe('useDownloadPdfRoute', () => {
 
     // Verify filename format: report-YYYY-MM-DD.pdf
     expect(mockAnchor.download).toMatch(/^report-\d{4}-\d{2}-\d{2}\.pdf$/)
+  })
+
+  test('uses sanitized title as filename when provided', async () => {
+    const { result } = renderHook(() => useDownloadPdfRoute())
+
+    const mockBlob = new Blob(['pdf content'], { type: 'application/pdf' })
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      blob: () => Promise.resolve(mockBlob),
+    })
+
+    const mockAnchor = { href: '', download: '', click: vi.fn() }
+    vi.spyOn(document, 'createElement').mockReturnValue(mockAnchor as unknown as HTMLElement)
+    vi.spyOn(document.body, 'appendChild').mockImplementation(() => mockAnchor as unknown as Node)
+    vi.spyOn(document.body, 'removeChild').mockImplementation(() => mockAnchor as unknown as Node)
+
+    await act(async () => {
+      await result.current.downloadPdf('# Test', 'Market Analysis Report')
+    })
+
+    expect(mockAnchor.download).toBe('market-analysis-report.pdf')
   })
 
   test('handles fetch error', async () => {

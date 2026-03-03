@@ -33,6 +33,7 @@ const mockRespondToPrompt = vi.fn()
 const mockAddPlanMessage = vi.fn()
 const mockUpdatePlanMessageResponse = vi.fn()
 const mockAddDeepResearchBanner = vi.fn()
+const mockDismissConnectionErrors = vi.fn()
 
 // Mock store state
 let mockStoreState: {
@@ -94,6 +95,7 @@ vi.mock('../store', () => ({
       addPlanMessage: mockAddPlanMessage,
       updatePlanMessageResponse: mockUpdatePlanMessageResponse,
       addDeepResearchBanner: mockAddDeepResearchBanner,
+      dismissConnectionErrors: mockDismissConnectionErrors,
     })),
     {
       getState: vi.fn(() => ({
@@ -101,6 +103,7 @@ vi.mock('../store', () => ({
       })),
     }
   ),
+  selectHasConnectionError: () => false,
 }))
 
 // Mock auth hook
@@ -109,6 +112,11 @@ vi.mock('@/adapters/auth', () => ({
     user: { id: 'user-1', email: 'test@example.com' },
     idToken: 'mock-id-token',
   })),
+}))
+
+// Mock connection recovery hook (tested separately)
+vi.mock('./use-connection-recovery', () => ({
+  useConnectionRecovery: vi.fn(),
 }))
 
 // Mock backend health check
@@ -399,7 +407,7 @@ describe('useWebSocketChat', () => {
       result.current.sendMessage('Hello')
     })
 
-    expect(mockAddErrorCard).toHaveBeenCalledWith('system.unknown', 'No active conversation', undefined, false)
+    expect(mockAddErrorCard).toHaveBeenCalledWith('system.unknown', 'No active conversation')
     expect(mockSetStreaming).toHaveBeenCalledWith(false)
   })
 
@@ -553,8 +561,7 @@ describe('useWebSocketChat', () => {
     expect(mockAddErrorCard).toHaveBeenCalledWith(
       'agent.response_failed',
       'Invalid message format',
-      'Missing required field',
-      true
+      'Missing required field'
     )
     expect(mockSetCurrentStatus).toHaveBeenCalledWith(null)
     expect(mockSetStreaming).toHaveBeenCalledWith(false)
@@ -601,8 +608,7 @@ describe('useWebSocketChat', () => {
       expect(mockAddErrorCard).toHaveBeenCalledWith(
         'connection.failed',
         'Unable to connect to the server. Please check your network connection.',
-        undefined,
-        true
+        undefined
       )
     })
   })

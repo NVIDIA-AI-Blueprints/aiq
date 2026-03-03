@@ -221,15 +221,15 @@ function renderList(token: ListToken, index: number, _nested: boolean = false): 
       ? textTokens
           .map((t: any) => {
             if ('text' in t) {
-              return stripHtml(t.text as string)
+              return stripHtml(preserveHtmlLinks(t.text as string))
             }
             if ('raw' in t) {
-              return stripHtml(t.raw as string)
+              return stripHtml(preserveHtmlLinks(t.raw as string))
             }
             return ''
           })
           .join(' ')
-      : stripHtml(item.text)
+      : stripHtml(preserveHtmlLinks(item.text))
 
     const hasNestedContent = nestedLists.length > 0
 
@@ -339,13 +339,20 @@ function stripHtml(text: string): string {
   return text.replace(/<[^>]*>/g, '')
 }
 
+/** Convert HTML <a> tags to markdown link syntax so they survive stripHtml. */
+function preserveHtmlLinks(text: string): string {
+  return text.replace(/<a\s[^>]*href=["']([^"']*)["'][^>]*>(.*?)<\/a>/gi, '[$2]($1)')
+}
+
 function parseInlineFormatting(text: string): React.ReactNode {
+  text = preserveHtmlLinks(text)
   text = stripHtml(text)
 
   const parts: React.ReactNode[] = []
-  // Combined regex for links, bold, and italic
-  // Links: [text](url) | Bold: **text** or __text__ | Italic: *text* or _text_
-  const inlineRegex = /(\[([^\]]+)\]\(([^)]+)\)|\*\*(.+?)\*\*|\*(.+?)\*|__(.+?)__|_(.+?)_)/g
+  // Links: [text](url) — supports balanced parens in URLs (e.g. Wikipedia)
+  // Bold: **text** or __text__ | Italic: *text* or _text_
+  const inlineRegex =
+    /(\[([^\]]+)\]\(((?:[^()\s]|\([^)]*\))+)\)|\*\*(.+?)\*\*|\*(.+?)\*|__(.+?)__|_(.+?)_)/g
   let key = 0
   let lastIndex = 0
   let match
@@ -357,27 +364,32 @@ function parseInlineFormatting(text: string): React.ReactNode {
 
     const fullMatch = match[0]
 
-    // Check if it's a link [text](url)
     if (fullMatch.startsWith('[') && match[2] && match[3]) {
       const linkText = match[2]
       const linkUrl = match[3]
-      parts.push(
-        <Link key={`link-${key++}`} src={linkUrl} style={styles.link}>
-          {linkText}
-        </Link>
-      )
-    }
-    // Check if it's bold
-    else if (fullMatch.startsWith('**') || fullMatch.startsWith('__')) {
+
+      if (linkUrl.startsWith('#')) {
+        // Anchor links have no destination in a PDF — render as styled text
+        parts.push(
+          <Text key={`anchor-${key++}`} style={{ fontWeight: 'bold' }}>
+            {linkText}
+          </Text>
+        )
+      } else {
+        parts.push(
+          <Link key={`link-${key++}`} src={linkUrl} style={styles.link}>
+            {linkText}
+          </Link>
+        )
+      }
+    } else if (fullMatch.startsWith('**') || fullMatch.startsWith('__')) {
       const content = match[4] || match[6]
       parts.push(
         <Text key={`bold-${key++}`} style={{ fontWeight: 'bold' }}>
           {content}
         </Text>
       )
-    }
-    // It's italic
-    else {
+    } else {
       const content = match[5] || match[7]
       parts.push(
         <Text key={`italic-${key++}`} style={{ fontStyle: 'italic' }}>

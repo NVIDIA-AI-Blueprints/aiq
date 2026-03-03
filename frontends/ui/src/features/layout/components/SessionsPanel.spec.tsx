@@ -163,7 +163,7 @@ describe('SessionsPanel', () => {
   test('renders footer text', () => {
     render(<SessionsPanel sessions={mockSessions} />)
 
-    expect(screen.getByText(/Sessions and Files are saved for a limited time/i)).toBeInTheDocument()
+    expect(screen.getByText(/Sessions and files are saved for a limited time before automatic deletion/i)).toBeInTheDocument()
   })
 
   test('does not show session content when panel is closed', () => {

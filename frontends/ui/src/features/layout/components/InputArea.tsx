@@ -181,6 +181,13 @@ export const InputArea: FC<InputAreaProps> = ({
   const activeChat = connectionMode === 'websocket' ? wsChat : sseChat
   const { sendMessage, isLoading, respondToInteraction, pendingInteraction } = activeChat
 
+  // Register respondToInteraction in the store so sibling components (e.g. AgentPrompt) can use it
+  const setRespondToInteractionFn = useChatStore((state) => state.setRespondToInteractionFn)
+  useEffect(() => {
+    setRespondToInteractionFn(respondToInteraction)
+    return () => setRespondToInteractionFn(null)
+  }, [respondToInteraction, setRespondToInteractionFn])
+
   // Layout store for opening data sources panel
   const {
     rightPanel,
