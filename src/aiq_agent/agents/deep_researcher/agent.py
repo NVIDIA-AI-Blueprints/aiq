@@ -23,6 +23,7 @@ from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
 
@@ -427,6 +428,8 @@ class DeepResearcherAgent:
                         [c["reason"] for c in verification.removed_citations],
                     )
                 final_message = verification.verified_report
+            else:
+                raise EmptySourceRegistryError("deep research")
 
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)

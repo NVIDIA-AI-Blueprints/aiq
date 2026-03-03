@@ -18,6 +18,7 @@
 import pytest
 
 from aiq_agent.common.citation_verification import _PARSER_REGISTRY
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import _normalize_url
@@ -704,3 +705,26 @@ class TestSanitizeReport:
         assert "https://unknown.com" not in result.sanitized_report
         assert result.body_urls_replaced == 1
         assert result.body_urls_removed == 1
+
+
+# ---------------------------------------------------------------------------
+# EmptySourceRegistryError
+# ---------------------------------------------------------------------------
+
+
+class TestEmptySourceRegistryError:
+    """Tests for EmptySourceRegistryError."""
+
+    def test_default_message(self):
+        err = EmptySourceRegistryError()
+        assert "no sources were captured" in str(err)
+        assert "research" in str(err)
+
+    def test_custom_agent_type(self):
+        err = EmptySourceRegistryError("deep research")
+        assert "deep research" in str(err)
+        assert err.agent_type == "deep research"
+
+    def test_is_exception(self):
+        with pytest.raises(EmptySourceRegistryError):
+            raise EmptySourceRegistryError("test")

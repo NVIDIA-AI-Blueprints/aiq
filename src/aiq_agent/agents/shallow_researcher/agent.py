@@ -36,6 +36,7 @@ from langgraph.prebuilt import tools_condition
 
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 from aiq_agent.common.citation_verification import sanitize_report
@@ -301,6 +302,8 @@ class ShallowResearcherAgent:
                             len(verification.removed_citations),
                         )
                     content = verification.verified_report
+                else:
+                    raise EmptySourceRegistryError("shallow research")
 
                 # Step 2: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
                 sanitization = sanitize_report(content)

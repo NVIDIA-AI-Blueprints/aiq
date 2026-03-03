@@ -67,6 +67,18 @@ class CitationVerificationResult:
     valid_citations: list[dict] = field(default_factory=list)
 
 
+class EmptySourceRegistryError(Exception):
+    """Raised when no sources were captured during research."""
+
+    def __init__(self, agent_type: str = "research") -> None:
+        self.agent_type = agent_type
+        super().__init__(
+            f"Research failed: no sources were captured during {agent_type}. "
+            "All tool calls may have failed or returned no results. "
+            "Please try again."
+        )
+
+
 # ---------------------------------------------------------------------------
 # URL normalization
 # ---------------------------------------------------------------------------
