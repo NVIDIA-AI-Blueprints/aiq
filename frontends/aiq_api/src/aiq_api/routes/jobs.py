@@ -689,7 +689,12 @@ async def _cleanup_old_events_loop(db_url: str, retention_seconds: int, interval
     )
 
     # Run once immediately on startup to catch anything that aged out during downtime.
-    await _run_event_cleanup(db_url, retention_seconds, is_postgres)
+    try:
+        await _run_event_cleanup(db_url, retention_seconds, is_postgres)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning("Event cleanup startup run failed: %s", e)
 
     while True:
         try:
