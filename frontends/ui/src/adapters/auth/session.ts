@@ -52,9 +52,9 @@ const DEFAULT_USER = {
  * ```
  */
 export const useAuth = (): AuthContext => {
-  const { authRequired } = useAppConfig()
+  const { authRequired, authProviderId } = useAppConfig()
   const authRequiredRef = useRef(authRequired)
-  const { data: session, status, update } = useNextAuthSession()
+  const { data: session, status } = useNextAuthSession()
   const hasTriggeredReauth = useRef(false)
 
   if (authRequiredRef.current !== authRequired) {
@@ -62,8 +62,8 @@ export const useAuth = (): AuthContext => {
   }
 
   const handleSignIn = useCallback(async (): Promise<void> => {
-    await signIn('oauth', { callbackUrl: '/' })
-  }, [])
+    await signIn(authProviderId, { callbackUrl: '/' })
+  }, [authProviderId])
 
   const handleSignOut = useCallback(async (): Promise<void> => {
     await signOut({ callbackUrl: '/auth/signin' })
@@ -82,22 +82,18 @@ export const useAuth = (): AuthContext => {
     }
   }, [session?.error, authRequired, handleSignOut])
 
-  useEffect(() => {
-    if (!authRequired) return
-    if (status !== 'authenticated') return
-
-    const interval = setInterval(() => {
-      update()
-    }, 4 * 60 * 1000)
-
-    return () => clearInterval(interval)
-  }, [status, update, authRequired])
+  // Session refresh is handled by SessionProvider's refetchInterval
+  // and refetchOnWindowFocus. Do NOT add a duplicate setInterval here --
+  // concurrent refresh requests cause "invalid_grant" failures with
+  // rotating refresh tokens, logging users out unexpectedly.
 
   if (!authRequired) {
     return {
       isAuthenticated: true,
       isLoading: false,
       authRequired: false,
+      hasAccess: true,
+      dlGroup: undefined,
       user: DEFAULT_USER,
       accessToken: undefined,
       idToken: undefined,
@@ -115,6 +111,8 @@ export const useAuth = (): AuthContext => {
     isAuthenticated,
     isLoading,
     authRequired: true,
+    hasAccess: session?.hasAccess ?? true,
+    dlGroup: session?.dlGroup,
     user: session?.user
       ? {
           id: session.userId || session.user.email || undefined,

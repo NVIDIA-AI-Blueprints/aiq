@@ -24,6 +24,10 @@ declare module 'next-auth' {
     userId?: string
     /** Error state for token refresh failures */
     error?: string
+    /** Whether the user has access via DL group membership (Helios API, Starfleet only) */
+    hasAccess?: boolean
+    /** DL group name used for access gating (Starfleet only) */
+    dlGroup?: string
   }
 
   /**
@@ -54,6 +58,10 @@ declare module 'next-auth/jwt' {
     userId?: string
     /** Error state for token refresh failures */
     error?: string
+    /** Whether the user has access via DL group membership (Helios API, Starfleet only) */
+    hasAccess?: boolean
+    /** DL group name used for access gating (Starfleet only) */
+    dlGroup?: string
   }
 }
 
@@ -80,13 +88,17 @@ export interface AuthState {
   idToken?: string
   /** Any auth error */
   error?: string
+  /** Whether the user has access via DL group membership (true when DL gating is not configured) */
+  hasAccess: boolean
+  /** DL group name used for access gating (undefined when DL gating is not configured) */
+  dlGroup?: string
 }
 
 /**
  * Auth actions for the useAuth hook
  */
 export interface AuthActions {
-  /** Sign in with OAuth */
+  /** Sign in with the configured auth provider */
   signIn: () => Promise<void>
   /** Sign out and clear session */
   signOut: () => Promise<void>

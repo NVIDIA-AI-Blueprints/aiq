@@ -8,7 +8,7 @@
  * - GET /api/auth/signin
  * - GET /api/auth/signout
  * - GET /api/auth/session
- * - POST /api/auth/callback/oauth
+ * - POST /api/auth/callback/{provider}
  *
  * After successful OAuth callback, sets the idToken as a cookie for backend auth.
  * This is necessary because middleware skips /api/auth/ routes.
@@ -17,7 +17,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import NextAuth from 'next-auth'
 import { getToken } from 'next-auth/jwt'
-import { authOptions, isAuthRequired, shouldUseSecureCookies } from '@/adapters/auth/config'
+import {
+  authOptions,
+  isAuthRequired,
+  shouldUseSecureCookies,
+  ID_TOKEN_COOKIE_MAX_AGE,
+} from '@/adapters/auth/config'
 
 const nextAuthHandler = NextAuth(authOptions)
 
@@ -36,7 +41,7 @@ const clearAuthCookies = (response: NextResponse): void => {
  * The middleware skips /api/auth/ routes, so we need to set the cookie here.
  *
  * Handles both:
- * - OAuth callbacks (GET /api/auth/callback/oauth)
+ * - OAuth callbacks (GET /api/auth/callback/{provider})
  * - Credentials callbacks (POST /api/auth/callback/dev-bypass)
  */
 const withIdTokenCookie = async (
@@ -82,14 +87,12 @@ const withIdTokenCookie = async (
           headers: new Headers(response.headers),
         })
 
-        // Set the idToken cookie
-        const maxAge = 30 * 24 * 60 * 60 // 30 days
         newResponse.cookies.set('idToken', token.idToken as string, {
           httpOnly: true,
           sameSite: 'lax',
           path: '/',
           secure: shouldUseSecureCookies(),
-          maxAge,
+          maxAge: ID_TOKEN_COOKIE_MAX_AGE,
         })
 
         return newResponse

@@ -6,6 +6,7 @@
  *
  * Custom sign-in page for OAuth authentication.
  * Redirects to home when REQUIRE_AUTH=false since auth is not needed.
+ * Shows DL access denied UI when Helios DL gating is configured and denies the user.
  */
 
 'use client'
@@ -14,7 +15,7 @@ import { type ReactNode, Suspense, useEffect } from 'react'
 import { useSearchParams, useRouter } from 'next/navigation'
 import { signIn } from 'next-auth/react'
 import { Flex, Text, Button, Card, Stack, Logo, Spinner } from '@/adapters/ui'
-import { LoadingSpinner } from '@/adapters/ui/icons'
+import { LoadingSpinner, Lock } from '@/adapters/ui/icons'
 import { useAppConfig } from '@/shared/context'
 import { StarfieldAnimation } from '@/shared/components/StarfieldAnimation'
 
@@ -26,18 +27,18 @@ const DISCLAIMER_TEXT =
  */
 const SignInContent = (): ReactNode => {
   const router = useRouter()
-  const { authRequired } = useAppConfig()
+  const { authRequired, authProviderId } = useAppConfig()
   const searchParams = useSearchParams()
   const error = searchParams?.get('error') ?? null
+  const dlGroup = searchParams?.get('dl_group') ?? null
+  const isDlDenied = error === 'DLAccessDenied'
 
-  // Redirect to home if auth is disabled - this page is not needed
   useEffect(() => {
     if (!authRequired) {
       router.replace('/')
     }
   }, [authRequired, router])
 
-  // Show loading while redirecting
   if (!authRequired) {
     return (
       <Flex align="center" justify="center" className="py-8">
@@ -46,17 +47,18 @@ const SignInContent = (): ReactNode => {
     )
   }
 
+  const isStarfleet = authProviderId === 'nvlogin'
+
   const handleSignIn = (): void => {
-    signIn('oauth', { callbackUrl: '/' })
+    signIn(authProviderId, { callbackUrl: '/' })
   }
 
-  // Map NextAuth error codes to user-friendly messages
   const getErrorMessage = (errorCode: string | null): string | null => {
     if (!errorCode) return null
 
     const errorMessages: Record<string, string> = {
       OAuthSignin:
-        'OAuth configuration error. Check that OAUTH_CLIENT_ID is set in .env.local',
+        'OAuth configuration error. Check that your client ID is set in the environment.',
       OAuthCallback: 'OAuth callback error. The authentication response was invalid.',
       OAuthCreateAccount: 'Could not create user account.',
       EmailCreateAccount: 'Could not create user account.',
@@ -69,7 +71,8 @@ const SignInContent = (): ReactNode => {
     return errorMessages[errorCode] || errorMessages.Default
   }
 
-  const errorMessage = getErrorMessage(error)
+  const errorMessage = isDlDenied ? null : getErrorMessage(error)
+  const buttonLabel = isStarfleet ? 'Sign in with SSO' : 'Sign in'
 
   return (
     <Stack gap="6" align="center">
@@ -78,9 +81,40 @@ const SignInContent = (): ReactNode => {
       <Flex direction="col" gap="2" align="center">
         <Text kind="title/lg">Sign in to AI-Q</Text>
         <Text kind="body/regular/md" className="text-secondary text-center">
-          Sign in to continue
+          {isStarfleet ? 'Use your credentials to access AI-Q' : 'Sign in to continue'}
         </Text>
       </Flex>
+
+      {isDlDenied && (
+        <Flex
+          direction="col"
+          gap="3"
+          className="bg-status-warning-muted border-status-warning w-full rounded-md border p-4"
+        >
+          <Flex align="center" gap="density-sm">
+            <Lock className="text-status-warning h-5 w-5 shrink-0" />
+            <Text kind="label/semibold/sm" className="text-status-warning">
+              Access Denied
+            </Text>
+          </Flex>
+          <Text kind="body/regular/sm">
+            You are not a member of the required DL group. Please request access, then sign in
+            again after approval (may take up to 20 minutes).
+          </Text>
+          {dlGroup && (
+            <Button
+              kind="secondary"
+              size="small"
+              onClick={() =>
+                window.open(`https://helios.nvidia.com/dlrequest/group/${dlGroup}`, '_blank')
+              }
+              aria-label="Request DL access"
+            >
+              Request Access
+            </Button>
+          )}
+        </Flex>
+      )}
 
       {errorMessage && (
         <Flex
@@ -96,7 +130,7 @@ const SignInContent = (): ReactNode => {
       )}
 
       <Button kind="primary" size="large" onClick={handleSignIn} className="w-full">
-        Sign in
+        {buttonLabel}
       </Button>
 
       <Text kind="body/regular/sm" className="text-subtle text-center">
