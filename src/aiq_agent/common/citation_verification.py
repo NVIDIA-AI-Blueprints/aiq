@@ -147,8 +147,11 @@ def _parse_citation_key(key: str) -> tuple[str, int | None]:
 class SourceRegistry:
     """Registry of sources captured from tool call results.
 
-    Not thread-safe. In practice this is fine because deepagents subagents
-    run as async coroutines on the same event loop, not separate threads.
+    Not thread-safe — this is intentional.  All access happens on a single
+    asyncio event loop (cooperative concurrency), and Python's GIL already
+    protects the underlying dict/list/set operations from corruption.
+    The module-level ``_session_registries`` dict *is* lock-protected because
+    it is accessed across event loops when creating/looking up sessions.
     """
 
     def __init__(self) -> None:
@@ -158,7 +161,14 @@ class SourceRegistry:
         self._all: list[SourceEntry] = []
 
     def add(self, entry: SourceEntry) -> None:
-        """Register a source entry (deduplicated by normalized URL and citation key filename)."""
+        """Register a source entry (deduplicated by normalized URL and citation key filename).
+
+        Note: when an entry has both a url and a citation_key, and the URL
+        is new but the citation_key filename is already known, the entry is
+        added to _all (via the URL branch) but the citation_key is NOT
+        appended to _citation_keys.  This is intentional — in practice
+        entries carry either a URL or a citation_key, never both.
+        """
         added = False
         if entry.url:
             normalized = _normalize_url(entry.url)
@@ -273,6 +283,11 @@ def get_or_create_session_registry(session_id: str) -> SourceRegistry:
 def set_session_registry(registry: SourceRegistry | None) -> contextvars.Token:
     """Set the session-scoped SourceRegistry for the current async context."""
     return _session_source_registry.set(registry)
+
+
+def reset_session_registry(token: contextvars.Token) -> None:
+    """Restore the session-scoped SourceRegistry to its previous value."""
+    _session_source_registry.reset(token)
 
 
 def get_session_registry() -> SourceRegistry | None:

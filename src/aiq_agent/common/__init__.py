@@ -39,6 +39,7 @@ from .citation_verification import SourceRegistry
 from .citation_verification import get_or_create_session_registry
 from .citation_verification import get_session_registry
 from .citation_verification import register_source_parser
+from .citation_verification import reset_session_registry
 from .citation_verification import sanitize_report
 from .citation_verification import set_session_registry
 from .citation_verification import verify_citations
@@ -82,6 +83,7 @@ __all__ = [
     "parse_data_sources",
     "register_source_parser",
     "render_prompt_template",
+    "reset_session_registry",
     "sanitize_report",
     "set_session_registry",
     "validate_tool_availability",
