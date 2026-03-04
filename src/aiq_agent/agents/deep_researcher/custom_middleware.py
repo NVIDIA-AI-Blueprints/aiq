@@ -222,6 +222,12 @@ class SourceRegistryMiddleware(AgentMiddleware):
         self.registry = SourceRegistry()
         self._source_tool_names = source_tool_names or set()
 
+    def _get_registry(self) -> SourceRegistry:
+        """Return the session-scoped registry if set, otherwise the instance registry."""
+        from aiq_agent.common.citation_verification import get_session_registry
+
+        return get_session_registry() or self.registry
+
     async def awrap_tool_call(self, request, handler):
         """Capture sources from tool results after execution."""
         result = await handler(request)
@@ -232,8 +238,9 @@ class SourceRegistryMiddleware(AgentMiddleware):
             if tool_name not in self._source_tool_names:
                 return result
             sources = extract_sources_from_tool_result(tool_name, str(result.content))
+            active_registry = self._get_registry()
             for source in sources:
-                self.registry.add(source)
+                active_registry.add(source)
             if sources:
                 logger.info(
                     "[CitationRegistry] Captured %d source(s) from %s: %s",
@@ -254,7 +261,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
 
         from aiq_agent.common.citation_verification import _normalize_url
 
-        sources = self.registry.all_sources()
+        sources = self._get_registry().all_sources()
         if not sources:
             return None
 

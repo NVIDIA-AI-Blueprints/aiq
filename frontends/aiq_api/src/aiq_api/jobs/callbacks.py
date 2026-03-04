@@ -358,6 +358,17 @@ class AgentEventCallback(BaseCallbackHandler):
         """
         self._source_registry = registry
 
+    def _get_source_registry(self):
+        """Return the active SourceRegistry: explicit > session ContextVar > None."""
+        if self._source_registry is not None:
+            return self._source_registry
+        try:
+            from aiq_agent.common.citation_verification import get_session_registry
+
+            return get_session_registry()
+        except ImportError:
+            return None
+
     def emit_final_report(self, content: str) -> None:
         """Emit the post-processed final report as an OUTPUT artifact.
 
@@ -465,8 +476,9 @@ class AgentEventCallback(BaseCallbackHandler):
                 continue
 
             is_valid = False
-            if self._source_registry is not None:
-                is_valid = self._source_registry.has_url(url)
+            registry = self._get_source_registry()
+            if registry is not None:
+                is_valid = registry.has_url(url)
             else:
                 is_valid = normalized in self._discovered_urls
 

@@ -573,3 +573,29 @@ class TestShallowResearcherSessionRegistry:
 
         with pytest.raises(EmptySourceRegistryError):
             await agent.run(state)
+
+    @pytest.mark.asyncio
+    async def test_session_registry_does_not_mutate_shared_instance(self, mock_llm_provider, mock_llm):
+        """Setting a session registry must NOT overwrite self.source_registry on the agent."""
+        from aiq_agent.common.citation_verification import set_session_registry
+
+        session_reg = SourceRegistry()
+        session_reg.add(SourceEntry(url="https://session.example.com/doc"))
+
+        agent_response = AIMessage(content=("Answer [1].\n\n## Sources\n[1] Doc: https://session.example.com/doc"))
+        mock_llm.ainvoke = AsyncMock(return_value=agent_response)
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+        )
+        original_registry = agent.source_registry
+
+        set_session_registry(session_reg)
+        try:
+            state = ShallowResearchAgentState(messages=[HumanMessage(content="Q")])
+            await agent.run(state)
+            # The instance attribute must remain unchanged
+            assert agent.source_registry is original_registry
+        finally:
+            set_session_registry(None)

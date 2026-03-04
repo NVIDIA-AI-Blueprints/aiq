@@ -24,7 +24,6 @@ from aiq_agent.common import LLMRole
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
-from aiq_agent.common.citation_verification import get_session_registry
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
 
@@ -162,11 +161,6 @@ class DeepResearcherAgent:
             ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
         ]
 
-        # Share source registry with SSE callbacks for consistent citation tracking
-        for cb in self.callbacks:
-            if hasattr(cb, "set_source_registry"):
-                cb.set_source_registry(self.source_registry_middleware.registry)
-
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""
         prompts = {}
@@ -288,7 +282,7 @@ class DeepResearcherAgent:
 
         # Quick citation quality check — only reject if ALL citations are invalid
         # (full verification with repair/renumbering happens in run() post-processing)
-        if self.source_registry_middleware.registry.all_sources():
+        if self.source_registry_middleware._get_registry().all_sources():
             from aiq_agent.common.citation_verification import _CITATION_LINE_RE
             from aiq_agent.common.citation_verification import _REFERENCE_SECTION_RE
             from aiq_agent.common.citation_verification import _URL_IN_LINE_RE
@@ -298,7 +292,7 @@ class DeepResearcherAgent:
             if ref_match:
                 ref_section = content[ref_match.start() :]
                 has_any_valid = False
-                registry = self.source_registry_middleware.registry
+                registry = self.source_registry_middleware._get_registry()
                 for line_match in _CITATION_LINE_RE.finditer(ref_section):
                     ref_text = line_match.group(2).strip()
                     # Check URL citations
@@ -343,14 +337,6 @@ class DeepResearcherAgent:
         """
 
         agent = self._build_orchestrator_agent(state)
-
-        # Use session-scoped registry if available (conversation mode)
-        session_registry = get_session_registry()
-        if session_registry is not None:
-            self.source_registry_middleware.registry = session_registry
-            for cb in self.callbacks:
-                if hasattr(cb, "set_source_registry"):
-                    cb.set_source_registry(session_registry)
 
         messages = state.messages
         if messages:
@@ -428,8 +414,8 @@ class DeepResearcherAgent:
                 final_message = final_content if isinstance(final_content, str) else str(final_content)
 
             # Post-process: verify citations against source registry
-            if self.source_registry_middleware.registry.all_sources():
-                verification = verify_citations(final_message, self.source_registry_middleware.registry)
+            if self.source_registry_middleware._get_registry().all_sources():
+                verification = verify_citations(final_message, self.source_registry_middleware._get_registry())
                 if verification.removed_citations:
                     logger.info(
                         "Citation verification removed %d invalid citations: %s",
