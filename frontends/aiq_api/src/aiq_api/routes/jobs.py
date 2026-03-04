@@ -623,15 +623,15 @@ def _start_periodic_cleanup(
     """
     global _cleanup_task
 
-    from dask.distributed import fire_and_forget
-
-    from nat.front_ends.fastapi.async_job import periodic_cleanup
-
     # Cleanup interval: half the expiry time, clamped to [60s, 3600s]
     cleanup_interval = max(60, min(expiry_seconds // 2, 3600))
 
     # Submit NAT's periodic_cleanup as a long-running Dask task for job_info table
     try:
+        from dask.distributed import fire_and_forget
+
+        from nat.front_ends.fastapi.async_job import periodic_cleanup
+
         cleanup_future = job_store.dask_client.submit(
             periodic_cleanup,
             scheduler_address=scheduler_address,
@@ -679,7 +679,7 @@ async def _cleanup_old_events_loop(db_url: str, retention_seconds: int, interval
     when multiple pods share the same database.
     """
 
-    is_postgres = db_url.startswith("postgresql")
+    is_postgres = db_url.startswith("postgres")
 
     logger.info(
         "Event cleanup task started (retention=%ds, interval=%ds, advisory_lock=%s)",
