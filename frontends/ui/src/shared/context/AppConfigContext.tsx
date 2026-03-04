@@ -41,8 +41,10 @@ export interface FileUploadConfig {
 export interface AppConfig {
   /** Whether authentication is required (set REQUIRE_AUTH=true to enable OAuth) */
   authRequired: boolean
-  /** The NextAuth provider ID for signIn() calls (e.g. 'oauth', 'nvlogin') */
+  /** The NextAuth provider ID for signIn() calls (e.g. 'oauth', 'internalauth') */
   authProviderId: string
+  /** Optional URL template to request LDAP group access; use {group} placeholder */
+  ldapGroupRequestUrlTemplate?: string
   /** File upload validation configuration */
   fileUpload: FileUploadConfig
 }

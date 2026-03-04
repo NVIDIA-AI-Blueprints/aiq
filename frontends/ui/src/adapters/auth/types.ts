@@ -24,9 +24,9 @@ declare module 'next-auth' {
     userId?: string
     /** Error state for token refresh failures */
     error?: string
-    /** Whether the user has access via DL group membership (Helios API, Starfleet only) */
+    /** Whether the user has access via LDAP group membership (LDAP-API, InternalAuth only) */
     hasAccess?: boolean
-    /** DL group name used for access gating (Starfleet only) */
+    /** LDAP group name used for access gating (InternalAuth only) */
     dlGroup?: string
   }
 
@@ -58,9 +58,9 @@ declare module 'next-auth/jwt' {
     userId?: string
     /** Error state for token refresh failures */
     error?: string
-    /** Whether the user has access via DL group membership (Helios API, Starfleet only) */
+    /** Whether the user has access via LDAP group membership (LDAP-API, InternalAuth only) */
     hasAccess?: boolean
-    /** DL group name used for access gating (Starfleet only) */
+    /** LDAP group name used for access gating (InternalAuth only) */
     dlGroup?: string
   }
 }

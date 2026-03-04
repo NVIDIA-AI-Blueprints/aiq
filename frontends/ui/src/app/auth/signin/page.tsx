@@ -6,7 +6,7 @@
  *
  * Custom sign-in page for OAuth authentication.
  * Redirects to home when REQUIRE_AUTH=false since auth is not needed.
- * Shows DL access denied UI when Helios DL gating is configured and denies the user.
+ * Shows access denied UI when LDAP group gating is configured and denies the user.
  */
 
 'use client'
@@ -27,7 +27,7 @@ const DISCLAIMER_TEXT =
  */
 const SignInContent = (): ReactNode => {
   const router = useRouter()
-  const { authRequired, authProviderId } = useAppConfig()
+  const { authRequired, authProviderId, ldapGroupRequestUrlTemplate } = useAppConfig()
   const searchParams = useSearchParams()
   const error = searchParams?.get('error') ?? null
   const dlGroup = searchParams?.get('dl_group') ?? null
@@ -47,7 +47,7 @@ const SignInContent = (): ReactNode => {
     )
   }
 
-  const isStarfleet = authProviderId === 'nvlogin'
+  const isInternalAuth = authProviderId === 'internalauth'
 
   const handleSignIn = (): void => {
     signIn(authProviderId, { callbackUrl: '/' })
@@ -72,7 +72,11 @@ const SignInContent = (): ReactNode => {
   }
 
   const errorMessage = isDlDenied ? null : getErrorMessage(error)
-  const buttonLabel = isStarfleet ? 'Sign in with SSO' : 'Sign in'
+  const buttonLabel = isInternalAuth ? 'Sign in with InternalAuth' : 'Sign in'
+  const requestAccessUrl =
+    dlGroup && ldapGroupRequestUrlTemplate
+      ? ldapGroupRequestUrlTemplate.replace('{group}', encodeURIComponent(dlGroup))
+      : null
 
   return (
     <Stack gap="6" align="center">
@@ -81,7 +85,7 @@ const SignInContent = (): ReactNode => {
       <Flex direction="col" gap="2" align="center">
         <Text kind="title/lg">Sign in to AI-Q</Text>
         <Text kind="body/regular/md" className="text-secondary text-center">
-          {isStarfleet ? 'Use your credentials to access AI-Q' : 'Sign in to continue'}
+          {isInternalAuth ? 'Use your credentials to access AI-Q' : 'Sign in to continue'}
         </Text>
       </Flex>
 
@@ -98,17 +102,15 @@ const SignInContent = (): ReactNode => {
             </Text>
           </Flex>
           <Text kind="body/regular/sm">
-            You are not a member of the required DL group. Please request access, then sign in
+            You are not a member of the required LDAP group. Please request access, then sign in
             again after approval (may take up to 20 minutes).
           </Text>
-          {dlGroup && (
+          {requestAccessUrl && (
             <Button
               kind="secondary"
               size="small"
-              onClick={() =>
-                window.open(`https://helios.nvidia.com/dlrequest/group/${dlGroup}`, '_blank')
-              }
-              aria-label="Request DL access"
+              onClick={() => window.open(requestAccessUrl, '_blank')}
+              aria-label="Request LDAP group access"
             >
               Request Access
             </Button>

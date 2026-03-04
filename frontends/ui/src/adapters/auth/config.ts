@@ -8,7 +8,7 @@
  *
  * Provider selection (AUTH_PROVIDER env var):
  *   - 'generic' (default) — Generic OIDC provider using OAUTH_* env vars
- *   - 'starfleet'          — NVIDIA Starfleet SSO using AIQ_STARFLEET_* env vars
+ *   - 'internalauth'       — Internal OIDC provider using INTERNAL_AUTH_* env vars
  *
  * When REQUIRE_AUTH=false (default), authentication is disabled entirely.
  */
@@ -18,9 +18,9 @@ import { type JWT } from 'next-auth/jwt'
 import CredentialsProvider from 'next-auth/providers/credentials'
 
 import {
-  StarfleetProvider,
-  getStarfleetClientId,
-  refreshStarfleetToken,
+  InternalAuthProvider,
+  getInternalAuthClientId,
+  refreshInternalAuthToken,
   GenericOIDCProvider,
   refreshGenericToken,
 } from './providers'
@@ -36,12 +36,12 @@ export const AUTH_PROVIDER = (process.env.AUTH_PROVIDER || 'generic').toLowerCas
 
 /**
  * The NextAuth provider ID used for signIn() calls.
- * 'nvlogin' for Starfleet, 'oauth' for generic OIDC.
+ * 'internalauth' for InternalAuth, 'oauth' for generic OIDC.
  */
-export const AUTH_PROVIDER_ID = AUTH_PROVIDER === 'starfleet' ? 'nvlogin' : 'oauth'
+export const AUTH_PROVIDER_ID = AUTH_PROVIDER === 'internalauth' ? 'internalauth' : 'oauth'
 
 const getAuthProvider = () => {
-  if (AUTH_PROVIDER === 'starfleet') return StarfleetProvider
+  if (AUTH_PROVIDER === 'internalauth') return InternalAuthProvider
   return GenericOIDCProvider
 }
 
@@ -89,7 +89,7 @@ export const TOKEN_REFRESH_BUFFER_SECONDS =
 
 /**
  * Max age (seconds) for the idToken cookie.
- * Default: 720 hours (30 days). Set to 24 for enterprise/Starfleet deployments.
+ * Default: 720 hours (30 days). Set to 24 for enterprise/InternalAuth deployments.
  *
  * Override via ID_TOKEN_COOKIE_HOURS env var.
  */
@@ -97,22 +97,23 @@ export const ID_TOKEN_COOKIE_MAX_AGE =
   parseInt(process.env.ID_TOKEN_COOKIE_HOURS || '720', 10) * 60 * 60
 
 // ---------------------------------------------------------------------------
-// DL gating (NVIDIA Helios) — no-op when env vars are absent
+// LDAP-API gating — no-op when env vars are absent
 // ---------------------------------------------------------------------------
 
-const isDlGatingConfigured = (): boolean => {
+const isLdapGatingConfigured = (): boolean => {
   return !!(
-    process.env.STARFLEET_SSA_CLIENT_ID &&
-    process.env.STARFLEET_SSA_SECRET &&
-    process.env.HELIOS_SSA_TOKEN_ENDPOINT &&
-    process.env.DL_GROUP
+    process.env.INTERNAL_AUTH_SSA_CLIENT_ID &&
+    process.env.INTERNAL_AUTH_SSA_SECRET &&
+    process.env.LDAP_API_SSA_TOKEN_ENDPOINT &&
+    process.env.LDAP_GROUP &&
+    process.env.LDAP_API_GROUPS_ENDPOINT
   )
 }
 
-const getHeliosJwtToken = async (): Promise<string | null> => {
-  const clientId = process.env.STARFLEET_SSA_CLIENT_ID
-  const clientSecret = process.env.STARFLEET_SSA_SECRET
-  const tokenEndpoint = process.env.HELIOS_SSA_TOKEN_ENDPOINT
+const getLdapApiJwtToken = async (): Promise<string | null> => {
+  const clientId = process.env.INTERNAL_AUTH_SSA_CLIENT_ID
+  const clientSecret = process.env.INTERNAL_AUTH_SSA_SECRET
+  const tokenEndpoint = process.env.LDAP_API_SSA_TOKEN_ENDPOINT
 
   if (!clientId || !clientSecret || !tokenEndpoint) {
     return null
@@ -134,62 +135,70 @@ const getHeliosJwtToken = async (): Promise<string | null> => {
     })
 
     if (!response.ok) {
-      console.error(`[Auth/DL] SSA token request failed: ${response.status}`)
+      console.error(`[Auth/LDAP] SSA token request failed: ${response.status}`)
       return null
     }
 
     const tokenData = await response.json()
     return tokenData.access_token as string
   } catch (error) {
-    console.error('[Auth/DL] Error obtaining SSA token:', error)
+    console.error('[Auth/LDAP] Error obtaining SSA token:', error)
     return null
   }
 }
 
 /**
- * Check DL group membership via the Helios API.
- * Returns true (grant access) if DL gating is not configured or auth is not required.
+ * Check LDAP group membership via the configured LDAP-API.
+ * Returns true (grant access) if LDAP gating is not configured or auth is not required.
  */
 const checkUserAccess = async (userEmail: string): Promise<boolean> => {
-  if (!isAuthRequired() || !isDlGatingConfigured()) {
+  if (!isAuthRequired() || !isLdapGatingConfigured()) {
     return true
   }
 
-  const dlGroup = process.env.DL_GROUP!
-  const userName = userEmail.replace('@nvidia.com', '')
+  const ldapGroup = process.env.LDAP_GROUP!
+  const userName = userEmail.split('@')[0] || userEmail
+  const ldapApiGroupsEndpoint = process.env.LDAP_API_GROUPS_ENDPOINT
 
   try {
-    const heliosToken = await getHeliosJwtToken()
-    if (!heliosToken) {
-      console.error('[Auth/DL] Failed to obtain Helios token, denying access')
+    const ldapApiToken = await getLdapApiJwtToken()
+    if (!ldapApiToken) {
+      console.error('[Auth/LDAP] Failed to obtain LDAP-API token, denying access')
       return false
     }
 
-    const heliosUrl =
-      `https://helios-api.nvidia.com/api/v3/groups` +
-      `?filter[descendantUserLogin]=${encodeURIComponent(userName)}` +
-      `&filter[names]=${encodeURIComponent(dlGroup)}`
+    if (!ldapApiGroupsEndpoint) {
+      console.error('[Auth/LDAP] LDAP_API_GROUPS_ENDPOINT is not set, denying access')
+      return false
+    }
 
-    const response = await fetch(heliosUrl, {
+    const ldapApiUrl =
+      `${ldapApiGroupsEndpoint}` +
+      `?filter[descendantUserLogin]=${encodeURIComponent(userName)}` +
+      `&filter[names]=${encodeURIComponent(ldapGroup)}`
+
+    const response = await fetch(ldapApiUrl, {
       method: 'GET',
       headers: {
-        Authorization: `Bearer ${heliosToken}`,
+        Authorization: `Bearer ${ldapApiToken}`,
         'Content-Type': 'application/json',
       },
     })
 
     if (!response.ok) {
-      console.error(`[Auth/DL] Helios API request failed: ${response.status}`)
+      console.error(`[Auth/LDAP] LDAP-API request failed: ${response.status}`)
       return false
     }
 
     const data = await response.json()
     const hasAccess = Array.isArray(data.data) && data.data.length > 0
 
-    console.log(`[Auth/DL] Access check for ${userName}: ${hasAccess ? 'granted' : 'denied'} (DL: ${dlGroup})`)
+    console.log(
+      `[Auth/LDAP] Access check for ${userName}: ${hasAccess ? 'granted' : 'denied'} (group: ${ldapGroup})`
+    )
     return hasAccess
   } catch (error) {
-    console.error('[Auth/DL] Error checking user access:', error)
+    console.error('[Auth/LDAP] Error checking user access:', error)
     return false
   }
 }
@@ -201,8 +210,8 @@ const checkUserAccess = async (userEmail: string): Promise<boolean> => {
 const refreshAccessToken = async (token: JWT): Promise<JWT> => {
   try {
     const refreshed =
-      AUTH_PROVIDER === 'starfleet'
-        ? await refreshStarfleetToken(token.refreshToken as string)
+      AUTH_PROVIDER === 'internalauth'
+        ? await refreshInternalAuthToken(token.refreshToken as string)
         : await refreshGenericToken(token.refreshToken as string)
 
     return {
@@ -262,7 +271,7 @@ export const authOptions: AuthOptions = {
           expiresAt: account.expires_at,
           userId: user.id,
           hasAccess,
-          dlGroup: process.env.DL_GROUP,
+          dlGroup: process.env.LDAP_GROUP,
         }
       }
 
@@ -315,9 +324,9 @@ export const validateAuthEnv = (): { isValid: boolean; missing: string[] } => {
     }
   }
 
-  if (AUTH_PROVIDER === 'starfleet') {
-    if (!getStarfleetClientId()) {
-      missing.push('AIQ_STARFLEET_CLIENT_ID (or AIQ_STARFLEET_CLIENT_ID_BROWSER)')
+  if (AUTH_PROVIDER === 'internalauth') {
+    if (!getInternalAuthClientId()) {
+      missing.push('INTERNAL_AUTH_CLIENT_ID (or INTERNAL_AUTH_CLIENT_ID_BROWSER)')
     }
   } else {
     if (!process.env.OAUTH_CLIENT_ID) {
