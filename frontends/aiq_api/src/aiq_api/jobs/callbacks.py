@@ -230,7 +230,6 @@ class AgentEventCallback(BaseCallbackHandler):
         self._job_id = event_store.job_id if event_store else None
         self._instance_discovered_urls: set[str] = set()
         self._instance_cited_urls: set[str] = set()
-        self._source_registry = None  # Set via set_source_registry() for verified citation tracking
         self._init_job_url_sets()
 
     def _init_job_url_sets(self) -> None:
@@ -346,22 +345,8 @@ class AgentEventCallback(BaseCallbackHandler):
                 return name
         return kwargs.get("name", "unknown")
 
-    def set_source_registry(self, registry) -> None:
-        """Attach a SourceRegistry for verified citation tracking.
-
-        When set, citation_source events use the registry (which captures
-        URLs from ALL tool calls via middleware) instead of the callback's
-        own pattern-based _is_search_tool check. This means:
-        - All tools are covered, not just ones matching SEARCH_TOOL_PATTERNS
-        - URL normalization is consistent with verify_citations()
-        - citation_use validation uses the same registry as post-processing
-        """
-        self._source_registry = registry
-
     def _get_source_registry(self):
-        """Return the active SourceRegistry: explicit > session ContextVar > None."""
-        if self._source_registry is not None:
-            return self._source_registry
+        """Return the session-scoped SourceRegistry if set, otherwise None."""
         try:
             from aiq_agent.common.citation_verification import get_session_registry
 

@@ -290,11 +290,11 @@ class ChatResearcherAgent:
                 return END
 
             # Respect explicit escalation decision from shallow research.
-            # Note: successful shallow paths set shallow_result=None so this
-            # guard only fires when shallow explicitly set escalate_to_deep.
-            # With persistent checkpointers, ensure stale shallow_result from
-            # a prior turn is cleared before relying on this check.
-            if state.shallow_result is not None and not state.shallow_result.escalate_to_deep:
+            # Successful shallow paths set shallow_result=None so this guard
+            # only fires when shallow explicitly set escalate_to_deep.
+            if state.shallow_result is not None:
+                if state.shallow_result.escalate_to_deep:
+                    return "deep_research"
                 return END
 
             messages = state.messages
