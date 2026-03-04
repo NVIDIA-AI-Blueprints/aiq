@@ -93,4 +93,4 @@ frontends/benchmarks/*/analysis/*.csv
 docs/notebooks/config_*.yml
 # Local images (not committed) for notebooks
 docs/notebooks/local_assets/
-config_*.yml
+/config_*.yml
