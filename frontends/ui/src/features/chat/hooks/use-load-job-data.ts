@@ -213,7 +213,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string }>(),
           todos: null as TodoItem[] | null,
           citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-          files: [] as Array<{ filename: string; content: string }>,
+          files: new Map<string, string>(),  // filename -> latest content (deduped)
           reportContent: null as string | null,
         }
 
@@ -264,10 +264,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             timestamp: now,
           }))
 
-          const files = buffer.files.map((f, idx) => ({
+          const files = Array.from(buffer.files.entries()).map(([filename, content], idx) => ({
             id: `file-${idx}`,
-            filename: f.filename,
-            content: f.content,
+            filename,
+            content,
             timestamp: now,
           }))
 
@@ -396,15 +396,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             },
 
             onFileUpdate: (filename, content) => {
-              buffer.files.push({ filename, content })
+              buffer.files.set(filename, content)
             },
 
-            onOutputUpdate: (content, outputCategory, workflow) => {
+            onOutputUpdate: (content, outputCategory) => {
               if (outputCategory === 'intermediate') return
-              if (outputCategory === 'research_notes') {
-                const filename = workflow ? `${workflow} - ${outputCategory}` : 'Sub-Agent Notes'
-                buffer.files.push({ filename, content })
-              } else if (outputCategory === 'final_report' || !outputCategory) {
+              // research_notes are already captured via write_file artifacts — skip to avoid duplicates
+              if (outputCategory === 'final_report' || !outputCategory) {
                 buffer.reportContent = content
               }
             },

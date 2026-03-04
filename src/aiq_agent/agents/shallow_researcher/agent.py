@@ -27,6 +27,7 @@ from typing import Any
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
@@ -35,6 +36,11 @@ from langgraph.prebuilt import tools_condition
 
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import SourceRegistry
+from aiq_agent.common.citation_verification import extract_sources_from_tool_result
+from aiq_agent.common.citation_verification import sanitize_report
+from aiq_agent.common.citation_verification import verify_citations
 
 from ...common import LLMProvider
 from ...common import LLMRole
@@ -106,6 +112,14 @@ class ShallowResearcherAgent:
 
         # Build tools info for prompt rendering
         self.tools_info = self._build_tools_info()
+
+        # Source registry for citation verification
+        self.source_registry = SourceRegistry()
+
+        # Share source registry with SSE callbacks for consistent citation tracking
+        for cb in self.callbacks:
+            if hasattr(cb, "set_source_registry"):
+                cb.set_source_registry(self.source_registry)
 
         # Build the LangGraph
         self._graph = self._build_graph()
@@ -214,8 +228,36 @@ class ShallowResearcherAgent:
 
         builder.set_entry_point("agent")
 
+        tool_node = ToolNode(self.tools)
+
+        _source_tool_names = {t.name for t in self.tools}
+
+        async def tool_node_with_source_capture(state: ShallowResearchAgentState) -> dict[str, Any]:
+            """Execute tools and capture source URLs/citations for verification.
+
+            Only config-defined source tools contribute to the registry;
+            internal tools are ignored automatically.
+            """
+            result = await tool_node.ainvoke(state)
+            for msg in result.get("messages", []):
+                if isinstance(msg, ToolMessage) and msg.content:
+                    tool_name = getattr(msg, "name", "") or ""
+                    if tool_name not in _source_tool_names:
+                        continue
+                    sources = extract_sources_from_tool_result(tool_name, str(msg.content))
+                    for source in sources:
+                        self.source_registry.add(source)
+                    if sources:
+                        logger.info(
+                            "[CitationRegistry] Captured %d source(s) from %s: %s",
+                            len(sources),
+                            tool_name,
+                            [s.url or s.citation_key for s in sources],
+                        )
+            return result
+
         builder.add_node("agent", agent_node)
-        builder.add_node("tools", ToolNode(self.tools))
+        builder.add_node("tools", tool_node_with_source_capture)
 
         builder.add_conditional_edges(
             "agent",
@@ -236,12 +278,51 @@ class ShallowResearcherAgent:
         Returns:
             Updated state with response in messages.
         """
+        self.source_registry.clear()
+
         recursion_limit = (self.max_llm_turns * 2) + 10
         config = {"recursion_limit": recursion_limit}
         if self.callbacks:
             config["callbacks"] = self.callbacks
         result = await self._graph.ainvoke(state, config=config)
-        return ShallowResearchAgentState.model_validate(result)
+
+        # Post-process: verify citations against source registry
+        validated_result = dict(result)
+        if validated_result.get("messages"):
+            last_msg = validated_result["messages"][-1]
+            if hasattr(last_msg, "content") and last_msg.content:
+                content = str(last_msg.content)
+
+                # Step 1: verify citations against registry
+                if self.source_registry.all_sources():
+                    verification = verify_citations(content, self.source_registry)
+                    if verification.removed_citations:
+                        logger.info(
+                            "Shallow researcher: removed %d invalid citations",
+                            len(verification.removed_citations),
+                        )
+                    content = verification.verified_report
+                else:
+                    raise EmptySourceRegistryError("shallow research")
+
+                # Step 2: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
+                sanitization = sanitize_report(content)
+                content = sanitization.sanitized_report
+
+                # Emit verified/sanitized report so the frontend shows the
+                # cleaned version (overwrites the raw draft auto-emitted
+                # during ainvoke).
+                for cb in self.callbacks:
+                    if hasattr(cb, "emit_final_report"):
+                        cb.emit_final_report(content)
+                        break
+
+                if hasattr(last_msg, "model_copy"):
+                    validated_result["messages"][-1] = last_msg.model_copy(update={"content": content})
+                else:
+                    validated_result["messages"][-1] = type(last_msg)(content=content)
+
+        return ShallowResearchAgentState.model_validate(validated_result)
 
     @property
     def graph(self) -> CompiledStateGraph:

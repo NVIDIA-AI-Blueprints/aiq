@@ -34,6 +34,7 @@ from nat.builder.context import Context
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
+from nat.data_models.api_server import ChatResponse
 from nat.data_models.component_ref import FunctionGroupRef
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
@@ -277,8 +278,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
 
-    # TODO: return type is actually ChatResponse via _create_chat_response, align annotation later
-    async def _run(query: object) -> str:
+    async def _run(query: object) -> ChatResponse:
         import os
         import sys
         import uuid

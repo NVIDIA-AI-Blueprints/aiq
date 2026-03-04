@@ -28,6 +28,7 @@ from langchain_core.tools import tool
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common.citation_verification import SourceEntry
 
 
 @tool
@@ -185,6 +186,7 @@ class TestDeepResearcherAgent:
                 tools=[real_tool],
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Quick query")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
             await agent.run(state)
 
             mock_llm_provider.get.assert_any_call(LLMRole.PLANNER)
@@ -203,6 +205,7 @@ class TestDeepResearcherAgent:
             )
 
             state = DeepResearchAgentState(messages=[HumanMessage(content="Compare CUDA vs OpenCL in depth")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
 
             result = await agent.run(state)
 
@@ -222,6 +225,7 @@ class TestDeepResearcherAgent:
             )
 
             state = DeepResearchAgentState(messages=[])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
 
             result = await agent.run(state)
 
@@ -241,6 +245,7 @@ class TestDeepResearcherAgent:
             )
 
             state = DeepResearchAgentState(messages=[HumanMessage(content="Test query")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
 
             await agent.run(state)
 
@@ -284,6 +289,7 @@ class TestDeepResearcherAgent:
             )
 
             state = DeepResearchAgentState(messages=[HumanMessage(content="Test")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
 
             result = await agent.run(state)
 
@@ -313,6 +319,7 @@ class TestDeepResearcherAgent:
             )
 
             state = DeepResearchAgentState(messages=[HumanMessage(content="Original query")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
 
             result = await agent.run(state)
 
@@ -390,6 +397,7 @@ class TestRunRetryStatePreservation:
                 tools=[real_tool],
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Compare X and Y")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="http://example.com"))
 
             await agent.run(state)
 
@@ -442,6 +450,7 @@ class TestRunRetryStatePreservation:
                 tools=[real_tool],
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Q")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://a.com"))
 
             await agent.run(state)
 

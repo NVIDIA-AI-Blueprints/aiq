@@ -539,6 +539,78 @@ async def test_handler_run_processes_user_message(monkeypatch) -> None:
     assert sockets == ["conv-1"]
 
 
+@pytest.mark.asyncio
+async def test_handler_run_cancels_workflow_on_disconnect(monkeypatch) -> None:
+    """When the socket disconnects, in-flight workflow tasks are cancelled."""
+    dummy_socket = DummySocket()  # no messages → immediate WebSocketDisconnect
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = "conv-1"
+
+    # Simulate a long-running workflow task (sleeps forever)
+    workflow_task = asyncio.create_task(asyncio.sleep(999))
+    handler._running_workflow_task = workflow_task
+
+    # Also register the task in the global registry
+    await websocket_reconnect._registry.set_workflow_task("conv-1", workflow_task)
+
+    await handler.run()
+
+    # Let the event loop process the cancellation
+    await asyncio.sleep(0)
+    assert workflow_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_registry_set_workflow_task_cancels_stale() -> None:
+    """Registering a new workflow task cancels any previous stale one."""
+    registry = WebSocketSessionRegistry()
+
+    stale_task = asyncio.create_task(asyncio.sleep(999))
+    await registry.set_workflow_task("conv-1", stale_task)
+    await asyncio.sleep(0)
+    assert not stale_task.cancelled()
+
+    new_task = asyncio.create_task(asyncio.sleep(999))
+    await registry.set_workflow_task("conv-1", new_task)
+    await asyncio.sleep(0)  # let cancellation propagate to stale_task
+
+    assert stale_task.cancelled()
+    assert not new_task.cancelled()
+
+    new_task.cancel()
+    await asyncio.sleep(0)  # let cancellation propagate
+
+
+@pytest.mark.asyncio
+async def test_registry_cancel_workflow_task() -> None:
+    """cancel_workflow_task removes and cancels the tracked task."""
+    registry = WebSocketSessionRegistry()
+
+    task = asyncio.create_task(asyncio.sleep(999))
+    await registry.set_workflow_task("conv-1", task)
+    await asyncio.sleep(0)
+    assert not task.cancelled()
+
+    await registry.cancel_workflow_task("conv-1")
+    await asyncio.sleep(0)  # let cancellation propagate
+    assert task.cancelled()
+
+    # Idempotent: calling again is a no-op
+    await registry.cancel_workflow_task("conv-1")
+
+
+@pytest.mark.asyncio
+async def test_registry_cancel_workflow_task_noop_for_missing() -> None:
+    """cancel_workflow_task is safe for missing conversation IDs."""
+    registry = WebSocketSessionRegistry()
+    await registry.cancel_workflow_task(None)
+    await registry.cancel_workflow_task("nonexistent")
+
+
 def test_install_reconnectable_handler(monkeypatch) -> None:
     from nat.front_ends.fastapi import fastapi_front_end_plugin_worker as worker_module
 

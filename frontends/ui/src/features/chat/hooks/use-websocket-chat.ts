@@ -209,8 +209,23 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
    * Create WebSocket callbacks that route messages to the store
    */
   const createCallbacks = useCallback((): NATWebSocketClientCallbacks => {
+    /**
+     * Guard against stale messages from a previous (cancelled) workflow.
+     * Returns true when the message should be dropped.
+     */
+    const isStaleMessage = (parentId?: string): boolean => {
+      const activeId = wsClientRef.current?.activeParentId
+      if (!parentId || !activeId) return false
+      return parentId !== activeId
+    }
+
     return {
-      onResponse: (content: string, status: string, isFinal: boolean) => {
+      onResponse: (content: string, status: string, isFinal: boolean, parentId?: string) => {
+        if (isStaleMessage(parentId)) {
+          console.warn('Dropping stale system_response (parent_id mismatch)', { parentId, active: wsClientRef.current?.activeParentId })
+          return
+        }
+
         // Check for deep research escalation signal
         // Backend sends: "Deep research job submitted. Job ID: {uuid}"
         const deepResearchMatch = content?.match(
@@ -316,6 +331,14 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
 
         // status: "complete" with null text signals task completion
         if (isFinal) {
+          // Guard: if we're not streaming, this is a stale COMPLETE from a
+          // previous workflow that outlived its socket (e.g. after disconnect).
+          const { isStreaming: currentlyStreaming } = useChatStore.getState()
+          if (!currentlyStreaming) {
+            console.warn('Ignoring stale isFinal -- not currently streaming')
+            return
+          }
+
           // Complete any pending thinking step
           if (currentThinkingStepIdRef.current) {
             completeThinkingStep(currentThinkingStepIdRef.current)
@@ -332,7 +355,16 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         }
       },
 
-      onIntermediateStep: (content: NATIntermediateStepContent | string, status: string) => {
+      onIntermediateStep: (content: NATIntermediateStepContent | string, status: string, _parentId?: string) => {
+        // NAT uses an internal step ID (not the user message ID) for intermediate step parent_id,
+        // so we cannot use parent_id for stale detection here. Guard instead on isStreaming:
+        // if we are not currently streaming, the workflow that sent this step was already
+        // cancelled/disconnected, so discard it.
+        const { isStreaming: currentlyStreaming } = useChatStore.getState()
+        if (!currentlyStreaming) {
+          console.warn('Ignoring stale intermediate step -- not currently streaming')
+          return
+        }
         // Handle string content (legacy format)
         if (typeof content === 'string') {
           // For plain string content, create a generic thinking step

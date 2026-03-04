@@ -1,5 +1,6 @@
-# This is the default configuration for the Web mode.
+# This is an example configuration for hybrid frontier model mode.
 # It has the following features:
+# - A combination of a open-source model for researcher and a frontier model for orchestrating
 # - Knowledge retrieval using LlamaIndex
 # - Web search and Paper search tools by default
 
@@ -65,15 +66,12 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  gpt_oss_llm:
-    _type: nim
-    model_name: openai/gpt-oss-120b
-    base_url: https://integrate.api.nvidia.com/v1
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 256000
-    api_key: ${NVIDIA_API_KEY}
-    max_retries: 10
+  # Frontier model for orchestrating and planning in deep research agent
+  # You need to set the OPENAI_API_KEY environment variable
+  openai_gpt_5_2:
+    _type: openai
+    model_name: "gpt-5.2"
+    api_key: ${OPENAI_API_KEY}
   
   nemotron_llm_deep:
     _type: nim
@@ -135,8 +133,8 @@ functions:
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: gpt_oss_llm
-    planner_llm: nemotron_llm
+    llm: openai_gpt_5_2
+    planner_llm: openai_gpt_5_2
     tools:
       - web_search_tool
       - knowledge_search
@@ -157,9 +155,9 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: gpt_oss_llm
+    orchestrator_llm: openai_gpt_5_2
     researcher_llm: nemotron_llm_deep
-    planner_llm: gpt_oss_llm
+    planner_llm: openai_gpt_5_2
     max_loops: 2
     verbose: true
     tools:

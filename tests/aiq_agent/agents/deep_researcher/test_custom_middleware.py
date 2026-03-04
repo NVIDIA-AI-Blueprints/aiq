@@ -20,7 +20,9 @@ from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.messages import ToolMessage
 
+from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 
 
@@ -115,3 +117,154 @@ class TestToolNameSanitizationMiddleware:
 
         assert result.result[0].content == "Just text, no tools"
         assert not result.result[0].tool_calls
+
+
+class TestSourceRegistryMiddleware:
+    """Tests for SourceRegistryMiddleware allowlist + source extraction."""
+
+    @pytest.fixture
+    def source_tools(self):
+        return {"advanced_web_search_tool", "knowledge_search", "paper_search_tool"}
+
+    @pytest.fixture
+    def middleware(self, source_tools):
+        return SourceRegistryMiddleware(source_tool_names=source_tools)
+
+    def _make_request(self, tool_name: str):
+        req = MagicMock()
+        req.tool_call = {"name": tool_name}
+        return req
+
+    def _make_tool_result(self, content: str):
+        return ToolMessage(content=content, tool_call_id="tc1")
+
+    # -- URL extraction --
+
+    @pytest.mark.asyncio
+    async def test_url_source_captured(self, middleware):
+        """URLs in tool output are extracted and registered."""
+        content = "Found result at https://arxiv.org/abs/2401.00001"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("advanced_web_search_tool")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        sources = middleware.registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].url == "https://arxiv.org/abs/2401.00001"
+
+    @pytest.mark.asyncio
+    async def test_multiple_urls_captured(self, middleware):
+        """Multiple URLs from a single tool call are all captured."""
+        content = "Result from https://a.com/page and also https://b.com/page"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("advanced_web_search_tool")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        urls = {s.url for s in middleware.registry.all_sources()}
+        assert urls == {"https://a.com/page", "https://b.com/page"}
+
+    @pytest.mark.asyncio
+    async def test_knowledge_layer_citation_key_captured(self, middleware):
+        """Knowledge layer citation keys are captured via regex."""
+        content = (
+            "--- Result 1 ---\n"
+            "Source: report.pdf\n"
+            "Page: 5\n"
+            "Citation: report.pdf, p.5\n"
+            "Content Type: pdf\n"
+            "\nSome content here."
+        )
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("knowledge_search")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        sources = middleware.registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].citation_key == "report.pdf, p.5"
+
+    # -- Allowlist filtering --
+
+    @pytest.mark.asyncio
+    async def test_think_tool_ignored(self, middleware):
+        """Internal tools not in the allowlist are ignored."""
+        content = "Thinking about https://hallucinated.com"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("think")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        assert len(middleware.registry.all_sources()) == 0
+
+    @pytest.mark.asyncio
+    async def test_unknown_tool_ignored(self, middleware):
+        """Tools not in the allowlist are ignored."""
+        content = "https://unknown.com/data"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("some_random_tool")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        assert len(middleware.registry.all_sources()) == 0
+
+    @pytest.mark.asyncio
+    async def test_mixed_source_tools(self, middleware):
+        """Multiple tool calls — only allowlisted tools contribute sources."""
+        h1 = AsyncMock(return_value=self._make_tool_result("See https://a.com"))
+        h2 = AsyncMock(return_value=self._make_tool_result("See https://b.com"))
+
+        await middleware.awrap_tool_call(self._make_request("advanced_web_search_tool"), h1)
+        await middleware.awrap_tool_call(self._make_request("paper_search_tool"), h2)
+
+        urls = {s.url for s in middleware.registry.all_sources()}
+        assert "https://a.com" in urls
+        assert "https://b.com" in urls
+
+    # -- Edge cases --
+
+    @pytest.mark.asyncio
+    async def test_empty_content_skipped(self, middleware):
+        """Empty content is ignored gracefully."""
+        handler = AsyncMock(return_value=self._make_tool_result(""))
+        request = self._make_request("advanced_web_search_tool")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        assert len(middleware.registry.all_sources()) == 0
+
+    @pytest.mark.asyncio
+    async def test_non_tool_message_passthrough(self, middleware):
+        """Non-ToolMessage results pass through without error."""
+        handler = AsyncMock(return_value=AIMessage(content="just an AI reply"))
+        request = self._make_request("advanced_web_search_tool")
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        assert isinstance(result, AIMessage)
+        assert len(middleware.registry.all_sources()) == 0
+
+    @pytest.mark.asyncio
+    async def test_default_empty_allowlist_captures_nothing(self):
+        """Middleware with no source_tool_names captures nothing."""
+        mw = SourceRegistryMiddleware()
+        content = "See https://should-not-be-captured.com"
+        handler = AsyncMock(return_value=ToolMessage(content=content, tool_call_id="tc1"))
+        request = MagicMock()
+        request.tool_call = {"name": "advanced_web_search_tool"}
+
+        await mw.awrap_tool_call(request, handler)
+
+        assert len(mw.registry.all_sources()) == 0
+
+    @pytest.mark.asyncio
+    async def test_content_returned_unchanged(self, middleware):
+        """Tool result content is not modified by the middleware."""
+        content = "Results from https://example.com/page"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("advanced_web_search_tool")
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        assert result.content == content

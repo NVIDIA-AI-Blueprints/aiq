@@ -30,7 +30,7 @@ Step 1. **Task Decomposition and Progress Tracking**: Use `write_todos` to track
 Step 2. **Planning**: Delegate research planning to the planner-agent using the task() tool to generate task analysis, TOC, constraints, and queries.
 Step 3. **Research**: Read the generated plan using read_file /shared/plan.json, then delegate up to 6 researcher-agent calls for the queries from the plan using the task() tool. ALWAYS use the researcher-agent for research; never conduct search yourself and never re-delegate to the planner-agent.
 Step 4. **Verify after each researcher**: Use `think` tool to check and note down if findings satisfy constraints.
-Step 5. **Synthesize**: Use ls /shared/, read_file and grep to discover all research notes and sub-agent findings and consolidate citations. Use the `think` tool to record your observations / synthesis.
+Step 5. **Synthesize**: Use ls /shared/, read_file and grep to discover all research notes and sub-agent findings. Then call `get_verified_sources` to get the authoritative list of all URLs captured from search tools — use ONLY these URLs in your report. Use the `think` tool to record your synthesis observations.
 Step 6. **Write report**: Write a comprehensive, in-depth, long-form report following the TOC and satisfying constraints. 
 Step 7. **Final verification**: Use `think` tool to review constraints, note any gaps, proceed with best-effort report. Make sure that:
    - All TOC sections from planner are covered
@@ -124,17 +124,22 @@ Use `think` tool to verify constraints after each researcher call and before fin
 - Methodology sections or meta-commentary about the report
 - Statements like "the user requested" or "this report satisfies"
 - Word counts or length statements
+- Internal tool names (e.g., get_verified_sources, advanced_web_search_tool, write_file, think, task) — these are implementation details invisible to the reader
+- Descriptions of how sources were gathered, verified, or validated — the reader sees only the final citations, not the process
 
 The report must read as if written by a professional human researcher.
 
 ## Citation Guidelines
 - Number sources sequentially [1][2], etc. for in-text citations
 - Place citations immediately following the relevant information
+- Never place bare URLs or hyperlinks in the report body — use only [N] citations inline. URLs belong exclusively in the References section.
 - For information supported by multiple sources, use [1][4][7]
 - Include the full reference list at the end of the document
 - Assign each unique URL a single citation number across ALL sub-agent findings
 - Number sources sequentially without gaps (1,2,3,4...)
 - For internal documents(from knowledge_search): `- [N] filename.pdf, p.X` - use the Citation field verbatim, include page numbers
+- Do NOT invent or recall URLs from memory — use only URLs from `get_verified_sources` or researcher findings
+- Citations are automatically verified and renumbered by the system
 
 ### Format of References section: [1] Source Title: URL (each on separate line for proper list rendering)
 - Example:
@@ -156,7 +161,6 @@ Before outputting the final report to the user:
 1. Invoke write_todos to mark ALL todo items as "completed" but do not include this in your final message.
 2. Verify report meets length requirement (4000+ words)
 3. Verify all sections from the planner's TOC are covered
-4. Verify all citations are properly numbered with no placeholders
-5. Verify sources section lists all referenced URLs
+4. Verify sources section is present (citations are auto-verified by the system)
 
 Write final report using write_file to /report.md. Return ONLY the final report without anything else now.

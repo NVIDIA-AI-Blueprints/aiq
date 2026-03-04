@@ -76,7 +76,7 @@ The following are used by this project:
 - [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
 - [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
 - [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NIM of nvidia/llama-3_2-nv-embedqa-1b-v2](https://build.nvidia.com/nvidia/llama-3_2-nv-embedqa-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
+- [NIM of nvidia/llama-nemotron-embed-vl-1b-v2](https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
 - [NIM of nvidia/nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
 - [Tavily Search API](https://tavily.com/) for web search
 - [Serper Search API](https://serper.dev/) for paper search (Google Scholar)
@@ -117,7 +117,7 @@ Generalized minimum requirements.
 - Typical server for AI-Q workflow (no GPU required)
 - [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
 - [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NIM of nvidia/llama-3_2-nv-embedqa-1b-v2](https://build.nvidia.com/nvidia/llama-3_2-nv-embedqa-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
+- [NIM of nvidia/llama-nemotron-embed-vl-1b-v2](https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
 - [NIM of nvidia/nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
 - [NVIDIA RAG Blueprint Requirements](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/support-matrix.md) (if used)
 

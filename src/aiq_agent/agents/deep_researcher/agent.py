@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 """Deep research agent using deepagents library for multi-phase workflow."""
 
@@ -23,9 +23,15 @@ from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import sanitize_report
+from aiq_agent.common.citation_verification import verify_citations
 
 from .custom_middleware import EmptyContentFixMiddleware
+from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
+from .custom_middleware import ToolResultPruningMiddleware
+from .custom_middleware import ToolRetryMiddleware
 from .models import DeepResearchAgentState
 
 logger = logging.getLogger(__name__)
@@ -119,13 +125,46 @@ class DeepResearcherAgent:
         self.tools_info = []
         for t in self.tools:
             self.tools_info.append({"name": t.name, "description": t.description})
-        self.all_tools = [think, *self.tools]
+
+        self.source_registry_middleware = SourceRegistryMiddleware(
+            source_tool_names={t.name for t in self.tools},
+        )
+
+        # Create a tool that gives the orchestrator access to verified sources
+        registry_middleware = self.source_registry_middleware
+
+        @tool
+        def get_verified_sources() -> str:
+            """Returns the list of all verified source URLs captured from search tool calls.
+
+            Call this tool during the Synthesize step (Step 5) BEFORE writing the
+            final report. It returns every URL and citation key that was returned
+            by search tools during research. Use ONLY these sources in your report
+            — any other URL will be automatically removed.
+
+            Returns:
+                A numbered list of verified sources with titles and URLs.
+            """
+            source_list = registry_middleware.get_source_list_text()
+            if source_list:
+                return source_list
+            return "No sources captured yet. Run research queries first."
+
+        self.all_tools = [think, get_verified_sources, *self.tools]
 
         self.middleware = [
             EmptyContentFixMiddleware(),
             ToolNameSanitizationMiddleware(valid_tool_names=[t.name for t in self.all_tools]),
+            ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
+            self.source_registry_middleware,
+            ToolResultPruningMiddleware(keep_last_n=3, max_chars=500),
             ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
         ]
+
+        # Share source registry with SSE callbacks for consistent citation tracking
+        for cb in self.callbacks:
+            if hasattr(cb, "set_source_registry"):
+                cb.set_source_registry(self.source_registry_middleware.registry)
 
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""
@@ -246,6 +285,37 @@ class DeepResearcherAgent:
         if not has_sources:
             return False, "missing_sources_section"
 
+        # Quick citation quality check — only reject if ALL citations are invalid
+        # (full verification with repair/renumbering happens in run() post-processing)
+        if self.source_registry_middleware.registry.all_sources():
+            from aiq_agent.common.citation_verification import _CITATION_LINE_RE
+            from aiq_agent.common.citation_verification import _REFERENCE_SECTION_RE
+            from aiq_agent.common.citation_verification import _URL_IN_LINE_RE
+            from aiq_agent.common.citation_verification import _is_knowledge_citation
+
+            ref_match = _REFERENCE_SECTION_RE.search(content)
+            if ref_match:
+                ref_section = content[ref_match.start() :]
+                has_any_valid = False
+                registry = self.source_registry_middleware.registry
+                for line_match in _CITATION_LINE_RE.finditer(ref_section):
+                    ref_text = line_match.group(2).strip()
+                    # Check URL citations
+                    url_match = _URL_IN_LINE_RE.search(ref_text)
+                    if url_match:
+                        url = url_match.group(0).rstrip(".,;)")
+                        if registry.has_url(url):
+                            has_any_valid = True
+                            break
+                        continue
+                    # Check knowledge-layer citation keys (lenient — passes registry for fuzzy match)
+                    is_kl, citation_key = _is_knowledge_citation(ref_text, registry)
+                    if is_kl and citation_key:
+                        has_any_valid = True
+                        break
+                if not has_any_valid:
+                    return False, "no_valid_citations"
+
         giving_up_patterns = [
             "please confirm",
             "do you want me to",
@@ -315,6 +385,16 @@ class DeepResearcherAgent:
                     feedback_msg += "The report is too short. Expand your analysis and add more detail."
                 elif "missing_section_headers" in reason:
                     feedback_msg += "Use markdown headers (##) to structure the report."
+                elif "no_valid_citations" in reason:
+                    feedback_msg += (
+                        "None of your cited sources match actual tool results. "
+                        "Re-check your findings and cite only URLs returned by your search tools."
+                    )
+                    # Include the consolidated source list so the orchestrator
+                    # has an authoritative reference for the retry
+                    source_list = self.source_registry_middleware.get_source_list_text()
+                    if source_list:
+                        feedback_msg += "\n\n" + source_list
 
                 feedback_msg += " Please fix this immediately and call 'submit_final_report' when done."
 
@@ -337,6 +417,37 @@ class DeepResearcherAgent:
             if result and result.get("messages"):
                 final_content = result["messages"][-1].content
                 final_message = final_content if isinstance(final_content, str) else str(final_content)
+
+            # Post-process: verify citations against source registry
+            if self.source_registry_middleware.registry.all_sources():
+                verification = verify_citations(final_message, self.source_registry_middleware.registry)
+                if verification.removed_citations:
+                    logger.info(
+                        "Citation verification removed %d invalid citations: %s",
+                        len(verification.removed_citations),
+                        [c["reason"] for c in verification.removed_citations],
+                    )
+                final_message = verification.verified_report
+            else:
+                raise EmptySourceRegistryError("deep research")
+
+            # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
+            sanitization = sanitize_report(final_message)
+            final_message = sanitization.sanitized_report
+
+            # Re-emit the verified/sanitized report so the frontend overwrites
+            # the raw version that on_llm_end auto-emitted during ainvoke().
+            for cb in self.callbacks:
+                if hasattr(cb, "emit_final_report"):
+                    cb.emit_final_report(final_message)
+                    break
+
+            if result and result.get("messages"):
+                last_msg = result["messages"][-1]
+                if hasattr(last_msg, "model_copy"):
+                    result["messages"][-1] = last_msg.model_copy(update={"content": final_message})
+                else:
+                    result["messages"][-1] = type(last_msg)(content=final_message)
 
             logger.info("=" * 80)
             logger.info("Deep Research Subagent: Workflow complete")

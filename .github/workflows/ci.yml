@@ -139,8 +139,7 @@ jobs:
             ./frontends/benchmarks/freshqa \
             ./frontends/benchmarks/intent_classifier \
             ./sources/tavily_web_search \
-            ./sources/google_scholar_paper_search \
-            ./sources/eci
+            ./sources/google_scholar_paper_search
           do
             if [ -d "$pkg" ]; then
               uv pip install -e "$pkg"

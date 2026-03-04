@@ -2323,6 +2323,20 @@ export const useChatStore = create<ChatStore>()(
         },
 
         addDeepResearchFile: (file: Omit<DeepResearchFile, 'id' | 'timestamp'>) => {
+          const { deepResearchFiles } = get()
+          const existingIndex = deepResearchFiles.findIndex((f) => f.filename === file.filename)
+
+          if (existingIndex >= 0) {
+            // Update existing file with latest content
+            const updatedFiles = deepResearchFiles.map((f, i) =>
+              i === existingIndex
+                ? { ...f, content: file.content, timestamp: new Date() }
+                : f
+            )
+            set({ deepResearchFiles: updatedFiles }, false, 'addDeepResearchFile:update')
+            return deepResearchFiles[existingIndex].id
+          }
+
           const fileId = uuidv4()
           const newFile: DeepResearchFile = {
             ...file,

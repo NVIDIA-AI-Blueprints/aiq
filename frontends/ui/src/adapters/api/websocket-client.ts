@@ -35,9 +35,9 @@ export interface ConnectionChangeContext {
 /** Callbacks for NAT WebSocket client */
 export interface NATWebSocketClientCallbacks {
   /** Called when a system response message arrives (final or streaming content) */
-  onResponse?: (content: string, status: string, isFinal: boolean) => void
+  onResponse?: (content: string, status: string, isFinal: boolean, parentId?: string) => void
   /** Called when intermediate steps arrive (thinking, tool calls) */
-  onIntermediateStep?: (content: NATIntermediateStepContent | string, status: string) => void
+  onIntermediateStep?: (content: NATIntermediateStepContent | string, status: string, parentId?: string) => void
   /** Called when a human prompt arrives (clarification, approval, etc.) */
   onHumanPrompt?: (promptId: string, parentId: string, prompt: NATHumanPrompt) => void
   /** Called when an error occurs */
@@ -74,6 +74,8 @@ export class NATWebSocketClient {
   private isIntentionallyClosed = false
   private errorBeforeClose = false
   private messageIdCounter = 0
+  /** ID of the last user message sent -- used by callbacks to detect stale responses */
+  activeParentId: string | null = null
 
   constructor(options: NATWebSocketClientOptions) {
     this.options = {
@@ -145,10 +147,13 @@ export class NATWebSocketClient {
       data_sources: enabledDataSources ?? [],
     })
 
+    const messageId = this.generateMessageId()
+    this.activeParentId = messageId
+
     const message: NATUserMessage = {
       type: NATMessageType.USER_MESSAGE,
       schema_type: NATSchemaType.CHAT_STREAM,
-      id: this.generateMessageId(),
+      id: messageId,
       conversation_id: this.options.conversationId,
       content: {
         messages: [
@@ -282,14 +287,13 @@ export class NATWebSocketClient {
             content = message.content.text
           }
 
-
           const isFinal = message.status === 'complete'
-          this.options.callbacks.onResponse?.(content, message.status, isFinal)
+          this.options.callbacks.onResponse?.(content, message.status, isFinal, message.parent_id)
           break
         }
 
         case NATMessageType.SYSTEM_INTERMEDIATE: {
-          this.options.callbacks.onIntermediateStep?.(message.content, message.status)
+          this.options.callbacks.onIntermediateStep?.(message.content, message.status, message.parent_id)
           break
         }
 

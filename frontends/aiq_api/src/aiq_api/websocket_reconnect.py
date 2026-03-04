@@ -51,11 +51,12 @@ logger = logging.getLogger(__name__)
 
 
 class WebSocketSessionRegistry:
-    """Keep track of active sockets and pending HITL responses."""
+    """Keep track of active sockets, pending HITL responses, and running workflow tasks."""
 
     def __init__(self) -> None:
         self._sockets: dict[str, WebSocket] = {}
         self._pending_interactions: dict[str, asyncio.Future[TextContent]] = {}
+        self._workflow_tasks: dict[str, asyncio.Task] = {}
         self._lock = asyncio.Lock()
 
     async def set_socket(self, conversation_id: str | None, socket: WebSocket) -> None:
@@ -123,6 +124,27 @@ class WebSocketSessionRegistry:
         async with self._lock:
             self._pending_interactions.pop(conversation_id, None)
 
+    async def set_workflow_task(self, conversation_id: str | None, task: asyncio.Task) -> None:
+        """Register the running workflow task, cancelling any stale one first."""
+        if not conversation_id:
+            return
+        async with self._lock:
+            old_task = self._workflow_tasks.get(conversation_id)
+            if old_task is not None and not old_task.done():
+                old_task.cancel()
+                logger.info("Cancelled stale workflow task for conversation %s", conversation_id)
+            self._workflow_tasks[conversation_id] = task
+
+    async def cancel_workflow_task(self, conversation_id: str | None) -> None:
+        """Cancel and remove the workflow task for a conversation."""
+        if not conversation_id:
+            return
+        async with self._lock:
+            task = self._workflow_tasks.pop(conversation_id, None)
+            if task is not None and not task.done():
+                task.cancel()
+                logger.info("Cancelled workflow task for conversation %s", conversation_id)
+
 
 _registry = WebSocketSessionRegistry()
 _installed = False
@@ -166,14 +188,33 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
                             )
             except (asyncio.CancelledError, WebSocketDisconnect):
                 await _registry.clear_socket(self._conversation_id, self._socket)
+                await _registry.cancel_workflow_task(self._conversation_id)
+                self._cancel_running_workflow()
                 break
             except ValidationError as exc:
                 logger.warning("Invalid websocket message payload: %s", str(exc))
+
+    def _cancel_running_workflow(self) -> None:
+        """Cancel the background workflow task spawned by NAT's create_task."""
+        task = self._running_workflow_task
+        if task is not None and not task.done():
+            task.cancel()
+            logger.info(
+                "Cancelled in-flight workflow task for conversation %s",
+                self._conversation_id,
+            )
 
     async def process_workflow_request(self, user_message_as_validated_type: WebSocketUserMessage) -> None:
         """Process user messages and register sockets for reconnect."""
         await _registry.set_socket(user_message_as_validated_type.conversation_id, self._socket)
         await super().process_workflow_request(user_message_as_validated_type)
+        # TODO(NAT-upstream): _running_workflow_task is currently always None
+        # because NAT's message_handler.py assigns via method chaining:
+        #   self._running_workflow_task = asyncio.create_task(...).add_done_callback(cb)
+        # add_done_callback() returns None. Blocked on NeMo-Agent-Toolkit#1744.
+        task = self._running_workflow_task
+        if task is not None and not task.done():
+            await _registry.set_workflow_task(user_message_as_validated_type.conversation_id, task)
 
     async def create_websocket_message(
         self,
