@@ -70,7 +70,7 @@ llms:
   # You need to set the OPENAI_API_KEY environment variable
   openai_gpt_5_2:
     _type: openai
-    model_name: "gpt-5.2""
+    model_name: "gpt-5.2"
     api_key: ${OPENAI_API_KEY}
   
   nemotron_llm_deep:
