@@ -305,7 +305,11 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             logger.info("Using fresh conversation ID for --input mode: %s", nat_context_conversation_id)
         else:
             nat_context_conversation_id = Context.get().conversation_id
-            logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
+            if not nat_context_conversation_id:
+                nat_context_conversation_id = str(uuid.uuid4())
+                logger.info("No conversation-id header; generated thread ID: %s", nat_context_conversation_id)
+            else:
+                logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
 
         from aiq_agent.auth import get_current_user_info
 
