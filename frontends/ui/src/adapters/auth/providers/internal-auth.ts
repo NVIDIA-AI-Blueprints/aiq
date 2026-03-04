@@ -122,6 +122,9 @@ export const refreshInternalAuthToken = async (
       return refreshedTokens
     } catch (error) {
       lastError = error
+      if ((error as { error?: string })?.error === 'invalid_grant') {
+        throw lastError
+      }
       if (attempt < maxAttempts) {
         console.warn(`[Auth] Token refresh attempt ${attempt} failed, retrying...`)
         await new Promise((resolve) => setTimeout(resolve, 1000))
