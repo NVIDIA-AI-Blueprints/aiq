@@ -42,17 +42,23 @@ def clear_event_store_caches():
     EventStore._tables_initialized.clear()
 
 
-def _backdate_events(db_url: str, hours: int, where_clause: str = "1=1"):
+def _backdate_events(db_url: str, hours: int, *, job_id: str | None = None, event_id: int | None = None):
     """Helper to backdate events in the test DB."""
     from sqlalchemy import text
 
     engine = EventStore._get_or_create_sync_engine(db_url)
     old_time = datetime.now(UTC) - timedelta(hours=hours)
     with engine.connect() as conn:
-        conn.execute(
-            text(f"UPDATE job_events SET created_at = :ts WHERE {where_clause}"),
-            {"ts": old_time.replace(tzinfo=None)},
-        )
+        params: dict = {"ts": old_time.replace(tzinfo=None)}
+        if event_id is not None:
+            query = "UPDATE job_events SET created_at = :ts WHERE id = :event_id"
+            params["event_id"] = event_id
+        elif job_id is not None:
+            query = "UPDATE job_events SET created_at = :ts WHERE job_id = :job_id"
+            params["job_id"] = job_id
+        else:
+            query = "UPDATE job_events SET created_at = :ts"
+        conn.execute(text(query), params)
         conn.commit()
 
 
@@ -129,7 +135,7 @@ class TestCleanupOldEvents:
         store.store({"type": "old.event", "data": {"msg": "old"}})
         store.store({"type": "new.event", "data": {"msg": "new"}})
 
-        _backdate_events(db_url, hours=2, where_clause="id = 1")
+        _backdate_events(db_url, hours=2, event_id=1)
 
         deleted = EventStore.cleanup_old_events(db_url, retention_seconds=3600)
         assert deleted == 1
@@ -226,7 +232,7 @@ class TestRunEventCleanup:
         # Old event for a non-expired job (should be cleaned by time)
         store1 = EventStore(db_url, job_id="old-job")
         store1.store({"type": "test", "data": {}})
-        _backdate_events(db_url, hours=2, where_clause="job_id = 'old-job'")
+        _backdate_events(db_url, hours=2, job_id="old-job")
 
         # Recent event for an expired job (should be cleaned by expired-job logic)
         store2 = EventStore(db_url, job_id="expired-job")
