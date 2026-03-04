@@ -650,7 +650,10 @@ def _start_periodic_cleanup(
         logger.warning("Failed to submit periodic cleanup to Dask: %s", e)
 
     # Start local asyncio task for job_events table cleanup (NAT doesn't manage this table).
-    # Uses pg_try_advisory_lock on PostgreSQL so only one pod runs cleanup per cycle.
+    # Uses pg_try_advisory_xact_lock on PostgreSQL so only one pod runs cleanup per cycle.
+    # Cancel any previously-started task before overwriting the reference.
+    if _cleanup_task and not _cleanup_task.done():
+        _cleanup_task.cancel()
     _cleanup_task = asyncio.create_task(_cleanup_old_events_loop(db_url, expiry_seconds, cleanup_interval))
 
 
@@ -672,7 +675,7 @@ async def _cleanup_old_events_loop(db_url: str, retention_seconds: int, interval
     Background task that periodically deletes old events from the job_events table
     and removes events for jobs already marked as expired in job_info.
 
-    On PostgreSQL, uses pg_try_advisory_lock so only one pod runs cleanup per cycle
+    On PostgreSQL, uses pg_try_advisory_xact_lock so only one pod runs cleanup per cycle
     when multiple pods share the same database.
     """
 
@@ -703,11 +706,10 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
     """
     Execute one cleanup cycle: time-based event pruning + removal of events for expired jobs.
 
-    On PostgreSQL, acquires a session-level advisory lock so concurrent pods skip the cycle
-    rather than doing redundant work.
+    On PostgreSQL, acquires a transaction-level advisory lock (pg_try_advisory_xact_lock)
+    so concurrent pods skip the cycle rather than doing redundant work. The lock is
+    automatically released on commit/rollback, avoiding leak risks.
     """
-    import asyncio
-
     from ..jobs import EventStore
 
     loop = asyncio.get_running_loop()
@@ -718,47 +720,40 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
         engine = EventStore._get_or_create_sync_engine(db_url)
 
         with engine.connect() as conn:
-            # On PostgreSQL, try to acquire an advisory lock. If another pod already holds
-            # it, skip this cycle — the other pod is handling cleanup.
+            # On PostgreSQL, acquire a transaction-level advisory lock. If another pod
+            # already holds it, skip this cycle. The lock is automatically released
+            # on commit/rollback — no manual unlock needed.
             if is_postgres:
                 locked = conn.execute(
-                    text("SELECT pg_try_advisory_lock(:lock_id)"),
+                    text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
                     {"lock_id": _PG_ADVISORY_LOCK_ID},
                 ).scalar()
                 if not locked:
                     return (0, 0)
 
-            try:
-                # 1. Time-based: delete events older than retention period
-                if is_postgres:
-                    result = conn.execute(
-                        text("DELETE FROM job_events WHERE created_at < NOW() - :seconds * INTERVAL '1 second'"),
-                        {"seconds": retention_seconds},
-                    )
-                else:
-                    result = conn.execute(
-                        text("DELETE FROM job_events WHERE created_at < datetime('now', :interval)"),
-                        {"interval": f"-{retention_seconds} seconds"},
-                    )
-                time_deleted = result.rowcount
-
-                # 2. Coordinated: delete events for jobs already marked expired in job_info.
-                # This catches events that haven't aged out yet but whose parent job is
-                # already expired (e.g. short-lived jobs with long event retention).
-                expired_result = conn.execute(
-                    text("DELETE FROM job_events WHERE job_id IN (SELECT job_id FROM job_info WHERE is_expired = true)")
+            # 1. Time-based: delete events older than retention period
+            if is_postgres:
+                result = conn.execute(
+                    text("DELETE FROM job_events WHERE created_at < NOW() - :seconds * INTERVAL '1 second'"),
+                    {"seconds": retention_seconds},
                 )
-                expired_deleted = expired_result.rowcount
+            else:
+                result = conn.execute(
+                    text("DELETE FROM job_events WHERE created_at < datetime('now', :interval)"),
+                    {"interval": f"-{retention_seconds} seconds"},
+                )
+            time_deleted = result.rowcount
 
-                conn.commit()
-                return (time_deleted, expired_deleted)
-            finally:
-                if is_postgres:
-                    conn.execute(
-                        text("SELECT pg_advisory_unlock(:lock_id)"),
-                        {"lock_id": _PG_ADVISORY_LOCK_ID},
-                    )
-                    conn.commit()
+            # 2. Coordinated: delete events for jobs already marked expired in job_info.
+            # This catches events that haven't aged out yet but whose parent job is
+            # already expired (e.g. short-lived jobs with long event retention).
+            expired_result = conn.execute(
+                text("DELETE FROM job_events WHERE job_id IN (SELECT job_id FROM job_info WHERE is_expired = true)")
+            )
+            expired_deleted = expired_result.rowcount
+
+            conn.commit()
+            return (time_deleted, expired_deleted)
 
     time_deleted, expired_deleted = await loop.run_in_executor(None, _do_cleanup)
 
