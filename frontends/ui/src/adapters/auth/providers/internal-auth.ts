@@ -23,13 +23,18 @@
 import { type Profile } from 'next-auth'
 
 export const getInternalAuthClientId = (): string | undefined => {
-  return process.env.INTERNAL_AUTH_CLIENT_ID || process.env.INTERNAL_AUTH_CLIENT_ID_BROWSER
+  // Prefer browser client for NextAuth web sign-in flows; fallback to generic/client ID.
+  return process.env.INTERNAL_AUTH_CLIENT_ID_BROWSER || process.env.INTERNAL_AUTH_CLIENT_ID
+}
+
+export const getInternalAuthProviderId = (): string => {
+  return process.env.INTERNAL_AUTH_PROVIDER_ID || 'internalauth'
 }
 
 const issuer = process.env.INTERNAL_AUTH_ISSUER
 
 export const InternalAuthProvider = {
-  id: 'internalauth',
+  id: getInternalAuthProviderId(),
   name: 'InternalAuth',
   type: 'oauth' as const,
 

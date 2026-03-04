@@ -20,6 +20,7 @@ import CredentialsProvider from 'next-auth/providers/credentials'
 import {
   InternalAuthProvider,
   getInternalAuthClientId,
+  getInternalAuthProviderId,
   refreshInternalAuthToken,
   GenericOIDCProvider,
   refreshGenericToken,
@@ -36,9 +37,10 @@ export const AUTH_PROVIDER = (process.env.AUTH_PROVIDER || 'generic').toLowerCas
 
 /**
  * The NextAuth provider ID used for signIn() calls.
- * 'internalauth' for InternalAuth, 'oauth' for generic OIDC.
+ * InternalAuth ID is configurable for compatibility with legacy callback paths.
  */
-export const AUTH_PROVIDER_ID = AUTH_PROVIDER === 'internalauth' ? 'internalauth' : 'oauth'
+export const AUTH_PROVIDER_ID =
+  AUTH_PROVIDER === 'internalauth' ? getInternalAuthProviderId() : 'oauth'
 
 const getAuthProvider = () => {
   if (AUTH_PROVIDER === 'internalauth') return InternalAuthProvider
