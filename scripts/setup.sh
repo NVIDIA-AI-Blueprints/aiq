@@ -46,20 +46,10 @@ echo "Installing core framework with dev dependencies..."
 "${UV_BIN}" pip install -e ".[dev]"
 echo "Core framework installed"
 
-# Install frontends
-echo ""
-echo "Installing frontends..."
-"${UV_BIN}" pip install -e ./frontends/cli
-"${UV_BIN}" pip install -e ./frontends/debug
-"${UV_BIN}" pip install -e ./frontends/aiq_api
-echo "Frontends installed (CLI, Debug, AI-Q API)"
-
 # Install benchmarks
 echo ""
 echo "Installing benchmarks..."
 "${UV_BIN}" pip install -e ./frontends/benchmarks/deepresearch_bench
-"${UV_BIN}" pip install -e ./frontends/benchmarks/freshqa
-"${UV_BIN}" pip install -e ./frontends/benchmarks/deepsearch_qa
 echo "Benchmarks installed"
 
 # Install data sources
@@ -67,7 +57,8 @@ echo ""
 echo "Installing data sources..."
 "${UV_BIN}" pip install -e ./sources/tavily_web_search
 "${UV_BIN}" pip install -e ./sources/google_scholar_paper_search
-"${UV_BIN}" pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
+"${UV_BIN}" pip install -e ./sources/ensemble_web_search
+"${UV_BIN}" pip install -e ./sources/you_com_web_search
 echo "Data Sources installed"
 
 # Setup pre-commit
@@ -86,34 +77,13 @@ else
     echo ".env file already exists"
 fi
 
-# Setup UI dependencies (optional)
-echo ""
-if [ -d "frontends/ui" ]; then
-    echo "Setting up UI dependencies..."
-    cd frontends/ui
-    
-    if command -v npm &> /dev/null; then
-        npm ci
-        echo "UI dependencies installed"
-    else
-        echo "npm not found. Skipping UI setup."
-        echo "   Install Node.js 22+ to enable UI features"
-    fi
-    
-    cd ../..
-else
-    echo "UI directory not found at frontends/ui"
-fi
-
 echo ""
 echo "=== Setup Complete! ==="
 echo ""
 echo "Next steps:"
 echo "1. Activate virtual environment: source .venv/bin/activate"
-echo "2. Add your NVIDIA_API_KEY to deploy/.env"
-echo "3. Run the agent:"
-echo "   - CLI mode:        ./scripts/start_cli.sh"
-echo "   - Server mode:     ./scripts/start_server_in_debug_mode.sh"
-echo "   - End-to-End (UI): ./scripts/start_e2e.sh"
+echo "2. Add your API keys to deploy/.env"
+echo "3. Evaluate the agent:"
+echo "   nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_ensemble.yml"
 echo ""
 

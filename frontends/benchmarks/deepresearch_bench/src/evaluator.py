@@ -1,4 +1,19 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+
 """Deep Research Bench (DRB) evaluators for NAT.
 
 Implements the exact evaluation methodology from:
@@ -97,6 +112,34 @@ Please **strictly** follow the `<output_format>` below for each criterion evalua
 </output_format>
 
 Now, please evaluate the two articles based on the research task and criteria, providing detailed comparative analysis and scores according to the requirements above. Ensure your output follows the specified `<output_format>` and that the JSON format is parsable, with all characters that might cause JSON parsing errors properly escaped.
+</user_prompt>
+"""  # noqa: E501
+
+CLEAN_ARTICLE_PROMPT_ZH = """
+<system_role>你是一名专业的文章编辑，擅长整理和清洗文章内容。</system_role>
+
+<user_prompt>
+请帮我清洗以下研究文章，去除所有引用链接、引用标记（如[1]、[2]、1、2 等或其他复杂引用格式）、参考文献列表、脚注，并确保文章内容连贯流畅。
+保留文章的所有其他原本内容、只移除引用。如果文章中使用引用标记中的内容作为语句的一部分，保留这其中的文字内容，移除其他标记。
+
+文章内容：
+"{article}"
+
+请返回清洗后的文章全文，不要添加任何额外说明或评论。
+</user_prompt>
+"""  # noqa: E501
+
+CLEAN_ARTICLE_PROMPT_EN = """
+<system_role>You are a professional article editor who is good at cleaning and refining article content.</system_role>
+
+<user_prompt>
+Please help me clean the following research article, removing all citation links, citation marks (such as [1], [2], 1, 2, etc. or other complex citation formats), reference lists, footnotes, and ensuring the content is coherent and smooth.
+Keep all other original content of the article, removing only the citations. If the content of the citation mark is used as part of a sentence in the article, keep the text content and remove other marks.
+
+Article content:
+"{article}"
+
+Please return the cleaned article in full, without adding any additional comments or explanations.
 </user_prompt>
 """  # noqa: E501
 
@@ -315,15 +358,38 @@ class DRBRaceEvalOutput(EvalOutput):
 class DRBRaceEvaluator(BaseEvaluator):
     """RACE evaluator using exact DRB methodology."""
 
-    def __init__(self, llm: Any, criteria_data: dict, max_concurrency: int = 4, max_retries: int = 3):
+    def __init__(
+        self,
+        llm: Any,
+        criteria_data: dict,
+        max_concurrency: int = 4,
+        max_retries: int = 10,
+        clean_article: bool = True,
+        cleaner_llm: Any | None = None,
+        clean_max_retries: int = 3,
+    ):
         super().__init__(max_concurrency=max_concurrency, tqdm_desc="RACE Evaluation")
         self.llm = llm
         self.criteria_data = criteria_data
         self.max_retries = max_retries
+        self.clean_article = clean_article
+        self.cleaner_llm = cleaner_llm or llm
+        self.clean_max_retries = clean_max_retries
 
-    def _get_criteria_for_task(self, task_id: str) -> dict:
-        return self.criteria_data.get(
-            str(task_id), {"criterions": DEFAULT_CRITERIA, "dimension_weight": DEFAULT_DIMENSION_WEIGHTS}
+    def _get_criteria_for_task(self, task_id: str, task_prompt: str) -> dict:
+        """Resolve criteria with official-style fallback order.
+
+        Official DRB tooling keys criteria primarily by prompt text. We support:
+        1) exact task id
+        2) exact task prompt
+        3) defaults
+        """
+        by_id = self.criteria_data.get("by_id", {})
+        by_prompt = self.criteria_data.get("by_prompt", {})
+        return (
+            by_id.get(str(task_id))
+            or by_prompt.get(task_prompt)
+            or {"criterions": DEFAULT_CRITERIA, "dimension_weight": DEFAULT_DIMENSION_WEIGHTS}
         )
 
     async def evaluate(self, eval_input: EvalInput) -> DRBRaceEvalOutput:
@@ -389,6 +455,29 @@ class DRBRaceEvaluator(BaseEvaluator):
         response = await self.llm.ainvoke(prompt)
         return response.content if hasattr(response, "content") else str(response)
 
+    @staticmethod
+    def _detect_language(text: str) -> str:
+        if re.search(r"[\u4e00-\u9fff]", text or ""):
+            return "zh"
+        return "en"
+
+    async def _clean_article_text(self, article: str, language: str) -> str:
+        if not self.clean_article or not article.strip():
+            return article
+
+        prompt_template = CLEAN_ARTICLE_PROMPT_ZH if language == "zh" else CLEAN_ARTICLE_PROMPT_EN
+        prompt = prompt_template.format(article=article)
+        cleaned = ""
+        for _ in range(self.clean_max_retries):
+            try:
+                response = await self.cleaner_llm.ainvoke(prompt)
+                cleaned = response.content if hasattr(response, "content") else str(response)
+                if isinstance(cleaned, str) and len(cleaned.strip()) >= 100:
+                    return cleaned
+            except Exception:
+                continue
+        return article
+
     async def evaluate_item(self, item: EvalInputItem) -> EvalOutputItem:
         task_id = str(item.id)
         generated = item.output_obj or ""
@@ -401,13 +490,17 @@ class DRBRaceEvaluator(BaseEvaluator):
         if not reference:
             return EvalOutputItem(id=task_id, score=None, reasoning={"error": "No reference article"})
 
-        criteria_data = self._get_criteria_for_task(task_id)
+        criteria_data = self._get_criteria_for_task(task_id, question)
         criteria_list_str = format_criteria_list(criteria_data)
+        language = self._detect_language(question)
+        generated_for_eval = await self._clean_article_text(str(generated), language)
+        reference_for_eval = await self._clean_article_text(str(reference), language)
 
         prompt = RACE_SCORE_PROMPT.format(
-            task_prompt=question[:10000],
-            article_1=generated[:50000],
-            article_2=reference[:50000],
+            # Keep full task/article text to match official DRB scripts.
+            task_prompt=question,
+            article_1=generated_for_eval,
+            article_2=reference_for_eval,
             criteria_list=criteria_list_str,
         )
 
@@ -517,7 +610,7 @@ class DRBFactEvaluator(BaseEvaluator):
 
     async def _validate_citation(self, citation: dict, scraped_content: str) -> dict:
         if not scraped_content:
-            return {"valid": False, "reason": "Could not scrape URL"}
+            return {"result": "unknown", "confidence": 0.0, "reason": "Could not scrape URL"}
 
         prompt = f"""Verify if the following claim is supported by the source content.
 
@@ -525,7 +618,8 @@ Claim/Context: {citation["context"]}
 Source URL: {citation["url"]}
 Source Content (excerpt): {scraped_content[:5000]}
 
-Respond with JSON: {{"supported": true/false, "confidence": 0.0-1.0, "reason": "brief explanation"}}"""
+Respond with JSON:
+{{"result": "supported|unsupported|unknown", "confidence": 0.0-1.0, "reason": "brief explanation"}}"""
 
         try:
             response = await self.llm.ainvoke(prompt)
@@ -533,15 +627,18 @@ Respond with JSON: {{"supported": true/false, "confidence": 0.0-1.0, "reason": "
 
             result = extract_json_from_text(text)
             if result:
+                result_label = str(result.get("result", "")).strip().lower()
+                if result_label not in {"supported", "unsupported", "unknown"}:
+                    result_label = "unknown"
                 return {
-                    "valid": result.get("supported", False),
+                    "result": result_label,
                     "confidence": result.get("confidence", 0.0),
                     "reason": result.get("reason", ""),
                 }
         except Exception as e:
-            return {"valid": False, "reason": str(e)}
+            return {"result": "unknown", "confidence": 0.0, "reason": str(e)}
 
-        return {"valid": False, "reason": "Could not parse validation response"}
+        return {"result": "unknown", "confidence": 0.0, "reason": "Could not parse validation response"}
 
     async def evaluate_item(self, item: EvalInputItem) -> EvalOutputItem:
         task_id = str(item.id)
@@ -565,31 +662,37 @@ Respond with JSON: {{"supported": true/false, "confidence": 0.0-1.0, "reason": "
             )
 
         valid_count = 0
+        total_non_unknown = 0
         citation_results = []
 
-        for citation in citations[:20]:
+        for citation in citations:
             scraped = await self._scrape_url(citation["url"])
             validation = await self._validate_citation(citation, scraped)
 
             citation_results.append(
                 {
                     "url": citation["url"],
-                    "valid": validation.get("valid", False),
+                    "result": validation.get("result", "unknown"),
                     "confidence": validation.get("confidence", 0.0),
                     "reason": validation.get("reason", ""),
                 }
             )
 
-            if validation.get("valid"):
+            result_label = validation.get("result", "unknown")
+            if result_label != "unknown":
+                total_non_unknown += 1
+            if result_label == "supported":
                 valid_count += 1
 
-        citation_accuracy = valid_count / len(citations) if citations else 0.0
+        # Match official DRB FACT stat behavior: denominator excludes unknown.
+        citation_accuracy = valid_count / total_non_unknown if total_non_unknown > 0 else 0.0
 
         return EvalOutputItem(
             id=task_id,
             score=citation_accuracy * 100,
             reasoning={
-                "total_citations": len(citations),
+                "total_citations": total_non_unknown,
+                "total_extracted_citations": len(citations),
                 "valid_citations": valid_count,
                 "citation_accuracy": citation_accuracy,
                 "citation_details": citation_results[:10],
@@ -602,7 +705,8 @@ def load_criteria_data(criteria_file: str | None) -> dict:
     if not criteria_file or not Path(criteria_file).exists():
         return {}
 
-    criteria_map = {}
+    criteria_by_id = {}
+    criteria_by_prompt = {}
 
     with open(criteria_file, encoding="utf-8") as f:
         content = f.read().strip()
@@ -614,7 +718,10 @@ def load_criteria_data(criteria_file: str | None) -> dict:
 
     for item in data:
         task_id = str(item.get("id", item.get("task_id", "")))
+        task_prompt = item.get("prompt")
         if task_id:
-            criteria_map[task_id] = item
+            criteria_by_id[task_id] = item
+        if task_prompt:
+            criteria_by_prompt[task_prompt] = item
 
-    return criteria_map
+    return {"by_id": criteria_by_id, "by_prompt": criteria_by_prompt}

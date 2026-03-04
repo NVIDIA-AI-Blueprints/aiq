@@ -17,182 +17,73 @@ limitations under the License.
 -->
 <h1>NVIDIA AI-Q Blueprint</h1>
 
-> **⚠️ IMPORTANT – Active Development Branch**
+> **⚠️ IMPORTANT – Active Research Branch**
 >
-> You are currently viewing the **`develop`** branch for the pre-release version of **AI-Q v2.0**.
+> You are currently viewing the **`drb1`** branch for the pre-release version of **AI-Q v2.0**.
 > 
-> This branch contains the latest features and experimental updates and may contain breaking changes.
+> This branch contains features and experimental updates that we are submitting to the Deep Research Bench Leaderboard and may contain breaking changes.
 >
 > For production use, switch to the **v1.2.1 stable release** on the [`main branch`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/main).
 
 
-## Table of Contents 
+## Table of Contents
 - [Overview](#overview)
-- [Software Components](#software-components)
-- [Target Audience](#target-audience)
 - [Prerequisites](#prerequisites)
-- [Architecture](#architecture)
-- [Getting Started](#getting-started)
-  - [Clone the Repository](#clone-the-repository)
-  - [Automated Setup](#automated-setup)
-  - [Obtain API Keys](#obtain-api-keys)
-  - [Set Up Environment Variables](#set-up-environment-variables)
-- [Ways to Run the Agents](#ways-to-run-the-agents)
-  - [Command-line interface (CLI)](#command-line-interface-cli)
-  - [Web UI](#web-ui)
-  - [Async Deep Research Jobs](#async-deep-research-jobs)
-  - [Benchmarks](#benchmarks)
-  - [Jupyter Notebooks](#jupyter-notebooks)
-- [Evaluating the Workflow](#evaluating-the-workflow)
-  - [Available Benchmarks](#available-benchmarks)
-  - [Running Evaluations](#running-evaluations)
-- [Development](#development)
+- [Setup](#setup)
+- [API Keys](#api-keys)
+- [Running Evaluation](#running-evaluation)
+- [Optional: Phoenix Tracing](#optional-phoenix-tracing)
 - [License](#license)
 
 ## Overview
 
-The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/). It gives you both **quick, cited answers** and **in-depth, report-style research** in one system, with benchmarks and evaluation harnesses so you can measure quality and improve over time.
-
-<p align="center">
-<img src="./docs/assets/AIQ-arch-light.png" alt="AI-Q Architecture" width="800">
-</p>
-
-**Key features:**
-
-- **Orchestration node** — One node classifies intent (meta vs. research), produces meta responses (for example, greetings, capabilities), and sets research depth (shallow vs. deep).
-- **Shallow research** — Bounded, faster researcher with tool-calling and source citation.
-- **Deep research** — Long-running multi-step planning and research to generate a long-form citation-backed report.
-- **Workflow configuration** — YAML configs define agents, tools, LLMs, and routing behavior so you can tune workflows without code changes.
-- **Modular workflows** — All agents (orchestration node, shallow researcher, deep researcher, clarifier) are composable; each can run standalone or as part of the full pipeline.
-- **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
-- **Frontend options** — Run through CLI, web UI, or async jobs; the [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
-- **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as [helm deployment](deploy/helm/deployment-k8s/).
-
-
-## Software Components
-
-The following are used by this project:
-
-- [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
-- [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
-- [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NIM of nvidia/llama-3_2-nv-embedqa-1b-v2](https://build.nvidia.com/nvidia/llama-3_2-nv-embedqa-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
-- [NIM of nvidia/nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
-- [Tavily Search API](https://tavily.com/) for web search
-- [Serper Search API](https://serper.dev/) for paper search (Google Scholar)
-
-## Target Audience
-
-This project is for:
-
-- **AI researchers and developers**: People building or extending agentic research workflows
-- **Enterprise teams**: Organizations needing tool-augmented research with citation-backed research
-- **NeMo Agent Toolkit users**: Developers looking to understand advanced multi-agent patterns
+NVIDIA AI-Q provides a multi-agent deep research system that produces comprehensive, cited research reports. It uses an orchestrator that delegates to a planner (evidence-grounded planning via web search) and multiple researcher subagents (ensemble web search + academic paper search), then synthesizes findings into a final report. It is built using [NVIDIA NAT](https://github.com/NVIDIA/NeMo-Agent-Toolkit) and the [deepagents](https://github.com/langchain-ai/deepagents) library.
 
 ## Prerequisites
 
-- Python 3.11–3.13
+- Python 3.11-3.13
 - [uv](https://github.com/astral-sh/uv) package manager
-- NVIDIA API key from [NVIDIA AI](https://build.nvidia.com) (for NIM models)
-- Node.js 22+ and npm (optional, for web UI mode)
+- NVIDIA API key from [NVIDIA Build](https://build.nvidia.com/)
 
-**Optional requirements:**
-- Tavily API key (for web search functionality)
-- Serper API key (for academic paper search functionality)
+Recommended for research quality:
+- Tavily API key (web search)
+- You.com API key (web search)
+- Serper API key (paper search)
 
-> **Note:** Configure at least one data source (Tavily web search, Serper search tool, or knowledge layer) to enable research functionality.
+## Setup
 
-If these optional API keys are not provided, the agent continues to operate without the corresponding search capabilities. Refer to [Obtain API Keys](#obtain-api-keys) for details.
-
-## Hardware Requirements
-
-Generalized minimum requirements.
-
-**Local Development**
-- Typical developer machine for AI-Q workflow (no GPU required)
-- Llamaindex (no GPU required)
-- Self / Remote Hosted Models
-
-**Self Hosted**
-- Typical server for AI-Q workflow (no GPU required)
-- [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
-- [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NIM of nvidia/llama-3_2-nv-embedqa-1b-v2](https://build.nvidia.com/nvidia/llama-3_2-nv-embedqa-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
-- [NIM of nvidia/nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
-- [NVIDIA RAG Blueprint Requirements](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/support-matrix.md) (if used)
-
-**Remote Hosted**
-- Typical server for workflow (no GPU required)
-- Provider LLM API keys (if used)
-- [NVIDIA RAG Blueprint Requirements](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/support-matrix.md) (if used)
-
-## Architecture
-
-AI-Q uses a LangGraph-based state machine with the following key components:
-
-- **Orchestration node**: Classifies intent (meta vs. research), produces meta responses when needed, and sets depth (shallow vs. deep) in one step
-- **Shallow research agent**: Bounded tool-augmented research optimized for speed
-- **Deep research agent**: Multi-phase research with planning, iteration, and citation management
-
-Each agent can be run individually or as part of the orchestrated workflow. For detailed architecture documentation, refer to [Architecture](docs/source/architecture/overview.md).
-
-## Getting Started
-
-### Clone the Repository
+Clone and set up the environment:
 
 ```bash
 git clone https://github.com/NVIDIA-AI-Blueprints/aiq.git && cd aiq
-```
-
-### Automated Setup
-
-Run the setup script to initialize the environment:
-
-```bash
+git checkout drb1
 ./scripts/setup.sh
 ```
 
-This script:
-- Creates a Python virtual environment with uv
-- Installs all Python dependencies (core, frontends, benchmarks, data sources)
-- Installs UI dependencies (if Node.js is available)
-
-### Manual Installation
-
-For selective installation, install packages individually:
+Create your environment file:
 
 ```bash
-# Create and activate virtual environment
-uv venv --python 3.13 .venv
-source .venv/bin/activate
-
-# Install core with development dependencies
-uv pip install -e ".[dev]"
-
-# Install frontends (pick what you need)
-uv pip install -e ./frontends/cli          # CLI frontend
-uv pip install -e ./frontends/debug        # Debug console
-uv pip install -e ./frontends/aiq_api      # Unified API (includes debug)
-
-# Install benchmarks (pick what you need)
-uv pip install -e ./frontends/benchmarks/deepresearch_bench
-uv pip install -e ./frontends/benchmarks/freshqa
-
-# Install data sources (pick what you need)
-uv pip install -e ./sources/tavily_web_search
-uv pip install -e ./sources/google_scholar_paper_search
-uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
+cp deploy/.env.example deploy/.env
 ```
 
-### Obtain API Keys
+## API Keys
 
+Set the keys in `deploy/.env`:
 
-| API        | Environment Variable | Purpose                   | Required                                                    |
-| ---------- | -------------------- | ------------------------- | ----------------------------------------------------------- |
-| NVIDIA API | `NVIDIA_API_KEY`     | LLM inference through NIM | Yes                                                         |
-| Tavily     | `TAVILY_API_KEY`     | Web search                | No (if not specified, agent continues without web search)   |
-| Serper     | `SERPER_API_KEY`     | Academic paper search     | No (if not specified, agent continues without paper search) |
+| API | Environment Variable | Purpose | Required |
+| --- | --- | --- | --- |
+| NVIDIA Build | `NVIDIA_API_KEY` | Agent LLM inference | Required |
+| Gemini | `GEMINI_API_KEY` | Judge LLMs for evaluation configs | Required |
+| Tavily | `TAVILY_API_KEY` | Web search backend | Required |
+| You.com | `YOU_API_KEY` | You.com deep search backend | Optional |
+| Serper | `SERPER_API_KEY` | Academic paper search | Required |
+| Jina | `JINA_API_KEY` | FACT evaluator page retrieval | Optional |
 
+### You.com API Key
+
+1. Create/sign in to your You.com developer account.
+2. Generate an API key.
+3. Add `YOU_API_KEY=<your_key>` to `deploy/.env`.
 
 #### Obtain an NVIDIA API Key
 
@@ -210,137 +101,47 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 1. Sign in to [Serper](https://serper.dev/)
 2. Generate an API key from your dashboard
 
-### Set Up Environment Variables
+## Running Evaluation
 
-Create a `.env` file in `deploy/` directory:
+### Step 1: Install the dataset
 
-```bash
-cp deploy/.env.example deploy/.env
-```
+The dataset files are not included in the repository. We have included a script to retrieve them from the [Deep Research Bench Github Repository](https://github.com/Ayanami0730/deep_research_bench/tree/main) and format them for the NeMo Agent Toolkit evaluator.
 
-Replace your API keys.
-
-> **Note:** If you do not want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to disable it.
-
-## Ways to Run the Agents
-
-The `frontends/` directory contains different interfaces for interacting with the agents. You can also run agents directly through the NeMo Agent Toolkit CLI.
-
-### Command-line interface (CLI)
-
-The CLI provides an interactive research assistant in your terminal:
-
-```bash
-# Activate the virtual environment
-source .venv/bin/activate
-
-# Run with the convenience script
-./scripts/start_cli.sh
-
-# Verbose logging
-./scripts/start_cli.sh --verbose
-
-# Or run directly with the NeMo Agent Toolkit CLI
-nat run --config_file configs/config_cli_default.yml --input "How do I install CUDA?"
-```
-
-The CLI frontend source is in `frontends/cli/`.
-
-### Web UI
-
-For a full web-based experience:
-
-```bash
-./scripts/start_e2e.sh
-```
-
-This starts:
-- Backend API server at `http://localhost:8000`
-- Frontend UI at `http://localhost:3000`
-
-The web UI source is in `frontends/ui/`. Refer to [frontends/ui/README.md](frontends/ui/README.md) for more details.
-
-#### Web UI with Docker Compose
-
-You can also run the backend and UI with Docker Compose:
-
-```bash
-cd deploy/compose
-
-# No-auth local setup (LlamaIndex default)
-docker compose --env-file ../.env -f docker-compose.yaml up -d --build
-
-# To select a different backend config, set BACKEND_CONFIG in deploy/.env, for example:
-# BACKEND_CONFIG=/app/configs/config_web_frag.yml
-```
-
-For more details, refer to:
-- `deploy/compose/README.md`
-
-### Async Deep Research Jobs
-
-Endpoints, SSE streaming, and debug console: refer to [frontends/aiq_api/README.md](frontends/aiq_api/README.md).
-
-### Benchmarks
-
-To run agents in evaluation mode, refer to the [Evaluating the Workflow](#evaluating-the-workflow) section.
-
-### Jupyter Notebooks
-
-The `docs/notebooks/` directory contains a three-part series that walks through the blueprint from first run to full customization. Run them in order:
-
-| # | Notebook | What it covers | Prerequisites |
-|---|----------|----------------|---------------|
-| 0 | [Getting Started with AI-Q](docs/notebooks/0_Getting_Started_with_AIQ.ipynb) | Full blueprint overview — environment setup, orchestrated workflow (intent routing, shallow and deep research), and Docker Compose deployment | `NVIDIA_API_KEY`; optionally `TAVILY_API_KEY`, `SERPER_API_KEY` |
-| 1 | [Deep Researcher — Web Search](docs/notebooks/1_Deep_Researcher_Web_Search.ipynb) | Deep researcher in depth — Python API, `nat run`, and end-to-end evaluation against the DeepResearch Bench with `nat eval` | Notebook 0 completed; `NVIDIA_API_KEY`, `TAVILY_API_KEY`, `SERPER_API_KEY`; OpenAI or Gemini key for the judge model |
-| 2 | [Deep Researcher — Customization](docs/notebooks/2_Deep_Researcher_Customization.ipynb) | Extending the deep researcher — adding paper search, assigning different LLMs per agent role, editing prompts, and enabling the knowledge layer | Notebooks 0 and 1 completed; `NVIDIA_API_KEY`, `TAVILY_API_KEY`, `SERPER_API_KEY` |
-
-
-## Evaluating the Workflow
-
-The `frontends/benchmarks/` directory contains evaluation pipelines for assessing agent performance.
-
-### Available Benchmarks
-
-| Benchmark | Description | Location |
-|-----------|-------------|----------|
-| Deep Research Bench | RACE and FACT evaluation for research quality | `frontends/benchmarks/deepresearch_bench/` |
-| FreshQA | Factuality evaluation on time-sensitive questions | `frontends/benchmarks/freshqa/` |
-
-### Running Evaluations
-
-First, install the benchmark package:
-
-```bash
-uv pip install -e ./frontends/benchmarks/deepresearch_bench
-```
-
-Download the dataset files:
+To download the dataset files, run the following script:
 
 ```bash
 python frontends/benchmarks/deepresearch_bench/scripts/download_drb_dataset.py
 ```
 
-Then run the evaluation with one of the available configurations:
+### Step 2: Generate reports using NAT evaluation harness
 
 ```bash
-dotenv -f deploy/.env run nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench.yml
+dotenv -f deploy/.env run nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_ensemble.yml
 ```
+
+### Step 3: Convert the output into a compatible format
+```bash
+python frontends/benchmarks/deepresearch_bench/scripts/export_drb_jsonl.py --input <path to your workflow_output.json> --output <path to the output file you want to create with .jsonl extension>
+```
+
+### Step 4: Run evaluation
+Follow instructions in the [Deep Research Bench Github Repository](https://github.com/Ayanami0730/deep_research_bench/tree/main) to run evaluation and obtain scores.
+
+## Optional: Phoenix Tracing
+
+If your config enables Phoenix tracing, start the Phoenix server before running `nat eval`.
+
+Start server (separate terminal):
+
+```bash
+source .venv/bin/activate
+phoenix serve
+```
+
+Default UI endpoint: `http://localhost:6006`
 
 For detailed benchmark documentation, refer to:
 - [Deep Research Bench README](frontends/benchmarks/deepresearch_bench/README.md)
-- [FreshQA README](frontends/benchmarks/freshqa/README.md)
-
-## Development
-
-For development, contribution, and documentation, refer to:
-
-- **[Development and Contributing](docs/source/contributing/index.md)**: Setup, testing, PR workflow, sign-off/DCO
-- **[Architecture](docs/source/architecture/overview.md)**: Component details and data flow
-- **[Customization](docs/source/customization/index.md)**: Configuration and customization options
-- **[Knowledge Layer Setup](sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md)**: RAG backends and document ingestion
-- **[Docs index](docs/README.md)**: Full documentation list and component docs
-- **[Changelog](docs/source/resources/changelog.md)**: Version history and changes
 
 ## License
 

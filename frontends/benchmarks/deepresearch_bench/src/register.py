@@ -13,6 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 """Register Deep Research Bench evaluators for NAT."""
 
 import os
@@ -36,6 +37,15 @@ class DRBRaceEvaluatorConfig(EvaluatorBaseConfig, name="drb_race_evaluator"):
 
     llm_name: LLMRef = Field(description="LLM to use as judge")
     criteria_file: str | None = Field(default=None, description="Path to criteria JSON file")
+    clean_article: bool = Field(
+        default=True,
+        description="Apply official DRB article-cleaning pass before RACE scoring.",
+    )
+    cleaner_llm_name: LLMRef | None = Field(
+        default=None,
+        description="Optional LLM for article cleaning; defaults to llm_name when omitted.",
+    )
+    clean_max_retries: int = Field(default=3, description="Max retries for article-cleaning calls.")
 
 
 class DRBFactEvaluatorConfig(EvaluatorBaseConfig, name="drb_fact_evaluator"):
@@ -49,9 +59,19 @@ class DRBFactEvaluatorConfig(EvaluatorBaseConfig, name="drb_fact_evaluator"):
 async def register_drb_race_evaluator(config: DRBRaceEvaluatorConfig, builder: EvalBuilder):
     """Register DRB RACE evaluator."""
     llm = await builder.get_llm(config.llm_name, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+    cleaner_llm = llm
+    if config.cleaner_llm_name is not None:
+        cleaner_llm = await builder.get_llm(config.cleaner_llm_name, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
     criteria_data = load_criteria_data(config.criteria_file)
 
-    evaluator = DRBRaceEvaluator(llm=llm, criteria_data=criteria_data, max_concurrency=builder.get_max_concurrency())
+    evaluator = DRBRaceEvaluator(
+        llm=llm,
+        criteria_data=criteria_data,
+        max_concurrency=builder.get_max_concurrency(),
+        clean_article=config.clean_article,
+        cleaner_llm=cleaner_llm,
+        clean_max_retries=config.clean_max_retries,
+    )
 
     yield EvaluatorInfo(config=config, evaluate_fn=evaluator.evaluate, description="DRB RACE Evaluator")
 

@@ -1,0 +1,22 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[tool.setuptools]
+packages = ["you_com_web_search"]
+package-dir = {"you_com_web_search" = "src"}
+
+
+[project]
+name = "you-com-web-search"
+version = "1.0.0"
+description = "You.com Deep Search tool — isolated You.com backend for deep research"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "nvidia-nat==1.4.0",
+    "aiohttp",
+    "pydantic>=2.0.0",
+]
+
+[project.entry-points."nat.plugins"]
+you_com_web_search = "you_com_web_search.register"

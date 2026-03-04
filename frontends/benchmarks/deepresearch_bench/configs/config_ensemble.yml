@@ -1,0 +1,148 @@
+# Ensemble Deep Research Bench — Dual Pipeline (Tavily + You.com)
+# Runs two independent deep_research_agent instances in parallel, merges their reports.
+# nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_ensemble.yml
+
+general:
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+    tracing:
+      phoenix:
+        _type: phoenix
+        endpoint: http://localhost:6006/v1/traces
+        project: drb-ensemble
+  use_uvloop: true
+
+llms:
+  nemotron_rl:
+    _type: nim
+    model_name: "nemotron-super" # Replace with your model name
+    base_url: "http://127.0.0.1:8000/v1" 
+    temperature: 1.0
+    top_p: 0.95
+    max_tokens: 128000
+
+  openai_gpt_5_2:
+    _type: openai
+    model_name: "gpt-5.2"
+    api_key: ${OPENAI_API_KEY}
+
+  gemini_pro:
+    _type: openai
+    model_name: "gemini-2.5-pro"
+    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
+    api_key: ${GEMINI_API_KEY}
+    timeout: 600
+    max_retries: 10
+    temperature: 0.1
+
+  gpt_oss_llm:
+    _type: nim
+    model_name: openai/gpt-oss-120b
+    base_url: https://integrate.api.nvidia.com/v1
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 256000
+    api_key: ${NVIDIA_API_KEY}
+    max_retries: 10
+
+functions:
+  # --- Search tools ---
+  paper_search_tool:
+    _type: paper_search
+    max_results: 5
+    serper_api_key: ${SERPER_API_KEY}
+
+  advanced_web_search_tool:
+    _type: tavily_web_search
+    max_results: 2
+    advanced_search: true
+
+  you_com_search_tool:
+    _type: you_com_web_search
+    api_key: ${YOU_API_KEY}
+    search_effort: medium
+
+  # --- Pipeline A (Tavily) ---
+  planner_agent_a:
+    _type: planner_agent
+    llm: openai_gpt_5_2
+    tools:
+      - paper_search_tool
+      - advanced_web_search_tool
+    timeout: 3600
+
+  researcher_agent_a:
+    _type: researcher_agent
+    llm: nemotron_rl
+    rewriter_llm: nemotron_rl
+    tools:
+      - paper_search_tool
+      - advanced_web_search_tool
+    timeout: 7200
+
+  deep_research_agent_a:
+    _type: deep_research_agent
+    orchestrator_llm: openai_gpt_5_2
+    rewriter_llm: openai_gpt_5_2
+    max_loops: 2
+    timeout: 12000
+    tools:
+      - planner_agent_a
+      - researcher_agent_a
+
+  # --- Pipeline B (You.com) ---
+  planner_agent_b:
+    _type: planner_agent
+    llm: openai_gpt_5_2
+    tools:
+      - paper_search_tool
+      - you_com_search_tool
+    timeout: 3600
+
+  researcher_agent_b:
+    _type: researcher_agent
+    llm: nemotron_rl
+    rewriter_llm: nemotron_rl
+    tools:
+      - paper_search_tool
+      - you_com_search_tool
+    timeout: 7200
+
+  deep_research_agent_b:
+    _type: deep_research_agent
+    orchestrator_llm: openai_gpt_5_2
+    rewriter_llm: openai_gpt_5_2
+    max_loops: 2
+    timeout: 12000
+    tools:
+      - planner_agent_b
+      - researcher_agent_b
+
+workflow:
+  _type: ensemble_research_workflow
+  agents:
+    - deep_research_agent_a
+    - deep_research_agent_b
+  merger_llm: openai_gpt_5_2
+
+eval:
+  general:
+    workflow_alias: "aiq-deepresearcher-ensemble"
+    output_dir: frontends/benchmarks/deepresearch_bench/results/drb-ensemble
+    max_concurrency: 10
+    dataset:
+      _type: json
+      file_path: frontends/benchmarks/deepresearch_bench/data/drb_full_dataset.json
+      structure:
+        question_key: question
+        answer_key: expected_output
+        generated_answer_key: generated_answer
+
+  # evaluators:  # Optional, we recommend running evaluation with the official Deep Research Bench repository
+  #   race:
+  #     _type: drb_race_evaluator
+  #     llm_name: gemini_pro
+  #     criteria_file: frontends/benchmarks/deepresearch_bench/data/criteria.jsonl

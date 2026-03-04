@@ -13,7 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""NAT register function for deep research agent."""
+"""NAT register function for deep research agent (orchestrator).
+
+The orchestrator receives planner_agent and researcher_agent as tools via
+builder.get_tools(). These are independent @register_function NAT functions
+configured in YAML.
+"""
 
 import logging
 
@@ -30,7 +35,6 @@ from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
-from nat.data_models.api_server import ChatResponse
 from nat.data_models.component_ref import FunctionGroupRef
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
@@ -43,32 +47,41 @@ logger = logging.getLogger(__name__)
 
 
 class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
-    """Configuration for the deep research agent."""
+    """Configuration for the deep research agent (orchestrator).
 
-    orchestrator_llm: LLMRef = Field(..., description="LLM for orchestrator")
-    researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
-    planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
-    tools: list[FunctionRef | FunctionGroupRef] = Field(default_factory=list)
+    The orchestrator's tools list should include planner_agent and researcher_agent
+    as FunctionRef entries. These are resolved by builder.get_tools() into
+    StructuredTool objects that the orchestrator LLM can call directly.
+    """
+
+    orchestrator_llm: LLMRef = Field(..., description="LLM for the orchestrator")
+    rewriter_llm: LLMRef | None = Field(
+        default=None,
+        description="Optional LLM for post-report refinement.",
+    )
+    tools: list[FunctionRef | FunctionGroupRef] = Field(
+        default_factory=list,
+        description="Tools for the orchestrator — should include planner_agent and researcher_agent",
+    )
     max_loops: int = Field(default=2)
     verbose: bool = Field(default=True)
+    timeout: int = Field(default=600, description="Per-question timeout in seconds. 0 = no timeout.")
 
 
 @register_function(config_type=DeepResearchAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder):
-    """Deep research agent using multi-phase workflow."""
+    """Deep research agent using three-tier architecture."""
+    # Get all tools — includes planner_agent and researcher_agent as StructuredTools
     tools = await builder.get_tools(tool_names=config.tools, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
     llm = await builder.get_llm(config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
+    rewriter_llm = None
+    if config.rewriter_llm:
+        rewriter_llm = await builder.get_llm(config.rewriter_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
     provider = LLMProvider()
     provider.set_default(llm)
-
     provider.configure(LLMRole.ORCHESTRATOR, llm)
-    if config.researcher_llm:
-        researcher_llm = await builder.get_llm(config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-        provider.configure(LLMRole.RESEARCHER, researcher_llm)
-    if config.planner_llm:
-        planner_llm = await builder.get_llm(config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-        provider.configure(LLMRole.PLANNER, planner_llm)
 
     verbose = is_verbose(config.verbose)
     callbacks = [VerboseTraceCallback()] if verbose else []
@@ -76,52 +89,32 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     agent = DeepResearcherAgent(
         llm_provider=provider,
         tools=tools,
+        rewriter_llm=rewriter_llm,
         max_loops=config.max_loops,
         verbose=verbose,
         callbacks=callbacks,
+        timeout=config.timeout,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
         """Run deep research with a list of messages or payload."""
-        try:
-            data_sources = state.data_sources
-            selected_tools = filter_tools_by_sources(tools, data_sources)
-            active_agent = agent
-            if data_sources is not None and selected_tools != tools:
-                active_agent = DeepResearcherAgent(
-                    llm_provider=provider,
-                    tools=selected_tools,
-                    max_loops=config.max_loops,
-                    verbose=verbose,
-                    callbacks=callbacks,
-                )
-            elif data_sources is not None and not selected_tools:
-                logger.warning("Deep research received data_sources with no matching tools")
+        data_sources = state.data_sources
+        selected_tools = filter_tools_by_sources(tools, data_sources)
+        active_agent = agent
+        if data_sources is not None and selected_tools != tools:
+            active_agent = DeepResearcherAgent(
+                llm_provider=provider,
+                tools=selected_tools,
+                max_loops=config.max_loops,
+                verbose=verbose,
+                callbacks=callbacks,
+                timeout=config.timeout,
+            )
+        elif data_sources is not None and not selected_tools:
+            logger.warning("Deep research received data_sources with no matching tools")
 
-            # Validate tool availability before starting deep research
-            # At least one tool must be available
-            # This prevents the agent from trying to reason about unavailable tools
-            # Check selected_tools directly - they already reflect data_sources filtering
-            from aiq_agent.common import format_tool_unavailability_error
-            from aiq_agent.common import validate_tool_availability
-
-            is_valid, _, unavailable_tools = validate_tool_availability(selected_tools, research_type="deep research")
-
-            # Fail if no tools are available
-            if not is_valid:
-                error_msg = format_tool_unavailability_error("deep research", unavailable_tools)
-
-                # Return error state with error message - this prevents the agent from running
-                from langchain_core.messages import AIMessage
-
-                error_state = DeepResearchAgentState(messages=state.messages + [AIMessage(content=error_msg)])
-                return error_state
-
-            result = await active_agent.run(state)
-            return result
-        except Exception:
-            logger.exception("Error in deep research execution")
-            raise
+        result = await active_agent.run(state)
+        return result
 
     yield FunctionInfo.from_fn(_run, description="Deep research agent for comprehensive multi-phase research.")
 
@@ -144,7 +137,7 @@ async def deep_research_workflow(config: DeepResearchWorkflowConfig, builder: Bu
     """Wrapper workflow that accepts string queries for evaluation."""
     deep_research_agent_fn = await builder.get_function("deep_research_agent")
 
-    async def _run(query: str) -> ChatResponse:
+    async def _run(query: str) -> str:
         """Run deep research on a query string."""
         state = DeepResearchAgentState(messages=[HumanMessage(content=query)])
         result = await deep_research_agent_fn.ainvoke(state)

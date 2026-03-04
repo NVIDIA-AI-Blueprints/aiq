@@ -12,6 +12,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 """Paper search tool using Serper (Google Scholar).
 
 This module contains the NAT-independent PaperSearchTool class.
@@ -180,7 +181,7 @@ class PaperSearchTool:
     async def search(
         self,
         query: str,
-        year: str | None = None,
+        year: str | int | None = None,
     ) -> str:
         """
         Search for peer-reviewed academic papers and scientific publications.
@@ -201,7 +202,7 @@ class PaperSearchTool:
         if not query:
             return "Error: 'query' argument is required"
 
-        if year is not None and not isinstance(year, str):
+        if isinstance(year, int):
             year = str(year)
 
         logger.info(f"Paper search (serper) for: {query}")

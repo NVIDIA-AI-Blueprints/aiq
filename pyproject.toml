@@ -28,7 +28,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat[langchain,telemetry,weave,async_endpoints]==1.4.0",
+    "nvidia-nat[langchain,telemetry,weave]==1.4.0",
     "deepagents>=0.3.0",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
@@ -39,6 +39,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+    "arize-phoenix",
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
@@ -61,16 +62,14 @@ viz = [
 
 # -----------------------------------------------------------------------------
 # Workspace members are installed via: uv sync
-# Individual packages: uv pip install -e ./frontends/cli
 # See [tool.uv.workspace] below for auto-discovered packages
 # -----------------------------------------------------------------------------
 
 [project.entry-points."nat.plugins"]
-aiq_chat_researcher = "aiq_agent.agents.chat_researcher.register"
-aiq_shallow_researcher = "aiq_agent.agents.shallow_researcher.register"
 aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
-aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
-aiq_clarifier = "aiq_agent.agents.clarifier.register"
+aiq_ensemble_researcher = "aiq_agent.agents.ensemble_researcher.register"
+aiq_planner_agent = "aiq_agent.agents.deep_researcher.planner_agent.register"
+aiq_researcher_agent = "aiq_agent.agents.deep_researcher.researcher_agent.register"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
@@ -152,9 +151,6 @@ indent_dictionary_value = true
 #
 # Usage:
 #   uv sync                              # Install root + all workspace members
-#   uv sync --package aiq-agent  # Install only the root package
-#   uv pip install -e ./frontends/cli    # Install a specific package
-#   uv pip install -e "./frontends/aiq_api[postgres]"  # With extras
 # -----------------------------------------------------------------------------
 [dependency-groups]
 dev = [
@@ -170,10 +166,8 @@ dev = [
     # Workspace packages for testing
     "google-scholar-paper-search",
     "tavily-web-search",
-    "knowledge-layer[all]",
-    "aiq-api",
-    "aiq-research-cli",
-    "aiq-debug",
+    "ensemble-web-search",
+    "you-com-web-search",
 ]
 
 [tool.uv]
@@ -185,16 +179,11 @@ prerelease = "if-necessary-or-explicit"
 [tool.uv.workspace]
 members = [
     "sources/*",
-    "frontends/aiq_api",
-    "frontends/cli",
-    "frontends/debug",
 ]
 
 [tool.uv.sources]
 aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
-knowledge-layer = { workspace = true }
-aiq-api = { workspace = true }
-aiq-research-cli = { workspace = true }
-aiq-debug = { workspace = true }
+ensemble-web-search = { workspace = true }
+you-com-web-search = { workspace = true }

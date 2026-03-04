@@ -24,7 +24,7 @@ PROJECT_ROOT="$(cd "$BENCHMARK_DIR/../../.." && pwd)"
 
 # Default configuration
 NUM_RUNS=2
-CONFIG_FILE="frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench.yml"
+CONFIG_FILE="frontends/benchmarks/deepresearch_bench/configs/config_hybrid.yml"
 ENV_FILE="deploy/.env"
 PREFIX=""
 
@@ -59,8 +59,8 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --test          Run single evaluation (same as --runs 1)"
-            echo "  --runs N        Number of evaluation runs (default: 2)"
-            echo "  --config FILE   Config file path (default: frontends/benchmarks/deepresearch_bench/configs/config_hybrid.yml)"
+            echo "  --runs N        Number of evaluation runs (default: 1)"
+            echo "  --config FILE   Config file path (default: frontends/benchmarks/deepresearch_bench/configs/config_deepresearch_bench.yml)"
             echo "  --env FILE      Environment file path (default: deploy/.env)"
             echo "  --help, -h      Show this help message"
             echo ""
@@ -234,6 +234,14 @@ main() {
         set +e  # Don't exit on error for individual runs
         if run_evaluation $run_num; then
             ((successful_runs++))
+            # Export DRB submission JSONL (non-blocking)
+            if python "${BENCHMARK_DIR}/scripts/export_drb_jsonl.py" \
+                --input "${AGGREGATED_DIR}/run${run_num}/workflow_output.json" \
+                --output "${AGGREGATED_DIR}/run${run_num}/${PREFIX:-aira}.jsonl" 2>&1; then
+                log_success "DRB JSONL exported for run $run_num"
+            else
+                log_warning "DRB JSONL export failed for run $run_num (non-blocking)"
+            fi
         else
             ((failed_runs++))
         fi

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.  # noqa: E501
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,8 +22,6 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 from pydantic import Field
-
-from aiq_agent.knowledge import AvailableDocument
 
 
 def _merge_dict_state(left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
@@ -50,11 +48,9 @@ class DeepResearchAgentState(BaseModel):
         user_info: Optional user information.
         tools_info: Information about available tools.
         todos: Todo list managed by TodoListMiddleware.
-        files: Virtual filesystem managed by FilesystemMiddleware.
+        files: Virtual filesystem state (kept for framework compatibility).
         subagents: Status of subagents (planner, researcher) managed by
             SubAgentMiddleware.
-        clarifier_result: Log from clarifier agent dialog.
-        available_documents: User-uploaded documents with summaries for context.
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
@@ -65,4 +61,3 @@ class DeepResearchAgentState(BaseModel):
     files: Annotated[dict[str, Any], _merge_dict_state] = Field(default_factory=dict)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
     clarifier_result: str | None = None
-    available_documents: list[AvailableDocument] | None = None

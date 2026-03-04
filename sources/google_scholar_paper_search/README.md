@@ -8,7 +8,7 @@ Before using this function, you need a Serper API key:
 
 1. Go to [serper.dev](https://serper.dev/) and create an account
 2. Generate an API key from your dashboard
-3. Add the API key to your `deploy/.env` file in the project root:
+3. Add the API key to your `deploy.env` file:
 
 ```bash
 SERPER_API_KEY="your-serper-api-key"
@@ -27,7 +27,7 @@ uv pip install -e sources/google_scholar_paper_search
 After installation, verify the plugin is registered:
 
 ```bash
-nat info components -t function | grep paper_search
+nat info functions | grep paper_search
 ```
 
 ## Configuration
@@ -143,34 +143,3 @@ If no papers are found:
 - Remove year filters to expand the search range
 - Verify your Serper API key has available quota
 
-## Disabling Paper Search
-
-If you don't have a Serper API key or don't need paper search functionality, you can disable it by removing the tool from your configuration:
-
-### Remove from Configuration
-
-Edit your configuration file (for example, `configs/config_cli_default.yml`) and remove or comment out the `paper_search_tool` definition:
-
-```yaml
-functions:
-  # Remove or comment out this section
-  # paper_search_tool:
-  #   _type: paper_search
-  #   max_results: 5
-  #   serper_api_key: ${SERPER_API_KEY}
-```
-
-Also remove it from any agents that use it:
-
-```yaml
-functions:
-  deep_research_agent:
-    _type: deep_research_agent
-    orchestrator_llm: nemotron_llm
-    max_loops: 2
-    tools:
-      # Remove paper_search_tool from the tools list
-      - advanced_web_search_tool
-```
-
-After making these changes, the agent will function without paper search capabilities.

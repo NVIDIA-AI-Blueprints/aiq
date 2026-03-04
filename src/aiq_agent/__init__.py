@@ -15,14 +15,12 @@
 
 """AI-Q Blueprint core package.
 
-This module uses lazy imports to avoid loading heavy dependencies (langgraph, etc.)
-when only lightweight submodules like `aiq_agent.knowledge` are needed.
+This module uses lazy imports to avoid loading heavy dependencies (langchain, etc.)
 """
 
 __all__ = [
-    "chat_deepresearcher_agent",
-    "shallow_research_agent",
     "deep_research_agent",
+    "ensemble_research_workflow",
 ]
 
 from typing import Any
@@ -40,22 +38,10 @@ def __getattr__(name: str):
     if name in _lazy_imports:
         return _lazy_imports[name]
 
-    if name == "chat_deepresearcher_agent":
-        from .agents import chat_deepresearcher_agent
+    if name == "ensemble_research_workflow":
+        from .agents import ensemble_research_workflow
 
-        _lazy_imports[name] = chat_deepresearcher_agent
-        return chat_deepresearcher_agent
-
-    if name == "shallow_research_agent":
-        from .agents import shallow_research_agent
-
-        _lazy_imports[name] = shallow_research_agent
-        return shallow_research_agent
-
-    if name == "deep_research_agent":
-        from .agents import deep_research_agent
-
-        _lazy_imports[name] = deep_research_agent
-        return deep_research_agent
+        _lazy_imports[name] = ensemble_research_workflow
+        return ensemble_research_workflow
 
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

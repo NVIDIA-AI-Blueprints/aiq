@@ -1,43 +1,103 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Deep research agent using deepagents library for multi-phase workflow."""
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+"""Deep research agent orchestrator using three-tier architecture.
+
+The orchestrator calls planner_agent and researcher_agent as NAT-registered tools.
+Each is an independent @register_function that internally manages its own sub-agents.
+No SubAgentMiddleware is needed on the orchestrator — just tools.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from deepagents import create_deep_agent
-from deepagents.backends import CompositeBackend
-from deepagents.backends import StateBackend
+from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRetryMiddleware
-from langchain_core.messages import HumanMessage
+from langchain.agents.middleware import TodoListMiddleware
+from langchain.agents.middleware import ToolCallLimitMiddleware
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool
-from langgraph.store.memory import InMemoryStore
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
-from aiq_agent.common.citation_verification import EmptySourceRegistryError
-from aiq_agent.common.citation_verification import sanitize_report
-from aiq_agent.common.citation_verification import verify_citations
 
 from .custom_middleware import EmptyContentFixMiddleware
-from .custom_middleware import SourceRegistryMiddleware
+from .custom_middleware import EmptyResponseRetryMiddleware
+from .custom_middleware import ReportValidationMiddleware
+from .custom_middleware import RewriterMiddleware
+from .custom_middleware import TodoSanitizationMiddleware
+from .custom_middleware import ToolCallBudgetMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
-from .custom_middleware import ToolResultPruningMiddleware
-from .custom_middleware import ToolRetryMiddleware
 from .models import DeepResearchAgentState
 
 logger = logging.getLogger(__name__)
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
+
+# Tool names injected by middleware (TodoListMiddleware)
+_MIDDLEWARE_TOOL_NAMES = ["write_todos"]
+
+# Tool call budget for orchestrator
+_ORCHESTRATOR_TOOL_BUDGET = 24
+
+REPORT_REWRITER_PROMPT = """\
+You are a senior research editor. You receive:
+1. The user's original research request
+2. The research plan — TOC structure and quality constraints the report should satisfy
+3. The research briefs — the raw evidence collected by the research team
+4. A draft report written from those briefs
+
+The draft is often a good starting point but may have compressed or dropped evidence that the briefs \
+contain. Your job is to produce the best possible final report from the available evidence, using the \
+draft as your foundation where it is accurate and well-structured.
+
+Read the briefs carefully, then read the draft. Compare them. The briefs are the source of truth.
+
+Fix what's wrong: where the draft contradicts the briefs, correct it. Where the briefs contain \
+something important that the draft missed, add it. Where a claim lacks the evidence behind it, \
+strengthen it. Fix obvious mistakes like placeholder text or incomplete content.
+
+Improve the narrative: ensure the executive summary synthesizes findings into a clear central thesis. \
+Where the draft presents related findings in separate sections, add brief bridges that connect them. \
+If the briefs reveal tensions, trade-offs, or contradictions in the evidence, surface those explicitly. \
+If comparing the briefs reveals novel insights — patterns across sources, new connections, \
+or implications the draft didn't draw out — add them. \
+Ensure the conclusion ties back to the executive summary thesis and directly answers the user's question.
+
+Keep the same language and return the full refined report.
+
+Constraints:
+- Preserve every section of the original report. If a section heading (##, ###) exists in the \
+draft, it must exist in your output. You may improve content within sections, but do not remove \
+sections — especially Forward-Looking Synthesis and Conclusion.
+- Try to preserve tables, lists, and structured formats from the draft.
+- When the draft describes a finding qualitatively that the briefs describe with specific numbers, \
+dates, or named entities, substitute the specific version. Recovering concrete evidence is more \
+valuable than restructuring prose.
+- When the user asked "how much" or requested a number, try to strengthen qualitative hedges to \
+specific figures or ranges from the briefs.
+- Ensure every [N] citation in the body has a matching entry in Sources. Do not drop cited sources."""
 
 
 @tool
@@ -60,34 +120,26 @@ def think(thought: str) -> str:
 
 
 class DeepResearcherAgent:
-    """
-    Deep research agent using deepagents library for multi-phase workflow.
+    """Deep research orchestrator using three-tier architecture.
 
-    This agent produces publication-ready research reports through an iterative process:
+    The orchestrator calls two NAT-registered tools:
+    - planner_agent: Two-phase planning (scout + architect)
+    - researcher_agent: Multi-specialist research (evidence, mechanism, comparison, critique, horizon)
 
-    1. **Planning Phase**: Generate a structured research plan with queries and report
-       organization (planner subagent)
-    2. **Research Loops**: Execute queries via web search (researcher subagent), then
-       synthesize drafts directly in the orchestrator
-    3. **Iteration**: Repeat research and synthesis loops to fill gaps
-    4. **Citation Management**: Catalog and number sources in the orchestrator
-    5. **Finalization**: Produce a polished report with inline citations and references
-       directly in the orchestrator
+    Both are @register_function NAT functions wrapped as StructuredTool via builder.get_tools().
+    The orchestrator has NO SubAgentMiddleware — it just calls tools.
 
-    The agent is NAT-independent and receives all dependencies via constructor.
+    Workflow:
+    1. Call planner_agent(query="...") → receive plan JSON
+    2. Call researcher_agent(query="...") x 3-5 → receive synthesized briefs
+    3. Constraint gap review via think
+    4. Optional gap-fill researcher_agent calls
+    5. Write the final report
 
     Example:
-        >>> from aiq_agent.common import LLMProvider, LLMRole
-        >>> provider = LLMProvider()
-        >>> provider.set_default(my_llm)
-        >>> provider.configure(LLMRole.ORCHESTRATOR, orchestrator_llm)
-        >>> provider.configure(LLMRole.RESEARCHER, researcher_llm)
-        >>> provider.configure(LLMRole.PLANNER, planner_llm)
-        >>>
-        >>> from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
         >>> agent = DeepResearcherAgent(
         ...     llm_provider=provider,
-        ...     tools=[search_tool_a, search_tool_b],
+        ...     tools=[planner_agent_tool, researcher_agent_tool],
         ... )
         >>> state = DeepResearchAgentState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
         >>> result = await agent.run(state)
@@ -98,247 +150,122 @@ class DeepResearcherAgent:
         llm_provider: LLMProvider,
         tools: Sequence[BaseTool] | None = None,
         *,
+        rewriter_llm: Any | None = None,
         max_loops: int = 2,
         verbose: bool = True,
         callbacks: list[Any] | None = None,
+        timeout: int = 600,
     ) -> None:
         """
-        Initialize the deep researcher subagent.
+        Initialize the deep researcher orchestrator.
 
         Args:
             llm_provider: LLMProvider for role-based LLM access.
-            tools: Optional sequence of LangChain tools for research.
+            tools: Sequence of LangChain tools — should include planner_agent and
+                   researcher_agent as StructuredTools from builder.get_tools().
+            rewriter_llm: Optional LLM for post-report refinement. If set, the final
+                report is refined against researcher briefs using this model.
             max_loops: Maximum number of research loops (default 2).
             verbose: Enable detailed logging.
             callbacks: Optional list of callbacks.
+            timeout: Per-question timeout in seconds. 0 = no timeout.
         """
         self.llm_provider = llm_provider
+        self.rewriter_llm = rewriter_llm
         self.tools = list(tools) if tools else []
         self.max_loops = max_loops
         self.verbose = verbose
         self.callbacks = callbacks or []
+        self.timeout = timeout
 
         if self.verbose:
-            logger.info("Tools configured: %d", len(self.tools))
+            logger.info("Orchestrator tools configured: %d", len(self.tools))
+            for t in self.tools:
+                logger.info("  - %s: %s", t.name, t.description[:80] if t.description else "")
 
         self._prompts = self._load_prompts()
-        self.tools_info = []
-        for t in self.tools:
-            self.tools_info.append({"name": t.name, "description": t.description})
+        # All tools: think + NAT tools (planner_agent, researcher_agent, etc.)
+        self.all_tools = [think, *self.tools]
 
-        self.source_registry_middleware = SourceRegistryMiddleware(
-            source_tool_names={t.name for t in self.tools},
-        )
+        self.middleware = self._get_middleware()
 
-        # Create a tool that gives the orchestrator access to verified sources
-        registry_middleware = self.source_registry_middleware
+    def _get_middleware(self):
+        """Get the middleware for the orchestrator.
 
-        @tool
-        def get_verified_sources() -> str:
-            """Returns the list of all verified source URLs captured from search tool calls.
+        No SubAgentMiddleware — planner_agent and researcher_agent are regular tools
+        provided by NAT via builder.get_tools().
+        """
+        valid_tool_names = [t.name for t in self.all_tools] + _MIDDLEWARE_TOOL_NAMES
 
-            Call this tool during the Synthesize step (Step 5) BEFORE writing the
-            final report. It returns every URL and citation key that was returned
-            by search tools during research. Use ONLY these sources in your report
-            — any other URL will be automatically removed.
-
-            Returns:
-                A numbered list of verified sources with titles and URLs.
-            """
-            source_list = registry_middleware.get_source_list_text()
-            if source_list:
-                return source_list
-            return "No sources captured yet. Run research queries first."
-
-        self.all_tools = [think, get_verified_sources, *self.tools]
-
-        self.middleware = [
+        middleware = [
+            TodoListMiddleware(),
             EmptyContentFixMiddleware(),
-            ToolNameSanitizationMiddleware(valid_tool_names=[t.name for t in self.all_tools]),
-            ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
-            self.source_registry_middleware,
-            ToolResultPruningMiddleware(keep_last_n=3, max_chars=500),
-            ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
+            ToolNameSanitizationMiddleware(valid_tool_names=valid_tool_names),
+            TodoSanitizationMiddleware(),
+            ToolCallBudgetMiddleware(max_tool_calls=_ORCHESTRATOR_TOOL_BUDGET),
+            ToolCallLimitMiddleware(tool_name="researcher_agent", run_limit=8, exit_behavior="continue"),
+            ReportValidationMiddleware(min_length=5000, min_sections=2, max_retries=5),
+            # RewriterMiddleware: refine report against researcher briefs (opt-in via config)
+            *(
+                [
+                    RewriterMiddleware(
+                        model=self.rewriter_llm,
+                        prompt=REPORT_REWRITER_PROMPT,
+                        tool_names=["researcher_agent", "planner_agent"],
+                    )
+                ]
+                if self.rewriter_llm
+                else []
+            ),
+            EmptyResponseRetryMiddleware(
+                min_content_length=1000,
+                max_retries=2,
+            ),
+            ModelRetryMiddleware(
+                max_retries=10,
+                backoff_factor=2.0,
+                initial_delay=1.0,
+            ),
         ]
 
-        # Share source registry with SSE callbacks for consistent citation tracking
-        for cb in self.callbacks:
-            if hasattr(cb, "set_source_registry"):
-                cb.set_source_registry(self.source_registry_middleware.registry)
+        return middleware
 
     def _load_prompts(self) -> dict[str, str]:
-        """Load all prompts for subagents."""
+        """Load the orchestrator prompt."""
         prompts = {}
-        prompt_names = ["planner", "researcher", "orchestrator"]
-
-        for name in prompt_names:
-            try:
-                prompts[name] = load_prompt(AGENT_DIR / "prompts", name)
-            except Exception as e:
-                logger.warning("Failed to load prompt %s: %s, using inline default", name, e)
-                prompts[name] = self._get_inline_default(name)
-
+        try:
+            prompts["orchestrator"] = load_prompt(AGENT_DIR / "prompts", "orchestrator")
+        except Exception as e:
+            logger.warning("Failed to load orchestrator prompt: %s, using inline default", e)
+            prompts["orchestrator"] = (
+                "You are a research orchestrator. Coordinate the research process and produce a polished report."
+            )
         return prompts
 
-    def _get_inline_default(self, name: str) -> str:
-        """Get inline default prompt for fallback."""
-        defaults = {
-            "planner": "You are a research planning strategist. Create a structured research plan.",
-            "researcher": "You are a research investigator. Gather information from available sources.",
-            "orchestrator": (
-                "You are a research orchestrator. Coordinate the research process and produce a polished report."
-            ),
-        }
-        return defaults.get(name, f"You are a {name} agent.")
-
-    def _get_subagents(self, state: DeepResearchAgentState) -> list[dict[str, Any]]:
-        """Build subagent configs with state-dependent prompts (e.g. available_documents)."""
-        available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
-        return [
-            {
-                "name": "planner-agent",
-                "description": (
-                    "Content-driven research planning - iteratively builds evidence-grounded "
-                    "outlines through interleaved search and outline optimization"
-                ),
-                "system_prompt": render_prompt_template(
-                    self._prompts["planner"],
-                    tools=self.tools_info,
-                    available_documents=available_docs,
-                ),
-                "tools": self.all_tools,
-                "model": self.llm_provider.get(LLMRole.PLANNER),
-                "middleware": self.middleware,
-            },
-            {
-                "name": "researcher-agent",
-                "description": (
-                    "Information gathering - executes search queries and synthesizes "
-                    "relevant content from available sources"
-                ),
-                "system_prompt": render_prompt_template(
-                    self._prompts["researcher"],
-                    current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    tools=self.tools_info,
-                    available_documents=available_docs,
-                ),
-                "tools": self.all_tools,
-                "model": self.llm_provider.get(LLMRole.RESEARCHER),
-                "middleware": self.middleware,
-            },
-        ]
-
-    def _build_orchestrator_agent(self, state: DeepResearchAgentState) -> str:
-        """Get the orchestrator instructions for the deep research agent."""
-
-        def backend(runtime):
-            return CompositeBackend(
-                default=StateBackend(runtime),
-                routes={
-                    "/shared/": StateBackend(runtime),
-                },
-            )
-
-        available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
+    def _build_orchestrator_agent(self, state: DeepResearchAgentState):
+        """Build the orchestrator agent graph."""
         orchestrator_instructions = render_prompt_template(
             self._prompts["orchestrator"],
-            current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            current_datetime=datetime.now().strftime("%Y-%m-%d"),
             clarifier_result=state.clarifier_result,
-            available_documents=available_docs,
-            tools=self.tools_info,
         )
-
-        agent = create_deep_agent(
+        return create_agent(
             model=self.llm_provider.get(LLMRole.ORCHESTRATOR),
-            tools=self.all_tools,
-            backend=backend,
             system_prompt=orchestrator_instructions,
-            subagents=self._get_subagents(state),
-            store=InMemoryStore(),
-            context_schema=DeepResearchAgentState,
+            tools=self.all_tools,
             middleware=self.middleware,
-        )
-        return agent.with_config({"recursion_limit": 1000})
-
-    def _is_report_complete(self, result: dict | Any) -> tuple[bool, str]:
-        """
-        Check if the agent produced a complete report using tool calls or heuristics.
-        """
-        if isinstance(result, dict):
-            messages = result.get("messages", [])
-        else:
-            messages = getattr(result, "messages", [])
-        if not messages:
-            return False, "no_messages"
-
-        last_msg = messages[-1]
-        content = last_msg.content or ""
-
-        if len(content) < 1500:
-            return False, f"too_short ({len(content)} chars)"
-
-        if content.count("## ") < 2:
-            return False, "missing_section_headers"
-
-        source_headers = ("## Sources", "## References", "### Sources", "Reference List")
-        has_sources = any(h in content for h in source_headers)
-        if not has_sources:
-            return False, "missing_sources_section"
-
-        # Quick citation quality check — only reject if ALL citations are invalid
-        # (full verification with repair/renumbering happens in run() post-processing)
-        if self.source_registry_middleware.registry.all_sources():
-            from aiq_agent.common.citation_verification import _CITATION_LINE_RE
-            from aiq_agent.common.citation_verification import _REFERENCE_SECTION_RE
-            from aiq_agent.common.citation_verification import _URL_IN_LINE_RE
-            from aiq_agent.common.citation_verification import _is_knowledge_citation
-
-            ref_match = _REFERENCE_SECTION_RE.search(content)
-            if ref_match:
-                ref_section = content[ref_match.start() :]
-                has_any_valid = False
-                registry = self.source_registry_middleware.registry
-                for line_match in _CITATION_LINE_RE.finditer(ref_section):
-                    ref_text = line_match.group(2).strip()
-                    # Check URL citations
-                    url_match = _URL_IN_LINE_RE.search(ref_text)
-                    if url_match:
-                        url = url_match.group(0).rstrip(".,;)")
-                        if registry.has_url(url):
-                            has_any_valid = True
-                            break
-                        continue
-                    # Check knowledge-layer citation keys (lenient — passes registry for fuzzy match)
-                    is_kl, citation_key = _is_knowledge_citation(ref_text, registry)
-                    if is_kl and citation_key:
-                        has_any_valid = True
-                        break
-                if not has_any_valid:
-                    return False, "no_valid_citations"
-
-        giving_up_patterns = [
-            "please confirm",
-            "do you want me to",
-            "should i proceed",
-            "choose one",
-            "option (1)",
-            "option (2)",
-            "allow me to",
-            "i need your permission",
-            "i can't produce",
-            "i cannot produce",
-            "what i need from you",
-        ]
-        content_lower = content.lower()
-        for pattern in giving_up_patterns:
-            if pattern in content_lower:
-                return False, f"agent_gave_up (detected: '{pattern}')"
-
-        return True, "complete_via_heuristic"
+            state_schema=DeepResearchAgentState,
+        ).with_config({"recursion_limit": 1000})
 
     async def run(self, state: DeepResearchAgentState) -> DeepResearchAgentState:
         """
-        Execute deep research with multi-phase workflow.
+        Execute deep research with three-tier workflow.
+
+        Args:
+            state: DeepResearchAgentState with conversation messages.
+
+        Returns:
+            Updated state with final report in messages.
         """
 
         agent = self._build_orchestrator_agent(state)
@@ -348,113 +275,53 @@ class DeepResearcherAgent:
             query_content = messages[-1].content
             query = query_content if isinstance(query_content, str) else str(query_content)
             logger.info("=" * 80)
-            logger.info("Deep Research Subagent: Starting workflow")
+            logger.info("Deep Research Orchestrator: Starting workflow")
             logger.info("Query: %s...", query[:100])
+            logger.info("Tools: %s", [t.name for t in self.all_tools])
             logger.info("=" * 80)
 
-        result = None
-        last_error = None
+        _timeout = self.timeout if self.timeout > 0 else None
+        _config = {"callbacks": self.callbacks} if self.callbacks else None
+
         try:
-            max_retries = 5
-            for attempt in range(max_retries):
-                try:
-                    result = await agent.ainvoke(
-                        state,
-                        config={"callbacks": self.callbacks} if self.callbacks else None,
-                    )
-                    last_error = None
-                except Exception as ex:
-                    logger.error("Deep Research attempt %d failed: %s", attempt + 1, ex, exc_info=True)
-                    last_error = ex
-                    # If we hit the recursion limit or asyncio error, we might want to stop
-                    if "recursion" in str(ex).lower() or "reuse already awaited" in str(ex):
-                        raise ex
-                    continue
-
-                is_complete, reason = self._is_report_complete(result)
-                if is_complete:
-                    logger.info(f"Report completed successfully. Reason: {reason}")
-                    break
-
-                logger.warning("Report incomplete (attempt %d/%d): %s", attempt + 1, max_retries, reason)
-
-                feedback_msg = f"Your report is not yet complete. Reason: {reason}. "
-                if "missing_sources_section" in reason:
-                    feedback_msg += "You must include a '## Sources' section listing all URLs."
-                elif "too_short" in reason:
-                    feedback_msg += "The report is too short. Expand your analysis and add more detail."
-                elif "missing_section_headers" in reason:
-                    feedback_msg += "Use markdown headers (##) to structure the report."
-                elif "no_valid_citations" in reason:
-                    feedback_msg += (
-                        "None of your cited sources match actual tool results. "
-                        "Re-check your findings and cite only URLs returned by your search tools."
-                    )
-                    # Include the consolidated source list so the orchestrator
-                    # has an authoritative reference for the retry
-                    source_list = self.source_registry_middleware.get_source_list_text()
-                    if source_list:
-                        feedback_msg += "\n\n" + source_list
-
-                feedback_msg += " Please fix this immediately and call 'submit_final_report' when done."
-
-                if isinstance(result, dict):
-                    next_state = {**result}
-                    messages = result.get("messages", [])
-                else:
-                    next_state = result.model_dump() if hasattr(result, "model_dump") else dict(result)
-                    messages = getattr(result, "messages", next_state.get("messages", []))
-                next_state["messages"] = list(messages) + [HumanMessage(content=feedback_msg)]
-                result = await agent.ainvoke(
-                    next_state,
-                    config={"callbacks": self.callbacks} if self.callbacks else None,
-                )
-
-            if result is None and last_error is not None:
-                raise last_error
+            result = await asyncio.wait_for(
+                agent.ainvoke(state, config=_config),
+                timeout=_timeout,
+            )
 
             final_message = "Research failed to produce a report."
             if result and result.get("messages"):
                 final_content = result["messages"][-1].content
                 final_message = final_content if isinstance(final_content, str) else str(final_content)
 
-            # Post-process: verify citations against source registry
-            if self.source_registry_middleware.registry.all_sources():
-                verification = verify_citations(final_message, self.source_registry_middleware.registry)
-                if verification.removed_citations:
-                    logger.info(
-                        "Citation verification removed %d invalid citations: %s",
-                        len(verification.removed_citations),
-                        [c["reason"] for c in verification.removed_citations],
-                    )
-                final_message = verification.verified_report
-            else:
-                raise EmptySourceRegistryError("deep research")
-
-            # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
-            sanitization = sanitize_report(final_message)
-            final_message = sanitization.sanitized_report
-
-            # Re-emit the verified/sanitized report so the frontend overwrites
-            # the raw version that on_llm_end auto-emitted during ainvoke().
-            for cb in self.callbacks:
-                if hasattr(cb, "emit_final_report"):
-                    cb.emit_final_report(final_message)
-                    break
-
-            if result and result.get("messages"):
-                last_msg = result["messages"][-1]
-                if hasattr(last_msg, "model_copy"):
-                    result["messages"][-1] = last_msg.model_copy(update={"content": final_message})
-                else:
-                    result["messages"][-1] = type(last_msg)(content=final_message)
-
             logger.info("=" * 80)
-            logger.info("Deep Research Subagent: Workflow complete")
+            logger.info("Deep Research Orchestrator: Workflow complete")
             logger.info("Final report length: %d characters", len(final_message))
             logger.info("=" * 80)
             return DeepResearchAgentState.model_validate(result)
 
+        except TimeoutError:
+            logger.warning(
+                "Deep Research Orchestrator timed out after %ss for query: %s...",
+                self.timeout,
+                query[:100] if messages else "unknown",
+            )
+            # Return state with a timeout message so the eval still gets output
+            from langchain_core.messages import AIMessage as _AIMessage
+
+            timeout_msg = _AIMessage(
+                content=(
+                    f"# Research Report (Partial — Timed Out)\n\n"
+                    f"The research workflow exceeded the {self.timeout}s time budget "
+                    f"and could not produce a complete report. "
+                    f"The partial findings gathered before timeout were not recoverable.\n\n"
+                    f"## Query\n\n{query if messages else 'N/A'}\n\n"
+                    f"## Recommendation\n\n"
+                    f"Please retry with a narrower research scope or increased timeout."
+                )
+            )
+            return DeepResearchAgentState(messages=[*state.messages, timeout_msg])
+
         except Exception as ex:
-            logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
+            logger.error("Deep Research Orchestrator failed: %s", ex, exc_info=True)
             raise

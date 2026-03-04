@@ -1,0 +1,23 @@
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[tool.setuptools]
+packages = ["ensemble_web_search"]
+package-dir = {"ensemble_web_search" = "src"}
+
+
+[project]
+name = "ensemble-web-search"
+version = "1.0.0"
+description = "Ensemble web search tool combining You.com Deep Search and Tavily"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "nvidia-nat==1.4.0",
+    "aiohttp",
+    "pydantic>=2.0.0",
+    "langchain-tavily",
+]
+
+[project.entry-points."nat.plugins"]
+ensemble_web_search = "ensemble_web_search.register"

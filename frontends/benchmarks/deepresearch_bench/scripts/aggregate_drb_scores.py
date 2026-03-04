@@ -1,15 +1,22 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """
 DRB Score Aggregation Script
-
 Aggregates scores from multiple DRB evaluation runs, filtering out failed runs
 and calculating reliable metrics across successful runs.
-
-Based on the analysis notebook logic:
-- Filter out failed runs (score < 5 as proxy for failures)
-- Calculate per-question mean/std scores across successful runs
-- Extract fine-grained metrics (comprehensiveness, insight, instruction_following, readability)
-- Output final aggregated metrics
 """
 
 import argparse
@@ -71,36 +78,15 @@ def calculate_fine_grained_summary(df: pd.DataFrame) -> dict[str, float]:
     return summary.to_dict()
 
 
-def _expand_input_dirs(args: list[str]) -> list[Path]:
-    """Resolve and expand input dir args: resolve relative paths and expand glob patterns."""
-    expanded: list[Path] = []
-    for arg in args:
-        p = Path(arg)
-        if any(c in p.name for c in "*?["):
-            # Glob pattern: expand in parent directory
-            base = p.parent.resolve()
-            for d in sorted(base.glob(p.name)):
-                if d.is_dir():
-                    expanded.append(d.resolve())
-        else:
-            expanded.append(p.resolve())
-    return expanded
-
-
 def find_race_outputs(input_dir: Path) -> list[Path]:
-    """Find race_output.json files: run*/race_output.json and/or top-level race_output.json."""
+    """Find all race_output.json files in run subdirectories."""
     files = []
-    # Prefer run* subdirectories containing race_output.json
+    # Look for run* directories containing race_output.json
     for run_dir in sorted(input_dir.glob("run*")):
         if run_dir.is_dir():
             race_file = run_dir / "race_output.json"
             if race_file.exists():
                 files.append(race_file)
-    # If no run* layout, accept top-level race_output.json (e.g. results/hybrid_full/)
-    if not files:
-        top_level = input_dir / "race_output.json"
-        if top_level.exists():
-            files.append(top_level)
     return files
 
 
@@ -109,19 +95,14 @@ def main():
     parser.add_argument(
         "--input-dir",
         type=str,
-        nargs="+",
         required=True,
-        metavar="DIR",
-        help=(
-            "One or more directories (or globs like ./results/hybrid_full*); "
-            "each may have run*/race_output.json and/or top-level race_output.json"
-        ),
+        help="Directory containing run* subdirectories with race_output.json files",
     )
     parser.add_argument(
         "--output",
         type=str,
         required=True,
-        help="Output file for aggregated results (path can be relative)",
+        help="Output file for aggregated results",
     )
     parser.add_argument(
         "--score-threshold",
@@ -136,25 +117,16 @@ def main():
     )
     args = parser.parse_args()
 
-    # Resolve paths and expand glob patterns (e.g. ./results/hybrid_full*)
-    input_dirs = _expand_input_dirs(args.input_dir)
-    if not input_dirs:
-        patterns = ", ".join(args.input_dir)
-        print(f"Error: No directories matched pattern(s): {patterns}")
+    input_dir = Path(args.input_dir)
+    if not input_dir.exists():
+        print(f"Error: Input directory does not exist: {input_dir}")
         sys.exit(1)
-    for input_dir in input_dirs:
-        if not input_dir.exists():
-            print(f"Error: Input directory does not exist: {input_dir}")
-            sys.exit(1)
 
-    # Find all race_output.json files (run* subdirs or top-level) under each input dir
-    files: list[Path] = []
-    for input_dir in input_dirs:
-        files.extend(find_race_outputs(input_dir))
+    # Find all race_output.json files in run* subdirectories
+    files = find_race_outputs(input_dir)
 
     if not files:
-        dirs_msg = ", ".join(str(d) for d in input_dirs)
-        print(f"No race_output.json files found (run*/ or top-level) in: {dirs_msg}")
+        print(f"No race_output.json files found in {input_dir}/run*/")
         sys.exit(1)
 
     print(f"Found {len(files)} result file(s):")
@@ -244,13 +216,13 @@ def main():
         "source_files": [str(f) for f in files],
     }
 
-    # Save output (resolve so relative path works)
-    output_path = Path(args.output).resolve()
+    # Save output
+    output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(output_data, f, indent=2)
 
-    print(f"Results saved to: {output_path}")
+    print(f"Results saved to: {args.output}")
     print()
     print("=" * 60)
     print(f"FINAL SCORE: {overall_mean}")
