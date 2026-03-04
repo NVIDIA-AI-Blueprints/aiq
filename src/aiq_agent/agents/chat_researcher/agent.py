@@ -44,6 +44,7 @@ from aiq_agent.agents.clarifier.models import ClarifierResult
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
 
 from .models import ChatResearcherState
 from .models import ShallowResult
@@ -196,10 +197,32 @@ class ChatResearcherAgent:
                     available_documents=state.available_documents,
                 )
                 result = await self.shallow_research_fn(shallow_state)
+            except EmptySourceRegistryError:
+                logger.warning("Shallow research produced no verifiable sources")
+                err_msg = (
+                    "The search tools did not return any results for this question. "
+                    "This may be due to a temporary issue or the question may need to be rephrased. "
+                    "Please try again."
+                )
+                return {
+                    "messages": [AIMessage(content=err_msg)],
+                    "shallow_result": ShallowResult(
+                        answer=err_msg,
+                        confidence="high",
+                        escalate_to_deep=False,
+                    ),
+                }
             except Exception as e:
                 logger.exception("Error in shallow research: %s", e)
                 err_msg = "An error occurred while researching your question. Please try again."
-                return {"messages": [AIMessage(content=err_msg)]}
+                return {
+                    "messages": [AIMessage(content=err_msg)],
+                    "shallow_result": ShallowResult(
+                        answer=err_msg,
+                        confidence="high",
+                        escalate_to_deep=False,
+                    ),
+                }
 
             if not result.messages:
                 logger.error("Shallow research agent returned no messages")
@@ -217,10 +240,10 @@ class ChatResearcherAgent:
                 None,
             )
             if final_ai_message:
-                return {"messages": [final_ai_message]}
+                return {"messages": [final_ai_message], "shallow_result": None}
             if new_messages:
-                return {"messages": [new_messages[-1]]}
-            return {"messages": []}
+                return {"messages": [new_messages[-1]], "shallow_result": None}
+            return {"messages": [], "shallow_result": None}
 
         async def deep_research_node(state: ChatResearcherState) -> dict[str, Any]:
             trimmed_messages: list[BaseMessage] = trim_message_history(state.messages, self.max_history)
@@ -236,7 +259,16 @@ class ChatResearcherAgent:
                 clarifier_result=state.clarifier_result,
                 available_documents=state.available_documents,
             )
-            result = await self.deep_research_fn(deep_state)
+            try:
+                result = await self.deep_research_fn(deep_state)
+            except EmptySourceRegistryError:
+                logger.warning("Deep research produced no verifiable sources")
+                err_msg = (
+                    "The search tools did not return any results for this question. "
+                    "This may be due to a temporary issue or the question may need to be rephrased. "
+                    "Please try again."
+                )
+                return {"messages": [AIMessage(content=err_msg)]}
             if not result.messages:
                 error_message = "An error occurred during deep research."
                 logger.error(error_message)
@@ -255,6 +287,10 @@ class ChatResearcherAgent:
 
         def should_escalate(state: ChatResearcherState) -> str:
             if not self.enable_escalation:
+                return END
+
+            # Respect explicit escalation decision from shallow research
+            if state.shallow_result is not None and not state.shallow_result.escalate_to_deep:
                 return END
 
             messages = state.messages

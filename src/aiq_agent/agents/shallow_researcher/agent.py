@@ -39,6 +39,7 @@ from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
+from aiq_agent.common.citation_verification import get_session_registry
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
 
@@ -278,7 +279,17 @@ class ShallowResearcherAgent:
         Returns:
             Updated state with response in messages.
         """
-        self.source_registry.clear()
+        # Use session-scoped registry if available (conversation mode),
+        # otherwise use instance registry with clear (standalone mode).
+        session_registry = get_session_registry()
+        if session_registry is not None:
+            self.source_registry = session_registry
+            # Re-bind callbacks to use the session registry
+            for cb in self.callbacks:
+                if hasattr(cb, "set_source_registry"):
+                    cb.set_source_registry(self.source_registry)
+        else:
+            self.source_registry.clear()
 
         recursion_limit = (self.max_llm_turns * 2) + 10
         config = {"recursion_limit": recursion_limit}
@@ -296,11 +307,13 @@ class ShallowResearcherAgent:
                 # Step 1: verify citations against registry
                 if self.source_registry.all_sources():
                     verification = verify_citations(content, self.source_registry)
-                    if verification.removed_citations:
-                        logger.info(
-                            "Shallow researcher: removed %d invalid citations",
-                            len(verification.removed_citations),
-                        )
+                    logger.debug(
+                        "Shallow researcher: citation verification complete — "
+                        "%d valid, %d removed, %d sources in registry",
+                        len(verification.valid_citations),
+                        len(verification.removed_citations),
+                        len(self.source_registry.all_sources()),
+                    )
                     content = verification.verified_report
                 else:
                     raise EmptySourceRegistryError("shallow research")

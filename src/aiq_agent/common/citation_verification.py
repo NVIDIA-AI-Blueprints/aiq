@@ -29,8 +29,11 @@ Usage:
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
+import threading
+from collections import OrderedDict
 from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field
@@ -151,17 +154,27 @@ class SourceRegistry:
     def __init__(self) -> None:
         self._urls: dict[str, SourceEntry] = {}
         self._citation_keys: list[SourceEntry] = []
+        self._citation_key_files: set[str] = set()
         self._all: list[SourceEntry] = []
 
     def add(self, entry: SourceEntry) -> None:
-        """Register a source entry."""
-        self._all.append(entry)
+        """Register a source entry (deduplicated by normalized URL and citation key filename)."""
+        added = False
         if entry.url:
             normalized = _normalize_url(entry.url)
             if normalized not in self._urls:
                 self._urls[normalized] = entry
+                added = True
         if entry.citation_key:
-            self._citation_keys.append(entry)
+            filename, _ = _parse_citation_key(entry.citation_key)
+            key_lower = filename.lower()
+            if key_lower not in self._citation_key_files:
+                self._citation_key_files.add(key_lower)
+                self._citation_keys.append(entry)
+                if not added:
+                    added = True
+        if added:
+            self._all.append(entry)
 
     def has_url(self, url: str) -> bool:
         """Check if a URL (after normalization) is in the registry."""
@@ -227,7 +240,44 @@ class SourceRegistry:
         """Reset the registry."""
         self._urls.clear()
         self._citation_keys.clear()
+        self._citation_key_files.clear()
         self._all.clear()
+
+
+# ---------------------------------------------------------------------------
+# Session-scoped registry (ContextVar)
+# ---------------------------------------------------------------------------
+
+_session_source_registry: contextvars.ContextVar[SourceRegistry | None] = contextvars.ContextVar(
+    "_session_source_registry", default=None
+)
+
+_MAX_SESSION_REGISTRIES = 1000
+_session_registries: OrderedDict[str, SourceRegistry] = OrderedDict()
+_session_registries_lock = threading.Lock()
+
+
+def get_or_create_session_registry(session_id: str) -> SourceRegistry:
+    """Get or create a session-scoped SourceRegistry (LRU, max 1000 sessions)."""
+    with _session_registries_lock:
+        if session_id in _session_registries:
+            _session_registries.move_to_end(session_id)
+            return _session_registries[session_id]
+        registry = SourceRegistry()
+        _session_registries[session_id] = registry
+        while len(_session_registries) > _MAX_SESSION_REGISTRIES:
+            _session_registries.popitem(last=False)
+        return registry
+
+
+def set_session_registry(registry: SourceRegistry | None) -> contextvars.Token:
+    """Set the session-scoped SourceRegistry for the current async context."""
+    return _session_source_registry.set(registry)
+
+
+def get_session_registry() -> SourceRegistry | None:
+    """Get the session-scoped SourceRegistry for the current async context."""
+    return _session_source_registry.get()
 
 
 # ---------------------------------------------------------------------------

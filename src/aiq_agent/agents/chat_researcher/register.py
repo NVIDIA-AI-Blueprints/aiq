@@ -347,13 +347,23 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 logger.debug("No session context - cannot determine collection")
         except Exception as e:
             logger.warning("Could not fetch available documents: %s", e)
+        # Set session-scoped source registry for citation verification across turns
+        from aiq_agent.common.citation_verification import get_or_create_session_registry
+        from aiq_agent.common.citation_verification import set_session_registry
+
+        session_registry = get_or_create_session_registry(nat_context_conversation_id)
+        set_session_registry(session_registry)
+
         state = ChatResearcherState(
             messages=[HumanMessage(content=query_text)],
             user_info=user_info_dict,
             data_sources=data_sources,
             available_documents=available_documents,
         )
-        result = await agent.run(state, thread_id=nat_context_conversation_id)
+        try:
+            result = await agent.run(state, thread_id=nat_context_conversation_id)
+        finally:
+            set_session_registry(None)
 
         if isinstance(result, dict):
             messages = result.get("messages", [])

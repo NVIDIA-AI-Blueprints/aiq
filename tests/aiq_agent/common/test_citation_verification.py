@@ -166,9 +166,20 @@ class TestSourceRegistry:
     def test_deduplicates_urls(self, registry):
         registry.add(SourceEntry(url="https://example.com/page"))
         registry.add(SourceEntry(url="https://example.com/page"))
-        # all_sources has both but internal URL dict deduplicates
         assert registry.has_url("https://example.com/page")
-        assert len(registry.all_sources()) == 2  # all_sources keeps both
+        assert len(registry.all_sources()) == 1  # deduplicated by normalized URL
+
+    def test_deduplicates_citation_keys_by_filename(self, registry):
+        registry.add(SourceEntry(citation_key="report.pdf, p.5"))
+        registry.add(SourceEntry(citation_key="report.pdf, p.10"))
+        # Same file, different pages — deduplicated by filename
+        assert len(registry.all_sources()) == 1
+        assert registry.has_citation_key("report.pdf")
+
+    def test_different_citation_key_files_not_deduped(self, registry):
+        registry.add(SourceEntry(citation_key="report.pdf, p.5"))
+        registry.add(SourceEntry(citation_key="other.pdf, p.5"))
+        assert len(registry.all_sources()) == 2
 
     def test_resolve_url_exact_match(self, registry):
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
@@ -728,3 +739,68 @@ class TestEmptySourceRegistryError:
     def test_is_exception(self):
         with pytest.raises(EmptySourceRegistryError):
             raise EmptySourceRegistryError("test")
+
+
+# ---------------------------------------------------------------------------
+# Session Registry
+# ---------------------------------------------------------------------------
+
+
+class TestSessionRegistry:
+    """Tests for session-scoped registry management."""
+
+    def setup_method(self):
+        """Clear session registries before each test."""
+        from aiq_agent.common.citation_verification import _session_registries
+        from aiq_agent.common.citation_verification import _session_registries_lock
+
+        with _session_registries_lock:
+            _session_registries.clear()
+
+    def test_get_or_create_returns_same_instance(self):
+        from aiq_agent.common.citation_verification import get_or_create_session_registry
+
+        r1 = get_or_create_session_registry("session-1")
+        r2 = get_or_create_session_registry("session-1")
+        assert r1 is r2
+
+    def test_different_sessions_different_registries(self):
+        from aiq_agent.common.citation_verification import get_or_create_session_registry
+
+        r1 = get_or_create_session_registry("session-a")
+        r2 = get_or_create_session_registry("session-b")
+        assert r1 is not r2
+
+    def test_contextvar_set_and_get(self):
+        from aiq_agent.common.citation_verification import get_session_registry
+        from aiq_agent.common.citation_verification import set_session_registry
+
+        assert get_session_registry() is None
+        reg = SourceRegistry()
+        set_session_registry(reg)
+        assert get_session_registry() is reg
+        set_session_registry(None)
+        assert get_session_registry() is None
+
+    def test_lru_eviction(self):
+        from aiq_agent.common.citation_verification import _MAX_SESSION_REGISTRIES
+        from aiq_agent.common.citation_verification import _session_registries
+        from aiq_agent.common.citation_verification import _session_registries_lock
+        from aiq_agent.common.citation_verification import get_or_create_session_registry
+
+        # Fill to max + 10
+        for i in range(_MAX_SESSION_REGISTRIES + 10):
+            get_or_create_session_registry(f"evict-{i}")
+        with _session_registries_lock:
+            assert len(_session_registries) == _MAX_SESSION_REGISTRIES
+
+    def test_sources_persist_across_calls(self):
+        """Sources added to a session registry persist when retrieved again."""
+        from aiq_agent.common.citation_verification import get_or_create_session_registry
+
+        reg = get_or_create_session_registry("persist-test")
+        reg.add(SourceEntry(url="https://example.com/first"))
+
+        reg2 = get_or_create_session_registry("persist-test")
+        assert reg2.has_url("https://example.com/first")
+        assert len(reg2.all_sources()) == 1

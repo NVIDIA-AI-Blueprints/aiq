@@ -24,6 +24,7 @@ from aiq_agent.common import LLMRole
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import get_session_registry
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
 
@@ -342,6 +343,14 @@ class DeepResearcherAgent:
         """
 
         agent = self._build_orchestrator_agent(state)
+
+        # Use session-scoped registry if available (conversation mode)
+        session_registry = get_session_registry()
+        if session_registry is not None:
+            self.source_registry_middleware.registry = session_registry
+            for cb in self.callbacks:
+                if hasattr(cb, "set_source_registry"):
+                    cb.set_source_registry(session_registry)
 
         messages = state.messages
         if messages:
