@@ -493,7 +493,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     asyncio.create_task(_reap_ghost_jobs(job_store, db_url))
 
 
-GHOST_JOB_TIMEOUT_SECONDS = 300  # 5 minutes without events = ghost job
+GHOST_JOB_TIMEOUT_SECONDS = 180  # 3 minutes without events = ghost job
 GHOST_REAPER_INTERVAL_SECONDS = 60  # check every 60 seconds
 
 

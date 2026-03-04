@@ -23,7 +23,6 @@
 
 const http = require('http')
 const httpProxy = require('http-proxy')
-const { parse } = require('url')
 
 const dev = process.env.NODE_ENV !== 'production'
 const hostname = process.env.HOSTNAME || '0.0.0.0'
@@ -119,7 +118,7 @@ const startServer = async () => {
     req.socket.setKeepAlive?.(true, 15000)
     req.socket.setTimeout?.(0)
 
-    const parsedUrl = parse(req.url, true)
+    const parsedUrl = new URL(req.url, `http://${hostname}:${port}`)
 
     if (dev) {
       // Development: proxy everything to Next.js dev server
@@ -127,7 +126,10 @@ const startServer = async () => {
     } else {
       // Production: handle with Next.js directly
       try {
-        await nextHandle(req, res, parsedUrl)
+        await nextHandle(req, res, {
+          pathname: parsedUrl.pathname,
+          query: Object.fromEntries(parsedUrl.searchParams),
+        })
       } catch (err) {
         console.error('Error handling request:', err)
         res.statusCode = 500
@@ -141,7 +143,7 @@ const startServer = async () => {
     socket.setKeepAlive?.(true, 15000)
     socket.setTimeout?.(0)
 
-    const parsedUrl = parse(req.url, true)
+    const parsedUrl = new URL(req.url, `http://${hostname}:${port}`)
     const pathname = parsedUrl.pathname || '/'
 
     // Proxy /websocket to backend
