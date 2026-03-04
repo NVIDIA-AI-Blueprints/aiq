@@ -261,10 +261,19 @@ export const authOptions: AuthOptions = {
   },
 
   callbacks: {
+    async signIn({ user }: { user: User }) {
+      if (!isAuthRequired() || !isLdapGatingConfigured()) return true
+
+      const hasAccess = user.email ? await checkUserAccess(user.email) : false
+      if (!hasAccess) {
+        const group = encodeURIComponent(process.env.LDAP_GROUP || '')
+        return `/auth/signin?error=DLAccessDenied&dl_group=${group}`
+      }
+      return true
+    },
+
     async jwt({ token, account, user }: { token: JWT; account: Account | null; user?: User }) {
       if (account && user) {
-        const hasAccess = user.email ? await checkUserAccess(user.email) : true
-
         return {
           ...token,
           accessToken: account.access_token,
@@ -272,7 +281,7 @@ export const authOptions: AuthOptions = {
           refreshToken: account.refresh_token,
           expiresAt: account.expires_at,
           userId: user.id,
-          hasAccess,
+          hasAccess: true,
           dlGroup: process.env.LDAP_GROUP,
         }
       }
