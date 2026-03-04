@@ -376,6 +376,7 @@ class ChatResearcherAgent:
                 "user_info": state.user_info,
                 "data_sources": state.data_sources,
                 "available_documents": state.available_documents,
+                "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
             }
             messages = state.messages
 
