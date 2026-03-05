@@ -860,6 +860,18 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     if ref_section:
         cleaned_body, ref_section, _ = _renumber_citations(cleaned_body, ref_section)
 
+        # Sort reference lines by [N] number (LLM may have emitted them out of order)
+        ref_lines = ref_section.split("\n")
+        citation_lines = [(i, line) for i, line in enumerate(ref_lines) if _CITATION_LINE_RE.match(line)]
+        if citation_lines:
+            first_idx = citation_lines[0][0]
+            non_citation_before = ref_lines[:first_idx]
+            sorted_citations = sorted(
+                [line for _, line in citation_lines],
+                key=lambda line: int(_CITATION_LINE_RE.match(line).group(1)),
+            )
+            ref_section = "\n".join(non_citation_before + sorted_citations) + "\n"
+
     sanitized_report = cleaned_body + ref_section
 
     # --- Strip leaked tool-call XML fragments ---
