@@ -60,7 +60,7 @@ jobs:
       - name: Run remaining pre-commit hooks
         run: |
           . .venv/bin/activate
-          SKIP=ruff-check,ruff-format pre-commit run --all-files
+          SKIP=ruff-check,ruff-format,pytest,helm-lint pre-commit run --all-files
 
   test:
     name: Pytest and Coverage
