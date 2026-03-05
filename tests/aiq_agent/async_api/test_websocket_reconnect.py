@@ -211,9 +211,11 @@ async def test_handler_create_websocket_message_uses_registry_send(
 
 
 @pytest.mark.asyncio
-async def test_handler_create_websocket_message_falls_back_to_socket(
+async def test_handler_create_websocket_message_drops_for_disconnected_conversation(
     monkeypatch,
 ) -> None:
+    """When registry.send fails for a valid conversation_id the message is dropped
+    instead of falling back to the (likely dead) direct socket."""
     failing_registry = WebSocketSessionRegistry()
     dummy_socket = DummySocket()
     handler = ReconnectableWebSocketMessageHandler(
@@ -222,6 +224,64 @@ async def test_handler_create_websocket_message_falls_back_to_socket(
         step_adaptor=DummyStepAdaptor(),
     )
     handler._conversation_id = "conv-1"
+
+    async def fake_send(_conversation_id, _message):
+        return False
+
+    async def fake_resolve_message_type(_data_model):
+        return "response"
+
+    async def fake_get_schema(_message_type):
+        from nat.data_models.api_server import WebSocketSystemResponseTokenMessage
+
+        return WebSocketSystemResponseTokenMessage
+
+    async def fake_convert_data(_data_model):
+        return DummyMessage()
+
+    async def fake_create_response_message(**_kwargs):
+        return DummyMessage(content="sent")
+
+    monkeypatch.setattr(websocket_reconnect, "_registry", failing_registry)
+    monkeypatch.setattr(websocket_reconnect._registry, "send", fake_send)
+    monkeypatch.setattr(
+        handler._message_validator,
+        "resolve_message_type_by_data",
+        fake_resolve_message_type,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "get_message_schema_by_type",
+        fake_get_schema,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "convert_data_to_message_content",
+        fake_convert_data,
+    )
+    monkeypatch.setattr(
+        handler._message_validator,
+        "create_system_response_token_message",
+        fake_create_response_message,
+    )
+
+    await handler.create_websocket_message(data_model=DummyMessage())
+    assert dummy_socket.sent == []
+
+
+@pytest.mark.asyncio
+async def test_handler_create_websocket_message_falls_back_to_socket_without_conversation(
+    monkeypatch,
+) -> None:
+    """When conversation_id is None, fall back to the direct socket."""
+    failing_registry = WebSocketSessionRegistry()
+    dummy_socket = DummySocket()
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = None
 
     async def fake_send(_conversation_id, _message):
         return False
@@ -477,6 +537,78 @@ async def test_handler_run_processes_user_message(monkeypatch) -> None:
 
     assert processed == [user_message]
     assert sockets == ["conv-1"]
+
+
+@pytest.mark.asyncio
+async def test_handler_run_cancels_workflow_on_disconnect(monkeypatch) -> None:
+    """When the socket disconnects, in-flight workflow tasks are cancelled."""
+    dummy_socket = DummySocket()  # no messages → immediate WebSocketDisconnect
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=dummy_socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+    )
+    handler._conversation_id = "conv-1"
+
+    # Simulate a long-running workflow task (sleeps forever)
+    workflow_task = asyncio.create_task(asyncio.sleep(999))
+    handler._running_workflow_task = workflow_task
+
+    # Also register the task in the global registry
+    await websocket_reconnect._registry.set_workflow_task("conv-1", workflow_task)
+
+    await handler.run()
+
+    # Let the event loop process the cancellation
+    await asyncio.sleep(0)
+    assert workflow_task.cancelled()
+
+
+@pytest.mark.asyncio
+async def test_registry_set_workflow_task_cancels_stale() -> None:
+    """Registering a new workflow task cancels any previous stale one."""
+    registry = WebSocketSessionRegistry()
+
+    stale_task = asyncio.create_task(asyncio.sleep(999))
+    await registry.set_workflow_task("conv-1", stale_task)
+    await asyncio.sleep(0)
+    assert not stale_task.cancelled()
+
+    new_task = asyncio.create_task(asyncio.sleep(999))
+    await registry.set_workflow_task("conv-1", new_task)
+    await asyncio.sleep(0)  # let cancellation propagate to stale_task
+
+    assert stale_task.cancelled()
+    assert not new_task.cancelled()
+
+    new_task.cancel()
+    await asyncio.sleep(0)  # let cancellation propagate
+
+
+@pytest.mark.asyncio
+async def test_registry_cancel_workflow_task() -> None:
+    """cancel_workflow_task removes and cancels the tracked task."""
+    registry = WebSocketSessionRegistry()
+
+    task = asyncio.create_task(asyncio.sleep(999))
+    await registry.set_workflow_task("conv-1", task)
+    await asyncio.sleep(0)
+    assert not task.cancelled()
+
+    await registry.cancel_workflow_task("conv-1")
+    await asyncio.sleep(0)  # let cancellation propagate
+    assert task.cancelled()
+
+    # Idempotent: calling again is a no-op
+    await registry.cancel_workflow_task("conv-1")
+
+
+@pytest.mark.asyncio
+async def test_registry_cancel_workflow_task_noop_for_missing() -> None:
+    """cancel_workflow_task is safe for missing conversation IDs."""
+    registry = WebSocketSessionRegistry()
+    await registry.cancel_workflow_task(None)
+    await registry.cancel_workflow_task("nonexistent")
 
 
 def test_install_reconnectable_handler(monkeypatch) -> None:

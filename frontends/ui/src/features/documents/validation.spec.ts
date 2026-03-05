@@ -20,7 +20,6 @@ describe('validation', () => {
   describe('isValidFileExtension', () => {
     test('accepts valid extensions', () => {
       expect(isValidFileExtension('document.pdf')).toBe(true)
-      expect(isValidFileExtension('document.html')).toBe(true)
       expect(isValidFileExtension('document.docx')).toBe(true)
       expect(isValidFileExtension('document.txt')).toBe(true)
       expect(isValidFileExtension('document.md')).toBe(true)
@@ -30,6 +29,7 @@ describe('validation', () => {
       expect(isValidFileExtension('document.exe')).toBe(false)
       expect(isValidFileExtension('document.js')).toBe(false)
       expect(isValidFileExtension('document.png')).toBe(false)
+      expect(isValidFileExtension('document.html')).toBe(false)
     })
 
     test('rejects files without extension', () => {
@@ -45,7 +45,6 @@ describe('validation', () => {
   describe('isValidMimeType', () => {
     test('accepts valid mime types', () => {
       expect(isValidMimeType('application/pdf')).toBe(true)
-      expect(isValidMimeType('text/html')).toBe(true)
       expect(isValidMimeType('text/plain')).toBe(true)
       expect(isValidMimeType('text/markdown')).toBe(true)
     })
@@ -57,6 +56,7 @@ describe('validation', () => {
     test('rejects invalid mime types', () => {
       expect(isValidMimeType('image/png')).toBe(false)
       expect(isValidMimeType('application/javascript')).toBe(false)
+      expect(isValidMimeType('text/html')).toBe(false)
     })
   })
 

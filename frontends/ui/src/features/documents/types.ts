@@ -52,8 +52,8 @@ export interface TrackedFile {
   fileName: string
   /** File size in bytes */
   fileSize: number
-  /** Current status */
-  status: DocumentFileStatus
+  /** Current status (includes client-only 'deleting' transient state) */
+  status: DocumentFileStatus | 'deleting'
   /** Progress percentage (0-100) */
   progress: number
   /** Error message if failed */
@@ -97,6 +97,11 @@ export interface DocumentsState {
   isCreatingCollection: boolean
   isUploading: boolean
   isPolling: boolean
+  isLoadingFiles: boolean
+  /** Session ID for which files were last loaded from the server (null = never loaded) */
+  loadedSessionId: string | null
+  /** File IDs/names recently deleted — prevents stale server responses from resurrecting them */
+  recentlyDeletedIds: Set<string>
   /** Error message */
   error: string | null
   /** Tracks which banners have been shown for each job (NOT persisted) */
@@ -113,6 +118,8 @@ export interface DocumentsActions {
   addTrackedFile: (file: TrackedFile) => void
   updateTrackedFile: (id: string, updates: Partial<TrackedFile>) => void
   removeTrackedFile: (id: string) => void
+  /** Remove a file's IDs from recentlyDeletedIds (used to undo optimistic delete on failure) */
+  unmarkRecentlyDeleted: (file: TrackedFile) => void
   clearTrackedFiles: () => void
   /** Clear files for a specific collection (used when switching sessions) */
   clearFilesForCollection: (collectionName: string) => void
@@ -124,6 +131,7 @@ export interface DocumentsActions {
   setCreatingCollection: (loading: boolean) => void
   setUploading: (loading: boolean) => void
   setPolling: (polling: boolean) => void
+  setLoadingFiles: (loading: boolean) => void
 
   // Error handling
   setError: (error: string | null) => void

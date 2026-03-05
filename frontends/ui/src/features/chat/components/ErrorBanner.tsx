@@ -11,7 +11,7 @@
 'use client'
 
 import { type FC, useState } from 'react'
-import { Banner, Button, Flex, Text } from '@/adapters/ui'
+import { Banner, Flex, Text } from '@/adapters/ui'
 import { formatTime } from '@/shared/utils/format-time'
 import { ChevronDown, ChevronUp } from '@/adapters/ui/icons'
 import type { ErrorCode } from '../types'
@@ -48,52 +48,50 @@ export const ErrorBanner: FC<ErrorBannerProps> = ({
   // Use custom message if provided, otherwise use default from registry
   const displayMessage = message || errorMeta.defaultMessage
 
+  const subheading = (
+    <>
+      {displayMessage}
+      {details && (
+        <>
+          {' '}
+          <button
+            type="button"
+            onClick={() => setIsExpanded(!isExpanded)}
+            aria-expanded={isExpanded}
+            aria-controls="error-details"
+            className="inline-flex cursor-pointer items-center gap-1 border-none bg-transparent p-0 text-xs font-medium no-underline"
+          >
+            {isExpanded ? 'Hide details' : 'Show details'}
+            {isExpanded ? (
+              <ChevronUp className="h-3 w-3" aria-hidden="true" />
+            ) : (
+              <ChevronDown className="h-3 w-3" aria-hidden="true" />
+            )}
+          </button>
+          {isExpanded && (
+            <pre
+              id="error-details"
+              className="text-error bg-surface-raised mt-2 whitespace-pre-wrap rounded p-2 font-mono text-xs"
+            >
+              {details}
+            </pre>
+          )}
+        </>
+      )}
+    </>
+  )
+
   return (
     <Flex direction="col" gap="1" className="w-full">
-      <Flex direction="col" gap="2">
-        <Banner
-          status={errorMeta.status}
-          kind="header"
-          slotSubheading={displayMessage}
-          onClose={onDismiss}
-        >
-          {errorMeta.title}
-        </Banner>
+      <Banner
+        status={errorMeta.status}
+        kind="header"
+        slotSubheading={subheading}
+        onClose={onDismiss}
+      >
+        {errorMeta.title}
+      </Banner>
 
-        {/* Expandable Details */}
-        {details && (
-          <Flex direction="col" gap="1" className="pl-4">
-            <Button
-              kind="tertiary"
-              size="small"
-              onClick={() => setIsExpanded(!isExpanded)}
-              aria-expanded={isExpanded}
-              aria-controls="error-details"
-              title={isExpanded ? 'Hide details' : 'Show details'}
-            >
-              <Flex align="center" gap="1">
-                <Text kind="label/regular/xs">{isExpanded ? 'Hide details' : 'Show details'}</Text>
-                {isExpanded ? (
-                  <ChevronUp className="h-3 w-3" aria-hidden="true" />
-                ) : (
-                  <ChevronDown className="h-3 w-3" aria-hidden="true" />
-                )}
-              </Flex>
-            </Button>
-            {isExpanded && (
-              <Text
-                id="error-details"
-                kind="body/regular/sm"
-                className="text-error bg-surface-raised whitespace-pre-wrap rounded p-2 font-mono text-xs"
-              >
-                {details}
-              </Text>
-            )}
-          </Flex>
-        )}
-      </Flex>
-
-      {/* Timestamp outside banner, right-aligned */}
       {timestamp && (
         <Text kind="body/regular/xs" className="text-subtle mr-2 self-end">
           {formatTime(timestamp)}

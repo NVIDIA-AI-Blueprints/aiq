@@ -508,10 +508,14 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
             // citation_use = "Cited" sources (actually used in the report)
             callbacks.onCitationUpdate?.(artifactData.url || '', artifactData.content as string, true)
             break
-          case 'file':
-            // file artifacts are draft files written during research
-            callbacks.onFileUpdate?.(artifactData.url || 'draft', artifactData.content as string)
+          case 'file': {
+            // file artifacts are written during research — extract filename from path
+            const raw = artifactData as Record<string, unknown>
+            const filePath = (raw.file_path || raw.path || artifactData.url || 'unknown') as string
+            const fileName = filePath.split('/').pop() || filePath
+            callbacks.onFileUpdate?.(fileName, artifactData.content as string)
             break
+          }
           case 'output':
             callbacks.onOutputUpdate?.(artifactData.content as string, artifactData.output_category, artifactWorkflow)
             break

@@ -108,6 +108,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
     patchConversationMessage,
     // Actions for deep research banners
     addDeepResearchBanner,
+    setStreamLoaded,
   } = useChatStore()
 
   /**
@@ -177,7 +178,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string }>(),
         todos: null as TodoItem[] | null,
         citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-        files: [] as Array<{ filename: string; content: string }>,
+        files: new Map<string, string>(),
         reportContent: null as string | null,
       }
 
@@ -192,7 +193,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         const llmSteps = Array.from(buf.llmSteps.entries()).map(([id, s]) => ({ id, name: s.name, workflow: s.workflow, content: s.content, thinking: s.thinking, usage: s.usage, isComplete: true, timestamp: now }))
         const toolCalls = Array.from(buf.toolCalls.entries()).map(([id, t]) => ({ id, name: t.name, input: t.input, output: t.output, workflow: t.workflow, agentId: t.agentId, status: 'complete' as const, timestamp: now }))
         const citations = buf.citations.map((c, i) => ({ id: `citation-${i}`, url: c.url, content: c.content, isCited: c.isCited, timestamp: now }))
-        const files = buf.files.map((f, i) => ({ id: `file-${i}`, filename: f.filename, content: f.content, timestamp: now }))
+        const files = Array.from(buf.files.entries()).map(([filename, content], i) => ({ id: `file-${i}`, filename, content, timestamp: now }))
         const todos = buf.todos?.map((t, i) => ({ id: `todo-${i}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`, content: t.content, status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped' }))
 
         useChatStore.setState((state) => ({
@@ -283,6 +284,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               addDeepResearchBanner('success', jobId, ownerConvId || undefined, { totalTokens, toolCallCount })
               researchStartTimeRef.current = null
               stopAllDeepResearchSpinners(true)
+              setStreamLoaded(true)
               completeDeepResearch()
               setStreaming(false)
             } else if (status === 'failure' || status === 'interrupted') {
@@ -302,11 +304,12 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               addDeepResearchBanner(isUserCancelled ? 'cancelled' : 'failure', jobId, ownerConvId || undefined)
               researchStartTimeRef.current = null
               clientRef.current?.disconnect()
+              setStreamLoaded(true)
               completeDeepResearch()
               setStreaming(false)
               if (error && !isUserCancelled) {
                 const { addErrorCard } = useChatStore.getState()
-                addErrorCard('agent.deep_research_failed', error, undefined, true)
+                addErrorCard('agent.deep_research_failed', error)
               }
             }
           },
@@ -429,25 +432,22 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
           },
 
           onFileUpdate: (filename, content) => {
-            if (buf.active) { buf.files.push({ filename, content }); return }
+            if (buf.active) { buf.files.set(filename, content); return }
             if (!isOwnerActive()) return
             resetTimeout(); addDeepResearchFile({ filename, content })
           },
 
-          onOutputUpdate: (content, outputCategory, workflow) => {
+          onOutputUpdate: (content, outputCategory, _workflow) => {
             if (outputCategory === 'intermediate') return
             if (buf.active) {
               if (outputCategory === 'final_report' || !outputCategory) { buf.reportContent = content }
-              if (outputCategory === 'research_notes') {
-                const filename = workflow ? `${workflow} - ${outputCategory}` : 'Sub-Agent Notes'
-                buf.files.push({ filename, content })
-              }
+              // research_notes are already captured via write_file artifacts — skip to avoid duplicates
               return
             }
             if (!isOwnerActive()) return
             if (outputCategory === 'research_notes') {
-              const filename = workflow ? `${workflow} - ${outputCategory}` : 'Sub-Agent Notes'
-              addDeepResearchFile({ filename, content })
+              // Skip — research notes are already tracked via write_file tool artifacts
+              void 0
             } else if (outputCategory === 'final_report' || !outputCategory) {
               setReportContent(content)
               setCurrentStatus('writing')
@@ -467,7 +467,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               if (backendUp) return
               console.error('Deep research SSE failed (backend unreachable):', error)
               const { addErrorCard } = useChatStore.getState()
-              addErrorCard('agent.deep_research_failed', error.message, error.stack, true)
+              addErrorCard('agent.deep_research_failed', error.message, error.stack)
               stopAllDeepResearchSpinners()
             }
           },
@@ -488,7 +488,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
       addDeepResearchLLMStep, appendToDeepResearchLLMStep,
       completeDeepResearchLLMStep, addDeepResearchAgentWithId, completeDeepResearchAgent,
       addDeepResearchToolCall, completeDeepResearchToolCall, addDeepResearchFile,
-      patchConversationMessage, addDeepResearchBanner, setStreaming,
+      patchConversationMessage, addDeepResearchBanner, setStreaming, setStreamLoaded,
     ]
   )
 
@@ -556,13 +556,14 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         stopAllDeepResearchSpinners()
         clientRef.current?.disconnect()
         clientRef.current = null
+        setStreamLoaded(true)
         completeDeepResearch()
         setStreaming(false)
       }, CANCEL_FALLBACK_TIMEOUT_MS)
     } catch (error) {
       console.error('Failed to cancel job:', error)
     }
-  }, [deepResearchJobId, idToken, patchConversationMessage, addDeepResearchBanner, stopAllDeepResearchSpinners, completeDeepResearch, setStreaming])
+  }, [deepResearchJobId, idToken, patchConversationMessage, addDeepResearchBanner, stopAllDeepResearchSpinners, completeDeepResearch, setStreaming, setStreamLoaded])
 
   /**
    * Auto-connect when job ID changes

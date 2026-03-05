@@ -34,6 +34,7 @@ vi.mock('@/features/chat', () => ({
     const state = {
       currentConversation: { id: 'session-1', messages: mockConversationMessages },
       ensureSession: vi.fn(() => 'session-1'),
+      setRespondToInteractionFn: vi.fn(),
       deepResearchStatus: mockDeepResearchStatus,
       isDeepResearchStreaming: mockIsDeepResearchStreaming,
       deepResearchOwnerConversationId: mockDeepResearchOwnerConversationId,
@@ -60,7 +61,7 @@ vi.mock('@/shared/context', () => ({
   useAppConfig: () => ({
     authRequired: true,
     fileUpload: {
-      acceptedTypes: '.pdf,.md,.docx,.html,.txt',
+      acceptedTypes: '.pdf,.docx,.txt,.md',
       acceptedMimeTypes: ['application/pdf', 'text/plain', 'text/markdown'],
       maxTotalSizeMB: 100,
       maxFileSize: 100 * 1024 * 1024,

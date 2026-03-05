@@ -9,7 +9,7 @@
  * icons, and retry behavior across the application.
  */
 
-import type { ErrorCode, ErrorCategory } from '../types'
+import type { ErrorCode } from '../types'
 
 /** Metadata for each error type */
 export interface ErrorMeta {
@@ -19,10 +19,6 @@ export interface ErrorMeta {
   title: string
   /** Default message if none provided */
   defaultMessage: string
-  /** Error category for grouping */
-  category: ErrorCategory
-  /** Whether the error is retryable */
-  isRetryable: boolean
 }
 
 /**
@@ -37,54 +33,16 @@ export const ERROR_REGISTRY: Record<ErrorCode, ErrorMeta> = {
     status: 'error',
     title: 'Connection Lost',
     defaultMessage: 'Lost connection to the server. Please check your network.',
-    category: 'connection',
-    isRetryable: true,
   },
   'connection.failed': {
     status: 'error',
     title: 'Connection Failed',
     defaultMessage: 'Unable to connect to the server. Please check your network connection.',
-    category: 'connection',
-    isRetryable: true,
   },
   'connection.timeout': {
     status: 'warning',
     title: 'Request Timeout',
     defaultMessage: 'The request took too long to complete.',
-    category: 'connection',
-    isRetryable: true,
-  },
-
-  // ============================================================
-  // File Errors
-  // ============================================================
-  'file.upload_failed': {
-    status: 'error',
-    title: 'Upload Failed',
-    defaultMessage: 'Failed to upload the file. Please try again.',
-    category: 'file',
-    isRetryable: true,
-  },
-  'file.too_large': {
-    status: 'error',
-    title: 'File Too Large',
-    defaultMessage: 'The file exceeds the maximum allowed size.',
-    category: 'file',
-    isRetryable: false,
-  },
-  'file.invalid_type': {
-    status: 'error',
-    title: 'Invalid File Type',
-    defaultMessage: 'This file type is not supported.',
-    category: 'file',
-    isRetryable: false,
-  },
-  'file.ingest_failed': {
-    status: 'warning',
-    title: 'Processing Failed',
-    defaultMessage: 'Failed to process the file contents.',
-    category: 'file',
-    isRetryable: true,
   },
 
   // ============================================================
@@ -94,15 +52,11 @@ export const ERROR_REGISTRY: Record<ErrorCode, ErrorMeta> = {
     status: 'error',
     title: 'Session Expired',
     defaultMessage: 'Your session has expired. Please sign in again.',
-    category: 'auth',
-    isRetryable: false,
   },
   'auth.unauthorized': {
     status: 'error',
     title: 'Unauthorized',
     defaultMessage: 'You do not have permission to perform this action.',
-    category: 'auth',
-    isRetryable: false,
   },
 
   // ============================================================
@@ -112,29 +66,21 @@ export const ERROR_REGISTRY: Record<ErrorCode, ErrorMeta> = {
     status: 'error',
     title: 'Response Failed',
     defaultMessage: 'The assistant encountered an error generating a response.',
-    category: 'agent',
-    isRetryable: true,
   },
   'agent.response_interrupted': {
     status: 'warning',
     title: 'Response Interrupted',
     defaultMessage: 'Your previous request was not completed. Please resend your message.',
-    category: 'agent',
-    isRetryable: true,
-  },
-  'agent.tool_error': {
-    status: 'error',
-    title: 'Tool Error',
-    defaultMessage: 'A tool the assistant was using encountered an error.',
-    category: 'agent',
-    isRetryable: true,
   },
   'agent.deep_research_failed': {
     status: 'error',
     title: 'Deep Research Failed',
     defaultMessage: 'The deep research process encountered an error.',
-    category: 'agent',
-    isRetryable: true,
+  },
+  'agent.deep_research_load_failed': {
+    status: 'error',
+    title: 'Research Data Unavailable',
+    defaultMessage: 'Unable to load research data. The job may have expired or been deleted.',
   },
 
   // ============================================================
@@ -144,8 +90,6 @@ export const ERROR_REGISTRY: Record<ErrorCode, ErrorMeta> = {
     status: 'error',
     title: 'Something Went Wrong',
     defaultMessage: 'An unexpected error occurred. Please try again.',
-    category: 'system',
-    isRetryable: true,
   },
 }
 
@@ -155,12 +99,4 @@ export const ERROR_REGISTRY: Record<ErrorCode, ErrorMeta> = {
  */
 export const getErrorMeta = (code: ErrorCode): ErrorMeta => {
   return ERROR_REGISTRY[code] || ERROR_REGISTRY['system.unknown']
-}
-
-/**
- * Get the category from an error code.
- * Error codes use dot-notation: "category.specific_error"
- */
-export const getErrorCategory = (code: ErrorCode): ErrorCategory => {
-  return ERROR_REGISTRY[code]?.category || 'system'
 }

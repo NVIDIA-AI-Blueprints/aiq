@@ -33,6 +33,7 @@ const mockRespondToPrompt = vi.fn()
 const mockAddPlanMessage = vi.fn()
 const mockUpdatePlanMessageResponse = vi.fn()
 const mockAddDeepResearchBanner = vi.fn()
+const mockDismissConnectionErrors = vi.fn()
 
 // Mock store state
 let mockStoreState: {
@@ -94,6 +95,7 @@ vi.mock('../store', () => ({
       addPlanMessage: mockAddPlanMessage,
       updatePlanMessageResponse: mockUpdatePlanMessageResponse,
       addDeepResearchBanner: mockAddDeepResearchBanner,
+      dismissConnectionErrors: mockDismissConnectionErrors,
     })),
     {
       getState: vi.fn(() => ({
@@ -101,6 +103,7 @@ vi.mock('../store', () => ({
       })),
     }
   ),
+  selectHasConnectionError: () => false,
 }))
 
 // Mock auth hook
@@ -109,6 +112,11 @@ vi.mock('@/adapters/auth', () => ({
     user: { id: 'user-1', email: 'test@example.com' },
     idToken: 'mock-id-token',
   })),
+}))
+
+// Mock connection recovery hook (tested separately)
+vi.mock('./use-connection-recovery', () => ({
+  useConnectionRecovery: vi.fn(),
 }))
 
 // Mock backend health check
@@ -399,13 +407,16 @@ describe('useWebSocketChat', () => {
       result.current.sendMessage('Hello')
     })
 
-    expect(mockAddErrorCard).toHaveBeenCalledWith('system.unknown', 'No active conversation', undefined, false)
+    expect(mockAddErrorCard).toHaveBeenCalledWith('system.unknown', 'No active conversation')
     expect(mockSetStreaming).toHaveBeenCalledWith(false)
   })
 
   test('onResponse callback routes meta/shallow responses to chat', () => {
     // autoConnect: true creates the WebSocket client and captures callbacks
     renderWebSocketHook()
+
+    // Both intermediate steps and the isFinal guard require isStreaming=true.
+    mockStoreState.isStreaming = true
 
     // Simulate an intermediate step first to create a thinking step
     act(() => {
@@ -443,6 +454,9 @@ describe('useWebSocketChat', () => {
   test('onIntermediateStep callback creates thinking step if none exists', () => {
     renderWebSocketHook()
 
+    // Intermediate steps are dropped when not streaming (stale-guard).
+    mockStoreState.isStreaming = true
+
     // Simulate intermediate step with string content - no thinking step exists yet
     act(() => {
       capturedCallbacks.onIntermediateStep?.('Thinking...', 'in_progress')
@@ -460,6 +474,9 @@ describe('useWebSocketChat', () => {
 
   test('onIntermediateStep callback appends to existing thinking step', () => {
     renderWebSocketHook()
+
+    // Intermediate steps are dropped when not streaming (stale-guard).
+    mockStoreState.isStreaming = true
 
     // First call creates a step
     act(() => {
@@ -485,6 +502,9 @@ describe('useWebSocketChat', () => {
 
   test('onIntermediateStep callback handles object content with payload', () => {
     renderWebSocketHook()
+
+    // Intermediate steps are dropped when not streaming (stale-guard).
+    mockStoreState.isStreaming = true
 
     // Simulate intermediate step with object content - creates new step
     act(() => {
@@ -553,8 +573,7 @@ describe('useWebSocketChat', () => {
     expect(mockAddErrorCard).toHaveBeenCalledWith(
       'agent.response_failed',
       'Invalid message format',
-      'Missing required field',
-      true
+      'Missing required field'
     )
     expect(mockSetCurrentStatus).toHaveBeenCalledWith(null)
     expect(mockSetStreaming).toHaveBeenCalledWith(false)
@@ -601,8 +620,7 @@ describe('useWebSocketChat', () => {
       expect(mockAddErrorCard).toHaveBeenCalledWith(
         'connection.failed',
         'Unable to connect to the server. Please check your network connection.',
-        undefined,
-        true
+        undefined
       )
     })
   })

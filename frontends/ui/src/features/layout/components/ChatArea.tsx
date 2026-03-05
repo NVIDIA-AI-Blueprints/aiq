@@ -119,16 +119,26 @@ export const ChatArea: FC<ChatAreaProps> = ({ isAuthenticated = false, onSignIn 
 
             // Derive post-thinking state for user messages with thinking steps.
             // Priority: isThinking (active) > isWaiting (HITL) > isInterrupted > done
-            const shouldCheckPostState = isUserMessage && hasThinkingSteps && !isStreaming
+            const isCurrentlyStreaming = isStreaming && message.id === currentUserMessageId
+            const shouldCheckPostState = isUserMessage && hasThinkingSteps && !isCurrentlyStreaming
             const remaining = shouldCheckPostState ? displayableMessages.slice(index + 1) : []
+            const nextUserMessageIndex = remaining.findIndex(
+              (m) => m.messageType === 'user' || m.role === 'user'
+            )
+            // Only evaluate status within this message turn (until next user message).
+            // This prevents later turns from overriding interrupted/waiting state.
+            const turnMessages =
+              nextUserMessageIndex >= 0
+                ? remaining.slice(0, nextUserMessageIndex)
+                : remaining
 
             // Waiting: an unresponded HITL prompt follows this user message
-            const isWaiting = shouldCheckPostState && remaining.some((m) =>
+            const isWaiting = shouldCheckPostState && turnMessages.some((m) =>
               m.messageType === 'prompt' && !m.isPromptResponded
             )
 
             // Interrupted: no actual response AND not waiting for HITL
-            const hasResponse = remaining.some((m) =>
+            const hasResponse = turnMessages.some((m) =>
               m.messageType === 'assistant' || m.messageType === 'agent_response'
             )
             const isInterrupted = shouldCheckPostState && !isWaiting && !hasResponse
@@ -266,7 +276,7 @@ const MessageRenderer: FC<MessageRendererProps> = ({
       )
 
     case 'file_upload_status':
-      // File upload status banners (uploaded, pending_warning, deleted)
+      // File upload status banners (uploaded, pending_warning)
       if (!message.fileUploadStatusData) {
         return null
       }

@@ -17,6 +17,7 @@ import { LoadingSpinner } from '@/adapters/ui/icons'
 import { FileSourceCard } from './FileSourceCard'
 import { DeleteFileConfirmationModal } from './DeleteFileConfirmationModal'
 import { useFileUpload, useDocumentsStore, FileUploadZone, mapToDisplayStatus } from '@/features/documents'
+import { sessionHasKnownCollection } from '@/features/documents/persistence'
 import { useChatStore } from '@/features/chat/store'
 import { useLayoutStore } from '../store'
 import { useAppConfig } from '@/shared/context'
@@ -58,11 +59,24 @@ export const FileSourcesTab: FC<FileSourcesTabProps> = ({ onDeleteFile }) => {
   // isUploading/isPolling are global flags, so we must scope to the current session to avoid
   // showing a spinner for uploads belonging to a different session.
   const activeCollection = useDocumentsStore((state) => state.currentCollectionName)
+  const isLoadingFiles = useDocumentsStore((state) => state.isLoadingFiles)
+  const loadedSessionId = useDocumentsStore((state) => state.loadedSessionId)
   const isThisSessionProcessing =
     activeCollection === currentConversation?.id && (isUploading || isPolling)
 
-  // Show loading spinner when THIS session's files are being processed but haven't appeared yet
-  const isFileProcessing = isThisSessionProcessing && sessionFiles.length === 0
+  // Show spinner when:
+  // 1. Actively loading files from server, OR
+  // 2. Upload/polling in progress but files haven't appeared, OR
+  // 3. Session is known to have files but we haven't loaded for it yet
+  //    (covers the render-to-useEffect gap on session switch; stops once
+  //    loadFilesForSession completes — even if the result is empty)
+  const sessionId = currentConversation?.id
+  const hasLoadedForSession = loadedSessionId === sessionId
+  const sessionExpectsFiles = !!sessionId && !hasLoadedForSession && sessionHasKnownCollection(sessionId)
+  const isAwaitingFiles =
+    isLoadingFiles ||
+    (isThisSessionProcessing && sessionFiles.length === 0) ||
+    sessionExpectsFiles
 
   // Delete confirmation modal state
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false)
@@ -130,6 +144,19 @@ export const FileSourcesTab: FC<FileSourcesTabProps> = ({ onDeleteFile }) => {
   }, [])
 
   if (sessionFiles.length === 0) {
+    // When files are expected (loading, uploading, or session known to have files),
+    // always show the spinner — never flash "No Files" during transitions.
+    if (isAwaitingFiles) {
+      return (
+        <Flex direction="col" align="center" justify="center" gap="2" className="flex-1 py-8">
+          <LoadingSpinner size="medium" aria-label="Loading files" />
+          <Text kind="body/regular/sm" className="text-subtle">
+            Checking for files...
+          </Text>
+        </Flex>
+      )
+    }
+
     return (
       <Flex direction="col" gap="4" className="flex-1">
         {/* Show info banner when file upload is not available */}
@@ -139,18 +166,8 @@ export const FileSourcesTab: FC<FileSourcesTabProps> = ({ onDeleteFile }) => {
           </Banner>
         )}
 
-        {/* Show loading spinner when files are being processed but API hasn't updated yet */}
-        {isFileProcessing && (
-          <Flex direction="col" align="center" justify="center" gap="2" className="py-8">
-            <LoadingSpinner size="medium" aria-label="Processing files" />
-            <Text kind="body/regular/sm" className="text-subtle">
-              Checking for files...
-            </Text>
-          </Flex>
-        )}
-
-        {/* Show empty state message when file upload is available and not processing */}
-        {knowledgeLayerAvailable && !isFileProcessing && (
+        {/* Show empty state message when file upload is available */}
+        {knowledgeLayerAvailable && (
           <StatusMessage
             size="small"
             slotHeading="No Files"
@@ -165,8 +182,8 @@ export const FileSourcesTab: FC<FileSourcesTabProps> = ({ onDeleteFile }) => {
           </Banner>
         )}
 
-        {/* File Upload Zone for empty state - only show when knowledge layer is available and not processing */}
-        {knowledgeLayerAvailable && !isFileProcessing && (
+        {/* File Upload Zone */}
+        {knowledgeLayerAvailable && (
           <FileUploadZone
             sessionId={currentConversation?.id}
             acceptedTypes={fileUploadConfig.acceptedTypes}
@@ -207,8 +224,8 @@ export const FileSourcesTab: FC<FileSourcesTabProps> = ({ onDeleteFile }) => {
           kind="tertiary"
           size="small"
           onClick={handleAddFileClick}
-          disabled={isUploading || !knowledgeLayerAvailable}
-          title={knowledgeLayerAvailable ? "Add files" : "File upload not available"}
+          disabled={isLoadingFiles || !knowledgeLayerAvailable}
+          title={isLoadingFiles ? "Loading files..." : knowledgeLayerAvailable ? "Add files" : "File upload not available"}
         >
           + Add File
         </Button>

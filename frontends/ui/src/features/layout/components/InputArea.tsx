@@ -181,6 +181,13 @@ export const InputArea: FC<InputAreaProps> = ({
   const activeChat = connectionMode === 'websocket' ? wsChat : sseChat
   const { sendMessage, isLoading, respondToInteraction, pendingInteraction } = activeChat
 
+  // Register respondToInteraction in the store so sibling components (e.g. AgentPrompt) can use it
+  const setRespondToInteractionFn = useChatStore((state) => state.setRespondToInteractionFn)
+  useEffect(() => {
+    setRespondToInteractionFn(respondToInteraction)
+    return () => setRespondToInteractionFn(null)
+  }, [respondToInteraction, setRespondToInteractionFn])
+
   // Layout store for opening data sources panel
   const {
     rightPanel,
@@ -293,12 +300,12 @@ export const InputArea: FC<InputAreaProps> = ({
         return
       }
 
-      // uploadFiles validates internally and sets error if invalid
-      await uploadFiles(files, sessionId)
-
-      // Open the data sources panel and switch to files tab
+      // Open the files tab immediately so the user sees instant feedback
       setDataSourcesPanelTab('files')
       openRightPanel('data-sources')
+
+      // uploadFiles validates internally and sets error if invalid
+      await uploadFiles(files, sessionId)
     },
     [
       ensureSession,

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { render, screen } from '@/test-utils'
-import { describe, test, expect } from 'vitest'
+import { render, screen, fireEvent } from '@/test-utils'
+import { describe, test, expect, vi } from 'vitest'
 import { MarkdownRenderer } from './MarkdownRenderer'
 
 describe('MarkdownRenderer', () => {
@@ -51,6 +51,18 @@ describe('MarkdownRenderer', () => {
       render(<MarkdownRenderer content="#### Heading 4" />)
 
       expect(screen.getByRole('heading', { level: 4 })).toHaveTextContent('Heading 4')
+    })
+
+    test('headings have slugified id attributes for anchor navigation', () => {
+      render(
+        <MarkdownRenderer
+          content={`# Introduction\n\n## Key Findings\n\n### Next Steps`}
+        />
+      )
+
+      expect(screen.getByRole('heading', { level: 1 })).toHaveAttribute('id', 'introduction')
+      expect(screen.getByRole('heading', { level: 2 })).toHaveAttribute('id', 'key-findings')
+      expect(screen.getByRole('heading', { level: 3 })).toHaveAttribute('id', 'next-steps')
     })
   })
 
@@ -124,12 +136,41 @@ Paragraph 2.`} />)
       expect(link).toHaveAttribute('href', 'https://example.com')
     })
 
-    test('links open in new tab', () => {
+    test('external links open in new tab', () => {
       render(<MarkdownRenderer content="[Link](https://example.com)" />)
 
       const link = screen.getByRole('link', { name: 'Link' })
       expect(link).toHaveAttribute('target', '_blank')
       expect(link).toHaveAttribute('rel', 'noopener noreferrer')
+    })
+
+    test('anchor links do not open in new tab', () => {
+      render(<MarkdownRenderer content="[Introduction](#introduction)" />)
+
+      const link = screen.getByRole('link', { name: 'Introduction' })
+      expect(link).toHaveAttribute('href', '#introduction')
+      expect(link).not.toHaveAttribute('target', '_blank')
+    })
+
+    test('anchor links scroll to the target heading', () => {
+      const scrollMock = vi.fn()
+      vi.spyOn(document, 'getElementById').mockReturnValue({
+        scrollIntoView: scrollMock,
+      } as unknown as HTMLElement)
+
+      render(
+        <MarkdownRenderer
+          content={`[Go to section](#my-section)\n\n## My Section\n\nContent here.`}
+        />
+      )
+
+      const link = screen.getByRole('link', { name: 'Go to section' })
+      fireEvent.click(link)
+
+      expect(document.getElementById).toHaveBeenCalledWith('my-section')
+      expect(scrollMock).toHaveBeenCalledWith({ behavior: 'smooth', block: 'start' })
+
+      vi.restoreAllMocks()
     })
   })
 

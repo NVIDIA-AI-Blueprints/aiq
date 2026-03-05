@@ -6,9 +6,16 @@
  *
  * Manages localStorage capacity by tracking size and automatically cleaning up
  * old sessions when approaching quota limits (5MB in most browsers).
+ *
+ * Cleanup uses a tiered priority:
+ *  1. Sessions older than 1 day (any user) — stale sessions first
+ *  2. Oldest sessions of the current user
+ *
+ * Protected sessions (current + actively busy) are never deleted.
  */
 
 import type { Conversation } from '../types'
+import { hasActiveDeepResearchJob } from './session-activity'
 import { logStorageCapacity, logStorageWarning, logStorageCleanup } from './storage-logger'
 
 /** localStorage quota limit in MB (conservative estimate across browsers) */
@@ -23,6 +30,12 @@ const TARGET_SIZE_MB = 3.5
 /** Storage key for chat store */
 const STORAGE_KEY = 'aiq-chat-store'
 
+/** Sessions older than this are eligible for Tier 1 cleanup */
+const STALE_SESSION_MS = 24 * 60 * 60 * 1000 // 1 day
+
+/** Maximum sessions to delete in a single cleanup pass */
+const MAX_CLEANUP_DELETIONS = 10
+
 /**
  * Calculate the size of a specific localStorage key in bytes
  */
@@ -30,7 +43,6 @@ const getKeySize = (key: string): number => {
   try {
     const value = localStorage.getItem(key)
     if (!value) return 0
-    // UTF-16 uses 2 bytes per character
     return value.length * 2
   } catch {
     return 0
@@ -62,9 +74,6 @@ export const calculateChatStoreSize = (): number => {
   return getKeySize(STORAGE_KEY)
 }
 
-/**
- * Convert bytes to megabytes
- */
 const bytesToMB = (bytes: number): number => {
   return bytes / (1024 * 1024)
 }
@@ -97,9 +106,11 @@ const getChatStoreData = (): { conversations: Conversation[]; currentConversatio
     if (!stored) return null
 
     const parsed = JSON.parse(stored)
+    const currentConversationId: string | null = parsed.state?.currentConversation ?? null
+
     return {
       conversations: parsed.state?.conversations ?? [],
-      currentConversationId: parsed.state?.currentConversation?.id ?? null,
+      currentConversationId,
     }
   } catch {
     return null
@@ -118,12 +129,12 @@ const saveChatStoreData = (
     if (!stored) return
 
     const parsed = JSON.parse(stored)
-    const currentConversation = conversations.find((c) => c.id === currentConversationId) ?? null
 
+    // Store only the ID reference (matches prunePersistedChatState format)
     parsed.state = {
       ...parsed.state,
       conversations,
-      currentConversation,
+      currentConversation: currentConversationId,
     }
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed))
@@ -133,30 +144,61 @@ const saveChatStoreData = (
 }
 
 /**
- * Get the oldest session by updatedAt timestamp (excluding current session)
+ * Collect IDs of sessions that have active deep research jobs.
+ * These are protected from cleanup deletion.
  */
-export const getOldestSession = (
-  conversations: Conversation[],
-  currentConversationId: string | null
-): Conversation | null => {
-  const eligibleSessions = conversations.filter((c) => c.id !== currentConversationId)
+export const getBusySessionIds = (conversations: Conversation[]): Set<string> => {
+  const busy = new Set<string>()
+  for (const conv of conversations) {
+    if (hasActiveDeepResearchJob(conv.messages)) {
+      busy.add(conv.id)
+    }
+  }
+  return busy
+}
 
-  if (eligibleSessions.length === 0) return null
+const getUpdatedAtMs = (conv: Conversation): number =>
+  new Date(conv.updatedAt as unknown as string).getTime()
 
-  return eligibleSessions.reduce((oldest, current) => {
-    const oldestTime = new Date(oldest.updatedAt as unknown as string).getTime()
-    const currentTime = new Date(current.updatedAt as unknown as string).getTime()
-    return currentTime < oldestTime ? current : oldest
-  })
+/**
+ * Get the oldest eligible session from a candidate list.
+ */
+const pickOldest = (candidates: Conversation[]): Conversation | null => {
+  if (candidates.length === 0) return null
+  return candidates.reduce((oldest, current) =>
+    getUpdatedAtMs(current) < getUpdatedAtMs(oldest) ? current : oldest
+  )
 }
 
 /**
- * Clean up old sessions until storage is below target size
+ * Get the oldest session by updatedAt timestamp, excluding protected sessions.
+ * @deprecated Use cleanupOldSessions with tiered priority instead.
+ */
+export const getOldestSession = (
+  conversations: Conversation[],
+  protectedIds: Set<string>
+): Conversation | null => {
+  const eligible = conversations.filter((c) => !protectedIds.has(c.id))
+  return pickOldest(eligible)
+}
+
+/**
+ * Clean up old sessions using tiered priority until storage is below target.
  *
- * @param currentConversationId - ID of current session to protect from deletion
+ * Tier 1: Delete sessions older than 1 day from ANY user (stale first).
+ * Tier 2: Delete oldest sessions of the CURRENT user (regardless of age).
+ *
+ * Protected sessions (current session + sessions with active deep research
+ * jobs) are never deleted in either tier.
+ *
+ * @param currentConversationId - ID of current session to protect
+ * @param currentUserId - ID of current user (for Tier 2 scoping)
  * @returns Number of sessions deleted
  */
-export const cleanupOldSessions = (currentConversationId: string | null): number => {
+export const cleanupOldSessions = (
+  currentConversationId: string | null,
+  currentUserId: string | null
+): number => {
   const data = getChatStoreData()
   if (!data) return 0
 
@@ -164,25 +206,41 @@ export const cleanupOldSessions = (currentConversationId: string | null): number
   const deletedSessionIds: string[] = []
   const beforeMB = bytesToMB(calculateTotalStorageSize())
 
-  // Keep deleting oldest sessions until we're below target size
-  while (bytesToMB(calculateTotalStorageSize()) > TARGET_SIZE_MB) {
-    const oldestSession = getOldestSession(conversations, currentConversationId)
+  const protectedIds = getBusySessionIds(conversations)
+  if (currentConversationId) protectedIds.add(currentConversationId)
 
-    // No more sessions to delete (only current session remains or no sessions)
-    if (!oldestSession) break
+  const isAboveTarget = () => bytesToMB(calculateTotalStorageSize()) > TARGET_SIZE_MB
+  const hitLimit = () => deletedSessionIds.length >= MAX_CLEANUP_DELETIONS
 
-    // Delete the oldest session
-    conversations = conversations.filter((c) => c.id !== oldestSession.id)
-    deletedSessionIds.push(oldestSession.id)
-
-    // Save updated conversations back to localStorage
+  const deleteSession = (session: Conversation) => {
+    conversations = conversations.filter((c) => c.id !== session.id)
+    deletedSessionIds.push(session.id)
     saveChatStoreData(conversations, currentConversationId)
-
-    // Safety: don't delete more than 10 sessions in one cleanup
-    if (deletedSessionIds.length >= 10) break
   }
 
-  // Log cleanup if any sessions were deleted
+  // --- Tier 1: stale sessions (>1 day old) from any user, oldest first ---
+  const now = Date.now()
+  while (isAboveTarget() && !hitLimit()) {
+    const staleCandidates = conversations.filter(
+      (c) => !protectedIds.has(c.id) && (now - getUpdatedAtMs(c)) > STALE_SESSION_MS
+    )
+    const oldest = pickOldest(staleCandidates)
+    if (!oldest) break
+    deleteSession(oldest)
+  }
+
+  // --- Tier 2: oldest sessions of the current user ---
+  if (currentUserId) {
+    while (isAboveTarget() && !hitLimit()) {
+      const userCandidates = conversations.filter(
+        (c) => !protectedIds.has(c.id) && c.userId === currentUserId
+      )
+      const oldest = pickOldest(userCandidates)
+      if (!oldest) break
+      deleteSession(oldest)
+    }
+  }
+
   if (deletedSessionIds.length > 0) {
     const afterMB = bytesToMB(calculateTotalStorageSize())
     const freedMB = beforeMB - afterMB
@@ -193,33 +251,29 @@ export const cleanupOldSessions = (currentConversationId: string | null): number
 }
 
 /**
- * Ensure storage capacity before creating a new session.
- * Automatically cleans up old sessions if storage is approaching limits.
- *
- * Call this at the start of ensureSession() in the store.
+ * Ensure storage capacity by cleaning up old sessions if needed.
+ * Uses tiered cleanup priority (stale > current user oldest).
  *
  * @param currentConversationId - ID of current session to protect
+ * @param currentUserId - ID of current user for Tier 2 scoping
  */
-export const ensureStorageCapacity = (currentConversationId: string | null): void => {
+export const ensureStorageCapacity = (
+  currentConversationId: string | null,
+  currentUserId: string | null
+): void => {
   const health = checkStorageHealth()
 
-  // Log current capacity (dev-only)
   logStorageCapacity(health.currentMB, STORAGE_QUOTA_MB, health.percentUsed, health.isHealthy)
 
-  // If storage is healthy, nothing to do
   if (health.isHealthy) return
 
-  // Storage is over threshold - warn and cleanup
   const data = getChatStoreData()
   const sessionCount = data?.conversations.length ?? 0
 
   logStorageWarning(health.currentMB, WARNING_THRESHOLD_MB, sessionCount)
 
-  // Trigger cleanup
-  const deletedCount = cleanupOldSessions(currentConversationId)
+  const deletedCount = cleanupOldSessions(currentConversationId, currentUserId)
 
-  // If no sessions were deleted but storage is still over threshold,
-  // this means the current session itself is too large
   if (deletedCount === 0 && !checkStorageHealth().isHealthy) {
     console.warn(
       '[SessionsStore] ⚠️ Current session is too large - message pruning will occur on next save',

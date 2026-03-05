@@ -6,7 +6,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest'
-import { useChatStore } from './store'
+import { useChatStore, selectHasConnectionError } from './store'
 import type { Conversation, ChatMessage } from './types'
 
 describe('ChatStore - Session Busy Selectors', () => {
@@ -608,5 +608,252 @@ describe('ChatStore - Session Busy Selectors', () => {
       // Should return true because of ephemeral isStreaming, not because of message status
       expect(isSessionBusy('session-1')).toBe(true)
     })
+  })
+})
+
+describe('selectHasConnectionError', () => {
+  beforeEach(() => {
+    useChatStore.setState({
+      conversations: [],
+      currentConversation: null,
+    })
+  })
+
+  it('returns false when no conversation exists', () => {
+    expect(selectHasConnectionError(useChatStore.getState())).toBe(false)
+  })
+
+  it('returns false when conversation has no error messages', () => {
+    const conversation: Conversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      title: 'Test',
+      messages: [
+        { id: 'm1', role: 'user', content: 'Hello', timestamp: new Date(), messageType: 'user' } as ChatMessage,
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    useChatStore.setState({ currentConversation: conversation })
+    expect(selectHasConnectionError(useChatStore.getState())).toBe(false)
+  })
+
+  it('returns true when conversation has a connection.failed error', () => {
+    const conversation: Conversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      title: 'Test',
+      messages: [
+        {
+          id: 'err-1',
+          role: 'assistant',
+          content: 'Connection failed',
+          timestamp: new Date(),
+          messageType: 'error',
+          errorData: { errorCode: 'connection.failed' },
+        } as ChatMessage,
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    useChatStore.setState({ currentConversation: conversation })
+    expect(selectHasConnectionError(useChatStore.getState())).toBe(true)
+  })
+
+  it('returns true for any connection.* error code', () => {
+    const conversation: Conversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      title: 'Test',
+      messages: [
+        {
+          id: 'err-1',
+          role: 'assistant',
+          content: 'Connection lost',
+          timestamp: new Date(),
+          messageType: 'error',
+          errorData: { errorCode: 'connection.lost' },
+        } as ChatMessage,
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    useChatStore.setState({ currentConversation: conversation })
+    expect(selectHasConnectionError(useChatStore.getState())).toBe(true)
+  })
+
+  it('returns false for non-connection errors (agent, system)', () => {
+    const conversation: Conversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      title: 'Test',
+      messages: [
+        {
+          id: 'err-1',
+          role: 'assistant',
+          content: 'Agent error',
+          timestamp: new Date(),
+          messageType: 'error',
+          errorData: { errorCode: 'agent.response_failed' },
+        } as ChatMessage,
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    useChatStore.setState({ currentConversation: conversation })
+    expect(selectHasConnectionError(useChatStore.getState())).toBe(false)
+  })
+})
+
+describe('dismissConnectionErrors', () => {
+  beforeEach(() => {
+    useChatStore.setState({
+      conversations: [],
+      currentConversation: null,
+    })
+  })
+
+  it('removes all connection.* error messages from current conversation', () => {
+    const conversation: Conversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      title: 'Test',
+      messages: [
+        { id: 'm1', role: 'user', content: 'Hello', timestamp: new Date(), messageType: 'user' } as ChatMessage,
+        {
+          id: 'err-1',
+          role: 'assistant',
+          content: 'Connection failed',
+          timestamp: new Date(),
+          messageType: 'error',
+          errorData: { errorCode: 'connection.failed' },
+        } as ChatMessage,
+        {
+          id: 'err-2',
+          role: 'assistant',
+          content: 'Connection lost',
+          timestamp: new Date(),
+          messageType: 'error',
+          errorData: { errorCode: 'connection.lost' },
+        } as ChatMessage,
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    useChatStore.setState({
+      conversations: [conversation],
+      currentConversation: conversation,
+    })
+
+    useChatStore.getState().dismissConnectionErrors()
+
+    const state = useChatStore.getState()
+    expect(state.currentConversation!.messages).toHaveLength(1)
+    expect(state.currentConversation!.messages[0].id).toBe('m1')
+  })
+
+  it('does not remove non-connection error messages', () => {
+    const conversation: Conversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      title: 'Test',
+      messages: [
+        {
+          id: 'err-1',
+          role: 'assistant',
+          content: 'Connection failed',
+          timestamp: new Date(),
+          messageType: 'error',
+          errorData: { errorCode: 'connection.failed' },
+        } as ChatMessage,
+        {
+          id: 'err-2',
+          role: 'assistant',
+          content: 'Agent error',
+          timestamp: new Date(),
+          messageType: 'error',
+          errorData: { errorCode: 'agent.response_failed' },
+        } as ChatMessage,
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    useChatStore.setState({
+      conversations: [conversation],
+      currentConversation: conversation,
+    })
+
+    useChatStore.getState().dismissConnectionErrors()
+
+    const state = useChatStore.getState()
+    expect(state.currentConversation!.messages).toHaveLength(1)
+    expect(state.currentConversation!.messages[0].id).toBe('err-2')
+  })
+
+  it('does nothing when no connection errors exist', () => {
+    const conversation: Conversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      title: 'Test',
+      messages: [
+        { id: 'm1', role: 'user', content: 'Hello', timestamp: new Date(), messageType: 'user' } as ChatMessage,
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    useChatStore.setState({
+      conversations: [conversation],
+      currentConversation: conversation,
+    })
+
+    useChatStore.getState().dismissConnectionErrors()
+
+    const state = useChatStore.getState()
+    expect(state.currentConversation!.messages).toHaveLength(1)
+  })
+
+  it('does nothing when no current conversation exists', () => {
+    useChatStore.setState({ currentConversation: null })
+    // Should not throw
+    useChatStore.getState().dismissConnectionErrors()
+    expect(useChatStore.getState().currentConversation).toBeNull()
+  })
+
+  it('also updates the conversations list', () => {
+    const conversation: Conversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      title: 'Test',
+      messages: [
+        {
+          id: 'err-1',
+          role: 'assistant',
+          content: 'Connection failed',
+          timestamp: new Date(),
+          messageType: 'error',
+          errorData: { errorCode: 'connection.failed' },
+        } as ChatMessage,
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }
+
+    useChatStore.setState({
+      conversations: [conversation],
+      currentConversation: conversation,
+    })
+
+    useChatStore.getState().dismissConnectionErrors()
+
+    const state = useChatStore.getState()
+    const convInList = state.conversations.find((c) => c.id === 'conv-1')
+    expect(convInList!.messages).toHaveLength(0)
   })
 })

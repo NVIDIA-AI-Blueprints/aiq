@@ -294,7 +294,7 @@ describe('useChat', () => {
     })
 
     expect(mockCompleteThinkingStep).toHaveBeenCalledWith('step-1')
-    expect(mockAddErrorCard).toHaveBeenCalledWith('agent.response_failed', 'API error', undefined, true)
+    expect(mockAddErrorCard).toHaveBeenCalledWith('agent.response_failed', 'API error')
     expect(mockSetCurrentStatus).toHaveBeenCalledWith(null)
   })
 
@@ -308,7 +308,7 @@ describe('useChat', () => {
     })
 
     expect(mockCompleteThinkingStep).toHaveBeenCalled()
-    expect(mockAddErrorCard).toHaveBeenCalledWith('agent.response_failed', 'Network error', undefined, true)
+    expect(mockAddErrorCard).toHaveBeenCalledWith('agent.response_failed', 'Network error')
     expect(mockSetStreaming).toHaveBeenCalledWith(false)
   })
 
@@ -339,7 +339,7 @@ describe('useChat', () => {
       await result.current.sendMessage('Hello')
     })
 
-    expect(mockAddErrorCard).toHaveBeenCalledWith('agent.response_failed', 'No active conversation', undefined, true)
+    expect(mockAddErrorCard).toHaveBeenCalledWith('agent.response_failed', 'No active conversation')
   })
 
   test('createConversation calls store action', () => {

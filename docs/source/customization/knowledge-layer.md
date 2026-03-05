@@ -153,14 +153,20 @@ functions:
 
 #### Multimodal Extraction (LlamaIndex Only)
 
-By default, LlamaIndex ingests text only. To extract tables and images from PDFs, set environment variables before starting the server:
+By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding models. All options below can be overridden via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `AIQ_EXTRACT_TABLES` | `false` | Extract tables from PDFs as markdown using pdfplumber |
-| `AIQ_EXTRACT_IMAGES` | `false` | Extract embedded images from PDFs and caption them with a VLM |
-| `AIQ_EXTRACT_CHARTS` | `false` | Classify images as charts and extract structured data (chart type, axis labels, data points) |
-| `AIQ_VLM_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` | NVIDIA VLM model for image captioning |
+| **Embedding** | | |
+| `AIQ_EMBED_MODEL` | `nvidia/llama-nemotron-embed-vl-1b-v2` | NVIDIA embedding model |
+| `AIQ_EMBED_BASE_URL` | `https://integrate.api.nvidia.com/v1` | Embedding API base URL — override for local NIM |
+| **Extraction Flags** | | |
+| `AIQ_EXTRACT_TABLES` | `false` | Extract tables from PDFs as markdown |
+| `AIQ_EXTRACT_IMAGES` | `false` | Extract and caption images with VLM |
+| `AIQ_EXTRACT_CHARTS` | `false` | Classify images as charts and extract structured data |
+| **Vision Model** | | |
+| `AIQ_VLM_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` | VLM for image captioning |
+| `AIQ_VLM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | VLM API base URL — override for local NIM |
 
 When enabled, the startup log shows the active mode:
 
@@ -201,10 +207,22 @@ File type support depends on the configured backend:
 
 | Backend | Supported Types |
 |---------|----------------|
-| **LlamaIndex** | PDF, TXT, MD, DOCX, HTML, JSON, CSV |
+| **LlamaIndex** | PDF, DOCX, TXT, MD, HTML, JSON, CSV |
 | **Foundational RAG** | PDF, DOCX, PPTX, TXT, MD, HTML, images (PNG, JPG) |
 
 For custom backends, supported types are determined by the backend implementation.
+
+> **Note:** The backends support more types than the frontend currently allows. The frontend only supports uploading `.pdf,.docx,.txt,.md` (the common subset across both backends). Types like HTML, JSON, CSV, and images are supported by the backends but the frontend upload flow does not handle them yet -- this is a separate task.
+
+To change the accepted types in the frontend, set `FILE_UPLOAD_ACCEPTED_TYPES` for your deployment method:
+
+| Deployment | Where to set |
+|-----------|-------------|
+| **CLI** (`start_e2e.sh`) | `deploy/.env`: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md` |
+| **Docker Compose** | `deploy/.env` (passed to frontend container automatically) |
+| **Helm** | `deploy/helm/deployment-k8s/values.yaml` under the frontend app's `env` section |
+
+For Foundational RAG, add `.pptx` to include PowerPoint support: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md`
 
 ### Programmatic Usage
 

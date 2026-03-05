@@ -28,6 +28,8 @@ from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common.citation_verification import SourceEntry
+from aiq_agent.common.citation_verification import SourceRegistry
 
 
 @tool
@@ -38,6 +40,23 @@ def web_search_tool(query: str) -> str:
 
 class TestShallowResearcherAgent:
     """Tests for the ShallowResearcherAgent class."""
+
+    @pytest.fixture(autouse=True)
+    def _bypass_citation_pipeline(self):
+        """Bypass citation verification for tests that don't test it.
+
+        These tests mock the LLM to return AIMessage directly (no tool calls),
+        so no tools execute and the source registry stays empty. Patching the
+        pipeline avoids EmptySourceRegistryError in run().
+        """
+        with (
+            patch.object(SourceRegistry, "all_sources", return_value=[SourceEntry(url="https://example.com")]),
+            patch("aiq_agent.agents.shallow_researcher.agent.verify_citations") as mock_verify,
+            patch("aiq_agent.agents.shallow_researcher.agent.sanitize_report") as mock_sanitize,
+        ):
+            mock_verify.side_effect = lambda content, reg: MagicMock(verified_report=content, removed_citations=[])
+            mock_sanitize.side_effect = lambda content: MagicMock(sanitized_report=content)
+            yield
 
     @pytest.fixture
     def mock_llm(self):
@@ -368,3 +387,215 @@ class TestShallowResearcherAgent:
             "synthesize" in str(msg.content).lower() for msg in last_call_messages if hasattr(msg, "content")
         )
         assert synthesis_instruction_found
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — verify end-to-end source capture without bypasses
+# ---------------------------------------------------------------------------
+
+
+@tool
+def web_search_with_urls(query: str) -> str:
+    """Search the web and return results with URLs."""
+    return (
+        '<Document href="https://docs.nvidia.com/cuda/">\n'
+        "<title>\nCUDA Toolkit Documentation\n</title>\n"
+        "CUDA is a parallel computing platform.\n"
+        "</Document>"
+    )
+
+
+class TestShallowResearcherSourceCaptureIntegration:
+    """Integration tests verifying source capture through the full pipeline.
+
+    These tests do NOT bypass the citation pipeline — they verify that
+    tool_node_with_source_capture registers sources from real tool execution,
+    and that verify_citations + sanitize_report run on the final output.
+    """
+
+    @pytest.fixture
+    def mock_llm(self):
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        return llm
+
+    @pytest.fixture
+    def mock_llm_provider(self, mock_llm):
+        provider = MagicMock(spec=LLMProvider)
+        provider.get = MagicMock(return_value=mock_llm)
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_source_registry_populated_from_tool_call(self, mock_llm_provider, mock_llm):
+        """Tool execution populates the source registry with extracted URLs."""
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
+        )
+        final_response = AIMessage(
+            content=(
+                "CUDA is a parallel computing platform.\n\n"
+                "## Sources\n"
+                "[1] CUDA Toolkit Documentation: https://docs.nvidia.com/cuda/"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_with_urls],
+        )
+
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
+        result = await agent.run(state)
+
+        # Source registry should have the URL from tool output
+        sources = agent.source_registry.all_sources()
+        assert len(sources) >= 1
+        assert any(s.url == "https://docs.nvidia.com/cuda/" for s in sources)
+
+        # Final output should exist and have been processed
+        assert result.messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_invalid_citation_removed_end_to_end(self, mock_llm_provider, mock_llm):
+        """Citations not backed by registry sources are removed from output."""
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
+        )
+        # LLM fabricates a citation [2] not in the registry
+        final_response = AIMessage(
+            content=(
+                "CUDA is great [1]. Also see this [2].\n\n"
+                "## Sources\n"
+                "[1] CUDA Docs: https://docs.nvidia.com/cuda/\n"
+                "[2] Fake Source: https://totally-fabricated.example.com/fake"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_with_urls],
+        )
+
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
+        result = await agent.run(state)
+
+        output = result.messages[-1].content
+        # The fabricated URL should have been removed by verify_citations
+        assert "totally-fabricated.example.com" not in output
+        # The valid citation should survive
+        assert "docs.nvidia.com/cuda" in output
+
+
+# ---------------------------------------------------------------------------
+# Session registry integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestShallowResearcherSessionRegistry:
+    """Tests verifying session-scoped SourceRegistry integration.
+
+    These tests do NOT use the _bypass_citation_pipeline fixture — they verify
+    the actual ContextVar-based session registry behavior.
+    """
+
+    @pytest.fixture
+    def mock_llm(self):
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        return llm
+
+    @pytest.fixture
+    def mock_llm_provider(self, mock_llm):
+        provider = MagicMock(spec=LLMProvider)
+        provider.get = MagicMock(return_value=mock_llm)
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_run_uses_session_registry_when_set(self, mock_llm_provider, mock_llm):
+        """When session registry is set via ContextVar, run() uses it and doesn't raise."""
+        from aiq_agent.common.citation_verification import set_session_registry
+
+        # Pre-populate a session registry with a source from a "prior turn"
+        session_reg = SourceRegistry()
+        session_reg.add(SourceEntry(url="https://prior-turn.example.com/article"))
+
+        # LLM answers from memory (no tool calls) citing the prior-turn URL
+        agent_response = AIMessage(
+            content=(
+                "Answer based on prior context [1].\n\n"
+                "## Sources\n"
+                "[1] Prior Article: https://prior-turn.example.com/article"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=agent_response)
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+        )
+
+        set_session_registry(session_reg)
+        try:
+            state = ShallowResearchAgentState(messages=[HumanMessage(content="Follow-up question")])
+            result = await agent.run(state)
+            # Should NOT raise EmptySourceRegistryError because session registry has sources
+            assert result is not None
+            assert "prior-turn.example.com/article" in result.messages[-1].content
+        finally:
+            set_session_registry(None)
+
+    @pytest.mark.asyncio
+    async def test_run_clears_registry_in_standalone_mode(self, mock_llm_provider, mock_llm):
+        """Without session registry ContextVar, run() clears instance registry and raises."""
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_agent.common.citation_verification import set_session_registry
+
+        set_session_registry(None)  # Ensure no session registry
+
+        # LLM answers without calling tools
+        agent_response = AIMessage(content="Answer without sources")
+        mock_llm.ainvoke = AsyncMock(return_value=agent_response)
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+        )
+        # Pre-populate the instance registry (simulating stale data)
+        agent.source_registry.add(SourceEntry(url="https://stale.example.com"))
+
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="Test")])
+
+        with pytest.raises(EmptySourceRegistryError):
+            await agent.run(state)
+
+    @pytest.mark.asyncio
+    async def test_session_registry_does_not_mutate_shared_instance(self, mock_llm_provider, mock_llm):
+        """Setting a session registry must NOT overwrite self.source_registry on the agent."""
+        from aiq_agent.common.citation_verification import set_session_registry
+
+        session_reg = SourceRegistry()
+        session_reg.add(SourceEntry(url="https://session.example.com/doc"))
+
+        agent_response = AIMessage(content=("Answer [1].\n\n## Sources\n[1] Doc: https://session.example.com/doc"))
+        mock_llm.ainvoke = AsyncMock(return_value=agent_response)
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+        )
+        original_registry = agent.source_registry
+
+        set_session_registry(session_reg)
+        try:
+            state = ShallowResearchAgentState(messages=[HumanMessage(content="Q")])
+            await agent.run(state)
+            # The instance attribute must remain unchanged
+            assert agent.source_registry is original_registry
+        finally:
+            set_session_registry(None)

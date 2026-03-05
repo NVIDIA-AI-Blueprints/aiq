@@ -17,6 +17,7 @@ import { createDocumentsClient } from '@/adapters/api'
 import { useDocumentsStore } from '../store'
 import { useAuth } from '@/adapters/auth'
 import { useAppConfig } from '@/shared/context'
+import { useLayoutStore } from '@/features/layout/store'
 import type { TrackedFile } from '../types'
 import { validateFileUpload, type ValidationContext } from '../validation'
 import { UploadOrchestrator } from '../orchestrator'
@@ -49,7 +50,7 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
   const { idToken } = useAuth()
   const { fileUpload: fileUploadConfig } = useAppConfig()
   const clientRef = useRef(createDocumentsClient({ authToken: idToken }))
-  const previousSessionIdRef = useRef<string | undefined>(sessionId)
+  const previousSessionIdRef = useRef<string | undefined>(undefined)
 
   const {
     trackedFiles,
@@ -61,6 +62,7 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
     addTrackedFile,
     updateTrackedFile,
     removeTrackedFile,
+    unmarkRecentlyDeleted,
     setUploading,
     setError,
     clearError,
@@ -97,6 +99,18 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
       previousSessionIdRef.current = sessionId
     }
   }, [sessionId])
+
+  // Retry file loading when knowledgeLayerAvailable becomes true.
+  // On browser refresh, the initial loadFilesForSession call may fire before
+  // fetchDataSources completes, causing it to skip because
+  // knowledgeLayerAvailable is still false. This effect ensures we retry
+  // once the knowledge layer is confirmed available.
+  const knowledgeLayerAvailable = useLayoutStore((state) => state.knowledgeLayerAvailable)
+  useEffect(() => {
+    if (knowledgeLayerAvailable && sessionId) {
+      UploadOrchestrator.loadFilesForSession(sessionId)
+    }
+  }, [knowledgeLayerAvailable, sessionId])
 
   // Note: We intentionally don't cleanup the orchestrator on unmount.
   // The orchestrator is a singleton that manages polling across component lifecycles.
@@ -162,32 +176,34 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
 
       const trackedFileMap: Map<string, TrackedFile> = new Map()
 
+      // Add tracked files to the store immediately so uploading cards appear
+      // in the UI before any network calls (collection creation, upload POST)
+      for (const file of validFiles) {
+        const trackedFile: TrackedFile = {
+          id: uuidv4(),
+          file,
+          fileName: file.name,
+          fileSize: file.size,
+          status: 'uploading',
+          progress: 0,
+          collectionName,
+          uploadedAt: new Date().toISOString(),
+        }
+        addTrackedFile(trackedFile)
+        trackedFileMap.set(file.name, trackedFile)
+      }
+
+      // Show informational banner in chat as soon as upload starts
+      const chatStore = useChatStore.getState()
+      chatStore.addFileUploadStatusCard(
+        'uploaded',
+        validFiles.length,
+        `upload-${Date.now()}`,
+        collectionName
+      )
+
       try {
         await ensureCollectionExists(collectionName)
-
-        for (const file of validFiles) {
-          const trackedFile: TrackedFile = {
-            id: uuidv4(),
-            file,
-            fileName: file.name,
-            fileSize: file.size,
-            status: 'uploading',
-            progress: 0,
-            collectionName,
-            uploadedAt: new Date().toISOString(),
-          }
-          addTrackedFile(trackedFile)
-          trackedFileMap.set(file.name, trackedFile)
-        }
-
-        // Show informational banner in chat as soon as upload starts
-        const chatStore = useChatStore.getState()
-        chatStore.addFileUploadStatusCard(
-          'uploaded',
-          validFiles.length,
-          `upload-${Date.now()}`,
-          collectionName
-        )
 
         const { job_id, file_ids } = await clientRef.current.uploadFiles(collectionName, validFiles)
 
@@ -252,8 +268,6 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
     setUploading(false)
   }, [setUploading])
 
-  const addFileUploadStatusCard = useChatStore((state) => state.addFileUploadStatusCard)
-
   const deleteFile = useCallback(
     async (fileId: string) => {
       const file = trackedFiles.find((f) => f.id === fileId)
@@ -263,19 +277,26 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
       }
 
       const collectionName = file.collectionName
+      const deleteId = file.serverFileId || file.fileName
+
+      // Optimistic delete: remove from UI immediately, call API in background.
+      // This prevents the file from reappearing if a concurrent server reload
+      // returns stale data before the backend processes the delete.
+      removeTrackedFile(fileId)
 
       try {
-        await clientRef.current.deleteFiles(collectionName, [file.fileName])
-        removeTrackedFile(fileId)
-
-        // File deletion is handled silently - no status message needed
-        // (removed 'deleted' status type from FileUploadStatusType)
+        await clientRef.current.deleteFiles(collectionName, [deleteId])
       } catch (err) {
+        // Restore the file on failure so the user can retry.
+        // Also undo the recentlyDeletedIds entry so the file isn't
+        // filtered out on the next server sync.
+        addTrackedFile(file)
+        unmarkRecentlyDeleted(file)
         const message = err instanceof Error ? err.message : 'Delete failed'
         setError(message)
       }
     },
-    [trackedFiles, removeTrackedFile, setError, addFileUploadStatusCard]
+    [trackedFiles, addTrackedFile, removeTrackedFile, unmarkRecentlyDeleted, setError]
   )
 
   const retryFile = useCallback(

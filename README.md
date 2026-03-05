@@ -42,6 +42,7 @@ limitations under the License.
   - [Web UI](#web-ui)
   - [Async Deep Research Jobs](#async-deep-research-jobs)
   - [Benchmarks](#benchmarks)
+  - [Jupyter Notebooks](#jupyter-notebooks)
 - [Evaluating the Workflow](#evaluating-the-workflow)
   - [Available Benchmarks](#available-benchmarks)
   - [Running Evaluations](#running-evaluations)
@@ -75,7 +76,7 @@ The following are used by this project:
 - [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
 - [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
 - [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NIM of nvidia/llama-3_2-nv-embedqa-1b-v2](https://build.nvidia.com/nvidia/llama-3_2-nv-embedqa-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
+- [NIM of nvidia/llama-nemotron-embed-vl-1b-v2](https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
 - [NIM of nvidia/nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
 - [Tavily Search API](https://tavily.com/) for web search
 - [Serper Search API](https://serper.dev/) for paper search (Google Scholar)
@@ -116,7 +117,7 @@ Generalized minimum requirements.
 - Typical server for AI-Q workflow (no GPU required)
 - [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
 - [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NIM of nvidia/llama-3_2-nv-embedqa-1b-v2](https://build.nvidia.com/nvidia/llama-3_2-nv-embedqa-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
+- [NIM of nvidia/llama-nemotron-embed-vl-1b-v2](https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
 - [NIM of nvidia/nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
 - [NVIDIA RAG Blueprint Requirements](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/support-matrix.md) (if used)
 
@@ -240,7 +241,7 @@ source .venv/bin/activate
 ./scripts/start_cli.sh --verbose
 
 # Or run directly with the NeMo Agent Toolkit CLI
-nat run --config_file configs/config_cli_default.yml
+nat run --config_file configs/config_cli_default.yml --input "How do I install CUDA?"
 ```
 
 The CLI frontend source is in `frontends/cli/`.
@@ -283,6 +284,16 @@ Endpoints, SSE streaming, and debug console: refer to [frontends/aiq_api/README.
 ### Benchmarks
 
 To run agents in evaluation mode, refer to the [Evaluating the Workflow](#evaluating-the-workflow) section.
+
+### Jupyter Notebooks
+
+The `docs/notebooks/` directory contains a three-part series that walks through the blueprint from first run to full customization. Run them in order:
+
+| # | Notebook | What it covers | Prerequisites |
+|---|----------|----------------|---------------|
+| 0 | [Getting Started with AI-Q](docs/notebooks/0_Getting_Started_with_AIQ.ipynb) | Full blueprint overview — environment setup, orchestrated workflow (intent routing, shallow and deep research), and Docker Compose deployment | `NVIDIA_API_KEY`; optionally `TAVILY_API_KEY`, `SERPER_API_KEY` |
+| 1 | [Deep Researcher — Web Search](docs/notebooks/1_Deep_Researcher_Web_Search.ipynb) | Deep researcher in depth — Python API, `nat run`, and end-to-end evaluation against the DeepResearch Bench with `nat eval` | Notebook 0 completed; `NVIDIA_API_KEY`, `TAVILY_API_KEY`, `SERPER_API_KEY`; OpenAI or Gemini key for the judge model |
+| 2 | [Deep Researcher — Customization](docs/notebooks/2_Deep_Researcher_Customization.ipynb) | Extending the deep researcher — adding paper search, assigning different LLMs per agent role, editing prompts, and enabling the knowledge layer | Notebooks 0 and 1 completed; `NVIDIA_API_KEY`, `TAVILY_API_KEY`, `SERPER_API_KEY` |
 
 
 ## Evaluating the Workflow

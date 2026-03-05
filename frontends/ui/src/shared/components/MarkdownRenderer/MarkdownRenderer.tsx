@@ -3,12 +3,31 @@
 
 'use client'
 
-import { type FC, memo, useMemo } from 'react'
+import { type FC, type ReactNode, memo, useMemo } from 'react'
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Text, CodeSnippet, Anchor } from '@/adapters/ui'
 import type { MarkdownRendererProps } from './types'
 import { getLanguageFromClassName } from './utils'
+
+function getTextFromChildren(node: ReactNode): string {
+  if (typeof node === 'string') return node
+  if (typeof node === 'number') return String(node)
+  if (Array.isArray(node)) return node.map(getTextFromChildren).join('')
+  if (node && typeof node === 'object' && 'props' in node) {
+    return getTextFromChildren((node as React.ReactElement).props.children)
+  }
+  return ''
+}
+
+function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, '')
+    .replace(/[\s_]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+}
 
 /**
  * MarkdownRenderer - Renders markdown content with KUI styling
@@ -61,27 +80,39 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
         // Skip default pre rendering since CodeSnippet handles it
         pre: ({ children }) => <>{children}</>,
 
-        // Headings
-        h1: ({ children }) => (
-          <Text asChild kind="title/xl" className="text-primary mb-3 mt-6 block">
-            <h1>{children}</h1>
-          </Text>
-        ),
-        h2: ({ children }) => (
-          <Text asChild kind="title/lg" className="text-primary mb-2 mt-5 block">
-            <h2>{children}</h2>
-          </Text>
-        ),
-        h3: ({ children }) => (
-          <Text asChild kind="title/md" className="text-primary mb-2 mt-4 block">
-            <h3>{children}</h3>
-          </Text>
-        ),
-        h4: ({ children }) => (
-          <Text asChild kind="title/sm" className="text-primary mb-1 mt-3 block">
-            <h4>{children}</h4>
-          </Text>
-        ),
+        // Headings — include id for in-page anchor navigation
+        h1: ({ children }) => {
+          const id = slugify(getTextFromChildren(children))
+          return (
+            <Text asChild kind="title/xl" className="text-primary mb-3 mt-6 block scroll-mt-4">
+              <h1 id={id}>{children}</h1>
+            </Text>
+          )
+        },
+        h2: ({ children }) => {
+          const id = slugify(getTextFromChildren(children))
+          return (
+            <Text asChild kind="title/lg" className="text-primary mb-2 mt-5 block scroll-mt-4">
+              <h2 id={id}>{children}</h2>
+            </Text>
+          )
+        },
+        h3: ({ children }) => {
+          const id = slugify(getTextFromChildren(children))
+          return (
+            <Text asChild kind="title/md" className="text-primary mb-2 mt-4 block scroll-mt-4">
+              <h3 id={id}>{children}</h3>
+            </Text>
+          )
+        },
+        h4: ({ children }) => {
+          const id = slugify(getTextFromChildren(children))
+          return (
+            <Text asChild kind="title/sm" className="text-primary mb-1 mt-3 block scroll-mt-4">
+              <h4 id={id}>{children}</h4>
+            </Text>
+          )
+        },
 
         // Paragraphs
         p: ({ children }) => (
@@ -107,12 +138,29 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
           </Text>
         ),
 
-        // Links
-        a: ({ href, children }) => (
-          <Anchor href={href ?? '#'} target="_blank" rel="noopener noreferrer" kind="inline">
-            {children}
-          </Anchor>
-        ),
+        // Links — anchor hrefs scroll in-page; external hrefs open new tabs
+        a: ({ href, children }) => {
+          if (href?.startsWith('#')) {
+            return (
+              <Anchor
+                href={href}
+                kind="inline"
+                onClick={(e: React.MouseEvent) => {
+                  e.preventDefault()
+                  const el = document.getElementById(href.slice(1))
+                  el?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                }}
+              >
+                {children}
+              </Anchor>
+            )
+          }
+          return (
+            <Anchor href={href ?? '#'} target="_blank" rel="noopener noreferrer" kind="inline">
+              {children}
+            </Anchor>
+          )
+        },
 
         // Emphasis
         strong: ({ children }) => (

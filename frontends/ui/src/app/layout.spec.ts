@@ -31,7 +31,7 @@ describe('File Upload Configuration', () => {
     test('uses default accepted types when env var not set', () => {
       const config = buildFileUploadConfig()
 
-      expect(config.acceptedTypes).toBe('.pdf,.md,.docx,.html,.txt')
+      expect(config.acceptedTypes).toBe('.pdf,.docx,.txt,.md')
     })
 
     test('uses default max size when env var not set', () => {
@@ -60,13 +60,13 @@ describe('File Upload Configuration', () => {
       expect(config.acceptedMimeTypes).toContain('application/pdf')
       expect(config.acceptedMimeTypes).toContain('text/markdown')
       expect(config.acceptedMimeTypes).toContain('text/x-markdown')
-      expect(config.acceptedMimeTypes).toContain('text/html')
       expect(config.acceptedMimeTypes).toContain('text/plain')
       expect(
         config.acceptedMimeTypes.includes(
           'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
         )
       ).toBe(true)
+      expect(config.acceptedMimeTypes).not.toContain('text/html')
     })
   })
 
@@ -80,6 +80,18 @@ describe('File Upload Configuration', () => {
       expect(config.acceptedMimeTypes).toContain('text/csv')
       expect(config.acceptedMimeTypes).toContain('application/json')
       expect(config.acceptedMimeTypes).not.toContain('application/pdf')
+    })
+
+    test('FILE_UPLOAD_ACCEPTED_TYPES with .pptx resolves correct MIME type', () => {
+      process.env.FILE_UPLOAD_ACCEPTED_TYPES = '.pdf,.docx,.pptx,.txt,.md'
+
+      const config = buildFileUploadConfig()
+
+      expect(config.acceptedTypes).toBe('.pdf,.docx,.pptx,.txt,.md')
+      expect(config.acceptedMimeTypes).toContain(
+        'application/vnd.openxmlformats-officedocument.presentationml.presentation'
+      )
+      expect(config.acceptedMimeTypes).toContain('application/pdf')
     })
 
     test('FILE_UPLOAD_MAX_SIZE_MB overrides default max size', () => {

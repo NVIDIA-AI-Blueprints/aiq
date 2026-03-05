@@ -41,6 +41,8 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from aiq_agent.common.citation_verification import get_session_registry
+
 if TYPE_CHECKING:
     from .event_store import EventStore
 
@@ -148,8 +150,8 @@ class ToolArtifactMapping:
             "write_file",
             artifact_type=ArtifactType.FILE,
             content_key="content",
-            name_key="path",
-            extra_keys=["path", "filename"],
+            name_key="file_path",
+            extra_keys=["file_path", "path", "filename"],
         )
 
     def register(
@@ -345,6 +347,23 @@ class AgentEventCallback(BaseCallbackHandler):
                 return name
         return kwargs.get("name", "unknown")
 
+    def _get_source_registry(self):
+        """Return the session-scoped SourceRegistry if set, otherwise None."""
+        return get_session_registry()
+
+    def emit_final_report(self, content: str) -> None:
+        """Emit the post-processed final report as an OUTPUT artifact.
+
+        Call this after citation verification and sanitisation so the
+        frontend receives the verified content (overwrites the earlier
+        auto-emitted version).
+        """
+        self._emit_artifact(
+            ArtifactType.OUTPUT,
+            content,
+            output_category="final_report",
+        )
+
     def _is_search_tool(self, tool_name: str) -> bool:
         """Check if tool is a search-related tool that returns URLs."""
         tool_lower = tool_name.lower()
@@ -413,12 +432,11 @@ class AgentEventCallback(BaseCallbackHandler):
 
         Returns:
             - "research_notes" for researcher-agent outputs
-            - "draft" for orchestrator intermediate outputs
-            - "final_report" for final outputs (when no workflow context)
+            - "draft" for orchestrator or unattributed outputs
         """
         workflow_name = agent_info[0] if agent_info else None
         if not workflow_name:
-            return "final_report"
+            return "draft"
         workflow_lower = workflow_name.lower()
         if "researcher" in workflow_lower or "research" in workflow_lower:
             return "research_notes"
@@ -427,16 +445,30 @@ class AgentEventCallback(BaseCallbackHandler):
         return "intermediate"
 
     def _emit_cited_urls(self, content: str) -> None:
-        """Extract URLs from output content and emit citation_use events."""
+        """Extract URLs from output content and emit citation_use events.
+
+        When a SourceRegistry is attached, validates against it (consistent
+        with verify_citations). Otherwise falls back to the callback's own
+        _discovered_urls set.
+        """
         urls = self._extract_urls(content)
         for url in urls:
             normalized = self._normalize_url(url)
-            # Check if normalized URL was discovered (handles trailing slash differences, etc.)
-            if normalized in self._discovered_urls and normalized not in self._cited_urls:
+            if normalized in self._cited_urls:
+                continue
+
+            is_valid = False
+            registry = self._get_source_registry()
+            if registry is not None:
+                is_valid = registry.has_url(url)
+            else:
+                is_valid = normalized in self._discovered_urls
+
+            if is_valid:
                 self._cited_urls.add(normalized)
                 self._emit_artifact(
                     ArtifactType.CITATION_USE,
-                    url,  # Emit original URL for display
+                    url,
                     name=url,
                     url=url,
                 )
@@ -470,7 +502,7 @@ class AgentEventCallback(BaseCallbackHandler):
             for key in extra_keys:
                 if key in tool_input:
                     extra_data[key] = tool_input[key]
-                    if not name and key in ("path", "filename", "name"):
+                    if not name and key in ("file_path", "path", "filename", "name"):
                         name = tool_input[key]
         elif isinstance(tool_input, list) and content_key == "todos":
             content = tool_input

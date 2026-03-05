@@ -23,6 +23,7 @@ const { mockClient, mockDocumentsStoreState, mockOrchestratorFns } = vi.hoisted(
     addTrackedFile: vi.fn(),
     updateTrackedFile: vi.fn(),
     removeTrackedFile: vi.fn(),
+    unmarkRecentlyDeleted: vi.fn(),
     setUploading: vi.fn(),
     setError: vi.fn(),
     clearError: vi.fn(),
@@ -31,6 +32,7 @@ const { mockClient, mockDocumentsStoreState, mockOrchestratorFns } = vi.hoisted(
     setAuthToken: vi.fn(),
     setCallbacks: vi.fn(),
     handleSessionChange: vi.fn(),
+    loadFilesForSession: vi.fn(),
     startPolling: vi.fn(),
     stopPolling: vi.fn(),
   },
@@ -49,7 +51,7 @@ vi.mock('@/shared/context', () => ({
   useAppConfig: () => ({
     authRequired: true,
     fileUpload: {
-      acceptedTypes: '.pdf,.md,.docx,.html,.txt',
+      acceptedTypes: '.pdf,.docx,.txt,.md',
       acceptedMimeTypes: ['application/pdf', 'text/plain', 'text/markdown'],
       maxTotalSizeMB: 100,
       maxFileSize: 100 * 1024 * 1024,
@@ -73,6 +75,11 @@ vi.mock('@/features/chat', () => {
 
 vi.mock('../orchestrator', () => ({
   UploadOrchestrator: mockOrchestratorFns,
+}))
+
+vi.mock('@/features/layout/store', () => ({
+  useLayoutStore: (selector: (state: { knowledgeLayerAvailable: boolean }) => unknown) =>
+    selector({ knowledgeLayerAvailable: true }),
 }))
 
 const mockMarkSessionHasCollection = vi.fn()
@@ -136,13 +143,18 @@ describe('useFileUpload', () => {
       })
     })
 
-    test('handles session change when sessionId changes', async () => {
+    test('calls handleSessionChange on initial mount with sessionId', () => {
+      renderHook(() => useFileUpload({ sessionId: 'session-1' }))
+
+      expect(mockOrchestratorFns.handleSessionChange).toHaveBeenCalledWith('session-1')
+    })
+
+    test('calls handleSessionChange when sessionId changes', () => {
       const { rerender } = renderHook(({ sessionId }) => useFileUpload({ sessionId }), {
         initialProps: { sessionId: 'session-1' },
       })
 
-      // Initial render doesn't call handleSessionChange since previousSessionIdRef starts undefined
-      // and the effect checks for sessionId !== previousSessionId
+      mockOrchestratorFns.handleSessionChange.mockClear()
 
       rerender({ sessionId: 'session-2' })
 

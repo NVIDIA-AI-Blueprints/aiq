@@ -3,7 +3,7 @@
 
 import type { FileUploadConfig } from '@/shared/context'
 
-const DEFAULT_ACCEPTED_TYPES = '.pdf,.md,.docx,.html,.txt'
+const DEFAULT_ACCEPTED_TYPES = '.pdf,.docx,.txt,.md'
 const DEFAULT_MAX_SIZE_MB = 100
 const DEFAULT_MAX_FILE_COUNT = 10
 const DEFAULT_EXPIRATION_CHECK_INTERVAL_HOURS = 0
@@ -12,6 +12,7 @@ const EXTENSION_TO_MIME: Record<string, string[]> = {
   '.pdf': ['application/pdf'],
   '.md': ['text/markdown', 'text/x-markdown'],
   '.docx': ['application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+  '.pptx': ['application/vnd.openxmlformats-officedocument.presentationml.presentation'],
   '.html': ['text/html'],
   '.txt': ['text/plain'],
   '.csv': ['text/csv'],

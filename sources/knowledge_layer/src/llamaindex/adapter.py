@@ -24,7 +24,8 @@ It uses:
 
 Configuration options:
     persist_dir: Directory for ChromaDB persistence (default: /tmp/chroma_data)
-    embed_model: NVIDIA embedding model (default: nvidia/llama-3.2-nv-embedqa-1b-v2)
+    embed_model: NVIDIA embedding model (default: nvidia/llama-nemotron-embed-vl-1b-v2)
+    embed_base_url: Embedding model base URL (default: https://integrate.api.nvidia.com/v1)
     chunk_size: Chunk size for text splitting (default: 1024, model supports up to 2048 tokens)
     chunk_overlap: Overlap between chunks (default: 128)
 
@@ -33,6 +34,7 @@ Multimodal options:
     extract_charts: Enable chart extraction with VLM data extraction (default: False)
     extract_images: Enable image extraction with VLM captioning (default: False)
     vlm_model: NVIDIA VLM model for captioning (default: nvidia/llama-3.2-90b-vision-instruct)
+    vlm_base_url: VLM model base URL (default: https://integrate.api.nvidia.com/v1)
 
 Chart extraction uses the VLM to:
 1. Classify images as charts/graphs vs regular images
@@ -68,7 +70,10 @@ logger = logging.getLogger(__name__)
 
 # Default VLM model for image captioning
 # nemotron-nano is faster (12B vs 90B) - same as NV-Ingest service mode uses
-DEFAULT_VLM_MODEL = "nvidia/nemotron-nano-12b-v2-vl"
+DEFAULT_VLM_MODEL = os.environ.get("AIQ_VLM_MODEL", "nvidia/nemotron-nano-12b-v2-vl")
+# Default VLM model base URL
+DEFAULT_VLM_BASE_URL = os.environ.get("AIQ_VLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+
 
 # Image extraction settings - filters out small icons/logos
 MIN_IMAGE_WIDTH_PX = 100
@@ -259,6 +264,7 @@ def _table_to_markdown(table: list[list[str]]) -> str:
 def _analyze_image_with_vlm(
     image_bytes: bytes,
     vlm_model: str = DEFAULT_VLM_MODEL,
+    vlm_base_url: str = DEFAULT_VLM_BASE_URL,
     extract_charts: bool = True,
 ) -> tuple[str, str]:
     """
@@ -313,7 +319,7 @@ Provide a detailed, structured response."""
 
         # Call NVIDIA's VLM API
         client = OpenAI(
-            base_url="https://integrate.api.nvidia.com/v1",
+            base_url=vlm_base_url,
             api_key=api_key,
         )
 
@@ -375,11 +381,17 @@ Provide a detailed, structured response."""
 def _caption_image_with_vlm(
     image_bytes: bytes,
     vlm_model: str = DEFAULT_VLM_MODEL,
+    vlm_base_url: str = DEFAULT_VLM_BASE_URL,
     prompt: str = "Describe this image in detail.",
     is_chart: bool = False,
 ) -> str:
     """Legacy wrapper - use _analyze_image_with_vlm for new code."""
-    _, caption = _analyze_image_with_vlm(image_bytes, vlm_model, extract_charts=is_chart)
+    _, caption = _analyze_image_with_vlm(
+        image_bytes,
+        vlm_model=vlm_model,
+        vlm_base_url=vlm_base_url,
+        extract_charts=is_chart,
+    )
     return caption
 
 
@@ -435,7 +447,8 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
 
     Configuration options:
         persist_dir: ChromaDB persistence directory (default from AIQ_CHROMA_DIR)
-        embed_model: NVIDIA embedding model name (default: nvidia/llama-3.2-nv-embedqa-1b-v2)
+        embed_model: NVIDIA embedding model name (default: nvidia/llama-nemotron-embed-vl-1b-v2)
+        embed_base_url: Embedding model base URL (default: https://integrate.api.nvidia.com/v1)
         chunk_size: Text chunk size (default: 1024, model supports up to 2048 tokens)
         chunk_overlap: Chunk overlap (default: 128)
 
@@ -448,10 +461,12 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
     Environment variables:
         AIQ_CHROMA_DIR: Default ChromaDB persistence directory
         AIQ_EMBED_MODEL: Default embedding model name
+        AIQ_EMBED_BASE_URL: Default embedding model base URL
         AIQ_EXTRACT_TABLES: Enable table extraction ("true"/"false")
         AIQ_EXTRACT_CHARTS: Enable chart extraction ("true"/"false")
         AIQ_EXTRACT_IMAGES: Enable image extraction ("true"/"false")
         AIQ_VLM_MODEL: VLM model for captioning
+        AIQ_VLM_BASE_URL: Default VLM base URL
         AIQ_COLLECTION_TTL_HOURS: Hours before stale collections are deleted (default: 24)
         AIQ_TTL_CLEANUP_INTERVAL_SECONDS: Seconds between cleanup runs (default: 3600)
     """
@@ -467,10 +482,18 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
     # @environment_variable AIQ_EMBED_MODEL
     # @category Knowledge Layer
     # @type str
-    # @default nvidia/llama-3.2-nv-embedqa-1b-v2
+    # @default nvidia/llama-nemotron-embed-vl-1b-v2
     # @required false
     # NVIDIA embedding model name for LlamaIndex vector encoding.
-    DEFAULT_EMBED_MODEL = os.environ.get("AIQ_EMBED_MODEL", "nvidia/llama-3.2-nv-embedqa-1b-v2")
+    DEFAULT_EMBED_MODEL = os.environ.get("AIQ_EMBED_MODEL", "nvidia/llama-nemotron-embed-vl-1b-v2")
+
+    # @environment_variable AIQ_EMBED_BASE_URL
+    # @category Knowledge Layer
+    # @type str
+    # @default https://integrate.api.nvidia.com/v1
+    # @required false
+    # Embedding model base URL.
+    DEFAULT_EMBED_BASE_URL = os.environ.get("AIQ_EMBED_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
     # @environment_variable AIQ_EXTRACT_TABLES
     # @category Knowledge Layer
@@ -496,14 +519,6 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
     # Enable chart extraction from PDFs during ingestion.
     DEFAULT_EXTRACT_CHARTS = os.environ.get("AIQ_EXTRACT_CHARTS", "false").lower() == "true"
 
-    # @environment_variable AIQ_VLM_MODEL
-    # @category Knowledge Layer
-    # @type str
-    # @default nvidia/nemotron-nano-12b-v2-vl
-    # @required false
-    # Vision-language model for captioning extracted images and charts.
-    DEFAULT_VLM_MODEL = os.environ.get("AIQ_VLM_MODEL", DEFAULT_VLM_MODEL)
-
     backend_name = "llamaindex"
 
     def __init__(self, config: dict[str, Any] | None = None):
@@ -511,8 +526,9 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
 
         # Configuration - read from env vars with fallback to class defaults
         self.persist_dir = self.config.get("persist_dir", self.DEFAULT_PERSIST_DIR)
+        self.embed_base_url = self.config.get("embed_base_url", self.DEFAULT_EMBED_BASE_URL)
         self.embed_model_name = self.config.get("embed_model", self.DEFAULT_EMBED_MODEL)
-        # llama-3.2-nv-embedqa-1b-v2 supports up to 2048 tokens
+        # llama-nemotron-embed-vl-1b-v2 supports up to 2048 tokens
         self.chunk_size = self.config.get("chunk_size", 1024)
         self.chunk_overlap = self.config.get("chunk_overlap", 128)
 
@@ -520,7 +536,8 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
         self.extract_tables = self.config.get("extract_tables", self.DEFAULT_EXTRACT_TABLES)
         self.extract_images = self.config.get("extract_images", self.DEFAULT_EXTRACT_IMAGES)
         self.extract_charts = self.config.get("extract_charts", self.DEFAULT_EXTRACT_CHARTS)
-        self.vlm_model = self.config.get("vlm_model", self.DEFAULT_VLM_MODEL)
+        self.vlm_model = self.config.get("vlm_model", DEFAULT_VLM_MODEL)
+        self.vlm_base_url = self.config.get("vlm_base_url", DEFAULT_VLM_BASE_URL)
 
         # Document summarization options
         self.generate_summary_enabled = self.config.get("generate_summary", False)
@@ -560,6 +577,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
             from llama_index.embeddings.nvidia import NVIDIAEmbedding
 
             self._embed_model = NVIDIAEmbedding(
+                base_url=self.embed_base_url,
                 model=self.embed_model_name,
                 api_key=_get_nvidia_api_key(),
             )
@@ -1004,6 +1022,10 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
         This removes all chunks that have the matching file_name in metadata.
         Handles both exact file names and names with tmp prefix stripped.
         Uses same tmp pattern as Foundational RAG: tmp[8 random chars]_filename
+
+        The file_id parameter may be either a backend UUID or a human-readable
+        filename (the frontend sends filenames). Both are handled: UUID is looked
+        up directly in self._files, while a filename triggers a value-based search.
         """
         import re
 
@@ -1016,11 +1038,21 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                 logger.warning(f"Collection {collection_name} not found")
                 return False
 
-            # Get file_name from tracking or use file_id directly
+            # Resolve file_name from tracking dict.
+            # The caller may pass a UUID (direct key) or a filename (value search).
             file_name = None
+            tracking_ids_to_remove: list[str] = []
             with self._lock:
-                if hasattr(self, "_files") and file_id in self._files:
-                    file_name = self._files[file_id].file_name
+                if hasattr(self, "_files"):
+                    if file_id in self._files:
+                        file_name = self._files[file_id].file_name
+                        tracking_ids_to_remove.append(file_id)
+                    else:
+                        # file_id is likely a filename — search by value
+                        for fid, fi in self._files.items():
+                            if fi.file_name == file_id and fi.collection_name == collection_name:
+                                file_name = fi.file_name
+                                tracking_ids_to_remove.append(fid)
             if not file_name:
                 file_name = file_id
 
@@ -1041,17 +1073,30 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                     if tmp_pattern.match(meta.get("file_name", ""))
                 ]
                 if not matching_ids:
-                    logger.warning(f"No chunks found for file_name={file_name}")
-                    return False
+                    if not tracking_ids_to_remove:
+                        logger.warning(f"No chunks found for file_name={file_name}")
+                        return False
+                    # No chunks in ChromaDB but tracking entries exist (e.g. FAILED files).
+                    # Clean them up and report success.
+                    with self._lock:
+                        for tid in tracking_ids_to_remove:
+                            self._files.pop(tid, None)
+                    logger.info(f"Removed {len(tracking_ids_to_remove)} tracking entries for file {file_name}")
+
+                    from aiq_agent.knowledge import unregister_summary
+
+                    unregister_summary(collection_name, file_name)
+                    return True
                 results = {"ids": matching_ids}
 
             collection.delete(ids=results["ids"])
             logger.info(f"Deleted {len(results['ids'])} chunks for file {file_name}")
 
-            # Remove from tracking if it was there
+            # Remove all matching tracking entries
             with self._lock:
-                if hasattr(self, "_files") and file_id in self._files:
-                    del self._files[file_id]
+                if hasattr(self, "_files"):
+                    for tid in tracking_ids_to_remove:
+                        self._files.pop(tid, None)
 
             # Remove from centralized summary registry
             from aiq_agent.knowledge import unregister_summary
@@ -1155,7 +1200,8 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                         )
                     )
 
-            # Also include FAILED files from tracking (they won't have chunks in Chroma)
+            # Also include FAILED files from tracking (they won't have chunks in Chroma).
+            # Track seen names to avoid duplicates when the same file was uploaded multiple times.
             with self._lock:
                 if hasattr(self, "_files"):
                     existing_names = {f.file_name for f in result}
@@ -1166,6 +1212,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                             and fi.status == FileStatus.FAILED
                         ):
                             result.append(fi)
+                            existing_names.add(fi.file_name)
 
             logger.info(f"Listed {len(result)} files in {collection_name}")
             return result
@@ -1244,6 +1291,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
             extract_images = config.get("extract_images", self.extract_images)
             extract_charts = config.get("extract_charts", self.extract_charts)
             vlm_model = config.get("vlm_model", self.vlm_model)
+            vlm_base_url = config.get("vlm_base_url", self.vlm_base_url)
 
             # Set up ChromaDB client (use shared client if using default persist_dir)
             persist_dir = config.get("persist_dir", self.persist_dir)
@@ -1355,6 +1403,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                             content_type, caption = _analyze_image_with_vlm(
                                 img["image_bytes"],
                                 vlm_model=vlm_model,
+                                vlm_base_url=vlm_base_url,
                                 extract_charts=extract_charts,
                             )
 
@@ -1548,12 +1597,14 @@ class LlamaIndexRetriever(BaseRetriever):
     Environment variables:
         AIQ_CHROMA_DIR: Default ChromaDB persistence directory
         AIQ_EMBED_MODEL: Default embedding model name
+        AIQ_EMBED_BASE_URL: Default embedding model base URL
         AIQ_RETRIEVER_TOP_K: Default top_k value
     """
 
     # Default configuration from environment variables
     DEFAULT_PERSIST_DIR = os.environ.get("AIQ_CHROMA_DIR", "/tmp/chroma_data")
-    DEFAULT_EMBED_MODEL = os.environ.get("AIQ_EMBED_MODEL", "nvidia/llama-3.2-nv-embedqa-1b-v2")
+    DEFAULT_EMBED_MODEL = os.environ.get("AIQ_EMBED_MODEL", "nvidia/llama-nemotron-embed-vl-1b-v2")
+    DEFAULT_EMBED_BASE_URL = os.environ.get("AIQ_EMBED_BASE_URL", "https://integrate.api.nvidia.com/v1")
     # @environment_variable AIQ_RETRIEVER_TOP_K
     # @category Knowledge Layer
     # @type int
@@ -1569,6 +1620,7 @@ class LlamaIndexRetriever(BaseRetriever):
 
         self.persist_dir = self.config.get("persist_dir", self.DEFAULT_PERSIST_DIR)
         self.embed_model_name = self.config.get("embed_model", self.DEFAULT_EMBED_MODEL)
+        self.embed_base_url = self.config.get("embed_base_url", self.DEFAULT_EMBED_BASE_URL)
         self.default_top_k = self.config.get("top_k", self.DEFAULT_TOP_K)
 
         # Lazy-loaded components
@@ -1590,6 +1642,7 @@ class LlamaIndexRetriever(BaseRetriever):
             from llama_index.embeddings.nvidia import NVIDIAEmbedding
 
             self._embed_model = NVIDIAEmbedding(
+                base_url=self.embed_base_url,
                 model=self.embed_model_name,
                 api_key=_get_nvidia_api_key(),
             )

@@ -110,6 +110,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
     setLoadedJobId,
     setStreamLoaded,
     stopAllDeepResearchSpinners,
+    addErrorCard,
+    completeDeepResearch,
+    setStreaming,
   } = useChatStore()
 
   const { openRightPanel, setResearchPanelTab } = useLayoutStore()
@@ -210,7 +213,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string }>(),
           todos: null as TodoItem[] | null,
           citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-          files: [] as Array<{ filename: string; content: string }>,
+          files: new Map<string, string>(),  // filename -> latest content (deduped)
           reportContent: null as string | null,
         }
 
@@ -261,10 +264,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             timestamp: now,
           }))
 
-          const files = buffer.files.map((f, idx) => ({
+          const files = Array.from(buffer.files.entries()).map(([filename, content], idx) => ({
             id: `file-${idx}`,
-            filename: f.filename,
-            content: f.content,
+            filename,
+            content,
             timestamp: now,
           }))
 
@@ -393,15 +396,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             },
 
             onFileUpdate: (filename, content) => {
-              buffer.files.push({ filename, content })
+              buffer.files.set(filename, content)
             },
 
-            onOutputUpdate: (content, outputCategory, workflow) => {
+            onOutputUpdate: (content, outputCategory) => {
               if (outputCategory === 'intermediate') return
-              if (outputCategory === 'research_notes') {
-                const filename = workflow ? `${workflow} - ${outputCategory}` : 'Sub-Agent Notes'
-                buffer.files.push({ filename, content })
-              } else if (outputCategory === 'final_report' || !outputCategory) {
+              // research_notes are already captured via write_file artifacts — skip to avoid duplicates
+              if (outputCategory === 'final_report' || !outputCategory) {
                 buffer.reportContent = content
               }
             },
@@ -484,9 +485,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         }
 
         // Defensive cleanup: loaded data may have stale 'running' items
-        // if the backend never sent completion events. Since we're loading
-        // a completed job, all items should be in terminal state.
-        stopAllDeepResearchSpinners(true)
+        // if the backend never sent completion events. Only treat as
+        // successful for success jobs; interrupted/failed jobs should
+        // leave un-attempted tasks as 'stopped'.
+        stopAllDeepResearchSpinners(jobStatus === 'success')
 
         // Set job ID for cache tracking (so subsequent clicks show cached data)
         setLoadedJobId(jobId)
@@ -497,6 +499,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         const errorMessage = err instanceof Error ? err.message : 'Failed to load job data'
         setError(errorMessage)
         console.error('Failed to load job data:', err)
+        addErrorCard('agent.deep_research_load_failed', errorMessage)
+        stopAllDeepResearchSpinners()
+        completeDeepResearch()
+        setStreaming(false)
       } finally {
         setIsLoading(false)
       }
@@ -511,6 +517,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       stopAllDeepResearchSpinners,
       setResearchPanelTab,
       openRightPanel,
+      addErrorCard,
+      completeDeepResearch,
+      setStreaming,
     ]
   )
 
@@ -573,19 +582,25 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
         clearDeepResearch()
         await streamFullJob(jobId)
-        // Defensive cleanup: loaded data may have stale 'running' items
-        stopAllDeepResearchSpinners(true)
+        // Defensive cleanup: loaded data may have stale 'running' items.
+        // Only mark as successful completion for success jobs; interrupted/failed
+        // jobs should leave un-attempted tasks as 'stopped'.
+        stopAllDeepResearchSpinners(jobStatus === 'success')
         setStreamLoaded(true)
         setLoadedJobId(jobId)
       } catch (err) {
         const errorMessage = err instanceof Error ? err.message : 'Failed to load stream data'
         setError(errorMessage)
         console.error('Failed to load stream data:', err)
+        addErrorCard('agent.deep_research_load_failed', errorMessage)
+        stopAllDeepResearchSpinners()
+        completeDeepResearch()
+        setStreaming(false)
       } finally {
         setIsLoading(false)
       }
     },
-    [accessToken, clearDeepResearch, streamFullJob, stopAllDeepResearchSpinners, setStreamLoaded, setLoadedJobId]
+    [accessToken, clearDeepResearch, streamFullJob, stopAllDeepResearchSpinners, setStreamLoaded, setLoadedJobId, addErrorCard, completeDeepResearch, setStreaming]
   )
 
   return {

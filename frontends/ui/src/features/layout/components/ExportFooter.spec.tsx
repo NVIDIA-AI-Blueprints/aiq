@@ -10,10 +10,11 @@ import { ExportFooter } from './ExportFooter'
 let mockIsBusy = false
 
 // Mock the chat store and the centralized busy hook
-let mockChatState = {
+let mockChatState: Record<string, unknown> = {
   reportContent: 'Some report content',
   isDeepResearchStreaming: false,
   deepResearchStatus: null as 'submitted' | 'running' | 'success' | 'failure' | 'interrupted' | null,
+  currentConversation: { title: 'AI Market Trends' },
 }
 
 vi.mock('@/features/chat', () => ({
@@ -29,7 +30,7 @@ vi.mock('@/features/chat', () => ({
 // Mock the download utilities
 const mockDownloadAsMarkdown = vi.fn().mockReturnValue({ success: true })
 vi.mock('@/utils/download-as-markdown', () => ({
-  downloadAsMarkdown: (content: string) => mockDownloadAsMarkdown(content),
+  downloadAsMarkdown: (...args: unknown[]) => mockDownloadAsMarkdown(...args),
 }))
 
 const mockDownloadPdf = vi.fn()
@@ -57,24 +58,24 @@ describe('ExportFooter', () => {
     expect(screen.getByRole('button', { name: /pdf/i })).toBeInTheDocument()
   })
 
-  test('calls downloadAsMarkdown when Markdown button is clicked', async () => {
+  test('calls downloadAsMarkdown with content and conversation title', async () => {
     const user = userEvent.setup()
 
     render(<ExportFooter />)
 
     await user.click(screen.getByRole('button', { name: /markdown/i }))
 
-    expect(mockDownloadAsMarkdown).toHaveBeenCalledWith('Some report content')
+    expect(mockDownloadAsMarkdown).toHaveBeenCalledWith('Some report content', 'AI Market Trends')
   })
 
-  test('calls downloadPdf when PDF button is clicked', async () => {
+  test('calls downloadPdf with content and conversation title', async () => {
     const user = userEvent.setup()
 
     render(<ExportFooter />)
 
     await user.click(screen.getByRole('button', { name: /pdf/i }))
 
-    expect(mockDownloadPdf).toHaveBeenCalledWith('Some report content')
+    expect(mockDownloadPdf).toHaveBeenCalledWith('Some report content', 'AI Market Trends')
   })
 
   test('disables buttons when disabled prop is true', () => {
@@ -93,6 +94,7 @@ describe('ExportFooter - Busy State (via useIsCurrentSessionBusy)', () => {
       reportContent: 'Some report content',
       isDeepResearchStreaming: false,
       deepResearchStatus: null,
+      currentConversation: { title: 'AI Market Trends' },
     }
     mockIsBusy = false
   })

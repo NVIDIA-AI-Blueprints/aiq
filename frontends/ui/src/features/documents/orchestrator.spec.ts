@@ -29,6 +29,7 @@ const mockDocumentsStore = {
   setError: vi.fn(),
   clearError: vi.fn(),
   updateFilesFromJobStatus: vi.fn(),
+  setLoadingFiles: vi.fn(),
   trackedFiles: [],
   isUploading: false,
   isPolling: false,
@@ -133,7 +134,7 @@ describe('UploadOrchestrator', () => {
       await UploadOrchestrator.handleSessionChange('session-2')
 
       expect(mockDocumentsStore.clearFilesForCollection).toHaveBeenCalledWith('session-1')
-      expect(mockDocumentsStore.clearFilesForCollection).toHaveBeenCalledWith('session-2')
+      expect(mockDocumentsStore.clearFilesForCollection).not.toHaveBeenCalledWith('session-2')
     })
 
     test('loads files for new session when session has known collection', async () => {

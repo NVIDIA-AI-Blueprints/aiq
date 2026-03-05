@@ -194,7 +194,7 @@ class TestFilterToolsBySourcesMixed:
         assert other_tool in result
 
     def test_filter_all_three_source_types(self):
-        """Test filtering with web_search, knowledge_layer, and ECI sources."""
+        """Test filtering with web_search and knowledge_layer sources."""
         web_tool = MagicMock()
         web_tool.name = "tavily_search"
         knowledge_tool = MagicMock()
@@ -219,7 +219,7 @@ class TestFilterToolsBySourcesMixed:
         assert web_tool in result
 
     def test_filter_preserves_other_tools(self):
-        """Test that non-search/ECI tools are always included."""
+        """Test that non-search tools are always included."""
         calculator = MagicMock()
         calculator.name = "calculator"
         code_executor = MagicMock()

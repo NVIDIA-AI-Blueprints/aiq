@@ -703,12 +703,12 @@ describe('useChatStore', () => {
         conversations: [conv],
       })
 
-      // Wait for initial persist
+      // Wait for initial persist (currentConversation stored as ID string)
       await vi.waitFor(() => {
         const stored = localStorage.getItem(STORAGE_KEY)
         expect(stored).not.toBeNull()
         const parsed = JSON.parse(stored!)
-        expect(parsed.state.currentConversation?.id).toBe('conv-current')
+        expect(parsed.state.currentConversation).toBe('conv-current')
       })
 
       // Delete the current conversation
@@ -1179,7 +1179,6 @@ describe('useChatStore', () => {
       expect(messages).toHaveLength(1)
       expect(messages?.[0].messageType).toBe('error')
       expect(messages?.[0].errorData?.errorCode).toBe('connection.lost')
-      expect(messages?.[0].errorData?.isRetryable).toBe(true) // from registry
     })
 
     test('addErrorCard uses custom message', () => {
@@ -1187,12 +1186,11 @@ describe('useChatStore', () => {
 
       useChatStore
         .getState()
-        .addErrorCard('file.upload_failed', 'Custom error message', 'Details here', false)
+        .addErrorCard('connection.failed', 'Custom error message', 'Details here')
 
       const msg = useChatStore.getState().currentConversation?.messages[0]
       expect(msg?.content).toBe('Custom error message')
       expect(msg?.errorData?.errorDetails).toBe('Details here')
-      expect(msg?.errorData?.isRetryable).toBe(false)
     })
 
     test('dismissErrorCard removes error message', () => {

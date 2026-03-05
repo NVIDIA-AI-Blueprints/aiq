@@ -257,8 +257,31 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     @app.get("/health", tags=["health"], summary="Health check")
     async def health_check():
-        """Simple health check endpoint."""
-        return {"status": "ok", "dask_available": dask_available}
+        """Health check endpoint that validates DB connectivity."""
+        from sqlalchemy import text
+
+        from ..jobs import EventStore
+
+        result = {"status": "ok", "dask_available": dask_available, "db": "ok"}
+
+        # Check DB connectivity using any cached async engine
+        try:
+            cache = EventStore._async_engine_cache
+            if cache:
+                engine = next(iter(cache.values()))[0]
+                async with engine.connect() as conn:
+                    await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3.0)
+            else:
+                result["db"] = "no_engine"
+        except Exception:
+            logger.warning("Health check DB ping failed", exc_info=True)
+            result["status"] = "degraded"
+            result["db"] = "unreachable"
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=503, content=result)
+
+        return result
 
     @app.post(
         "/v1/jobs/async/submit",
@@ -469,6 +492,11 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     # Start the ghost job reaper background task
     asyncio.create_task(_reap_ghost_jobs(job_store, db_url))
 
+    # Start periodic cleanup of expired jobs (NAT's job_info table) and old events (job_events table).
+    # NAT provides periodic_cleanup as a Dask task for job_info, but it must be explicitly submitted.
+    # We also run a local asyncio task for job_events cleanup since NAT doesn't manage that table.
+    _start_periodic_cleanup(job_store, scheduler_address, db_url, default_expiry_seconds, log_level, use_threads)
+
 
 GHOST_JOB_TIMEOUT_SECONDS = 300  # 5 minutes without events = ghost job
 GHOST_REAPER_INTERVAL_SECONDS = 60  # check every 60 seconds
@@ -569,6 +597,177 @@ async def _reap_ghost_jobs(job_store, db_url: str) -> None:
             break
         except Exception as e:
             logger.warning("Ghost job reaper error: %s", e)
+
+
+_cleanup_task: asyncio.Task | None = None
+"""Module-level reference for graceful shutdown cancellation."""
+
+# Advisory lock ID for PostgreSQL — ensures only one pod runs cleanup at a time.
+# Arbitrary constant; change if it collides with another lock in your deployment.
+_PG_ADVISORY_LOCK_ID = 0x41495143_4C45414E  # "AIQCLEAN" in hex
+
+
+def _start_periodic_cleanup(
+    job_store,
+    scheduler_address: str,
+    db_url: str,
+    expiry_seconds: int,
+    log_level: int,
+    use_threads: bool,
+) -> None:
+    """
+    Start periodic cleanup of expired jobs and old events.
+
+    Submits NAT's periodic_cleanup as a Dask task (handles job_info expiry)
+    and starts a local asyncio task for coordinated event cleanup.
+    """
+    global _cleanup_task
+
+    # Cleanup interval: half the expiry time, clamped to [60s, 3600s]
+    cleanup_interval = max(60, min(expiry_seconds // 2, 3600))
+
+    # Submit NAT's periodic_cleanup as a long-running Dask task for job_info table
+    try:
+        from dask.distributed import fire_and_forget
+
+        from nat.front_ends.fastapi.async_job import periodic_cleanup
+
+        cleanup_future = job_store.dask_client.submit(
+            periodic_cleanup,
+            scheduler_address=scheduler_address,
+            db_url=db_url,
+            sleep_time_sec=cleanup_interval,
+            configure_logging=not use_threads,
+            log_level=log_level,
+        )
+        fire_and_forget(cleanup_future)
+        logger.info(
+            "Submitted periodic job cleanup task to Dask (interval=%ds, expiry=%ds)",
+            cleanup_interval,
+            expiry_seconds,
+        )
+    except Exception as e:
+        logger.warning("Failed to submit periodic cleanup to Dask: %s", e)
+
+    # Start local asyncio task for job_events table cleanup (NAT doesn't manage this table).
+    # Uses pg_try_advisory_xact_lock on PostgreSQL so only one pod runs cleanup per cycle.
+    # Cancel any previously-started task before overwriting the reference.
+    if _cleanup_task and not _cleanup_task.done():
+        _cleanup_task.cancel()
+    _cleanup_task = asyncio.create_task(_cleanup_old_events_loop(db_url, expiry_seconds, cleanup_interval))
+
+
+async def stop_periodic_cleanup() -> None:
+    """Cancel the event cleanup background task. Call from shutdown handler."""
+    global _cleanup_task
+    if _cleanup_task and not _cleanup_task.done():
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            pass
+        _cleanup_task = None
+        logger.info("Event cleanup task cancelled")
+
+
+async def _cleanup_old_events_loop(db_url: str, retention_seconds: int, interval_seconds: int) -> None:
+    """
+    Background task that periodically deletes old events from the job_events table
+    and removes events for jobs already marked as expired in job_info.
+
+    On PostgreSQL, uses pg_try_advisory_xact_lock so only one pod runs cleanup per cycle
+    when multiple pods share the same database.
+    """
+
+    is_postgres = db_url.startswith("postgres")
+
+    logger.info(
+        "Event cleanup task started (retention=%ds, interval=%ds, advisory_lock=%s)",
+        retention_seconds,
+        interval_seconds,
+        is_postgres,
+    )
+
+    # Run once immediately on startup to catch anything that aged out during downtime.
+    try:
+        await _run_event_cleanup(db_url, retention_seconds, is_postgres)
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:
+        logger.warning("Event cleanup startup run failed: %s", e)
+
+    while True:
+        try:
+            await asyncio.sleep(interval_seconds)
+            await _run_event_cleanup(db_url, retention_seconds, is_postgres)
+        except asyncio.CancelledError:
+            logger.info("Event cleanup task stopped")
+            break
+        except Exception as e:
+            logger.warning("Event cleanup error: %s", e)
+
+
+async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: bool) -> None:
+    """
+    Execute one cleanup cycle: time-based event pruning + removal of events for expired jobs.
+
+    On PostgreSQL, acquires a transaction-level advisory lock (pg_try_advisory_xact_lock)
+    so concurrent pods skip the cycle rather than doing redundant work. The lock is
+    automatically released on commit/rollback, avoiding leak risks.
+    """
+    from ..jobs import EventStore
+
+    loop = asyncio.get_running_loop()
+
+    def _do_cleanup() -> tuple[int, int]:
+        from sqlalchemy import text
+
+        engine = EventStore._get_or_create_sync_engine(db_url)
+
+        with engine.connect() as conn:
+            # On PostgreSQL, acquire a transaction-level advisory lock. If another pod
+            # already holds it, skip this cycle. The lock is automatically released
+            # on commit/rollback — no manual unlock needed.
+            if is_postgres:
+                locked = conn.execute(
+                    text("SELECT pg_try_advisory_xact_lock(:lock_id)"),
+                    {"lock_id": _PG_ADVISORY_LOCK_ID},
+                ).scalar()
+                if not locked:
+                    return (0, 0)
+
+            # 1. Time-based: delete events older than retention period
+            if is_postgres:
+                result = conn.execute(
+                    text("DELETE FROM job_events WHERE created_at < NOW() - :seconds * INTERVAL '1 second'"),
+                    {"seconds": retention_seconds},
+                )
+            else:
+                result = conn.execute(
+                    text("DELETE FROM job_events WHERE created_at < datetime('now', :interval)"),
+                    {"interval": f"-{retention_seconds} seconds"},
+                )
+            time_deleted = result.rowcount
+
+            # 2. Coordinated: delete events for jobs already marked expired in job_info.
+            # This catches events that haven't aged out yet but whose parent job is
+            # already expired (e.g. short-lived jobs with long event retention).
+            expired_result = conn.execute(
+                text("DELETE FROM job_events WHERE job_id IN (SELECT job_id FROM job_info WHERE is_expired = true)")
+            )
+            expired_deleted = expired_result.rowcount
+
+            conn.commit()
+            return (time_deleted, expired_deleted)
+
+    time_deleted, expired_deleted = await loop.run_in_executor(None, _do_cleanup)
+
+    if time_deleted > 0 or expired_deleted > 0:
+        logger.info(
+            "Event cleanup: %d old events removed, %d events for expired jobs removed",
+            time_deleted,
+            expired_deleted,
+        )
 
 
 async def _cancel_dask_task(scheduler_address: str, job_id: str) -> bool:

@@ -17,7 +17,7 @@ Universal Schema for Knowledge Layer.
 
 This module defines the "Golden Record" - strict Pydantic models that all
 adapters must output. This ensures agents always see a consistent format
-regardless of the underlying backend (LlamaIndex, Foundational RAG, ECI, and so on).
+regardless of the underlying backend (LlamaIndex, Foundational RAG, and so on).
 
 Schema Rules (enforced by all adapters):
 1. Four Pillars: content_type MUST be exactly "text", "table", "chart", or "image"

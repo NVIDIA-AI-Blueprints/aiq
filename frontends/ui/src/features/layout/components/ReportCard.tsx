@@ -69,13 +69,13 @@ export const ReportCard: FC<ReportCardProps> = ({
 
   const handleExportMarkdown = useCallback(() => {
     if (isExportDisabled) return
-    downloadAsMarkdown(content)
-  }, [isExportDisabled, content])
+    downloadAsMarkdown(content, title)
+  }, [isExportDisabled, content, title])
 
   const handleExportPDF = useCallback(() => {
     if (isExportDisabled || isPdfLoading) return
-    downloadPdf(content)
-  }, [isExportDisabled, isPdfLoading, content, downloadPdf])
+    downloadPdf(content, title)
+  }, [isExportDisabled, isPdfLoading, content, downloadPdf, title])
 
   if (!hasContent) {
     return (

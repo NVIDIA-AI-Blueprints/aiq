@@ -28,6 +28,7 @@ interface ExportFooterProps {
  */
 export const ExportFooter: FC<ExportFooterProps> = ({ disabled }) => {
   const reportContent = useChatStore((state) => state.reportContent)
+  const conversationTitle = useChatStore((state) => state.currentConversation?.title)
   const { downloadPdf, isLoading: isPdfLoading, error: pdfError, clearError: clearPdfError } = useDownloadPdfRoute()
   const [mdError, setMdError] = useState<string | null>(null)
 
@@ -51,16 +52,16 @@ export const ExportFooter: FC<ExportFooterProps> = ({ disabled }) => {
   const handleExportMarkdown = useCallback(() => {
     if (isExportDisabled) return
     setMdError(null)
-    const result = downloadAsMarkdown(reportContentStr)
+    const result = downloadAsMarkdown(reportContentStr, conversationTitle ?? undefined)
     if (!result.success && result.error) {
       setMdError(result.error)
     }
-  }, [isExportDisabled, reportContentStr])
+  }, [isExportDisabled, reportContentStr, conversationTitle])
 
   const handleExportPDF = useCallback(() => {
     if (isExportDisabled || isPdfLoading) return
-    downloadPdf(reportContentStr)
-  }, [isExportDisabled, isPdfLoading, reportContentStr, downloadPdf])
+    downloadPdf(reportContentStr, conversationTitle ?? undefined)
+  }, [isExportDisabled, isPdfLoading, reportContentStr, downloadPdf, conversationTitle])
 
   const exportError = mdError || pdfError
   const clearExportError = useCallback(() => {

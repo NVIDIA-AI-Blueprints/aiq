@@ -26,6 +26,9 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_checkpointer
 from aiq_agent.common import is_verbose
+from aiq_agent.common.citation_verification import get_or_create_session_registry
+from aiq_agent.common.citation_verification import reset_session_registry
+from aiq_agent.common.citation_verification import set_session_registry
 from aiq_agent.observability.otel_header_redaction_exporter import (
     ensure_registered as _ensure_otel_redaction_registered,
 )
@@ -34,6 +37,7 @@ from nat.builder.context import Context
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
+from nat.data_models.api_server import ChatResponse
 from nat.data_models.component_ref import FunctionGroupRef
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
@@ -277,8 +281,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
 
-    # TODO: return type is actually ChatResponse via _create_chat_response, align annotation later
-    async def _run(query: object) -> str:
+    async def _run(query: object) -> ChatResponse:
         import os
         import sys
         import uuid
@@ -305,7 +308,11 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             logger.info("Using fresh conversation ID for --input mode: %s", nat_context_conversation_id)
         else:
             nat_context_conversation_id = Context.get().conversation_id
-            logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
+            if not nat_context_conversation_id:
+                nat_context_conversation_id = str(uuid.uuid4())
+                logger.info("No conversation-id header; generated thread ID: %s", nat_context_conversation_id)
+            else:
+                logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
 
         from aiq_agent.auth import get_current_user_info
 
@@ -347,13 +354,21 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 logger.debug("No session context - cannot determine collection")
         except Exception as e:
             logger.warning("Could not fetch available documents: %s", e)
-        state = ChatResearcherState(
-            messages=[HumanMessage(content=query_text)],
-            user_info=user_info_dict,
-            data_sources=data_sources,
-            available_documents=available_documents,
-        )
-        result = await agent.run(state, thread_id=nat_context_conversation_id)
+        # Set session-scoped source registry for citation verification across turns.
+        # When no conversation ID is available, get_or_create_session_registry returns a
+        # fresh per-request registry to prevent anonymous sessions from sharing state.
+        session_registry = get_or_create_session_registry(nat_context_conversation_id)
+        token = set_session_registry(session_registry)
+        try:
+            state = ChatResearcherState(
+                messages=[HumanMessage(content=query_text)],
+                user_info=user_info_dict,
+                data_sources=data_sources,
+                available_documents=available_documents,
+            )
+            result = await agent.run(state, thread_id=nat_context_conversation_id)
+        finally:
+            reset_session_registry(token)
 
         if isinstance(result, dict):
             messages = result.get("messages", [])

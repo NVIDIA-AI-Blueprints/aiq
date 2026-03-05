@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, test, expect } from 'vitest'
-import { pruneMessageForStorage, capString, pruneThinkingSteps, prunePlanMessages } from './prune-message-for-storage'
+import { pruneMessageForStorage, capString, stripThinkingStepsForStorage, prunePlanMessages } from './prune-message-for-storage'
 import type { ChatMessage } from '../types'
 
 describe('prune-message-for-storage', () => {
@@ -79,7 +79,6 @@ describe('prune-message-for-storage', () => {
 
       const pruned = pruneMessageForStorage(message)
 
-      // Essential fields kept
       expect(pruned.thinkingSteps).toBeDefined()
       expect(pruned.thinkingSteps).toHaveLength(1)
       expect(pruned.planMessages).toBeDefined()
@@ -88,6 +87,96 @@ describe('prune-message-for-storage', () => {
       expect(pruned.messageFiles).toHaveLength(1)
       expect(pruned.deepResearchJobId).toBe('job_123')
       expect(pruned.deepResearchJobStatus).toBe('success')
+    })
+
+    test('strips thinking step content and removes deep research steps', () => {
+      const message: ChatMessage = {
+        id: 'msg_3',
+        role: 'user',
+        content: 'Question',
+        timestamp: new Date(),
+        messageType: 'user',
+        thinkingSteps: [
+          {
+            id: 'ts_shallow',
+            userMessageId: 'msg_3',
+            category: 'tools',
+            functionName: 'web_search_tool',
+            displayName: 'Web Search',
+            content: 'Large content that is never displayed in ChatThinking',
+            rawPayload: '{"raw": "payload data"}',
+            timestamp: new Date(),
+            isComplete: true,
+            isDeepResearch: false,
+          },
+          {
+            id: 'ts_deep',
+            userMessageId: 'msg_3',
+            category: 'agents',
+            functionName: 'deep_agent',
+            displayName: 'Deep Agent',
+            content: 'Deep research content',
+            timestamp: new Date(),
+            isComplete: true,
+            isDeepResearch: true,
+          },
+        ],
+      }
+
+      const pruned = pruneMessageForStorage(message)
+
+      // Deep research step removed entirely
+      expect(pruned.thinkingSteps).toHaveLength(1)
+      expect(pruned.thinkingSteps![0].id).toBe('ts_shallow')
+
+      // Shallow step content stripped
+      expect(pruned.thinkingSteps![0].content).toBe('')
+      expect(pruned.thinkingSteps![0].rawPayload).toBeUndefined()
+
+      // Display fields preserved
+      expect(pruned.thinkingSteps![0].displayName).toBe('Web Search')
+      expect(pruned.thinkingSteps![0].functionName).toBe('web_search_tool')
+      expect(pruned.thinkingSteps![0].isTopLevel).toBeUndefined()
+    })
+
+    test('caps plan message text during pruning', () => {
+      const message: ChatMessage = {
+        id: 'msg_4',
+        role: 'assistant',
+        content: 'Response',
+        timestamp: new Date(),
+        messageType: 'agent_response',
+        planMessages: [
+          {
+            id: 'pm1',
+            text: 'x'.repeat(20000),
+            inputType: 'approval',
+            timestamp: new Date(),
+            userResponse: 'y'.repeat(5000),
+          },
+        ],
+      }
+
+      const pruned = pruneMessageForStorage(message)
+
+      expect(pruned.planMessages![0].text).toHaveLength(10000)
+      expect(pruned.planMessages![0].userResponse).toHaveLength(2000)
+    })
+
+    test('handles messages without thinkingSteps or planMessages', () => {
+      const message: ChatMessage = {
+        id: 'msg_5',
+        role: 'user',
+        content: 'Simple message',
+        timestamp: new Date(),
+      }
+
+      const pruned = pruneMessageForStorage(message)
+
+      expect(pruned.id).toBe('msg_5')
+      expect(pruned.content).toBe('Simple message')
+      expect(pruned.thinkingSteps).toBeUndefined()
+      expect(pruned.planMessages).toBeUndefined()
     })
   })
 
@@ -108,8 +197,40 @@ describe('prune-message-for-storage', () => {
     })
   })
 
-  describe('pruneThinkingSteps', () => {
-    test('caps content length in thinking steps', () => {
+  describe('stripThinkingStepsForStorage', () => {
+    test('removes deep research steps', () => {
+      const steps = [
+        {
+          id: 'ts_shallow',
+          userMessageId: 'msg_1',
+          category: 'tools' as const,
+          functionName: 'web_search',
+          displayName: 'Web Search',
+          content: 'some content',
+          timestamp: new Date(),
+          isComplete: true,
+          isDeepResearch: false,
+        },
+        {
+          id: 'ts_deep',
+          userMessageId: 'msg_1',
+          category: 'agents' as const,
+          functionName: 'deep_agent',
+          displayName: 'Deep Agent',
+          content: 'deep content',
+          timestamp: new Date(),
+          isComplete: true,
+          isDeepResearch: true,
+        },
+      ]
+
+      const stripped = stripThinkingStepsForStorage(steps)
+
+      expect(stripped).toHaveLength(1)
+      expect(stripped[0].id).toBe('ts_shallow')
+    })
+
+    test('strips content from shallow steps', () => {
       const steps = [
         {
           id: 'ts1',
@@ -118,38 +239,51 @@ describe('prune-message-for-storage', () => {
           functionName: 'test_function',
           displayName: 'Step 1',
           content: 'x'.repeat(10000),
+          rawPayload: '{"large": "payload"}',
           timestamp: new Date(),
           isComplete: true,
         },
       ]
 
-      const pruned = pruneThinkingSteps(steps, 100)
+      const stripped = stripThinkingStepsForStorage(steps)
 
-      expect(pruned).toHaveLength(1)
-      expect(pruned[0].content).toHaveLength(100)
-      expect(pruned[0].displayName).toBe('Step 1')
+      expect(stripped).toHaveLength(1)
+      expect(stripped[0].content).toBe('')
+      expect(stripped[0].rawPayload).toBeUndefined()
+      expect(stripped[0].displayName).toBe('Step 1')
+      expect(stripped[0].functionName).toBe('test_function')
     })
 
-    test('keeps other step fields intact', () => {
+    test('preserves display fields', () => {
+      const ts = new Date()
       const steps = [
         {
           id: 'ts1',
           userMessageId: 'msg_1',
           category: 'tools' as const,
-          functionName: 'test_function',
-          displayName: 'Step 1',
-          content: 'Short content',
-          timestamp: new Date(),
+          functionName: 'search_tool',
+          displayName: 'Search Tool',
+          content: 'content',
+          timestamp: ts,
           isComplete: true,
-          isDeepResearch: true,
+          isTopLevel: true,
         },
       ]
 
-      const pruned = pruneThinkingSteps(steps, 5000)
+      const stripped = stripThinkingStepsForStorage(steps)
 
-      expect(pruned[0].id).toBe('ts1')
-      expect(pruned[0].isDeepResearch).toBe(true)
-      expect(pruned[0].isComplete).toBe(true)
+      expect(stripped[0].id).toBe('ts1')
+      expect(stripped[0].userMessageId).toBe('msg_1')
+      expect(stripped[0].functionName).toBe('search_tool')
+      expect(stripped[0].displayName).toBe('Search Tool')
+      expect(stripped[0].timestamp).toBe(ts)
+      expect(stripped[0].isComplete).toBe(true)
+      expect(stripped[0].isTopLevel).toBe(true)
+    })
+
+    test('handles empty array', () => {
+      const stripped = stripThinkingStepsForStorage([])
+      expect(stripped).toHaveLength(0)
     })
   })
 

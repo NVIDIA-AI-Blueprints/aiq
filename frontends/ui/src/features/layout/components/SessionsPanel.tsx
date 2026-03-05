@@ -157,7 +157,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
             Using {storagePercent}% of browser storage quota
           </Text>
           <Text kind="body/regular/xs" className="text-subtle">
-            Note: Sessions and Files are saved for a limited time before deletion.
+            Note: Sessions and files are saved for a limited time before automatic deletion.
           </Text>
         </Flex>
       }
