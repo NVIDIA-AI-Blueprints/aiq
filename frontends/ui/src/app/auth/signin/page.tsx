@@ -27,7 +27,7 @@ const DISCLAIMER_TEXT =
  */
 const SignInContent = (): ReactNode => {
   const router = useRouter()
-  const { authRequired, authProviderId, ldapGroupRequestUrlTemplate } = useAppConfig()
+  const { authRequired, authProvider, authProviderId, ldapGroupRequestUrlTemplate } = useAppConfig()
   const searchParams = useSearchParams()
   const error = searchParams?.get('error') ?? null
   const dlGroup = searchParams?.get('dl_group') ?? null
@@ -47,7 +47,7 @@ const SignInContent = (): ReactNode => {
     )
   }
 
-  const isInternalAuth = authProviderId === 'internalauth'
+  const isInternalAuth = authProvider === 'internalauth'
 
   const handleSignIn = (): void => {
     signIn(authProviderId, { callbackUrl: '/' })

@@ -4,27 +4,22 @@
 /**
  * Authentication Configuration
  *
- * NextAuth configuration with pluggable auth providers.
+ * NextAuth configuration with pluggable auth provider architecture.
  *
- * Provider selection (AUTH_PROVIDER env var):
- *   - 'generic' (default) — Generic OIDC provider using OAUTH_* env vars
- *   - 'internalauth'       — Internal OIDC provider using INTERNAL_AUTH_* env vars
+ * Authentication is DISABLED by default. The app runs with a default user
+ * and no login is required (REQUIRE_AUTH=false).
  *
- * When REQUIRE_AUTH=false (default), authentication is disabled entirely.
+ * Auth providers have been removed from this repository. To enable auth,
+ * implement a provider in ./providers/ and wire it into this file.
+ * See ./providers/internal-auth.ts for a complete (commented-out) reference.
+ *
+ * If REQUIRE_AUTH=true is set without an active provider, a console warning
+ * is logged and the app falls through to default user.
  */
 
 import { type AuthOptions, type Account, type User, type Session } from 'next-auth'
 import { type JWT } from 'next-auth/jwt'
 import CredentialsProvider from 'next-auth/providers/credentials'
-
-import {
-  InternalAuthProvider,
-  getInternalAuthClientId,
-  getInternalAuthProviderId,
-  refreshInternalAuthToken,
-  GenericOIDCProvider,
-  refreshGenericToken,
-} from './providers'
 
 // Import type extensions
 import './types'
@@ -37,14 +32,27 @@ export const AUTH_PROVIDER = (process.env.AUTH_PROVIDER || 'generic').toLowerCas
 
 /**
  * The NextAuth provider ID used for signIn() calls.
- * InternalAuth ID is configurable for compatibility with legacy callback paths.
+ * When no provider is active this is 'disabled-auth'.
+ *
+ * When re-enabling a provider, set this to the provider's ID
+ * (e.g. getInternalAuthProviderId() for InternalAuth).
  */
-export const AUTH_PROVIDER_ID =
-  AUTH_PROVIDER === 'internalauth' ? getInternalAuthProviderId() : 'oauth'
+export const AUTH_PROVIDER_ID = 'disabled-auth'
 
-const getAuthProvider = () => {
-  if (AUTH_PROVIDER === 'internalauth') return InternalAuthProvider
-  return GenericOIDCProvider
+// No auth providers are currently enabled. To enable a provider,
+// uncomment and wire the provider in ./providers/ and restore the
+// import + dispatch here. See ./providers/internal-auth.ts for reference.
+const getAuthProvider = (): null => {
+  return null
+}
+
+// Log once at module load if REQUIRE_AUTH=true but no provider is available
+if (process.env.REQUIRE_AUTH?.toLowerCase() === 'true') {
+  console.warn(
+    '[Auth] REQUIRE_AUTH=true but no auth provider is configured. ' +
+      'Falling through to default user. ' +
+      'See src/adapters/auth/providers/ to enable a provider.'
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -81,29 +89,29 @@ export const shouldUseSecureCookies = (): boolean => {
 
 /**
  * Buffer time (seconds) before token expiry to trigger proactive refresh.
- * Default: 5 minutes for generic, 30 minutes recommended for ECI deployments
- * (deep research jobs can run 20-40+ minutes).
+ * Default: 30 minutes (deep research jobs can run 20-40+ minutes).
  *
  * Override via TOKEN_REFRESH_BUFFER_MINUTES env var.
  */
 export const TOKEN_REFRESH_BUFFER_SECONDS =
-  parseInt(process.env.TOKEN_REFRESH_BUFFER_MINUTES || '5', 10) * 60
+  parseInt(process.env.TOKEN_REFRESH_BUFFER_MINUTES || '30', 10) * 60
 
 /**
  * Max age (seconds) for the idToken cookie.
- * Default: 720 hours (30 days). Set to 24 for enterprise/InternalAuth deployments.
+ * Default: 24 hours. Must stay aligned with session.maxAge below.
  *
  * Override via ID_TOKEN_COOKIE_HOURS env var.
  */
 export const ID_TOKEN_COOKIE_MAX_AGE =
-  parseInt(process.env.ID_TOKEN_COOKIE_HOURS || '720', 10) * 60 * 60
+  parseInt(process.env.ID_TOKEN_COOKIE_HOURS || '24', 10) * 60 * 60
 
 // ---------------------------------------------------------------------------
-// LDAP-API gating — no-op when env vars are absent
+// LDAP-API gating — no-op when env vars are absent or provider is not internalauth
 // ---------------------------------------------------------------------------
 
 const isLdapGatingConfigured = (): boolean => {
   return !!(
+    AUTH_PROVIDER === 'internalauth' &&
     process.env.INTERNAL_AUTH_SSA_CLIENT_ID &&
     process.env.INTERNAL_AUTH_SSA_SECRET &&
     process.env.LDAP_API_SSA_TOKEN_ENDPOINT &&
@@ -206,29 +214,22 @@ const checkUserAccess = async (userEmail: string): Promise<boolean> => {
 }
 
 // ---------------------------------------------------------------------------
-// Token refresh (provider-aware)
+// Token refresh
 // ---------------------------------------------------------------------------
 
+/**
+ * Token refresh stub. No provider is currently active, so this should never
+ * be called. If it is, something is misconfigured — return an error token
+ * so the session hook triggers re-auth.
+ *
+ * When re-enabling a provider, restore the provider-dispatched refresh logic
+ * (see git history or ./providers/internal-auth.ts for reference).
+ */
 const refreshAccessToken = async (token: JWT): Promise<JWT> => {
-  try {
-    const refreshed =
-      AUTH_PROVIDER === 'internalauth'
-        ? await refreshInternalAuthToken(token.refreshToken as string)
-        : await refreshGenericToken(token.refreshToken as string)
-
-    return {
-      ...token,
-      accessToken: refreshed.access_token,
-      idToken: refreshed.id_token ?? token.idToken,
-      expiresAt: Math.floor(Date.now() / 1000) + refreshed.expires_in,
-      refreshToken: refreshed.refresh_token ?? token.refreshToken,
-    }
-  } catch (error) {
-    console.error('[Auth] Token refresh failed:', error)
-    return {
-      ...token,
-      error: 'RefreshAccessTokenError',
-    }
+  console.error('[Auth] Token refresh called but no auth provider is configured')
+  return {
+    ...token,
+    error: 'RefreshAccessTokenError',
   }
 }
 
@@ -236,23 +237,23 @@ const refreshAccessToken = async (token: JWT): Promise<JWT> => {
 // NextAuth configuration
 // ---------------------------------------------------------------------------
 
-export const authOptions: AuthOptions = {
-  secret: process.env.NEXTAUTH_SECRET || (!isAuthRequired() ? 'disabled-auth-secret' : undefined),
+const activeProvider = getAuthProvider()
 
-  providers: !isAuthRequired()
-    ? [
-        CredentialsProvider({
-          id: 'disabled-auth',
-          name: 'Disabled Auth',
-          credentials: {},
-          authorize: async () => null,
-        }),
-      ]
-    : [getAuthProvider()],
+export const authOptions: AuthOptions = {
+  secret: process.env.NEXTAUTH_SECRET || (!isAuthRequired() || !activeProvider ? 'disabled-auth-secret' : undefined),
+
+  providers: [
+    CredentialsProvider({
+      id: 'disabled-auth',
+      name: 'Disabled Auth',
+      credentials: {},
+      authorize: async () => null,
+    }),
+  ],
 
   session: {
     strategy: 'jwt',
-    maxAge: 24 * 60 * 60, // 24 hours
+    maxAge: ID_TOKEN_COOKIE_MAX_AGE,
   },
 
   pages: {
@@ -326,22 +327,18 @@ export const validateAuthEnv = (): { isValid: boolean; missing: string[] } => {
     return { isValid: true, missing: [] }
   }
 
+  // No provider is active — warn but don't block
+  if (!activeProvider) {
+    console.warn('[Auth] REQUIRE_AUTH=true but no auth provider is active. Auth will be bypassed.')
+    return { isValid: true, missing: [] }
+  }
+
   const required = ['NEXTAUTH_URL', 'NEXTAUTH_SECRET']
   const missing: string[] = []
 
   for (const key of required) {
     if (!process.env[key]) {
       missing.push(key)
-    }
-  }
-
-  if (AUTH_PROVIDER === 'internalauth') {
-    if (!getInternalAuthClientId()) {
-      missing.push('INTERNAL_AUTH_CLIENT_ID (or INTERNAL_AUTH_CLIENT_ID_BROWSER)')
-    }
-  } else {
-    if (!process.env.OAUTH_CLIENT_ID) {
-      missing.push('OAUTH_CLIENT_ID')
     }
   }
 

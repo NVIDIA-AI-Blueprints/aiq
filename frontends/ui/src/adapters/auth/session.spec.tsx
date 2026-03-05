@@ -48,6 +48,7 @@ const defaultFileUploadConfig = {
 const createWrapper = (
   config: AppConfig = {
     authRequired: true,
+    authProvider: 'generic',
     authProviderId: 'oauth',
     fileUpload: defaultFileUploadConfig,
   }
@@ -188,6 +189,7 @@ describe('useAuth', () => {
       const { result } = renderHook(() => useAuth(), {
         wrapper: createWrapper({
           authRequired: false,
+          authProvider: 'generic',
           authProviderId: 'oauth',
           fileUpload: defaultFileUploadConfig,
         }),
@@ -206,6 +208,7 @@ describe('useAuth', () => {
       const { result } = renderHook(() => useAuth(), {
         wrapper: createWrapper({
           authRequired: false,
+          authProvider: 'generic',
           authProviderId: 'oauth',
           fileUpload: defaultFileUploadConfig,
         }),
