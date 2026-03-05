@@ -119,7 +119,14 @@ const startServer = async () => {
     req.socket.setKeepAlive?.(true, 15000)
     req.socket.setTimeout?.(0)
 
-    const parsedUrl = parse(req.url, true)
+    let parsedUrl
+    try {
+      parsedUrl = parse(req.url, true)
+    } catch {
+      res.writeHead(400, { 'Content-Type': 'text/plain' })
+      res.end('Bad Request')
+      return
+    }
 
     if (dev) {
       // Development: proxy everything to Next.js dev server
@@ -141,7 +148,13 @@ const startServer = async () => {
     socket.setKeepAlive?.(true, 15000)
     socket.setTimeout?.(0)
 
-    const parsedUrl = parse(req.url, true)
+    let parsedUrl
+    try {
+      parsedUrl = parse(req.url, true)
+    } catch {
+      socket.destroy()
+      return
+    }
     const pathname = parsedUrl.pathname || '/'
 
     // Proxy /websocket to backend
