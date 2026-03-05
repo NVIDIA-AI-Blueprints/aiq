@@ -282,7 +282,8 @@ class DeepResearcherAgent:
 
         # Quick citation quality check — only reject if ALL citations are invalid
         # (full verification with repair/renumbering happens in run() post-processing)
-        if self.source_registry_middleware._get_registry().all_sources():
+        registry = self.source_registry_middleware._get_registry()
+        if registry.all_sources():
             from aiq_agent.common.citation_verification import _CITATION_LINE_RE
             from aiq_agent.common.citation_verification import _REFERENCE_SECTION_RE
             from aiq_agent.common.citation_verification import _URL_IN_LINE_RE
@@ -292,7 +293,6 @@ class DeepResearcherAgent:
             if ref_match:
                 ref_section = content[ref_match.start() :]
                 has_any_valid = False
-                registry = self.source_registry_middleware._get_registry()
                 for line_match in _CITATION_LINE_RE.finditer(ref_section):
                     ref_text = line_match.group(2).strip()
                     # Check URL citations

@@ -350,7 +350,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 logger.debug("No session context - cannot determine collection")
         except Exception as e:
             logger.warning("Could not fetch available documents: %s", e)
-        # Set session-scoped source registry for citation verification across turns
+        # Set session-scoped source registry for citation verification across turns.
+        # When no conversation ID is available, get_or_create_session_registry returns a
+        # fresh per-request registry to prevent anonymous sessions from sharing state.
         session_registry = get_or_create_session_registry(nat_context_conversation_id)
         token = set_session_registry(session_registry)
         try:

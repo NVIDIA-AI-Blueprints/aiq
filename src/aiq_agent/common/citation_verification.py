@@ -267,8 +267,15 @@ _session_registries: OrderedDict[str, SourceRegistry] = OrderedDict()
 _session_registries_lock = threading.Lock()
 
 
-def get_or_create_session_registry(session_id: str) -> SourceRegistry:
-    """Get or create a session-scoped SourceRegistry (LRU, max 1000 sessions)."""
+def get_or_create_session_registry(session_id: str | None) -> SourceRegistry:
+    """Get or create a session-scoped SourceRegistry (LRU, max 1000 sessions).
+
+    When session_id is None (e.g. CLI or batch modes with no conversation context),
+    a fresh isolated SourceRegistry is returned on every call to prevent anonymous
+    sessions from sharing state and leaking citations across concurrent requests.
+    """
+    if session_id is None:
+        return SourceRegistry()
     with _session_registries_lock:
         if session_id in _session_registries:
             _session_registries.move_to_end(session_id)
