@@ -26,7 +26,7 @@ const DISCLAIMER_TEXT =
  */
 const SignInContent = (): ReactNode => {
   const router = useRouter()
-  const { authRequired } = useAppConfig()
+  const { authRequired, authProviderId } = useAppConfig()
   const searchParams = useSearchParams()
   const error = searchParams?.get('error') ?? null
 
@@ -47,7 +47,7 @@ const SignInContent = (): ReactNode => {
   }
 
   const handleSignIn = (): void => {
-    signIn('oauth', { callbackUrl: '/' })
+    signIn(authProviderId, { callbackUrl: '/' })
   }
 
   // Map NextAuth error codes to user-friendly messages

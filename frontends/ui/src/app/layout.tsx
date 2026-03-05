@@ -17,7 +17,7 @@ import { connection } from 'next/server'
 import { Providers } from './providers'
 import type { AppConfig } from '@/shared/context'
 import { getFileUploadConfigFromEnv } from '@/shared/config/file-upload'
-import { isAuthRequired } from '@/adapters/auth/config'
+import { isAuthRequired, AUTH_PROVIDER_ID } from '@/adapters/auth/config'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -34,6 +34,7 @@ export const metadata: Metadata = {
  */
 const getAppConfig = (): AppConfig => ({
   authRequired: isAuthRequired(),
+  authProviderId: AUTH_PROVIDER_ID,
   fileUpload: getFileUploadConfigFromEnv(process.env),
 })
 

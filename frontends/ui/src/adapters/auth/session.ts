@@ -52,7 +52,7 @@ const DEFAULT_USER = {
  * ```
  */
 export const useAuth = (): AuthContext => {
-  const { authRequired } = useAppConfig()
+  const { authRequired, authProviderId } = useAppConfig()
   const authRequiredRef = useRef(authRequired)
   const { data: session, status, update } = useNextAuthSession()
   const hasTriggeredReauth = useRef(false)
@@ -62,8 +62,8 @@ export const useAuth = (): AuthContext => {
   }
 
   const handleSignIn = useCallback(async (): Promise<void> => {
-    await signIn('oauth', { callbackUrl: '/' })
-  }, [])
+    await signIn(authProviderId, { callbackUrl: '/' })
+  }, [authProviderId])
 
   const handleSignOut = useCallback(async (): Promise<void> => {
     await signOut({ callbackUrl: '/auth/signin' })

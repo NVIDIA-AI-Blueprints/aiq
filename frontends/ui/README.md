@@ -358,22 +358,132 @@ ws.sendMessage('Hello!')
 
 ## Authentication
 
-Authentication is **disabled by default**. All users are assigned a "Default User" identity with no login required.
+Authentication is **disabled by default**. All users are assigned a "Default User" identity with no login required. The auth system uses a **plugin architecture** where `src/adapters/auth/providers/index.ts` is the sole file that controls whether auth is enabled and which provider is active.
 
-To enable OAuth authentication:
+### Architecture
 
-1. Set `REQUIRE_AUTH=true`
-2. Configure your OIDC provider credentials:
+```
+src/adapters/auth/
+├── providers/
+│   ├── types.ts           # AuthProviderConfig interface (contract)
+│   ├── index.ts           # SWAP-POINT: returns null (disabled) or a real provider
+│   └── internal-auth.ts   # Reference implementation (not imported by default)
+├── config.ts              # NextAuth config (provider-agnostic, never needs editing)
+├── session.ts             # useAuth() hook (provider-agnostic)
+├── types.ts               # NextAuth type extensions
+└── index.ts               # Re-exports
+```
+
+- `providers/index.ts` exports `getAuthProviderConfig()` which returns the active provider configuration. By default it returns `{ provider: null }` (auth disabled).
+- `config.ts` imports from `providers/index.ts` and wires the provider into NextAuth. It never needs to be edited when adding a new provider.
+- `session.ts` provides the `useAuth()` hook that components use. It reads `authProviderId` from `AppConfig` and adapts dynamically.
+
+### Provider Contract
+
+Every auth provider must conform to the `AuthProviderConfig` interface defined in `providers/types.ts`:
+
+```typescript
+interface AuthProviderConfig {
+  provider: Record<string, unknown> | null  // NextAuth-compatible provider object, or null
+  providerId: string                        // ID used in signIn(providerId) -- must match provider.id
+  refreshToken: (refreshToken: string) => Promise<TokenRefreshResult>
+}
+
+interface TokenRefreshResult {
+  access_token: string
+  id_token?: string
+  expires_in: number
+  refresh_token?: string
+}
+```
+
+### Enabling Authentication (step-by-step)
+
+To enable OAuth/OIDC authentication, follow these steps:
+
+#### Step 1: Create a provider file
+
+Create a new file in `src/adapters/auth/providers/` (e.g. `my-sso.ts`). See `internal-auth.ts` in the same directory for a complete reference implementation. Your file should export:
+
+1. A NextAuth-compatible provider object (OAuth/OIDC config)
+2. A token refresh function matching the `TokenRefreshResult` return type
+
+Example minimal provider:
+
+```typescript
+// src/adapters/auth/providers/my-sso.ts
+import type { TokenRefreshResult } from './types'
+
+export const MySSOProvider = {
+  id: 'my-sso',
+  name: 'My SSO',
+  type: 'oauth' as const,
+  wellKnown: `${process.env.MY_SSO_ISSUER}/.well-known/openid-configuration`,
+  authorization: {
+    params: { scope: 'openid profile email', response_type: 'code' },
+  },
+  clientId: process.env.MY_SSO_CLIENT_ID,
+  clientSecret: process.env.MY_SSO_CLIENT_SECRET || '',
+  checks: ['pkce', 'state'] as ('pkce' | 'state' | 'nonce')[],
+  idToken: true,
+  profile(profile: { sub: string; email: string; name: string; picture?: string }) {
+    return { id: profile.sub, email: profile.email, name: profile.name, image: profile.picture }
+  },
+}
+
+export const refreshMySSOToken = async (refreshToken: string): Promise<TokenRefreshResult> => {
+  const response = await fetch(process.env.MY_SSO_TOKEN_URL!, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'refresh_token',
+      refresh_token: refreshToken,
+      client_id: process.env.MY_SSO_CLIENT_ID || '',
+    }),
+  })
+  const tokens = await response.json()
+  if (!response.ok) throw tokens
+  return tokens
+}
+```
+
+#### Step 2: Wire it into providers/index.ts
+
+Replace the default `getAuthProviderConfig()` to return your provider:
+
+```typescript
+// src/adapters/auth/providers/index.ts
+import type { AuthProviderConfig } from './types'
+import { MySSOProvider, refreshMySSOToken } from './my-sso'
+
+export type { AuthProviderConfig, TokenRefreshResult } from './types'
+
+export const getAuthProviderConfig = (): AuthProviderConfig => ({
+  provider: MySSOProvider,
+  providerId: 'my-sso',
+  refreshToken: refreshMySSOToken,
+})
+```
+
+#### Step 3: Set environment variables
 
 ```bash
-# .env
 REQUIRE_AUTH=true
 NEXTAUTH_SECRET=<generate-with-openssl-rand-base64-32>
 NEXTAUTH_URL=http://localhost:3000
-OAUTH_CLIENT_ID=<your-client-id>
-OAUTH_CLIENT_SECRET=<your-client-secret>
-OAUTH_ISSUER=<your-oidc-issuer-url>
+
+# Provider-specific (names depend on your provider file)
+MY_SSO_ISSUER=https://sso.example.com
+MY_SSO_CLIENT_ID=<your-client-id>
+MY_SSO_CLIENT_SECRET=<your-client-secret>
+MY_SSO_TOKEN_URL=https://sso.example.com/token
 ```
+
+That's it. No other files need to change -- `config.ts`, `session.ts`, `proxy.ts`, and all components automatically adapt to the new provider via `getAuthProviderConfig()`.
+
+### Disabling Authentication
+
+To disable auth (the default), ensure `providers/index.ts` returns `{ provider: null }` and either unset `REQUIRE_AUTH` or set `REQUIRE_AUTH=false`. The app will use a "Default User" identity with no login required.
 
 ### Using the Auth Hook
 
@@ -386,16 +496,11 @@ const MyComponent = () => {
   if (isLoading) return <Spinner />
   if (!isAuthenticated) return <Button onClick={signIn}>Sign In</Button>
 
-  // Use idToken for backend API calls
-  await fetch('/api/data', {
-    headers: { 'Authorization': `Bearer ${idToken}` }
-  })
-
   return <Text>Welcome, {user?.name}</Text>
 }
 ```
 
->**NOTE:** Above Authentication docs are reference only and implementation depends on environment specifics.
+When auth is disabled, `useAuth()` returns `isAuthenticated: true` with a default user -- no sign-in flow is triggered.
 
 
 ## Development
