@@ -913,10 +913,9 @@ def expand_reference_urls(report_text: str, registry: SourceRegistry) -> str:
     # Find every URL in the references section and replace with canonical
     def _replace_url(m: re.Match) -> str:
         url = m.group(0).rstrip(".,;)")
-        trailing = m.group(0)[len(url) :]
         canonical = registry.resolve_url(url)
         if canonical and canonical != url:
-            return canonical + trailing
+            return canonical
         return m.group(0)
 
     ref_section = _GENERIC_URL_RE.sub(_replace_url, ref_section)

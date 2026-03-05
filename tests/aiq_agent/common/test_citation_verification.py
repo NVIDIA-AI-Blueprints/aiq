@@ -789,6 +789,15 @@ class TestExpandReferenceUrls:
         assert "https://nvidia.com/benefits/full" in result
         assert "**References:**" in result
 
+    def test_ellipsis_truncated_url_expanded_without_trailing_dots(self):
+        """Truncated URL ending in ... has dots stripped after expansion."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://example.com/very/long/path/article"))
+        report = "Finding [1].\n\n## Sources\n[1] Article: https://example.com/very/long..."
+        result = expand_reference_urls(report, registry)
+        assert "https://example.com/very/long/path/article" in result
+        assert "..." not in result
+
 
 # ---------------------------------------------------------------------------
 # EmptySourceRegistryError
