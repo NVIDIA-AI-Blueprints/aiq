@@ -29,7 +29,7 @@ aiq:
       replicas: 1
       image:
         repository: ""
-        tag: 2602.23.ext.rc0
+        tag: 2603.04.ext.rc6
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
@@ -211,7 +211,7 @@ aiq:
       replicas: 1
       image:
         repository: ""
-        tag: 2602.23.ext.rc0
+        tag: 2603.04.ext.rc6
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
@@ -220,23 +220,48 @@ aiq:
         targetPort: 3000
       port: 3000
       healthCheck:
-        enabled: false
+        enabled: true
+        path: /
+        startupProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 30
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+          timeoutSeconds: 3
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: 3000
+          initialDelaySeconds: 10
+          periodSeconds: 15
+          timeoutSeconds: 5
+          failureThreshold: 3
       resources:
         requests:
           cpu: 100m
           memory: 256Mi
         limits:
           cpu: 500m
-          memory: 512Mi
+          memory: 2Gi
       env:
         BACKEND_URL: http://aiq-backend:8000
         NODE_ENV: production
-        DISABLE_AUTH: 'true'
-        NEXT_PUBLIC_DATADOG_ENABLED: 'false'
-        FILE_UPLOAD_ACCEPTED_TYPES: '.pdf,.docx,.txt,.md'
+        REQUIRE_AUTH: 'false'
+        FILE_UPLOAD_ACCEPTED_TYPES: .pdf,.docx,.txt,.md
         FILE_UPLOAD_MAX_SIZE_MB: '100'
         FILE_UPLOAD_MAX_FILE_COUNT: '10'
         FILE_EXPIRATION_CHECK_INTERVAL_HOURS: '0'
+        NEXT_PUBLIC_DATADOG_ENABLED: 'false'
       labels:
         component: frontend
       route:
