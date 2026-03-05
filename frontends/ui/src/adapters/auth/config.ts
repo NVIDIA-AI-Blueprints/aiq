@@ -79,11 +79,24 @@ export const shouldUseSecureCookies = (): boolean => {
 // ---------------------------------------------------------------------------
 
 /**
- * Buffer time before token expiry to trigger proactive refresh.
- * Refresh 5 minutes before expiry to prevent race conditions and
- * ensure tokens are always valid when used.
+ * Buffer time (seconds) before token expiry to trigger proactive refresh.
+ * Default: 5 minutes. For deployments with long-running jobs (deep research
+ * can run 20-40+ minutes), set TOKEN_REFRESH_BUFFER_MINUTES=30.
+ *
+ * Override via TOKEN_REFRESH_BUFFER_MINUTES env var.
  */
-export const TOKEN_REFRESH_BUFFER_SECONDS = 5 * 60
+export const TOKEN_REFRESH_BUFFER_SECONDS =
+  parseInt(process.env.TOKEN_REFRESH_BUFFER_MINUTES || '5', 10) * 60
+
+/**
+ * Max age (seconds) for both the NextAuth session and the idToken cookie.
+ * These MUST stay aligned -- a session that outlives its cookie (or vice versa)
+ * causes stale-credential or premature-logout bugs.
+ *
+ * Default: 24 hours. Override via SESSION_MAX_AGE_HOURS env var.
+ */
+export const SESSION_MAX_AGE_SECONDS =
+  parseInt(process.env.SESSION_MAX_AGE_HOURS || '24', 10) * 60 * 60
 
 // ---------------------------------------------------------------------------
 // Token refresh (delegates to active provider)
@@ -116,7 +129,7 @@ const refreshAccessToken = async (token: JWT): Promise<JWT> => {
 // ---------------------------------------------------------------------------
 
 export const authOptions: AuthOptions = {
-  secret: process.env.NEXTAUTH_SECRET || (!isAuthRequired() || !activeProvider ? 'disabled-auth-secret' : undefined),
+  secret: process.env.NEXTAUTH_SECRET || (!isAuthRequired() || !activeProvider ? crypto.randomUUID() : undefined),
 
   providers:
     !isAuthRequired() || !activeProvider
@@ -132,7 +145,7 @@ export const authOptions: AuthOptions = {
 
   session: {
     strategy: 'jwt',
-    maxAge: 24 * 60 * 60,
+    maxAge: SESSION_MAX_AGE_SECONDS,
   },
 
   pages: {

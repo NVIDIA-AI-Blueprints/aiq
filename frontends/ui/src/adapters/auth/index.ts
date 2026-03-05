@@ -9,7 +9,15 @@
  */
 
 // Configuration
-export { authOptions, validateAuthEnv, isAuthRequired, shouldUseSecureCookies, AUTH_PROVIDER_ID } from './config'
+export {
+  authOptions,
+  validateAuthEnv,
+  isAuthRequired,
+  shouldUseSecureCookies,
+  AUTH_PROVIDER_ID,
+  TOKEN_REFRESH_BUFFER_SECONDS,
+  SESSION_MAX_AGE_SECONDS,
+} from './config'
 
 // Session hooks (client-side)
 export { useAuth } from './session'

@@ -297,6 +297,8 @@ All environment variables are **runtime configurable** - no container rebuild ne
 | `REQUIRE_AUTH` | `false` | Set to `true` to require OAuth login |
 | `NEXTAUTH_SECRET` | - | Session encryption secret (required if auth enabled) |
 | `NEXTAUTH_URL` | - | Public URL where app is hosted (required if auth enabled) |
+| `SESSION_MAX_AGE_HOURS` | `24` | Session and idToken cookie lifetime in hours |
+| `TOKEN_REFRESH_BUFFER_MINUTES` | `5` | Minutes before token expiry to trigger refresh (set to 30 for long-running jobs) |
 
 > **Cookie Security:** `NEXTAUTH_URL` determines cookie security:
 > - `http://...` -> non-secure cookies (local dev over HTTP)
@@ -304,13 +306,7 @@ All environment variables are **runtime configurable** - no container rebuild ne
 
 ### OAuth (required when `REQUIRE_AUTH=true`)
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `OAUTH_CLIENT_ID` | - | OAuth client ID from your OIDC provider |
-| `OAUTH_CLIENT_SECRET` | - | OAuth client secret |
-| `OAUTH_ISSUER` | - | OIDC issuer URL (enables auto-discovery of endpoints) |
-
-> **Note:** When `OAUTH_ISSUER` is set, the app uses OIDC auto-discovery to resolve authorization, token, and userinfo endpoints automatically. No additional endpoint URLs are needed for standard OIDC providers.
+Provider-specific env vars depend on your provider implementation. See `src/adapters/auth/providers/internal-auth.ts` for a reference and the [Authentication](#authentication) section for setup steps.
 
 
 ## API Communication

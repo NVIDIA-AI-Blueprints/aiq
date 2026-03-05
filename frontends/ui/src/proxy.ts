@@ -25,7 +25,12 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { getToken } from 'next-auth/jwt'
-import { TOKEN_REFRESH_BUFFER_SECONDS, isAuthRequired, shouldUseSecureCookies } from '@/adapters/auth/config'
+import {
+  TOKEN_REFRESH_BUFFER_SECONDS,
+  SESSION_MAX_AGE_SECONDS,
+  isAuthRequired,
+  shouldUseSecureCookies,
+} from '@/adapters/auth/config'
 
 /**
  * Check if a token is expired or about to expire (within buffer period).
@@ -87,7 +92,7 @@ export default async function proxy(req: NextRequest) {
           sameSite: 'lax',
           path: '/',
           secure: shouldUseSecureCookies(),
-          maxAge: 30 * 24 * 60 * 60, // 30 days
+          maxAge: SESSION_MAX_AGE_SECONDS,
         })
       } else if (isTokenExpiredOrExpiring(expiresAt)) {
         // Token is expired or about to expire - clear the cookie
