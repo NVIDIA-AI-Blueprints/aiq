@@ -124,12 +124,6 @@ spec:
         - name: http
           containerPort: {{ $appConfig.port }}
           protocol: TCP
-        {{- else if $appConfig.port }}
-        ports:
-        - name: http
-          containerPort: {{ $appConfig.port }}
-          protocol: TCP
-        {{- end }}
         {{- end }}
         {{- /* Health checks with defaults and smart port handling */ -}}
         {{- $defaultHealthCheck := $defaults.healthCheck | default dict }}
