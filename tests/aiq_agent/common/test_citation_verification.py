@@ -734,6 +734,24 @@ class TestSanitizeReport:
         assert ref_lines[1].startswith("[2]")
         assert ref_lines[2].startswith("[3]")
 
+    def test_already_sorted_citations_unchanged(self):
+        """Already-sorted citations are not modified."""
+        report = "A [1]. B [2].\n\n## Sources\n[1] First: https://a.com/page\n[2] Second: https://b.com/page"
+        result = sanitize_report(report)
+        assert "[1] First: https://a.com/page" in result.sanitized_report
+        assert "[2] Second: https://b.com/page" in result.sanitized_report
+
+    def test_sorting_preserves_header(self):
+        """Reference section header is preserved before sorted entries."""
+        report = "A [1]. B [2].\n\n## Sources\n[2] Second: https://b.com/page\n[1] First: https://a.com/page"
+        result = sanitize_report(report)
+        assert "## Sources" in result.sanitized_report
+        # Header appears before first citation line in the references section
+        header_pos = result.sanitized_report.index("## Sources")
+        ref_after_header = result.sanitized_report[header_pos:]
+        first_cite_pos = ref_after_header.index("[1]")
+        assert first_cite_pos > 0
+
 
 # ---------------------------------------------------------------------------
 # expand_reference_urls tests
