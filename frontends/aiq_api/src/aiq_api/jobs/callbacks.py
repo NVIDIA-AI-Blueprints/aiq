@@ -41,6 +41,8 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from aiq_agent.common.citation_verification import get_session_registry
+
 if TYPE_CHECKING:
     from .event_store import EventStore
 
@@ -347,12 +349,7 @@ class AgentEventCallback(BaseCallbackHandler):
 
     def _get_source_registry(self):
         """Return the session-scoped SourceRegistry if set, otherwise None."""
-        try:
-            from aiq_agent.common.citation_verification import get_session_registry
-
-            return get_session_registry()
-        except ImportError:
-            return None
+        return get_session_registry()
 
     def emit_final_report(self, content: str) -> None:
         """Emit the post-processed final report as an OUTPUT artifact.

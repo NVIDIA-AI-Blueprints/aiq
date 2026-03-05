@@ -26,6 +26,9 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_checkpointer
 from aiq_agent.common import is_verbose
+from aiq_agent.common.citation_verification import get_or_create_session_registry
+from aiq_agent.common.citation_verification import reset_session_registry
+from aiq_agent.common.citation_verification import set_session_registry
 from aiq_agent.observability.otel_header_redaction_exporter import (
     ensure_registered as _ensure_otel_redaction_registered,
 )
@@ -348,10 +351,6 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         except Exception as e:
             logger.warning("Could not fetch available documents: %s", e)
         # Set session-scoped source registry for citation verification across turns
-        from aiq_agent.common.citation_verification import get_or_create_session_registry
-        from aiq_agent.common.citation_verification import reset_session_registry
-        from aiq_agent.common.citation_verification import set_session_registry
-
         session_registry = get_or_create_session_registry(nat_context_conversation_id)
         token = set_session_registry(session_registry)
         try:
