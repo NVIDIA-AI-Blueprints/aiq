@@ -96,7 +96,8 @@ jobs:
             --cov=src/aiq_agent \
             --cov-report=xml \
             --cov-report=html \
-            --cov-report=term
+            --cov-report=term \
+            --cov-fail-under=65
 
       - name: Upload coverage artifacts
         if: always()
@@ -108,6 +109,24 @@ jobs:
             coverage.xml
             htmlcov/
           retention-days: 7
+
+  helm-lint:
+    name: Helm Lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint Helm charts
+        run: |
+          for chart in deploy/helm/helm-charts-k8s/*; do
+            if [ -d "$chart" ]; then
+              helm lint "$chart"
+            fi
+          done
 
   test-scripts:
     name: Script Validation
