@@ -131,7 +131,7 @@ const refreshAccessToken = async (token: JWT): Promise<JWT> => {
 export const authOptions: AuthOptions = {
   secret: process.env.NEXTAUTH_SECRET || (!isAuthRequired() || !activeProvider ? crypto.randomUUID() : undefined),
 
-  providers:
+  providers: (
     !isAuthRequired() || !activeProvider
       ? [
           CredentialsProvider({
@@ -141,7 +141,8 @@ export const authOptions: AuthOptions = {
             authorize: async () => null,
           }),
         ]
-      : [activeProvider],
+      : [activeProvider]
+  ) as AuthOptions['providers'],
 
   session: {
     strategy: 'jwt',

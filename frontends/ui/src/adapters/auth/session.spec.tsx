@@ -46,7 +46,7 @@ const defaultFileUploadConfig = {
  * Test wrapper that provides required context
  */
 const createWrapper = (
-  config: AppConfig = { authRequired: true, fileUpload: defaultFileUploadConfig }
+  config: AppConfig = { authRequired: true, authProviderId: 'oauth', fileUpload: defaultFileUploadConfig }
 ) => {
   const Wrapper = ({ children }: { children: ReactNode }): ReactNode => (
     <AppConfigProvider config={config}>{children}</AppConfigProvider>
@@ -182,7 +182,7 @@ describe('useAuth', () => {
       mockUseSessionFn.mockReturnValue({ data: null, status: 'unauthenticated' })
 
       const { result } = renderHook(() => useAuth(), {
-        wrapper: createWrapper({ authRequired: false, fileUpload: defaultFileUploadConfig }),
+        wrapper: createWrapper({ authRequired: false, authProviderId: 'disabled-auth', fileUpload: defaultFileUploadConfig }),
       })
 
       expect(result.current.isAuthenticated).toBe(true)
@@ -196,7 +196,7 @@ describe('useAuth', () => {
       mockUseSessionFn.mockReturnValue({ data: null, status: 'unauthenticated' })
 
       const { result } = renderHook(() => useAuth(), {
-        wrapper: createWrapper({ authRequired: false, fileUpload: defaultFileUploadConfig }),
+        wrapper: createWrapper({ authRequired: false, authProviderId: 'disabled-auth', fileUpload: defaultFileUploadConfig }),
       })
 
       await result.current.signIn()
