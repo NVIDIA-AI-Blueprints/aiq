@@ -933,7 +933,7 @@ def expand_reference_urls(report_text: str, registry: SourceRegistry) -> str:
         if canonical and canonical != url:
             # Reattach structural punctuation (e.g. ")" in markdown links),
             # but drop truncation markers ("...", "…")
-            keep = "" if re.fullmatch(r"[.…]+", trailing) else trailing
+            keep = "" if re.fullmatch(r"\.{2,}|…+", trailing) else trailing
             return canonical + keep
         return raw
 
