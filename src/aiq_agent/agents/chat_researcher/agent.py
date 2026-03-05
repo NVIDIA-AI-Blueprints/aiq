@@ -204,6 +204,10 @@ class ChatResearcherAgent:
                     "This may be due to a temporary issue or the question may need to be rephrased. "
                     "Please try again."
                 )
+                # confidence="high" reflects certainty that an error occurred and that the error
+                # message is the correct response — not uncertainty about the answer quality.
+                # escalate_to_deep=False because retrying deep research will not resolve a
+                # source registry or transient failure; the user should rephrase and retry.
                 return {
                     "messages": [AIMessage(content=err_msg)],
                     "shallow_result": ShallowResult(
@@ -215,6 +219,8 @@ class ChatResearcherAgent:
             except Exception as e:
                 logger.exception("Error in shallow research: %s", e)
                 err_msg = "An error occurred while researching your question. Please try again."
+                # Same rationale as EmptySourceRegistryError: the system is certain an error
+                # occurred; escalating to deep research will not resolve an unexpected exception.
                 return {
                     "messages": [AIMessage(content=err_msg)],
                     "shallow_result": ShallowResult(
