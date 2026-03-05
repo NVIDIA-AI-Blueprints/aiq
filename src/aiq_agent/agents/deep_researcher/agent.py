@@ -415,8 +415,8 @@ class DeepResearcherAgent:
                 final_message = final_content if isinstance(final_content, str) else str(final_content)
 
             # Post-process: verify citations against source registry
-            if self.source_registry_middleware._get_registry().all_sources():
-                registry = self.source_registry_middleware._get_registry()
+            registry = self.source_registry_middleware._get_registry()
+            if registry.all_sources():
                 final_message = expand_reference_urls(final_message, registry)
                 verification = verify_citations(final_message, registry)
                 if verification.removed_citations:

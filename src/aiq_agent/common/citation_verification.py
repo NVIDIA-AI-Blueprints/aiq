@@ -860,7 +860,9 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     if ref_section:
         cleaned_body, ref_section, _ = _renumber_citations(cleaned_body, ref_section)
 
-        # Sort reference lines by [N] number (LLM may have emitted them out of order)
+        # Sort reference lines by [N] number (LLM may have emitted them out of order).
+        # Intentionally drops blank lines between entries; the "Trim" step below
+        # removes all content after the last citation line anyway.
         ref_lines = ref_section.split("\n")
         citation_lines = [(i, line) for i, line in enumerate(ref_lines) if _CITATION_LINE_RE.match(line)]
         if citation_lines:
@@ -924,11 +926,16 @@ def expand_reference_urls(report_text: str, registry: SourceRegistry) -> str:
 
     # Find every URL in the references section and replace with canonical
     def _replace_url(m: re.Match) -> str:
-        url = m.group(0).rstrip(".,;)")
+        raw = m.group(0)
+        url = raw.rstrip(".,;)")
+        trailing = raw[len(url) :]
         canonical = registry.resolve_url(url)
         if canonical and canonical != url:
-            return canonical
-        return m.group(0)
+            # Reattach structural punctuation (e.g. ")" in markdown links),
+            # but drop truncation markers ("...", "…")
+            keep = "" if re.fullmatch(r"[.…]+", trailing) else trailing
+            return canonical + keep
+        return raw
 
     ref_section = _GENERIC_URL_RE.sub(_replace_url, ref_section)
 

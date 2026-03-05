@@ -718,6 +718,22 @@ class TestSanitizeReport:
         assert result.body_urls_replaced == 1
         assert result.body_urls_removed == 1
 
+    def test_out_of_order_citations_sorted(self):
+        """Citations emitted out of order by LLM are sorted sequentially."""
+        report = (
+            "A [1]. B [2]. C [3].\n\n"
+            "## Sources\n"
+            "[3] Third: https://c.com/page\n"
+            "[1] First: https://a.com/page\n"
+            "[2] Second: https://b.com/page"
+        )
+        result = sanitize_report(report)
+        lines = result.sanitized_report.split("\n")
+        ref_lines = [ln for ln in lines if ln.strip().startswith("[")]
+        assert ref_lines[0].startswith("[1]")
+        assert ref_lines[1].startswith("[2]")
+        assert ref_lines[2].startswith("[3]")
+
 
 # ---------------------------------------------------------------------------
 # expand_reference_urls tests
@@ -785,8 +801,8 @@ class TestExpandReferenceUrls:
         registry.add(SourceEntry(url="https://nvidia.com/benefits/full"))
         report = "Benefits info.\n\n**References:**\n- [NVIDIA Benefits](https://nvidia.com/benefits)"
         result = expand_reference_urls(report, registry)
-        # Structure preserved, URL expanded inside the markdown link
-        assert "https://nvidia.com/benefits/full" in result
+        # Structure preserved, URL expanded inside the markdown link with closing )
+        assert "[NVIDIA Benefits](https://nvidia.com/benefits/full)" in result
         assert "**References:**" in result
 
     def test_ellipsis_truncated_url_expanded_without_trailing_dots(self):
