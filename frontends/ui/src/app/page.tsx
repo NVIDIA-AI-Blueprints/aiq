@@ -35,7 +35,6 @@ const HomeContent = (): ReactNode => {
       }
       onSignIn={signIn}
       onSignOut={signOut}
-      workflowId={process.env.NEXT_PUBLIC_WORKFLOW_ID}
     />
   )
 }

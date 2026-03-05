@@ -171,7 +171,7 @@ describe('useChat', () => {
   test('sendMessage calls streamGenerate with correct options', async () => {
     mockStreamGenerate.mockResolvedValue(undefined)
 
-    const { result } = renderHook(() => useChat({ workflowId: 'test-workflow' }))
+    const { result } = renderHook(() => useChat())
 
     await act(async () => {
       await result.current.sendMessage('Test message')
@@ -180,7 +180,6 @@ describe('useChat', () => {
     expect(mockStreamGenerate).toHaveBeenCalledWith(
       expect.objectContaining({
         inputMessage: 'Test message',
-        workflowId: 'test-workflow',
         sessionId: 'conv-1',
         authToken: 'mock-id-token',
       }),

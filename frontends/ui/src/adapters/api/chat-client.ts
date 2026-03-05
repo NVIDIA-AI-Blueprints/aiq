@@ -19,7 +19,6 @@ import {
 
 export interface StreamChatOptions {
   messages: Message[]
-  workflowId?: string
   sessionId?: string
   model?: string
   temperature?: number
@@ -45,14 +44,13 @@ export const streamChat = async (
   options: StreamChatOptions,
   callbacks: StreamCallbacks
 ): Promise<void> => {
-  const { messages, workflowId, sessionId, model, temperature, maxTokens, signal, authToken } =
+  const { messages, sessionId, model, temperature, maxTokens, signal, authToken } =
     options
   const { onChunk, onComplete, onError } = callbacks
 
   const requestBody: ChatCompletionRequest = {
     messages,
     stream: true,
-    workflow_id: workflowId,
     session_id: sessionId,
     model,
     temperature,
@@ -221,8 +219,6 @@ export interface GenerateStreamMessage {
 export interface StreamGenerateOptions {
   /** User's input message */
   inputMessage: string
-  /** Workflow ID for the backend */
-  workflowId?: string
   /** Session ID for conversation tracking */
   sessionId?: string
   /** Abort signal */
@@ -299,12 +295,11 @@ export const streamGenerate = async (
   options: StreamGenerateOptions,
   callbacks: GenerateStreamCallbacks
 ): Promise<void> => {
-  const { inputMessage, workflowId, sessionId, signal, authToken } = options
+  const { inputMessage, sessionId, signal, authToken } = options
   const { onThinking, onStatus, onPrompt, onReport, onComplete, onError } = callbacks
 
   const requestBody = {
     input_message: inputMessage,
-    workflow_id: workflowId,
     session_id: sessionId,
     stream: true,
   }

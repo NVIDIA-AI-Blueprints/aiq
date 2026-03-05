@@ -23,8 +23,6 @@ import { useAuth } from '@/adapters/auth'
 import type { Conversation, StatusType, ThinkingStep, PendingInteraction } from '../types'
 
 interface UseChatOptions {
-  /** Workflow ID for the backend */
-  workflowId?: string
   /** Model to use (optional) */
   model?: string
   /** Temperature for generation */
@@ -71,9 +69,7 @@ interface UseChatReturn {
  * - prompt: Agent questions requiring user response
  * - report: Final report content for Details Panel
  */
-export const useChat = (options: UseChatOptions = {}): UseChatReturn => {
-  const { workflowId } = options
-
+export const useChat = (_options: UseChatOptions = {}): UseChatReturn => {
   // Abort controller for cancelling requests
   const abortControllerRef = useRef<AbortController | null>(null)
 
@@ -175,7 +171,6 @@ export const useChat = (options: UseChatOptions = {}): UseChatReturn => {
         await streamGenerate(
           {
             inputMessage: content,
-            workflowId,
             sessionId: conversation.id,
             signal: abortControllerRef.current.signal,
             authToken: idToken,
@@ -295,7 +290,6 @@ export const useChat = (options: UseChatOptions = {}): UseChatReturn => {
       setStreaming,
       clearThinkingSteps,
       clearReportContent,
-      workflowId,
       idToken,
     ]
   )

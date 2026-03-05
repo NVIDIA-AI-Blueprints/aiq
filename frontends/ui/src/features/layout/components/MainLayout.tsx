@@ -44,8 +44,6 @@ interface MainLayoutProps {
   onSignIn?: () => void
   /** Callback when sign out is clicked */
   onSignOut?: () => void
-  /** Workflow ID for the backend API */
-  workflowId?: string
 }
 
 /**
@@ -59,7 +57,6 @@ export const MainLayout: FC<MainLayoutProps> = ({
   user,
   onSignIn,
   onSignOut,
-  workflowId,
 }) => {
   const {
     currentConversation,
@@ -174,7 +171,6 @@ export const MainLayout: FC<MainLayoutProps> = ({
           {/* Input Area - Fixed at bottom of chat */}
           {/* Using WebSocket mode for full HITL (human-in-the-loop) support */}
           <InputArea
-            workflowId={workflowId}
             isAuthenticated={isAuthenticated}
             connectionMode="websocket"
           />

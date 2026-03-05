@@ -30,8 +30,6 @@ export type ConnectionMode = 'sse' | 'websocket'
 interface InputAreaProps {
   /** Placeholder text */
   placeholder?: string
-  /** Workflow ID for the backend (used with SSE mode) */
-  workflowId?: string
   /** Whether the user is authenticated */
   isAuthenticated?: boolean
   /** Connection mode: 'sse' for SSE endpoint, 'websocket' for WebSocket (default: 'sse') */
@@ -53,7 +51,6 @@ interface InputAreaProps {
  */
 export const InputArea: FC<InputAreaProps> = ({
   placeholder = 'Check data sources and ask a research question...',
-  workflowId,
   isAuthenticated = false,
   connectionMode = 'sse',
 }) => {
@@ -69,7 +66,7 @@ export const InputArea: FC<InputAreaProps> = ({
   const isBusy = useIsCurrentSessionBusy()
 
   // Use appropriate hook based on connection mode
-  const sseChat = useChat({ workflowId })
+  const sseChat = useChat()
   const wsChat = useWebSocketChat({ autoConnect: connectionMode === 'websocket' })
 
   // Get current conversation for filtering files and ensureSession for auto-creation

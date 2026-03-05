@@ -26,7 +26,6 @@ export const ChatCompletionRequestSchema = z.object({
   temperature: z.number().optional(),
   max_tokens: z.number().optional(),
   stream: z.boolean().optional(),
-  workflow_id: z.string().optional(),
   session_id: z.string().optional(),
 })
 
