@@ -18,6 +18,7 @@ import { Close, Generate, StopCircle } from '@/adapters/ui/icons'
 import { cancelJob } from '@/adapters/api'
 import { useChatStore, useLoadJobData } from '@/features/chat'
 import { useAuth } from '@/adapters/auth'
+import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { useLayoutStore } from '../store'
 import { PlanTab } from './PlanTab'
 import { TasksTab } from './TasksTab'
@@ -51,6 +52,8 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
   const { importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
   const { idToken } = useAuth()
+
+  const prefersReducedMotion = useReducedMotion()
 
   const isOpen = rightPanel === 'research'
   const cancelFallbackRef = useRef<NodeJS.Timeout | null>(null)
@@ -158,7 +161,9 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
       style={{
         width: isOpen ? 'calc(60% + 40px)' : '40px',
         minWidth: isOpen ? 'calc(60% + 40px)' : '40px',
-        transition: 'width 600ms ease-in-out, min-width 600ms ease-in-out',
+        transition: prefersReducedMotion
+          ? 'none'
+          : 'width 600ms ease-in-out, min-width 600ms ease-in-out',
       }}
     >
       {/* Toggle Tag Button - protruding from left side, always visible */}
@@ -192,9 +197,11 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
           style={{
             visibility: isOpen ? 'visible' : 'hidden',
             opacity: isOpen ? 1 : 0,
-            transition: isOpen
-              ? 'opacity 100ms ease-in-out, visibility 0ms'
-              : 'opacity 100ms ease-in-out 500ms, visibility 0ms 600ms',
+            transition: prefersReducedMotion
+              ? 'none'
+              : isOpen
+                ? 'opacity 100ms ease-in-out, visibility 0ms'
+                : 'opacity 100ms ease-in-out 500ms, visibility 0ms 600ms',
           }}
         >
         {/* Header with tabs and close button */}

@@ -18,6 +18,7 @@
 
 import { type FC, useCallback } from 'react'
 import { Flex } from '@/adapters/ui'
+import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { AppBar } from './AppBar'
 import { SessionsPanel } from './SessionsPanel'
 import { ChatArea } from './ChatArea'
@@ -74,6 +75,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
   } = useChatStore()
 
   const { rightPanel, closeRightPanel } = useLayoutStore()
+  const prefersReducedMotion = useReducedMotion()
 
   // Deep research SSE hook - manages connection when deep research starts
   useDeepResearch()
@@ -162,7 +164,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
           className="flex flex-col overflow-hidden"
           style={{
             width: isResearchPanelOpen ? '40%' : '100%',
-            transition: 'width 600ms ease-in-out',
+            transition: prefersReducedMotion ? 'none' : 'width 600ms ease-in-out',
           }}
         >
           {/* Chat Area - Scrollable */}

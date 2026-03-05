@@ -72,9 +72,49 @@ body {
   height: 100%;
 }
 
-/* Smooth scrolling */
-html {
-  scroll-behavior: smooth;
+/* Smooth scrolling — only when user has no motion preference */
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}
+
+/* =============================================================================
+   Reduced-motion fallbacks for KUI SidePanel, overlay, and collapsibles.
+
+   KUI's slide animations are gated behind @media (prefers-reduced-motion:
+   no-preference) in kui-generated.css and rely on animation-fill-mode: both
+   to persist the final transform. When animations are disabled (reduce), no
+   fill-mode applies and force-mounted panels stay visible at transform: none.
+   These rules provide the correct end-state transforms directly.
+   ============================================================================= */
+@media (prefers-reduced-motion: reduce) {
+  .nv-side-panel-content.nv-side-panel-content--side-left {
+    transform: translate(-100%);
+  }
+  .nv-side-panel-content.nv-side-panel-content--side-left[data-state="open"] {
+    transform: translate(0);
+  }
+
+  .nv-side-panel-content.nv-side-panel-content--side-right {
+    transform: translate(100%);
+  }
+  .nv-side-panel-content.nv-side-panel-content--side-right[data-state="open"] {
+    transform: translate(0);
+  }
+
+  .nv-side-panel-overlay {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .nv-side-panel-overlay[data-state="open"] {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .nv-collapsible-content[data-state="closed"] {
+    height: 0;
+  }
 }
 
 /* Focus visible styles for accessibility */
