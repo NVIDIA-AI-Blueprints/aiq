@@ -23,6 +23,7 @@ from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import _normalize_url
 from aiq_agent.common.citation_verification import _parse_citation_key
+from aiq_agent.common.citation_verification import expand_reference_urls
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 from aiq_agent.common.citation_verification import register_source_parser
 from aiq_agent.common.citation_verification import sanitize_report
@@ -716,6 +717,77 @@ class TestSanitizeReport:
         assert "https://unknown.com" not in result.sanitized_report
         assert result.body_urls_replaced == 1
         assert result.body_urls_removed == 1
+
+
+# ---------------------------------------------------------------------------
+# expand_reference_urls tests
+# ---------------------------------------------------------------------------
+
+
+class TestExpandReferenceUrls:
+    """Tests for expanding truncated/garbled URLs in references."""
+
+    def test_truncated_url_expanded(self):
+        """Truncated URL in references is expanded to full canonical form."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://nvidia.com/benefits/full-guide-2026"))
+        report = "Finding [1].\n\n## Sources\n[1] Benefits: https://nvidia.com/benefits"
+        result = expand_reference_urls(report, registry)
+        assert "https://nvidia.com/benefits/full-guide-2026" in result
+        # Truncated URL should be gone
+        assert result.count("https://nvidia.com/benefits") == 1
+
+    def test_full_url_unchanged(self):
+        """URLs that already match the registry are not modified."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://example.com/article"))
+        report = "Finding [1].\n\n## Sources\n[1] Article: https://example.com/article"
+        result = expand_reference_urls(report, registry)
+        assert "https://example.com/article" in result
+
+    def test_no_references_section_unchanged(self):
+        """Report without references section is returned unchanged."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://example.com"))
+        report = "Just a plain report."
+        assert expand_reference_urls(report, registry) == report
+
+    def test_empty_registry_unchanged(self):
+        """Empty registry returns report unchanged."""
+        registry = SourceRegistry()
+        report = "Finding.\n\n## Sources\n[1] https://example.com"
+        assert expand_reference_urls(report, registry) == report
+
+    def test_body_not_modified(self):
+        """URLs in the body are not touched — only references section."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://example.com/full-path"))
+        report = "See https://example.com for details.\n\n## Sources\n[1] Page: https://example.com"
+        result = expand_reference_urls(report, registry)
+        # Body URL stays truncated
+        assert "See https://example.com for details." in result
+        # References URL is expanded
+        assert "[1] Page: https://example.com/full-path" in result
+
+    def test_multiple_urls_expanded(self):
+        """Multiple truncated URLs are all expanded."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://a.com/long/path/1"))
+        registry.add(SourceEntry(url="https://b.com/long/path/2"))
+        report = "Findings.\n\n## Sources\n[1] A: https://a.com/long\n[2] B: https://b.com/long"
+        result = expand_reference_urls(report, registry)
+        assert "https://a.com/long/path/1" in result
+        assert "https://b.com/long/path/2" in result
+
+    def test_preserves_llm_formatting(self):
+        """LLM's formatting (markdown links, bullets, etc.) is preserved."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://nvidia.com/benefits/full"))
+        report = "Benefits info.\n\n**References:**\n- [NVIDIA Benefits](https://nvidia.com/benefits)"
+        result = expand_reference_urls(report, registry)
+        # Structure preserved, URL expanded inside the markdown link
+        assert "https://nvidia.com/benefits/full" in result
+        assert "**References:**" in result
 
 
 # ---------------------------------------------------------------------------

@@ -51,9 +51,11 @@ class TestShallowResearcherAgent:
         """
         with (
             patch.object(SourceRegistry, "all_sources", return_value=[SourceEntry(url="https://example.com")]),
+            patch("aiq_agent.agents.shallow_researcher.agent.expand_reference_urls") as mock_expand,
             patch("aiq_agent.agents.shallow_researcher.agent.verify_citations") as mock_verify,
             patch("aiq_agent.agents.shallow_researcher.agent.sanitize_report") as mock_sanitize,
         ):
+            mock_expand.side_effect = lambda content, reg: content
             mock_verify.side_effect = lambda content, reg: MagicMock(verified_report=content, removed_citations=[])
             mock_sanitize.side_effect = lambda content: MagicMock(sanitized_report=content)
             yield

@@ -890,3 +890,35 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
         truncated_urls_removed=truncated_urls_removed,
         unsafe_urls_removed=unsafe_urls_removed,
     )
+
+
+def expand_reference_urls(report_text: str, registry: SourceRegistry) -> str:
+    """Expand URLs in the references section to their full canonical form.
+
+    Finds every URL in the LLM's references section, fuzzy-matches it
+    against the registry via ``resolve_url()``, and replaces truncated or
+    garbled URLs with the full canonical version.  The LLM's formatting
+    and structure are preserved exactly — only the URLs change.
+    """
+    if not registry.all_sources():
+        return report_text
+
+    ref_match = _REFERENCE_SECTION_RE.search(report_text)
+    if not ref_match:
+        return report_text
+
+    body = report_text[: ref_match.start()]
+    ref_section = report_text[ref_match.start() :]
+
+    # Find every URL in the references section and replace with canonical
+    def _replace_url(m: re.Match) -> str:
+        url = m.group(0).rstrip(".,;)")
+        trailing = m.group(0)[len(url) :]
+        canonical = registry.resolve_url(url)
+        if canonical and canonical != url:
+            return canonical + trailing
+        return m.group(0)
+
+    ref_section = _GENERIC_URL_RE.sub(_replace_url, ref_section)
+
+    return body + ref_section

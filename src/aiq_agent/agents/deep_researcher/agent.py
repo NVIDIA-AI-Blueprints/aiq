@@ -24,6 +24,7 @@ from aiq_agent.common import LLMRole
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import expand_reference_urls
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
 
@@ -415,7 +416,9 @@ class DeepResearcherAgent:
 
             # Post-process: verify citations against source registry
             if self.source_registry_middleware._get_registry().all_sources():
-                verification = verify_citations(final_message, self.source_registry_middleware._get_registry())
+                registry = self.source_registry_middleware._get_registry()
+                final_message = expand_reference_urls(final_message, registry)
+                verification = verify_citations(final_message, registry)
                 if verification.removed_citations:
                     logger.info(
                         "Citation verification removed %d invalid citations: %s",
