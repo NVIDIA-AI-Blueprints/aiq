@@ -168,9 +168,14 @@ export const authOptions: AuthOptions = {
         }
       }
 
-      const expiresAt = (token.expiresAt as number) || 0
-      const expiresAtWithBuffer = expiresAt - TOKEN_REFRESH_BUFFER_SECONDS
-      if (Date.now() < expiresAtWithBuffer * 1000) {
+      const expiresAt = token.expiresAt as number | undefined
+
+      if (expiresAt !== undefined) {
+        const expiresAtWithBuffer = expiresAt - TOKEN_REFRESH_BUFFER_SECONDS
+        if (Date.now() < expiresAtWithBuffer * 1000) {
+          return token
+        }
+      } else if (!token.refreshToken) {
         return token
       }
 

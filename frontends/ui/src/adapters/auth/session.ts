@@ -82,16 +82,18 @@ export const useAuth = (): AuthContext => {
     }
   }, [session?.error, authRequired, handleSignOut])
 
+  const { sessionRefreshIntervalSeconds } = useAppConfig()
+
   useEffect(() => {
     if (!authRequired) return
     if (status !== 'authenticated') return
 
     const interval = setInterval(() => {
       update()
-    }, 4 * 60 * 1000)
+    }, sessionRefreshIntervalSeconds * 1000)
 
     return () => clearInterval(interval)
-  }, [status, update, authRequired])
+  }, [status, update, authRequired, sessionRefreshIntervalSeconds])
 
   if (!authRequired) {
     return {

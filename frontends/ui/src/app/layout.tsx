@@ -17,7 +17,7 @@ import { connection } from 'next/server'
 import { Providers } from './providers'
 import type { AppConfig } from '@/shared/context'
 import { getFileUploadConfigFromEnv } from '@/shared/config/file-upload'
-import { isAuthRequired, AUTH_PROVIDER_ID } from '@/adapters/auth/config'
+import { isAuthRequired, AUTH_PROVIDER_ID, TOKEN_REFRESH_BUFFER_SECONDS } from '@/adapters/auth/config'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -35,6 +35,7 @@ export const metadata: Metadata = {
 const getAppConfig = (): AppConfig => ({
   authRequired: isAuthRequired(),
   authProviderId: AUTH_PROVIDER_ID,
+  sessionRefreshIntervalSeconds: Math.max(60, TOKEN_REFRESH_BUFFER_SECONDS - 60),
   fileUpload: getFileUploadConfigFromEnv(process.env),
 })
 

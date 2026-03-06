@@ -43,6 +43,8 @@ export interface AppConfig {
   authRequired: boolean
   /** The NextAuth provider ID for signIn() calls (e.g. 'oauth', 'nvlogin', 'disabled-auth') */
   authProviderId: string
+  /** Client-side session polling interval in seconds, derived from TOKEN_REFRESH_BUFFER_SECONDS */
+  sessionRefreshIntervalSeconds: number
   /** File upload validation configuration */
   fileUpload: FileUploadConfig
 }

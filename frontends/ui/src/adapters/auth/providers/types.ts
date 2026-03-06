@@ -5,7 +5,7 @@
  * Auth Provider Contract
  *
  * Defines the interface that any authentication provider must implement.
- * See ./internal-auth.ts for a complete reference implementation.
+ * See ./auth-example.ts for a complete reference implementation.
  *
  * To add a new provider:
  *   1. Create a new file in this directory (e.g. my-provider.ts)

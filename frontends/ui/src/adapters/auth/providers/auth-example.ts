@@ -23,7 +23,7 @@
  *
  * Example ./index.ts when this provider is active:
  *
- *   import { InternalAuthProvider, getInternalAuthProviderId, refreshInternalAuthToken } from './internal-auth'
+ *   import { InternalAuthProvider, getInternalAuthProviderId, refreshInternalAuthToken } from './auth-example'
  *   import type { AuthProviderConfig } from './types'
  *
  *   export type { AuthProviderConfig, TokenRefreshResult } from './types'
