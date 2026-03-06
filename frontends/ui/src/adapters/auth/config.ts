@@ -10,10 +10,11 @@
  * By default, no provider is active and authentication is disabled.
  * Set REQUIRE_AUTH=true and configure a provider to enable OAuth.
  *
- * See ./providers/internal-auth.ts for a complete reference implementation
+ * See ./providers/auth-example.ts for a reference implementation
  * and ./providers/types.ts for the provider contract.
  */
 
+import { randomUUID } from 'node:crypto'
 import { type AuthOptions, type Account, type User, type Session } from 'next-auth'
 import { type JWT } from 'next-auth/jwt'
 import CredentialsProvider from 'next-auth/providers/credentials'
@@ -129,7 +130,7 @@ const refreshAccessToken = async (token: JWT): Promise<JWT> => {
 // ---------------------------------------------------------------------------
 
 export const authOptions: AuthOptions = {
-  secret: process.env.NEXTAUTH_SECRET || (!isAuthRequired() || !activeProvider ? crypto.randomUUID() : undefined),
+  secret: process.env.NEXTAUTH_SECRET || (!isAuthRequired() || !activeProvider ? randomUUID() : undefined),
 
   providers: (
     !isAuthRequired() || !activeProvider

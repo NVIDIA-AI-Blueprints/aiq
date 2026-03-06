@@ -306,7 +306,7 @@ All environment variables are **runtime configurable** - no container rebuild ne
 
 ### OAuth (required when `REQUIRE_AUTH=true`)
 
-Provider-specific env vars depend on your provider implementation. See `src/adapters/auth/providers/internal-auth.ts` for a reference and the [Authentication](#authentication) section for setup steps.
+Provider-specific env vars depend on your provider implementation. See `src/adapters/auth/providers/auth-example.ts` for a reference and the [Authentication](#authentication) section for setup steps.
 
 
 ## API Communication
@@ -363,7 +363,7 @@ src/adapters/auth/
 ├── providers/
 │   ├── types.ts           # AuthProviderConfig interface (contract)
 │   ├── index.ts           # SWAP-POINT: returns null (disabled) or a real provider
-│   └── internal-auth.ts   # Reference implementation (not imported by default)
+│   └── auth-example.ts    # Reference implementation (not imported by default)
 ├── config.ts              # NextAuth config (provider-agnostic, never needs editing)
 ├── session.ts             # useAuth() hook (provider-agnostic)
 ├── types.ts               # NextAuth type extensions
@@ -399,7 +399,7 @@ To enable OAuth/OIDC authentication, follow these steps:
 
 #### Step 1: Create a provider file
 
-Create a new file in `src/adapters/auth/providers/` (e.g. `my-sso.ts`). See `internal-auth.ts` in the same directory for a complete reference implementation. Your file should export:
+Create a new file in `src/adapters/auth/providers/` (e.g. `my-sso.ts`). See `auth-example.ts` in the same directory for a complete reference implementation. Your file should export:
 
 1. A NextAuth-compatible provider object (OAuth/OIDC config)
 2. A token refresh function matching the `TokenRefreshResult` return type
