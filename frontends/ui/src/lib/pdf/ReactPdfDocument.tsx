@@ -19,6 +19,10 @@ Font.register({
   fonts: [{ src: 'Helvetica' }, { src: 'Helvetica-Bold', fontWeight: 'bold' }],
 })
 
+// Disable hyphenation — react-pdf's default English hyphenation inserts
+// hyphens into long words (including URLs), making them unusable when copied.
+Font.registerHyphenationCallback((word) => [word])
+
 const styles = StyleSheet.create({
   page: {
     padding: 56.69,
