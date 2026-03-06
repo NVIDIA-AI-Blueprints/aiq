@@ -206,12 +206,28 @@ class TestSourceRegistry:
         resolved = registry.resolve_url("https://example.com/very/long")
         assert resolved == "https://example.com/very/long/path/article"
 
+    def test_resolve_url_truncated_mid_query(self, registry):
+        """Report URL cut mid-query (e.g. copy-paste); match by raw prefix."""
+        full = "https://example.sharepoint.com/sites/foo/_layouts/15/Doc.aspx?sourcedoc=%7BGUID%7D&file=US%20Benefits%20Open%20Enrollment.pptx&action=edit"
+        registry.add(SourceEntry(url=full))
+        truncated = (
+            "https://example.sharepoint.com/sites/foo/_layouts/15/Doc.aspx?sourcedoc=%7BGUID%7D&file=US%20Benefit"
+        )
+        resolved = registry.resolve_url(truncated)
+        assert resolved == full
+
     def test_resolve_url_ambiguous_returns_none(self, registry):
-        """Multiple registry URLs match the prefix — reject to avoid guessing."""
+        """Shallow ambiguous prefix (e.g. arxiv abs/1706) — reject."""
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.08500"))
-        # "https://arxiv.org/abs/1706" is a prefix of both — ambiguous
+        # path "abs/1706" has only 2 segments — too shallow to treat as parent
         assert registry.resolve_url("https://arxiv.org/abs/1706") is None
+
+    def test_resolve_url_prefix_ambiguous_rejected(self, registry):
+        """Report URL is prefix of multiple registry URLs — ambiguous, reject."""
+        registry.add(SourceEntry(url="https://example.sharepoint.com/sites/hr/Pages/New-Employees.aspx"))
+        registry.add(SourceEntry(url="https://example.sharepoint.com/sites/hr/Pages/ourculture.aspx"))
+        assert registry.resolve_url("https://example.sharepoint.com/sites/hr/") is None
 
     def test_resolve_url_unique_prefix_succeeds(self, registry):
         """Single registry URL matches the prefix — unambiguous, return it."""
@@ -219,6 +235,69 @@ class TestSourceRegistry:
         registry.add(SourceEntry(url="https://arxiv.org/abs/2301.00001"))
         # "https://arxiv.org/abs/1706" only matches the first
         assert registry.resolve_url("https://arxiv.org/abs/1706") == "https://arxiv.org/abs/1706.03762"
+
+    def test_resolve_url_child_path_single_match(self, registry):
+        """LLM expanded a registry URL to a subpage — child-path match."""
+        registry.add(SourceEntry(url="https://www.example.com/us/benefits/"))
+        resolved = registry.resolve_url("https://www.example.com/us/benefits/healthcare/")
+        assert resolved == "https://www.example.com/us/benefits/"
+
+    def test_resolve_url_child_path_requires_depth(self, registry):
+        """Domain-only registry URLs (< 2 path segments) should NOT child-match."""
+        registry.add(SourceEntry(url="https://example.com/"))
+        assert registry.resolve_url("https://example.com/us/benefits/") is None
+
+    def test_resolve_url_child_path_ambiguous(self, registry):
+        """Multiple parent paths — reject to avoid guessing."""
+        registry.add(SourceEntry(url="https://example.com/us/benefits/"))
+        registry.add(SourceEntry(url="https://example.com/us/benefits/time-off/"))
+        # "healthcare/" is under "benefits/" but not under "time-off/"
+        # Only one match, so this should succeed
+        resolved = registry.resolve_url("https://example.com/us/benefits/healthcare/")
+        assert resolved == "https://example.com/us/benefits/"
+
+    def test_resolve_url_child_path_different_domain(self, registry):
+        """Child-path match requires same domain."""
+        registry.add(SourceEntry(url="https://example.com/us/benefits/"))
+        assert registry.resolve_url("https://other.com/us/benefits/healthcare/") is None
+
+    def test_resolve_url_query_subset_match(self, registry):
+        """LLM dropped some query params — query-subset match recovers it."""
+        full_url = (
+            "https://example.sharepoint.com/:p:/r/sites/benefits/_layouts/15/Doc.aspx"
+            "?sourcedoc=%7BGUID-AAA%7D&file=Benefits.pptx&action=edit&mobileredirect=true"
+        )
+        registry.add(SourceEntry(url=full_url))
+        partial_url = (
+            "https://example.sharepoint.com/:p:/r/sites/benefits/_layouts/15/Doc.aspx?sourcedoc=%7BGUID-AAA%7D"
+        )
+        assert registry.resolve_url(partial_url) == full_url
+
+    def test_resolve_url_query_subset_disambiguates_by_params(self, registry):
+        """Multiple SharePoint docs with same path — query-subset uses params to pick the right one."""
+        url_a = (
+            "https://example.sharepoint.com/:p:/r/sites/benefits/_layouts/15/Doc.aspx"
+            "?sourcedoc=%7BGUID-AAA%7D&file=Benefits.pptx&action=edit"
+        )
+        url_b = (
+            "https://example.sharepoint.com/:p:/r/sites/benefits/_layouts/15/Doc.aspx"
+            "?sourcedoc=%7BGUID-BBB%7D&file=HSA.pptx&action=edit"
+        )
+        registry.add(SourceEntry(url=url_a))
+        registry.add(SourceEntry(url=url_b))
+        partial = "https://example.sharepoint.com/:p:/r/sites/benefits/_layouts/15/Doc.aspx?sourcedoc=%7BGUID-BBB%7D"
+        assert registry.resolve_url(partial) == url_b
+
+    def test_resolve_url_query_subset_no_match_wrong_value(self, registry):
+        """Query-subset rejects when param values differ."""
+        registry.add(SourceEntry(url="https://example.com/doc?id=123&mode=view"))
+        assert registry.resolve_url("https://example.com/doc?id=999") is None
+
+    def test_resolve_url_no_query_params_matched_by_prefix(self, registry):
+        """Dropping ALL query params is handled by prefix match (step 2), not query-subset."""
+        registry.add(SourceEntry(url="https://example.com/doc?id=123&mode=view"))
+        # The path-only URL is a prefix of the full normalized URL → prefix match succeeds
+        assert registry.resolve_url("https://example.com/doc") == "https://example.com/doc?id=123&mode=view"
 
 
 # ---------------------------------------------------------------------------

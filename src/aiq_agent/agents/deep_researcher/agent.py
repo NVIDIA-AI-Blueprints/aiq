@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +15,7 @@ from deepagents import create_deep_agent
 from deepagents.backends import CompositeBackend
 from deepagents.backends import StateBackend
 from langchain.agents.middleware import ModelRetryMiddleware
+from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool
@@ -255,6 +257,29 @@ class DeepResearcherAgent:
         )
         return agent.with_config({"recursion_limit": 1000})
 
+    @staticmethod
+    def _extract_report_content(messages: list) -> str:
+        """Extract report content from the last message, checking write_file tool calls if text content is empty."""
+        if not messages:
+            return ""
+        last_msg = messages[-1]
+        raw = last_msg.content or ""
+        if isinstance(raw, list):
+            content = " ".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
+        else:
+            content = raw if isinstance(raw, str) else str(raw)
+        if len(content) >= 1500:
+            return content
+        # If the last message is an AIMessage with a write_file tool call,
+        # the LLM may have written the report via tool instead of text output.
+        if isinstance(last_msg, AIMessage) and getattr(last_msg, "tool_calls", None):
+            for tc in last_msg.tool_calls:
+                if tc.get("name") == "write_file":
+                    file_content = tc.get("args", {}).get("content", "")
+                    if isinstance(file_content, str) and len(file_content) > len(content):
+                        content = file_content
+        return content
+
     def _is_report_complete(self, result: dict | Any) -> tuple[bool, str]:
         """
         Check if the agent produced a complete report using tool calls or heuristics.
@@ -266,8 +291,7 @@ class DeepResearcherAgent:
         if not messages:
             return False, "no_messages"
 
-        last_msg = messages[-1]
-        content = last_msg.content or ""
+        content = self._extract_report_content(messages)
 
         if len(content) < 1500:
             return False, f"too_short ({len(content)} chars)"
@@ -299,7 +323,7 @@ class DeepResearcherAgent:
                     url_match = _URL_IN_LINE_RE.search(ref_text)
                     if url_match:
                         url = url_match.group(0).rstrip(".,;)")
-                        if registry.has_url(url):
+                        if registry.resolve_url(url):
                             has_any_valid = True
                             break
                         continue
@@ -391,7 +415,12 @@ class DeepResearcherAgent:
                     if source_list:
                         feedback_msg += "\n\n" + source_list
 
-                feedback_msg += " Please fix this immediately and call 'submit_final_report' when done."
+                feedback_msg += (
+                    " IMPORTANT: Do NOT restart the research from scratch."
+                    " First check if /report.md already exists using read_file."
+                    " If it does, use that content as your report — just fix the specific issue above"
+                    " and return the corrected report in your final message."
+                )
 
                 if isinstance(result, dict):
                     next_state = {**result}
@@ -400,27 +429,49 @@ class DeepResearcherAgent:
                     next_state = result.model_dump() if hasattr(result, "model_dump") else dict(result)
                     messages = getattr(result, "messages", next_state.get("messages", []))
                 next_state["messages"] = list(messages) + [HumanMessage(content=feedback_msg)]
-                result = await agent.ainvoke(
-                    next_state,
-                    config={"callbacks": self.callbacks} if self.callbacks else None,
-                )
+
+                try:
+                    result = await agent.ainvoke(
+                        next_state,
+                        config={"callbacks": self.callbacks} if self.callbacks else None,
+                    )
+                    last_error = None
+                except Exception as ex:
+                    logger.error("Deep Research feedback retry %d failed: %s", attempt + 1, ex, exc_info=True)
+                    last_error = ex
+                    if "recursion" in str(ex).lower() or "reuse already awaited" in str(ex):
+                        raise ex
+                    continue
+
+                # Evaluate the feedback-retry result before the next iteration
+                is_complete, reason = self._is_report_complete(result)
+                if is_complete:
+                    logger.info(f"Report completed after feedback retry. Reason: {reason}")
+                    break
+
+                # Update state so next iteration builds on progress, not the original state
+                state = result
 
             if result is None and last_error is not None:
                 raise last_error
 
             final_message = "Research failed to produce a report."
             if result and result.get("messages"):
-                final_content = result["messages"][-1].content
-                final_message = final_content if isinstance(final_content, str) else str(final_content)
+                final_message = self._extract_report_content(result["messages"])
 
             # Post-process: verify citations against source registry
             if self.source_registry_middleware._get_registry().all_sources():
                 verification = verify_citations(final_message, self.source_registry_middleware._get_registry())
                 if verification.removed_citations:
+                    removed_details = []
+                    for c in verification.removed_citations:
+                        url_match = re.search(r"https?://\S+", c.get("line", ""))
+                        url_str = url_match.group(0).rstrip(".,;)") if url_match else "(no url)"
+                        removed_details.append(f"[{c['number']}] {c['reason']}: {url_str}")
                     logger.info(
-                        "Citation verification removed %d invalid citations: %s",
+                        "Citation verification removed %d invalid citation(s):\n  %s",
                         len(verification.removed_citations),
-                        [c["reason"] for c in verification.removed_citations],
+                        "\n  ".join(removed_details),
                     )
                 final_message = verification.verified_report
             else:

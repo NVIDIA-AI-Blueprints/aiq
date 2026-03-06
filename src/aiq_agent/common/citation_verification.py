@@ -82,10 +82,6 @@ class EmptySourceRegistryError(Exception):
         )
 
 
-# ---------------------------------------------------------------------------
-# URL normalization
-# ---------------------------------------------------------------------------
-
 _TRACKING_PARAMS = frozenset(
     {
         "utm_source",
@@ -139,6 +135,17 @@ def _parse_citation_key(key: str) -> tuple[str, int | None]:
     return filename, page
 
 
+@dataclass
+class _ParsedURL:
+    """Pre-parsed URL components cached at registration time."""
+
+    host: str
+    path: str
+    path_segments: list[str]
+    query: dict[str, list[str]]
+    entry: SourceEntry
+
+
 # ---------------------------------------------------------------------------
 # SourceRegistry
 # ---------------------------------------------------------------------------
@@ -156,25 +163,36 @@ class SourceRegistry:
 
     def __init__(self) -> None:
         self._urls: dict[str, SourceEntry] = {}
+        self._parsed_urls: dict[str, _ParsedURL] = {}
         self._citation_keys: list[SourceEntry] = []
         self._citation_key_files: set[str] = set()
         self._all: list[SourceEntry] = []
 
     def add(self, entry: SourceEntry) -> None:
-        """Register a source entry (deduplicated by normalized URL and citation key filename).
+        """Register a source entry. One entry per logical URL (dedup by normalized form).
 
-        Note: when an entry has both a url and a citation_key, and the URL
-        is new but the citation_key filename is already known, the entry is
-        added to _all (via the URL branch) but the citation_key is NOT
-        appended to _citation_keys.  This is intentional — in practice
-        entries carry either a URL or a citation_key, never both.
+        Raw URL = entry.url (exactly as the tool returned it); that is what we
+        retain in the report. Normalized URL is used only as a key for dedup
+        and matching. Both raw and normalized are stored as keys to the same
+        entry so we never have duplicate entries and lookups find the tool URL.
         """
         added = False
         if entry.url:
-            normalized = _normalize_url(entry.url)
+            raw = entry.url
+            normalized = _normalize_url(raw)
             if normalized not in self._urls:
                 self._urls[normalized] = entry
+                parsed = urlparse(normalized)
+                self._parsed_urls[normalized] = _ParsedURL(
+                    host=parsed.netloc,
+                    path=parsed.path,
+                    path_segments=[s for s in parsed.path.split("/") if s],
+                    query=parse_qs(parsed.query, keep_blank_values=True),
+                    entry=entry,
+                )
                 added = True
+            if raw != normalized:
+                self._urls[raw] = self._urls[normalized]
         if entry.citation_key:
             filename, _ = _parse_citation_key(entry.citation_key)
             key_lower = filename.lower()
@@ -190,39 +208,89 @@ class SourceRegistry:
         """Check if a URL (after normalization) is in the registry."""
         return _normalize_url(url) in self._urls
 
-    def resolve_url(self, url: str) -> str | None:
-        """Find the canonical (full, original) URL from the registry for a possibly garbled URL.
+    @staticmethod
+    def _pick_unique(candidates: list[SourceEntry], strategy: str, url: str) -> str | None:
+        """Return the registry URL when exactly one candidate matches.
 
-        Matching strategy:
-        1. Exact normalized match — always returned
-        2. Prefix match — only if exactly ONE registry URL matches
-           (ambiguous matches are rejected to avoid guessing wrong)
-
-        Returns the original full URL from the registry, or None if no match
-        or if multiple ambiguous matches exist.
+        The references section can only show one URL per citation. If multiple
+        registry URLs match (e.g. same path, different query), we cannot know
+        which one the author meant, so we reject.
         """
-        normalized = _normalize_url(url)
-
-        # 1. Exact match — unambiguous, always return
-        if normalized in self._urls:
-            return self._urls[normalized].url
-
-        # 2. Prefix match — the LLM truncated the URL
-        # Collect ALL candidates where the report URL is a prefix of a registry URL
-        candidates: list[SourceEntry] = []
-        for reg_normalized, entry in self._urls.items():
-            if reg_normalized.startswith(normalized):
-                candidates.append(entry)
-
         if len(candidates) == 1:
+            logger.debug("[CitationVerify] %s match: '%s' → '%s'", strategy, url, candidates[0].url)
             return candidates[0].url
         if len(candidates) > 1:
             logger.debug(
-                "[CitationVerify] Ambiguous URL prefix match for '%s' — %d candidates, rejecting",
+                "[CitationVerify] Ambiguous %s match for '%s' — %d candidates, rejecting",
+                strategy,
                 url,
                 len(candidates),
             )
-            return None
+        return None
+
+    def resolve_url(self, url: str) -> str | None:
+        """Return the registry URL (full, as returned by the tool) when the report URL matches.
+
+        Matching strategy (first unambiguous match wins):
+        1. Exact match — raw or normalized
+        2. Truncation — report URL is a prefix of exactly one registry URL (raw)
+        3. Prefix — report normalized is prefix of registry normalized
+        4. Child-path — report path is a subpath of exactly one registry URL
+        5. Query-subset — same host+path, report params subset of one registry URL
+
+        Always returns the tool's URL (with query params etc.). If multiple
+        registry URLs match, we reject (ambiguous).
+        """
+        # 1. Exact match — raw or normalized; retain the tool's URL
+        if url in self._urls:
+            return self._urls[url].url
+        normalized = _normalize_url(url)
+        if normalized in self._urls:
+            return self._urls[normalized].url
+
+        # 2. Truncation — report URL is a prefix of exactly one registry URL (raw).
+        #    Normalized match fails when the report is cut mid-query (param order differs).
+        truncation_entries = [e for e in self._urls.values() if e.url and e.url.startswith(url)]
+        result = self._pick_unique(list({e.url: e for e in truncation_entries}.values()), "truncation", url)
+        if result:
+            return result
+
+        # 3. Prefix match — report normalized is prefix of registry normalized
+        result = self._pick_unique(
+            [e for n, e in self._urls.items() if n.startswith(normalized)],
+            "prefix",
+            url,
+        )
+        if result:
+            return result
+
+        parsed = urlparse(normalized)
+        host, path = parsed.netloc, parsed.path
+        same_host = [p for p in self._parsed_urls.values() if p.host == host]
+
+        # 4. Child-path match — report path extends a registry path (subpage)
+        result = self._pick_unique(
+            [p.entry for p in same_host if len(p.path_segments) >= 2 and path != p.path and path.startswith(p.path)],
+            "child-path",
+            url,
+        )
+        if result:
+            return result
+
+        # 5. Query-subset match — same host+path, report params are a subset of registry params
+        report_qs = parse_qs(parsed.query, keep_blank_values=True)
+        if report_qs:
+            result = self._pick_unique(
+                [
+                    p.entry
+                    for p in same_host
+                    if p.path == path and p.query and all(p.query.get(k) == v for k, v in report_qs.items())
+                ],
+                "query-subset",
+                url,
+            )
+            if result:
+                return result
 
         return None
 
@@ -249,6 +317,7 @@ class SourceRegistry:
     def clear(self) -> None:
         """Reset the registry."""
         self._urls.clear()
+        self._parsed_urls.clear()
         self._citation_keys.clear()
         self._citation_key_files.clear()
         self._all.clear()
@@ -551,9 +620,11 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
         logger.debug("[CitationVerify] Skipping — registry is empty (no tool calls captured)")
         return CitationVerificationResult(verified_report=report_text)
 
-    logger.debug(
-        "[CitationVerify] Starting verification against %d registered source(s)",
+    registry_urls = [s.url for s in all_sources if s.url]
+    logger.info(
+        "[CitationVerify] Starting verification against %d registered source(s): %s",
         len(all_sources),
+        registry_urls,
     )
 
     # Find references section
@@ -589,7 +660,7 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
                     logger.debug("[CitationVerify]   [%d] VALID  — %s", num, url)
                 valid_citations.append({"number": num, "url": canonical, "citation_key": None, "line": full_line})
             else:
-                logger.debug("[CitationVerify]   [%d] REMOVE — url_not_in_registry: %s", num, url)
+                logger.info("[CitationVerify]   [%d] REMOVE — url_not_in_registry: %s", num, url)
                 removed_citations.append({"number": num, "line": full_line, "reason": "url_not_in_registry"})
             continue
 

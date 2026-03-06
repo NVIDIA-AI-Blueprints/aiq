@@ -552,3 +552,25 @@ class TestIsReportComplete:
             is_complete, reason = agent._is_report_complete(result)
             assert is_complete is False
             assert "no_messages" in reason or "message" in reason.lower()
+
+    def test_write_file_tool_call_extracts_content(self, mock_llm_provider, real_tool):
+        """Report written via write_file tool call should be detected as complete."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            report_content = "A" * 1600 + "\n## Introduction\n\n## Methods\n\n## Sources\n[1] http://x.com"
+            # AIMessage with empty text but report in write_file tool call
+            msg = AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "write_file", "args": {"file_path": "/report.md", "content": report_content}, "id": "tc1"}
+                ],
+            )
+            result = {"messages": [msg]}
+            is_complete, reason = agent._is_report_complete(result)
+            assert is_complete is True
+            assert "complete" in reason.lower()
