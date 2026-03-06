@@ -105,13 +105,7 @@ export class NATWebSocketClient {
     this.options.callbacks.onConnectionChange?.('connecting')
 
     try {
-      const baseWsUrl = this.options.websocketUrl || (await getWebSocketUrl())
-      let wsUrl = baseWsUrl
-      if (this.options.authToken) {
-        const separator = wsUrl.includes('?') ? '&' : '?'
-        wsUrl = `${wsUrl}${separator}token=${encodeURIComponent(this.options.authToken)}`
-      }
-
+      const wsUrl = this.options.websocketUrl || (await getWebSocketUrl())
       this.ws = new WebSocket(wsUrl)
       this.setupEventHandlers()
     } catch {
