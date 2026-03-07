@@ -293,6 +293,18 @@ class TestSourceRegistry:
         registry.add(SourceEntry(url="https://example.com/doc?id=123&mode=view"))
         assert registry.resolve_url("https://example.com/doc?id=999") is None
 
+    def test_resolve_url_query_subset_reordered_params(self, registry):
+        """Report URL has a subset of params in different order — only Strategy 5 can match."""
+        full_url = (
+            "https://example.sharepoint.com/sites/hr/_layouts/15/Doc.aspx"
+            "?sourcedoc=%7BGUID-X%7D&file=Handbook.pptx&action=edit&mobileredirect=true"
+        )
+        registry.add(SourceEntry(url=full_url))
+        # Reordered param (action before sourcedoc) — not a raw prefix, so Strategy 2 won't match.
+        # Normalization sorts params, so if the subset params match, Strategy 5 picks it up.
+        reordered = "https://example.sharepoint.com/sites/hr/_layouts/15/Doc.aspx?action=edit&sourcedoc=%7BGUID-X%7D"
+        assert registry.resolve_url(reordered) == full_url
+
     def test_resolve_url_no_query_params_matched_by_prefix(self, registry):
         """Dropping ALL query params is handled by prefix match (step 2), not query-subset."""
         registry.add(SourceEntry(url="https://example.com/doc?id=123&mode=view"))

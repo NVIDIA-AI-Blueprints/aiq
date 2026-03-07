@@ -264,7 +264,7 @@ class DeepResearcherAgent:
 
     @staticmethod
     def _extract_report_content(messages: list) -> str:
-        """Extract report content from the last message, checking write_file tool calls if text content is empty."""
+        """Extract report content from the last message, falling back to write_file tool calls if text is too short."""
         if not messages:
             return ""
         last_msg = messages[-1]
