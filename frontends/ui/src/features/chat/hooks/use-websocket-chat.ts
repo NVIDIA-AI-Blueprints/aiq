@@ -153,9 +153,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
   // Ref to track the current status for detecting status changes
   const currentStatusRef = useRef<StatusType | null>(null)
 
-  // Auth hook for getting user and token
-  // Note: idToken is used for backend auth, not accessToken
-  const { user, idToken } = useAuth()
+  const { user } = useAuth()
 
   // Chat store
   const {
@@ -587,14 +585,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
 
       // Collect metadata about data sources and files before adding user message
       const layoutState = useLayoutStore.getState()
-      let enabledDataSources = layoutState.enabledDataSourceIds
-
-      // Filter out authenticated sources if user doesn't have a valid idToken
-      if (!idToken) {
-        enabledDataSources = enabledDataSources.filter(
-          (sourceId) => sourceId === WEB_SEARCH_SOURCE_ID
-        )
-      }
+      const enabledDataSources = layoutState.enabledDataSourceIds
 
       // Get session files
       const sessionId = useChatStore.getState().currentConversation?.id
