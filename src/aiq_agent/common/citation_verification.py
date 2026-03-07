@@ -256,8 +256,11 @@ class SourceRegistry:
             return result
 
         # 3. Prefix match — report normalized is prefix of registry normalized
+        #    Deduplicate by url to avoid raw+normalized keys for the same entry
+        #    being counted as ambiguous.
+        prefix_entries = [e for n, e in self._urls.items() if n.startswith(normalized)]
         result = self._pick_unique(
-            [e for n, e in self._urls.items() if n.startswith(normalized)],
+            list({e.url: e for e in prefix_entries}.values()),
             "prefix",
             url,
         )
@@ -269,8 +272,14 @@ class SourceRegistry:
         same_host = [p for p in self._parsed_urls.values() if p.host == host]
 
         # 4. Child-path match — report path extends a registry path (subpage)
+        #    Use rstrip("/") + "/" to enforce segment boundaries (prevents
+        #    /us/benefits matching /us/benefitsOther).
         result = self._pick_unique(
-            [p.entry for p in same_host if len(p.path_segments) >= 2 and path != p.path and path.startswith(p.path)],
+            [
+                p.entry
+                for p in same_host
+                if len(p.path_segments) >= 2 and path != p.path and path.startswith(p.path.rstrip("/") + "/")
+            ],
             "child-path",
             url,
         )
@@ -620,11 +629,13 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
         logger.debug("[CitationVerify] Skipping — registry is empty (no tool calls captured)")
         return CitationVerificationResult(verified_report=report_text)
 
-    registry_urls = [s.url for s in all_sources if s.url]
     logger.info(
-        "[CitationVerify] Starting verification against %d registered source(s): %s",
+        "[CitationVerify] Starting verification against %d registered source(s)",
         len(all_sources),
-        registry_urls,
+    )
+    logger.debug(
+        "[CitationVerify] Registered URLs: %s",
+        [s.url for s in all_sources if s.url],
     )
 
     # Find references section

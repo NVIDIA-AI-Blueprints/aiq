@@ -151,7 +151,6 @@ const mockWsClient = {
   sendMessage: vi.fn(),
   sendInteractionResponse: vi.fn(),
   isConnected: vi.fn(() => false),
-  updateAuthToken: vi.fn(),
   updateConversationId: vi.fn(),
 }
 

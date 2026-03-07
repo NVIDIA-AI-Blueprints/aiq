@@ -247,8 +247,8 @@ class TestSourceRegistry:
         registry.add(SourceEntry(url="https://example.com/"))
         assert registry.resolve_url("https://example.com/us/benefits/") is None
 
-    def test_resolve_url_child_path_ambiguous(self, registry):
-        """Multiple parent paths — reject to avoid guessing."""
+    def test_resolve_url_child_path_single_parent(self, registry):
+        """Report URL is a child of only one registry path — match succeeds."""
         registry.add(SourceEntry(url="https://example.com/us/benefits/"))
         registry.add(SourceEntry(url="https://example.com/us/benefits/time-off/"))
         # "healthcare/" is under "benefits/" but not under "time-off/"

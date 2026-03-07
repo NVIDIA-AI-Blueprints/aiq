@@ -562,7 +562,6 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       wsClientRef.current = createNATWebSocketClient({
         conversationId: currentConversation.id,
         callbacks: createCallbacks(),
-        authToken: idToken,
       })
       wsClientRef.current.connect()
     } else {
@@ -577,16 +576,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         wsClientRef.current = null
       }
     }
-  }, [currentConversation?.id, autoConnect, idToken, createCallbacks])
-
-  /**
-   * Update auth token when it changes
-   */
-  useEffect(() => {
-    if (wsClientRef.current && idToken) {
-      wsClientRef.current.updateAuthToken(idToken)
-    }
-  }, [idToken])
+  }, [currentConversation?.id, autoConnect, createCallbacks])
 
   /**
    * Send a message via WebSocket
@@ -683,7 +673,6 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         wsClientRef.current = createNATWebSocketClient({
           conversationId,
           callbacks,
-          authToken: idToken,
         })
         wsClientRef.current.connect()
       } else {
@@ -702,7 +691,6 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       setCurrentStatus,
       setStreaming,
       setLoading,
-      idToken,
       createCallbacks,
     ]
   )
@@ -771,11 +759,10 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       wsClientRef.current = createNATWebSocketClient({
         conversationId: currentConversation.id,
         callbacks: createCallbacks(),
-        authToken: idToken,
       })
       wsClientRef.current.connect()
     }
-  }, [currentConversation, idToken, createCallbacks])
+  }, [currentConversation, createCallbacks])
 
   // Activate recovery polling when connection error cards are visible
   useConnectionRecovery(connect)

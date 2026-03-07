@@ -38,6 +38,11 @@ from .models import DeepResearchAgentState
 
 logger = logging.getLogger(__name__)
 
+# Minimum character count for a report to be considered substantive.
+# Used by both _extract_report_content (to decide if write_file fallback is needed)
+# and _is_report_complete (to reject too-short reports).
+_MIN_REPORT_LENGTH = 1500
+
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
 
@@ -268,7 +273,7 @@ class DeepResearcherAgent:
             content = " ".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
         else:
             content = raw if isinstance(raw, str) else str(raw)
-        if len(content) >= 1500:
+        if len(content) >= _MIN_REPORT_LENGTH:
             return content
         # If the last message is an AIMessage with a write_file tool call,
         # the LLM may have written the report via tool instead of text output.
@@ -293,7 +298,7 @@ class DeepResearcherAgent:
 
         content = self._extract_report_content(messages)
 
-        if len(content) < 1500:
+        if len(content) < _MIN_REPORT_LENGTH:
             return False, f"too_short ({len(content)} chars)"
 
         if content.count("## ") < 2:
@@ -441,6 +446,9 @@ class DeepResearcherAgent:
                     last_error = ex
                     if "recursion" in str(ex).lower() or "reuse already awaited" in str(ex):
                         raise ex
+                    # Non-fatal: ainvoke raised before producing a result, so
+                    # `result` still holds the previous iteration's value.
+                    # The next loop iteration will rebuild next_state from it.
                     continue
 
                 # Evaluate the feedback-retry result before the next iteration
