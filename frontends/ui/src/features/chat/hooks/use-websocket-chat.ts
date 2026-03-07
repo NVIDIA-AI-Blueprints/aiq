@@ -34,7 +34,6 @@ import { checkBackendHealthCached, invalidateHealthCache } from '@/shared/hooks/
 import { useChatStore } from '../store'
 import { useConnectionRecovery } from './use-connection-recovery'
 import { useLayoutStore } from '@/features/layout/store'
-import { WEB_SEARCH_SOURCE_ID } from '@/features/layout/data-sources'
 import { useDocumentsStore } from '@/features/documents/store'
 import { useAuth } from '@/adapters/auth'
 import type {
