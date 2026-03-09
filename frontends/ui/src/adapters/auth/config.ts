@@ -14,6 +14,7 @@
  * and ./providers/types.ts for the provider contract.
  */
 
+import 'server-only'
 import { randomUUID } from 'node:crypto'
 import { type AuthOptions, type Account, type User, type Session } from 'next-auth'
 import { type JWT } from 'next-auth/jwt'
