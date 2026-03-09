@@ -34,6 +34,11 @@ import { useChatStore } from '../store'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 
+const isUnavailableDeepResearchJobError = (error: unknown): boolean => {
+  if (!(error instanceof Error)) return false
+  return /(?:404|410)|expired|deleted|not found/i.test(error.message)
+}
+
 export interface LoadJobDataOptions {
   /**
    * Whether to stream the full job to get all artifacts (citations, todos, tool calls, etc.)
@@ -113,6 +118,8 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
     addErrorCard,
     completeDeepResearch,
     setStreaming,
+    patchConversationMessage,
+    addDeepResearchBanner,
   } = useChatStore()
 
   const { openRightPanel, setResearchPanelTab } = useLayoutStore()
@@ -120,6 +127,41 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
   const clearError = useCallback(() => {
     setError(null)
   }, [])
+
+  const syncMissingJobToFailureState = useCallback(
+    (jobId: string): void => {
+      const state = useChatStore.getState()
+      const conversation = state.currentConversation
+      if (!conversation) return
+
+      const trackingMessage = [...conversation.messages]
+        .reverse()
+        .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId === jobId)
+
+      if (trackingMessage?.id) {
+        const hasPartialReport = Boolean(
+          trackingMessage.reportContent?.trim() || trackingMessage.showViewReport
+        )
+        patchConversationMessage(conversation.id, trackingMessage.id, {
+          deepResearchJobStatus: 'failure',
+          isDeepResearchActive: false,
+          showViewReport: hasPartialReport,
+        })
+      }
+
+      const hasTerminalBanner = conversation.messages.some(
+        (m) =>
+          m.messageType === 'deep_research_banner' &&
+          m.deepResearchBannerData?.jobId === jobId &&
+          ['success', 'failure', 'cancelled'].includes(m.deepResearchBannerData?.bannerType || '')
+      )
+
+      if (!hasTerminalBanner) {
+        addDeepResearchBanner('failure', jobId, conversation.id)
+      }
+    },
+    [patchConversationMessage, addDeepResearchBanner]
+  )
 
   /**
    * Load job data using REST API (report only)
@@ -499,6 +541,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         const errorMessage = err instanceof Error ? err.message : 'Failed to load job data'
         setError(errorMessage)
         console.error('Failed to load job data:', err)
+        if (isUnavailableDeepResearchJobError(err)) {
+          syncMissingJobToFailureState(jobId)
+        }
         addErrorCard('agent.deep_research_load_failed', errorMessage)
         stopAllDeepResearchSpinners()
         completeDeepResearch()
@@ -520,6 +565,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       addErrorCard,
       completeDeepResearch,
       setStreaming,
+      syncMissingJobToFailureState,
     ]
   )
 
@@ -592,6 +638,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         const errorMessage = err instanceof Error ? err.message : 'Failed to load stream data'
         setError(errorMessage)
         console.error('Failed to load stream data:', err)
+        if (isUnavailableDeepResearchJobError(err)) {
+          syncMissingJobToFailureState(jobId)
+        }
         addErrorCard('agent.deep_research_load_failed', errorMessage)
         stopAllDeepResearchSpinners()
         completeDeepResearch()
@@ -600,7 +649,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         setIsLoading(false)
       }
     },
-    [idToken, clearDeepResearch, streamFullJob, stopAllDeepResearchSpinners, setStreamLoaded, setLoadedJobId, addErrorCard, completeDeepResearch, setStreaming]
+    [idToken, clearDeepResearch, streamFullJob, stopAllDeepResearchSpinners, setStreamLoaded, setLoadedJobId, syncMissingJobToFailureState, addErrorCard, completeDeepResearch, setStreaming]
   )
 
   return {

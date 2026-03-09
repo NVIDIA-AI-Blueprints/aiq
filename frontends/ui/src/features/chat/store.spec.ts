@@ -12,12 +12,21 @@ const mockLayoutState = vi.hoisted(() => ({
   availableDataSources: [{ id: 'web_search' }, { id: 'knowledge_base' }],
   setEnabledDataSources: vi.fn(),
 }))
+const mockDeepResearchApi = vi.hoisted(() => ({
+  getJobStatus: vi.fn(),
+  cancelJob: vi.fn(),
+}))
 
 // Mock the layout store
 vi.mock('@/features/layout/store', () => ({
   useLayoutStore: {
     getState: () => mockLayoutState,
   },
+}))
+
+vi.mock('@/adapters/api/deep-research-client', () => ({
+  getJobStatus: mockDeepResearchApi.getJobStatus,
+  cancelJob: mockDeepResearchApi.cancelJob,
 }))
 
 describe('useChatStore', () => {
@@ -28,6 +37,8 @@ describe('useChatStore', () => {
     mockLayoutState.setEnabledDataSources.mockClear()
     mockLayoutState.enabledDataSourceIds = ['web_search']
     mockLayoutState.availableDataSources = [{ id: 'web_search' }, { id: 'knowledge_base' }]
+    mockDeepResearchApi.getJobStatus.mockReset()
+    mockDeepResearchApi.cancelJob.mockReset()
     // Reset store to initial state before each test
     useChatStore.setState({
       currentUserId: null,
@@ -1383,6 +1394,151 @@ describe('useChatStore', () => {
       useChatStore.getState().restoreSessionState(updatedConv)
       const afterSecond = useChatStore.getState().currentConversation?.messages ?? []
       expect(afterSecond.filter((m) => m.errorData?.errorCode === 'agent.response_interrupted')).toHaveLength(1)
+    })
+  })
+
+  describe('cleanupOrphanedStartingBanners', () => {
+    const createConversation = (messages: Partial<Conversation['messages'][0]>[]): Conversation => ({
+      id: 'conv-orphaned',
+      userId: 'user-1',
+      title: 'Orphaned Banner Test',
+      messages: messages.map((m, i) => ({
+        id: m.id ?? `msg-${i}`,
+        role: (m.role ?? 'assistant') as 'user' | 'assistant' | 'system',
+        content: m.content ?? '',
+        timestamp: new Date(),
+        ...m,
+      })),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    test('syncs stale tracking message when terminal banner already exists', async () => {
+      const conv = createConversation([
+        {
+          id: 'tracking-msg',
+          messageType: 'agent_response',
+          deepResearchJobId: 'job-123',
+          deepResearchJobStatus: 'running',
+          isDeepResearchActive: true,
+        },
+        {
+          id: 'starting-banner',
+          messageType: 'deep_research_banner',
+          deepResearchBannerData: { bannerType: 'starting', jobId: 'job-123' },
+        },
+        {
+          id: 'failure-banner',
+          messageType: 'deep_research_banner',
+          deepResearchBannerData: { bannerType: 'failure', jobId: 'job-123' },
+        },
+      ])
+
+      useChatStore.setState({ currentConversation: conv, conversations: [conv] })
+
+      await useChatStore.getState().cleanupOrphanedStartingBanners()
+
+      const updatedMessages = useChatStore.getState().currentConversation?.messages ?? []
+      const trackingMessage = updatedMessages.find((m) => m.id === 'tracking-msg')
+
+      expect(updatedMessages.some((m) => m.id === 'starting-banner')).toBe(false)
+      expect(trackingMessage?.deepResearchJobStatus).toBe('failure')
+      expect(trackingMessage?.isDeepResearchActive).toBe(false)
+    })
+
+    test('syncs stale tracking message after REST status resolves terminal state', async () => {
+      mockDeepResearchApi.getJobStatus.mockResolvedValue({
+        job_id: 'job-456',
+        status: 'failure',
+        error: 'expired',
+      })
+
+      const conv = createConversation([
+        {
+          id: 'tracking-msg',
+          messageType: 'agent_response',
+          deepResearchJobId: 'job-456',
+          deepResearchJobStatus: 'running',
+          isDeepResearchActive: true,
+        },
+        {
+          id: 'starting-banner',
+          messageType: 'deep_research_banner',
+          deepResearchBannerData: { bannerType: 'starting', jobId: 'job-456' },
+        },
+      ])
+
+      useChatStore.setState({ currentConversation: conv, conversations: [conv] })
+
+      await useChatStore.getState().cleanupOrphanedStartingBanners()
+
+      const updatedMessages = useChatStore.getState().currentConversation?.messages ?? []
+      const trackingMessage = updatedMessages.find((m) => m.id === 'tracking-msg')
+      const terminalBanner = updatedMessages.find(
+        (m) =>
+          m.messageType === 'deep_research_banner' &&
+          m.deepResearchBannerData?.jobId === 'job-456' &&
+          m.deepResearchBannerData?.bannerType === 'failure'
+      )
+
+      expect(trackingMessage?.deepResearchJobStatus).toBe('failure')
+      expect(trackingMessage?.isDeepResearchActive).toBe(false)
+      expect(updatedMessages.some((m) => m.id === 'starting-banner')).toBe(false)
+      expect(terminalBanner).toBeTruthy()
+    })
+  })
+
+  describe('reconnectToActiveJob', () => {
+    const createConversation = (messages: Partial<Conversation['messages'][0]>[]): Conversation => ({
+      id: 'conv-reconnect',
+      userId: 'user-1',
+      title: 'Reconnect Test',
+      messages: messages.map((m, i) => ({
+        id: m.id ?? `msg-${i}`,
+        role: (m.role ?? 'assistant') as 'user' | 'assistant' | 'system',
+        content: m.content ?? '',
+        timestamp: new Date(),
+        ...m,
+      })),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    test('marks missing active job as failed when status lookup returns 404', async () => {
+      mockDeepResearchApi.getJobStatus.mockRejectedValue(new Error('Failed to get job status: 404'))
+
+      const conv = createConversation([
+        {
+          id: 'tracking-msg',
+          messageType: 'agent_response',
+          deepResearchJobId: 'job-missing',
+          deepResearchJobStatus: 'running',
+          isDeepResearchActive: true,
+        },
+        {
+          id: 'starting-banner',
+          messageType: 'deep_research_banner',
+          deepResearchBannerData: { bannerType: 'starting', jobId: 'job-missing' },
+        },
+      ])
+
+      useChatStore.setState({ currentConversation: conv, conversations: [conv] })
+
+      await useChatStore.getState().reconnectToActiveJob()
+
+      const updatedMessages = useChatStore.getState().currentConversation?.messages ?? []
+      const trackingMessage = updatedMessages.find((m) => m.id === 'tracking-msg')
+      const failureBanner = updatedMessages.find(
+        (m) =>
+          m.messageType === 'deep_research_banner' &&
+          m.deepResearchBannerData?.jobId === 'job-missing' &&
+          m.deepResearchBannerData?.bannerType === 'failure'
+      )
+
+      expect(trackingMessage?.deepResearchJobStatus).toBe('failure')
+      expect(trackingMessage?.isDeepResearchActive).toBe(false)
+      expect(updatedMessages.some((m) => m.id === 'starting-banner')).toBe(false)
+      expect(failureBanner).toBeTruthy()
     })
   })
 })
