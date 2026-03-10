@@ -20,7 +20,6 @@ adapters must implement. The Adapter Pattern allows new backends to be added
 without modifying core code.
 """
 
-import asyncio
 import logging
 import threading
 import time
@@ -202,8 +201,7 @@ class BaseRetriever(ABC):
         Returns:
             True if healthy, False otherwise.
         """
-        await asyncio.sleep(0)
-        return True
+        return True  # NOSONAR
 
 
 class BaseIngestor(ABC):
@@ -479,5 +477,4 @@ class BaseIngestor(ABC):
         Returns:
             True if healthy, False otherwise.
         """
-        await asyncio.sleep(0)
-        return True
+        return True  # NOSONAR
