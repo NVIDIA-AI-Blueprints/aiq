@@ -362,7 +362,6 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.verbose:
-        warnings.resetwarnings()
         logging.basicConfig(
             level=logging.INFO, format="%(levelname)s - %(name)s - %(message)s", handlers=[logging.StreamHandler()]
         )
