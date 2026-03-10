@@ -68,11 +68,10 @@ ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@your-vm-host
 
 Then open [http://localhost:3000](http://localhost:3000) on your local machine as usual.
 
-To forward ports to an already-active SSH session, you can also use `~C` (SSH escape sequence) to open the SSH command line and type:
+To forward ports to an already-active SSH session, you can also use `~C` (SSH escape sequence) to open the SSH command line and type the following on a single line (press Enter at the end):
 
 ```text
--L 3000:localhost:3000
--L 8000:localhost:8000
+-L 3000:localhost:3000 -L 8000:localhost:8000
 ```
 
 ### VS Code Remote SSH

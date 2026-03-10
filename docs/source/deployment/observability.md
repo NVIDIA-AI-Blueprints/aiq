@@ -24,7 +24,7 @@ The AI-Q blueprint supports multiple observability backends for tracing agent ex
 1. Install Phoenix:
 
    ```bash
-   pip install arize-phoenix
+   uv pip install arize-phoenix
    ```
 
 2. Start the Phoenix server:
@@ -208,6 +208,8 @@ general:
 
 | Field | Description |
 |-------|-------------|
+| `endpoint` | The OTEL collector URL to send spans to (e.g., `http://your-otel-collector:4318/v1/traces`). |
+| `project` | Logical project name attached to all exported spans. |
 | `redaction_enabled` | Enable or disable redaction processing. |
 | `redaction_attributes` | Span attributes to redact (defaults to `input.value`, `output.value`, `nat.metadata`). |
 | `force_redaction` | Always redact, regardless of header conditions. |
@@ -220,11 +222,17 @@ general:
 The exporter supports standard OTEL batch settings:
 
 ```yaml
-batch_size: 512
-flush_interval: 5000
-max_queue_size: 2048
-drop_on_overflow: false
-shutdown_timeout: 30000
+general:
+  telemetry:
+    tracing:
+      otel:
+        _type: otelcollector_redaction
+        endpoint: http://your-otel-collector:4318/v1/traces
+        batch_size: 512
+        flush_interval: 5000
+        max_queue_size: 2048
+        drop_on_overflow: false
+        shutdown_timeout: 30000
 ```
 
 ## Verbose Logging
