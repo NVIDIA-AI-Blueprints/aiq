@@ -44,6 +44,7 @@ from nat.runtime.session import SessionManager
 if not os.environ.get("PYTHONWARNINGS"):
     warnings.filterwarnings("ignore")
 logging.getLogger("nat.builder.function_info").setLevel(logging.ERROR)
+logging.getLogger("langgraph.checkpoint").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 console = Console()
