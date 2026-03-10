@@ -154,6 +154,17 @@ When `tool_iterations >= max_tool_iterations`, the agent appends a
 This combats the "Lost in the Middle" problem by placing the instruction at
 the end of the context window.
 
+## Citation Verification
+
+The shallow researcher applies the same citation verification and report
+sanitization pipeline as the deep researcher. After the LLM produces a final
+response, all citations are validated against the sources actually retrieved
+during tool calls, and unsafe or unverifiable URLs are removed.
+
+See [Deep Researcher -- Citation Verification](./deep-researcher.md#phase-5-citation-verification-post-processing)
+for full details on the verification logic, URL matching strategies, and
+audit trail.
+
 ## Related
 
 - [Architecture Overview](../overview.md) -- full system flow
