@@ -118,10 +118,7 @@ Set `LOG_LEVEL=DEBUG` for verbose output during troubleshooting. Use `LOG_LEVEL=
 
 ### Tracing
 
-The backend supports OpenTelemetry-compatible tracing. Configure the following for observability:
-
-- **Phoenix tracing** -- Set up Phoenix for local trace visualization during development and debugging.
-- **LangSmith** -- For LLM-specific tracing, evaluation, and optimization. Configure `LANGCHAIN_TRACING_V2=true` and set `LANGCHAIN_API_KEY`.
+The backend supports OpenTelemetry-compatible tracing. See [Observability](./observability.md) for setup guides covering Phoenix, LangSmith, Weave, and the OTEL Collector with privacy redaction.
 
 ### Metrics to Watch
 

@@ -29,6 +29,8 @@ All containerized deployments run the same three services:
 
 - **[Docker Build System](./docker-build.md)** -- Multi-stage Dockerfile architecture, build targets (dev vs. release), base images, and startup scripts (`entrypoint.py` and `start_web.py`).
 
+- **[Observability](./observability.md)** -- Tracing and monitoring with Phoenix, LangSmith, Weave, and OpenTelemetry.
+
 - **[Production Considerations](./production.md)** -- Guidance on managed databases, horizontal scaling, security hardening, monitoring, and resource requirements.
 
 ## Quick Start
