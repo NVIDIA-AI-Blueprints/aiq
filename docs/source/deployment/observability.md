@@ -241,7 +241,7 @@ For quick debugging without any external services, enable the built-in verbose c
 
 ```yaml
 workflow:
-  _type: chat_researcher_agent
+  _type: chat_deepresearcher_agent
   verbose: true
 ```
 
