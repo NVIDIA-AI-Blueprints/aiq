@@ -220,7 +220,7 @@ cp deploy/.env.example deploy/.env
 
 Replace your API keys.
 
-> **Note:** Depending on your usecase, deep research report quality can be enahnced by enabling searching across academic research papers. We use Serper for this. If you want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to enable it.
+> **Note:** Depending on your usecase, deep research report quality can be enhanced by enabling searching across academic research papers. We use Serper for this. If you want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to enable it.
 
 ## Ways to Run the Agents
 

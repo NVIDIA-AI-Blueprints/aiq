@@ -25,7 +25,7 @@ The following table lists the available configuration files:
 
 | Config | Description |
 |--------|-------------|
-| `configs/config_deep_research_bench.yml` | Default: Nemotron for agent, Gemini 2.5 Pro for RACE judge. Use this for the main quickstart. |
+| `configs/config_deep_research_bench.yml` | Default: Nemotron for agent. Generates reports for submission to the official DRB evaluator. |
 
 ## Running Evaluation
 
