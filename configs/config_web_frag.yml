@@ -1,6 +1,6 @@
 # This is the configuration for the Web mode with Foundational RAG. It is the default configuration for the Helm deployment.
 # It has the following features:
-# - Web search and Paper search tools by default
+# - Web search enabled by default
 # - Knowledge retrieval using Foundational RAG.
 #  Please note that this requires a RAG server and ingest server to be running which is not deployed by this blueprint.
 #  For an example RAG deployment, see https://github.com/NVIDIA-AI-Blueprints/rag/tree/main
