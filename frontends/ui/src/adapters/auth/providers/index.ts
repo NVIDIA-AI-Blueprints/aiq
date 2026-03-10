@@ -11,7 +11,7 @@
  * DEFAULT: Returns a null provider (auth disabled, "Default User" mode).
  *
  * TO ENABLE AUTH:
- *   1. Create a provider file in this directory (see ./auth-example.ts for reference)
+ *   1. Create a provider file in this directory (see ./auth-example.ts for a template)
  *   2. Replace getAuthProviderConfig() below to return your provider:
  *
  *        import { MyProvider, refreshMyToken } from './my-provider'

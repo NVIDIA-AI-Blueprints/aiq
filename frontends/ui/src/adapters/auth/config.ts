@@ -10,7 +10,7 @@
  * By default, no provider is active and authentication is disabled.
  * Set REQUIRE_AUTH=true and configure a provider to enable OAuth.
  *
- * See ./providers/auth-example.ts for a reference implementation
+ * See ./providers/auth-example.ts for a provider template
  * and ./providers/types.ts for the provider contract.
  */
 
@@ -76,6 +76,13 @@ export const shouldUseSecureCookies = (): boolean => {
   return nextAuthUrl.startsWith('https://')
 }
 
+const parsePositiveIntEnv = (envValue: string | undefined, defaultValue: number): number => {
+  if (envValue === undefined) return defaultValue
+
+  const parsed = Number.parseInt(envValue, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultValue
+}
+
 // ---------------------------------------------------------------------------
 // Configurable token/cookie lifetimes
 // ---------------------------------------------------------------------------
@@ -88,7 +95,7 @@ export const shouldUseSecureCookies = (): boolean => {
  * Override via TOKEN_REFRESH_BUFFER_MINUTES env var.
  */
 export const TOKEN_REFRESH_BUFFER_SECONDS =
-  parseInt(process.env.TOKEN_REFRESH_BUFFER_MINUTES || '5', 10) * 60
+  parsePositiveIntEnv(process.env.TOKEN_REFRESH_BUFFER_MINUTES, 5) * 60
 
 /**
  * Max age (seconds) for both the NextAuth session and the idToken cookie.
@@ -98,7 +105,7 @@ export const TOKEN_REFRESH_BUFFER_SECONDS =
  * Default: 24 hours. Override via SESSION_MAX_AGE_HOURS env var.
  */
 export const SESSION_MAX_AGE_SECONDS =
-  parseInt(process.env.SESSION_MAX_AGE_HOURS || '24', 10) * 60 * 60
+  parsePositiveIntEnv(process.env.SESSION_MAX_AGE_HOURS, 24) * 60 * 60
 
 // ---------------------------------------------------------------------------
 // Token refresh (delegates to active provider)

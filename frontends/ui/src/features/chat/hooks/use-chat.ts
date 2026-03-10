@@ -22,15 +22,6 @@ import { useChatStore } from '../store'
 import { useAuth } from '@/adapters/auth'
 import type { Conversation, StatusType, ThinkingStep, PendingInteraction } from '../types'
 
-interface UseChatOptions {
-  /** Model to use (optional) */
-  model?: string
-  /** Temperature for generation */
-  temperature?: number
-  /** Max tokens for response */
-  maxTokens?: number
-}
-
 interface UseChatReturn {
   /** Send a message and stream the response */
   sendMessage: (content: string) => Promise<void>
@@ -69,7 +60,7 @@ interface UseChatReturn {
  * - prompt: Agent questions requiring user response
  * - report: Final report content for Details Panel
  */
-export const useChat = (_options: UseChatOptions = {}): UseChatReturn => {
+export const useChat = (): UseChatReturn => {
   // Abort controller for cancelling requests
   const abortControllerRef = useRef<AbortController | null>(null)
 

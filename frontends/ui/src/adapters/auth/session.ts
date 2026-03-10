@@ -52,7 +52,7 @@ const DEFAULT_USER = {
  * ```
  */
 export const useAuth = (): AuthContext => {
-  const { authRequired, authProviderId } = useAppConfig()
+  const { authRequired, authProviderId, sessionRefreshIntervalSeconds } = useAppConfig()
   const authRequiredRef = useRef(authRequired)
   const { data: session, status, update } = useNextAuthSession()
   const hasTriggeredReauth = useRef(false)
@@ -81,8 +81,6 @@ export const useAuth = (): AuthContext => {
       }
     }
   }, [session?.error, authRequired, handleSignOut])
-
-  const { sessionRefreshIntervalSeconds } = useAppConfig()
 
   useEffect(() => {
     if (!authRequired) return

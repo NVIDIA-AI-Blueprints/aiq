@@ -39,6 +39,7 @@ import {
   clearDeepResearchSession,
   clearAllDeepResearchSessions,
 } from './lib/deep-research-session-storage'
+import { isUnavailableDeepResearchJobError } from './lib/deep-research-errors'
 import { hasActiveDeepResearchJob } from './lib/session-activity'
 import {
   logStorageWrite,
@@ -57,11 +58,6 @@ const isQuotaExceededError = (error: unknown): boolean => {
   if (!(error instanceof Error)) return false
   if (error.name === 'QuotaExceededError') return true
   return /quota|exceeded|storage/i.test(error.message)
-}
-
-const isUnavailableDeepResearchJobError = (error: unknown): boolean => {
-  if (!(error instanceof Error)) return false
-  return /(?:404|410)|expired|deleted|not found/i.test(error.message)
 }
 
 type PersistedChatState = {

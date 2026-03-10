@@ -31,13 +31,9 @@ import {
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
+import { isUnavailableDeepResearchJobError } from '../lib/deep-research-errors'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
-
-const isUnavailableDeepResearchJobError = (error: unknown): boolean => {
-  if (!(error instanceof Error)) return false
-  return /(?:404|410)|expired|deleted|not found/i.test(error.message)
-}
 
 export interface LoadJobDataOptions {
   /**
