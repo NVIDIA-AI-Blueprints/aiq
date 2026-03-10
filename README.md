@@ -240,8 +240,8 @@ source .venv/bin/activate
 # Verbose logging
 ./scripts/start_cli.sh --verbose
 
-# Or run directly with the NeMo Agent Toolkit CLI
-nat run --config_file configs/config_cli_default.yml --input "How do I install CUDA?"
+# Or run directly with the NeMo Agent Toolkit CLI (dotenv loads deploy/.env into the environment)
+dotenv -f deploy/.env run nat run --config_file configs/config_cli_default.yml --input "How do I install CUDA?"
 ```
 
 The CLI frontend source is in `frontends/cli/`.

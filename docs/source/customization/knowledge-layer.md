@@ -259,8 +259,9 @@ Run the backend API server and frontend UI together for document upload, collect
 
 ```bash
 # Foundational RAG example (requires deployed FRAG server)
-# Set env vars: RAG_SERVER_URL, RAG_INGEST_URL, NVIDIA_API_KEY
-nat serve --config_file configs/config_web_frag.yml --host 0.0.0.0 --port 8000
+# dotenv loads API keys (NVIDIA_API_KEY, etc.) from deploy/.env
+# Additional env vars needed: RAG_SERVER_URL, RAG_INGEST_URL
+dotenv -f deploy/.env run nat serve --config_file configs/config_web_frag.yml --host 0.0.0.0 --port 8000
 ```
 
 ### Start Frontend
