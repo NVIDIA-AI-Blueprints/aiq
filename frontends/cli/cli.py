@@ -376,10 +376,6 @@ def main() -> None:
     else:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(name)s - %(message)s")
 
-    # Suppress noisy third-party loggers regardless of verbose mode
-    for _lib in ("httpx", "httpcore", "urllib3", "openai", "chromadb"):
-        logging.getLogger(_lib).setLevel(logging.WARNING)
-
     env_file = Path(args.env_file)
     if env_file.exists():
         try:
