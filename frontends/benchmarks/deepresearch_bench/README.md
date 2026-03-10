@@ -213,7 +213,7 @@ python scripts/aggregate_drb_scores.py \
 
 ## W&B Tracking
 
-Evaluation runs are tracked using [Weights & Biases Weave](https://wandb.ai/site/weave) for experiment tracking and observability.
+Evaluation runs are tracked using [Weights & Biases Weave](https://wandb.ai/site/weave/) for experiment tracking and observability.
 
 ### Configuration
 
