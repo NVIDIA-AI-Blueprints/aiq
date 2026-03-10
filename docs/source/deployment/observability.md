@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Observability
 
-The AI-Q blueprint supports multiple observability backends for tracing agent execution, LLM calls, tool invocations, and token usage. Choose the backend that best fits your workflow.
+The AI-Q blueprint supports multiple observability backends for tracing agent execution, LLM calls, tool invocations, and token usage. Choose the backend that best fits your workflow. For more details on available backends, refer to the [NVIDIA Agent Toolkit observability documentation](https://docs.nvidia.com/nemo/agent-toolkit/latest/run-workflows/observe/observe.html).
 
 | Backend | Best For | Setup |
 |---------|----------|-------|
