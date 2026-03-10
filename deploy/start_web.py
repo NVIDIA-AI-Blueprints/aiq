@@ -99,8 +99,9 @@ import os
 import sys
 import warnings
 
-# Suppress all warnings in server mode
-warnings.filterwarnings("ignore")
+# Suppress warnings unless PYTHONWARNINGS is explicitly set
+if not os.environ.get("PYTHONWARNINGS"):
+    warnings.filterwarnings("ignore")
 
 
 def configure_logging():

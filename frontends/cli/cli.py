@@ -40,8 +40,9 @@ from nat.data_models.intermediate_step import IntermediateStepType
 from nat.runtime.loader import load_workflow
 from nat.runtime.session import SessionManager
 
-# Suppress all warnings by default; re-enabled in main() if --verbose is passed
-warnings.filterwarnings("ignore")
+# Suppress warnings by default; re-enabled in main() if --verbose is passed
+if not os.environ.get("PYTHONWARNINGS"):
+    warnings.filterwarnings("ignore")
 logging.getLogger("nat.builder.function_info").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)

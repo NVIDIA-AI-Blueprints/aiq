@@ -64,8 +64,8 @@ else
     echo "Warning: No .env file found. Copy deploy/.env.example to deploy/.env"
 fi
 
-# Suppress Python warnings in server mode
-export PYTHONWARNINGS=ignore
+# Suppress Python warnings unless overridden by .env
+export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
 
 # Validate that config has front_end (API mode) - required for server/debug mode
 if ! grep -q "front_end:" "$REPO_ROOT/$CONFIG_FILE" 2>/dev/null; then
