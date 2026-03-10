@@ -20,9 +20,15 @@ def convert(input_path: Path, output_path: Path) -> int:
     with open(output_path, "w", encoding="utf-8") as f:
         for item in data:
             article = item.get("generated_answer", "")
+            item_id = item.get("id")
+            item_question = item.get("question")
+            if item_id is None or item_question is None:
+                print(f"  Warning: missing 'id' or 'question', skipping: {item}")
+                continue
             if not article or len(article.strip()) < 100:
-                print(f"  Warning: id={item['id']} has short/empty article ({len(article.strip())} chars)")
-            entry = {"id": item["id"], "prompt": item["question"], "article": article}
+                n = len(article.strip())
+                print(f"  Warning: id={item_id} short/empty article ({n} chars)")
+            entry = {"id": item_id, "prompt": item_question, "article": article}
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
             written += 1
 
