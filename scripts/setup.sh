@@ -57,7 +57,6 @@ echo "Frontends installed (CLI, Debug, AI-Q API)"
 # Install benchmarks
 echo ""
 echo "Installing benchmarks..."
-"${UV_BIN}" pip install -e ./frontends/benchmarks/deepresearch_bench
 "${UV_BIN}" pip install -e ./frontends/benchmarks/freshqa
 "${UV_BIN}" pip install -e ./frontends/benchmarks/deepsearch_qa
 echo "Benchmarks installed"

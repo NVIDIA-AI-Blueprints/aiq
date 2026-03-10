@@ -220,7 +220,7 @@ cp deploy/.env.example deploy/.env
 
 Replace your API keys.
 
-> **Note:** If you do not want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to disable it.
+> **Note:** Depending on your usecase, deep research report quality can be enahnced by enabling searching across academic research papers. We use Serper for this. If you want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to enable it.
 
 ## Ways to Run the Agents
 
@@ -309,22 +309,40 @@ The `frontends/benchmarks/` directory contains evaluation pipelines for assessin
 
 ### Running Evaluations
 
-First, install the benchmark package:
+### Step 1: Install the dataset
 
-```bash
-uv pip install -e ./frontends/benchmarks/deepresearch_bench
-```
+The dataset files are not included in the repository. We have included a script to retrieve them from the [Deep Research Bench Github Repository](https://github.com/Ayanami0730/deep_research_bench/tree/main) and format them for the NeMo Agent Toolkit evaluator.
 
-Download the dataset files:
+To download the dataset files, run the following script:
 
 ```bash
 python frontends/benchmarks/deepresearch_bench/scripts/download_drb_dataset.py
 ```
 
-Then run the evaluation with one of the available configurations:
+### Step 2: Generate reports using NAT evaluation harness
 
 ```bash
 dotenv -f deploy/.env run nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench.yml
+```
+
+### Step 3: Convert the output into a compatible format
+```bash
+python frontends/benchmarks/deepresearch_bench/scripts/export_drb_jsonl.py --input <path to your workflow_output.json> --output <path to the output file you want to create with .jsonl extension>
+```
+
+### Step 4: Run evaluation
+Follow instructions in the [Deep Research Bench Github Repository](https://github.com/Ayanami0730/deep_research_bench/tree/main) to run evaluation and obtain scores.
+
+
+### Optional: Phoenix Tracing
+
+If your config enables Phoenix tracing, start the Phoenix server before running `nat eval`.
+
+Start server (separate terminal):
+
+```bash
+source .venv/bin/activate
+phoenix serve
 ```
 
 For detailed benchmark documentation, refer to:

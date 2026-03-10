@@ -30,15 +30,6 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  judge_llm:
-    _type: openai
-    model_name: "gemini-2.5-pro"
-    base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
-    api_key: ${GEMINI_API_KEY}
-    timeout: 600
-    max_retries: 10
-    temperature: 0.1
-
 functions:
   paper_search_tool:
     _type: paper_search
@@ -73,14 +64,3 @@ eval:
         question_key: question
         answer_key: expected_output
         generated_answer_key: generated_answer
-
-  evaluators:
-    race:
-      _type: drb_race_evaluator
-      llm_name: judge_llm
-      criteria_file: frontends/benchmarks/deepresearch_bench/data/criteria.jsonl
-
-    # fact:
-    #   _type: drb_fact_evaluator
-    #   llm_name: judge_llm
-    #   jina_api_key: ${JINA_API_KEY}
