@@ -153,7 +153,9 @@ functions:
 
 #### Multimodal Extraction (LlamaIndex Only)
 
-By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding models. All options below can be overridden via environment variables:
+By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding models. When `AIQ_EXTRACT_IMAGES` or `AIQ_EXTRACT_CHARTS` is enabled, a Vision Language Model (VLM) is used during ingestion to caption embedded images and extract structured data from charts (axis labels, data points, chart type). This makes visual content in PDFs searchable and retrievable alongside text. The VLM is only invoked at ingestion time, not at query time.
+
+All options below can be overridden via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
