@@ -74,18 +74,7 @@ The AI-Q blueprint supports multiple observability backends for tracing agent ex
 
    The `LANGCHAIN_PROJECT` variable groups traces under a named project. If omitted, traces go to the `default` project.
 
-3. Start the application as usual. All LangChain and LangGraph operations are traced automatically. No YAML config changes are required -- the LangChain SDK detects these environment variables at startup:
-
-   ```yaml
-   # No telemetry.tracing section needed for LangSmith.
-   # The environment variables above are sufficient.
-   general:
-     telemetry:
-       logging:
-         console:
-           _type: console
-           level: INFO
-   ```
+3. Start the application as usual. All LangChain and LangGraph operations are traced automatically. No YAML config changes are required -- the LangChain SDK detects these environment variables at startup.
 
 ### What You Can Inspect
 
