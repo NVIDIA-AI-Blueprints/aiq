@@ -42,6 +42,10 @@ export default defineConfig({
       '@/adapters': path.resolve(__dirname, './src/adapters'),
       '@/features': path.resolve(__dirname, './src/features'),
       '@/shared': path.resolve(__dirname, './src/shared'),
+      'server-only': path.resolve(
+        __dirname,
+        './config/vitest/mocks/server-only.ts',
+      ),
       'external-svg-loader': path.resolve(
         __dirname,
         './config/vitest/mocks/external-svg-loader.ts',
