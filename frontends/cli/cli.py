@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import uuid
+import warnings
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -39,6 +40,8 @@ from nat.data_models.intermediate_step import IntermediateStepType
 from nat.runtime.loader import load_workflow
 from nat.runtime.session import SessionManager
 
+# Suppress all warnings by default; re-enabled in main() if --verbose is passed
+warnings.filterwarnings("ignore")
 logging.getLogger("nat.builder.function_info").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
@@ -357,6 +360,7 @@ def main() -> None:
     args = parser.parse_args()
 
     if args.verbose:
+        warnings.resetwarnings()
         logging.basicConfig(
             level=logging.INFO, format="%(levelname)s - %(name)s - %(message)s", handlers=[logging.StreamHandler()]
         )
@@ -370,6 +374,10 @@ def main() -> None:
         callbacks_logger.propagate = False
     else:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(name)s - %(message)s")
+
+    # Suppress noisy third-party loggers regardless of verbose mode
+    for _lib in ("httpx", "httpcore", "urllib3", "openai", "chromadb"):
+        logging.getLogger(_lib).setLevel(logging.WARNING)
 
     env_file = Path(args.env_file)
     if env_file.exists():

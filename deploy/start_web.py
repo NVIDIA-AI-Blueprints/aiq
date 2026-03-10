@@ -97,6 +97,10 @@ Or run directly for local development:
 import logging
 import os
 import sys
+import warnings
+
+# Suppress all warnings in server mode
+warnings.filterwarnings("ignore")
 
 
 def configure_logging():

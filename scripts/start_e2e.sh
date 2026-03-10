@@ -78,6 +78,7 @@ echo ""
 
 check_env() {
     export AIQ_DEV_ENV=e2e
+    export PYTHONWARNINGS=ignore
     echo "Set AIQ_DEV_ENV=e2e"
 
     if [ -f "./deploy/.env" ]; then

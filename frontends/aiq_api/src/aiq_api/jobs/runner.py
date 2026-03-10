@@ -256,6 +256,10 @@ async def run_agent_job(
 
             std_logging.basicConfig(level=log_level)
 
+    # Suppress noisy third-party loggers
+    for _lib in ("httpx", "httpcore", "urllib3", "openai", "chromadb"):
+        logging.getLogger(_lib).setLevel(logging.WARNING)
+
     job_store: JobStore | None = None
     cancellation_monitor: CancellationMonitor | None = None
     event_store: EventStore | BatchingEventStore | None = None
