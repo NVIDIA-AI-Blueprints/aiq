@@ -68,7 +68,7 @@ phoenix serve
 
 ## W&B Tracking
 
-Evaluation runs are tracked using [Weights & Biases Weave - deep-researcher-v2 project](https://wandb.ai/nvidia-aiq/deep-researcher-v2/weave) for experiment tracking and observability.
+Evaluation runs are tracked using [Weights & Biases Weave](https://wandb.ai/site/weave/) for experiment tracking and observability.
 
 ### Configuration
 

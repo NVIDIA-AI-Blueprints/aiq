@@ -201,7 +201,7 @@ class BaseRetriever(ABC):
         Returns:
             True if healthy, False otherwise.
         """
-        return True
+        return True  # NOSONAR
 
 
 class BaseIngestor(ABC):
@@ -477,4 +477,4 @@ class BaseIngestor(ABC):
         Returns:
             True if healthy, False otherwise.
         """
-        return True
+        return True  # NOSONAR

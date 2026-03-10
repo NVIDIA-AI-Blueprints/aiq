@@ -153,7 +153,9 @@ functions:
 
 #### Multimodal Extraction (LlamaIndex Only)
 
-By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding models. All options below can be overridden via environment variables:
+By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding models. When `AIQ_EXTRACT_IMAGES` or `AIQ_EXTRACT_CHARTS` is enabled, a Vision Language Model (VLM) is used during ingestion to caption embedded images and extract structured data from charts (axis labels, data points, chart type). This makes visual content in PDFs searchable and retrievable alongside text. The VLM is only invoked at ingestion time, not at query time.
+
+All options below can be overridden via environment variables:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -259,8 +261,9 @@ Run the backend API server and frontend UI together for document upload, collect
 
 ```bash
 # Foundational RAG example (requires deployed FRAG server)
-# Set env vars: RAG_SERVER_URL, RAG_INGEST_URL, NVIDIA_API_KEY
-nat serve --config_file configs/config_web_frag.yml --host 0.0.0.0 --port 8000
+# dotenv loads API keys (NVIDIA_API_KEY, etc.) from deploy/.env
+# Additional env vars needed: RAG_SERVER_URL, RAG_INGEST_URL
+dotenv -f deploy/.env run nat serve --config_file configs/config_web_frag.yml --host 0.0.0.0 --port 8000
 ```
 
 ### Start Frontend

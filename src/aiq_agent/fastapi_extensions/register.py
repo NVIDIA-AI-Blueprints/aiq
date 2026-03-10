@@ -143,8 +143,8 @@ class KnowledgeAPIWorker(FastApiFrontEndPluginWorker):
         ingestor = _get_ingestor(knowledge_config)
 
         # Add routes
-        await add_collection_routes(app, ingestor)
-        await add_document_routes(app, ingestor)
+        add_collection_routes(app, ingestor)
+        add_document_routes(app, ingestor)
 
         logger.info(f"Knowledge API routes registered (backend={knowledge_config.backend})")
 

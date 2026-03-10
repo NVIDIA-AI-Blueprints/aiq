@@ -114,6 +114,14 @@ The central state model carries data through the entire workflow:
   are tuned through benchmarks (FreshQA, Deep Research Bench) and will evolve
   as evaluation scores improve.
 
+- **Citation verification and auditability**: Every research response passes
+  through a deterministic post-processing pipeline that verifies citations
+  against actually-retrieved sources, removes unverifiable or unsafe URLs,
+  and produces an audit trail of all verification decisions. This is always
+  enabled and applies to both shallow and deep research paths. See
+  [Deep Researcher -- Citation Verification](agents/deep-researcher.md#phase-5-citation-verification-post-processing)
+  for details.
+
 ## References
 
 - [Data Flow](data-flow.md) -- request lifecycle, SSE events, async jobs

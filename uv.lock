@@ -15,9 +15,9 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "aiq-agent",
     "aiq-api",
     "aiq-debug",
-    "aiq-agent",
     "aiq-research-cli",
     "google-scholar-paper-search",
     "knowledge-layer",
@@ -190,6 +190,109 @@ wheels = [
 ]
 
 [[package]]
+name = "aiq-agent"
+version = "2.0.0"
+source = { editable = "." }
+dependencies = [
+    { name = "aiofiles" },
+    { name = "aiosqlite" },
+    { name = "asyncpg" },
+    { name = "deepagents" },
+    { name = "langgraph-checkpoint-postgres" },
+    { name = "langgraph-checkpoint-sqlite" },
+    { name = "nvidia-nat", extra = ["async-endpoints", "langchain", "telemetry", "weave"] },
+    { name = "psycopg", extra = ["binary"] },
+]
+
+[package.optional-dependencies]
+dev = [
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-env" },
+    { name = "ruff" },
+    { name = "yapf" },
+]
+docs = [
+    { name = "myst-parser" },
+    { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "sphinx-copybutton" },
+    { name = "sphinx-mermaid" },
+    { name = "sphinx-rtd-theme" },
+]
+viz = [
+    { name = "pygraphviz" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "aiq-api" },
+    { name = "aiq-debug" },
+    { name = "aiq-research-cli" },
+    { name = "dask", extra = ["distributed"] },
+    { name = "google-scholar-paper-search" },
+    { name = "knowledge-layer", extra = ["all"] },
+    { name = "mypy" },
+    { name = "pre-commit" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-env" },
+    { name = "ruff" },
+    { name = "tavily-web-search" },
+    { name = "yapf" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "aiofiles", specifier = ">=23.0.0" },
+    { name = "aiosqlite", specifier = ">=0.19.0" },
+    { name = "asyncpg", specifier = ">=0.29.0" },
+    { name = "deepagents", specifier = ">=0.3.0" },
+    { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.0" },
+    { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.0" },
+    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
+    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=3.0" },
+    { name = "nvidia-nat", extras = ["langchain", "telemetry", "weave", "async-endpoints"], specifier = "==1.4.0" },
+    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.5.0" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.0.0" },
+    { name = "pygraphviz", marker = "extra == 'viz'", specifier = ">=1.11" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
+    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
+    { name = "pytest-env", marker = "extra == 'dev'", specifier = ">=1.1.0" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = "~=0.12" },
+    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.0" },
+    { name = "sphinx-copybutton", marker = "extra == 'docs'", specifier = ">=0.5" },
+    { name = "sphinx-mermaid", marker = "extra == 'docs'", specifier = ">=0.0.8" },
+    { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=2.0" },
+    { name = "yapf", marker = "extra == 'dev'", specifier = ">=0.40.0" },
+]
+provides-extras = ["dev", "docs", "viz"]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "aiq-api", editable = "frontends/aiq_api" },
+    { name = "aiq-debug", editable = "frontends/debug" },
+    { name = "aiq-research-cli", editable = "frontends/cli" },
+    { name = "dask", extras = ["distributed"], specifier = ">=2024.1.0" },
+    { name = "google-scholar-paper-search", editable = "sources/google_scholar_paper_search" },
+    { name = "knowledge-layer", extras = ["all"], editable = "sources/knowledge_layer" },
+    { name = "mypy", specifier = ">=1.5.0" },
+    { name = "pre-commit", specifier = ">=3.5.0" },
+    { name = "pytest", specifier = ">=7.4.0" },
+    { name = "pytest-asyncio", specifier = ">=0.21.0" },
+    { name = "pytest-cov", specifier = ">=4.1.0" },
+    { name = "pytest-env", specifier = ">=1.1.0" },
+    { name = "ruff", specifier = "~=0.12" },
+    { name = "tavily-web-search", editable = "sources/tavily_web_search" },
+    { name = "yapf", specifier = ">=0.40.0" },
+]
+
+[[package]]
 name = "aiq-api"
 version = "0.1.0"
 source = { editable = "frontends/aiq_api" }
@@ -250,107 +353,6 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
 ]
 provides-extras = ["dev"]
-
-[[package]]
-name = "aiq-agent"
-version = "2.0.0"
-source = { editable = "." }
-dependencies = [
-    { name = "aiosqlite" },
-    { name = "asyncpg" },
-    { name = "deepagents" },
-    { name = "langgraph-checkpoint-postgres" },
-    { name = "langgraph-checkpoint-sqlite" },
-    { name = "nvidia-nat", extra = ["async-endpoints", "langchain", "telemetry", "weave"] },
-    { name = "psycopg", extra = ["binary"] },
-]
-
-[package.optional-dependencies]
-dev = [
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-env" },
-    { name = "ruff" },
-    { name = "yapf" },
-]
-docs = [
-    { name = "myst-parser" },
-    { name = "sphinx", version = "9.0.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.12'" },
-    { name = "sphinx", version = "9.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
-    { name = "sphinx-copybutton" },
-    { name = "sphinx-mermaid" },
-    { name = "sphinx-rtd-theme" },
-]
-viz = [
-    { name = "pygraphviz" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "aiq-api" },
-    { name = "aiq-debug" },
-    { name = "aiq-research-cli" },
-    { name = "dask", extra = ["distributed"] },
-    { name = "google-scholar-paper-search" },
-    { name = "knowledge-layer", extra = ["all"] },
-    { name = "mypy" },
-    { name = "pre-commit" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-env" },
-    { name = "ruff" },
-    { name = "tavily-web-search" },
-    { name = "yapf" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "aiosqlite", specifier = ">=0.19.0" },
-    { name = "asyncpg", specifier = ">=0.29.0" },
-    { name = "deepagents", specifier = ">=0.3.0" },
-    { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.0" },
-    { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.0" },
-    { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
-    { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=3.0" },
-    { name = "nvidia-nat", extras = ["langchain", "telemetry", "weave", "async-endpoints"], specifier = "==1.4.0" },
-    { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.5.0" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.0.0" },
-    { name = "pygraphviz", marker = "extra == 'viz'", specifier = ">=1.11" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
-    { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
-    { name = "pytest-env", marker = "extra == 'dev'", specifier = ">=1.1.0" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = "~=0.12" },
-    { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.0" },
-    { name = "sphinx-copybutton", marker = "extra == 'docs'", specifier = ">=0.5" },
-    { name = "sphinx-mermaid", marker = "extra == 'docs'", specifier = ">=0.0.8" },
-    { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=2.0" },
-    { name = "yapf", marker = "extra == 'dev'", specifier = ">=0.40.0" },
-]
-provides-extras = ["dev", "docs", "viz"]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "aiq-api", editable = "frontends/aiq_api" },
-    { name = "aiq-debug", editable = "frontends/debug" },
-    { name = "aiq-research-cli", editable = "frontends/cli" },
-    { name = "dask", extras = ["distributed"], specifier = ">=2024.1.0" },
-    { name = "google-scholar-paper-search", editable = "sources/google_scholar_paper_search" },
-    { name = "knowledge-layer", extras = ["all"], editable = "sources/knowledge_layer" },
-    { name = "mypy", specifier = ">=1.5.0" },
-    { name = "pre-commit", specifier = ">=3.5.0" },
-    { name = "pytest", specifier = ">=7.4.0" },
-    { name = "pytest-asyncio", specifier = ">=0.21.0" },
-    { name = "pytest-cov", specifier = ">=4.1.0" },
-    { name = "pytest-env", specifier = ">=1.1.0" },
-    { name = "ruff", specifier = "~=0.12" },
-    { name = "tavily-web-search", editable = "sources/tavily_web_search" },
-    { name = "yapf", specifier = ">=0.40.0" },
-]
 
 [[package]]
 name = "aiq-research-cli"

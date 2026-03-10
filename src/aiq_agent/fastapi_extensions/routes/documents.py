@@ -17,8 +17,8 @@
 
 import logging
 import os
-import tempfile
 
+import aiofiles.tempfile
 from fastapi import FastAPI
 from fastapi import File
 from fastapi import HTTPException
@@ -34,7 +34,7 @@ from ..models.requests import UploadResponse
 logger = logging.getLogger(__name__)
 
 
-async def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
+def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
     """Add document management routes to the FastAPI app."""
 
     @app.post(
@@ -81,9 +81,9 @@ async def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
                 original_filename = file.filename or "unknown"
                 original_filenames.append(original_filename)
                 suffix = f"_{original_filename}" if original_filename else ""
-                with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                async with aiofiles.tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
                     content = await file.read()
-                    tmp.write(content)
+                    await tmp.write(content)
                     temp_paths.append(tmp.name)
                     logger.debug(f"Saved uploaded file to {tmp.name}")
 

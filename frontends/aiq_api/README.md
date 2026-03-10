@@ -8,10 +8,10 @@ Unified API plugin for the AI-Q blueprint: **Knowledge API** (collections, docum
 ### Web Mode - Local Development
 
 ```bash
-# NeMo Agent toolkit auto-creates:
+# Loads API keys from deploy/.env; NeMo Agent toolkit auto-creates:
 # - Local Dask cluster
 # - SQLite database at .tmp/job_store.db
-nat serve --config configs/config_web_frag.yml
+dotenv -f deploy/.env run nat serve --config configs/config_web_frag.yml
 ```
 
 ### Production (PostgreSQL + Dask Cluster)
@@ -19,7 +19,7 @@ nat serve --config configs/config_web_frag.yml
 ```bash
 export NAT_DASK_SCHEDULER_ADDRESS="tcp://scheduler:8786"
 export NAT_JOB_STORE_DB_URL="postgresql://user:pass@host:5432/dbname"
-nat serve --config configs/config_web_frag.yml
+dotenv -f deploy/.env run nat serve --config configs/config_web_frag.yml
 ```
 
 ## Architecture
