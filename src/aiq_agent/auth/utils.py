@@ -90,7 +90,7 @@ def get_auth_token() -> str | None:
     return None
 
 
-async def get_current_user_info() -> UserInfo | None:
+def get_current_user_info() -> UserInfo | None:
     """
     Get current user information from the frontend auth token.
 

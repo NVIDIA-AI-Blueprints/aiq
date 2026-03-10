@@ -84,7 +84,7 @@ class ChatResearcherAgent:
         max_history: int = 5,
         deep_research_job_submitter: Callable[[Any], Awaitable[str]] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
-        validate_deep_research_tools_fn: Callable[[list[str] | None], Awaitable[tuple[bool, str]]] | None = None,
+        validate_deep_research_tools_fn: Callable[[list[str] | None], tuple[bool, str]] | None = None,
     ) -> None:
         """
         Initialize the chat researcher agent.
@@ -126,7 +126,7 @@ class ChatResearcherAgent:
 
             # Validate deep research tools before proceeding to clarifier
             if self.validate_deep_research_tools_fn:
-                is_valid, error_msg = await self.validate_deep_research_tools_fn(state.data_sources)
+                is_valid, error_msg = self.validate_deep_research_tools_fn(state.data_sources)
                 if not is_valid:
                     logger.error("Deep research tools validation failed: %s", error_msg)
                     return Command(

@@ -28,7 +28,7 @@ from ..models.requests import CreateCollectionRequest
 logger = logging.getLogger(__name__)
 
 
-async def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
+def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
     """Add collection management routes to the FastAPI app."""
 
     @app.post(

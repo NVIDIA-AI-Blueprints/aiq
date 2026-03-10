@@ -18,6 +18,7 @@
 import logging
 from typing import Any
 
+import aiofiles
 from langchain_core.messages import HumanMessage
 from pydantic import Field
 
@@ -155,8 +156,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         try:
             import yaml
 
-            with open(config_file_path, encoding="utf-8") as f:
-                config_dict = yaml.safe_load(f)
+            async with aiofiles.open(config_file_path, encoding="utf-8") as f:
+                raw = await f.read()
+                config_dict = yaml.safe_load(raw)
 
             from aiq_agent.common.config_validation import validate_llm_configs
 
@@ -193,7 +195,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     )
 
     # Create a validation function to check if deep research tools are available
-    async def validate_deep_research_tools(data_sources: list[str] | None) -> tuple[bool, str]:
+    def validate_deep_research_tools(data_sources: list[str] | None) -> tuple[bool, str]:
         """
         Validate that at least one deep research tool is available.
 
@@ -230,7 +232,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             from aiq_agent.auth import get_current_user_info
 
             async def _submit_deep_job(state: ChatResearcherState) -> str:
-                user_info = await get_current_user_info()
+                user_info = get_current_user_info()
                 owner = user_info.email if user_info and user_info.email else "anonymous"
                 query = state.original_query
                 if not query:
@@ -316,7 +318,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
         from aiq_agent.auth import get_current_user_info
 
-        user_info = await get_current_user_info()
+        user_info = get_current_user_info()
         user_info_dict = None
         if user_info:
             logger.debug("User authenticated")
