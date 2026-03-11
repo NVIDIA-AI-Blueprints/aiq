@@ -65,6 +65,10 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 The web UI requires Node.js 22+ and npm. If these were available during `./scripts/setup.sh`, UI dependencies are already installed. Otherwise, run `cd frontends/ui && npm ci` first.
 ```
 
+```{tip}
+**Running on a remote VM?** If you access the VM via SSH, you need to forward ports 3000 and 8000 to your local machine: `ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@your-vm-host`. See [Troubleshooting — VM / Remote Development](../resources/troubleshooting.md#vm--remote-development) for details.
+```
+
 ## Step 3: Ask a Question
 
 Try one of these example queries to observe the system in action:

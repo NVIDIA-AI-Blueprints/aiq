@@ -200,6 +200,69 @@ The orchestrator produces the polished report:
 - Structured sections based on the research plan
 - Publication-ready formatting
 
+### Phase 5: Citation Verification (Post-Processing)
+
+After the orchestrator produces the final report, a deterministic
+post-processing pipeline verifies all citations against the actual sources
+retrieved during research. This provides auditability over generated
+content — every citation in the output is traceable to a source that was
+actually retrieved, and all verification decisions are logged. This step
+is always enabled and requires no configuration.
+
+**Location:** `src/aiq_agent/common/citation_verification.py`
+
+#### Source Registry
+
+During research, a `SourceRegistryMiddleware` intercepts every tool call and
+records the URLs and citation keys returned by search tools (Tavily, Google
+Scholar, knowledge layer, etc.) into a per-session `SourceRegistry`. This
+creates a ground-truth record of what sources were actually retrieved.
+
+#### Citation Verification
+
+The `verify_citations()` function validates every citation in the report
+against the source registry using a five-level URL matching strategy:
+
+1. **Exact match** -- raw or normalized URL
+2. **Truncation match** -- report URL is a prefix of exactly one registry URL
+3. **Prefix match** -- normalized report URL is a prefix of a registry URL
+4. **Child-path match** -- report URL path is a subpath of a registry URL (requires 2+ path segments)
+5. **Query-subset match** -- same host and path, report query parameters are a subset of registry parameters
+
+Citations that cannot be matched to any source in the registry are removed.
+Each removal is recorded with an audit reason (`url_not_in_registry`,
+`citation_key_not_in_registry`, or `unverifiable`).
+
+Knowledge-layer citations (for example, `report.pdf, p.15`) are matched
+against citation keys with lenient page-number comparison.
+
+#### Report Sanitization
+
+The `sanitize_report()` function removes potentially unsafe or unreliable
+URLs from the report body:
+
+- **Shortened URLs** (bit.ly, t.co, tinyurl.com, and 13 other shortener domains)
+- **Truncated or garbled URLs** (ending in `...` or ellipsis characters)
+- **IP-address URLs** (security concern)
+- **Non-HTTP schemes** (`javascript:`, `data:`, `vbscript:`, `file:`)
+
+After removals, citations are renumbered to close any gaps in the reference
+list.
+
+#### Audit Trail
+
+The verification result includes:
+
+| Field | Description |
+| ----- | ----------- |
+| `verified_report` | Cleaned report text with invalid citations removed |
+| `removed_citations` | List of removed citations with reasons |
+| `valid_citations` | List of retained citations with reference numbers |
+
+This provides a complete audit trail of which citations were kept, which
+were removed, and why -- enabling downstream systems or reviewers to inspect
+verification decisions.
+
 ## Evaluation
 
 The Deep Researcher is evaluated using the Deep Research Bench (DRB) which

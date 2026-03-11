@@ -1,7 +1,9 @@
 # This is the configuration for the Web mode with Foundational RAG. It is the default configuration for the Helm deployment.
 # It has the following features:
-# - Knowledge retrieval using Foundational RAG (Please note that this requires a RAG server and ingest server to be running)
-# - Web search and Paper search tools by default
+# - Web search enabled by default
+# - Knowledge retrieval using Foundational RAG.
+#  Please note that this requires a RAG server and ingest server to be running which is not deployed by this blueprint.
+#  For an example RAG deployment, see https://github.com/NVIDIA-AI-Blueprints/rag/tree/main
 
 general:
   use_uvloop: true
@@ -107,17 +109,19 @@ functions:
     ingest_url: ${RAG_INGEST_URL:-http://localhost:8082}
     timeout: 300
 
-  paper_search_tool:
-    _type: paper_search
-    max_results: 5
-    serper_api_key: ${SERPER_API_KEY}
+  # Paper Search (optional - requires SERPER_API_KEY)
+  # Uncomment the block below and set SERPER_API_KEY to enable academic paper search.
+  # paper_search_tool:
+  #   _type: paper_search
+  #   max_results: 5
+  #   serper_api_key: ${SERPER_API_KEY}
 
   intent_classifier:
     _type: intent_classifier
     llm: nemotron_llm_intent
     tools:
       - web_search_tool
-      - paper_search_tool
+      # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
       - knowledge_search
 
   clarifier_agent:
@@ -148,7 +152,7 @@ functions:
     planner_llm: gpt_oss_llm
     max_loops: 2
     tools:
-      - paper_search_tool
+      # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
       - advanced_web_search_tool
       - knowledge_search
 

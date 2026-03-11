@@ -35,7 +35,7 @@ The script performs the following steps:
 2. Creates a Python 3.13 virtual environment at `.venv/`
 3. Installs the core package with dev dependencies
 4. Installs all frontends (CLI, debug console, API server)
-5. Installs benchmark packages (deepresearch_bench, freshqa, deepsearch_qa)
+5. Installs benchmark packages (freshqa, deepsearch_qa)
 6. Installs all data source plugins (Tavily, Google Scholar, knowledge layer)
 7. Sets up pre-commit hooks
 8. Copies `deploy/.env.example` to `deploy/.env` if no `.env` file exists
@@ -54,7 +54,7 @@ If you prefer to install components selectively, follow these steps.
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/NVIDIA-AI-Blueprints/aiq.git
 cd aiq
 ```
 
@@ -84,7 +84,6 @@ uv pip install -e ./sources/google_scholar_paper_search
 uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 
 # Benchmarks (optional)
-uv pip install -e ./frontends/benchmarks/deepresearch_bench
 uv pip install -e ./frontends/benchmarks/freshqa
 uv pip install -e ./frontends/benchmarks/deepsearch_qa
 ```

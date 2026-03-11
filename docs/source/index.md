@@ -86,6 +86,7 @@ Benchmarks <./evaluation/benchmarks/index.md>
 Overview <./deployment/index.md>
 Docker Compose <./deployment/docker-compose.md>
 Docker Build System <./deployment/docker-build.md>
+Observability <./deployment/observability.md>
 Production <./deployment/production.md>
 ```
 
