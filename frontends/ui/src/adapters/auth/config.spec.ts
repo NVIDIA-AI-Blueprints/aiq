@@ -94,7 +94,12 @@ describe('auth jwt refresh behavior', () => {
     const result = await authOptions.callbacks!.jwt!({
       token,
       account: null,
-      user: undefined,
+      user: {
+        id: 'user-1',
+        name: null,
+        email: null,
+        image: null,
+      },
       profile: undefined,
       trigger: undefined,
       isNewUser: false,
