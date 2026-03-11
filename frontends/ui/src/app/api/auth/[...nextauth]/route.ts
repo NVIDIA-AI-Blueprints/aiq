@@ -17,7 +17,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import NextAuth from 'next-auth'
 import { getToken } from 'next-auth/jwt'
-import { authOptions, isAuthRequired, shouldUseSecureCookies } from '@/adapters/auth/config'
+import {
+  authOptions,
+  isAuthRequired,
+  SESSION_MAX_AGE_SECONDS,
+  shouldUseSecureCookies,
+} from '@/adapters/auth/config'
 
 const nextAuthHandler = NextAuth(authOptions)
 
@@ -82,14 +87,13 @@ const withIdTokenCookie = async (
           headers: new Headers(response.headers),
         })
 
-        // Set the idToken cookie
-        const maxAge = 30 * 24 * 60 * 60 // 30 days
+        // Keep callback-set cookies aligned with the shared auth session lifetime.
         newResponse.cookies.set('idToken', token.idToken as string, {
           httpOnly: true,
           sameSite: 'lax',
           path: '/',
           secure: shouldUseSecureCookies(),
-          maxAge,
+          maxAge: SESSION_MAX_AGE_SECONDS,
         })
 
         return newResponse

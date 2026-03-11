@@ -76,3 +76,32 @@ describe('auth timing config', () => {
     expect(SESSION_MAX_AGE_SECONDS).toBe(12 * 60 * 60)
   })
 })
+
+describe('auth jwt refresh behavior', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+  })
+
+  test('does not force refresh when refresh token exists but expiresAt is absent', async () => {
+    const { authOptions } = await loadConfig()
+    const token = {
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      userId: 'user-1',
+    }
+
+    const result = await authOptions.callbacks!.jwt!({
+      token,
+      account: null,
+      user: undefined,
+      profile: undefined,
+      trigger: undefined,
+      isNewUser: false,
+      session: undefined,
+    })
+
+    expect(result).toEqual(token)
+    expect(result.error).toBeUndefined()
+  })
+})

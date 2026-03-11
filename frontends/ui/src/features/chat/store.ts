@@ -2106,6 +2106,16 @@ export const useChatStore = create<ChatStore>()(
               showViewReport: terminalStatus === 'success' || hasPartialReport,
             })
           }
+          const bannerTypeToTerminalStatus = (
+            bannerType: DeepResearchBannerType | undefined
+          ): DeepResearchJobStatus => {
+            // Preserve the distinction between explicit user cancellation and
+            // terminal failures such as expiry/deletion. Cancelled jobs map to
+            // the interrupted job status; backend lookup failures map to failure.
+            if (bannerType === 'success') return 'success'
+            if (bannerType === 'cancelled') return 'interrupted'
+            return 'failure'
+          }
 
           const startingBanners = currentConversation.messages.filter(
             (m) =>
@@ -2133,12 +2143,9 @@ export const useChatStore = create<ChatStore>()(
             )
 
             if (matchingTerminalBanner) {
-              const terminalStatus =
-                matchingTerminalBanner.deepResearchBannerData?.bannerType === 'success'
-                  ? 'success'
-                  : matchingTerminalBanner.deepResearchBannerData?.bannerType === 'cancelled'
-                    ? 'interrupted'
-                    : 'failure'
+              const terminalStatus = bannerTypeToTerminalStatus(
+                matchingTerminalBanner.deepResearchBannerData?.bannerType
+              )
               syncTrackingMessageToTerminalState(bannerJobId, terminalStatus)
               orphanedIds.push(banner.id)
             } else {

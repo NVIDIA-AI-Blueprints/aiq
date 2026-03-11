@@ -183,7 +183,11 @@ export const authOptions: AuthOptions = {
         if (Date.now() < expiresAtWithBuffer * 1000) {
           return token
         }
-      } else if (!token.refreshToken) {
+      } else {
+        // Some providers do not return expires_at. In that case we cannot
+        // safely schedule proactive refreshes, but refreshing on every session
+        // check will churn rotating refresh tokens. Keep the current token and
+        // rely on providers that support refresh to populate expiresAt.
         return token
       }
 
