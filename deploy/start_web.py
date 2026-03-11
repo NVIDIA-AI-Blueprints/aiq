@@ -97,6 +97,11 @@ Or run directly for local development:
 import logging
 import os
 import sys
+import warnings
+
+# Suppress warnings unless PYTHONWARNINGS is explicitly set
+if not os.environ.get("PYTHONWARNINGS"):
+    warnings.filterwarnings("ignore")
 
 
 def configure_logging():

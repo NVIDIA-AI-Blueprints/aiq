@@ -89,6 +89,9 @@ check_env() {
         echo "No deploy/.env file found (optional)"
     fi
 
+    # Suppress Python warnings unless overridden by .env
+    export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
+
     # For local E2E, backend always runs on localhost:8000
     export BACKEND_URL="http://localhost:8000"
     export NEXT_PUBLIC_BACKEND_URL="http://localhost:8000"

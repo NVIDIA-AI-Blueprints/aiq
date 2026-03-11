@@ -157,7 +157,6 @@ jobs:
             ./frontends/cli \
             ./frontends/debug \
             ./frontends/aiq_api \
-            ./frontends/benchmarks/deepresearch_bench \
             ./frontends/benchmarks/freshqa \
             ./frontends/benchmarks/intent_classifier \
             ./sources/tavily_web_search \

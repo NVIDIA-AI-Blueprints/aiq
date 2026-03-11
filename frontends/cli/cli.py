@@ -20,6 +20,7 @@ import os
 import re
 import sys
 import uuid
+import warnings
 from pathlib import Path
 
 from prompt_toolkit import PromptSession
@@ -39,7 +40,11 @@ from nat.data_models.intermediate_step import IntermediateStepType
 from nat.runtime.loader import load_workflow
 from nat.runtime.session import SessionManager
 
+# Suppress warnings by default; re-enabled in main() if --verbose is passed
+if not os.environ.get("PYTHONWARNINGS"):
+    warnings.filterwarnings("ignore")
 logging.getLogger("nat.builder.function_info").setLevel(logging.ERROR)
+logging.getLogger("langgraph.checkpoint").setLevel(logging.ERROR)
 
 logger = logging.getLogger(__name__)
 console = Console()

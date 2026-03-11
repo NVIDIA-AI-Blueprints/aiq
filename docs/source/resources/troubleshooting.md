@@ -53,6 +53,43 @@ Common issues and solutions for the AI-Q blueprint.
 | Port already in use | Another service on port 3000/8000 | Set `PORT=8100` or `FRONTEND_PORT=3100` in `.env` |
 | UI shows "Backend unavailable" | Backend not healthy | `curl http://localhost:8000/health`; check backend container logs |
 
+## VM / Remote Development
+
+If you are running the AI-Q blueprint on a remote VM (cloud instance, WSL, SSH server) and accessing it from your local browser, `localhost:3000` and `localhost:8000` will not resolve because the services are listening on the VM — not your local machine.
+
+### SSH Port Forwarding
+
+Forward the required ports through your SSH connection:
+
+```bash
+# Forward both the frontend and backend ports
+ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@your-vm-host
+```
+
+Then open [http://localhost:3000](http://localhost:3000) on your local machine as usual.
+
+To forward ports to an already-active SSH session, you can also use `~C` (SSH escape sequence) to open the SSH command line and type the following on a single line (press Enter at the end):
+
+```text
+-L 3000:localhost:3000 -L 8000:localhost:8000
+```
+
+### VS Code Remote SSH
+
+If you are using VS Code Remote-SSH, ports are typically forwarded automatically when the server starts listening. If not, open the **Ports** panel (`Ctrl+Shift+P` → "Ports: Focus on Ports View") and add ports `3000` and `8000` manually.
+
+### Common Symptoms
+
+| Symptom | Cause | Fix |
+| ------- | ----- | --- |
+| "This site can't be reached" on `localhost:3000` or `localhost:8000` | Ports not forwarded from VM to local machine | Use SSH port forwarding (see above) |
+| Connection refused after forwarding | Service not running on the VM | SSH into the VM and verify with `curl http://localhost:8000/health` |
+| Port forwarding conflicts | Local port already in use | Use alternate local ports: `ssh -L 3001:localhost:3000 -L 8001:localhost:8000 user@vm` |
+
+```{note}
+Docker Compose deployments on the VM handle container-to-host port mapping automatically. The SSH forwarding described here is for making the VM's ports accessible on your local machine.
+```
+
 ## Debugging Tips
 
 ### Enable Verbose Logging
@@ -67,6 +104,8 @@ workflow:
 Or through CLI: `./scripts/start_cli.sh --verbose`
 
 ### Phoenix Tracing
+
+For full setup instructions covering Phoenix, LangSmith, and other tracing backends, see [Observability](../deployment/observability.md).
 
 Start a Phoenix server and enable tracing in config:
 
