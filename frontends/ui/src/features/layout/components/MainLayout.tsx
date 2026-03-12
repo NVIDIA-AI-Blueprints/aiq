@@ -141,6 +141,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
         isAuthenticated={isAuthenticated}
         authRequired={authRequired}
         user={user}
+        onNewSession={handleNewSession}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />

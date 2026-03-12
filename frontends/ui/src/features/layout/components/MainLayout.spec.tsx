@@ -2,14 +2,24 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { render, screen } from '@/test-utils'
+import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { MainLayout } from './MainLayout'
+
+const mockUpdateSessionUrl = vi.fn()
+const mockClearSessionUrl = vi.fn()
+const mockSelectConversation = vi.fn()
+const mockCreateConversation = vi.fn(() => ({ id: 'session-2' }))
+const mockDeleteConversation = vi.fn()
+const mockDeleteAllConversations = vi.fn()
+const mockUpdateConversationTitle = vi.fn()
+const mockCloseRightPanel = vi.fn()
 
 // Mock the useSessionUrl hook (uses Next.js App Router hooks)
 vi.mock('@/hooks/use-session-url', () => ({
   useSessionUrl: vi.fn(() => ({
-    updateSessionUrl: vi.fn(),
-    clearSessionUrl: vi.fn(),
+    updateSessionUrl: mockUpdateSessionUrl,
+    clearSessionUrl: mockClearSessionUrl,
   })),
 }))
 
@@ -18,10 +28,13 @@ vi.mock('@/features/chat', () => ({
   useChatStore: vi.fn(() => ({
     currentConversation: { id: 'session-1', title: 'Test Session' },
     getUserConversations: vi.fn(() => []),
-    selectConversation: vi.fn(),
-    createConversation: vi.fn(),
-    deleteConversation: vi.fn(),
-    updateConversationTitle: vi.fn(),
+    selectConversation: mockSelectConversation,
+    createConversation: mockCreateConversation,
+    deleteConversation: mockDeleteConversation,
+    deleteAllConversations: mockDeleteAllConversations,
+    updateConversationTitle: mockUpdateConversationTitle,
+    isDeepResearchStreaming: false,
+    deepResearchOwnerConversationId: null,
   })),
   useDeepResearch: vi.fn(() => ({
     isResearching: false,
@@ -39,13 +52,19 @@ vi.mock('../store', () => ({
     isSessionsPanelOpen: false,
     setSessionsPanelOpen: vi.fn(),
     enabledDataSourceIds: ['source-1', 'source-2'],
+    closeRightPanel: mockCloseRightPanel,
   })),
 }))
 
 // Mock child components
 vi.mock('./AppBar', () => ({
-  AppBar: ({ sessionTitle }: { sessionTitle: string }) => (
-    <div data-testid="app-bar">{sessionTitle}</div>
+  AppBar: ({ sessionTitle, onNewSession }: { sessionTitle: string; onNewSession?: () => void }) => (
+    <>
+      <div data-testid="app-bar">{sessionTitle}</div>
+      <button type="button" onClick={onNewSession}>
+        Header New Session
+      </button>
+    </>
   ),
 }))
 
@@ -100,13 +119,16 @@ describe('MainLayout', () => {
   })
 
   test('shows "New Session" when no current conversation', () => {
-    vi.mocked(useChatStore).mockReturnValue({
+    vi.mocked(useChatStore).mockReturnValueOnce({
       currentConversation: null,
       getUserConversations: vi.fn(() => []),
       selectConversation: vi.fn(),
       createConversation: vi.fn(),
       deleteConversation: vi.fn(),
+      deleteAllConversations: vi.fn(),
       updateConversationTitle: vi.fn(),
+      isDeepResearchStreaming: false,
+      deepResearchOwnerConversationId: null,
     } as unknown as ReturnType<typeof useChatStore>)
 
     render(<MainLayout />)
@@ -127,6 +149,18 @@ describe('MainLayout', () => {
     expect(screen.getByTestId('app-bar')).toBeInTheDocument()
     expect(screen.getByTestId('chat-area')).toBeInTheDocument()
     expect(screen.getByTestId('input-area')).toBeInTheDocument()
+  })
+
+  test('wires the AppBar new session action to session creation flow', async () => {
+    const user = userEvent.setup()
+
+    render(<MainLayout />)
+
+    await user.click(screen.getByRole('button', { name: /header new session/i }))
+
+    expect(mockCreateConversation).toHaveBeenCalledOnce()
+    expect(mockUpdateSessionUrl).toHaveBeenCalledWith('session-2')
+    expect(mockCloseRightPanel).toHaveBeenCalledOnce()
   })
 
   test('adjusts chat width when details panel is open', () => {
