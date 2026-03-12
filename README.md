@@ -229,7 +229,7 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 | `config_web_frag.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B | Web + Foundational RAG (external RAG server). Helm default. See [RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag/tree/main) for an example RAG deployment. |
 | `config_frontier_models.yml` | GPT-5.2 (orchestrator/planner), Nemotron 3 Nano 30B, Nemotron 3 Super 120B, Nemotron Mini 4B | Hybrid: frontier orchestrator/planner, open researcher. Llamaindex backend. |
 
-## Ways to Run the Agents
+| `config_frontier_models.yml` | GPT-5.2 (orchestrator/planner), Nemotron 3 Nano 30B, Nemotron 3 Super 120B, Nemotron Mini 4B | Hybrid: frontier orchestrator/planner, open researcher. Llamaindex backend. Requires `OPENAI_API_KEY`. |
 
 The `frontends/` directory contains different interfaces for interacting with the agents. You can also run agents directly through the NeMo Agent Toolkit CLI.
 
