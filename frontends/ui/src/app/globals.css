@@ -263,7 +263,7 @@ body {
 }
 
 /* Constrain spinner SVG inside the research panel toggle tab */
-[data-testid="research-panel-toggle"] .nv-spinner svg {
+.research-panel-toggle .nv-spinner svg {
   width: 100%;
 }
 

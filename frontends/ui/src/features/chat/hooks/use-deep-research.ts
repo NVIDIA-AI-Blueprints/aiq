@@ -469,6 +469,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               const backendUp = await checkBackendHealthCached()
               if (backendUp) return
               console.error('Deep research SSE failed (backend unreachable):', error)
+              setCurrentStatus('error')
 
               const state = useChatStore.getState()
               const ownerConvId = state.deepResearchOwnerConversationId

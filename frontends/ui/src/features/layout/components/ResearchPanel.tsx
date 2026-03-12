@@ -170,7 +170,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
       <button
         onClick={handleToggle}
         disabled={!isAuthenticated}
-        className={`border-base bg-surface-base relative z-10 flex w-10 shrink-0 items-center justify-center self-start overflow-hidden mt-[calc(var(--spacing)*3)] rounded-l-lg border-b border-l border-r border-t transition-colors ${
+        className={`research-panel-toggle border-base bg-surface-base relative z-10 flex w-10 shrink-0 items-center justify-center self-start overflow-hidden mt-[calc(var(--spacing)*3)] rounded-l-lg border-b border-l border-r border-t transition-colors ${
           isAuthenticated ? 'cursor-pointer hover:border-[#76B900]' : 'cursor-not-allowed opacity-50'
         }`}
         style={{ height: 'calc(var(--spacing) * 38)' }}

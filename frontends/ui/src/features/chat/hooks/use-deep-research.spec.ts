@@ -879,6 +879,7 @@ describe('useDeepResearch', () => {
 
       expect(consoleWarnSpy).toHaveBeenCalledWith('Deep research SSE error:', 'Connection lost')
       expect(consoleErrorSpy).toHaveBeenCalledWith('Deep research SSE failed (backend unreachable):', testError)
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('error')
       expect(mockAddErrorCard).toHaveBeenCalledWith(
         'agent.deep_research_failed',
         'Connection lost',
