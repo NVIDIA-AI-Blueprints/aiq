@@ -31,6 +31,27 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
+  gpt_oss_llm:
+    _type: nim
+    model_name: openai/gpt-oss-120b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 256000
+    api_key: ${NVIDIA_API_KEY}
+    max_retries: 10
+
+  nemotron_llm_deep:
+    _type: nim
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 128000
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+
   # Judge model for evaluator: set OPENAI_API_KEY or add a Gemini LLM and set evaluators.freshqa.llm_name.
   judge_llm:
     _type: openai
@@ -68,8 +89,9 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    llm: nemotron_llm
-    report_llm: nemotron_llm
+    orchestrator_llm: gpt_oss_llm
+    researcher_llm: nemotron_llm_deep
+    planner_llm: gpt_oss_llm
     max_loops: 2
     tools:
       - web_search_tool

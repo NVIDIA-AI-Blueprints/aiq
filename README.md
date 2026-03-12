@@ -37,6 +37,7 @@ limitations under the License.
   - [Automated Setup](#automated-setup)
   - [Obtain API Keys](#obtain-api-keys)
   - [Set Up Environment Variables](#set-up-environment-variables)
+- [Configuration Files](#configuration-files)
 - [Ways to Run the Agents](#ways-to-run-the-agents)
   - [Command-line interface (CLI)](#command-line-interface-cli)
   - [Web UI](#web-ui)
@@ -74,6 +75,7 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 The following are used by this project:
 
 - [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
+- [NIM of nvidia/nemotron-3-super-120b-a12b](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b)
 - [NVIDIA nemotron-3-nano-30b-a3b](https://build.nvidia.com/nvidia/nemotron-3-nano-30b-a3b/modelcard) (agents)
 - [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
 - [NIM of nvidia/llama-nemotron-embed-vl-1b-v2](https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
@@ -110,8 +112,9 @@ When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), infere
 
 | Component | Default Model | Self-Hosted Hardware Reference |
 |-----------|---------------|-------------------------------|
-| LLM (intent classifier, orchestrator, planner, researcher) | `nvidia/nemotron-3-nano-30b-a3b` | [Nemotron 3 Nano support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-nano) |
-| LLM (deep research, optional) | `openai/gpt-oss-120b` | [GPT OSS support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#gpt-oss-120b) |
+| LLM (intent classifier, orchestrator, planner) | `nvidia/nemotron-3-nano-30b-a3b` | [Nemotron 3 Nano support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-nano) |
+| LLM (deep research researcher) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-super) |
+| LLM (deep research orchestrator/planner, optional) | `openai/gpt-oss-120b` | [GPT OSS support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#gpt-oss-120b) |
 | Document summary (optional) | `nvidia/nemotron-mini-4b-instruct` | [Nemotron Mini 4B](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/) |
 | Text embedding | `nvidia/llama-nemotron-embed-vl-1b-v2` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
 | VLM (image/chart extraction, optional) | `nvidia/nemotron-nano-12b-v2-vl` | [Vision language model support matrix](https://docs.nvidia.com/nim/vision-language-models/latest/support-matrix.html#nemotron-nano-12b-v2-vl) |
@@ -214,6 +217,17 @@ cp deploy/.env.example deploy/.env
 Replace your API keys.
 
 > **Note:** Depending on your usecase, deep research report quality can be enhanced by enabling searching across academic research papers. We use Serper for this. If you want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to enable it.
+
+## Configuration Files
+
+The `configs/` directory holds YAML workflow configs that define agents, tools, LLMs, and routing. Use the one that matches your run mode and data sources:
+
+| Config | Models | Description |
+|--------|--------|-------------|
+| `config_cli_default.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B | CLI default. Web + paper search; no knowledge retrieval. |
+| `config_web_default_llamaindex.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B, Nemotron Mini 4B | Web default. LlamaIndex knowledge retrieval; web + paper search. |
+| `config_web_frag.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B | Web + Foundational RAG (external RAG server). Helm default. See [RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag/tree/main) for an example RAG deployment. |
+| `config_frontier_models.yml` | GPT-5.2 (orchestrator/planner), Nemotron 3 Nano 30B, Nemotron 3 Super 120B, Nemotron Mini 4B | Hybrid: frontier orchestrator/planner, open researcher. Llamaindex backend. |
 
 ## Ways to Run the Agents
 

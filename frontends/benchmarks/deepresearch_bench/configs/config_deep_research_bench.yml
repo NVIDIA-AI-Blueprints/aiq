@@ -30,6 +30,28 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
+  gpt_oss_llm:
+    _type: nim
+    model_name: openai/gpt-oss-120b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 256000
+    api_key: ${NVIDIA_API_KEY}
+    max_retries: 10
+
+  nemotron_llm_deep:
+    _type: nim
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 128000
+    max_retries: 10
+    timeout: 600
+    chat_template_kwargs:
+      enable_thinking: true
+
 functions:
   paper_search_tool:
     _type: paper_search
@@ -43,7 +65,9 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm
+    orchestrator_llm: gpt_oss_llm
+    researcher_llm: nemotron_llm_deep
+    planner_llm: gpt_oss_llm
     max_loops: 2
     tools:
       - paper_search_tool
