@@ -171,7 +171,6 @@ export const ChatThinking: FC<ChatThinkingProps> = ({
           direction="col"
           className="border-base border-t px-4 pt-3"
           style={{ paddingBottom: 'calc(var(--spacing) * 5)' }}
-          role="listitem"
         >
           <Text kind="label/bold/md" className="text-primary mb-1">
             Selected Data Sources:

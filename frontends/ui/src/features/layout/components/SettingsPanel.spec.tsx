@@ -42,15 +42,14 @@ describe('SettingsPanel', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  test('renders appearance section with theme dropdown', () => {
+  test('renders theme options section with Select trigger', () => {
     render(<SettingsPanel />)
 
     expect(screen.getByText('UI Theme Options')).toBeInTheDocument()
-    // Dropdown trigger shows the current theme label
-    expect(screen.getByText('System Theme (Auto)')).toBeInTheDocument()
+    expect(screen.getByRole('combobox')).toBeInTheDocument()
   })
 
-  test('dropdown trigger label reflects current theme', () => {
+  test('select trigger reflects current theme', () => {
     vi.mocked(useLayoutStore).mockReturnValue({
       rightPanel: 'settings',
       closeRightPanel: mockCloseRightPanel,
@@ -61,7 +60,19 @@ describe('SettingsPanel', () => {
 
     render(<SettingsPanel />)
 
-    expect(screen.getByText('Dark')).toBeInTheDocument()
+    const trigger = screen.getByRole('combobox')
+    expect(trigger).toHaveTextContent('Dark')
+  })
+
+  test('calls setTheme when a theme option is selected', async () => {
+    const user = userEvent.setup()
+
+    render(<SettingsPanel />)
+
+    await user.click(screen.getByRole('combobox'))
+    await user.click(screen.getByRole('option', { name: /dark/i }))
+
+    expect(mockSetTheme).toHaveBeenCalledWith('dark')
   })
 
   test('does not render when panel is closed', () => {

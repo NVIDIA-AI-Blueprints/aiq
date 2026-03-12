@@ -123,6 +123,13 @@ describe('InputArea', () => {
     } as unknown as ReturnType<typeof useWebSocketChat>)
   })
 
+  test('does not render the Auto mode selector button', () => {
+    render(<InputArea isAuthenticated={true} />)
+
+    expect(screen.queryByText('Auto')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /query type/i })).not.toBeInTheDocument()
+  })
+
   test('renders text area with default placeholder', () => {
     render(<InputArea isAuthenticated={true} />)
 

@@ -153,7 +153,6 @@ export const Code = createIcon('code')
 
 export const Sun = createIcon('sun-high')
 export const Moon = createIcon('moon')
-export const Monitor = createIcon('desktop')
 
 // ---------------------------------------------------------------------------
 // Misc icons
