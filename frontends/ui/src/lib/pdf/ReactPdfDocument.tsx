@@ -3,7 +3,10 @@
 
 import React from 'react'
 import { Document, Page, Text, View, StyleSheet, Font, Link } from '@react-pdf/renderer'
+import type { Style } from '@react-pdf/types'
 import { marked } from 'marked'
+import { MathSvg } from './MathJaxSvg'
+import { getDisplayMath, normalizeMathDelimiters, splitInlineMath } from '@/shared/utils/math-markdown'
 
 type Token = ReturnType<typeof marked.lexer>[number]
 type HeadingToken = Extract<Token, { type: 'heading' }>
@@ -13,6 +16,7 @@ type TableToken = Extract<Token, { type: 'table' }>
 type CodeToken = Extract<Token, { type: 'code' }>
 type BlockquoteToken = Extract<Token, { type: 'blockquote' }>
 type HtmlToken = Extract<Token, { type: 'html' }>
+type PdfTextStyle = Style | Style[] | undefined
 
 Font.register({
   family: 'Helvetica',
@@ -54,6 +58,11 @@ const styles = StyleSheet.create({
   paragraph: {
     marginBottom: 8,
     textAlign: 'left',
+  },
+  inlineContent: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'flex-end',
   },
   listItem: {
     flexDirection: 'row',
@@ -147,7 +156,7 @@ interface MarkdownPDFProps {
 }
 
 export const MarkdownPDF: React.FC<MarkdownPDFProps> = ({ markdown }) => {
-  const tokens = marked.lexer(markdown)
+  const tokens = marked.lexer(normalizeMathDelimiters(markdown))
 
   return (
     <Document>
@@ -189,19 +198,27 @@ function renderHeading(token: HeadingToken, index: number): React.ReactNode {
     2: styles.h2,
     3: styles.h3,
   }
+  const headingStyle = styleMap[token.depth] || styles.h3
+  const headingFontSize = token.depth === 1 ? 18 : token.depth === 2 ? 14 : 12
 
   return (
-    <Text key={index} style={styleMap[token.depth] || styles.h3}>
-      {parseInlineFormatting(token.text)}
-    </Text>
+    <View key={index} style={headingStyle}>
+      {renderInlineContent(token.text, headingStyle, headingFontSize)}
+    </View>
   )
 }
 
 function renderParagraph(token: ParagraphToken, index: number): React.ReactNode {
+  const displayMath = getDisplayMath(token.text)
+
+  if (displayMath) {
+    return <MathSvg key={index} latex={displayMath} display fontSize={10} />
+  }
+
   return (
-    <Text key={index} style={styles.paragraph}>
-      {parseInlineFormatting(token.text)}
-    </Text>
+    <View key={index} style={styles.paragraph}>
+      {renderInlineContent(token.text, undefined, 10)}
+    </View>
   )
 }
 
@@ -245,7 +262,7 @@ function renderList(token: ListToken, index: number, _nested: boolean = false): 
       >
         <Text style={styles.listItemBullet}>{bullet}</Text>
         <View style={styles.listItemText}>
-          <Text>{parseInlineFormatting(mainText)}</Text>
+          {renderInlineContent(mainText, undefined, styles.page.fontSize ?? 10)}
           {nestedLists.map((nestedList: any, nlIndex: number) =>
             renderList(nestedList as ListToken, nlIndex, true)
           )}
@@ -279,7 +296,7 @@ function renderTable(token: TableToken, index: number): React.ReactNode {
           const isLast = cellIndex === token.header.length - 1
           return (
             <View key={cellIndex} style={isLast ? styles.tableCellLast : styles.tableCell}>
-              <Text style={styles.tableHeaderCell}>{parseInlineFormatting(getCellText(cell))}</Text>
+              {renderInlineContent(getCellText(cell), styles.tableHeaderCell, styles.page.fontSize ?? 10)}
             </View>
           )
         })}
@@ -291,7 +308,7 @@ function renderTable(token: TableToken, index: number): React.ReactNode {
             const isLast = cellIndex === row.length - 1
             return (
               <View key={cellIndex} style={isLast ? styles.tableCellLast : styles.tableCell}>
-                <Text>{parseInlineFormatting(getCellText(cell))}</Text>
+                {renderInlineContent(getCellText(cell), undefined, styles.page.fontSize ?? 10)}
               </View>
             )
           })}
@@ -348,7 +365,33 @@ function preserveHtmlLinks(text: string): string {
   return text.replace(/<a\s[^>]*href=["']([^"']*)["'][^>]*>(.*?)<\/a>/gi, '[$2]($1)')
 }
 
-function parseInlineFormatting(text: string): React.ReactNode {
+function renderInlineContent(
+  text: string,
+  textStyle?: PdfTextStyle,
+  fontSize: number = 10
+): React.ReactNode {
+  const segments = splitInlineMath(text)
+
+  if (segments.length === 1 && segments[0]?.type === 'text') {
+    return <Text style={textStyle}>{parseTextFormatting(segments[0].value)}</Text>
+  }
+
+  return (
+    <View style={styles.inlineContent}>
+      {segments.map((segment, index) =>
+        segment.type === 'math' ? (
+          <MathSvg key={`math-${index}`} latex={segment.value} fontSize={fontSize} />
+        ) : (
+          <Text key={`text-${index}`} style={textStyle}>
+            {parseTextFormatting(segment.value)}
+          </Text>
+        )
+      )}
+    </View>
+  )
+}
+
+function parseTextFormatting(text: string): React.ReactNode {
   text = preserveHtmlLinks(text)
   text = stripHtml(text)
 

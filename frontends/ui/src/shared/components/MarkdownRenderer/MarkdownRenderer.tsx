@@ -5,8 +5,11 @@
 
 import { type FC, type ReactNode, memo, useMemo } from 'react'
 import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown'
+import rehypeMathjaxSvg from 'rehype-mathjax/svg'
 import remarkGfm from 'remark-gfm'
+import remarkMath from 'remark-math-extended'
 import { Text, CodeSnippet, Anchor } from '@/adapters/ui'
+import { normalizeMathDelimiters } from '@/shared/utils/math-markdown'
 import type { MarkdownRendererProps } from './types'
 import { getLanguageFromClassName } from './utils'
 
@@ -38,7 +41,19 @@ function slugify(text: string): string {
  * @param compact - Use smaller text sizes for chat bubbles
  */
 export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
-  ({ content, className = '', compact = false }) => {
+  ({ content, className = '', compact = false, enableMath = false }) => {
+    const normalizedContent = useMemo(
+      () => (enableMath ? normalizeMathDelimiters(content) : content),
+      [content, enableMath]
+    )
+
+    const remarkPlugins = useMemo(
+      () => (enableMath ? [remarkGfm, remarkMath] : [remarkGfm]),
+      [enableMath]
+    )
+
+    const rehypePlugins = useMemo(() => (enableMath ? [rehypeMathjaxSvg] : []), [enableMath])
+
     // Custom component mappings
     const components: Components = useMemo(
       () => ({
@@ -203,8 +218,12 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
 
     return (
       <div className={`markdown-content break-words [overflow-wrap:anywhere] [&>*:last-child]:mb-0 ${className}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
-          {content}
+        <ReactMarkdown
+          remarkPlugins={remarkPlugins}
+          rehypePlugins={rehypePlugins}
+          components={components}
+        >
+          {normalizedContent}
         </ReactMarkdown>
       </div>
     )

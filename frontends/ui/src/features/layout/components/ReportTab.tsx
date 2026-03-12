@@ -70,6 +70,7 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
                 content={reportContentStr}
                 isStreaming={false}
                 className="max-w-none"
+              enableMath
               />
             </div>
           </Flex>
@@ -80,6 +81,7 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
               content={reportContentStr}
               isStreaming={isGeneratingReport}
               className="max-w-none"
+              enableMath
             />
           </div>
         )}

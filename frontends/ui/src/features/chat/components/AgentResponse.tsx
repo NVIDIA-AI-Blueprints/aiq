@@ -120,7 +120,7 @@ export const AgentResponse: FC<AgentResponseProps> = ({
     return (
       <Flex direction="col" gap="2" className="w-full break-words overflow-hidden">
         {/* Response Content rendered as markdown */}
-        <MarkdownRenderer content={content} />
+        <MarkdownRenderer content={content} enableMath />
 
         {/* Optional action button */}
         {shouldShowButton && (
@@ -170,7 +170,7 @@ export const AgentResponse: FC<AgentResponseProps> = ({
           className="bg-surface-sunken-opaque border-base rounded-br-xl rounded-tl-xl rounded-tr-xl border p-4 break-words overflow-hidden"
         >
           {/* Response Content rendered as markdown */}
-          <MarkdownRenderer content={content} />
+          <MarkdownRenderer content={content} enableMath />
 
           {/* Optional action button stays inside the bubble */}
           {shouldShowButton && (

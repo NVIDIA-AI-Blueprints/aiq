@@ -10,6 +10,8 @@ export interface MarkdownRendererProps {
   className?: string
   /** Use compact text sizes (for chat bubbles vs full reports) */
   compact?: boolean
+  /** Enable MathJax math rendering for markdown math delimiters */
+  enableMath?: boolean
 }
 
 /** Supported languages for syntax highlighting */
