@@ -354,7 +354,7 @@ For detailed benchmark documentation, refer to:
 For development, contribution, and documentation, refer to:
 
 - **[Development and Contributing](docs/source/contributing/index.md)**: Setup, testing, PR workflow, sign-off/DCO
-- **[Tutorial Notebooks](docs/notebooks/)** Getting started overview, deeper dive, and customization notebooks
+- **[Tutorial Notebooks](docs/notebooks/)**: Getting started overview, deeper dive, and customization notebooks
 - **[Architecture](docs/source/architecture/overview.md)**: Component details and data flow
 - **[Customization](docs/source/customization/index.md)**: Configuration and customization options
 - **[Knowledge Layer Setup](sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md)**: RAG backends and document ingestion
