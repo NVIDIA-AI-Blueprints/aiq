@@ -224,7 +224,7 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 
 | Config | Models | Description |
 |--------|--------|-------------|
-| `config_cli_default.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B | CLI default. Web + paper search; no knowledge retrieval. |
+| `config_cli_default.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B | CLI default. Web search; optional paper search (requires `SERPER_API_KEY`); no knowledge retrieval. |
 | `config_web_default_llamaindex.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B, Nemotron Mini 4B | Web default. LlamaIndex knowledge retrieval; web + paper search. |
 | `config_web_frag.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B | Web + Foundational RAG (external RAG server). Helm default. See [RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag/tree/main) for an example RAG deployment. |
 | `config_frontier_models.yml` | GPT-5.2 (orchestrator/planner), Nemotron 3 Nano 30B, Nemotron 3 Super 120B, Nemotron Mini 4B | Hybrid: frontier orchestrator/planner, open researcher. Llamaindex backend. |
