@@ -219,33 +219,34 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
         >
         {/* Header with tabs and close button */}
         <Flex align="center" justify="between" className="border-base shrink-0 border-b pl-6 pr-8 py-4">
-          <SegmentedControl
-            value={researchPanelTab}
-            onValueChange={handleTabChange}
-            size="medium"
-            items={[
-              { value: 'plan', children: 'Plan' },
-              { value: 'tasks', children: 'Tasks' },
-              { value: 'thinking', children: 'Thinking' },
-              { value: 'citations', children: 'Citations' },
-              { value: 'report', children: 'Report' },
-            ]}
-          />
           <Flex align="center" gap="density-xl">
-            {/* Stop Researching button - only when streaming */}
-            {isDeepResearchStreaming && (
-              <Button
-                kind="tertiary"
-                size="small"
-                onClick={handleStopResearch}
-                aria-label="Stop researching"
-                title="Stop researching"
-                data-testid="research-panel-stop"
-              >
-                <StopCircle className="h-4 w-4 mr-2" aria-hidden="true" />
-                Stop Researching
-              </Button>
-            )}
+            <SegmentedControl
+              value={researchPanelTab}
+              onValueChange={handleTabChange}
+              size="medium"
+              items={[
+                { value: 'plan', children: 'Plan' },
+                { value: 'tasks', children: 'Tasks' },
+                { value: 'thinking', children: 'Thinking' },
+                { value: 'citations', children: 'Citations' },
+                { value: 'report', children: 'Report' },
+              ]}
+            />
+            {/* Stop Researching button - always visible, disabled when not streaming */}
+            <Button
+              kind="tertiary"
+              size="small"
+              onClick={isDeepResearchStreaming ? handleStopResearch : undefined}
+              disabled={!isDeepResearchStreaming}
+              aria-label="Stop researching"
+              title={isDeepResearchStreaming ? 'Stop researching' : 'No active research'}
+              data-testid="research-panel-stop"
+            >
+              <StopCircle className="h-4 w-4 mr-2" aria-hidden="true" />
+              Stop Researching
+            </Button>
+          </Flex>
+          <Flex align="center" gap="density-xl">
             {/* Close button */}
             <Button
               kind="tertiary"
@@ -255,8 +256,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
               title="Close research panel"
               data-testid="research-panel-close"
             >
-              Hide
-              <Close className="h-4 w-4 ml-2" aria-hidden="true" />
+              <Close className="h-4 w-4" aria-hidden="true" />
             </Button>
           </Flex>
         </Flex>
