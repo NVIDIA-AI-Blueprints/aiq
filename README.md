@@ -26,8 +26,8 @@ limitations under the License.
 > For production use, switch to the **v1.2.1 stable release** on the [`main branch`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/main).
 >
 > **🏆 BENCHMARK NOTE 🏆**
-> 
-> To obtain results consistent with the **nvidia-aiq** [DeepResearch Bench](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) and [DeepResearch Bench II](https://agentresearchlab.com/benchmarks/deepresearch-bench-ii/index.html#leaderboard) leaderboard results, please use the [`drb1`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb1) and [`drb2`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb2) branches, respectively. 
+>
+> To obtain results consistent with the **nvidia-aiq** [DeepResearch Bench](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) and [DeepResearch Bench II](https://agentresearchlab.com/benchmarks/deepresearch-bench-ii/index.html#leaderboard) leaderboard results, please use the [`drb1`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb1) and [`drb2`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb2) branches, respectively.
 
 
 ## Table of Contents
@@ -41,6 +41,7 @@ limitations under the License.
   - [Automated Setup](#automated-setup)
   - [Obtain API Keys](#obtain-api-keys)
   - [Set Up Environment Variables](#set-up-environment-variables)
+- [Configuration Files](#configuration-files)
 - [Ways to Run the Agents](#ways-to-run-the-agents)
   - [Command-line interface (CLI)](#command-line-interface-cli)
   - [Web UI](#web-ui)
@@ -51,6 +52,8 @@ limitations under the License.
   - [Available Benchmarks](#available-benchmarks)
   - [Running Evaluations](#running-evaluations)
 - [Development](#development)
+- [Roadmap](#roadmap)
+- [Security Considerations](#security-considerations)
 - [License](#license)
 
 ## Overview
@@ -222,6 +225,17 @@ Replace your API keys.
 
 > **Note:** Depending on your usecase, deep research report quality can be enhanced by enabling searching across academic research papers. We use Serper for this. If you want to use paper search, follow the steps in the [Customization guide](docs/source/customization/tools-and-sources.md#disabling-a-tool) to enable it.
 
+## Configuration Files
+
+The `configs/` directory holds YAML workflow configs that define agents, tools, LLMs, and routing. Use the one that matches your run mode and data sources:
+
+| Config | Models | Description |
+|--------|--------|-------------|
+| `config_cli_default.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B | CLI default. Web search; optional paper search (requires `SERPER_API_KEY`); no knowledge retrieval. |
+| `config_web_default_llamaindex.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B, Nemotron Mini 4B | Web default. LlamaIndex knowledge retrieval; web search; optional paper search (requires `SERPER_API_KEY`). |
+| `config_web_frag.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron 3 Super 120B | Web + Foundational RAG (external RAG server). Helm default. See [RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag/tree/main) for an example RAG deployment. |
+| `config_frontier_models.yml` | GPT-5.2 (orchestrator/planner), Nemotron 3 Nano 30B, Nemotron 3 Super 120B, Nemotron Mini 4B | Hybrid: frontier orchestrator/planner, open researcher. LlamaIndex; web search; optional paper search (requires `SERPER_API_KEY`). Requires `OPENAI_API_KEY`. |
+
 ## Ways to Run the Agents
 
 The `frontends/` directory contains different interfaces for interacting with the agents. You can also run agents directly through the NeMo Agent Toolkit CLI.
@@ -380,7 +394,7 @@ For development, contribution, and documentation, refer to:
 - A robust frontend that handles AuthN & AuthZ is highly recommended. Missing AuthN & AuthZ will result in ungated access to customer models if directly exposed e.g. the internet, resulting in either cost to the customer, resource exhaustion, or denial of service.
 - End users are encouraged to add [NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) and additional prompt content filtering to the blueprint. Guardrails will be native in upcoming release.
 - The AI-Q Blueprint doesn't require any privileged access to the system.
-- The AI-Q Blueprint doesn't generate any code that may require sandboxing.
+- The AI-Q Blueprint doesn't currently generate any code that may require sandboxing. Future roadmap features (such as custom skills) will introduce sandboxed execution environments.
 - End users are responsible for ensuring the availability of their deployment.
 - End users are responsible for building, and patching, the container images to keep them up to date.
 - The end users are responsible for ensuring that OSS packages used by the developer blueprint are current.
