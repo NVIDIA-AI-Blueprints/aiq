@@ -32,7 +32,6 @@ All models are served through `https://integrate.api.nvidia.com/v1` (NVIDIA host
 | Shallow research, intent classification | `nvidia/nemotron-3-nano-30b-a3b` |
 | Deep research researcher | `nvidia/nemotron-3-super-120b-a12b` |
 | Orchestrator, planner, clarifier | `openai/gpt-oss-120b` |
-| Evaluation judge | `openai/gpt-4o` (via OpenAI API) |
 
 ### Tools
 

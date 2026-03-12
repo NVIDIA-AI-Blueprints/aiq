@@ -106,20 +106,6 @@ The default configs use `https://integrate.api.nvidia.com/v1`, which is NVIDIA's
 
 ### Known Limitations
 
-**Rate limits**
-
-The hosted API enforces per-account rate limits. Running benchmarks or deep research at high concurrency (for example, `max_concurrency > 1`) can trigger `429 Too Many Requests` errors. The configs set `num_retries` / `max_retries` to mitigate transient rate limiting, but sustained high-throughput workloads may require a self-hosted NIM or an enterprise API agreement.
-
-**Service instability**
-
-The hosted API is a developer preview service and may experience:
-
-- Intermittent `504 Gateway Timeout` errors under high load
-- Brief outages during maintenance windows
-- Degraded latency during peak usage periods
-
-Deep research workflows are especially sensitive to timeouts because a single failed LLM call mid-pipeline can abort the entire research task. The `timeout` parameter in the LLM config (for example, `timeout: 600`) and `num_retries` provide a first line of defense, but do not fully eliminate failures during service disruptions.
-
 **Model availability**
 
 Models served through `integrate.api.nvidia.com` are subject to change:
