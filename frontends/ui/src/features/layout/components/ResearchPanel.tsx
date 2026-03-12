@@ -186,7 +186,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
           {isDeepResearchStreaming ? (
             <Spinner size="small" aria-label="Researching" />
           ) : (
-            <Generate style={{ width: 'calc(var(--spacing) * 6)', height: 'calc(var(--spacing) * 6)' }} />
+            <Generate className="h-[calc(var(--spacing)*6)] w-[calc(var(--spacing)*6)]" />
           )}
         </span>
         <Text
