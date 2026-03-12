@@ -70,7 +70,6 @@ html_static_path = ["_static"]
 html_favicon = "_static/favicon.ico"
 html_css_files = ["css/custom.css"]
 html_js_files = ["js/mermaid-fullscreen.js"]
-templates_path = ["_templates"]
 html_show_sourcelink = False
 
 # Suppress warnings for missing toctree references during incremental builds
@@ -80,6 +79,6 @@ suppress_warnings = ["toc.excluded"]
 linkcheck_ignore = [
     r"http://localhost.*",
     r"http://127\.0\.0\.1.*",
-    r".*github\\.com.*",
-    r".*githubusercontent\\.com.*",
+    r".*github\.com.*",
+    r".*githubusercontent\.com.*",
 ]
