@@ -23,8 +23,6 @@ as sources/knowledge_layer/src/register.py.
 
 import logging
 import os
-from typing import TYPE_CHECKING
-from typing import Any
 from typing import override
 
 from fastapi import FastAPI
@@ -33,6 +31,7 @@ from pydantic import model_validator
 
 from nat.builder.workflow_builder import WorkflowBuilder
 from nat.cli.register_workflow import register_front_end
+from nat.data_models.config import AIQConfig
 from nat.front_ends.fastapi.fastapi_front_end_config import FastApiFrontEndConfig
 from nat.front_ends.fastapi.fastapi_front_end_plugin import FastApiFrontEndPlugin
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
@@ -42,13 +41,6 @@ from .routes.collections import add_collection_routes
 from .routes.documents import add_document_routes
 
 logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    from nat.data_models.config import AIQConfig
-else:
-    # AIQConfig is used for annotations only; keep runtime resilient to
-    # NAT package structure changes across versions.
-    AIQConfig = Any
 
 
 class KnowledgeAPIConfig(FastApiFrontEndConfig, name="aiq_frontend"):

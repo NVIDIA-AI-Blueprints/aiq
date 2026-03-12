@@ -38,8 +38,6 @@ import logging
 import os
 import signal
 from collections.abc import Callable
-from typing import TYPE_CHECKING
-from typing import Any
 from typing import override
 
 from fastapi import FastAPI
@@ -47,6 +45,7 @@ from pydantic import Field
 
 from nat.builder.workflow_builder import WorkflowBuilder
 from nat.cli.register_workflow import register_front_end
+from nat.data_models.config import AIQConfig
 from nat.front_ends.fastapi.fastapi_front_end_config import FastApiFrontEndConfig
 from nat.front_ends.fastapi.fastapi_front_end_plugin import FastApiFrontEndPlugin
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
@@ -62,13 +61,6 @@ from .websocket_reconnect import install_reconnectable_handler
 logger = logging.getLogger(__name__)
 
 install_reconnectable_handler()
-
-if TYPE_CHECKING:
-    from nat.data_models.config import AIQConfig
-else:
-    # AIQConfig is only needed for type hints; avoid runtime import breakage
-    # when NAT package internals move across versions.
-    AIQConfig = Any
 
 
 class AIQAPIConfig(FastApiFrontEndConfig, name="aiq_api"):
