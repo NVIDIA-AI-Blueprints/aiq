@@ -791,6 +791,40 @@ describe('useDeepResearch', () => {
       })
     })
 
+    test('onFileUpdate sets status to writing when report.md is received', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onFileUpdate?.('report.md', '# Final report')
+      })
+
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
+    })
+
+    test('onFileUpdate sets status to writing for path ending in report.md', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onFileUpdate?.('artifacts/report.md', '# Final report')
+      })
+
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
+    })
+
+    test('onFileUpdate does not set writing status for non-report files', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onFileUpdate?.('notes.md', '# Some notes')
+      })
+
+      expect(mockAddDeepResearchFile).toHaveBeenCalledWith({
+        filename: 'notes.md',
+        content: '# Some notes',
+      })
+      expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
+    })
+
     test('onOutputUpdate sets report content', async () => {
       await setupConnectedHook()
 

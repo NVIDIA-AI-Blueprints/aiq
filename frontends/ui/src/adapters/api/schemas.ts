@@ -255,7 +255,6 @@ export const NATIncomingMessageSchema = z.discriminatedUnion('type', [
 export const WebSocketConnectMessageSchema = z.object({
   type: z.literal('connect'),
   session_id: z.string(),
-  workflow_id: z.string(),
   /** Auth token for backend authentication */
   auth_token: z.string().optional(),
 })

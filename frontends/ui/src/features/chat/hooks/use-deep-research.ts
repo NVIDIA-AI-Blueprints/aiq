@@ -69,8 +69,6 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
   const cancelFallbackRef = useRef<NodeJS.Timeout | null>(null)
   const researchStartTimeRef = useRef<number | null>(null)
 
-  // Track whether all todos have been completed (signals final report phase)
-  const allTodosCompletedRef = useRef(false)
 
   // State for timeout warning
   const [isTimedOut, setIsTimedOut] = useState(false)
@@ -353,7 +351,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               const id = `llm-${buf.idCounter++}`; buf.activeLLMStack.push(id); buf.llmSteps.set(id, { name, workflow, content: '' }); return
             }
             if (!isOwnerActive()) return
-            if (allTodosCompletedRef.current && !workflow) setCurrentStatus('writing')
+
             const hasUserMsg = Boolean(useChatStore.getState().currentUserMessageId)
             if (hasUserMsg) {
               const displayName = workflow ? `${workflow} > ${name}` : name
@@ -422,7 +420,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             if (buf.active) { buf.todos = todos; return }
             if (!isOwnerActive()) return
             resetTimeout(); setDeepResearchTodos(todos)
-            allTodosCompletedRef.current = todos.length > 0 && todos.every(t => t.status === 'completed')
+
           },
 
           onCitationUpdate: (url, content, isCited) => {
@@ -435,6 +433,11 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             if (buf.active) { buf.files.set(filename, content); return }
             if (!isOwnerActive()) return
             resetTimeout(); addDeepResearchFile({ filename, content })
+            // report.md artifact arrives 1-2 min before the final_report output event —
+            // use it as an early signal to switch the UI to "writing" status.
+            if (filename.endsWith('report.md')) {
+              setCurrentStatus('writing')
+            }
           },
 
           onOutputUpdate: (content, outputCategory, _workflow) => {
