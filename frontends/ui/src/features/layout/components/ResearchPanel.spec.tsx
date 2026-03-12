@@ -233,6 +233,7 @@ describe('ResearchPanel', () => {
 
       // The toggle tag button has a specific data-testid
       expect(screen.getByTestId('research-panel-toggle')).toBeInTheDocument()
+      expect(screen.getByText('Show Research')).toBeInTheDocument()
     })
 
     test('closes panel when tag clicked while open', async () => {

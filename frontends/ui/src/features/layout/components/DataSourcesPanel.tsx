@@ -169,8 +169,8 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
             connections will be available to the AI assistant.
           </Text>
         ) : (
-          <Text kind="body/regular/xs" className="text-subtle">
-            Uploaded files will be processed and made available to the AI assistant.
+          <Text kind="body/regular/xs" className="text-left text-subtle">
+            Attached files will be always available to agents until deleted.
           </Text>
         )
       }

@@ -170,19 +170,32 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
       <button
         onClick={handleToggle}
         disabled={!isAuthenticated}
-        className={`bg-[var(--background-color-surface-sunken)] border-base z-10 flex h-10 w-10 shrink-0 items-center justify-center self-start mt-6 rounded-l-lg border-b border-l border-t transition-colors ${
+        className={`border-base bg-surface-base relative z-10 flex w-10 shrink-0 items-center justify-center self-start overflow-hidden mt-[calc(var(--spacing)*3)] rounded-l-lg border-b border-l border-r border-t transition-colors ${
           isAuthenticated ? 'cursor-pointer hover:border-[#76B900]' : 'cursor-not-allowed opacity-50'
         }`}
+        style={{ height: 'calc(var(--spacing) * 38)' }}
         aria-label={isOpen ? 'Close research panel' : 'Open research panel'}
         aria-expanded={isOpen}
         title={isAuthenticated ? (isOpen ? 'Close research panel' : 'Open research panel') : 'Sign in to access research panel'}
         data-testid="research-panel-toggle"
       >
-        {isDeepResearchStreaming ? (
-          <Spinner size="small" aria-label="Researching" />
-        ) : (
-          <Generate />
-        )}
+        <span
+          className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center"
+          style={{ top: 'calc(var(--spacing) * 3)', width: 'calc(var(--spacing) * 6)', height: 'calc(var(--spacing) * 6)' }}
+        >
+          {isDeepResearchStreaming ? (
+            <Spinner size="small" aria-label="Researching" />
+          ) : (
+            <Generate style={{ width: 'calc(var(--spacing) * 6)', height: 'calc(var(--spacing) * 6)' }} />
+          )}
+        </span>
+        <Text
+          kind="label/semibold/sm"
+          className="absolute left-1/2 -translate-x-1/2 -rotate-90 whitespace-nowrap text-primary"
+          style={{ top: 'calc(var(--spacing) * 21)' }}
+        >
+          Show Research
+        </Text>
       </button>
 
       {/* Outer container: clips content, fills remaining space */}

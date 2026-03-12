@@ -12,7 +12,7 @@
 'use client'
 
 import { type FC, useCallback, useRef, useState } from 'react'
-import { Flex, Text, Button, StatusMessage, Banner } from '@/adapters/ui'
+import { Flex, Text, Button, Banner } from '@/adapters/ui'
 import { LoadingSpinner } from '@/adapters/ui/icons'
 import { FileSourceCard } from './FileSourceCard'
 import { DeleteFileConfirmationModal } from './DeleteFileConfirmationModal'
@@ -168,11 +168,14 @@ export const FileSourcesTab: FC<FileSourcesTabProps> = ({ onDeleteFile }) => {
 
         {/* Show empty state message when file upload is available */}
         {knowledgeLayerAvailable && (
-          <StatusMessage
-            size="small"
-            slotHeading="No Files"
-            slotSubheading="You have not added any files to this session. Once you do they will appear here."
-          />
+          <Flex direction="col" gap="1">
+            <Text kind="label/semibold/xs" className="text-subtle uppercase">
+              No Attached Files
+            </Text>
+            <Text kind="body/regular/sm" className="text-subtle">
+              All attached files will be accessible to agents in this session unless removed.
+            </Text>
+          </Flex>
         )}
 
         {/* Upload Error Display */}

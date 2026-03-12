@@ -171,7 +171,7 @@ describe('DataSourcesPanel', () => {
 
     render(<DataSourcesPanel />)
 
-    expect(screen.getByText(/uploaded files will be processed/i)).toBeInTheDocument()
+    expect(screen.getByText(/attached files will be always available to agents until deleted/i)).toBeInTheDocument()
   })
 
   test('does not render content when panel is closed', () => {
