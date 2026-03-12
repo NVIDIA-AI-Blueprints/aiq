@@ -9,7 +9,7 @@ general:
         level: INFO
 
 llms:
-  nemotron_llm_non_thinking:
+  nemotron_llm_intent:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -20,7 +20,7 @@ llms:
     chat_template_kwargs:
       enable_thinking: false
 
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -41,7 +41,7 @@ llms:
     api_key: ${NVIDIA_API_KEY}
     max_retries: 10
 
-  nemotron_llm_deep:
+  nemotron_super_llm:
     _type: nim
     model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -66,21 +66,11 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_non_thinking
-
-  depth_router:
-    _type: depth_router
-    llm: nemotron_llm_non_thinking
-
-  meta_chatter:
-    _type: meta_chatter
-    llm: nemotron_llm_non_thinking
-    tools:
-      - web_search_tool
+    llm: nemotron_llm_intent
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_llm_non_thinking
+    llm: nemotron_nano_llm
     tools:
       - web_search_tool
     max_llm_turns: 10
@@ -90,7 +80,7 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: gpt_oss_llm
-    researcher_llm: nemotron_llm_deep
+    researcher_llm: nemotron_super_llm
     planner_llm: gpt_oss_llm
     max_loops: 2
     tools:

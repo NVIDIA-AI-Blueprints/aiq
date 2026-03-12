@@ -82,11 +82,11 @@ general:
 
 ## `llms` Section
 
-Defines named LLM instances. Each entry gets a user-chosen key (for example, `nemotron_llm`) that agents reference.
+Defines named LLM instances. Each entry gets a user-chosen key (for example, `nemotron_nano_llm`) that agents reference.
 
 ```yaml
 llms:
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -303,9 +303,9 @@ Multi-phase research agent with separate orchestrator, planner, and researcher s
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm_deep
-    researcher_llm: nemotron_llm_deep
-    planner_llm: nemotron_llm_deep
+    orchestrator_llm: nemotron_super_llm
+    researcher_llm: nemotron_super_llm
+    planner_llm: nemotron_super_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool

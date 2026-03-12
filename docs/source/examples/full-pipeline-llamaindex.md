@@ -54,7 +54,7 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -65,7 +65,7 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_llm_deep:
+  nemotron_super_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -132,8 +132,8 @@ functions:
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_llm
-    planner_llm: nemotron_llm
+    llm: nemotron_nano_llm
+    planner_llm: nemotron_nano_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -144,7 +144,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_llm
+    llm: nemotron_nano_llm
     verbose: true
     tools:
       - web_search_tool
@@ -154,7 +154,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm_deep
+    orchestrator_llm: nemotron_super_llm
     max_loops: 2
     verbose: true
     tools:
