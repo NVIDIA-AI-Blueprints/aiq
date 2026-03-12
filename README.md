@@ -369,7 +369,7 @@ For development, contribution, and documentation, refer to:
 - [ ] **Skills & Sandboxing:** Support custom skills within isolated environments.
 - [ ] **Dynamic Model Routing:** Allow sub-agents to automatically select the optimal model per task.
 - [ ] **Resource Management:** Implement configurable token caps and tool-call budgets.
-- [ ] **Expanded Web Search:** Addtional integration examples including Perplexity and You.com.
+- [ ] **Expanded Web Search:** Additional integration examples including Perplexity and You.com.
 - [ ] **Collaborative Rewriting:** Additional report rewriting agent and HITL Q&A.
 - [ ] **Multimedia Output:** Embed audio, video, and images directly into reports.
 - [ ] **Voice-to-Text Input:** Integrate [NVIDIA Riva](https://developer.nvidia.com/riva) for hands-free accessibility.
