@@ -2,6 +2,8 @@
 
 HTTP client adapter for deployed [NVIDIA RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag) endpoints.
 
+> **Tested with:** NVIDIA RAG Blueprint **`v2.4.0`** (Helm chart `nvidia-blueprint-rag`). Other versions may work but have not been validated.
+
 ## Prerequisites: Deploy the RAG Blueprint
 
 **This adapter requires a deployed NVIDIA RAG Blueprint server.**
