@@ -213,6 +213,13 @@ main() {
 
     if [ "$HAS_UI" = true ]; then
         start_frontend
+    else
+        echo ""
+        echo "WARNING: Frontend will NOT be started."
+        echo "   Reason: UI dependencies not available (missing npm or node_modules)"
+        echo "   To fix: install Node.js 22+ and run 'npm ci' in frontends/ui/"
+        echo "   The backend will still run at http://localhost:8000"
+        echo ""
     fi
 
     echo ""
@@ -223,6 +230,8 @@ main() {
     echo "Backend: http://localhost:8000"
     if [ "$HAS_UI" = true ]; then
         echo "Frontend: http://localhost:3000"
+    else
+        echo "Frontend: SKIPPED (see warning above)"
     fi
     echo ""
     echo "Press Ctrl+C to stop all services"
