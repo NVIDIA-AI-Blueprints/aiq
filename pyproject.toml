@@ -55,6 +55,10 @@ docs = [
     "sphinx-copybutton>=0.5",
     "sphinx-mermaid>=0.0.8",
     "sphinx-rtd-theme>=2.0",
+    "sphinx-autobuild>=2025.8.25",
+    "nvidia-sphinx-theme>=0.0.9.post1",
+    "sphinx-design>=0.7.0",
+    "sphinxcontrib-mermaid>=2.0.1",
 ]
 viz = [
     "pygraphviz>=1.11",
