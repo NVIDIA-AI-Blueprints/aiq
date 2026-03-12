@@ -44,12 +44,8 @@ jobs:
       - name: Install dev dependencies
         run: |
           uv venv --python 3.13 .venv
-          . .venv/bin/activate
-          uv pip install -e ".[dev]"
+          uv sync --group dev
           uv pip install nbconvert
-          uv pip install -e ./frontends/aiq_api
-          uv pip install -e ./sources/google_scholar_paper_search
-          uv pip install -e "./sources/knowledge_layer[all]"
 
       - name: Ruff checks
         run: |
@@ -82,10 +78,7 @@ jobs:
       - name: Install test dependencies
         run: |
           uv venv --python 3.13 .venv
-          . .venv/bin/activate
-          uv pip install -e ".[dev]"
-          uv pip install -e ./frontends/aiq_api
-          uv pip install -e "./sources/knowledge_layer[all]"
+          uv sync --group dev
 
       - name: Run tests with coverage
         run: |
@@ -150,17 +143,10 @@ jobs:
         run: |
           set -euo pipefail
           uv venv --python 3.13 .venv
-          . .venv/bin/activate
-          uv pip install -e ".[dev]"
-
+          uv sync --group dev
           for pkg in \
-            ./frontends/cli \
-            ./frontends/debug \
-            ./frontends/aiq_api \
             ./frontends/benchmarks/freshqa \
-            ./frontends/benchmarks/intent_classifier \
-            ./sources/tavily_web_search \
-            ./sources/google_scholar_paper_search
+            ./frontends/benchmarks/intent_classifier
           do
             if [ -d "$pkg" ]; then
               uv pip install -e "$pkg"

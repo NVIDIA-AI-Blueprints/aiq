@@ -55,7 +55,7 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -73,7 +73,7 @@ llms:
     model_name: "gpt-5.2"
     api_key: ${OPENAI_API_KEY}
 
-  nemotron_llm_deep:
+  nemotron_super_llm:
     _type: nim
     model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -145,7 +145,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_llm
+    llm: nemotron_nano_llm
     verbose: true
     tools:
       - web_search_tool
@@ -156,7 +156,7 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: openai_gpt_5_2
-    researcher_llm: nemotron_llm_deep
+    researcher_llm: nemotron_super_llm
     planner_llm: openai_gpt_5_2
     max_loops: 2
     verbose: true

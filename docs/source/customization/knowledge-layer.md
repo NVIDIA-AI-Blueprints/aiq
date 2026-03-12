@@ -99,7 +99,7 @@ functions:
 
     # Summarization options (optional, all backends):
     # generate_summary: true                  # Generate one-sentence summary per document
-    # summary_model: nemotron_llm             # LLM reference from llms: section (required if generate_summary is true)
+    # summary_model: nemotron_nano_llm             # LLM reference from llms: section (required if generate_summary is true)
     # summary_db: sqlite+aiosqlite:///./summaries.db  # Summary storage (SQLite or PostgreSQL)
 
     # Backend-specific options (each backend uses different fields):

@@ -10,7 +10,7 @@ LLMs are defined in the `llms` section and referenced by agents and tools. You c
 
 ```yaml
 llms:
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -24,7 +24,7 @@ llms:
 
 ```yaml
 llms:
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -35,7 +35,7 @@ llms:
       enable_thinking: true
 ```
 
-**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_llm`, `llm: nemotron_llm`). Use different keys in `llms` and point agents at them to swap models per role.
+**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_nano_llm`, `llm: nemotron_nano_llm`). Use different keys in `llms` and point agents at them to swap models per role.
 
 ## Using Downloadable NIMs (Self-Hosted)
 
@@ -61,7 +61,7 @@ Change `base_url` to point to your local NIM instance instead of the hosted API.
 
 ```yaml
 llms:
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "http://localhost:8080/v1"    # local NIM
