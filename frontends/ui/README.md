@@ -321,7 +321,7 @@ OpenAI-compatible chat completions via `/chat/stream`:
 import { streamChat } from '@/adapters/api'
 
 await streamChat(
-  { messages, sessionId, workflowId },
+  { messages, sessionId },
   {
     onChunk: (content) => console.log(content),
     onComplete: () => console.log('Done'),
@@ -339,7 +339,6 @@ import { createWebSocketClient } from '@/adapters/api'
 
 const ws = createWebSocketClient({
   sessionId: 'abc123',
-  workflowId: 'researcher',
   callbacks: {
     onAgentText: (content, isFinal) => {},
     onStatus: (status, message) => {},
