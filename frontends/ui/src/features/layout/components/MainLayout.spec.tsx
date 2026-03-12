@@ -33,6 +33,8 @@ vi.mock('@/features/chat', () => ({
     deleteConversation: mockDeleteConversation,
     deleteAllConversations: mockDeleteAllConversations,
     updateConversationTitle: mockUpdateConversationTitle,
+    isStreaming: false,
+    pendingInteraction: null,
     isDeepResearchStreaming: false,
     deepResearchOwnerConversationId: null,
   })),
@@ -58,10 +60,18 @@ vi.mock('../store', () => ({
 
 // Mock child components
 vi.mock('./AppBar', () => ({
-  AppBar: ({ sessionTitle, onNewSession }: { sessionTitle: string; onNewSession?: () => void }) => (
+  AppBar: ({
+    sessionTitle,
+    onNewSession,
+    isNewSessionDisabled,
+  }: {
+    sessionTitle: string
+    onNewSession?: () => void
+    isNewSessionDisabled?: boolean
+  }) => (
     <>
       <div data-testid="app-bar">{sessionTitle}</div>
-      <button type="button" onClick={onNewSession}>
+      <button type="button" onClick={onNewSession} disabled={isNewSessionDisabled}>
         Header New Session
       </button>
     </>
@@ -127,6 +137,8 @@ describe('MainLayout', () => {
       deleteConversation: vi.fn(),
       deleteAllConversations: vi.fn(),
       updateConversationTitle: vi.fn(),
+      isStreaming: false,
+      pendingInteraction: null,
       isDeepResearchStreaming: false,
       deepResearchOwnerConversationId: null,
     } as unknown as ReturnType<typeof useChatStore>)
@@ -161,6 +173,26 @@ describe('MainLayout', () => {
     expect(mockStartNewSessionDraft).toHaveBeenCalledOnce()
     expect(mockClearSessionUrl).toHaveBeenCalledOnce()
     expect(mockCloseRightPanel).toHaveBeenCalledOnce()
+  })
+
+  test('disables new session action while shallow streaming is active', () => {
+    vi.mocked(useChatStore).mockReturnValue({
+      currentConversation: { id: 'session-1', title: 'Test Session' },
+      getUserConversations: vi.fn(() => []),
+      selectConversation: vi.fn(),
+      startNewSessionDraft: vi.fn(),
+      deleteConversation: vi.fn(),
+      deleteAllConversations: vi.fn(),
+      updateConversationTitle: vi.fn(),
+      isStreaming: true,
+      pendingInteraction: null,
+      isDeepResearchStreaming: false,
+      deepResearchOwnerConversationId: null,
+    } as unknown as ReturnType<typeof useChatStore>)
+
+    render(<MainLayout />)
+
+    expect(screen.getByRole('button', { name: /header new session/i })).toBeDisabled()
   })
 
   test('adjusts chat width when details panel is open', () => {

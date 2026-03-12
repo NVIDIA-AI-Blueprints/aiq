@@ -68,6 +68,8 @@ export const MainLayout: FC<MainLayoutProps> = ({
     deleteConversation,
     deleteAllConversations,
     updateConversationTitle,
+    isStreaming,
+    pendingInteraction,
     isDeepResearchStreaming,
     deepResearchOwnerConversationId,
   } = useChatStore()
@@ -117,6 +119,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
   // Check if research panel is open (pushes content instead of overlaying)
   const isResearchPanelOpen = rightPanel === 'research'
+  const isNavigationBlocked = isStreaming || pendingInteraction !== null
 
   // Get only conversations for the current authenticated user
   const userConversations = getUserConversations()
@@ -142,6 +145,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
         authRequired={authRequired}
         user={user}
         onNewSession={handleNewSession}
+        isNewSessionDisabled={isNavigationBlocked}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />

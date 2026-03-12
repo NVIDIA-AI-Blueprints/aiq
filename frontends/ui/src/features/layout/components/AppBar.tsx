@@ -35,6 +35,8 @@ interface AppBarProps {
   }
   /** Callback when a new session is requested */
   onNewSession?: () => void
+  /** Disable creating a new session while shallow research/HITL is active */
+  isNewSessionDisabled?: boolean
   /** Callback when sign in is clicked */
   onSignIn?: () => void
   /** Callback when sign out is clicked */
@@ -51,6 +53,7 @@ export const AppBar: FC<AppBarProps> = ({
   authRequired = false,
   user,
   onNewSession,
+  isNewSessionDisabled = false,
   onSignIn,
   onSignOut,
 }) => {
@@ -85,9 +88,9 @@ export const AppBar: FC<AppBarProps> = ({
   }, [])
 
   const handleNewSessionClick = useCallback(() => {
-    if (!isAuthenticated) return
+    if (!isAuthenticated || isNewSessionDisabled) return
     onNewSession?.()
-  }, [isAuthenticated, onNewSession])
+  }, [isAuthenticated, isNewSessionDisabled, onNewSession])
 
   const handleSignOut = useCallback(() => {
     setIsUserMenuOpen(false)
@@ -103,9 +106,13 @@ export const AppBar: FC<AppBarProps> = ({
             kind="tertiary"
             size="small"
             onClick={handleNewSessionClick}
-            disabled={!isAuthenticated}
+            disabled={!isAuthenticated || isNewSessionDisabled}
             aria-label="Create new session"
-            title="Create new session"
+            title={
+              isNewSessionDisabled
+                ? 'Cannot create new session while shallow research is active'
+                : 'Create new session'
+            }
           >
             <Flex align="center" gap="density-lg">
               <Logo kind="logo-only" size="small" />

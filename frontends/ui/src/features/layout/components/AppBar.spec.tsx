@@ -89,6 +89,14 @@ describe('AppBar', () => {
     expect(onNewSession).toHaveBeenCalledOnce()
   })
 
+  test('disables new session button when shallow navigation is blocked', () => {
+    render(<AppBar isAuthenticated={true} isNewSessionDisabled={true} />)
+
+    expect(screen.getByRole('button', { name: /create new session/i })).toBeDisabled()
+    // Other action buttons remain enabled.
+    expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).not.toBeDisabled()
+  })
+
   test('toggles sessions panel when menu button clicked', async () => {
     const user = userEvent.setup()
 
