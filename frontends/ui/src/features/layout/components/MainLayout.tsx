@@ -64,7 +64,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
     currentConversation,
     getUserConversations,
     selectConversation,
-    createConversation,
+    startNewSessionDraft,
     deleteConversation,
     deleteAllConversations,
     updateConversationTitle,
@@ -90,12 +90,12 @@ export const MainLayout: FC<MainLayoutProps> = ({
     [selectConversation, updateSessionUrl]
   )
 
-  // Wrap createConversation to also update URL and close any open right panel
+  // Start a new unsaved draft session and clear URL until first interaction.
   const handleNewSession = useCallback(() => {
-    const newConversation = createConversation()
-    updateSessionUrl(newConversation.id)
+    startNewSessionDraft()
+    clearSessionUrl()
     closeRightPanel()
-  }, [createConversation, updateSessionUrl, closeRightPanel])
+  }, [startNewSessionDraft, clearSessionUrl, closeRightPanel])
 
   // Wrap deleteConversation to clear URL if deleting current session
   const handleDeleteSession = useCallback(

@@ -49,7 +49,7 @@ export const PlanTab: FC = () => {
          Once the research <b>plan</b> is approved, a <b>task</b> list will be generated. Agents will
           asynchronously <b>think</b> on these tasks using sources and tools as needed. Found sources will be
           continuously appended to <b>citations</b>. Once enough information is found, report drafts will be
-          generated and edited until a final <b>report</b> is ready and available for export.
+          generated and edited. Then citations will  go through validation and verification, until a final <b>report</b> is ready and available for export.
         </Text>
       </Flex>
 

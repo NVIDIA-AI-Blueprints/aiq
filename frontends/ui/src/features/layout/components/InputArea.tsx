@@ -277,9 +277,16 @@ export const InputArea: FC<InputAreaProps> = ({
   const handleValueChange = useCallback(
     (value: string) => {
       if (isDisabledByAuth) return // Don't allow typing when not authenticated
+
+      // Persist a session as soon as the user starts interacting via typed input.
+      // This keeps logo-triggered "new session" drafts out of history until touched.
+      if (!currentConversation && value.trim().length > 0) {
+        ensureSession()
+      }
+
       setMessage(value)
     },
-    [isDisabledByAuth]
+    [isDisabledByAuth, currentConversation, ensureSession]
   )
 
   // Handle attach button click

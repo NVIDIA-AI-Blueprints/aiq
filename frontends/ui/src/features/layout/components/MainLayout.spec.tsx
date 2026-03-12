@@ -9,7 +9,7 @@ import { MainLayout } from './MainLayout'
 const mockUpdateSessionUrl = vi.fn()
 const mockClearSessionUrl = vi.fn()
 const mockSelectConversation = vi.fn()
-const mockCreateConversation = vi.fn(() => ({ id: 'session-2' }))
+const mockStartNewSessionDraft = vi.fn()
 const mockDeleteConversation = vi.fn()
 const mockDeleteAllConversations = vi.fn()
 const mockUpdateConversationTitle = vi.fn()
@@ -29,7 +29,7 @@ vi.mock('@/features/chat', () => ({
     currentConversation: { id: 'session-1', title: 'Test Session' },
     getUserConversations: vi.fn(() => []),
     selectConversation: mockSelectConversation,
-    createConversation: mockCreateConversation,
+    startNewSessionDraft: mockStartNewSessionDraft,
     deleteConversation: mockDeleteConversation,
     deleteAllConversations: mockDeleteAllConversations,
     updateConversationTitle: mockUpdateConversationTitle,
@@ -123,7 +123,7 @@ describe('MainLayout', () => {
       currentConversation: null,
       getUserConversations: vi.fn(() => []),
       selectConversation: vi.fn(),
-      createConversation: vi.fn(),
+      startNewSessionDraft: vi.fn(),
       deleteConversation: vi.fn(),
       deleteAllConversations: vi.fn(),
       updateConversationTitle: vi.fn(),
@@ -151,15 +151,15 @@ describe('MainLayout', () => {
     expect(screen.getByTestId('input-area')).toBeInTheDocument()
   })
 
-  test('wires the AppBar new session action to session creation flow', async () => {
+  test('wires the AppBar new session action to draft session flow', async () => {
     const user = userEvent.setup()
 
     render(<MainLayout />)
 
     await user.click(screen.getByRole('button', { name: /header new session/i }))
 
-    expect(mockCreateConversation).toHaveBeenCalledOnce()
-    expect(mockUpdateSessionUrl).toHaveBeenCalledWith('session-2')
+    expect(mockStartNewSessionDraft).toHaveBeenCalledOnce()
+    expect(mockClearSessionUrl).toHaveBeenCalledOnce()
     expect(mockCloseRightPanel).toHaveBeenCalledOnce()
   })
 
