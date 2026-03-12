@@ -61,7 +61,7 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_nano_llm_intent
+    llm: nemotron_llm_intent
     tools:
       - web_search_tool
       - knowledge_search
