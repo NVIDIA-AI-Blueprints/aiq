@@ -107,10 +107,12 @@ functions:
     ingest_url: ${RAG_INGEST_URL:-http://localhost:8082}
     timeout: 300
 
-  paper_search_tool:
-    _type: paper_search
-    max_results: 5
-    serper_api_key: ${SERPER_API_KEY}
+  # Paper Search (optional - requires SERPER_API_KEY)
+  # Uncomment the block below and set SERPER_API_KEY to enable academic paper search.
+  # paper_search_tool:
+  #   _type: paper_search
+  #   max_results: 5
+  #   serper_api_key: ${SERPER_API_KEY}
 
   # =========================================================================
   # MCP Tool: Connect to an external MCP server
@@ -137,7 +139,7 @@ functions:
     llm: nemotron_llm_intent
     tools:
       - web_search_tool
-      - paper_search_tool
+      # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
       - knowledge_search
       - mcp_financial_data
 
@@ -162,14 +164,14 @@ functions:
       - knowledge_search
       - mcp_financial_data
     max_llm_turns: 10
-    max_tool_calls: 5
+    max_tool_iterations: 5
 
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: nemotron_llm_deep
     max_loops: 2
     tools:
-      - paper_search_tool
+      # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
       - advanced_web_search_tool
       - knowledge_search
       - mcp_financial_data
