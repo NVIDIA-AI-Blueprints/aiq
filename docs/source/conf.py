@@ -15,7 +15,7 @@ extensions = [
     "sphinx.ext.napoleon",  # For google style docstrings
     "sphinx_copybutton",  # For copy button in code blocks
     "sphinx_design",  # For grid cards and other design elements
-    "sphinxmermaid", # For mermaid diagrams
+    "sphinxmermaid",  # For mermaid diagrams
 ]
 
 templates_path = ["_templates"]
@@ -57,12 +57,9 @@ html_theme_options = {
             "icon": "fa-brands fa-github",
         }
     ],
-    'collapse_navigation':
-        False,
-    'navigation_depth':
-        6,
-    "show_nav_level":
-        1,
+    "collapse_navigation": False,
+    "navigation_depth": 6,
+    "show_nav_level": 1,
 }
 
 html_extra_path = ["project.json", "versions1.json"]
