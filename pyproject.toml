@@ -28,11 +28,12 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat[langchain]==1.4.0",
+    "nvidia-nat==1.4.0",
+    "nvidia-nat-langchain==1.4.0",
     "nvidia-nat[telemetry]==1.4.0",
-    "nvidia-nat[weave]==1.4.0",
+    "nvidia-nat-weave==1.4.0",
     "nvidia-nat[async_endpoints]==1.4.0",
-    "nvidia-nat[phoenix]==1.4.0",
+    "nvidia-nat-phoenix==1.4.0",
     "deepagents>=0.3.0",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",

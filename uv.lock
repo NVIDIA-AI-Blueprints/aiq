@@ -200,7 +200,10 @@ dependencies = [
     { name = "deepagents" },
     { name = "langgraph-checkpoint-postgres" },
     { name = "langgraph-checkpoint-sqlite" },
-    { name = "nvidia-nat", extra = ["async-endpoints", "langchain", "phoenix", "telemetry", "weave"] },
+    { name = "nvidia-nat", extra = ["async-endpoints", "telemetry"] },
+    { name = "nvidia-nat-langchain" },
+    { name = "nvidia-nat-phoenix" },
+    { name = "nvidia-nat-weave" },
     { name = "psycopg", extra = ["binary"] },
     { name = "python-multipart" },
 ]
@@ -257,11 +260,12 @@ requires-dist = [
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=3.0" },
+    { name = "nvidia-nat", specifier = "==1.4.0" },
     { name = "nvidia-nat", extras = ["async-endpoints"], specifier = "==1.4.0" },
-    { name = "nvidia-nat", extras = ["langchain"], specifier = "==1.4.0" },
-    { name = "nvidia-nat", extras = ["phoenix"], specifier = "==1.4.0" },
     { name = "nvidia-nat", extras = ["telemetry"], specifier = "==1.4.0" },
-    { name = "nvidia-nat", extras = ["weave"], specifier = "==1.4.0" },
+    { name = "nvidia-nat-langchain", specifier = "==1.4.0" },
+    { name = "nvidia-nat-phoenix", specifier = "==1.4.0" },
+    { name = "nvidia-nat-weave", specifier = "==1.4.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.0.0" },
     { name = "pygraphviz", marker = "extra == 'viz'", specifier = ">=1.11" },
@@ -3784,26 +3788,17 @@ async-endpoints = [
     { name = "distributed" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
-langchain = [
-    { name = "nvidia-nat-langchain" },
-]
 litellm = [
     { name = "litellm" },
 ]
 opentelemetry = [
     { name = "nvidia-nat-opentelemetry" },
 ]
-phoenix = [
-    { name = "nvidia-nat-phoenix" },
-]
 telemetry = [
     { name = "nvidia-nat-data-flywheel" },
     { name = "nvidia-nat-opentelemetry" },
     { name = "nvidia-nat-phoenix" },
     { name = "nvidia-nat-ragaai" },
-    { name = "nvidia-nat-weave" },
-]
-weave = [
     { name = "nvidia-nat-weave" },
 ]
 
