@@ -6,14 +6,14 @@ SPDX-License-Identifier: Apache-2.0
 
 Model Context Protocol (MCP) is an open protocol that standardizes how applications provide context to LLMs. You can use MCP to connect the AIQ Blueprint to external tools and data sources served by remote MCP servers, without writing any custom Python code. Since the AIQ Blueprint is built on the NVIDIA NeMo Agent toolkit, MCP integration is available through configuration using `mcp_client`.
 
-For the full MCP documentation, refer to the [NeMo Agent Toolkit MCP Client Guide](https://docs.nvidia.com/nemo/agent-toolkit/latest/).
+For the full MCP documentation, refer to the [NeMo Agent Toolkit MCP Client Guide](https://docs.nvidia.com/nemo/agent-toolkit/latest/workflows/mcp/mcp-client.html).
 
 ## Prerequisites
 
 Install MCP support if it is not already available:
 
 ```bash
-uv pip install "nvidia-nat[mcp]"
+uv pip install nvidia-nat-mcp==1.4.0
 ```
 
 ## Starting an Example MCP Server
@@ -40,7 +40,7 @@ To get details about a specific tool:
 nat mcp client tool list --url http://localhost:9901/mcp --tool <tool_name> --detail
 ```
 
-For more details on deploying MCP servers, refer to the [NeMo Agent Toolkit MCP Server Guide](https://docs.nvidia.com/nemo/agent-toolkit/latest/).
+For more details on deploying MCP servers, refer to the [NeMo Agent Toolkit MCP Server Guide](https://docs.nvidia.com/nemo/agent-toolkit/latest/workflows/mcp/mcp-server.html).
 
 ## Adding MCP Tools to the Deep Researcher
 
@@ -255,7 +255,7 @@ workflow:
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
 ```
 
-## Filtering and Renaming Tools
+## Overriding Tool Names and Descriptions
 
 By default, `mcp_client` exposes all tools from the MCP server. You can rename or override descriptions for specific tools using `tool_overrides`:
 
