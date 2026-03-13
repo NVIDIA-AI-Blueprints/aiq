@@ -416,7 +416,8 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             setCurrentStatus('researching')
           },
 
-          onTodoUpdate: (todos: TodoItem[]) => {
+          onTodoUpdate: (todos: TodoItem[], workflow?: string) => {
+            if (workflow) return
             if (buf.active) { buf.todos = todos; return }
             if (!isOwnerActive()) return
             resetTimeout(); setDeepResearchTodos(todos)

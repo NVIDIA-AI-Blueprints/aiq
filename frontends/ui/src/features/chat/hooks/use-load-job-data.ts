@@ -425,7 +425,8 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               }
             },
 
-            onTodoUpdate: (todos: TodoItem[]) => {
+            onTodoUpdate: (todos: TodoItem[], workflow?: string) => {
+              if (workflow) return
               buffer.todos = todos
             },
 
