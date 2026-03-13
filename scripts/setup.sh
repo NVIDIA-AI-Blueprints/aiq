@@ -40,33 +40,33 @@ echo ""
 echo "Activating virtual environment..."
 source .venv/bin/activate
 
-# Install core framework with dev dependencies
+# Install core framework with dev dependencies (uses uv.lock to pin versions)
 echo ""
 echo "Installing core framework with dev dependencies..."
-"${UV_BIN}" pip install -e ".[dev]"
+"${UV_BIN}" sync --dev
 echo "Core framework installed"
 
-# Install frontends
+# Install frontends (--no-deps: dependencies already resolved by uv sync)
 echo ""
 echo "Installing frontends..."
-"${UV_BIN}" pip install -e ./frontends/cli
-"${UV_BIN}" pip install -e ./frontends/debug
-"${UV_BIN}" pip install -e ./frontends/aiq_api
+"${UV_BIN}" pip install --no-deps -e ./frontends/cli
+"${UV_BIN}" pip install --no-deps -e ./frontends/debug
+"${UV_BIN}" pip install --no-deps -e ./frontends/aiq_api
 echo "Frontends installed (CLI, Debug, AI-Q API)"
 
 # Install benchmarks
 echo ""
 echo "Installing benchmarks..."
-"${UV_BIN}" pip install -e ./frontends/benchmarks/freshqa
-"${UV_BIN}" pip install -e ./frontends/benchmarks/deepsearch_qa
+"${UV_BIN}" pip install --no-deps -e ./frontends/benchmarks/freshqa
+"${UV_BIN}" pip install --no-deps -e ./frontends/benchmarks/deepsearch_qa
 echo "Benchmarks installed"
 
 # Install data sources
 echo ""
 echo "Installing data sources..."
-"${UV_BIN}" pip install -e ./sources/tavily_web_search
-"${UV_BIN}" pip install -e ./sources/google_scholar_paper_search
-"${UV_BIN}" pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
+"${UV_BIN}" pip install --no-deps -e ./sources/tavily_web_search
+"${UV_BIN}" pip install --no-deps -e ./sources/google_scholar_paper_search
+"${UV_BIN}" pip install --no-deps -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 echo "Data Sources installed"
 
 # Setup pre-commit

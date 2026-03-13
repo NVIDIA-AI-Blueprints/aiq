@@ -149,7 +149,7 @@ jobs:
             ./frontends/benchmarks/intent_classifier
           do
             if [ -d "$pkg" ]; then
-              uv pip install -e "$pkg"
+              uv pip install --no-deps -e "$pkg"
             fi
           done
 
