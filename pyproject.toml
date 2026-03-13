@@ -195,6 +195,8 @@ members = [
     "frontends/aiq_api",
     "frontends/cli",
     "frontends/debug",
+    "frontends/benchmarks/freshqa",
+    "frontends/benchmarks/deepsearch_qa",
 ]
 
 [tool.uv.sources]
@@ -205,3 +207,5 @@ knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }
 aiq-debug = { workspace = true }
+freshqa-eval = { workspace = true }
+deepsearch-qa-evaluator = { workspace = true }
