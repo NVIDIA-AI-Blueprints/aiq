@@ -29,7 +29,7 @@ aiq:
       replicas: 1
       image:
         repository: ""
-        tag: 2603.04.ext.rc6
+        tag: 2603.12.ext.rc7
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
@@ -211,7 +211,7 @@ aiq:
       replicas: 1
       image:
         repository: ""
-        tag: 2603.04.ext.rc6
+        tag: 2603.12.ext.rc7
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:

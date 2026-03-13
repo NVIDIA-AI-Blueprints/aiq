@@ -174,8 +174,8 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
         # =====================================================================
         ingestor = _get_active_ingestor()
         if ingestor:
-            await add_collection_routes(app, ingestor)
-            await add_document_routes(app, ingestor)
+            add_collection_routes(app, ingestor)
+            add_document_routes(app, ingestor)
             logger.info("Knowledge API routes registered (backend=%s)", ingestor.backend_name)
 
         # =====================================================================
