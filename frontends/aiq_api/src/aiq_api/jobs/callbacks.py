@@ -473,7 +473,7 @@ class AgentEventCallback(BaseCallbackHandler):
                     url=url,
                 )
 
-    def _emit_tool_artifact(self, tool_name: str, tool_input: Any) -> None:
+    def _emit_tool_artifact(self, tool_name: str, tool_input: Any, run_id: str = "") -> None:
         """
         Emit artifacts for tools registered in the mapping.
 
@@ -508,6 +508,16 @@ class AgentEventCallback(BaseCallbackHandler):
             content = tool_input
 
         if content is not None:
+            # For todo artifacts, include source context so the UI can
+            # distinguish orchestrator-level todos from sub-agent todos.
+            if artifact_type == ArtifactType.TODO and run_id:
+                agent_info = self._find_agent_for_run(run_id)
+                if agent_info:
+                    extra_data["workflow"] = agent_info[0]
+                    extra_data["agent_id"] = agent_info[1]
+                    extra_data["source"] = "agent"
+                else:
+                    extra_data["source"] = "orchestrator"
             self._emit_artifact(artifact_type, content, name=name, **extra_data)
 
     def on_chain_start(self, serialized: dict | None, inputs: dict, **kwargs) -> None:
@@ -605,7 +615,7 @@ class AgentEventCallback(BaseCallbackHandler):
             )
         )
 
-        self._emit_tool_artifact(tool_name, parsed_input)
+        self._emit_tool_artifact(tool_name, parsed_input, run_id=run_id)
 
     def on_tool_end(self, output: str, **kwargs) -> None:
         run_id = str(kwargs.get("run_id", ""))
