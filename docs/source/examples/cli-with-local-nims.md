@@ -96,7 +96,7 @@ llms:
 
   nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "http://localhost:8001/v1"   # <-- Local NIM
     temperature: 1.0
     top_p: 1.0

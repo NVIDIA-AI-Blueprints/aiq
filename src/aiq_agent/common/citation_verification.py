@@ -450,7 +450,9 @@ _TITLE_NEAR_URL_PATTERNS = [
 def _extract_title_for_url(content: str, url: str) -> str | None:
     """Try to extract a title associated with a URL from the surrounding content.
 
-    Finds the title pattern closest to the URL within its text block.
+    Finds the title pattern **closest to** (and preceding) the URL within its
+    text block.  This prevents a single block containing multiple search
+    results from assigning the first result's title to every URL.
     """
     # Find the block of text containing this URL (split by --- or double newlines)
     blocks = re.split(r"\n\n---\n\n|\n\n\n", content)
@@ -465,8 +467,10 @@ def _extract_title_for_url(content: str, url: str) -> str | None:
                 title = title_match.group(1).strip()
                 if not title or title == url:
                     continue
+                # Prefer titles that appear before (and closest to) the URL
                 distance = url_pos - title_match.end()
                 if distance < 0:
+                    # Title appears after the URL — use large penalty
                     distance = abs(distance) + 10000
                 if distance < best_distance:
                     best_distance = distance
