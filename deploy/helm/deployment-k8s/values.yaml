@@ -74,9 +74,9 @@ aiq:
         CONFIG_FILE: configs/config_web_default_llamaindex.yml
         DASK_NWORKERS: '1'
         DASK_NTHREADS: '4'
-        NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:6432/aiq_jobs
-        AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:6432/aiq_jobs
-        AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:6432/aiq_jobs
+        NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         RAG_SERVER_URL: http://rag-server:8080
         RAG_INGEST_URL: http://rag-ingest:8080
         COLLECTION_NAME: default_collection
@@ -139,9 +139,6 @@ aiq:
         - name: postgres
           port: 5432
           targetPort: 5432
-        - name: pgbouncer
-          port: 6432
-          targetPort: 6432
       ports:
       - name: postgres
         containerPort: 5432
@@ -151,105 +148,7 @@ aiq:
         POSTGRES_PASSWORD: DB_USER_PASSWORD
       env:
         POSTGRES_DB: aiq_jobs
-      sidecars:
-      - name: pgbouncer
-        image: edoburu/pgbouncer:v1.25.1-p0
-        imagePullPolicy: IfNotPresent
-        ports:
-        - name: pgbouncer
-          containerPort: 6432
-          protocol: TCP
-        env:
-        - name: DB_HOST
-          value: 127.0.0.1
-        - name: DB_PORT
-          value: '5432'
-        - name: DB_NAME
-          value: '*'
-        - name: DB_USER
-          value: aiq
-        - name: DB_PASSWORD
-          value: aiq_dev
-        - name: LISTEN_PORT
-          value: '6432'
-        - name: LISTEN_ADDR
-          value: 0.0.0.0
-        - name: AUTH_TYPE
-          value: trust
-        - name: POOL_MODE
-          value: transaction
-        - name: DEFAULT_POOL_SIZE
-          value: '20'
-        - name: MAX_CLIENT_CONN
-          value: '200'
-        - name: MAX_DB_CONNECTIONS
-          value: '50'
-        - name: IGNORE_STARTUP_PARAMETERS
-          value: extra_float_digits,options
-        resources:
-          requests:
-            cpu: 100m
-            memory: 128Mi
-          limits:
-            cpu: 500m
-            memory: 256Mi
-        securityContext:
-          allowPrivilegeEscalation: false
-          capabilities:
-            drop:
-            - ALL
-          readOnlyRootFilesystem: false
-        volumeMounts:
-        - name: pgbouncer-config
-          mountPath: /etc/pgbouncer/pgbouncer.ini
-          subPath: pgbouncer.ini
-        - name: pgbouncer-userlist
-          mountPath: /etc/pgbouncer/userlist.txt
-          subPath: userlist.txt
-        livenessProbe:
-          tcpSocket:
-            port: 6432
-          initialDelaySeconds: 5
-          periodSeconds: 10
-        readinessProbe:
-          tcpSocket:
-            port: 6432
-          initialDelaySeconds: 3
-          periodSeconds: 5
       configMaps:
-      - name: aiq-pgbouncer-config
-        data:
-          pgbouncer.ini: '[databases]
-
-            * = host=127.0.0.1 port=5432
-
-
-            [pgbouncer]
-
-            listen_addr = 0.0.0.0
-
-            listen_port = 6432
-
-            auth_file = /etc/pgbouncer/userlist.txt
-
-            auth_type = trust
-
-            pool_mode = transaction
-
-            default_pool_size = 20
-
-            max_client_conn = 200
-
-            max_db_connections = 50
-
-            ignore_startup_parameters = extra_float_digits,options
-
-            admin_users = aiq
-
-            '
-          userlist.txt: '"aiq" "aiq_dev"
-
-            '
       - name: aiq-postgres-init
         data:
           init.sql: "-- =============================================================================\n\
@@ -286,18 +185,6 @@ aiq:
       - name: postgres-data
         persistentVolumeClaim:
           claimName: aiq-postgres-data
-      - name: pgbouncer-config
-        configMap:
-          name: aiq-pgbouncer-config
-          items:
-          - key: pgbouncer.ini
-            path: pgbouncer.ini
-      - name: pgbouncer-userlist
-        configMap:
-          name: aiq-pgbouncer-config
-          items:
-          - key: userlist.txt
-            path: userlist.txt
       volumeMounts:
       - name: postgres-data
         mountPath: /var/lib/postgresql/data
