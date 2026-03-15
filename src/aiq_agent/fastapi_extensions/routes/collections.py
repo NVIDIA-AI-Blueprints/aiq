@@ -17,7 +17,8 @@
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import APIRouter
+from fastapi import Depends
 from fastapi import HTTPException
 
 from aiq_agent.knowledge.base import BaseIngestor
@@ -28,10 +29,19 @@ from ..models.requests import CreateCollectionRequest
 logger = logging.getLogger(__name__)
 
 
-def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
+def _require_ingestor() -> BaseIngestor:
+    from aiq_agent.knowledge.factory import get_active_ingestor
+
+    ingestor = get_active_ingestor()
+    if ingestor is None:
+        raise HTTPException(status_code=503, detail="Knowledge API not configured")
+    return ingestor
+
+
+def add_collection_routes(router: APIRouter):
     """Add collection management routes to the FastAPI app."""
 
-    @app.post(
+    @router.post(
         "/v1/collections",
         response_model=CollectionInfo,
         status_code=201,
@@ -40,7 +50,10 @@ def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
         description="Create a named collection for organizing uploaded documents.",
         responses={400: {"description": "Collection already exists or invalid name"}},
     )
-    async def create_collection(request: CreateCollectionRequest) -> CollectionInfo:
+    async def create_collection(
+        request: CreateCollectionRequest,
+        ingestor: BaseIngestor = Depends(_require_ingestor),
+    ) -> CollectionInfo:
         """Create a new collection for storing documents."""
         try:
             return ingestor.create_collection(
@@ -52,14 +65,16 @@ def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
             logger.error(f"Failed to create collection '{request.name}': {e}")
             raise HTTPException(status_code=400, detail=str(e))
 
-    @app.get(
+    @router.get(
         "/v1/collections",
         response_model=list[CollectionInfo],
         tags=["collections"],
         summary="List all collections",
         description="Returns all collections with their metadata and document counts.",
     )
-    async def list_collections() -> list[CollectionInfo]:
+    async def list_collections(
+        ingestor: BaseIngestor = Depends(_require_ingestor),
+    ) -> list[CollectionInfo]:
         """List all available collections."""
         try:
             return ingestor.list_collections()
@@ -67,7 +82,7 @@ def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
             logger.error(f"Failed to list collections: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get(
+    @router.get(
         "/v1/collections/{name}",
         response_model=CollectionInfo,
         tags=["collections"],
@@ -75,14 +90,17 @@ def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
         description="Get metadata and document count for a specific collection.",
         responses={404: {"description": "Collection not found"}},
     )
-    async def get_collection(name: str) -> CollectionInfo:
+    async def get_collection(
+        name: str,
+        ingestor: BaseIngestor = Depends(_require_ingestor),
+    ) -> CollectionInfo:
         """Get details for a specific collection."""
         collection = ingestor.get_collection(name)
         if collection is None:
             raise HTTPException(status_code=404, detail=f"Collection '{name}' not found")
         return collection
 
-    @app.delete(
+    @router.delete(
         "/v1/collections/{name}",
         tags=["collections"],
         summary="Delete a collection",
@@ -92,7 +110,10 @@ def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
             500: {"description": "Backend error during deletion"},
         },
     )
-    async def delete_collection(name: str) -> dict:
+    async def delete_collection(
+        name: str,
+        ingestor: BaseIngestor = Depends(_require_ingestor),
+    ) -> dict:
         """Delete a collection and all its contents."""
         try:
             success = ingestor.delete_collection(name)
@@ -105,14 +126,16 @@ def add_collection_routes(app: FastAPI, ingestor: BaseIngestor):
             logger.error(f"Failed to delete collection '{name}': {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get(
+    @router.get(
         "/v1/knowledge/health",
         tags=["health"],
         summary="Check knowledge backend health",
         description="Verify the knowledge backend (LlamaIndex or Foundational RAG) is reachable.",
         responses={503: {"description": "Knowledge backend unhealthy or unreachable"}},
     )
-    async def health_check() -> dict:
+    async def health_check(
+        ingestor: BaseIngestor = Depends(_require_ingestor),
+    ) -> dict:
         """Check if the knowledge backend is healthy and reachable."""
         try:
             healthy = await ingestor.health_check()
