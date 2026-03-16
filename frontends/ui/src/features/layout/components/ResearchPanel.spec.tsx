@@ -34,6 +34,14 @@ vi.mock('@/adapters/api', () => ({
 let mockIsDeepResearchStreaming = false
 let mockDeepResearchJobId: string | null = null
 let mockDeepResearchStreamLoaded = false
+let mockCurrentStatus: string | null = null
+let mockReportContent = ''
+let mockDeepResearchTodosCount = 0
+let mockDeepResearchCitationsCount = 0
+let mockDeepResearchLLMStepsCount = 0
+let mockDeepResearchAgentsCount = 0
+let mockDeepResearchToolCallsCount = 0
+let mockDeepResearchFilesCount = 0
 const mockImportJobStream = vi.fn()
 
 const mockCancelCurrentJob = vi.fn()
@@ -43,11 +51,27 @@ vi.mock('@/features/chat', () => ({
     isDeepResearchStreaming: boolean
     deepResearchJobId: string | null
     deepResearchStreamLoaded: boolean
+    currentStatus: string | null
+    reportContent: string
+    deepResearchTodos: Array<unknown>
+    deepResearchCitations: Array<unknown>
+    deepResearchLLMSteps: Array<unknown>
+    deepResearchAgents: Array<unknown>
+    deepResearchToolCalls: Array<unknown>
+    deepResearchFiles: Array<unknown>
   }) => unknown) =>
     selector({
       isDeepResearchStreaming: mockIsDeepResearchStreaming,
       deepResearchJobId: mockDeepResearchJobId,
       deepResearchStreamLoaded: mockDeepResearchStreamLoaded,
+      currentStatus: mockCurrentStatus,
+      reportContent: mockReportContent,
+      deepResearchTodos: Array.from({ length: mockDeepResearchTodosCount }),
+      deepResearchCitations: Array.from({ length: mockDeepResearchCitationsCount }),
+      deepResearchLLMSteps: Array.from({ length: mockDeepResearchLLMStepsCount }),
+      deepResearchAgents: Array.from({ length: mockDeepResearchAgentsCount }),
+      deepResearchToolCalls: Array.from({ length: mockDeepResearchToolCallsCount }),
+      deepResearchFiles: Array.from({ length: mockDeepResearchFilesCount }),
     }),
   useLoadJobData: () => ({
     importStreamOnly: mockImportJobStream,
@@ -89,6 +113,14 @@ describe('ResearchPanel', () => {
     mockIsDeepResearchStreaming = false
     mockDeepResearchJobId = null
     mockDeepResearchStreamLoaded = false
+    mockCurrentStatus = null
+    mockReportContent = ''
+    mockDeepResearchTodosCount = 0
+    mockDeepResearchCitationsCount = 0
+    mockDeepResearchLLMStepsCount = 0
+    mockDeepResearchAgentsCount = 0
+    mockDeepResearchToolCallsCount = 0
+    mockDeepResearchFilesCount = 0
     mockImportJobStream.mockClear()
   })
 
@@ -224,6 +256,16 @@ describe('ResearchPanel', () => {
 
       // When not streaming, the generate icon is shown instead of spinner
       expect(screen.queryByLabelText('Researching')).not.toBeInTheDocument()
+    })
+
+    test('shows a tab loading spinner while a new deep research job is waiting for first task data', () => {
+      mockIsDeepResearchStreaming = true
+      mockDeepResearchJobId = 'job-123'
+      mockResearchPanelTab = 'tasks'
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      expect(screen.getByLabelText('Preparing research tasks...')).toBeInTheDocument()
     })
   })
 

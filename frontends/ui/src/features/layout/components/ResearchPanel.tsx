@@ -50,6 +50,14 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const deepResearchJobId = useChatStore((state) => state.deepResearchJobId)
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
+  const currentStatus = useChatStore((state) => state.currentStatus)
+  const reportContent = useChatStore((state) => state.reportContent)
+  const deepResearchTodosCount = useChatStore((state) => state.deepResearchTodos.length)
+  const deepResearchCitationsCount = useChatStore((state) => state.deepResearchCitations.length)
+  const deepResearchLLMStepsCount = useChatStore((state) => state.deepResearchLLMSteps.length)
+  const deepResearchAgentsCount = useChatStore((state) => state.deepResearchAgents.length)
+  const deepResearchToolCallsCount = useChatStore((state) => state.deepResearchToolCalls.length)
+  const deepResearchFilesCount = useChatStore((state) => state.deepResearchFiles.length)
   const { importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
   const { idToken } = useAuth()
 
@@ -57,6 +65,28 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
 
   const isOpen = rightPanel === 'research'
   const cancelFallbackRef = useRef<NodeJS.Timeout | null>(null)
+  const hasThinkingContent =
+    deepResearchLLMStepsCount > 0 ||
+    deepResearchAgentsCount > 0 ||
+    deepResearchToolCallsCount > 0 ||
+    deepResearchFilesCount > 0
+  const hasReportContent = typeof reportContent === 'string' && reportContent.trim().length > 0
+  const showPendingTabSpinner =
+    Boolean(deepResearchJobId) &&
+    isDeepResearchStreaming &&
+    !isStreamLoading &&
+    ((researchPanelTab === 'tasks' && deepResearchTodosCount === 0) ||
+      (researchPanelTab === 'thinking' && !hasThinkingContent) ||
+      (researchPanelTab === 'citations' && deepResearchCitationsCount === 0) ||
+      (researchPanelTab === 'report' && !hasReportContent))
+  const pendingTabMessage =
+    researchPanelTab === 'report' || currentStatus === 'writing'
+      ? 'Drafting report...'
+      : researchPanelTab === 'citations'
+        ? 'Gathering sources...'
+        : researchPanelTab === 'thinking'
+          ? 'Collecting research activity...'
+          : 'Preparing research tasks...'
 
   // Clean up cancel fallback timer on unmount
   useEffect(() => {
@@ -270,6 +300,13 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
                 {TABS_REQUIRING_STREAM.includes(researchPanelTab)
                   ? 'Loading research data...'
                   : 'Loading report...'}
+              </Text>
+            </Flex>
+          ) : showPendingTabSpinner ? (
+            <Flex direction="col" align="center" justify="center" className="h-full gap-4">
+              <Spinner size="medium" aria-label={pendingTabMessage} />
+              <Text kind="body/regular/md" className="text-tertiary">
+                {pendingTabMessage}
               </Text>
             </Flex>
           ) : (
