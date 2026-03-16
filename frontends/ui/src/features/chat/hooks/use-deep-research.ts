@@ -16,6 +16,7 @@ import { useEffect, useRef, useCallback, useState } from 'react'
 import {
   createDeepResearchClient,
   cancelJob,
+  getJobReport,
   type DeepResearchClient,
   type DeepResearchJobStatus,
   type TodoItem,
@@ -248,7 +249,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             }
           },
 
-          onJobStatus: (status, error) => {
+          onJobStatus: async (status, error) => {
             if (buf.active) flushBuffer()
             if (!isOwnerActive()) return
             resetTimeout()
@@ -266,10 +267,23 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
 
             if (status === 'success') {
               setCurrentStatus('complete')
-              const { reportContent: currentReport, deepResearchLLMSteps, deepResearchToolCalls } = state
+              let resolvedReport = state.reportContent
+              if (!resolvedReport?.trim()) {
+                try {
+                  const response = await getJobReport(jobId, idToken || undefined)
+                  if (response.has_report && response.report?.trim()) {
+                    resolvedReport = response.report
+                    setReportContent(response.report)
+                  }
+                } catch (reportError) {
+                  console.warn('Failed to backfill final report after deep research success:', reportError)
+                }
+              }
+
+              const { deepResearchLLMSteps, deepResearchToolCalls } = state
               const totalTokens = deepResearchLLMSteps.reduce((sum, step) => sum + (step.usage?.input_tokens || 0) + (step.usage?.output_tokens || 0), 0)
               const toolCallCount = deepResearchToolCalls.length
-              const hasReport = Boolean(currentReport?.trim())
+              const hasReport = Boolean(resolvedReport?.trim())
 
               if (ownerConvId && messageId) {
                 patchConversationMessage(ownerConvId, messageId, {

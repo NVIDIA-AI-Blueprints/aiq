@@ -164,7 +164,7 @@ vi.mock('@/adapters/api', () => ({
     mockCreateDeepResearchClient(options),
   cancelJob: (...args: unknown[]) => mockCancelJob(...args),
   getJobStatus: () => mockGetJobStatus(),
-  getJobReport: () => mockGetJobReport(),
+  getJobReport: (...args: unknown[]) => mockGetJobReport(...args),
 }))
 
 import { useChatStore } from '../store'
@@ -593,6 +593,47 @@ describe('useDeepResearch', () => {
           isDeepResearchActive: false,
         })
       )
+    })
+
+    test('onJobStatus success backfills missing report content before finalizing', async () => {
+      mockGetJobReport.mockResolvedValueOnce({
+        has_report: true,
+        report: 'Recovered final report',
+      })
+
+      await setupConnectedHook({
+        reportContent: '',
+        activeDeepResearchMessageId: 'msg-123',
+      })
+
+      vi.mocked(useChatStore).getState = vi.fn(() => ({
+        ...mockStoreState,
+        reportContent: '',
+        deepResearchLLMSteps: [],
+        deepResearchToolCalls: [],
+        deepResearchCitations: [],
+        addErrorCard: mockAddErrorCard,
+        deepResearchOwnerConversationId: 'test-conv-123',
+        activeDeepResearchMessageId: 'msg-123',
+      })) as unknown as typeof useChatStore.getState
+
+      await act(async () => {
+        await mockClient?.callbacks.onJobStatus?.('success', undefined)
+      })
+
+      expect(mockGetJobReport).toHaveBeenCalledWith('job-456', 'mock-id-token')
+      expect(mockSetReportContent).toHaveBeenCalledWith('Recovered final report')
+      expect(mockPatchConversationMessage).toHaveBeenCalledWith(
+        'test-conv-123',
+        'msg-123',
+        expect.objectContaining({
+          deepResearchJobStatus: 'success',
+          isDeepResearchActive: false,
+          showViewReport: true,
+        })
+      )
+      expect(mockSetStreamLoaded).toHaveBeenCalledWith(true)
+      expect(mockCompleteDeepResearch).toHaveBeenCalled()
     })
 
     test('onJobStatus failure stops todos and shows error', async () => {

@@ -101,7 +101,9 @@ vi.mock('./CitationsTab', () => ({
 
 vi.mock('./ReportTab', () => ({
   ReportTab: ({ children }: { children?: React.ReactNode }) => (
-    <div data-testid="report-tab">Report Tab Content {children}</div>
+    <div data-testid="report-tab">
+      {mockReportContent || 'Report Tab Content'} {children}
+    </div>
   ),
 }))
 
@@ -280,6 +282,25 @@ describe('ResearchPanel', () => {
       )
 
       expect(screen.getByTestId('custom-content')).toBeInTheDocument()
+    })
+
+    test('shows report content automatically when it arrives while report tab is open', () => {
+      mockResearchPanelTab = 'report'
+      mockIsDeepResearchStreaming = true
+      mockDeepResearchJobId = 'job-123'
+      mockCurrentStatus = 'writing'
+      mockReportContent = ''
+
+      const { rerender } = render(<ResearchPanel isAuthenticated={true} />)
+
+      expect(screen.getByLabelText('Drafting report...')).toBeInTheDocument()
+      expect(screen.queryByText('Recovered final report')).not.toBeInTheDocument()
+
+      mockReportContent = 'Recovered final report'
+      rerender(<ResearchPanel isAuthenticated={true} />)
+
+      expect(screen.queryByLabelText('Drafting report...')).not.toBeInTheDocument()
+      expect(screen.getByText('Recovered final report')).toBeInTheDocument()
     })
   })
 
