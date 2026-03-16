@@ -115,9 +115,9 @@ The core deep research agent using the DeepAgents library.
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_nano_llm   # LLM for orchestrator; can use nemotron_super_llm when Build API is stable
-    researcher_llm: nemotron_nano_llm    # optional; can use nemotron_super_llm when Build API is stable
-    planner_llm: nemotron_nano_llm        # optional; can use nemotron_super_llm when Build API is stable
+    orchestrator_llm: nemotron_nano_llm   # LLM for orchestrator; replace with nemotron_super_llm if available
+    researcher_llm: nemotron_nano_llm    # optional; replace with nemotron_super_llm if available
+    planner_llm: nemotron_nano_llm        # optional; replace with nemotron_super_llm if available
     max_loops: 2                     # Maximum research iterations
     verbose: true                    # Enable detailed logging
     tools:
@@ -205,7 +205,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
+    orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     max_loops: 2
     tools:
       - web_search_tool

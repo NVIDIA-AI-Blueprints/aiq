@@ -159,7 +159,7 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: openai_gpt_5_2
-    researcher_llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
+    researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: openai_gpt_5_2
     max_loops: 2
     verbose: true

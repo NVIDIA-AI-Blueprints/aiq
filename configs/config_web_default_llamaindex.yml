@@ -138,8 +138,8 @@ functions:
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
-    planner_llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
+    llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
+    planner_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     tools:
       - web_search_tool
       - knowledge_search
@@ -161,7 +161,7 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: gpt_oss_llm
-    researcher_llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
+    researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: gpt_oss_llm
     max_loops: 2
     verbose: true
