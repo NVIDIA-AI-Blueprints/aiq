@@ -518,7 +518,7 @@ class ClarifierAgent:
             Compiled LangGraph StateGraph ready for execution.
         """
         llm = self._get_llm()
-        bound_llm = llm.bind_tools(self.tools, parallel_tool_calls=False) if self.tools else llm
+        bound_llm = llm.bind_tools(self.tools, parallel_tool_calls=True) if self.tools else llm
         # Use planner_llm for plan generation if provided, otherwise use default llm
         planner_llm = self.planner_llm if self.planner_llm is not None else llm
 

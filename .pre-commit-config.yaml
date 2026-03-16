@@ -56,13 +56,13 @@ repos:
         entry: bash -c 'for chart in deploy/helm/helm-charts-k8s/*; do if [ -d "$chart" ]; then helm lint "$chart"; fi; done'
         language: system
         pass_filenames: false
-        stages: [push]
+        stages: [pre-push]
       - id: pytest
         name: pytest
         entry: pytest tests sources --cov=aiq_agent --cov-report=term --cov-fail-under=65
         language: system
         pass_filenames: false
-        stages: [push]
+        stages: [pre-push]
 
   - repo: https://github.com/tcort/markdown-link-check
     rev: v3.11.2
