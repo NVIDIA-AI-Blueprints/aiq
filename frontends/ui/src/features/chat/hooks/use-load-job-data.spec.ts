@@ -151,4 +151,22 @@ describe('useLoadJobData', () => {
       'Failed to get job status: 404'
     )
   })
+
+  test('preserves loaded stream data when fetching missing report for same completed job', async () => {
+    mockStoreState.deepResearchJobId = 'job-123'
+    mockStoreState.deepResearchStreamLoaded = true
+    mockGetJobStatus.mockResolvedValue({ status: 'success' })
+    mockGetJobReport.mockResolvedValue({ has_report: true, report: 'Recovered report' })
+    mockGetJobState.mockResolvedValue({ has_state: false, artifacts: undefined })
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.loadReport('job-123')
+    })
+
+    expect(mockClearDeepResearch).not.toHaveBeenCalled()
+    expect(mockSetReportContent).toHaveBeenCalledWith('Recovered report')
+    expect(mockSetLoadedJobId).toHaveBeenCalledWith('job-123')
+  })
 })

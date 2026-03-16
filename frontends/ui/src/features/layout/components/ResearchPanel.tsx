@@ -65,6 +65,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
 
   const isOpen = rightPanel === 'research'
   const cancelFallbackRef = useRef<NodeJS.Timeout | null>(null)
+  const pendingReportLoadJobIdRef = useRef<string | null>(null)
   const hasThinkingContent =
     deepResearchLLMStepsCount > 0 ||
     deepResearchAgentsCount > 0 ||
@@ -80,7 +81,9 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
       (researchPanelTab === 'citations' && deepResearchCitationsCount === 0) ||
       (researchPanelTab === 'report' && !hasReportContent))
   const pendingTabMessage =
-    researchPanelTab === 'report' || currentStatus === 'writing'
+    researchPanelTab === 'report' && !isDeepResearchStreaming
+      ? 'Loading report...'
+      : currentStatus === 'writing'
       ? 'Drafting report...'
       : researchPanelTab === 'citations'
         ? 'Gathering sources...'
@@ -88,11 +91,23 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
           ? 'Collecting research activity...'
           : 'Preparing research tasks...'
   const shouldLoadReport =
+    isOpen &&
     researchPanelTab === 'report' &&
     Boolean(deepResearchJobId) &&
     !hasReportContent &&
     !isDeepResearchStreaming &&
     !isStreamLoading
+
+  const requestReportLoad = useCallback(() => {
+    if (!deepResearchJobId || pendingReportLoadJobIdRef.current === deepResearchJobId) return
+
+    pendingReportLoadJobIdRef.current = deepResearchJobId
+    void Promise.resolve(loadReport(deepResearchJobId)).finally(() => {
+      if (pendingReportLoadJobIdRef.current === deepResearchJobId) {
+        pendingReportLoadJobIdRef.current = null
+      }
+    })
+  }, [deepResearchJobId, loadReport])
 
   const loadDataForTab = useCallback(
     (tab: ResearchPanelTab) => {
@@ -104,10 +119,10 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
       }
 
       if (tab === 'report' && !hasReportContent) {
-        void loadReport(deepResearchJobId)
+        requestReportLoad()
       }
     },
-    [deepResearchJobId, isDeepResearchStreaming, isStreamLoading, deepResearchStreamLoaded, importStreamOnly, hasReportContent, loadReport]
+    [deepResearchJobId, isDeepResearchStreaming, isStreamLoading, deepResearchStreamLoaded, importStreamOnly, hasReportContent, requestReportLoad]
   )
 
   // Clean up cancel fallback timer on unmount
@@ -119,6 +134,12 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (shouldLoadReport) {
+      requestReportLoad()
+    }
+  }, [shouldLoadReport, requestReportLoad])
 
   const handleClose = useCallback(() => {
     closeRightPanel()

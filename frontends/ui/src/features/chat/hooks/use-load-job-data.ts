@@ -491,6 +491,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       const hasStreamData =
         currentState.deepResearchJobId === jobId &&
         currentState.deepResearchStreamLoaded
+      const preserveExistingResearchState =
+        !shouldStreamFull &&
+        currentState.deepResearchJobId === jobId &&
+        currentState.deepResearchStreamLoaded
 
       // If we have what we need, just open the panel
       if (hasReportData && (!shouldStreamFull || hasStreamData)) {
@@ -514,7 +518,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           throw new Error(`Job is still ${jobStatus}. Cannot load data from incomplete job.`)
         }
 
-        clearDeepResearch()
+        if (!preserveExistingResearchState) {
+          clearDeepResearch()
+        }
 
         if (shouldStreamFull) {
           await streamFullJob(jobId)

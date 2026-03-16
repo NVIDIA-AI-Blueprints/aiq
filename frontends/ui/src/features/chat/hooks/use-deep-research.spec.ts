@@ -157,14 +157,16 @@ const mockCreateDeepResearchClient = vi.fn((options: { callbacks: Record<string,
 
 const mockCancelJob = vi.fn()
 const mockGetJobStatus = vi.fn<() => Promise<{ status: string }>>().mockResolvedValue({ status: 'running' })
-const mockGetJobReport = vi.fn<() => Promise<{ has_report: boolean; report?: string }>>().mockResolvedValue({ has_report: false })
+const mockGetJobReport = vi
+  .fn<(jobId: string, authToken?: string) => Promise<{ has_report: boolean; report?: string }>>()
+  .mockResolvedValue({ has_report: false })
 
 vi.mock('@/adapters/api', () => ({
   createDeepResearchClient: (options: { callbacks: Record<string, (...args: unknown[]) => void> }) =>
     mockCreateDeepResearchClient(options),
   cancelJob: (...args: unknown[]) => mockCancelJob(...args),
   getJobStatus: () => mockGetJobStatus(),
-  getJobReport: (...args: unknown[]) => mockGetJobReport(...args),
+  getJobReport: (jobId: string, authToken?: string) => mockGetJobReport(jobId, authToken),
 }))
 
 import { useChatStore } from '../store'

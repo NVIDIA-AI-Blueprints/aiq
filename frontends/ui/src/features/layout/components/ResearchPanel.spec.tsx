@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { render, screen } from '@/test-utils'
+import { waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { ResearchPanel } from './ResearchPanel'
@@ -43,7 +44,7 @@ let mockDeepResearchAgentsCount = 0
 let mockDeepResearchToolCallsCount = 0
 let mockDeepResearchFilesCount = 0
 const mockImportJobStream = vi.fn()
-const mockLoadReport = vi.fn()
+const mockLoadReport = vi.fn().mockResolvedValue(undefined)
 
 const mockCancelCurrentJob = vi.fn()
 
@@ -317,6 +318,17 @@ describe('ResearchPanel', () => {
 
       expect(screen.queryByLabelText('Drafting report...')).not.toBeInTheDocument()
       expect(screen.getByText('Recovered final report')).toBeInTheDocument()
+    })
+
+    test('loads report data automatically when panel is already open on report tab', async () => {
+      mockResearchPanelTab = 'report'
+      mockDeepResearchJobId = 'job-123'
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      await waitFor(() => {
+        expect(mockLoadReport).toHaveBeenCalledWith('job-123')
+      })
     })
   })
 
