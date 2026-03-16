@@ -303,9 +303,9 @@ Multi-phase research agent with separate orchestrator, planner, and researcher s
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm
-    researcher_llm: nemotron_super_llm
-    planner_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
+    researcher_llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
+    planner_llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
     tools:
       - paper_search_tool
       - advanced_web_search_tool

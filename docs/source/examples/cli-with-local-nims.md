@@ -94,16 +94,19 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_super_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "http://localhost:8001/v1"   # <-- Local NIM
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
-    num_retries: 3
-    chat_template_kwargs:
-      enable_thinking: true
+  # Nemotron Super is compatible and tested with AIQ, but Build API endpoints may
+  # experience temporary instability as it is a recently launched model.
+  # Uncomment and use nemotron_super_llm for higher-capacity research when endpoints are stable.
+  # nemotron_super_llm:
+  #   _type: nim
+  #   model_name: nvidia/nemotron-3-super-120b-a12b
+  #   base_url: "http://localhost:8001/v1"   # <-- Local NIM
+  #   temperature: 1.0
+  #   top_p: 1.0
+  #   max_tokens: 128000
+  #   num_retries: 3
+  #   chat_template_kwargs:
+  #     enable_thinking: true
 
 # ===========================================================================
 # Functions
@@ -152,7 +155,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_nano_llm  # can use nemotron_super_llm when Build API is stable
     max_loops: 2
     tools:
       - paper_search_tool

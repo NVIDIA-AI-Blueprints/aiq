@@ -168,7 +168,7 @@ llms:
 
   nemotron_llm_deep:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 1.0
     top_p: 1.0

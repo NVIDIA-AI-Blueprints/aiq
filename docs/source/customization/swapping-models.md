@@ -70,6 +70,10 @@ llms:
     num_retries: 5
 ```
 
+```{note}
+**Nemotron Super — Build Endpoint Stability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but as a recently launched model, Build API endpoints may experience temporary instability (HTTP 429 or 503 responses). The default configs use Nemotron Nano for reliability. When Super endpoints are stable, you can uncomment `nemotron_super_llm` in your config for higher-capacity research. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended.
+```
+
 You can mix hosted and local NIMs in the same config -- for example, use a local NIM for the high-volume shallow researcher and a hosted NIM for the orchestrator:
 
 ```yaml

@@ -17,6 +17,12 @@
 # Installs vLLM and serves NVIDIA-Nemotron-3-Super-120B with tensor parallelism.
 # Requires: super_v3_reasoning_parser.py in REPO_ROOT (or set REASONING_PARSER_PATH).
 # Run from repo root: ./scripts/install_and_serve_nemotron_super.sh
+#
+# NOTE: Nemotron Super is compatible and tested with AIQ, but NVIDIA Build API
+# endpoints may experience temporary instability as it is a recently launched model.
+# Self-hosting via this script provides consistent throughput for production use.
+# The default configs use Nemotron Nano; uncomment nemotron_super_llm in your
+# config when using this self-hosted endpoint.
 
 set -euo pipefail
 
