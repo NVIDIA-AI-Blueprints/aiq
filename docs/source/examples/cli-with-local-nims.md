@@ -94,9 +94,9 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  # Nemotron Super is compatible and tested with AIQ, but Build API endpoints may
-  # experience temporary instability as it is a recently launched model.
-  # Uncomment and use nemotron_super_llm for higher-capacity research when endpoints are stable.
+  # Nemotron Super is compatible and tested with AIQ but has limited availability
+  # on the Build API due to high demand.
+  # Uncomment nemotron_super_llm below if the endpoint is accessible.
   # nemotron_super_llm:
   #   _type: nim
   #   model_name: nvidia/nemotron-3-super-120b-a12b

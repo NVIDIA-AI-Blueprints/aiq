@@ -31,7 +31,7 @@ Common issues and solutions for the AI-Q blueprint.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
-| HTTP 429 or 503 on deep research | Nemotron Super Build API under high load (recently launched model) | Default configs use Nemotron Nano for reliability. Retry after a short delay, or self-host via [Brev Launchable](#nemotron-super-build-endpoint-stability) for consistent throughput |
+| HTTP 429 or 503 on deep research | Nemotron Super Build API has limited availability due to high demand | Default configs use Nemotron Nano for reliability. Retry after a short delay, or self-host via [Brev Launchable](#nemotron-super-build-endpoint-stability) for consistent throughput |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
 | Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns` or set `enable_plan_approval: false` |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
@@ -39,7 +39,7 @@ Common issues and solutions for the AI-Q blueprint.
 
 ## Nemotron Super — Build Endpoint Stability
 
-Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but as a recently launched model, the NVIDIA Build API endpoints may experience periods of temporary instability. During these periods you may observe:
+Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but the NVIDIA Build API endpoints have limited availability due to high demand. During peak periods you may observe:
 
 - Elevated latency or timeouts on LLM inference calls
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API

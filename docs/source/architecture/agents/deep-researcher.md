@@ -155,7 +155,7 @@ functions:
 ```
 
 ```{note}
-**Nemotron Super — Build Endpoint Stability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but as a recently launched model, Build API endpoints may experience temporary instability (HTTP 429/503 responses). The default configs use Nemotron Nano for the `researcher_llm` role for reliability. When Super endpoints are stable, you can uncomment `nemotron_super_llm` in your config for higher-capacity research. For production deployments, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended. See [Troubleshooting](../../resources/troubleshooting.md#nemotron-super-build-endpoint-stability) for details.
+**Nemotron Super — Build Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429/503 responses). The default configs use Nemotron Nano for the `researcher_llm` role for reliability. You can uncomment `nemotron_super_llm` in your config if the endpoint is accessible. For production deployments, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended. See [Troubleshooting](../../resources/troubleshooting.md#nemotron-super-build-endpoint-stability) for details.
 ```
 
 ## Prompt Templates
