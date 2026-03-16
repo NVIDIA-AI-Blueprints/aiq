@@ -58,7 +58,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
   const deepResearchAgentsCount = useChatStore((state) => state.deepResearchAgents.length)
   const deepResearchToolCallsCount = useChatStore((state) => state.deepResearchToolCalls.length)
   const deepResearchFilesCount = useChatStore((state) => state.deepResearchFiles.length)
-  const { importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
+  const { loadReport, importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
   const { idToken } = useAuth()
 
   const prefersReducedMotion = useReducedMotion()
@@ -87,6 +87,28 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
         : researchPanelTab === 'thinking'
           ? 'Collecting research activity...'
           : 'Preparing research tasks...'
+  const shouldLoadReport =
+    researchPanelTab === 'report' &&
+    Boolean(deepResearchJobId) &&
+    !hasReportContent &&
+    !isDeepResearchStreaming &&
+    !isStreamLoading
+
+  const loadDataForTab = useCallback(
+    (tab: ResearchPanelTab) => {
+      if (!deepResearchJobId || isDeepResearchStreaming || isStreamLoading) return
+
+      if (TABS_REQUIRING_STREAM.includes(tab) && !deepResearchStreamLoaded) {
+        void importStreamOnly(deepResearchJobId)
+        return
+      }
+
+      if (tab === 'report' && !hasReportContent) {
+        void loadReport(deepResearchJobId)
+      }
+    },
+    [deepResearchJobId, isDeepResearchStreaming, isStreamLoading, deepResearchStreamLoaded, importStreamOnly, hasReportContent, loadReport]
+  )
 
   // Clean up cancel fallback timer on unmount
   useEffect(() => {
@@ -151,37 +173,17 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
     } else {
       openRightPanel('research')
 
-      // Trigger stream import when opening panel if current tab requires it and data not loaded
-      if (
-        TABS_REQUIRING_STREAM.includes(researchPanelTab) &&
-        deepResearchJobId &&
-        !deepResearchStreamLoaded &&
-        !isDeepResearchStreaming &&
-        !isStreamLoading
-      ) {
-        void importStreamOnly(deepResearchJobId)
-      }
+      loadDataForTab(researchPanelTab)
     }
-  }, [isAuthenticated, isOpen, closeRightPanel, openRightPanel, researchPanelTab, deepResearchJobId, deepResearchStreamLoaded, isDeepResearchStreaming, isStreamLoading, importStreamOnly])
+  }, [isAuthenticated, isOpen, closeRightPanel, openRightPanel, researchPanelTab, loadDataForTab])
 
   const handleTabChange = useCallback(
     (value: string) => {
       const tab = value as ResearchPanelTab
       setResearchPanelTab(tab)
-
-      // Trigger stream import when clicking Tasks/Thinking/Citations for a loaded (non-streaming) job
-      if (
-        TABS_REQUIRING_STREAM.includes(tab) &&
-        deepResearchJobId &&
-        !deepResearchStreamLoaded &&
-        !isDeepResearchStreaming &&
-        !isStreamLoading
-      ) {
-        // Fire and forget - don't block the tab change
-        void importStreamOnly(deepResearchJobId)
-      }
+      loadDataForTab(tab)
     },
-    [setResearchPanelTab, deepResearchJobId, deepResearchStreamLoaded, isDeepResearchStreaming, isStreamLoading, importStreamOnly]
+    [setResearchPanelTab, loadDataForTab]
   )
 
   return (
@@ -302,7 +304,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
                   : 'Loading report...'}
               </Text>
             </Flex>
-          ) : showPendingTabSpinner ? (
+          ) : showPendingTabSpinner || shouldLoadReport ? (
             <Flex direction="col" align="center" justify="center" className="h-full gap-4">
               <Spinner size="medium" aria-label={pendingTabMessage} />
               <Text kind="body/regular/md" className="text-tertiary">

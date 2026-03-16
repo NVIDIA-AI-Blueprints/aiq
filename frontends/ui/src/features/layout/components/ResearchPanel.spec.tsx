@@ -43,6 +43,7 @@ let mockDeepResearchAgentsCount = 0
 let mockDeepResearchToolCallsCount = 0
 let mockDeepResearchFilesCount = 0
 const mockImportJobStream = vi.fn()
+const mockLoadReport = vi.fn()
 
 const mockCancelCurrentJob = vi.fn()
 
@@ -74,6 +75,7 @@ vi.mock('@/features/chat', () => ({
       deepResearchFiles: Array.from({ length: mockDeepResearchFilesCount }),
     }),
   useLoadJobData: () => ({
+    loadReport: mockLoadReport,
     importStreamOnly: mockImportJobStream,
     isLoading: false,
   }),
@@ -124,6 +126,7 @@ describe('ResearchPanel', () => {
     mockDeepResearchToolCallsCount = 0
     mockDeepResearchFilesCount = 0
     mockImportJobStream.mockClear()
+    mockLoadReport.mockClear()
   })
 
   describe('panel visibility', () => {
@@ -172,6 +175,19 @@ describe('ResearchPanel', () => {
 
       await user.click(screen.getByText('Citations'))
       expect(mockSetResearchPanelTab).toHaveBeenCalledWith('citations')
+    })
+
+    test('loads report data when report tab is clicked for a completed job without report content', async () => {
+      const user = userEvent.setup()
+      mockDeepResearchJobId = 'job-123'
+      mockResearchPanelTab = 'tasks'
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      await user.click(screen.getByText('Report'))
+
+      expect(mockSetResearchPanelTab).toHaveBeenCalledWith('report')
+      expect(mockLoadReport).toHaveBeenCalledWith('job-123')
     })
 
     test('displays correct tab content based on researchPanelTab', () => {
@@ -353,6 +369,20 @@ describe('ResearchPanel', () => {
       await user.click(screen.getByTestId('research-panel-toggle'))
 
       expect(mockOpenRightPanel).not.toHaveBeenCalled()
+    })
+
+    test('loads report data when opening panel directly on report tab for a completed job', async () => {
+      const user = userEvent.setup()
+      mockRightPanel = null
+      mockResearchPanelTab = 'report'
+      mockDeepResearchJobId = 'job-123'
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      await user.click(screen.getByTestId('research-panel-toggle'))
+
+      expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
+      expect(mockLoadReport).toHaveBeenCalledWith('job-123')
     })
   })
 })
