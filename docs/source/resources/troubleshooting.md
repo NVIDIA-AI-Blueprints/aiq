@@ -31,10 +31,40 @@ Common issues and solutions for the AI-Q blueprint.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
+| HTTP 429 or 503 on deep research | Nemotron Super Build API under high load | Retry after a short delay, or self-host via [Brev Launchable](#nemotron-super-build-endpoint-stability) for consistent throughput |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
 | Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns` or set `enable_plan_approval: false` |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
 | Job status stuck on RUNNING | Dask worker crashed | Check Dask logs; the ghost job reaper will eventually mark it FAILURE |
+
+## Nemotron Super — Build Endpoint Stability
+
+The NVIDIA Build API endpoints for `nvidia/llama-3.3-nemotron-super-49b-v1` (Nemotron Super) may experience periods of high load or intermittent instability. During these periods you may observe:
+
+- Elevated latency or timeouts on LLM inference calls
+- HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
+- Degraded agent workflow performance due to upstream model availability
+
+### Recommended Mitigation: Self-Host via Brev Launchable
+
+For production and staging deployments that require consistent throughput and low-latency inference, the recommended approach is to self-host the Nemotron Super model using a [Brev Launchable](https://brev.nvidia.com/placeholder_url) rather than relying on shared Build API endpoints.
+
+Once your self-hosted endpoint is running, update `base_url` in your config to point at it:
+
+```yaml
+llms:
+  nemotron_super_llm:
+    _type: nim
+    model_name: nvidia/llama-3.3-nemotron-super-49b-v1
+    base_url: "https://<your-brev-endpoint>/v1"
+    api_key: ""
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 128000
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+```
 
 ## Knowledge Layer Issues
 
