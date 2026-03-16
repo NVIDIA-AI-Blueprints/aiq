@@ -377,6 +377,48 @@ export const useChatStore = create<ChatStore>()(
           return newConversation
         },
 
+        startNewSessionDraft: () => {
+          const { currentUserId } = get()
+          if (!currentUserId) {
+            throw new Error('Cannot start session draft without authenticated user')
+          }
+
+          const layoutState = useLayoutStore.getState()
+          const defaultEnabledDataSourceIds = getDefaultEnabledDataSourceIds()
+          layoutState.setEnabledDataSources(defaultEnabledDataSourceIds)
+
+          set(
+            {
+              currentConversation: null,
+              // Clear all ResearchPanel content for draft session
+              thinkingSteps: [],
+              activeThinkingStepId: null,
+              reportContent: '',
+              reportContentCategory: null,
+              currentStatus: null,
+              planMessages: [],
+              deepResearchCitations: [],
+              deepResearchTodos: [],
+              deepResearchLLMSteps: [],
+              deepResearchAgents: [],
+              deepResearchToolCalls: [],
+              deepResearchFiles: [],
+              deepResearchStreamLoaded: false,
+              // Clear deep research job state for draft session
+              deepResearchJobId: null,
+              deepResearchLastEventId: null,
+              isDeepResearchStreaming: false,
+              deepResearchStatus: null,
+              deepResearchOwnerConversationId: null,
+              activeDeepResearchMessageId: null,
+              // Clear HITL pending interaction
+              pendingInteraction: null,
+            },
+            false,
+            'startNewSessionDraft'
+          )
+        },
+
         ensureSession: () => {
           const { currentConversation, currentUserId } = get()
 

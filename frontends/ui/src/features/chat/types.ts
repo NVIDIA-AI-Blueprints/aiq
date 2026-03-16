@@ -432,6 +432,8 @@ export interface ChatActions {
   getUserConversations: () => Conversation[]
   /** Create a new conversation for the current user */
   createConversation: () => Conversation
+  /** Start a new unsaved session draft; persisted only after first interaction. */
+  startNewSessionDraft: () => void
   /** Ensure a session exists, creating one if needed. Returns session ID or undefined if no user. */
   ensureSession: () => string | undefined
   /** Select a conversation (only if owned by current user) */

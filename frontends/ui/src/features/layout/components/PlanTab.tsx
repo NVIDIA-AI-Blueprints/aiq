@@ -40,6 +40,19 @@ export const PlanTab: FC = () => {
 
   return (
     <Flex direction="col" gap="4" className="h-full">
+      {/* Process Overview */}
+      <Flex direction="col" gap="2">
+        <Text kind="label/semibold/md" className="text-primary">
+          Process Overview
+        </Text>
+        <Text kind="body/regular/sm" className="text-subtle">
+         Once the research <b>plan</b> is approved, a <b>task</b> list will be generated. Agents will
+          asynchronously <b>think</b> on these tasks using sources and tools as needed. Found sources will be
+          continuously appended to <b>citations</b>. Once enough information is found, report drafts will be
+          generated and edited. Then citations will  go through validation and verification, until a final <b>report</b> is ready and available for export.
+        </Text>
+      </Flex>
+
       {/* Header */}
       <Flex align="center" justify="between">
         <Text kind="label/semibold/md" className="text-subtle">

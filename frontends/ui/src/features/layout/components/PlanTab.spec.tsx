@@ -42,6 +42,15 @@ describe('PlanTab', () => {
     mockIsLoading = false
   })
 
+  describe('process overview', () => {
+    test('renders process overview section', () => {
+      render(<PlanTab />)
+
+      expect(screen.getByText('Process Overview')).toBeInTheDocument()
+      expect(screen.getByText(/Once the research/)).toBeInTheDocument()
+    })
+  })
+
   describe('empty state', () => {
     test('shows empty state when no plan messages', () => {
       render(<PlanTab />)

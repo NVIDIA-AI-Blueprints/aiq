@@ -21,7 +21,13 @@ spec:
   {{- end }}
   {{- if hasKey $appConfig "deploymentStrategy" }}
   strategy:
-    {{- toYaml $appConfig.deploymentStrategy | nindent 4 }}
+    type: {{ $appConfig.deploymentStrategy.type | default "RollingUpdate" }}
+    {{- if ne ($appConfig.deploymentStrategy.type | default "RollingUpdate") "Recreate" }}
+    {{- with $appConfig.deploymentStrategy.rollingUpdate }}
+    rollingUpdate:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- end }}
   {{- end }}
   selector:
     matchLabels:

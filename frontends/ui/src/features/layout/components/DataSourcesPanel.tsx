@@ -165,12 +165,12 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
       slotFooter={
         dataSourcesPanelTab === 'connections' ? (
           <Text kind="body/regular/xs" className="text-subtle">
-            {enabledAvailableCount} of {availableCount} available sources enabled. Enabled sources
-            will be available to the AI assistant.
+            {enabledAvailableCount} of {availableCount} available connections enabled. Enabled
+            connections will be available to the AI assistant.
           </Text>
         ) : (
-          <Text kind="body/regular/xs" className="text-subtle">
-            Uploaded files will be processed and made available to the AI assistant.
+          <Text kind="body/regular/xs" className="text-left text-subtle">
+            Attached files will be always available to agents until deleted.
           </Text>
         )
       }
@@ -206,9 +206,9 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
             </Banner>
           )}
 
-          {/* All Sources Toggle */}
+          {/* All Connections Toggle */}
           <Text kind="label/semibold/xs" className="text-subtle mb-3 uppercase">
-            All Sources
+            All Connections
           </Text>
           <Flex
             align="center"
@@ -229,8 +229,8 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
             aria-disabled={isBusy}
             aria-label={
               isBusy
-                ? 'All available sources (disabled during operations)'
-                : `All available sources: ${allAvailableEnabled ? 'enabled' : 'disabled'}`
+                ? 'All available connections (disabled during operations)'
+                : `All available connections: ${allAvailableEnabled ? 'enabled' : 'disabled'}`
             }
             title={isBusy ? 'Data source changes disabled during active operations' : undefined}
           >
@@ -246,18 +246,18 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
                 disabled={isBusy}
                 aria-label={
                   isBusy
-                    ? 'Toggle all sources (disabled)'
+                    ? 'Toggle all connections (disabled)'
                     : allAvailableEnabled
-                      ? 'Disable all sources'
-                      : 'Enable all sources'
+                      ? 'Disable all connections'
+                      : 'Enable all connections'
                 }
               />
             </div>
           </Flex>
 
-          {/* Individual Sources */}
+          {/* Individual Connections */}
           <Text kind="label/semibold/xs" className="text-subtle mb-3 uppercase">
-            Individual Sources ({displaySources.length})
+            Individual Connections ({displaySources.length})
           </Text>
 
           {dataSourcesLoading ? (

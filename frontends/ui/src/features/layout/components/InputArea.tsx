@@ -22,7 +22,7 @@ import { useChat, useWebSocketChat, useChatStore, useIsCurrentSessionBusy } from
 import { useLayoutStore } from '../store'
 import { useAppConfig } from '@/shared/context'
 import { useFileUpload, useFileDragDrop, useFileUploadBanners } from '@/features/documents'
-import { Wand, Globe, Document, Paperclip, Paperplane, Cancel } from '@/adapters/ui/icons'
+import { Globe, Document, Paperclip, Paperplane, Cancel } from '@/adapters/ui/icons'
 
 /** Connection mode for the chat */
 export type ConnectionMode = 'sse' | 'websocket'
@@ -277,9 +277,16 @@ export const InputArea: FC<InputAreaProps> = ({
   const handleValueChange = useCallback(
     (value: string) => {
       if (isDisabledByAuth) return // Don't allow typing when not authenticated
+
+      // Persist a session as soon as the user starts interacting via typed input.
+      // This keeps logo-triggered "new session" drafts out of history until touched.
+      if (!currentConversation && value.trim().length > 0) {
+        ensureSession()
+      }
+
       setMessage(value)
     },
-    [isDisabledByAuth]
+    [isDisabledByAuth, currentConversation, ensureSession]
   )
 
   // Handle attach button click
@@ -395,28 +402,7 @@ export const InputArea: FC<InputAreaProps> = ({
         )}
 
         {/* Bottom Actions Bar */}
-        <Flex align="center" justify="between" className="mt-3">
-          {/* Left Actions: Mode selector only */}
-          <Flex align="center" gap="2">
-            {/* Mode selector */}
-            <Popover
-              side="top"
-              align="start"
-              slotContent={
-                <Text kind="body/regular/sm" className="p-2">
-                  Automatically route to appropriate agent based on inferred intent
-                </Text>
-              }
-            >
-              <Button kind="tertiary" size="tiny" disabled={isDisabledByAuth} aria-label="Query type">
-                <Flex align="center" gap="1">
-                  <Wand />
-                  <Text kind="label/bold/sm">Auto</Text>
-                </Flex>
-              </Button>
-            </Popover>
-          </Flex>
-
+        <Flex align="center" justify="end" className="mt-3">
           {/* Right Actions: Counters, Attach, Research, Submit */}
           <Flex align="center" gap="2">
             {/* Sources indicator - clickable to toggle data connections tab */}

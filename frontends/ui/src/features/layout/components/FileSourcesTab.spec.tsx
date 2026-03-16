@@ -114,7 +114,10 @@ describe('FileSourcesTab', () => {
   test('renders empty state when no files', () => {
     render(<FileSourcesTab />)
 
-    expect(screen.getByText('No Files')).toBeInTheDocument()
+    expect(screen.getByText('No Attached Files')).toBeInTheDocument()
+    expect(
+      screen.getByText('All attached files will be accessible to agents in this session unless removed.')
+    ).toBeInTheDocument()
   })
 
   test('renders file upload zone in empty state', () => {
@@ -276,7 +279,7 @@ describe('FileSourcesTab', () => {
 
     // Spinner should NOT appear because the upload is for a different session
     expect(screen.queryByText('Checking for files...')).not.toBeInTheDocument()
-    expect(screen.getByText('No Files')).toBeInTheDocument()
+    expect(screen.getByText('No Attached Files')).toBeInTheDocument()
   })
 
   test('displays upload error when present', () => {

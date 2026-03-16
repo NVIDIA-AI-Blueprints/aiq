@@ -115,9 +115,9 @@ The core deep research agent using the DeepAgents library.
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm   # LLM for orchestrator (report generation)
-    researcher_llm: nemotron_llm    # optional; LLM for researcher subagent (defaults to orchestrator)
-    planner_llm: nemotron_llm        # optional; LLM for planner subagent (defaults to orchestrator)
+    orchestrator_llm: nemotron_super_llm   # LLM for orchestrator (report generation)
+    researcher_llm: nemotron_super_llm    # optional; LLM for researcher subagent (defaults to orchestrator)
+    planner_llm: nemotron_super_llm        # optional; LLM for planner subagent (defaults to orchestrator)
     max_loops: 2                     # Maximum research iterations
     verbose: true                    # Enable detailed logging
     tools:
@@ -173,10 +173,10 @@ general:
   use_uvloop: true
 
 llms:
-  nemotron_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
-    base_url: https://integrate.api.nvidia.com/v1
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 1.0
     top_p: 1.0
     max_tokens: 128000
@@ -191,7 +191,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm
+    orchestrator_llm: nemotron_super_llm
     max_loops: 2
     tools:
       - web_search_tool

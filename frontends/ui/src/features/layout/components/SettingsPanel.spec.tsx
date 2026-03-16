@@ -42,48 +42,37 @@ describe('SettingsPanel', () => {
     expect(screen.getByText('Settings')).toBeInTheDocument()
   })
 
-  test('renders appearance section with theme options', () => {
+  test('renders theme options section with Select trigger', () => {
     render(<SettingsPanel />)
 
-    expect(screen.getByText('Appearance')).toBeInTheDocument()
-    expect(screen.getByText('Light')).toBeInTheDocument()
-    expect(screen.getByText('Dark')).toBeInTheDocument()
-    expect(screen.getByText('System')).toBeInTheDocument()
+    expect(screen.getByText('UI Theme Options')).toBeInTheDocument()
+    expect(screen.getByRole('combobox')).toBeInTheDocument()
   })
 
-  test('calls setTheme when theme option is clicked', async () => {
-    const user = userEvent.setup()
-
-    render(<SettingsPanel />)
-
-    await user.click(screen.getByText('Dark'))
-
-    expect(mockSetTheme).toHaveBeenCalledWith('dark')
-  })
-
-  test('calls setTheme with light when light option clicked', async () => {
-    const user = userEvent.setup()
-
-    render(<SettingsPanel />)
-
-    await user.click(screen.getByText('Light'))
-
-    expect(mockSetTheme).toHaveBeenCalledWith('light')
-  })
-
-  test('highlights selected theme option', () => {
+  test('select trigger reflects current theme', () => {
     vi.mocked(useLayoutStore).mockReturnValue({
       rightPanel: 'settings',
       closeRightPanel: mockCloseRightPanel,
       openRightPanel: mockOpenRightPanel,
-      theme: 'light',
+      theme: 'dark',
       setTheme: mockSetTheme,
     })
 
     render(<SettingsPanel />)
 
-    const lightOption = screen.getByText('Light').closest('button')
-    expect(lightOption).toHaveClass('border-accent-primary')
+    const trigger = screen.getByRole('combobox')
+    expect(trigger).toHaveTextContent('Dark')
+  })
+
+  test('calls setTheme when a theme option is selected', async () => {
+    const user = userEvent.setup()
+
+    render(<SettingsPanel />)
+
+    await user.click(screen.getByRole('combobox'))
+    await user.click(screen.getByRole('option', { name: /dark/i }))
+
+    expect(mockSetTheme).toHaveBeenCalledWith('dark')
   })
 
   test('does not render when panel is closed', () => {

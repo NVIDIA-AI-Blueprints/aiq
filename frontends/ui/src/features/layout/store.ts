@@ -24,7 +24,7 @@ import { WEB_SEARCH_SOURCE_ID } from './data-sources'
 const initialState: LayoutState = {
   isSessionsPanelOpen: false,
   rightPanel: null,
-  researchPanelTab: 'report',
+  researchPanelTab: 'plan',
   dataSourcesPanelTab: 'connections',
   enabledDataSourceIds: [], // Start empty, populated when data sources are fetched
   theme: 'system',

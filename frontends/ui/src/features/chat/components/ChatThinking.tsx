@@ -78,7 +78,7 @@ export const ChatThinking: FC<ChatThinkingProps> = ({
     <div className="bg-surface-sunken border-base w-full rounded-lg border">
       <Collapsible
         slotTrigger={
-          <Flex align="center" justify="between" className="w-full cursor-pointer px-4 pt-3 pb-6">
+          <Flex align="center" justify="between" className="w-full cursor-pointer px-4 pt-3" style={{ paddingBottom: 'calc(var(--spacing) * 4)' }}>
             {/* Left: status indicator */}
             <Flex align="center" gap="2">
               {isThinking ? (
@@ -136,29 +136,6 @@ export const ChatThinking: FC<ChatThinkingProps> = ({
           role="list"
           aria-label="Thinking steps"
         >
-          {/* Data Sources Summary - First Item */}
-          {(hasDataSources || hasFiles) && (
-            <Flex
-              direction="col"
-              className="w-full pb-3 mb-2 border-b border-base"
-              role="listitem"
-            >
-              <Text kind="label/bold/md" className="text-primary mb-1">
-                Selected Data Sources:
-              </Text>
-              {hasDataSources && (
-                <Text kind="body/regular/sm" className="text-primary">
-                  {dataSourcesDisplay}
-                </Text>
-              )}
-              {hasFiles && (
-                <Text kind="body/regular/sm" className="text-secondary">
-                  {messageFiles.map((f) => f.fileName).join(', ')}
-                </Text>
-              )}
-            </Flex>
-          )}
-
           {/* Thinking Steps: 3 levels — Workflow (0) | Function Start/Complete (1) | model/tool (2) */}
           {steps.map((step) => {
             const isWorkflowRoot = step.functionName === 'chat_deepresearcher_agent'
@@ -187,6 +164,29 @@ export const ChatThinking: FC<ChatThinkingProps> = ({
           })}
         </Flex>
       </Collapsible>
+
+      {/* Data Sources Summary — always visible below the collapsible */}
+      {(hasDataSources || hasFiles) && (
+        <Flex
+          direction="col"
+          className="border-base border-t px-4 pt-3"
+          style={{ paddingBottom: 'calc(var(--spacing) * 5)' }}
+        >
+          <Text kind="label/bold/md" className="text-primary mb-1">
+            Selected Data Sources:
+          </Text>
+          {hasDataSources && (
+            <Text kind="body/regular/sm" className="text-primary">
+              {dataSourcesDisplay}
+            </Text>
+          )}
+          {hasFiles && (
+            <Text kind="body/regular/sm" className="text-secondary">
+              {messageFiles.map((f) => f.fileName).join(', ')}
+            </Text>
+          )}
+        </Flex>
+      )}
     </div>
   )
 }

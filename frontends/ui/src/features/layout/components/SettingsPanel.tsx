@@ -11,7 +11,7 @@
 'use client'
 
 import { type FC, useCallback } from 'react'
-import { Flex, Text, SidePanel } from '@/adapters/ui'
+import { Flex, Text, SidePanel, Select } from '@/adapters/ui'
 import { Settings } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 import type { ThemeMode } from '../types'
@@ -37,8 +37,8 @@ export const SettingsPanel: FC = () => {
   )
 
   const handleThemeChange = useCallback(
-    (newTheme: ThemeMode) => {
-      setTheme(newTheme)
+    (value: string) => {
+      setTheme(value as ThemeMode)
     },
     [setTheme]
   )
@@ -66,65 +66,20 @@ export const SettingsPanel: FC = () => {
       {/* Appearance Section */}
       <Flex direction="col" gap="3">
         <Text kind="label/semibold/xs" className="text-subtle uppercase">
-          Appearance
+          UI Theme Options
         </Text>
 
-        <Flex direction="col" gap="2">
-          <ThemeOption
-            label="Light"
-            description="Use light theme"
-            selected={theme === 'light'}
-            onClick={() => handleThemeChange('light')}
-          />
-          <ThemeOption
-            label="Dark"
-            description="Use dark theme"
-            selected={theme === 'dark'}
-            onClick={() => handleThemeChange('dark')}
-          />
-          <ThemeOption
-            label="System"
-            description="Follow system preference"
-            selected={theme === 'system'}
-            onClick={() => handleThemeChange('system')}
-          />
-        </Flex>
+        <Select
+          value={theme}
+          onValueChange={handleThemeChange}
+          side="bottom"
+          items={[
+            { children: 'System Theme (Auto)', value: 'system' },
+            { children: 'Light', value: 'light' },
+            { children: 'Dark', value: 'dark' },
+          ]}
+        />
       </Flex>
     </SidePanel>
-  )
-}
-
-/**
- * Theme option selector component
- */
-interface ThemeOptionProps {
-  label: string
-  description: string
-  selected: boolean
-  onClick: () => void
-}
-
-const ThemeOption: FC<ThemeOptionProps> = ({ label, description, selected, onClick }) => {
-  return (
-    <button
-      onClick={onClick}
-      className={`
-        w-full rounded-lg border p-3 text-left transition-colors
-        ${
-          selected
-            ? 'bg-surface-raised border-accent-primary'
-            : 'border-base hover:bg-surface-raised-50 bg-transparent'
-        }
-      `}
-    >
-      <Flex direction="col">
-        <Text kind="label/semibold/sm" className="text-primary">
-          {label}
-        </Text>
-        <Text kind="body/regular/xs" className="text-subtle">
-          {description}
-        </Text>
-      </Flex>
-    </button>
   )
 }

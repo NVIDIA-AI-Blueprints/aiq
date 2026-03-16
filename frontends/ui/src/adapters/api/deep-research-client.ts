@@ -206,7 +206,7 @@ export interface DeepResearchCallbacks {
   onToolStart?: (name: string, input?: Record<string, unknown>, workflow?: string, eventId?: string, agentId?: string) => void
   onToolEnd?: (name: string, output?: string, eventId?: string, agentId?: string) => void
   /** Called on artifact updates */
-  onTodoUpdate?: (todos: TodoItem[]) => void
+  onTodoUpdate?: (todos: TodoItem[], workflow?: string) => void
   onCitationUpdate?: (url: string, content: string, isCited?: boolean) => void
   onFileUpdate?: (filename: string, content: string) => void
   onOutputUpdate?: (content: string, outputCategory?: string, workflow?: string) => void
@@ -498,7 +498,7 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
 
         switch (artifactData.type) {
           case 'todo':
-            callbacks.onTodoUpdate?.(artifactData.content as TodoItem[])
+            callbacks.onTodoUpdate?.(artifactData.content as TodoItem[], artifactWorkflow)
             break
           case 'citation_source':
             // citation_source = "Referenced" sources (discovered during search)

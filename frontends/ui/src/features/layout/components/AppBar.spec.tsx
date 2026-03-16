@@ -9,11 +9,14 @@ import { AppBar } from './AppBar'
 // Mock the layout store
 const mockToggleSessionsPanel = vi.fn()
 const mockOpenRightPanel = vi.fn()
+const mockCloseRightPanel = vi.fn()
 
 vi.mock('../store', () => ({
   useLayoutStore: () => ({
     toggleSessionsPanel: mockToggleSessionsPanel,
+    rightPanel: null,
     openRightPanel: mockOpenRightPanel,
+    closeRightPanel: mockCloseRightPanel,
   }),
 }))
 
@@ -26,6 +29,12 @@ describe('AppBar', () => {
     render(<AppBar />)
 
     expect(screen.getByText('AI-Q')).toBeInTheDocument()
+  })
+
+  test('renders sessions label beside the menu button', () => {
+    render(<AppBar isAuthenticated={true} />)
+
+    expect(screen.getByText('Sessions')).toBeInTheDocument()
   })
 
   test('shows Sign In button when not authenticated', () => {
@@ -54,6 +63,7 @@ describe('AppBar', () => {
   test('disables action buttons when not authenticated', () => {
     render(<AppBar isAuthenticated={false} />)
 
+    expect(screen.getByRole('button', { name: /create new session/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /add data sources/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /open settings/i })).toBeDisabled()
@@ -62,9 +72,29 @@ describe('AppBar', () => {
   test('enables action buttons when authenticated', () => {
     render(<AppBar isAuthenticated={true} />)
 
+    expect(screen.getByRole('button', { name: /create new session/i })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /add data sources/i })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /open settings/i })).not.toBeDisabled()
+  })
+
+  test('calls onNewSession when logo button clicked', async () => {
+    const user = userEvent.setup()
+    const onNewSession = vi.fn()
+
+    render(<AppBar isAuthenticated={true} onNewSession={onNewSession} />)
+
+    await user.click(screen.getByRole('button', { name: /create new session/i }))
+
+    expect(onNewSession).toHaveBeenCalledOnce()
+  })
+
+  test('disables new session button when shallow navigation is blocked', () => {
+    render(<AppBar isAuthenticated={true} isNewSessionDisabled={true} />)
+
+    expect(screen.getByRole('button', { name: /create new session/i })).toBeDisabled()
+    // Other action buttons remain enabled.
+    expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).not.toBeDisabled()
   })
 
   test('toggles sessions panel when menu button clicked', async () => {
@@ -160,6 +190,7 @@ describe('AppBar', () => {
     test('action buttons are enabled when auth is disabled (user is authenticated)', () => {
       render(<AppBar isAuthenticated={true} authRequired={false} />)
 
+      expect(screen.getByRole('button', { name: /create new session/i })).not.toBeDisabled()
       expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).not.toBeDisabled()
       expect(screen.getByRole('button', { name: /add data sources/i })).not.toBeDisabled()
       expect(screen.getByRole('button', { name: /open settings/i })).not.toBeDisabled()

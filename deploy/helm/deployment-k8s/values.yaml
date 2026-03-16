@@ -27,9 +27,15 @@ aiq:
     backend:
       enabled: true
       replicas: 1
+      autoscaling:
+        enabled: false
+        minReplicas: 1
+        maxReplicas: 3
+        targetCPUUtilizationPercentage: 80
+        targetMemoryUtilizationPercentage: 80
       image:
         repository: ""
-        tag: 2603.04.ext.rc6
+        tag: 2603.15.ext.rc11
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
@@ -209,9 +215,14 @@ aiq:
       podSecurityContext: null
     frontend:
       replicas: 1
+      autoscaling:
+        enabled: false
+        minReplicas: 1
+        maxReplicas: 3
+        targetCPUUtilizationPercentage: 80
       image:
         repository: ""
-        tag: 2603.04.ext.rc6
+        tag: 2603.15.ext.rc11
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
