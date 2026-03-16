@@ -17,14 +17,6 @@ limitations under the License.
 -->
 <h1>NVIDIA AI-Q Blueprint</h1>
 
-> **⚠️ IMPORTANT – Active Development Branch**
->
-> You are currently viewing the **`develop`** branch for the pre-release version of **AI-Q v2.0**.
->
-> This branch contains the latest features and experimental updates and may contain breaking changes.
->
-> For production use, switch to the **v1.2.1 stable release** on the [`main branch`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/main).
->
 > **🏆 BENCHMARK NOTE 🏆**
 >
 > To obtain results consistent with the **nvidia-aiq** [DeepResearch Bench](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) and [DeepResearch Bench II](https://agentresearchlab.com/benchmarks/deepresearch-bench-ii/index.html#leaderboard) leaderboard results, please use the [`drb1`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb1) and [`drb2`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb2) branches, respectively.
