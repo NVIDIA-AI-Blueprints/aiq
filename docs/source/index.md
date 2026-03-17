@@ -49,6 +49,7 @@ Overview <./customization/index.md>
 Configuration Reference <./customization/configuration-reference.md>
 Swapping Models <./customization/swapping-models.md>
 Tools and Sources <./customization/tools-and-sources.md>
+MCP Tools <./customization/mcp-tools.md>
 Knowledge Layer <./customization/knowledge-layer.md>
 Prompts <./customization/prompts.md>
 Human-in-the-Loop <./customization/hitl.md>
@@ -88,6 +89,7 @@ Docker Compose <./deployment/docker-compose.md>
 Docker Build System <./deployment/docker-build.md>
 Observability <./deployment/observability.md>
 Production <./deployment/production.md>
+Kubernetes <./deployment/kubernetes.md>
 ```
 
 ```{toctree}
