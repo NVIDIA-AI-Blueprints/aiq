@@ -14,6 +14,7 @@ SPDX-License-Identifier: Apache-2.0
 - **[Configuration Reference](./configuration-reference.md)** — Complete YAML schema with all parameters
 - **[Swapping Models](./swapping-models.md)** — Use different LLMs (hosted NIM, self-hosted NIM, mixing models)
 - **[Tools and Sources](./tools-and-sources.md)** — Enable, disable, and configure search tools
+- **[MCP Tools](./mcp-tools.md)** — Add external tools through Model Context Protocol
 - **[Knowledge Layer](./knowledge-layer.md)** — Add document retrieval (LlamaIndex or Foundational RAG)
 - **[Prompts](./prompts.md)** — Modify agent behavior through Jinja2 prompt templates
 - **[Human-in-the-Loop](./hitl.md)** — Configure the clarifier and plan approval workflow

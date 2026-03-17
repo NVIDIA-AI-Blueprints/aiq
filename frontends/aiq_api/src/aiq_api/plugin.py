@@ -40,6 +40,7 @@ import signal
 from collections.abc import Callable
 from typing import override
 
+from fastapi import APIRouter
 from fastapi import FastAPI
 from pydantic import Field
 
@@ -124,35 +125,6 @@ def _create_shutdown_signal_handler(
     return handler
 
 
-def _get_active_ingestor():
-    """
-    Get the active ingestor from the knowledge layer factory.
-
-    The ingestor is activated when NAT builds the knowledge_retrieval function.
-    This retrieves the explicitly-activated instance.
-
-    Returns:
-        BaseIngestor instance, or None if no knowledge_retrieval function is configured.
-    """
-    try:
-        from aiq_agent.knowledge.factory import get_active_ingestor
-
-        ingestor = get_active_ingestor()
-
-        if ingestor is None:
-            logger.info("Knowledge API disabled - no knowledge_retrieval function configured.")
-            return None
-
-        logger.info("Knowledge API using ingestor (backend=%s)", ingestor.backend_name)
-        return ingestor
-
-    except ImportError:
-        return None
-    except Exception as e:
-        logger.warning("Failed to get ingestor: %s", e)
-        return None
-
-
 class AIQAPIWorker(FastApiFrontEndPluginWorker):
     """
     Worker that adds unified AI-Q API routes to the FastAPI app.
@@ -166,17 +138,24 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
     _original_sigterm_handler: Callable | signal.Handlers | None = None
 
     @override
+    def build_app(self) -> FastAPI:
+        app = super().build_app()
+
+        app.title = "AI-Q API"
+        app.description = "Async research jobs, knowledge management, and agent orchestration."
+        app.version = "1.0.0"
+
+        knowledge_router = APIRouter()
+        add_collection_routes(knowledge_router)
+        add_document_routes(knowledge_router)
+        app.include_router(knowledge_router)
+        logger.info("Knowledge API routes registered")
+
+        return app
+
+    @override
     async def add_routes(self, app: FastAPI, builder: WorkflowBuilder):
         await super().add_routes(app, builder)
-
-        # =====================================================================
-        # Knowledge API routes (auto-enabled if knowledge_retrieval configured)
-        # =====================================================================
-        ingestor = _get_active_ingestor()
-        if ingestor:
-            await add_collection_routes(app, ingestor)
-            await add_document_routes(app, ingestor)
-            logger.info("Knowledge API routes registered (backend=%s)", ingestor.backend_name)
 
         # =====================================================================
         # Async Job API routes

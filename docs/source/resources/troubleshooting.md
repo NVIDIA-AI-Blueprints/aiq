@@ -31,10 +31,42 @@ Common issues and solutions for the AI-Q blueprint.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
+| HTTP 429 or 503 on deep research | Nemotron Super Build API has limited availability due to high demand | Default configs use Nemotron Nano for reliability. Retry after a short delay, or self-host via [Brev Launchable](#nemotron-super-build-endpoint-availability) for consistent throughput |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
 | Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns` or set `enable_plan_approval: false` |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
 | Job status stuck on RUNNING | Dask worker crashed | Check Dask logs; the ghost job reaper will eventually mark it FAILURE |
+
+## Nemotron Super — Build Endpoint Availability
+
+Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but the NVIDIA Build API endpoints have limited availability due to high demand. During peak periods you may observe:
+
+- Elevated latency or timeouts on LLM inference calls
+- HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
+- Degraded agent workflow performance due to upstream model availability
+
+**Default Configuration:** The default configs use Nemotron Nano (`nvidia/nemotron-3-nano-30b-a3b`) for the researcher role for reliability. When Super endpoints are stable, you can uncomment `nemotron_super_llm` in your config for higher-capacity research.
+
+### Recommended Mitigation: Self-Host via Brev Launchable
+
+For production and staging deployments that require consistent throughput and low-latency inference, the recommended approach is to self-host the Nemotron Super model using a [Brev Launchable](https://brev.nvidia.com/placeholder_url) rather than relying on shared Build API endpoints.
+
+Once your self-hosted endpoint is running, uncomment and update `base_url` in your config to point at it:
+
+```yaml
+llms:
+  nemotron_super_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    base_url: "https://<your-brev-endpoint>/v1"
+    api_key: ""
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 128000
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+```
 
 ## Knowledge Layer Issues
 

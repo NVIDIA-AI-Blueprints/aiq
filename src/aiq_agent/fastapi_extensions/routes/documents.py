@@ -19,7 +19,8 @@ import logging
 import os
 
 import aiofiles.tempfile
-from fastapi import FastAPI
+from fastapi import APIRouter
+from fastapi import Depends
 from fastapi import File
 from fastapi import HTTPException
 from fastapi import UploadFile
@@ -30,14 +31,15 @@ from aiq_agent.knowledge.schema import IngestionJobStatus
 
 from ..models.requests import DeleteFilesRequest
 from ..models.requests import UploadResponse
+from .collections import _require_ingestor
 
 logger = logging.getLogger(__name__)
 
 
-def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
+def add_document_routes(router: APIRouter):
     """Add document management routes to the FastAPI app."""
 
-    @app.post(
+    @router.post(
         "/v1/collections/{collection_name}/documents",
         response_model=UploadResponse,
         status_code=202,
@@ -57,6 +59,7 @@ def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
     async def upload_documents(
         collection_name: str,
         files: list[UploadFile] = File(..., description="Files to upload"),
+        ingestor: BaseIngestor = Depends(_require_ingestor),
     ) -> UploadResponse:
         """
         Upload documents to a collection.
@@ -128,7 +131,7 @@ def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
             logger.error(f"Failed to upload documents: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get(
+    @router.get(
         "/v1/collections/{collection_name}/documents",
         response_model=list[FileInfo],
         tags=["documents"],
@@ -136,7 +139,10 @@ def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
         description="Returns all documents in a collection with their metadata and ingestion status.",
         responses={404: {"description": "Collection not found"}},
     )
-    async def list_documents(collection_name: str) -> list[FileInfo]:
+    async def list_documents(
+        collection_name: str,
+        ingestor: BaseIngestor = Depends(_require_ingestor),
+    ) -> list[FileInfo]:
         """List all documents in a collection."""
         # Verify collection exists
         collection = ingestor.get_collection(collection_name)
@@ -149,7 +155,7 @@ def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
             logger.error(f"Failed to list documents: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.delete(
+    @router.delete(
         "/v1/collections/{collection_name}/documents",
         tags=["documents"],
         summary="Delete files from a collection",
@@ -162,6 +168,7 @@ def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
     async def delete_files(
         collection_name: str,
         request: DeleteFilesRequest,
+        ingestor: BaseIngestor = Depends(_require_ingestor),
     ) -> dict:
         """Delete files from a collection by ID."""
         # Verify collection exists
@@ -177,7 +184,7 @@ def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
             logger.error(f"Failed to delete files: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-    @app.get(
+    @router.get(
         "/v1/documents/{job_id}/status",
         response_model=IngestionJobStatus,
         tags=["documents"],
@@ -185,7 +192,10 @@ def add_document_routes(app: FastAPI, ingestor: BaseIngestor):
         description="Poll the status of a document ingestion job. Includes per-file progress details.",
         responses={404: {"description": "Ingestion job not found"}},
     )
-    async def get_job_status(job_id: str) -> IngestionJobStatus:
+    async def get_job_status(
+        job_id: str,
+        ingestor: BaseIngestor = Depends(_require_ingestor),
+    ) -> IngestionJobStatus:
         """Get the status of an ingestion job."""
         try:
             status = ingestor.get_job_status(job_id)

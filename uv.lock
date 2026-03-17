@@ -19,6 +19,8 @@ members = [
     "aiq-api",
     "aiq-debug",
     "aiq-research-cli",
+    "deepsearch-qa-evaluator",
+    "freshqa-eval",
     "google-scholar-paper-search",
     "knowledge-layer",
     "tavily-web-search",
@@ -210,10 +212,15 @@ dependencies = [
     { name = "aiosqlite" },
     { name = "asyncpg" },
     { name = "deepagents" },
+    { name = "knowledge-layer", extra = ["all"] },
     { name = "langgraph-checkpoint-postgres" },
     { name = "langgraph-checkpoint-sqlite" },
-    { name = "nvidia-nat", extra = ["async-endpoints", "langchain", "telemetry", "weave"] },
+    { name = "nvidia-nat", extra = ["async-endpoints", "telemetry"] },
+    { name = "nvidia-nat-langchain" },
+    { name = "nvidia-nat-phoenix" },
+    { name = "nvidia-nat-weave" },
     { name = "psycopg", extra = ["binary"] },
+    { name = "python-multipart" },
 ]
 
 [package.optional-dependencies]
@@ -268,11 +275,17 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "deepagents", specifier = ">=0.3.0" },
+    { name = "knowledge-layer", extras = ["all"], editable = "sources/knowledge_layer" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.0" },
     { name = "langgraph-checkpoint-sqlite", specifier = ">=2.0.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=3.0" },
-    { name = "nvidia-nat", extras = ["langchain", "telemetry", "weave", "async-endpoints"], specifier = "==1.4.0" },
+    { name = "nvidia-nat", specifier = "==1.4.0" },
+    { name = "nvidia-nat", extras = ["async-endpoints"], specifier = "==1.4.0" },
+    { name = "nvidia-nat", extras = ["telemetry"], specifier = "==1.4.0" },
+    { name = "nvidia-nat-langchain", specifier = "==1.4.0" },
+    { name = "nvidia-nat-phoenix", specifier = "==1.4.0" },
+    { name = "nvidia-nat-weave", specifier = "==1.4.0" },
     { name = "nvidia-sphinx-theme", marker = "extra == 'docs'", specifier = ">=0.0.9.post1" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.0.0" },
@@ -281,6 +294,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=4.1.0" },
     { name = "pytest-env", marker = "extra == 'dev'", specifier = ">=1.1.0" },
+    { name = "python-multipart", specifier = ">=0.0.9" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "~=0.12" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=7.0" },
     { name = "sphinx-autobuild", marker = "extra == 'docs'", specifier = ">=2025.8.25" },
@@ -1311,6 +1325,23 @@ wheels = [
 ]
 
 [[package]]
+name = "deepsearch-qa-evaluator"
+version = "1.0.0"
+source = { editable = "frontends/benchmarks/deepsearch_qa" }
+dependencies = [
+    { name = "httpx" },
+    { name = "nvidia-nat" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.24.0" },
+    { name = "nvidia-nat", specifier = "==1.4.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+]
+
+[[package]]
 name = "defusedxml"
 version = "0.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1547,6 +1578,21 @@ wheels = [
 ]
 
 [[package]]
+name = "freshqa-eval"
+version = "1.0.0"
+source = { editable = "frontends/benchmarks/freshqa" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "pytz" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pytz", specifier = ">=2024.1" },
+]
+
+[[package]]
 name = "frozenlist"
 version = "1.8.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1703,14 +1749,12 @@ version = "1.0.0"
 source = { editable = "sources/google_scholar_paper_search" }
 dependencies = [
     { name = "httpx" },
-    { name = "nvidia-nat" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.24.0" },
-    { name = "nvidia-nat", specifier = "==1.4.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
@@ -2379,7 +2423,6 @@ version = "1.0.0"
 source = { editable = "sources/knowledge_layer" }
 dependencies = [
     { name = "httpx" },
-    { name = "nvidia-nat" },
     { name = "pydantic" },
     { name = "python-dotenv" },
 ]
@@ -2427,7 +2470,6 @@ requires-dist = [
     { name = "llama-index", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "llama-index-embeddings-nvidia", marker = "extra == 'llamaindex'", specifier = ">=0.1.0" },
     { name = "llama-index-vector-stores-chroma", marker = "extra == 'llamaindex'", specifier = ">=0.1.0" },
-    { name = "nvidia-nat", specifier = "==1.4.0" },
     { name = "openai", marker = "extra == 'llamaindex'", specifier = ">=1.0.0" },
     { name = "pdfplumber", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "pillow", marker = "extra == 'llamaindex'", specifier = ">=9.0.0" },
@@ -3802,9 +3844,6 @@ async-endpoints = [
     { name = "distributed" },
     { name = "sqlalchemy", extra = ["asyncio"] },
 ]
-langchain = [
-    { name = "nvidia-nat-langchain" },
-]
 litellm = [
     { name = "litellm" },
 ]
@@ -3816,9 +3855,6 @@ telemetry = [
     { name = "nvidia-nat-opentelemetry" },
     { name = "nvidia-nat-phoenix" },
     { name = "nvidia-nat-ragaai" },
-    { name = "nvidia-nat-weave" },
-]
-weave = [
     { name = "nvidia-nat-weave" },
 ]
 
@@ -6692,7 +6728,6 @@ source = { editable = "sources/tavily_web_search" }
 dependencies = [
     { name = "httpx" },
     { name = "langchain-tavily" },
-    { name = "nvidia-nat" },
     { name = "pydantic" },
 ]
 
@@ -6700,7 +6735,6 @@ dependencies = [
 requires-dist = [
     { name = "httpx", specifier = ">=0.24.0" },
     { name = "langchain-tavily", specifier = ">=0.1.0" },
-    { name = "nvidia-nat", specifier = "==1.4.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
 

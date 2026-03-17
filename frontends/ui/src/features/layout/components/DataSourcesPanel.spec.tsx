@@ -104,7 +104,7 @@ describe('DataSourcesPanel', () => {
   test('renders connections tab by default', () => {
     render(<DataSourcesPanel />)
 
-    expect(screen.getByText('Individual Sources (3)')).toBeInTheDocument()
+    expect(screen.getByText('Individual Connections (3)')).toBeInTheDocument()
     expect(screen.getByTestId('connection-card-web_search')).toBeInTheDocument()
     expect(screen.getByTestId('connection-card-knowledge_base')).toBeInTheDocument()
     expect(screen.getByTestId('connection-card-bug_tracker')).toBeInTheDocument()
@@ -150,7 +150,7 @@ describe('DataSourcesPanel', () => {
   test('shows enabled count in footer for connections tab', () => {
     render(<DataSourcesPanel />)
 
-    expect(screen.getByText(/2 of 3 available sources enabled/i)).toBeInTheDocument()
+    expect(screen.getByText(/2 of 3 available connections enabled/i)).toBeInTheDocument()
   })
 
   test('shows file upload message in footer for files tab', () => {
@@ -171,7 +171,7 @@ describe('DataSourcesPanel', () => {
 
     render(<DataSourcesPanel />)
 
-    expect(screen.getByText(/uploaded files will be processed/i)).toBeInTheDocument()
+    expect(screen.getByText(/attached files will be always available to agents until deleted/i)).toBeInTheDocument()
   })
 
   test('does not render content when panel is closed', () => {
@@ -193,13 +193,13 @@ describe('DataSourcesPanel', () => {
     render(<DataSourcesPanel />)
 
     // SidePanel handles visibility, so content should not be visible
-    expect(screen.queryByText('Individual Sources (3)')).not.toBeInTheDocument()
+    expect(screen.queryByText('Individual Connections (3)')).not.toBeInTheDocument()
   })
 
   test('renders all sources toggle', () => {
     render(<DataSourcesPanel />)
 
-    expect(screen.getByText('All Sources')).toBeInTheDocument()
+    expect(screen.getByText('All Connections')).toBeInTheDocument()
   })
 
   test('calls setEnabledDataSources when enable all is clicked', async () => {
@@ -207,7 +207,7 @@ describe('DataSourcesPanel', () => {
     render(<DataSourcesPanel />)
 
     // Find and click the "Enable All" button
-    const enableAllButton = screen.getByRole('button', { name: /all available sources/i })
+    const enableAllButton = screen.getByRole('button', { name: /all available connections/i })
     await user.click(enableAllButton)
 
     expect(mockSetEnabledDataSources).toHaveBeenCalled()

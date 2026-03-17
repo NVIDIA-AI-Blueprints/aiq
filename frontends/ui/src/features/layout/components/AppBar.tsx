@@ -33,6 +33,10 @@ interface AppBarProps {
     email?: string
     image?: string
   }
+  /** Callback when a new session is requested */
+  onNewSession?: () => void
+  /** Disable creating a new session while shallow research/HITL is active */
+  isNewSessionDisabled?: boolean
   /** Callback when sign in is clicked */
   onSignIn?: () => void
   /** Callback when sign out is clicked */
@@ -48,6 +52,8 @@ export const AppBar: FC<AppBarProps> = ({
   isAuthenticated = false,
   authRequired = false,
   user,
+  onNewSession,
+  isNewSessionDisabled = false,
   onSignIn,
   onSignOut,
 }) => {
@@ -81,6 +87,11 @@ export const AppBar: FC<AppBarProps> = ({
     window.open('https://github.com/NVIDIA-AI-Blueprints/aiq', '_blank')
   }, [])
 
+  const handleNewSessionClick = useCallback(() => {
+    if (!isAuthenticated || isNewSessionDisabled) return
+    onNewSession?.()
+  }, [isAuthenticated, isNewSessionDisabled, onNewSession])
+
   const handleSignOut = useCallback(() => {
     setIsUserMenuOpen(false)
     onSignOut?.()
@@ -88,9 +99,30 @@ export const AppBar: FC<AppBarProps> = ({
 
   return (
     <header className="border-b border-base">
-      <Flex align="center" justify="between" className="h-[var(--header-height)] px-4">
-        {/* Left section: Menu toggle + Logo + Session title */}
-        <Flex align="center" gap="density-2xl">
+      <Flex align="center" justify="between" className="h-[var(--header-height)] gap-4 px-4">
+        {/* Left section: New session button + Sessions toggle */}
+        <Flex align="center" gap="2" className="min-w-0 flex-1">
+          <Button
+            kind="tertiary"
+            size="small"
+            onClick={handleNewSessionClick}
+            disabled={!isAuthenticated || isNewSessionDisabled}
+            aria-label="Create new session"
+            title={
+              isNewSessionDisabled
+                ? 'Cannot create new session while shallow research is active'
+                : 'Create new session'
+            }
+          >
+            <Flex align="center" gap="density-lg">
+              <Logo kind="logo-only" size="small" />
+
+              <Text kind="label/semibold/lg" className="text-primary whitespace-nowrap">
+                AI-Q
+              </Text>
+            </Flex>
+          </Button>
+
           <Button
             kind="tertiary"
             size="small"
@@ -99,28 +131,26 @@ export const AppBar: FC<AppBarProps> = ({
             aria-label="Toggle sessions sidebar"
             title="Toggle sessions sidebar"
           >
-            <Menu className="h-5 w-5" />
+            <Flex align="center" gap="1">
+              <Menu className="h-4 w-4" />
+              <Text kind="label/regular/md">Sessions</Text>
+            </Flex>
           </Button>
 
-          <Flex align="center" gap="density-lg">
-            <Logo kind="logo-only" size="small" />
-
-            <Text kind="label/semibold/lg" className="text-primary whitespace-nowrap">
-              AI-Q
-            </Text>
-          </Flex>
-
           {isAuthenticated && (
-            <Flex align="center" gap="2" className="border-1 border-base ml-2 rounded p-2">
-              <Text kind="body/regular/md" className="text-subtle max-w-[200px] truncate">
+            <div className="ml-4 hidden min-w-0 flex-1 items-center md:flex">
+              <Text
+                kind="body/regular/md"
+                className="block w-full max-w-[360px] truncate text-subtle lg:max-w-[480px] xl:max-w-[560px]"
+              >
                 {sessionTitle}
               </Text>
-            </Flex>
+            </div>
           )}
         </Flex>
 
         {/* Right section: Actions + User */}
-        <Flex align="center" gap="2">
+        <Flex align="center" gap="2" className="shrink-0">
           <Button
             kind="tertiary"
             size="small"

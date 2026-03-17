@@ -28,7 +28,12 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat[langchain,telemetry,weave,async_endpoints]==1.4.0",
+    "nvidia-nat==1.4.0",
+    "nvidia-nat-langchain==1.4.0",
+    "nvidia-nat[telemetry]==1.4.0",
+    "nvidia-nat-weave==1.4.0",
+    "nvidia-nat[async_endpoints]==1.4.0",
+    "nvidia-nat-phoenix==1.4.0",
     "deepagents>=0.3.0",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
@@ -36,6 +41,8 @@ dependencies = [
     "asyncpg>=0.29.0",
     "aiosqlite>=0.19.0",
     "aiofiles>=23.0.0",
+    "python-multipart>=0.0.9",
+    "knowledge-layer[all]",
 ]
 
 [project.optional-dependencies]
@@ -193,6 +200,8 @@ members = [
     "frontends/aiq_api",
     "frontends/cli",
     "frontends/debug",
+    "frontends/benchmarks/freshqa",
+    "frontends/benchmarks/deepsearch_qa",
 ]
 
 [tool.uv.sources]
@@ -203,3 +212,5 @@ knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }
 aiq-debug = { workspace = true }
+freshqa-eval = { workspace = true }
+deepsearch-qa-evaluator = { workspace = true }

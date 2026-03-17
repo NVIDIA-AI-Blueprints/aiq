@@ -846,17 +846,26 @@ describe('useDeepResearch', () => {
       })
     })
 
-    test('onError logs error and shows error card', async () => {
-      await setupConnectedHook()
+    test('onError logs error and performs full cleanup when backend is unreachable', async () => {
+      await setupConnectedHook({
+        activeDeepResearchMessageId: 'msg-123',
+        reportContent: 'Partial report',
+      })
 
-      // Set up mocks AFTER setupConnectedHook (which calls vi.clearAllMocks)
       mockCheckBackendHealthCached.mockResolvedValue(false)
-      // The onError handler reads isDeepResearchStreaming from getState()
       vi.mocked(useChatStore).getState = vi.fn(() => ({
         ...mockStoreState,
         isDeepResearchStreaming: true,
+        deepResearchOwnerConversationId: 'test-conv-123',
+        activeDeepResearchMessageId: 'msg-123',
+        reportContent: 'Partial report',
         addErrorCard: mockAddErrorCard,
         stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
+        patchConversationMessage: mockPatchConversationMessage,
+        addDeepResearchBanner: mockAddDeepResearchBanner,
+        completeDeepResearch: mockCompleteDeepResearch,
+        setStreaming: mockSetStreaming,
+        setStreamLoaded: mockSetStreamLoaded,
       })) as unknown as typeof useChatStore.getState
 
       const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -870,14 +879,79 @@ describe('useDeepResearch', () => {
 
       expect(consoleWarnSpy).toHaveBeenCalledWith('Deep research SSE error:', 'Connection lost')
       expect(consoleErrorSpy).toHaveBeenCalledWith('Deep research SSE failed (backend unreachable):', testError)
+      expect(mockSetCurrentStatus).toHaveBeenCalledWith('error')
       expect(mockAddErrorCard).toHaveBeenCalledWith(
         'agent.deep_research_failed',
         'Connection lost',
         testError.stack
       )
 
+      expect(mockPatchConversationMessage).toHaveBeenCalledWith(
+        'test-conv-123',
+        'msg-123',
+        expect.objectContaining({
+          deepResearchJobStatus: 'failure',
+          isDeepResearchActive: false,
+          showViewReport: true,
+        })
+      )
+      expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('failure', 'job-456', 'test-conv-123')
+      expect(mockStopAllDeepResearchSpinners).toHaveBeenCalled()
+      expect(mockClient?.disconnect).toHaveBeenCalled()
+      expect(mockSetStreamLoaded).toHaveBeenCalledWith(true)
+      expect(mockCompleteDeepResearch).toHaveBeenCalled()
+      expect(mockSetStreaming).toHaveBeenCalledWith(false)
+
       consoleWarnSpy.mockRestore()
       consoleErrorSpy.mockRestore()
+    })
+
+    test('onError does nothing when backend is reachable (transient SSE error)', async () => {
+      await setupConnectedHook()
+
+      mockCheckBackendHealthCached.mockResolvedValue(true)
+      vi.mocked(useChatStore).getState = vi.fn(() => ({
+        ...mockStoreState,
+        isDeepResearchStreaming: true,
+        addErrorCard: mockAddErrorCard,
+        stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
+      })) as unknown as typeof useChatStore.getState
+
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      await act(async () => {
+        await mockClient?.callbacks.onError?.(new Error('Transient error'))
+      })
+
+      expect(mockAddErrorCard).not.toHaveBeenCalled()
+      expect(mockCompleteDeepResearch).not.toHaveBeenCalled()
+      expect(mockSetStreaming).not.toHaveBeenCalled()
+
+      consoleWarnSpy.mockRestore()
+    })
+
+    test('onError skips cleanup when research already in terminal state', async () => {
+      await setupConnectedHook()
+
+      mockCheckBackendHealthCached.mockResolvedValue(false)
+      vi.mocked(useChatStore).getState = vi.fn(() => ({
+        ...mockStoreState,
+        isDeepResearchStreaming: false,
+        deepResearchStatus: 'failure',
+        addErrorCard: mockAddErrorCard,
+        stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
+      })) as unknown as typeof useChatStore.getState
+
+      const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      await act(async () => {
+        await mockClient?.callbacks.onError?.(new Error('Late error'))
+      })
+
+      expect(mockAddErrorCard).not.toHaveBeenCalled()
+      expect(mockCompleteDeepResearch).not.toHaveBeenCalled()
+
+      consoleWarnSpy.mockRestore()
     })
 
     test('onDisconnect does not throw in live mode', async () => {

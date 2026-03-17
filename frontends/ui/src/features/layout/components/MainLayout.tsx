@@ -64,10 +64,12 @@ export const MainLayout: FC<MainLayoutProps> = ({
     currentConversation,
     getUserConversations,
     selectConversation,
-    createConversation,
+    startNewSessionDraft,
     deleteConversation,
     deleteAllConversations,
     updateConversationTitle,
+    isStreaming,
+    pendingInteraction,
     isDeepResearchStreaming,
     deepResearchOwnerConversationId,
   } = useChatStore()
@@ -90,12 +92,12 @@ export const MainLayout: FC<MainLayoutProps> = ({
     [selectConversation, updateSessionUrl]
   )
 
-  // Wrap createConversation to also update URL and close any open right panel
+  // Start a new unsaved draft session and clear URL until first interaction.
   const handleNewSession = useCallback(() => {
-    const newConversation = createConversation()
-    updateSessionUrl(newConversation.id)
+    startNewSessionDraft()
+    clearSessionUrl()
     closeRightPanel()
-  }, [createConversation, updateSessionUrl, closeRightPanel])
+  }, [startNewSessionDraft, clearSessionUrl, closeRightPanel])
 
   // Wrap deleteConversation to clear URL if deleting current session
   const handleDeleteSession = useCallback(
@@ -117,6 +119,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
   // Check if research panel is open (pushes content instead of overlaying)
   const isResearchPanelOpen = rightPanel === 'research'
+  const isNavigationBlocked = isStreaming || pendingInteraction !== null
 
   // Get only conversations for the current authenticated user
   const userConversations = getUserConversations()
@@ -141,6 +144,8 @@ export const MainLayout: FC<MainLayoutProps> = ({
         isAuthenticated={isAuthenticated}
         authRequired={authRequired}
         user={user}
+        onNewSession={handleNewSession}
+        isNewSessionDisabled={isNavigationBlocked}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />

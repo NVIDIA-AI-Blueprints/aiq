@@ -49,6 +49,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 
 **Hosted Service Mode** - Connects to deployed services through HTTP. Requires infrastructure but scales better.
 - **`foundational_rag`** - Connects to [NVIDIA RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag) through HTTP.
+  - Tested with: **NVIDIA RAG Blueprint `v2.4.0`** (Helm chart `nvidia-blueprint-rag`)
   - [Deployment Guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/deploy-docker-self-hosted.md)
   - Backend-specific documentation: `sources/knowledge_layer/src/foundational_rag/README.md`
 
@@ -99,7 +100,7 @@ functions:
 
     # Summarization options (optional, all backends):
     # generate_summary: true                  # Generate one-sentence summary per document
-    # summary_model: nemotron_llm             # LLM reference from llms: section (required if generate_summary is true)
+    # summary_model: nemotron_nano_llm             # LLM reference from llms: section (required if generate_summary is true)
     # summary_db: sqlite+aiosqlite:///./summaries.db  # Summary storage (SQLite or PostgreSQL)
 
     # Backend-specific options (each backend uses different fields):

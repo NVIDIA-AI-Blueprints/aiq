@@ -416,7 +416,8 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             setCurrentStatus('researching')
           },
 
-          onTodoUpdate: (todos: TodoItem[]) => {
+          onTodoUpdate: (todos: TodoItem[], workflow?: string) => {
+            if (workflow) return
             if (buf.active) { buf.todos = todos; return }
             if (!isOwnerActive()) return
             resetTimeout(); setDeepResearchTodos(todos)
@@ -469,9 +470,29 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               const backendUp = await checkBackendHealthCached()
               if (backendUp) return
               console.error('Deep research SSE failed (backend unreachable):', error)
-              const { addErrorCard } = useChatStore.getState()
-              addErrorCard('agent.deep_research_failed', error.message, error.stack)
+              setCurrentStatus('error')
+
+              const state = useChatStore.getState()
+              const ownerConvId = state.deepResearchOwnerConversationId
+              const messageId = state.activeDeepResearchMessageId
+              const hasReport = Boolean(state.reportContent?.trim())
+
+              if (ownerConvId && messageId) {
+                patchConversationMessage(ownerConvId, messageId, {
+                  content: '',
+                  deepResearchJobStatus: 'failure',
+                  isDeepResearchActive: false,
+                  showViewReport: hasReport,
+                })
+              }
+
+              state.addErrorCard('agent.deep_research_failed', error.message, error.stack)
+              addDeepResearchBanner('failure', jobId, ownerConvId || undefined)
               stopAllDeepResearchSpinners()
+              clientRef.current?.disconnect()
+              setStreamLoaded(true)
+              completeDeepResearch()
+              setStreaming(false)
             }
           },
 

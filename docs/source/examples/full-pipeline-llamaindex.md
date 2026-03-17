@@ -54,7 +54,7 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -65,16 +65,19 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_llm_deep:
-    _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
-    num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: true
+  # Nemotron Super is compatible and tested with AIQ but has limited availability
+  # on the Build API due to high demand.
+  # Uncomment nemotron_super_llm below if the endpoint is accessible.
+  # nemotron_super_llm:
+  #   _type: nim
+  #   model_name: nvidia/nemotron-3-super-120b-a12b
+  #   base_url: "https://integrate.api.nvidia.com/v1"
+  #   temperature: 1.0
+  #   top_p: 1.0
+  #   max_tokens: 128000
+  #   num_retries: 5
+  #   chat_template_kwargs:
+  #     enable_thinking: true
 
   # LLM for document summaries (shown in the UI after upload)
   summary_llm:
@@ -132,8 +135,8 @@ functions:
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_llm
-    planner_llm: nemotron_llm
+    llm: nemotron_nano_llm
+    planner_llm: nemotron_nano_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -144,7 +147,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_llm
+    llm: nemotron_nano_llm
     verbose: true
     tools:
       - web_search_tool
@@ -154,7 +157,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm_deep
+    orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     max_loops: 2
     verbose: true
     tools:

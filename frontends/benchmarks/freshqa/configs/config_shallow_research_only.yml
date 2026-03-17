@@ -13,7 +13,7 @@ general:
         project: "AIQ_v2_freshqa"
 
 llms:
-  nemotron_llm_non_thinking:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -22,7 +22,7 @@ llms:
     max_tokens: 8192
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: false
+      enable_thinking: true
 
   judge_llm:
     _type: openai
@@ -37,7 +37,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_llm_non_thinking
+    llm: nemotron_nano_llm
     max_llm_turns: 20
     tools:
       - web_search_tool

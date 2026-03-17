@@ -373,6 +373,29 @@ class TestGenericUrlExtractor:
         entries = extract_sources_from_tool_result("any_tool", content)
         assert len(entries) == 1
 
+    def test_multiple_urls_in_same_block_get_correct_titles(self):
+        """Each URL should get the title closest to it, not the first title in the block."""
+        content = (
+            "1. **Spider 2.0: Enterprise Text-to-SQL** (2024)\n"
+            "   - Link: https://arxiv.org/abs/2411.07763\n"
+            "\n"
+            "2. **Spider: A Large-Scale Dataset** (2018)\n"
+            "   - Link: https://arxiv.org/abs/2308.15363"
+        )
+        entries = extract_sources_from_tool_result("paper_search_tool", content)
+        assert len(entries) == 2
+        # Each URL should have its own title, not both sharing the first title
+        titles = {e.url: e.title for e in entries}
+        assert titles["https://arxiv.org/abs/2411.07763"] == "Spider 2.0: Enterprise Text-to-SQL"
+        assert titles["https://arxiv.org/abs/2308.15363"] == "Spider: A Large-Scale Dataset"
+
+    def test_title_extraction_prefers_preceding_title(self):
+        """Title that appears before the URL is preferred over one after."""
+        content = "<title>Correct Title</title>\nhttps://example.com/page\n<title>Wrong Title</title>"
+        entries = extract_sources_from_tool_result("web_search", content)
+        assert len(entries) == 1
+        assert entries[0].title == "Correct Title"
+
 
 class TestKnowledgeLayerParser:
     """Tests for knowledge layer output parser."""

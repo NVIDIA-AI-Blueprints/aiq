@@ -262,6 +262,11 @@ body {
   color: #76b900 !important;
 }
 
+/* Constrain spinner SVG inside the research panel toggle tab */
+.research-panel-toggle .nv-spinner svg {
+  width: 100%;
+}
+
 /* Global scrollbar styles */
 *::-webkit-scrollbar {
   width: 8px;

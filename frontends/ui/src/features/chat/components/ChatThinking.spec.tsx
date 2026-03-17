@@ -223,22 +223,17 @@ describe('ChatThinking', () => {
   })
 
   describe('data sources summary', () => {
-    test('displays data sources when provided', async () => {
-      const user = userEvent.setup()
+    test('data sources are visible without expanding the collapsible', () => {
       const steps = [createStep()]
       const enabledDataSources = ['web_search', 'knowledge_base']
 
       render(<ChatThinking steps={steps} enabledDataSources={enabledDataSources} />)
 
-      // Expand to see content
-      await user.click(screen.getByText(/Show thinking/))
-
       expect(screen.getByText('Selected Data Sources:')).toBeVisible()
       expect(screen.getByText('Web Search, Knowledge Base')).toBeVisible()
     })
 
-    test('displays files when provided', async () => {
-      const user = userEvent.setup()
+    test('displays files when provided', () => {
       const steps = [createStep()]
       const messageFiles = [
         { id: 'file-1', fileName: 'document.pdf' },
@@ -247,14 +242,11 @@ describe('ChatThinking', () => {
 
       render(<ChatThinking steps={steps} messageFiles={messageFiles} />)
 
-      await user.click(screen.getByText(/Show thinking/))
-
       expect(screen.getByText('Selected Data Sources:')).toBeVisible()
       expect(screen.getByText('document.pdf, report.docx')).toBeVisible()
     })
 
-    test('displays both data sources and files', async () => {
-      const user = userEvent.setup()
+    test('displays both data sources and files', () => {
       const steps = [createStep()]
       const enabledDataSources = ['web_search']
       const messageFiles = [{ id: 'file-1', fileName: 'document.pdf' }]
@@ -267,46 +259,34 @@ describe('ChatThinking', () => {
         />
       )
 
-      await user.click(screen.getByText(/Show thinking/))
-
       expect(screen.getByText('Selected Data Sources:')).toBeVisible()
       expect(screen.getByText('Web Search')).toBeVisible()
       expect(screen.getByText('document.pdf')).toBeVisible()
     })
 
-    test('excludes knowledge_layer from data sources display', async () => {
-      const user = userEvent.setup()
+    test('excludes knowledge_layer from data sources display', () => {
       const steps = [createStep()]
       const enabledDataSources = ['web_search', 'knowledge_layer']
 
       render(<ChatThinking steps={steps} enabledDataSources={enabledDataSources} />)
 
-      await user.click(screen.getByText(/Show thinking/))
-
-      // knowledge_layer should be filtered out
       expect(screen.getByText('Web Search')).toBeVisible()
       expect(screen.queryByText(/Knowledge Layer/i)).not.toBeInTheDocument()
     })
 
-    test('does not show data sources section when no sources or files', async () => {
-      const user = userEvent.setup()
+    test('does not show data sources section when no sources or files', () => {
       const steps = [createStep()]
 
       render(<ChatThinking steps={steps} />)
 
-      await user.click(screen.getByText(/Show thinking/))
-
       expect(screen.queryByText('Selected Data Sources')).not.toBeInTheDocument()
     })
 
-    test('formats data source names correctly', async () => {
-      const user = userEvent.setup()
+    test('formats data source names correctly', () => {
       const steps = [createStep()]
       const enabledDataSources = ['web_search', 'onedrive', 'google_drive']
 
       render(<ChatThinking steps={steps} enabledDataSources={enabledDataSources} />)
-
-      await user.click(screen.getByText(/Show thinking/))
 
       expect(screen.getByText('Web Search, Onedrive, Google Drive')).toBeVisible()
     })

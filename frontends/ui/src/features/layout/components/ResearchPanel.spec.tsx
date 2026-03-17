@@ -181,6 +181,32 @@ describe('ResearchPanel', () => {
     })
   })
 
+  describe('stop researching button', () => {
+    test('is always rendered', () => {
+      mockIsDeepResearchStreaming = false
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      expect(screen.getByTestId('research-panel-stop')).toBeInTheDocument()
+    })
+
+    test('is disabled when not streaming', () => {
+      mockIsDeepResearchStreaming = false
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      expect(screen.getByTestId('research-panel-stop')).toBeDisabled()
+    })
+
+    test('is enabled when streaming', () => {
+      mockIsDeepResearchStreaming = true
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      expect(screen.getByTestId('research-panel-stop')).not.toBeDisabled()
+    })
+  })
+
   describe('streaming indicator', () => {
     test('shows spinner in toggle tag when streaming', () => {
       mockIsDeepResearchStreaming = true
@@ -233,6 +259,7 @@ describe('ResearchPanel', () => {
 
       // The toggle tag button has a specific data-testid
       expect(screen.getByTestId('research-panel-toggle')).toBeInTheDocument()
+      expect(screen.getByText('Show Research')).toBeInTheDocument()
     })
 
     test('closes panel when tag clicked while open', async () => {
