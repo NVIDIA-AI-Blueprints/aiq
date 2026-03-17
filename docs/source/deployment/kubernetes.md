@@ -102,11 +102,11 @@ helm upgrade --install aiq <chart-name>-<version>.tgz -n ns-aiq \
 
 Replace `<chart-name>` and `<version>` with the values provided to you (for example, `aiq-web` and `2603.7.0`).
 
-For the full NGC chart workflow (value overrides, upgrades, troubleshooting), see [`deploy/helm/README.md`](../../../deploy/helm/README.md).
+For the full NGC chart workflow (value overrides, upgrades, troubleshooting), see `deploy/helm/README.md` in the source repository.
 
 ### Using the source chart
 
-If you cloned the repository, you can deploy from the local source chart. See the [source chart README](../../../deploy/helm/deployment-k8s/README.md) for full details including Kind local development.
+If you cloned the repository, you can deploy from the local source chart. See the source chart README at `deploy/helm/deployment-k8s/README.md` in the source repository for full details including Kind local development.
 
 ```bash
 cd deploy/helm
@@ -239,7 +239,7 @@ aiq:
 helm upgrade --install aiq <release-or-chart> -n ns-aiq -f aiq-frag-values.yaml
 ```
 
-For complete examples with NGC-specific flags, see [`deploy/helm/README.md`](../../../deploy/helm/README.md#frag-integration).
+For complete examples with NGC-specific flags, see `deploy/helm/README.md` in the source repository.
 
 ## Secrets Reference
 
