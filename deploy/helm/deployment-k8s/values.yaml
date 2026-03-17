@@ -34,8 +34,8 @@ aiq:
         targetCPUUtilizationPercentage: 80
         targetMemoryUtilizationPercentage: 80
       image:
-        repository: ""
-        tag: 2603.16.ext.rc12
+        repository: nvcr.io/nvidia/blueprint/aiq-agent
+        tag: "2.0.0"
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
@@ -221,8 +221,8 @@ aiq:
         maxReplicas: 3
         targetCPUUtilizationPercentage: 80
       image:
-        repository: ""
-        tag: 2603.16.ext.rc12
+        repository: nvcr.io/nvidia/blueprint/aiq-frontend
+        tag: "2.0.0"
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
