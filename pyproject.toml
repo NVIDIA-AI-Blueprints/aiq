@@ -190,6 +190,11 @@ dev = [
 
 [tool.uv]
 prerelease = "if-necessary-or-explicit"
+override-dependencies = [
+    "authlib>=1.6.9",
+    "tornado>=6.5.5",
+    "pyopenssl>=26.0.0",
+]
 
 [tool.uv.pip]
 prerelease = "if-necessary-or-explicit"
