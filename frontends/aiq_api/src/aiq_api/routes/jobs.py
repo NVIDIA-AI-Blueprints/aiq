@@ -1033,7 +1033,11 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
             sequence_id += 1
         return f"id: {sequence_id}\nevent: {event_type}\ndata: {json.dumps(data)}\n\n"
 
-    asyncpg_url = db_url.replace("+psycopg2", "").replace("+asyncpg", "").replace("postgresql://", "postgres://")
+    # LISTEN/NOTIFY needs a persistent session — incompatible with PgBouncer
+    # transaction pooling. Use AIQ_LISTEN_DB_URL to point directly at PostgreSQL.
+    import os
+    listen_db_url = os.environ.get("AIQ_LISTEN_DB_URL", db_url)
+    asyncpg_url = listen_db_url.replace("+psycopg2", "").replace("+asyncpg", "").replace("postgresql://", "postgres://")
     channel = f"job_events_{job_id.replace('-', '_')}"
 
     logger.info(f"SSE pub-sub stream starting for job_id={job_id}, channel={channel}")
@@ -1119,7 +1123,14 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
                                 event_type = event.pop("type", "event")
                                 yield format_sse(event_type, event, db_event_id)
                     except TimeoutError:
-                        pass
+                        # Fallback poll: catch events if NOTIFY was lost
+                        fallback_events = await EventStore.get_events_async(db_url, job_id, last_event_id, 100)
+                        for event in fallback_events:
+                            db_event_id = event.pop("_id", None)
+                            if db_event_id:
+                                last_event_id = db_event_id
+                            event_type = event.pop("type", "event")
+                            yield format_sse(event_type, event, db_event_id)
 
                     job = await job_store.get_job(job_id)
                     if not job:
