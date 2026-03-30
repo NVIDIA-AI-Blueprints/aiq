@@ -285,10 +285,12 @@ async def run_agent_job(
         async with WorkflowBuilder.from_config(config=config) as builder:
             fn_config = builder.get_function_config(agent_config_name)
 
-            # Get LLMs for deep_researcher (orchestrator required)
-            orchestrator_llm = await builder.get_llm(
-                fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-            )
+            # Get LLMs - handle both deep_researcher (orchestrator_llm) and shallow/other agents (llm)
+            orchestrator_llm = None
+            if hasattr(fn_config, "orchestrator_llm") and fn_config.orchestrator_llm:
+                orchestrator_llm = await builder.get_llm(
+                    fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
+                )
             planner_llm = None
             researcher_llm = None
             if hasattr(fn_config, "planner_llm") and fn_config.planner_llm:
@@ -299,6 +301,8 @@ async def run_agent_job(
                 )
 
             llm = orchestrator_llm
+            if llm is None and hasattr(fn_config, "llm") and fn_config.llm:
+                llm = await builder.get_llm(fn_config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
             tools = await builder.get_tools(tool_names=fn_config.tools, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
             if data_sources is not None:
@@ -538,13 +542,24 @@ def _create_agent_instance(
     1. llm_provider + tools pattern (DeepResearcherAgent style)
     2. llm + tools pattern (simpler agents)
     """
-    # Try llm_provider pattern first (DeepResearcherAgent)
+    # Try deep_researcher pattern (llm_provider + tools + max_loops + verbose)
     try:
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
             max_loops=getattr(fn_config, "max_loops", 3),
             verbose=verbose,
+            callbacks=callbacks,
+        )
+    except TypeError:
+        pass
+
+    # Try llm_provider + tools pattern (ShallowResearcherAgent style)
+    try:
+        return agent_cls(
+            llm_provider=llm_provider,
+            tools=tools,
+            max_tool_iterations=getattr(fn_config, "max_tool_iterations", 5),
             callbacks=callbacks,
         )
     except TypeError:
