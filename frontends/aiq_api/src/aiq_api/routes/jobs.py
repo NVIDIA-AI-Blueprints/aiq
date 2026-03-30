@@ -1036,6 +1036,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     # LISTEN/NOTIFY needs a persistent session — incompatible with PgBouncer
     # transaction pooling. Use AIQ_LISTEN_DB_URL to point directly at PostgreSQL.
     import os
+
     listen_db_url = os.environ.get("AIQ_LISTEN_DB_URL", db_url)
     asyncpg_url = listen_db_url.replace("+psycopg2", "").replace("+asyncpg", "").replace("postgresql://", "postgres://")
     channel = f"job_events_{job_id.replace('-', '_')}"
