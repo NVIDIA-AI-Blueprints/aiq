@@ -20,6 +20,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 UI_DIR="$PROJECT_ROOT/frontends/ui"
 
+# Prefer the project .venv on PATH so `python` / `nat` match `uv sync` (not another Python on PATH, e.g. conda base).
+ensure_venv_path() {
+    if [ -d "$PROJECT_ROOT/.venv/bin" ]; then
+        export PATH="$PROJECT_ROOT/.venv/bin:${PATH}"
+    fi
+}
+
 # Default config file
 CONFIG_FILE="configs/config_web_default_llamaindex.yml"
 
@@ -100,12 +107,29 @@ check_env() {
 
 check_dependencies() {
     echo "Checking Python dependencies..."
+    cd "$PROJECT_ROOT"
+    ensure_venv_path
 
     if ! python -c "import nat" 2>/dev/null; then
         echo "NAT not installed. Installing dependencies..."
-        pip install -e .
+        cd "$PROJECT_ROOT"
+        # knowledge-layer is a local workspace package (not on PyPI). Plain `pip install -e .`
+        # cannot resolve it; use uv (same as ./scripts/setup.sh) or install the path first.
+        if command -v uv &> /dev/null || [ -x "${HOME}/.local/bin/uv" ]; then
+            UV_BIN="$(command -v uv 2>/dev/null || true)"
+            if [ -z "${UV_BIN}" ] && [ -x "${HOME}/.local/bin/uv" ]; then
+                UV_BIN="${HOME}/.local/bin/uv"
+            fi
+            echo "Using uv sync (resolves workspace packages from uv.lock)..."
+            "${UV_BIN}" sync
+        else
+            echo "uv not found; using pip. Installing local knowledge-layer first, then root package..."
+            pip install -e "./sources/knowledge_layer[all]"
+            pip install -e .
+        fi
     fi
 
+    ensure_venv_path
     echo "Python dependencies installed"
 }
 
@@ -147,6 +171,9 @@ start_backend() {
     echo "Backend will auto-reload on code changes"
     echo "Config: $CONFIG_FILE"
     echo ""
+
+    cd "$PROJECT_ROOT"
+    ensure_venv_path
 
     nat serve --config_file "$CONFIG_FILE" --host 0.0.0.0 --port 8000 &
     BACKEND_PID=$!
@@ -201,6 +228,7 @@ main() {
     check_env
     echo ""
 
+    ensure_venv_path
     check_dependencies
     echo ""
 
