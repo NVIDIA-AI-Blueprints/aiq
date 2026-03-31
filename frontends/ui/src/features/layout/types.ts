@@ -75,8 +75,8 @@ export interface LayoutActions {
   setTheme: (theme: ThemeMode) => void
   /** Fetch data sources from API. Only web_search is enabled by default */
   fetchDataSources: (authToken?: string) => Promise<void>
-  /** Disable all non-web sources (keep only web_search enabled) */
-  disableNonWebSources: () => void
+  /** Disable ECI sources (keep only web_search enabled) */
+  disableEciSources: () => void
   /** Set available data sources (from API) */
   setAvailableDataSources: (sources: DataSourceFromAPI[]) => void
   /** Set knowledge layer availability */
