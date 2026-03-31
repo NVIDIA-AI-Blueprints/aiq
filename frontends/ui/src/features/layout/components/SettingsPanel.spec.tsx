@@ -10,6 +10,7 @@ import { SettingsPanel } from './SettingsPanel'
 const mockCloseRightPanel = vi.fn()
 const mockOpenRightPanel = vi.fn()
 const mockSetTheme = vi.fn()
+const mockSetNewUiEnabled = vi.fn()
 
 vi.mock('../store', () => ({
   useLayoutStore: vi.fn(() => ({
@@ -18,6 +19,8 @@ vi.mock('../store', () => ({
     openRightPanel: mockOpenRightPanel,
     theme: 'system',
     setTheme: mockSetTheme,
+    newUiEnabled: false,
+    setNewUiEnabled: mockSetNewUiEnabled,
   })),
 }))
 
@@ -33,6 +36,8 @@ describe('SettingsPanel', () => {
       openRightPanel: mockOpenRightPanel,
       theme: 'system',
       setTheme: mockSetTheme,
+      newUiEnabled: false,
+      setNewUiEnabled: mockSetNewUiEnabled,
     })
   })
 
@@ -56,6 +61,8 @@ describe('SettingsPanel', () => {
       openRightPanel: mockOpenRightPanel,
       theme: 'dark',
       setTheme: mockSetTheme,
+      newUiEnabled: false,
+      setNewUiEnabled: mockSetNewUiEnabled,
     })
 
     render(<SettingsPanel />)
@@ -75,6 +82,16 @@ describe('SettingsPanel', () => {
     expect(mockSetTheme).toHaveBeenCalledWith('dark')
   })
 
+  test('calls setNewUiEnabled when New UI switch is toggled', async () => {
+    const user = userEvent.setup()
+
+    render(<SettingsPanel />)
+
+    await user.click(screen.getByTestId('nv-switch-track'))
+
+    expect(mockSetNewUiEnabled).toHaveBeenCalledWith(true)
+  })
+
   test('does not render when panel is closed', () => {
     vi.mocked(useLayoutStore).mockReturnValue({
       rightPanel: null,
@@ -82,6 +99,8 @@ describe('SettingsPanel', () => {
       openRightPanel: mockOpenRightPanel,
       theme: 'system',
       setTheme: mockSetTheme,
+      newUiEnabled: false,
+      setNewUiEnabled: mockSetNewUiEnabled,
     })
 
     render(<SettingsPanel />)

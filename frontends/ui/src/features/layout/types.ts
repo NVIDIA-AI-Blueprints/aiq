@@ -35,6 +35,8 @@ export interface LayoutState {
   enabledDataSourceIds: string[]
   /** Current theme mode */
   theme: ThemeMode
+  /** Whether the new UI experience is enabled */
+  newUiEnabled: boolean
   /** Dynamic data sources from API (null = not loaded yet) */
   availableDataSources: DataSourceFromAPI[] | null
   /** Whether the knowledge layer (file upload) is available */
@@ -73,6 +75,8 @@ export interface LayoutActions {
   setEnabledDataSources: (ids: string[]) => void
   /** Set the theme mode */
   setTheme: (theme: ThemeMode) => void
+  /** Enable or disable the new UI experience */
+  setNewUiEnabled: (enabled: boolean) => void
   /** Fetch data sources from API. Only web_search is enabled by default */
   fetchDataSources: (authToken?: string) => Promise<void>
   /** Disable all non-web sources (keep only web_search enabled) */

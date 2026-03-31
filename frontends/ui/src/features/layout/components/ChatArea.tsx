@@ -22,6 +22,7 @@ import { Document, Lock } from '@/adapters/ui/icons'
 import { useChatStore, AgentPrompt, AgentResponse, ErrorBanner, FileUploadBanner, DeepResearchBanner, UserMessage, ChatThinking } from '@/features/chat'
 import type { ChatMessage } from '@/features/chat'
 import { StarfieldAnimation } from '@/shared/components/StarfieldAnimation'
+import { useLayoutStore } from '../store'
 
 interface ChatAreaProps {
   /** Whether the user is authenticated */
@@ -339,6 +340,8 @@ interface WelcomeStateProps {
 }
 
 const WelcomeState: FC<WelcomeStateProps> = ({ isAuthenticated = false, onSignIn }) => {
+  const newUiEnabled = useLayoutStore((s) => s.newUiEnabled)
+
   if (!isAuthenticated) {
     // Logged out state - prompt to sign in
     return (
@@ -393,10 +396,17 @@ const WelcomeState: FC<WelcomeStateProps> = ({ isAuthenticated = false, onSignIn
         <Text kind="title/lg" className="text-primary">
           Welcome to AI-Q
         </Text>
-        <Text kind="body/regular/md" className="text-subtle">
-          Your AI-powered research companion for exploring technical documentation, market analysis,
-          and more.
-        </Text>
+        {newUiEnabled ? (
+          <Text kind="body/regular/md" className="text-primary">
+            Your AI-powered <span className="font-semibold">Deep Research</span> companion for exploring technical
+            documentation, market analysis, and insights from your on-premise data, web sources, and local files.
+          </Text>
+        ) : (
+          <Text kind="body/regular/md" className="text-subtle">
+            Your AI-powered research companion for exploring technical documentation, market analysis,
+            and more.
+          </Text>
+        )}
       </Flex>
 
     </Flex>

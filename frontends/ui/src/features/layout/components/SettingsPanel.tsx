@@ -11,7 +11,7 @@
 'use client'
 
 import { type FC, useCallback } from 'react'
-import { Flex, Text, SidePanel, Select } from '@/adapters/ui'
+import { Flex, Text, SidePanel, Select, Switch } from '@/adapters/ui'
 import { Settings } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 import type { ThemeMode } from '../types'
@@ -21,7 +21,15 @@ import type { ThemeMode } from '../types'
  * Opens from the right side of the screen.
  */
 export const SettingsPanel: FC = () => {
-  const { rightPanel, closeRightPanel, openRightPanel, theme, setTheme } = useLayoutStore()
+  const {
+    rightPanel,
+    closeRightPanel,
+    openRightPanel,
+    theme,
+    setTheme,
+    newUiEnabled,
+    setNewUiEnabled,
+  } = useLayoutStore()
 
   const isOpen = rightPanel === 'settings'
 
@@ -79,6 +87,17 @@ export const SettingsPanel: FC = () => {
             { children: 'Dark', value: 'dark' },
           ]}
         />
+          <Text kind="label/semibold/xs" className="text-subtle uppercase">
+            New UI
+          </Text>
+          <Switch
+            size="small"
+            checked={newUiEnabled}
+            onCheckedChange={setNewUiEnabled}
+            attributes={{
+              SwitchTrack: { 'aria-label': 'Enable new UI' },
+            }}
+          />
       </Flex>
     </SidePanel>
   )

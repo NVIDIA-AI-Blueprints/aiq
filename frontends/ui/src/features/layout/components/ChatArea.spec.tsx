@@ -6,6 +6,14 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { ChatArea } from './ChatArea'
 
+vi.mock('../store', () => ({
+  useLayoutStore: vi.fn((selector: (s: { newUiEnabled: boolean }) => unknown) =>
+    selector({ newUiEnabled: false })
+  ),
+}))
+
+import { useLayoutStore } from '../store'
+
 // Mock the chat store
 const mockRespondToPrompt = vi.fn()
 const mockDismissErrorCard = vi.fn()
@@ -41,6 +49,9 @@ import { useChatStore } from '@/features/chat'
 describe('ChatArea', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    vi.mocked(useLayoutStore).mockImplementation((selector) =>
+      selector({ newUiEnabled: false } as never)
+    )
   })
 
   test('renders welcome state when not authenticated', () => {
@@ -56,6 +67,18 @@ describe('ChatArea', () => {
 
     expect(screen.getByText('Welcome to AI-Q')).toBeInTheDocument()
     expect(screen.getByText(/AI-powered research companion/i)).toBeInTheDocument()
+  })
+
+  test('renders new UI welcome copy when newUiEnabled is true', () => {
+    vi.mocked(useLayoutStore).mockImplementation((selector) =>
+      selector({ newUiEnabled: true } as never)
+    )
+
+    render(<ChatArea isAuthenticated={true} />)
+
+    expect(screen.getByText('Welcome to AI-Q')).toBeInTheDocument()
+    expect(screen.getByText('Deep Research')).toBeInTheDocument()
+    expect(screen.getByText(/on-premise data/i)).toBeInTheDocument()
   })
 
   test('calls onSignIn when sign in button clicked', async () => {

@@ -28,6 +28,7 @@ const initialState: LayoutState = {
   dataSourcesPanelTab: 'connections',
   enabledDataSourceIds: [], // Start empty, populated when data sources are fetched
   theme: 'system',
+  newUiEnabled: false,
   availableDataSources: null,
   knowledgeLayerAvailable: false, // Default to false until API confirms availability
   dataSourcesLoading: false,
@@ -81,6 +82,9 @@ export const useLayoutStore = create<LayoutStore>()(
         set({ enabledDataSourceIds: ids }, false, 'setEnabledDataSources'),
 
       setTheme: (theme: ThemeMode) => set({ theme }, false, 'setTheme'),
+
+      setNewUiEnabled: (enabled: boolean) =>
+        set({ newUiEnabled: enabled }, false, 'setNewUiEnabled'),
 
       fetchDataSources: async (authToken?: string) => {
         set({ dataSourcesLoading: true, dataSourcesError: null }, false, 'fetchDataSources/start')

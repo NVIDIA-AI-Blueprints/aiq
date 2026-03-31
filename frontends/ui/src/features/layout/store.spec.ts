@@ -13,6 +13,7 @@ describe('useLayoutStore', () => {
       researchPanelTab: 'plan',
       dataSourcesPanelTab: 'connections',
       theme: 'system',
+      newUiEnabled: false,
     })
   })
 
@@ -24,6 +25,7 @@ describe('useLayoutStore', () => {
       expect(state.rightPanel).toBeNull()
       expect(state.researchPanelTab).toBe('plan')
       expect(state.dataSourcesPanelTab).toBe('connections')
+      expect(state.newUiEnabled).toBe(false)
     })
   })
 
@@ -173,6 +175,22 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setTheme('system')
 
       expect(useLayoutStore.getState().theme).toBe('system')
+    })
+  })
+
+  describe('setNewUiEnabled', () => {
+    test('enables new UI', () => {
+      useLayoutStore.getState().setNewUiEnabled(true)
+
+      expect(useLayoutStore.getState().newUiEnabled).toBe(true)
+    })
+
+    test('disables new UI', () => {
+      useLayoutStore.setState({ newUiEnabled: true })
+
+      useLayoutStore.getState().setNewUiEnabled(false)
+
+      expect(useLayoutStore.getState().newUiEnabled).toBe(false)
     })
   })
 })
