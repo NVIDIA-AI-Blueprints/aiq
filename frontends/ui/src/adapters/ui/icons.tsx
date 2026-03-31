@@ -180,6 +180,7 @@ export const Help = createIcon('help-circle')
 export const Lock = createIcon('lock-closed')
 export const Plug = createIcon('plug-recepticle')
 export const Wrench = createIcon('wrench')
+export const ChatMessage = createIcon('chat-message')
 export const Retry = createIcon('retry')
 export const Cancel = createIcon('cancel')
 

@@ -17,7 +17,7 @@
 
 import { type FC, useCallback, useState } from 'react'
 import { Flex, Text, Button, Logo, Avatar, Popover, Divider } from '@/adapters/ui'
-import { Menu, Globe, Settings, Book, Lock, Logout, ChevronRight, Info } from '@/adapters/ui/icons'
+import { Globe, Settings, Book, Lock, Logout, ChevronRight, Info, ChatMessage } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 
 interface AppBarProps {
@@ -48,7 +48,7 @@ interface AppBarProps {
  * Controls sidebar toggles and navigation actions.
  */
 export const AppBar: FC<AppBarProps> = ({
-  sessionTitle = 'New Session',
+  sessionTitle = '',
   isAuthenticated = false,
   authRequired = false,
   user,
@@ -122,7 +122,9 @@ export const AppBar: FC<AppBarProps> = ({
               </Text>
             </Flex>
           </Button>
-
+          <Flex justify="start">
+          <Divider orientation="vertical" />
+          </Flex>
           <Button
             kind="tertiary"
             size="small"
@@ -132,11 +134,15 @@ export const AppBar: FC<AppBarProps> = ({
             title="Toggle sessions sidebar"
           >
             <Flex align="center" gap="1">
-              <Menu className="h-4 w-4" />
-              <Text kind="label/regular/md">Sessions</Text>
+              <ChatMessage className="h-4 w-4" />
+              <Text kind="label/bold/sm">Sessions</Text>
             </Flex>
           </Button>
-
+          {sessionTitle && (
+            <Flex justify="start">
+              <Divider orientation="vertical" />
+            </Flex>
+          )}
           {isAuthenticated && (
             <div className="ml-4 hidden min-w-0 flex-1 items-center md:flex">
               <Text

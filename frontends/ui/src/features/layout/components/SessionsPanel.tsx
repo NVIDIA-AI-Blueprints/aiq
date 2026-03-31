@@ -12,7 +12,7 @@
 
 import { type FC, type KeyboardEvent, useCallback, useMemo, useState, useRef, useEffect } from 'react'
 import { Flex, Text, Button, SidePanel } from '@/adapters/ui'
-import { Chat, Edit, Trash, Plus, Search, LoadingSpinner } from '@/adapters/ui/icons'
+import { Edit, Trash, Plus, Search, LoadingSpinner, ChatMessage } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 import { useChatStore } from '@/features/chat'
 import { checkStorageHealth } from '@/features/chat/lib/storage-manager'
@@ -128,17 +128,17 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
   )
 
   const filteredSessions = useMemo(() => {
-    if (!searchQuery.trim()) return sessions
+    if (!searchQuery.trim()) return sessions.filter((s) => s.title.trim() !== '');
     const query = searchQuery.toLowerCase()
-    return sessions.filter((s) => s.title.toLowerCase().includes(query))
+    return sessions.filter((s) => s.title.toLowerCase().includes(query) && s.title.trim() !== '')
   }, [sessions, searchQuery])
 
   // Group sessions by date
   const groupedSessions = groupSessionsByDate(filteredSessions)
-
+  const isEmptyState = filteredSessions.length === 0;
   return (
     <SidePanel
-      className="bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px] rounded-r-2xl"
+      className="side-panel-dock-under-header bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px]"
       open={isSessionsPanelOpen}
       onOpenChange={handleOpenChange}
       side="left"
@@ -147,8 +147,8 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
       forceMount
       slotHeading={
         <Flex align="center" gap="2">
-          <Chat />
-          Sessions
+          <ChatMessage />
+          <Text kind="label/semibold/md">Sessions</Text>
         </Flex>
       }
       slotFooter={
@@ -163,6 +163,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
       }
     >
       {/* Delete All + New Session */}
+      {!isEmptyState && (searchQuery.trim()=== '') &&(
       <Flex align="center" justify="between" gap="2" className="mb-4">
         <Button
           kind="tertiary"
@@ -196,11 +197,11 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
         >
           <Flex align="center" gap="1">
             <Plus className="h-4 w-4" />
-            <Text kind="label/regular/sm">New Session</Text>
+            <Text kind="label/bold/sm">New Session</Text>
           </Flex>
         </Button>
       </Flex>
-
+      )}
       {/* Search */}
       <div className="relative mb-4">
         <Search className="text-subtle pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2" />
@@ -236,7 +237,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
           </Flex>
         ))}
 
-        {filteredSessions.length === 0 && (
+        {isEmptyState &&(
           <Flex direction="col" align="center" justify="center" className="flex-1 py-8">
             <Text kind="body/regular/sm" className="text-subtle">
               {searchQuery.trim() ? 'No matching sessions' : 'No sessions yet'}
@@ -330,7 +331,12 @@ const SessionItem: FC<SessionItemProps> = ({
 
   const handleSaveRename = useCallback(() => {
     const trimmedValue = editValue.trim()
-    if (trimmedValue && trimmedValue !== session.title) {
+    if (!trimmedValue) {
+      setEditValue(session.title)
+      setIsEditing(false)
+      return
+    }
+    if (trimmedValue !== session.title) {
       onRename?.(session.id, trimmedValue)
     }
     setIsEditing(false)
@@ -458,7 +464,7 @@ const groupSessionsByDate = (sessions: Session[]): Record<string, Session[]> => 
     const sessionDate = new Date(session.date)
     let label: string
 
-    if (isSameDay(sessionDate, today)) {
+    if (isSameDay(sessionDate, today) && session.title.trim()) {
       label = 'Today'
     } else if (isSameDay(sessionDate, yesterday)) {
       label = 'Yesterday'

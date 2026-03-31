@@ -105,6 +105,25 @@ const createResilientStorage = (): PersistStorage<PersistedChatState> | undefine
       const raw = await base.getItem(name)
       if (!raw) return null
 
+      // Strip connection error messages — they are transient and should not
+      // survive page reloads. Persisting them causes the UI to show a permanent
+      // "failed to connect" state that only clears when the user wipes cache.
+      const stripConnectionErrors = (conversations: Conversation[]) =>
+        conversations.map((c) => ({
+          ...c,
+          messages: c.messages.filter(
+            (m) =>
+              !(
+                m.messageType === 'error' &&
+                m.errorData?.errorCode?.startsWith('connection.')
+              )
+          ),
+        }))
+
+      if (raw.state.conversations) {
+        raw.state.conversations = stripConnectionErrors(raw.state.conversations)
+      }
+
       // Reconstruct currentConversation from the ID stored by prunePersistedChatState.
       const storedId = raw.state.currentConversation as unknown as string | null
       if (storedId) {
@@ -207,7 +226,7 @@ const initialState: ChatState = {
 const createNewConversation = (userId: string): Conversation => ({
   id: `s_${uuidv4().replace(/-/g, '_')}`, // Milvus: letters, numbers, underscores only (no hyphens)
   userId,
-  title: 'New Session',
+  title: '',
   messages: [],
   createdAt: new Date(),
   updatedAt: new Date(),
@@ -568,9 +587,9 @@ export const useChatStore = create<ChatStore>()(
             enabledDataSources: metadata?.enabledDataSources,
             messageFiles: metadata?.messageFiles,
           }
-
-          // Update title if this is the first message
-          const shouldUpdateTitle = conversation.messages.length === 0
+          // Update title on first user message (ignore file_upload_status and other system messages)
+          const hasUserMessage = conversation.messages.some((m) => m.messageType === 'user')
+          const shouldUpdateTitle = !hasUserMessage
 
           const updatedConversation: Conversation = {
             ...conversation,

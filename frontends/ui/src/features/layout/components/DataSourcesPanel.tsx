@@ -123,7 +123,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
     [setDataSourcesPanelTab]
   )
 
-  // Get only available sources (web_search always available, other sources need auth)
+  // Get only available sources (web_search always available, ECI sources need auth)
   const availableSources = useMemo(() => {
     return displaySources.filter(
       (source) => source.id === WEB_SEARCH_SOURCE_ID || hasValidToken
@@ -145,7 +145,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
 
   return (
     <SidePanel
-      className="bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px] rounded-l-2xl"
+      className="side-panel-dock-under-header bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px]"
       open={isOpen}
       onOpenChange={handleOpenChange}
       side="right"
@@ -201,8 +201,8 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
               className="mb-6 px-4 py-3"
             >
               {!authRequired
-                ? 'Enable authentication to access additional data sources.'
-                : 'Sign in to access additional data sources.'}
+                ? 'Setup auth to enable more data sources.'
+                : 'Sign in to access more data sources.'}
             </Banner>
           )}
 

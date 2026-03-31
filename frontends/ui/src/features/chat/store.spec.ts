@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest'
 import { useChatStore } from './store'
 import type { Conversation, PendingInteraction, FileCardData } from './types'
@@ -9,7 +6,7 @@ const STORAGE_KEY = 'aiq-chat-store'
 const mockLayoutState = vi.hoisted(() => ({
   closeRightPanel: vi.fn(),
   enabledDataSourceIds: ['web_search'],
-  availableDataSources: [{ id: 'web_search' }, { id: 'knowledge_base' }],
+  availableDataSources: [{ id: 'web_search' }, { id: 'confluence' }],
   setEnabledDataSources: vi.fn(),
 }))
 const mockDeepResearchApi = vi.hoisted(() => ({
@@ -36,9 +33,7 @@ describe('useChatStore', () => {
     mockLayoutState.closeRightPanel.mockClear()
     mockLayoutState.setEnabledDataSources.mockClear()
     mockLayoutState.enabledDataSourceIds = ['web_search']
-    mockLayoutState.availableDataSources = [{ id: 'web_search' }, { id: 'knowledge_base' }]
-    mockDeepResearchApi.getJobStatus.mockReset()
-    mockDeepResearchApi.cancelJob.mockReset()
+    mockLayoutState.availableDataSources = [{ id: 'web_search' }, { id: 'confluence' }]
     // Reset store to initial state before each test
     useChatStore.setState({
       currentUserId: null,
@@ -223,7 +218,7 @@ describe('useChatStore', () => {
       const conv = useChatStore.getState().createConversation()
 
       expect(conv.userId).toBe('user-1')
-      expect(conv.title).toBe('New Session')
+      expect(conv.title).toBe('')
       expect(conv.messages).toEqual([])
       expect(useChatStore.getState().currentConversation).toEqual(conv)
       expect(useChatStore.getState().conversations).toContainEqual(conv)
@@ -376,7 +371,7 @@ describe('useChatStore', () => {
       const conv: Conversation = {
         id: 'conv-1',
         userId: 'user-1',
-        title: 'New Session',
+        title: '',
         messages: [],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -398,7 +393,7 @@ describe('useChatStore', () => {
       const conv: Conversation = {
         id: 'conv-1',
         userId: 'user-1',
-        title: 'New Session',
+        title: '',
         messages: [],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -416,11 +411,40 @@ describe('useChatStore', () => {
       )
     })
 
+    test('updates title on first user message when file upload status messages exist', () => {
+      const conv: Conversation = {
+        id: 'conv-1',
+        userId: 'user-1',
+        title: '',
+        messages: [
+          {
+            id: 'status-1',
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            messageType: 'file_upload_status',
+            fileUploadStatusData: { type: 'uploaded', fileCount: 1, jobId: 'job-1' },
+          },
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: conv,
+        conversations: [conv],
+      })
+
+      useChatStore.getState().addUserMessage('Summarize my document')
+
+      expect(useChatStore.getState().currentConversation?.title).toBe('Summarize my document')
+    })
+
     test('truncates long titles to 50 characters', () => {
       const conv: Conversation = {
         id: 'conv-1',
         userId: 'user-1',
-        title: 'New Session',
+        title: '',
         messages: [],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -438,7 +462,7 @@ describe('useChatStore', () => {
     })
 
     test('creates conversation if none exists', () => {
-      mockLayoutState.enabledDataSourceIds = ['web_search', 'knowledge_base']
+      mockLayoutState.enabledDataSourceIds = ['web_search', 'confluence']
       useChatStore.setState({
         currentUserId: 'user-1',
         currentConversation: null,
@@ -451,7 +475,7 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().conversations).toHaveLength(1)
       expect(useChatStore.getState().currentConversation?.enabledDataSourceIds).toEqual([
         'web_search',
-        'knowledge_base',
+        'confluence',
       ])
     })
 
@@ -467,7 +491,7 @@ describe('useChatStore', () => {
       const conv: Conversation = {
         id: 'conv-1',
         userId: 'user-1',
-        title: 'New Session',
+        title: '',
         messages: [],
         createdAt: new Date(),
         updatedAt: new Date(),
