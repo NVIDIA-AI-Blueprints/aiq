@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /**
  * useFileUpload Hook
  *
@@ -63,6 +60,7 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
     updateTrackedFile,
     removeTrackedFile,
     unmarkRecentlyDeleted,
+    removeRecentlyDeletedIds,
     setUploading,
     setError,
     clearError,
@@ -207,6 +205,10 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
 
         const { job_id, file_ids } = await clientRef.current.uploadFiles(collectionName, validFiles)
 
+        // New upload supersedes tombstones: some backends reuse the same file_id after delete,
+        // which would otherwise hide the row in setFilesFromServer and preservedSuccessNotOnServer.
+        removeRecentlyDeletedIds(file_ids.filter((id): id is string => Boolean(id)))
+
         // Upload POST response means upload is complete and ingestion has started
         // Set status to 'ingesting' immediately
         const filesToPersist: TrackedFile[] = []
@@ -260,6 +262,7 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
       clearError,
       setError,
       onError,
+      removeRecentlyDeletedIds,
     ]
   )
 

@@ -24,6 +24,7 @@ const { mockClient, mockDocumentsStoreState, mockOrchestratorFns } = vi.hoisted(
     updateTrackedFile: vi.fn(),
     removeTrackedFile: vi.fn(),
     unmarkRecentlyDeleted: vi.fn(),
+    removeRecentlyDeletedIds: vi.fn(),
     setUploading: vi.fn(),
     setError: vi.fn(),
     clearError: vi.fn(),
@@ -245,6 +246,7 @@ describe('useFileUpload', () => {
 
       expect(mockDocumentsStoreState.setUploading).toHaveBeenCalledWith(true)
       expect(mockClient.uploadFiles).toHaveBeenCalled()
+      expect(mockDocumentsStoreState.removeRecentlyDeletedIds).toHaveBeenCalledWith(['file-id-1'])
       expect(mockOrchestratorFns.startPolling).toHaveBeenCalledWith(
         'job-1',
         'session-1',

@@ -14,7 +14,6 @@ export {
   selectFilesInProgress,
   selectCompletedFiles,
   selectFailedFiles,
-  selectIsProcessing,
 } from './store'
 
 // Hooks
