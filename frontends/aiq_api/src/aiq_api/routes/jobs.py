@@ -93,6 +93,7 @@ class JobStatusResponse(BaseModel):
                 {
                     "job_id": "abc123",
                     "status": "submitted",
+                    "status": "submitted",
                     "agent_type": "deep_researcher",
                     "error": None,
                     "created_at": "2026-02-12T10:30:00Z",
@@ -102,6 +103,10 @@ class JobStatusResponse(BaseModel):
     )
 
     job_id: str = Field(..., description="Unique job identifier")
+    status: str = Field(
+        ...,
+        description="Current status: submitted, running, success, failure, interrupted, not_found",
+    )
     status: str = Field(
         ...,
         description="Current status: submitted, running, success, failure, interrupted, not_found",

@@ -17,6 +17,7 @@
 
 These utilities can be used by any tool or agent to get auth tokens or user info.
 Token source: Context cookies (idToken) - set by the frontend auth layer.
+Token source: Context cookies (idToken) - set by the frontend auth layer.
 """
 
 import base64
