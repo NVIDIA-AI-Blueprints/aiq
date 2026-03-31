@@ -23,7 +23,7 @@ import { WEB_SEARCH_SOURCE_ID } from './data-sources'
 
 const initialState: LayoutState = {
   isSessionsPanelOpen: false,
-  rightPanel: null,
+  rightPanel: 'data-sources',
   researchPanelTab: 'plan',
   dataSourcesPanelTab: 'connections',
   enabledDataSourceIds: [], // Start empty, populated when data sources are fetched
@@ -91,6 +91,7 @@ export const useLayoutStore = create<LayoutStore>()(
 
           // data_sources is already filtered (knowledge_layer removed) by the client
           // Only enable web_search by default - user must manually enable other sources
+          // This ensures ECI sources are opt-in and prevents accidental data access
           const enabledIds = response.data_sources
             .filter((source) => source.id === WEB_SEARCH_SOURCE_ID)
             .map((source) => source.id)
@@ -119,7 +120,7 @@ export const useLayoutStore = create<LayoutStore>()(
         }
       },
 
-      disableNonWebSources: () =>
+      disableEciSources: () =>
         set(
           (state) => ({
             enabledDataSourceIds: state.enabledDataSourceIds.filter(
@@ -127,7 +128,7 @@ export const useLayoutStore = create<LayoutStore>()(
             ),
           }),
           false,
-          'disableNonWebSources'
+          'disableEciSources'
         ),
 
       setAvailableDataSources: (sources: DataSourceFromAPI[]) =>

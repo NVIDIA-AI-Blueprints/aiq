@@ -6,10 +6,10 @@ import { useLayoutStore } from './store'
 
 describe('useLayoutStore', () => {
   beforeEach(() => {
-    // Reset store to initial state before each test
+    // Reset store to initial state before each test (matches store.ts initialState)
     useLayoutStore.setState({
       isSessionsPanelOpen: false,
-      rightPanel: null,
+      rightPanel: 'data-sources',
       researchPanelTab: 'plan',
       dataSourcesPanelTab: 'connections',
       theme: 'system',
@@ -21,7 +21,7 @@ describe('useLayoutStore', () => {
       const state = useLayoutStore.getState()
 
       expect(state.isSessionsPanelOpen).toBe(false)
-      expect(state.rightPanel).toBeNull()
+      expect(state.rightPanel).toBe('data-sources')
       expect(state.researchPanelTab).toBe('plan')
       expect(state.dataSourcesPanelTab).toBe('connections')
     })
@@ -110,6 +110,8 @@ describe('useLayoutStore', () => {
     })
 
     test('handles closing when already closed', () => {
+      useLayoutStore.setState({ rightPanel: null })
+
       useLayoutStore.getState().closeRightPanel()
 
       expect(useLayoutStore.getState().rightPanel).toBeNull()

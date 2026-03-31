@@ -13,7 +13,7 @@ const mockStartNewSessionDraft = vi.fn()
 const mockDeleteConversation = vi.fn()
 const mockDeleteAllConversations = vi.fn()
 const mockUpdateConversationTitle = vi.fn()
-const mockCloseRightPanel = vi.fn()
+const mockOpenRightPanel = vi.fn()
 
 // Mock the useSessionUrl hook (uses Next.js App Router hooks)
 vi.mock('@/hooks/use-session-url', () => ({
@@ -54,7 +54,7 @@ vi.mock('../store', () => ({
     isSessionsPanelOpen: false,
     setSessionsPanelOpen: vi.fn(),
     enabledDataSourceIds: ['source-1', 'source-2'],
-    closeRightPanel: mockCloseRightPanel,
+    openRightPanel: mockOpenRightPanel,
   })),
 }))
 
@@ -151,7 +151,7 @@ describe('MainLayout', () => {
   test('passes auth state to components', () => {
     const onSignIn = vi.fn()
     const onSignOut = vi.fn()
-    const user = { name: 'Test User', email: 'test@example.com' }
+    const user = { name: 'Test User', email: 'test@nvidia.com' }
 
     render(
       <MainLayout isAuthenticated={true} user={user} onSignIn={onSignIn} onSignOut={onSignOut} />
@@ -172,7 +172,7 @@ describe('MainLayout', () => {
 
     expect(mockStartNewSessionDraft).toHaveBeenCalledOnce()
     expect(mockClearSessionUrl).toHaveBeenCalledOnce()
-    expect(mockCloseRightPanel).toHaveBeenCalledOnce()
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('data-sources')
   })
 
   test('disables new session action while shallow streaming is active', () => {
