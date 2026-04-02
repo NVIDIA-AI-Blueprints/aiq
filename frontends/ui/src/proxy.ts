@@ -104,11 +104,8 @@ export default async function proxy(req: NextRequest) {
           secure: shouldUseSecureCookies(),
           maxAge: idTokenCookieMaxAgeSeconds(expiresAt!),
         })
-      } else if (isTokenExpired(expiresAt)) {
-        // Token is actually expired - clear the cookie
-        response.cookies.delete('idToken')
       } else {
-        // No idToken in session - clear the cookie
+        // Token expired or absent - clear the cookie
         response.cookies.delete('idToken')
       }
     } else {

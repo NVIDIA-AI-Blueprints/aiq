@@ -492,15 +492,16 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             if (isDeepResearchStreaming && deepResearchStatus !== 'interrupted' && deepResearchStatus !== 'failure') {
               const backendUp = await checkBackendHealthCached()
 
-              if (backendUp) {
-                // Backend is healthy but stream failed -- classify the error
-                const errorInfo = getDeepResearchStreamFailure(error.message, error.stack)
-                const state = useChatStore.getState()
-                state.addErrorCard(errorInfo.code as Parameters<typeof state.addErrorCard>[0], errorInfo.message, errorInfo.details)
-                return
-              }
+              const errorInfo = backendUp
+                ? getDeepResearchStreamFailure(error.message, error.stack)
+                : { code: 'agent.deep_research_failed' as const, message: error.message, details: error.stack }
 
-              console.error('Deep research SSE failed (backend unreachable):', error)
+              console.error(
+                backendUp
+                  ? 'Deep research SSE failed while backend remained reachable:'
+                  : 'Deep research SSE failed (backend unreachable):',
+                error
+              )
               setCurrentStatus('error')
 
               const state = useChatStore.getState()
@@ -517,7 +518,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
                 })
               }
 
-              state.addErrorCard('agent.deep_research_failed', error.message, error.stack)
+              state.addErrorCard(errorInfo.code as Parameters<typeof state.addErrorCard>[0], errorInfo.message, errorInfo.details)
               addDeepResearchBanner('failure', jobId, ownerConvId || undefined)
               stopAllDeepResearchSpinners()
               clientRef.current?.disconnect()

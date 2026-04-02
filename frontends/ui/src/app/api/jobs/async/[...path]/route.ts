@@ -55,13 +55,16 @@ const getAuthHeaders = async (req: Request, pathSegments: string[]): Promise<Rec
     return {}
   }
 
-  // Only allow query token for stream paths (EventSource can't set headers)
+  // Only allow query token for stream paths (EventSource can't set headers).
+  // Note: tokens in URLs may appear in server access logs. This is a
+  // server-side route handler — the token is extracted here and forwarded
+  // only via headers, never passed on as a URL to the backend.
   const allowQueryToken = pathSegments.includes('stream')
   const rawQueryToken = new URL(req.url).searchParams.get('token')?.trim()
   const queryToken = allowQueryToken && rawQueryToken ? rawQueryToken : undefined
 
-  if (queryToken && process.env.NODE_ENV === 'development') {
-    console.warn('[Deep Research API] Using ?token= query fallback for stream auth')
+  if (queryToken) {
+    console.warn('[Deep Research API] SSE stream using ?token= query fallback (idToken cookie missing)')
   }
 
   const authToken = req.headers.get('Authorization') || (queryToken ? `Bearer ${queryToken}` : null)

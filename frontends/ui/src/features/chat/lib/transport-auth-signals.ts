@@ -13,8 +13,6 @@
 const AUTH_ERROR_PATTERNS = [
   /\b401\b/i,
   /\bunauthorized\b/i,
-  /\bforbidden\b/i,
-  /\b403\b/i,
   /\btoken.*(expired|invalid|missing)\b/i,
   /\bsession.*(expired|invalid)\b/i,
   /\bauthenticat/i,
