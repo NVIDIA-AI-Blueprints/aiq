@@ -22,6 +22,7 @@ Token source: Context cookies (idToken) - set by the frontend auth layer.
 import base64
 import json
 import logging
+import threading
 from collections.abc import Callable
 
 from pydantic import BaseModel
@@ -29,6 +30,7 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 _token_fetchers: list[tuple[int, Callable[[], str | None]]] = []
+_fetcher_lock = threading.Lock()
 
 
 def register_token_fetcher(fetcher: Callable[[], str | None], priority: int = 0) -> None:
@@ -38,18 +40,29 @@ def register_token_fetcher(fetcher: Callable[[], str | None], priority: int = 0)
     the default Context cookie lookup. The first fetcher that returns a
     non-None token wins.
 
+    Duplicate fetchers (same callable identity) are silently ignored.
+
     Args:
         fetcher: Callable that returns a token string or None.
         priority: Higher priority fetchers are tried first. Default: 0.
     """
-    _token_fetchers.append((priority, fetcher))
-    _token_fetchers.sort(key=lambda x: x[0], reverse=True)
+    with _fetcher_lock:
+        if any(f is fetcher for _, f in _token_fetchers):
+            logger.debug("Token fetcher already registered, skipping duplicate")
+            return
+        _token_fetchers.append((priority, fetcher))
+        _token_fetchers.sort(key=lambda x: x[0], reverse=True)
     logger.debug("Registered token fetcher (priority=%d), total fetchers: %d", priority, len(_token_fetchers))
 
 
 def clear_token_fetchers() -> None:
-    """Remove all registered token fetchers. Useful for testing."""
-    _token_fetchers.clear()
+    """Remove all registered token fetchers.
+
+    Warning: This is intended for test isolation only. Calling in production
+    will silently remove all registered auth sources.
+    """
+    with _fetcher_lock:
+        _token_fetchers.clear()
 
 
 class UserInfo(BaseModel):
@@ -98,8 +111,10 @@ def get_auth_token() -> str | None:
     Returns:
         ID token string or None if not available.
     """
-    # Try registered fetchers first (highest priority first)
-    for _priority, fetcher in _token_fetchers:
+    # Try registered fetchers first (highest priority first).
+    # Iterate a snapshot so concurrent register_token_fetcher() calls
+    # don't mutate the list mid-iteration.
+    for _priority, fetcher in list(_token_fetchers):
         try:
             token = fetcher()
             if token:

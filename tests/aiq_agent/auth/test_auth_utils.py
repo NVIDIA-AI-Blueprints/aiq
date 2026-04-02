@@ -98,3 +98,19 @@ def test_get_current_user_info_uses_registered_fetcher():
     assert user_info is not None
     assert user_info.email == "alice@nvidia.com"
     assert user_info.name == "Alice"
+
+
+def test_register_token_fetcher_deduplication():
+    """Registering the same fetcher twice is a no-op (identity check)."""
+    call_count = 0
+
+    def my_fetcher():
+        nonlocal call_count
+        call_count += 1
+        return "token"
+
+    register_token_fetcher(my_fetcher, priority=5)
+    register_token_fetcher(my_fetcher, priority=10)  # duplicate — ignored
+
+    assert get_auth_token() == "token"
+    assert call_count == 1  # called only once, not twice
