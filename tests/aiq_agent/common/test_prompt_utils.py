@@ -21,7 +21,9 @@ from tempfile import TemporaryDirectory
 import pytest
 
 from aiq_agent.common.prompt_utils import PromptError
+from aiq_agent.common.prompt_utils import clear_prompt_directories
 from aiq_agent.common.prompt_utils import load_prompt
+from aiq_agent.common.prompt_utils import register_prompt_directory
 from aiq_agent.common.prompt_utils import render_prompt_template
 
 
@@ -202,3 +204,132 @@ Description: {{ step.description }}
         assert "Step 1: Literature Review" in result
         assert "Step 2: Data Collection" in result
         assert "Handle with care" in result
+
+
+class TestRegisterPromptDirectory:
+    """Tests for the prompt directory override system."""
+
+    @pytest.fixture(autouse=True)
+    def cleanup(self):
+        """Clear registered directories between tests."""
+        yield
+        clear_prompt_directories()
+
+    def test_override_takes_priority(self):
+        """Override directory prompts take priority over agent prompts."""
+        with TemporaryDirectory() as agent_dir, TemporaryDirectory() as override_dir:
+            agent_prompts = Path(agent_dir) / "test_agent" / "prompts"
+            agent_prompts.mkdir(parents=True)
+            (agent_prompts / "system.j2").write_text("Original prompt")
+
+            override_path = Path(override_dir) / "test_agent"
+            override_path.mkdir(parents=True)
+            (override_path / "system.j2").write_text("Override prompt")
+
+            register_prompt_directory(Path(override_dir), priority=10)
+
+            result = load_prompt(agent_prompts, "system")
+            assert result == "Override prompt"
+
+    def test_fallback_to_agent_prompt(self):
+        """Falls back to agent prompt when no override exists."""
+        with TemporaryDirectory() as agent_dir, TemporaryDirectory() as override_dir:
+            agent_prompts = Path(agent_dir) / "test_agent" / "prompts"
+            agent_prompts.mkdir(parents=True)
+            (agent_prompts / "system.j2").write_text("Original prompt")
+
+            # Override dir exists but has no matching file
+            override_path = Path(override_dir) / "test_agent"
+            override_path.mkdir(parents=True)
+
+            register_prompt_directory(Path(override_dir), priority=10)
+
+            result = load_prompt(agent_prompts, "system")
+            assert result == "Original prompt"
+
+    def test_higher_priority_wins(self):
+        """Higher priority override directories are checked first."""
+        with TemporaryDirectory() as agent_dir, TemporaryDirectory() as low_dir, TemporaryDirectory() as high_dir:
+            agent_prompts = Path(agent_dir) / "test_agent" / "prompts"
+            agent_prompts.mkdir(parents=True)
+            (agent_prompts / "system.j2").write_text("Original")
+
+            low_path = Path(low_dir) / "test_agent"
+            low_path.mkdir(parents=True)
+            (low_path / "system.j2").write_text("Low priority")
+
+            high_path = Path(high_dir) / "test_agent"
+            high_path.mkdir(parents=True)
+            (high_path / "system.j2").write_text("High priority")
+
+            register_prompt_directory(Path(low_dir), priority=1)
+            register_prompt_directory(Path(high_dir), priority=10)
+
+            result = load_prompt(agent_prompts, "system")
+            assert result == "High priority"
+
+    def test_override_with_j2_extension(self):
+        """Override works with automatic .j2 extension resolution."""
+        with TemporaryDirectory() as agent_dir, TemporaryDirectory() as override_dir:
+            agent_prompts = Path(agent_dir) / "test_agent" / "prompts"
+            agent_prompts.mkdir(parents=True)
+            (agent_prompts / "researcher.j2").write_text("Original")
+
+            override_path = Path(override_dir) / "test_agent"
+            override_path.mkdir(parents=True)
+            (override_path / "researcher.j2").write_text("Override")
+
+            register_prompt_directory(Path(override_dir), priority=10)
+
+            # Call without .j2 extension
+            result = load_prompt(agent_prompts, "researcher")
+            assert result == "Override"
+
+    def test_selective_override(self):
+        """Only overrides prompts that exist in the override directory."""
+        with TemporaryDirectory() as agent_dir, TemporaryDirectory() as override_dir:
+            agent_prompts = Path(agent_dir) / "test_agent" / "prompts"
+            agent_prompts.mkdir(parents=True)
+            (agent_prompts / "system.j2").write_text("Original system")
+            (agent_prompts / "researcher.j2").write_text("Original researcher")
+
+            override_path = Path(override_dir) / "test_agent"
+            override_path.mkdir(parents=True)
+            (override_path / "researcher.j2").write_text("Override researcher")
+
+            register_prompt_directory(Path(override_dir), priority=10)
+
+            # system.j2 not overridden
+            assert load_prompt(agent_prompts, "system") == "Original system"
+            # researcher.j2 is overridden
+            assert load_prompt(agent_prompts, "researcher") == "Override researcher"
+
+    def test_clear_prompt_directories(self):
+        """clear_prompt_directories removes all registered directories."""
+        with TemporaryDirectory() as agent_dir, TemporaryDirectory() as override_dir:
+            agent_prompts = Path(agent_dir) / "test_agent" / "prompts"
+            agent_prompts.mkdir(parents=True)
+            (agent_prompts / "system.j2").write_text("Original")
+
+            override_path = Path(override_dir) / "test_agent"
+            override_path.mkdir(parents=True)
+            (override_path / "system.j2").write_text("Override")
+
+            register_prompt_directory(Path(override_dir), priority=10)
+            assert load_prompt(agent_prompts, "system") == "Override"
+
+            clear_prompt_directories()
+            assert load_prompt(agent_prompts, "system") == "Original"
+
+    def test_no_override_dir_for_agent(self):
+        """Gracefully falls back when override dir has no matching agent subdir."""
+        with TemporaryDirectory() as agent_dir, TemporaryDirectory() as override_dir:
+            agent_prompts = Path(agent_dir) / "test_agent" / "prompts"
+            agent_prompts.mkdir(parents=True)
+            (agent_prompts / "system.j2").write_text("Original")
+
+            # override_dir exists but has no test_agent/ subdir
+            register_prompt_directory(Path(override_dir), priority=10)
+
+            result = load_prompt(agent_prompts, "system")
+            assert result == "Original"

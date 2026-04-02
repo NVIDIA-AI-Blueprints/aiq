@@ -52,7 +52,9 @@ from .json_utils import extract_json
 from .llm_provider import LLMProvider
 from .llm_provider import LLMRole
 from .message_utils import get_latest_user_query
+from .prompt_utils import clear_prompt_directories
 from .prompt_utils import load_prompt
+from .prompt_utils import register_prompt_directory
 from .prompt_utils import render_prompt_template
 from .tool_validation import format_tool_unavailability_error
 from .tool_validation import validate_tool_availability
@@ -69,6 +71,7 @@ __all__ = [
     "LLMRole",
     "SourceRegistry",
     "VerboseTraceCallback",
+    "clear_prompt_directories",
     "extract_json",
     "extract_messages_and_sources",
     "filter_tools_by_sources",
@@ -81,6 +84,7 @@ __all__ = [
     "is_postgres_dsn",
     "load_prompt",
     "parse_data_sources",
+    "register_prompt_directory",
     "register_source_parser",
     "render_prompt_template",
     "reset_session_registry",
