@@ -22,10 +22,34 @@ Token source: Context cookies (idToken) - set by the frontend auth layer.
 import base64
 import json
 import logging
+from collections.abc import Callable
 
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+_token_fetchers: list[tuple[int, Callable[[], str | None]]] = []
+
+
+def register_token_fetcher(fetcher: Callable[[], str | None], priority: int = 0) -> None:
+    """Register an additional token source.
+
+    Registered fetchers are tried in priority order (highest first) before
+    the default Context cookie lookup. The first fetcher that returns a
+    non-None token wins.
+
+    Args:
+        fetcher: Callable that returns a token string or None.
+        priority: Higher priority fetchers are tried first. Default: 0.
+    """
+    _token_fetchers.append((priority, fetcher))
+    _token_fetchers.sort(key=lambda x: x[0], reverse=True)
+    logger.debug("Registered token fetcher (priority=%d), total fetchers: %d", priority, len(_token_fetchers))
+
+
+def clear_token_fetchers() -> None:
+    """Remove all registered token fetchers. Useful for testing."""
+    _token_fetchers.clear()
 
 
 class UserInfo(BaseModel):
@@ -68,11 +92,23 @@ def get_auth_token() -> str | None:
     """
     Get authentication token from the request context.
 
-    Reads the idToken cookie set by the frontend auth layer.
+    Tries registered token fetchers in priority order (highest first),
+    then falls back to the idToken cookie set by the frontend auth layer.
 
     Returns:
         ID token string or None if not available.
     """
+    # Try registered fetchers first (highest priority first)
+    for _priority, fetcher in _token_fetchers:
+        try:
+            token = fetcher()
+            if token:
+                logger.debug("Token provided by registered fetcher")
+                return token
+        except Exception as e:
+            logger.debug("Registered token fetcher failed: %s", e)
+
+    # Default: Context cookies
     from nat.builder.context import Context
 
     try:
