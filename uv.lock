@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'win32'",
@@ -1290,7 +1290,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.24.0" },
-    { name = "nvidia-nat-eval", specifier = ">=1.5.0,<2" },
+    { name = "nvidia-nat-eval", specifier = "==1.5.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
 

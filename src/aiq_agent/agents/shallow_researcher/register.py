@@ -45,7 +45,14 @@ class ShallowResearchAgentConfig(FunctionBaseConfig, name="shallow_research_agen
     """Configuration for the shallow research agent."""
 
     llm: LLMRef = Field(..., description="LLM to use")
-    tools: list[FunctionRef | FunctionGroupRef] = Field(default_factory=list, description="Tools to use")
+    tools: list[FunctionRef | FunctionGroupRef] = Field(
+        default_factory=list,
+        description="Explicit tool list. Empty = inherit all from data_source_registry.",
+    )
+    exclude_tools: list[str] = Field(
+        default_factory=list,
+        description="Tool names to exclude when inheriting from registry.",
+    )
     max_llm_turns: int = Field(default=10, description="Maximum number of LLM turns")
     max_tool_iterations: int = Field(default=5, description="Maximum tool-calling iterations before forcing synthesis")
     verbose: bool = Field(default=False, description="Whether to enable verbose logging")
@@ -55,7 +62,19 @@ class ShallowResearchAgentConfig(FunctionBaseConfig, name="shallow_research_agen
 async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Builder):
     """Shallow research agent with tool-calling capabilities."""
     llm = await builder.get_llm(config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-    tools = await builder.get_tools(tool_names=config.tools, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+    if config.tools:
+        tool_refs = config.tools
+    else:
+        from aiq_agent.common import get_all_tool_refs
+
+        tool_refs = get_all_tool_refs()
+
+    tools = await builder.get_tools(tool_names=tool_refs, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+    if config.exclude_tools:
+        excluded = set(config.exclude_tools)
+        tools = [t for t in tools if getattr(t, "name", "") not in excluded]
 
     provider = LLMProvider()
     provider.set_default(llm)

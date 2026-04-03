@@ -149,23 +149,6 @@ class DataSource(BaseModel):
     description: str | None = Field(default=None, description="Human-readable description")
 
 
-def _collect_tool_names(builder: WorkflowBuilder) -> set[str]:
-    """Collect tool names from workflow functions that declare tools (for data source list)."""
-    tool_names: set[str] = set()
-    # intent_classifier (orchestration) and research agents may have tools; meta_chatter/depth_router no longer exist
-    for fn_name in ("deep_research_agent", "shallow_research_agent", "intent_classifier"):
-        try:
-            fn_config = builder.get_function_config(fn_name)
-        except (KeyError, ValueError):
-            continue
-        tools = getattr(fn_config, "tools", None)
-        if not tools:
-            continue
-        for tool in tools:
-            tool_names.add(getattr(tool, "name", str(tool)))
-    return tool_names
-
-
 async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: FastApiFrontEndPluginWorker) -> None:
     """
     Register agent-agnostic async job routes.
@@ -176,10 +159,18 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     import logging as std_logging
     import os
 
+    from aiq_agent.common.data_source_registry import get_all_sources
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs import EventStore
     from ..jobs.runner import run_agent_job
+
+    if not get_all_sources():
+        logger.warning(
+            "No data sources registered. Add a 'data_sources' function with "
+            "_type: data_source_registry to your YAML config to enable "
+            "data source toggles in the UI."
+        )
 
     @app.get(
         "/v1/jobs/async/agents",
@@ -203,28 +194,10 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         summary="List data sources",
     )
     async def list_data_sources() -> list[DataSource]:
-        """List available data sources with metadata."""
-        data_sources = [
-            DataSource(
-                id="web_search",
-                name="Web Search",
-                description="Search the web for real-time information.",
-            )
+        """List available data sources dynamically from the registry."""
+        return [
+            DataSource(id=source.id, name=source.name, description=source.description) for source in get_all_sources()
         ]
-
-        tool_names = _collect_tool_names(builder)
-
-        knowledge_configured = any("knowledge" in name.lower() or name == "knowledge_search" for name in tool_names)
-        if knowledge_configured:
-            data_sources.append(
-                DataSource(
-                    id="knowledge_layer",
-                    name="Knowledge Base",
-                    description="Search uploaded documents and files.",
-                )
-            )
-
-        return data_sources
 
     logger.info("Registered /v1/data_sources and /v1/jobs/async/agents routes")
 

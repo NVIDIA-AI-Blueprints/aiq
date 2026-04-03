@@ -96,6 +96,22 @@ llms:
   #     enable_thinking: true
 
 functions:
+  # Data source display metadata for the UI
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      - id: knowledge_layer
+        name: "Knowledge Base"
+        description: "Search uploaded documents and files."
+        tools:
+          - knowledge_search
+
   web_search_tool:
     _type: tavily_web_search
     max_results: 5
@@ -126,18 +142,13 @@ functions:
   intent_classifier:
     _type: intent_classifier
     llm: nemotron_llm_intent
-    tools:
-      - web_search_tool
-      # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
-      - knowledge_search
+    # tools: omitted -> inherits all from data_source_registry
 
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    tools:
-      - web_search_tool
-      - knowledge_search
+    # tools: omitted -> inherits all from data_source_registry
     max_turns: 3
     enable_plan_approval: true
     log_response_max_chars: 2000
@@ -146,9 +157,8 @@ functions:
   shallow_research_agent:
     _type: shallow_research_agent
     llm: nemotron_nano_llm
-    tools:
-      - web_search_tool
-      - knowledge_search
+    exclude_tools:
+      - advanced_web_search_tool
     max_llm_turns: 10
     max_tool_iterations: 5
 
@@ -158,10 +168,8 @@ functions:
     researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: gpt_oss_llm
     max_loops: 2
-    tools:
-      # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
-      - advanced_web_search_tool
-      - knowledge_search
+    exclude_tools:
+      - web_search_tool
 
 workflow:
   _type: chat_deepresearcher_agent

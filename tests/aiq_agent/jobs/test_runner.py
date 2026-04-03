@@ -936,69 +936,6 @@ class TestDataSourceModel:
         assert data["description"] == "Enterprise docs."
 
 
-class TestCollectToolNames:
-    """Tests for _collect_tool_names helper function."""
-
-    def test_collect_empty_builder(self):
-        """Test collecting from builder with no functions."""
-        from aiq_api.routes.jobs import _collect_tool_names
-
-        mock_builder = MagicMock()
-        mock_builder.get_function_config.side_effect = KeyError("Not found")
-
-        result = _collect_tool_names(mock_builder)
-        assert result == set()
-
-    def test_collect_with_tools(self):
-        """Test collecting tool names from builder."""
-        from aiq_api.routes.jobs import _collect_tool_names
-
-        mock_tool1 = MagicMock()
-        mock_tool1.name = "tavily_search"
-
-        mock_config = MagicMock()
-        mock_config.tools = [mock_tool1]
-
-        mock_builder = MagicMock()
-        mock_builder.get_function_config.return_value = mock_config
-
-        result = _collect_tool_names(mock_builder)
-        assert "tavily_search" in result
-
-    def test_collect_with_no_tools_attribute(self):
-        """Test collecting when config has no tools attribute."""
-        from aiq_api.routes.jobs import _collect_tool_names
-
-        mock_config = MagicMock(spec=[])
-
-        mock_builder = MagicMock()
-        mock_builder.get_function_config.return_value = mock_config
-
-        result = _collect_tool_names(mock_builder)
-        assert result == set()
-
-    def test_collect_with_mixed_function_availability(self):
-        """Test collecting when some functions don't exist."""
-        from aiq_api.routes.jobs import _collect_tool_names
-
-        mock_tool = MagicMock()
-        mock_tool.name = "test_tool"
-        mock_config = MagicMock()
-        mock_config.tools = [mock_tool]
-
-        mock_builder = MagicMock()
-
-        def get_fn_config(name):
-            if name == "deep_research_agent":
-                return mock_config
-            raise KeyError(f"No function {name}")
-
-        mock_builder.get_function_config.side_effect = get_fn_config
-
-        result = _collect_tool_names(mock_builder)
-        assert "test_tool" in result
-
-
 class TestJobErrorEventEmission:
     """Tests for job.error event emission on job failure."""
 

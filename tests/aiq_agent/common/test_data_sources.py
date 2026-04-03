@@ -20,11 +20,45 @@ from unittest.mock import MagicMock
 import pytest
 from langchain_core.messages import HumanMessage
 
+from aiq_agent.common.data_source_registry import populate_from_config
+from aiq_agent.common.data_source_registry import reset_registry
 from aiq_agent.common.data_sources import DEFAULT_DATA_SOURCES
 from aiq_agent.common.data_sources import extract_messages_and_sources
 from aiq_agent.common.data_sources import filter_tools_by_sources
 from aiq_agent.common.data_sources import format_data_source_tools
 from aiq_agent.common.data_sources import parse_data_sources
+
+
+@pytest.fixture(autouse=True)
+def _setup_registry():
+    """Set up registry with test data sources and tool→source map for all tests."""
+    reset_registry()
+
+    populate_from_config(
+        [
+            {
+                "id": "web_search",
+                "name": "Web Search",
+                "description": "Search the web for real-time information.",
+                "tools": ["web_search_tool", "web_search", "tavily_search"],
+            },
+            {
+                "id": "knowledge_layer",
+                "name": "Knowledge Base",
+                "description": "Search uploaded documents and files.",
+                "tools": ["knowledge_search", "knowledge_retrieval"],
+            },
+            {
+                "id": "paper_search",
+                "name": "Academic Papers",
+                "description": "Search academic papers.",
+                "tools": ["paper_search_tool"],
+            },
+        ]
+    )
+
+    yield
+    reset_registry()
 
 
 class TestParseDataSources:
@@ -194,7 +228,7 @@ class TestFilterToolsBySourcesMixed:
         assert other_tool in result
 
     def test_filter_all_three_source_types(self):
-        """Test filtering with web_search and knowledge_layer sources."""
+        """Test filtering with web_search, knowledge_layer, and ECI sources."""
         web_tool = MagicMock()
         web_tool.name = "tavily_search"
         knowledge_tool = MagicMock()
@@ -219,7 +253,7 @@ class TestFilterToolsBySourcesMixed:
         assert web_tool in result
 
     def test_filter_preserves_other_tools(self):
-        """Test that non-search tools are always included."""
+        """Test that non-search/ECI tools are always included."""
         calculator = MagicMock()
         calculator.name = "calculator"
         code_executor = MagicMock()
@@ -291,58 +325,48 @@ class TestFormatDataSourceTools:
     """Tests for format_data_source_tools function."""
 
     def test_format_web_search_source(self):
-        """Test formatting web_search data source."""
+        """Test formatting web_search data source uses registry display name."""
         result = format_data_source_tools(["web_search"])
 
         assert len(result) == 1
-        assert result[0]["name"] == "web_search"
+        assert result[0]["name"] == "Web Search"
         assert "web" in result[0]["description"].lower()
 
     def test_format_knowledge_layer_source(self):
-        """Test formatting knowledge_layer data source."""
+        """Test formatting knowledge_layer data source uses registry display name."""
         result = format_data_source_tools(["knowledge_layer"])
 
         assert len(result) == 1
-        assert result[0]["name"] == "knowledge_search"
+        assert result[0]["name"] == "Knowledge Base"
         assert "document" in result[0]["description"].lower() or "file" in result[0]["description"].lower()
 
-    def test_format_non_web_source_as_knowledge(self):
-        """Test that non-web sources (e.g. confluence) map to knowledge_search."""
+    def test_format_unknown_source_uses_title_case(self):
+        """Test that unregistered sources fall back to title-cased ID."""
         result = format_data_source_tools(["confluence"])
 
         assert len(result) == 1
-        assert result[0]["name"] == "knowledge_search"
-        assert "document" in result[0]["description"].lower() or "file" in result[0]["description"].lower()
+        assert result[0]["name"] == "Confluence"
 
     def test_format_multiple_sources(self):
-        """Test formatting multiple data sources (web_search and others map to knowledge_search)."""
-        result = format_data_source_tools(["web_search", "sharepoint"])
+        """Test formatting multiple data sources."""
+        result = format_data_source_tools(["web_search", "knowledge_layer"])
 
         assert len(result) == 2
         names = [r["name"] for r in result]
-        assert "web_search" in names
-        assert "knowledge_search" in names
-
-    def test_format_multiple_sources_with_knowledge_layer(self):
-        """Test formatting multiple data sources; non-web sources map to knowledge_search."""
-        result = format_data_source_tools(["web_search", "knowledge_layer", "confluence"])
-
-        assert len(result) == 3
-        names = [r["name"] for r in result]
-        assert "web_search" in names
-        assert names.count("knowledge_search") == 2
+        assert "Web Search" in names
+        assert "Knowledge Base" in names
 
     def test_format_empty_list(self):
         """Test formatting empty list returns empty list."""
         result = format_data_source_tools([])
         assert len(result) == 0
 
-    def test_format_non_web_tool_as_knowledge(self):
-        """Test that non-web sources (e.g. google_drive) map to knowledge_search."""
+    def test_format_underscore_replacement_for_unknown(self):
+        """Test that unregistered sources with underscores get title-cased."""
         result = format_data_source_tools(["google_drive"])
 
         assert len(result) == 1
-        assert result[0]["name"] == "knowledge_search"
+        assert result[0]["name"] == "Google Drive"
 
 
 class TestDefaultDataSources:

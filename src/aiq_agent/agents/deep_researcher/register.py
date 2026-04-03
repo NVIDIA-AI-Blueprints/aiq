@@ -48,7 +48,14 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     orchestrator_llm: LLMRef = Field(..., description="LLM for orchestrator")
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
-    tools: list[FunctionRef | FunctionGroupRef] = Field(default_factory=list)
+    tools: list[FunctionRef | FunctionGroupRef] = Field(
+        default_factory=list,
+        description="Explicit tool list. Empty = inherit all from data_source_registry.",
+    )
+    exclude_tools: list[str] = Field(
+        default_factory=list,
+        description="Tool names to exclude when inheriting from registry.",
+    )
     max_loops: int = Field(default=2)
     verbose: bool = Field(default=True)
 
@@ -56,7 +63,19 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
 @register_function(config_type=DeepResearchAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder):
     """Deep research agent using multi-phase workflow."""
-    tools = await builder.get_tools(tool_names=config.tools, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+    if config.tools:
+        tool_refs = config.tools
+    else:
+        from aiq_agent.common import get_all_tool_refs
+
+        tool_refs = get_all_tool_refs()
+
+    tools = await builder.get_tools(tool_names=tool_refs, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+    if config.exclude_tools:
+        excluded = set(config.exclude_tools)
+        tools = [t for t in tools if getattr(t, "name", "") not in excluded]
+
     llm = await builder.get_llm(config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
     provider = LLMProvider()
