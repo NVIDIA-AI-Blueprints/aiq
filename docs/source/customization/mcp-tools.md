@@ -67,44 +67,38 @@ This connects to the MCP server at the given URL and registers all of its tools 
 - `sse`: Server-Sent Events, supported for backwards compatibility
 - `stdio`: standard input/output for local process communication
 
-### Step 2: Add the function group to each agent's `tools` list
+### Step 2: Register the function group as a data source
 
-The agents will not use the MCP tools unless the function group appears in their `tools` list. Add it to the agents that should have access:
+Add the MCP function group to the `data_source_registry` so all agents inherit it automatically and the UI shows a toggle:
 
 ```yaml
 # (inside the existing functions: section)
-  intent_classifier:
-    _type: intent_classifier
-    tools:
-      - web_search_tool
-      - knowledge_search
-      - mcp_financial_tools
-
-  clarifier_agent:
-    _type: clarifier_agent
-    tools:
-      - web_search_tool
-      - knowledge_search
-      - mcp_financial_tools
-
-  shallow_research_agent:
-    _type: shallow_research_agent
-    tools:
-      - web_search_tool
-      - knowledge_search
-      - mcp_financial_tools
-
-  deep_research_agent:
-    _type: deep_research_agent
-    tools:
-      - advanced_web_search_tool
-      - knowledge_search
-      - mcp_financial_tools
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      - id: knowledge_layer
+        name: "Knowledge Base"
+        description: "Search uploaded documents and files."
+        tools:
+          - knowledge_search
+      - id: financial_data
+        name: "Financial Data"
+        description: "Query financial reports and market data."
+        tools:
+          - mcp_financial_tools
 ```
+
+All agents inherit tools from the registry by default -- no per-agent `tools` lists needed. The registry auto-detects that `mcp_financial_tools` is a function group and uses prefix matching for its individual tools (e.g., `mcp_financial_tools__get_stock_quote`).
 
 ### Complete Example Config
 
-Below is a complete config that adds MCP tools to the deep researcher alongside the existing web search and knowledge search tools. This extends `config_web_frag.yml`:
+Below is a complete config that adds MCP tools to the deep researcher alongside the existing web search and knowledge search tools. This extends `config_web_frag.yml`. Note that agents inherit all registry tools automatically -- no per-agent `tools` lists needed:
 
 ```yaml
 general:
@@ -145,7 +139,7 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_llm:
+  nemotron_nano_llm:
     _type: nim
     model_name: nvidia/nemotron-3-nano-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
@@ -166,17 +160,6 @@ llms:
     api_key: ${NVIDIA_API_KEY}
     max_retries: 10
 
-  nemotron_llm_deep:
-    _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
-    num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: true
-
 # MCP Tools: connect to an external MCP server
 function_groups:
   mcp_financial_tools:
@@ -186,6 +169,27 @@ function_groups:
       url: ${MCP_SERVER_URL:-http://localhost:9901/mcp}
 
 functions:
+  # Registry: single source of truth for tools + UI toggles
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      - id: knowledge_layer
+        name: "Knowledge Base"
+        description: "Search uploaded documents and files."
+        tools:
+          - knowledge_search
+      - id: financial_data
+        name: "Financial Data"
+        description: "Query financial reports and market data."
+        tools:
+          - mcp_financial_tools
+
   web_search_tool:
     _type: tavily_web_search
     max_results: 5
@@ -205,22 +209,15 @@ functions:
     ingest_url: ${RAG_INGEST_URL:-http://localhost:8082}
     timeout: 300
 
+  # Agents inherit all registry tools automatically
   intent_classifier:
     _type: intent_classifier
     llm: nemotron_llm_intent
-    tools:
-      - web_search_tool
-      - knowledge_search
-      - mcp_financial_tools
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: gpt_oss_llm
-    planner_llm: nemotron_llm
-    tools:
-      - web_search_tool
-      - knowledge_search
-      - mcp_financial_tools
+    llm: nemotron_nano_llm
+    planner_llm: nemotron_nano_llm
     max_turns: 3
     enable_plan_approval: true
     log_response_max_chars: 2000
@@ -228,24 +225,20 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: gpt_oss_llm
-    tools:
-      - web_search_tool
-      - knowledge_search
-      - mcp_financial_tools
+    llm: nemotron_nano_llm
+    exclude_tools:
+      - advanced_web_search_tool
     max_llm_turns: 10
     max_tool_iterations: 5
 
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: gpt_oss_llm
-    researcher_llm: nemotron_llm_deep
+    researcher_llm: nemotron_nano_llm
     planner_llm: gpt_oss_llm
     max_loops: 2
-    tools:
-      - advanced_web_search_tool
-      - knowledge_search
-      - mcp_financial_tools
+    exclude_tools:
+      - web_search_tool
 
 workflow:
   _type: chat_deepresearcher_agent
@@ -280,9 +273,9 @@ MCP tools that require OAuth2 authentication (for example, corporate Jira, Confl
 
 For non-authenticated MCP servers, or MCP servers that use service account credentials (set through environment variables on the server side), use the `mcp_client` approach described above.
 
-## UI Limitations
+## UI Integration
 
-MCP tools added through the configuration file will be available to the agents at the backend level, but they will not automatically appear in the demo UI. Displaying custom MCP tools in the UI requires changes to both the backend and frontend. Built-in support for this is planned for an upcoming version. In the meantime, the demo UI source code is provided and can be modified to surface additional tools as needed.
+When you register an MCP function group in the `data_source_registry`, it automatically appears as a toggleable data source in the UI via the `GET /v1/data_sources` endpoint. Users can enable or disable it per message using the data source toggles, just like web search or knowledge base.
 
 ## Prompt Tuning
 

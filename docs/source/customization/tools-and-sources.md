@@ -91,6 +91,45 @@ If an agent specifies an explicit `tools` list, it uses exactly those tools and 
       - knowledge_search
 ```
 
+## Adding MCP Tools as Data Sources
+
+MCP tools (via `mcp_client` function groups) work with the registry the same way as any other tool. Add the group name to a registry source entry and all agents get it automatically:
+
+```yaml
+# Connect to an external MCP server
+function_groups:
+  mcp_financial_tools:
+    _type: mcp_client
+    server:
+      transport: streamable-http
+      url: ${MCP_SERVER_URL:-http://localhost:9901/mcp}
+
+functions:
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      - id: knowledge_layer
+        name: "Knowledge Base"
+        tools:
+          - knowledge_search
+      - id: financial_data
+        name: "Financial Data"
+        description: "Query financial reports and market data via MCP."
+        tools:
+          - mcp_financial_tools         # function group name
+```
+
+That's it -- one registry entry. Every agent automatically gets the MCP tools. The UI shows a "Financial Data" toggle. Per-request `data_sources` filtering works.
+
+The registry auto-detects that `mcp_financial_tools` is a function group and uses NAT's group separator (`__`) for prefix matching. All tools exposed by the MCP server (e.g., `mcp_financial_tools__get_stock_quote`, `mcp_financial_tools__get_earnings`) map to the `financial_data` data source.
+
+For details on MCP server setup, transport options, tool overrides, and prompt tuning, see [MCP Tools](./mcp-tools.md).
+
 ## Disabling a Tool
 
 To disable a tool (for example, to avoid API usage or restrict agents to specific sources), remove it from the `data_source_registry`:
