@@ -17,6 +17,7 @@
 
 import pytest
 
+from aiq_agent.common.data_source_registry import DataSourceEntry
 from aiq_agent.common.data_source_registry import DataSourceMeta
 from aiq_agent.common.data_source_registry import get_all_sources
 from aiq_agent.common.data_source_registry import get_all_tool_refs
@@ -78,6 +79,29 @@ class TestPopulateFromConfig:
         meta = get_source("disabled_src")
         assert meta is not None
         assert meta.default_enabled is False
+
+    def test_requires_auth_true(self):
+        """Test that requires_auth is stored on the metadata."""
+        populate_from_config(
+            [
+                {"id": "eci", "name": "ECI", "description": "Enterprise.", "requires_auth": True},
+            ]
+        )
+
+        meta = get_source("eci")
+        assert meta is not None
+        assert meta.requires_auth is True
+
+    def test_requires_auth_defaults_to_false(self):
+        """Test that requires_auth defaults to False when omitted."""
+        populate_from_config(
+            [
+                {"id": "web", "name": "Web", "description": "Web search."},
+            ]
+        )
+
+        meta = get_source("web")
+        assert meta.requires_auth is False
 
     def test_missing_name_uses_title_cased_id(self):
         """Test that missing name falls back to title-cased ID."""
@@ -268,3 +292,15 @@ class TestGetAllToolRefs:
 
         refs = get_all_tool_refs()
         assert refs == sorted(refs)
+
+
+class TestDataSourceEntry:
+    """Tests for the DataSourceEntry pydantic config model."""
+
+    def test_requires_auth_defaults_false(self):
+        entry = DataSourceEntry(id="web", name="Web", description="Web search.")
+        assert entry.requires_auth is False
+
+    def test_requires_auth_set_true(self):
+        entry = DataSourceEntry(id="eci", name="ECI", requires_auth=True)
+        assert entry.requires_auth is True

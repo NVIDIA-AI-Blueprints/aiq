@@ -16,7 +16,7 @@ import { Globe, LoadingSpinner } from '@/adapters/ui/icons'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '../store'
 import { useIsCurrentSessionBusy, useChatStore } from '@/features/chat'
-import { type DataSource, WEB_SEARCH_SOURCE_ID } from '../data-sources'
+import type { DataSource } from '../data-sources'
 import { DataConnectionCard } from './DataConnectionCard'
 import { FileSourcesTab } from './FileSourcesTab'
 import { UploadOrchestrator } from '@/features/documents'
@@ -76,12 +76,13 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
       description: source.description ?? '',
       category: source.category ?? 'enterprise',
       defaultEnabled: true,
+      requiresAuth: source.requires_auth ?? false,
     }))
   }, [availableDataSources])
 
-  // Check if there are authenticated sources (sources other than web_search that require auth)
+  // Check if any sources require authentication
   const hasAuthenticatedSources = useMemo(() => {
-    return displaySources.some((source) => source.id !== WEB_SEARCH_SOURCE_ID)
+    return displaySources.some((source) => source.requiresAuth)
   }, [displaySources])
 
   const handleOpenChange = useCallback(
@@ -123,10 +124,10 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
     [setDataSourcesPanelTab]
   )
 
-  // Get only available sources (web_search always available, other sources need auth)
+  // Sources are available unless they require auth and the user has no token
   const availableSources = useMemo(() => {
     return displaySources.filter(
-      (source) => source.id === WEB_SEARCH_SOURCE_ID || hasValidToken
+      (source) => !source.requiresAuth || hasValidToken
     )
   }, [displaySources, hasValidToken])
 
@@ -290,9 +291,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
           ) : (
             <Flex direction="col" gap="2">
               {displaySources.map((source) => {
-                // Authenticated sources require sign-in - web_search works without auth
-                const isAuthenticatedSource = source.id !== WEB_SEARCH_SOURCE_ID
-                const isSourceAvailable = !isAuthenticatedSource || hasValidToken
+                const isSourceAvailable = !source.requiresAuth || hasValidToken
                 return (
                   <DataConnectionCard
                     key={source.id}

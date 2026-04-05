@@ -317,6 +317,7 @@ The `data_source_registry` provides:
 - **`GET /v1/data_sources`** API endpoint returns the registered sources (the UI renders these as toggles)
 - **Per-message filtering** via `data_sources: ["web_search"]` in the chat payload -- only tools belonging to selected sources are active
 - **Display metadata** (name, description) shown in the UI
+- **Auth gating** -- set `requires_auth: true` on a source to grey it out in the UI until the user signs in (e.g., enterprise sources that need OAuth tokens)
 - **Auto-inheritance** -- all agents get every registered tool by default (use `exclude_tools` on an agent for per-agent specialization)
 
 If a tool isn't listed in any `data_source_registry` source entry, it is always included regardless of filtering (e.g., utility tools like "think" or "calculator").

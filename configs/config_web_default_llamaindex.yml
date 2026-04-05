@@ -118,11 +118,12 @@ functions:
         description: "Search uploaded documents and files."
         tools:
           - knowledge_search
-      # - id: paper_search
-      #   name: "Academic Papers"
-      #   description: "Search academic papers and scientific publications."
-      #   tools:
-      #     - paper_search_tool
+      # Uncomment when paper_search_tool is enabled (requires SERPER_API_KEY)
+      - id: paper_search
+        name: "Academic Papers"
+        description: "Search academic papers and scientific publications."
+        tools:
+          - paper_search_tool
 
   web_search_tool:
     _type: tavily_web_search
@@ -147,10 +148,10 @@ functions:
 
   # Paper Search (optional - requires SERPER_API_KEY)
   # Uncomment the block below and set SERPER_API_KEY to enable academic paper search.
-  # paper_search_tool:
-  #   _type: paper_search
-  #   max_results: 5
-  #   serper_api_key: ${SERPER_API_KEY}
+  paper_search_tool:
+    _type: paper_search
+    max_results: 5
+    serper_api_key: ${SERPER_API_KEY}
 
   intent_classifier:
     _type: intent_classifier

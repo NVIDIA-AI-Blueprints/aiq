@@ -47,6 +47,7 @@ export const DataConnectionsTab: FC<DataConnectionsTabProps> = ({
       description: source.description ?? '',
       category: source.category ?? 'enterprise',
       defaultEnabled: true,
+      requiresAuth: source.requires_auth ?? false,
     }))
   }, [availableDataSources])
 

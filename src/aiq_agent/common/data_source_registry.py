@@ -37,11 +37,12 @@ Example YAML::
             tools:
               - web_search_tool
               - advanced_web_search_tool
-          - id: knowledge_layer
-            name: "Knowledge Base"
-            description: "Search uploaded documents and files."
+          - id: eci
+            name: "Enterprise Search"
+            description: "Search Confluence, Google Drive, and more."
+            requires_auth: true
             tools:
-              - knowledge_search
+              - eci
 """
 
 import logging
@@ -70,6 +71,7 @@ class DataSourceMeta:
     name: str
     description: str
     default_enabled: bool = True
+    requires_auth: bool = False
 
 
 # ── Global state ──
@@ -87,6 +89,7 @@ class DataSourceEntry(BaseModel):
     name: str = Field(..., description="Display name shown in the UI")
     description: str = Field(default="", description="Human-readable description")
     default_enabled: bool = Field(default=True, description="Whether enabled by default")
+    requires_auth: bool = Field(default=False, description="Whether the source requires user authentication")
     tools: list[FunctionRef] = Field(
         default_factory=list,
         description="NAT functions or function groups that belong to this data source",
@@ -122,6 +125,7 @@ def _populate(sources: list[dict], group_names: set[str] | None = None) -> None:
             name=entry.get("name", source_id.replace("_", " ").title()),
             description=entry.get("description", ""),
             default_enabled=entry.get("default_enabled", True),
+            requires_auth=entry.get("requires_auth", False),
         )
         for ref_name in entry.get("tools", []):
             if ref_name in group_names:
@@ -149,6 +153,7 @@ async def data_source_registry_fn(config: DataSourceRegistryConfig, builder: Any
             "name": entry.name,
             "description": entry.description,
             "default_enabled": entry.default_enabled,
+            "requires_auth": entry.requires_auth,
             "tools": [str(ref) for ref in entry.tools],
         }
         for entry in config.sources

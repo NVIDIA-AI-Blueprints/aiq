@@ -147,6 +147,7 @@ class DataSource(BaseModel):
     id: str = Field(..., description="Unique identifier for the data source")
     name: str = Field(..., description="Display name")
     description: str | None = Field(default=None, description="Human-readable description")
+    requires_auth: bool = Field(default=False, description="Whether user authentication is required")
 
 
 async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: FastApiFrontEndPluginWorker) -> None:
@@ -196,7 +197,13 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     async def list_data_sources() -> list[DataSource]:
         """List available data sources dynamically from the registry."""
         return [
-            DataSource(id=source.id, name=source.name, description=source.description) for source in get_all_sources()
+            DataSource(
+                id=source.id,
+                name=source.name,
+                description=source.description,
+                requires_auth=source.requires_auth,
+            )
+            for source in get_all_sources()
         ]
 
     logger.info("Registered /v1/data_sources and /v1/jobs/async/agents routes")

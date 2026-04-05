@@ -63,7 +63,6 @@ export {
 
 // Data Sources Types
 export type { DataSource, DataSourceCategory } from './data-sources'
-export { WEB_SEARCH_SOURCE_ID } from './data-sources'
 
 // Store
 export { useLayoutStore } from './store'
