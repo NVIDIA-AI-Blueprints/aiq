@@ -116,12 +116,16 @@ functions:
   intent_classifier:
     _type: intent_classifier
     llm: nemotron_llm_intent
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
     # llm_timeout: 90  # optional; seconds for intent LLM call (default 90)
 
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
     max_turns: 3
     enable_plan_approval: true
     log_response_max_chars: 2000
@@ -130,6 +134,7 @@ functions:
   shallow_research_agent:
     _type: shallow_research_agent
     llm: nemotron_nano_llm
+    # tools: omitted -> inherits all from data_source_registry
     exclude_tools:
       - advanced_web_search_tool
     max_llm_turns: 10
