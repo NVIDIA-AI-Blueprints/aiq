@@ -128,14 +128,14 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
   )
 
   const filteredSessions = useMemo(() => {
-    if (!searchQuery.trim()) return sessions.filter((s) => s.title.trim() !== '');
+    if (!searchQuery.trim()) return sessions.filter((s) => s.title.trim() !== '')
     const query = searchQuery.toLowerCase()
     return sessions.filter((s) => s.title.toLowerCase().includes(query) && s.title.trim() !== '')
   }, [sessions, searchQuery])
 
   // Group sessions by date
   const groupedSessions = groupSessionsByDate(filteredSessions)
-  const isEmptyState = filteredSessions.length === 0;
+  const isEmptyState = filteredSessions.length === 0
   return (
     <SidePanel
       className="side-panel-dock-under-header bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px]"
@@ -163,7 +163,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
       }
     >
       {/* Delete All + New Session */}
-      {!isEmptyState && (searchQuery.trim()=== '') &&(
+      {!isEmptyState && (searchQuery.trim() === '') && (
       <Flex align="center" justify="between" gap="2" className="mb-4">
         <Button
           kind="tertiary"
