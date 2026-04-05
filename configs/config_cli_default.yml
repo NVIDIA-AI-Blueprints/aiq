@@ -63,7 +63,21 @@ llms:
   #     enable_thinking: true
 
 functions:
-  # Data source display metadata for the UI
+  # =========================================================================
+  # Data Source Registry
+  # =========================================================================
+  # Central registry that controls:
+  #   1. UI toggles — each source appears as an on/off switch in the frontend
+  #   2. Per-message filtering — users can select active sources per request
+  #   3. Tool auto-inheritance — agents with no explicit `tools` list receive
+  #      every tool listed here (use `exclude_tools` on agents to specialize)
+  #
+  # Source entry fields:
+  #   id, name, description, tools, requires_auth (default: false),
+  #   default_enabled (default: true)
+  #
+  # See docs/source/customization/tools-and-sources.md for full details.
+  # =========================================================================
   data_sources:
     _type: data_source_registry
     sources:
@@ -96,17 +110,18 @@ functions:
   #   max_results: 5
   #   serper_api_key: ${SERPER_API_KEY}
 
+  # =========================================================================
+  # Agents — inherit all registry tools; use exclude_tools to specialize
+  # =========================================================================
   intent_classifier:
     _type: intent_classifier
     llm: nemotron_llm_intent
     # llm_timeout: 90  # optional; seconds for intent LLM call (default 90)
-    # tools: omitted -> inherits all from data_source_registry
 
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    # tools: omitted -> inherits all from data_source_registry
     max_turns: 3
     enable_plan_approval: true
     log_response_max_chars: 2000
