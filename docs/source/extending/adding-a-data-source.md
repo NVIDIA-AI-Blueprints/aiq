@@ -317,10 +317,21 @@ The `data_source_registry` provides:
 - **`GET /v1/data_sources`** API endpoint returns the registered sources (the UI renders these as toggles)
 - **Per-message filtering** via `data_sources: ["web_search"]` in the chat payload -- only tools belonging to selected sources are active
 - **Display metadata** (name, description) shown in the UI
-- **Auth gating** -- set `requires_auth: true` on a source to grey it out in the UI until the user signs in (e.g., enterprise sources that need OAuth tokens)
+- **Auth gating** -- set `requires_auth: true` on a source to grey it out in the UI until the user signs in (e.g., enterprise sources that need user-level OAuth tokens). Sources using backend API keys (Tavily, Serper) should leave this `false` (the default).
 - **Auto-inheritance** -- all agents get every registered tool by default (use `exclude_tools` on an agent for per-agent specialization)
 
 If a tool isn't listed in any `data_source_registry` source entry, it is always included regardless of filtering (e.g., utility tools like "think" or "calculator").
+
+### Source Entry Field Reference
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` | string | *required* | Unique key used in API payloads and filtering |
+| `name` | string | *required* | Display name shown in the UI |
+| `description` | string | `""` | Human-readable description for the UI |
+| `tools` | list | `[]` | NAT function or function group names belonging to this source |
+| `requires_auth` | bool | `false` | Grey out in UI until user signs in (for user-token sources) |
+| `default_enabled` | bool | `true` | Whether enabled by default in the UI |
 
 ---
 

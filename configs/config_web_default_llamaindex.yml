@@ -103,7 +103,32 @@ llms:
     max_tokens: 100
 
 functions:
-  # Data source display metadata for the UI
+  # =========================================================================
+  # Data Source Registry
+  # =========================================================================
+  # Central registry that controls:
+  #   1. UI toggles — each source appears as an on/off switch in the frontend
+  #   2. Per-message filtering — users can select active sources per request
+  #   3. Tool auto-inheritance — agents with no explicit `tools` list receive
+  #      every tool listed here (use `exclude_tools` on agents to specialize)
+  #
+  # Adding a new tool or MCP function group? Just add it here — all agents
+  # pick it up automatically. No per-agent config changes needed.
+  #
+  # Source entry fields:
+  #   id            — Unique key used in API payloads and filtering
+  #   name          — Display name shown in the UI
+  #   description   — Human-readable description shown in the UI
+  #   tools         — List of NAT function names or function group names
+  #   requires_auth — (default: false) If true, the UI greys out this source
+  #                   until the user signs in. Use for sources that need
+  #                   user-level OAuth tokens (e.g., enterprise SSO).
+  #                   Sources using backend API keys (Tavily, Serper) should
+  #                   leave this false.
+  #   default_enabled — (default: true) Whether enabled by default
+  #
+  # See docs/source/customization/tools-and-sources.md for full details.
+  # =========================================================================
   data_sources:
     _type: data_source_registry
     sources:
@@ -118,7 +143,6 @@ functions:
         description: "Search uploaded documents and files."
         tools:
           - knowledge_search
-      # Uncomment when paper_search_tool is enabled (requires SERPER_API_KEY)
       - id: paper_search
         name: "Academic Papers"
         description: "Search academic papers and scientific publications."
@@ -153,17 +177,23 @@ functions:
     max_results: 5
     serper_api_key: ${SERPER_API_KEY}
 
+  # =========================================================================
+  # Agents
+  # =========================================================================
+  # Tool inheritance: agents with no `tools` list inherit ALL tools from the
+  # data_source_registry above. Use `exclude_tools` to remove specific tools
+  # from an agent (e.g., give shallow the basic search, deep the advanced).
+  # To bypass auto-inherit entirely, set an explicit `tools` list.
+  # =========================================================================
   intent_classifier:
     _type: intent_classifier
     llm: nemotron_llm_intent
     verbose: true
-    # tools: omitted -> inherits all from data_source_registry
 
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    # tools: omitted -> inherits all from data_source_registry
     max_turns: 3
     enable_plan_approval: true
     log_response_max_chars: 2000
@@ -173,7 +203,7 @@ functions:
     _type: shallow_research_agent
     llm: nemotron_nano_llm
     verbose: true
-    exclude_tools:
+    exclude_tools:                     # Remove advanced variant; shallow uses web_search_tool
       - advanced_web_search_tool
     max_llm_turns: 10
     max_tool_iterations: 5
@@ -185,7 +215,7 @@ functions:
     planner_llm: gpt_oss_llm
     max_loops: 2
     verbose: true
-    exclude_tools:
+    exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
       - web_search_tool
 
 workflow:

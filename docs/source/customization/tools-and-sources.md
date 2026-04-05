@@ -24,11 +24,28 @@ functions:
         description: "Search uploaded documents and files."
         tools:
           - knowledge_search
+      - id: enterprise_search
+        name: "Enterprise Search"
+        description: "Search Confluence, Google Drive, and more."
+        requires_auth: true
+        tools:
+          - eci
 ```
 
 The `GET /v1/data_sources` API endpoint returns these entries, which the UI renders as toggles. When a user sends a message with `data_sources: ["web_search"]`, only tools belonging to that source are active for that request.
 
 Tools not listed in any data source entry (e.g., utility tools like "think") are always included regardless of filtering.
+
+### Source Entry Fields
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` | string | *required* | Unique key used in API payloads and filtering (e.g., `web_search`) |
+| `name` | string | *required* | Display name shown in the UI |
+| `description` | string | `""` | Human-readable description shown in the UI |
+| `tools` | list[string] | `[]` | NAT function names or function group names belonging to this source |
+| `requires_auth` | bool | `false` | If `true`, the UI greys out this source until the user signs in. Use for sources that need user-level OAuth tokens (e.g., enterprise SSO). Sources that use backend API keys (Tavily, Serper) should leave this `false`. |
+| `default_enabled` | bool | `true` | Whether the source is enabled by default when a user first loads the UI |
 
 ## Auto-Inherit: Agents Get All Registry Tools by Default
 
