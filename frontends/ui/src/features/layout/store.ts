@@ -120,7 +120,7 @@ export const useLayoutStore = create<LayoutStore>()(
         }
       },
 
-      disableEciSources: () =>
+      disableNonWebSources: () =>
         set(
           (state) => ({
             enabledDataSourceIds: state.enabledDataSourceIds.filter(
@@ -128,7 +128,7 @@ export const useLayoutStore = create<LayoutStore>()(
             ),
           }),
           false,
-          'disableEciSources'
+          'disableNonWebSources'
         ),
 
       setAvailableDataSources: (sources: DataSourceFromAPI[]) =>
