@@ -171,6 +171,12 @@ async def submit_agent_job(
     if not scheduler_address:
         raise RuntimeError("Async job submission requires NAT_DASK_SCHEDULER_ADDRESS to be set")
 
+    # Auto-capture auth token if not explicitly provided
+    if auth_token is None:
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
 
