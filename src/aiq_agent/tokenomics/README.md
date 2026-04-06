@@ -8,9 +8,9 @@ Post-eval analysis module for the Deep Research Agent. Parses a NAT profiler tra
 
 ### The subagent attribution problem
 
-NAT 1.5.0 tracks all events under the single registered function `deep_research_agent`. The Planner and Researcher subagents are inline LangGraph graphs managed by the `deepagents` library and are invisible to NAT's `function_ancestry` system — calling `subagent.ainvoke()` directly never touches NAT's `push_active_function` context var.
+The workflow is registered as `deep_research_agent`, and NAT still emits `FUNCTION_START` / `FUNCTION_END` for **tools** (e.g. search). Planner and Researcher subagents are inline LangGraph graphs inside the **`task`** tool: they do not appear as their own `FUNCTION_*` scopes, and traces from this stack usually have no per-step metadata (such as `function_ancestry`) that identifies subagent phase.
 
-This module works around this by **timing-window attribution**: every `task` TOOL_START/END pair brackets a subagent invocation and carries a `subagent_type` field in its input. Any LLM call whose timestamp falls inside a window is attributed to that subagent's phase. Overlapping researcher windows (parallel invocations) are all labelled `researcher-phase` — the phase is still correct even when the individual owner is ambiguous.
+This module uses **timing-window attribution**: every `task` TOOL_START/END pair brackets one subagent run and carries `subagent_type` in the tool input. Each `LLM_END` is classified using its **`event_timestamp`** (completion time): if it falls inside a task window, that phase applies; otherwise orchestrator. Overlapping researcher windows (parallel invocations) all yield `researcher-phase` — correct phase even when the specific instance is ambiguous.
 
 ---
 

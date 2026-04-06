@@ -10,25 +10,30 @@ ready for the tokenomics HTML report.
 
 Architecture note
 -----------------
-NAT 1.5.0 tracks all events under the single registered function
-``deep_research_agent``.  The planner-agent and researcher-agent subagents
-are inline LangGraph graphs managed by the ``deepagents`` library and are
-invisible to NAT's function-ancestry system.
+The workflow is registered as ``deep_research_agent``.  NAT 1.5.0 traces still
+emit ``FUNCTION_START`` / ``FUNCTION_END`` for **tools** (e.g. search helpers),
+but **planner-agent** and **researcher-agent** runs live inside the ``task``
+tool: they do not get distinct ``FUNCTION_*`` names.  Traces from this stack
+typically have no per-step ``function_ancestry`` (or equivalent) carrying
+subagent identity — calling ``subagent.ainvoke()`` does not surface as separate
+NAT function scopes for Planner vs Researcher.
 
-Subagent attribution is therefore inferred post-hoc via timing windows:
-every ``task`` TOOL_START/END pair brackets a subagent invocation and
-carries the ``subagent_type`` in its input.  Any LLM_END whose timestamp
-falls inside a window is attributed to that subagent's phase.
+Subagent attribution is therefore inferred post-hoc via timing windows: every
+``task`` TOOL_START/END pair brackets one subagent invocation and carries
+``subagent_type`` in its input.  For each ``LLM_END`` we use that step's
+``event_timestamp`` (completion time, not ``span_event_timestamp``): if it
+lies inside a task window, the call is attributed to that phase; otherwise
+**orchestrator-phase**.
 
-When multiple researcher-agent windows overlap (parallel invocations),
-all LLM calls inside *any* researcher window are labelled
-``researcher-phase`` — we cannot distinguish which parallel instance owns
-which call, but the phase is still correct.
+``_build_task_windows`` appends windows in ``task`` TOOL_END order.
+``_infer_phase`` returns the **first** window in that list whose bounds contain
+``ts``.  Overlapping researcher windows share the same phase label, so order is
+unimportant in the common parallel-researcher case.
 
-This module is the durable piece.  If NAT is later extended to propagate
-subagent names through ``function_ancestry``, ``_infer_phase`` can be
-simplified to read directly from the step rather than doing the
-timestamp join, and everything else stays the same.
+If NAT later attaches subagent phase directly on each step (e.g.
+``function_ancestry`` or explicit ``FUNCTION_*`` scopes for subagents),
+``_infer_phase`` can be replaced with a field read and the rest of this module
+can stay the same.
 """
 
 from __future__ import annotations
@@ -124,11 +129,11 @@ def _build_task_windows(steps: list[dict]) -> list[_TaskWindow]:
 
 def _infer_phase(ts: float, windows: list[_TaskWindow]) -> str:
     """
-    Return the phase label for an LLM call at ``ts``.
+    Return the phase label for an LLM call from its ``LLM_END`` time ``ts``.
 
-    An LLM call is attributed to the innermost matching window.  Parallel
-    researcher calls produce overlapping windows; the label is still
-    ``researcher-phase`` for all of them.
+    ``windows`` is ordered by ``task`` TOOL_END (see ``_build_task_windows``).
+    The first window with ``start_ts <= ts <= end_ts`` wins.  Overlapping
+    researcher windows all map to ``researcher-phase`` anyway.
     """
     for win in windows:
         if win.start_ts <= ts <= win.end_ts:
@@ -204,6 +209,7 @@ def _parse_request(request_index: int, steps: list[dict], pricing: PricingRegist
             dur_s = max(0.0, ts - span_ts)
             tps = completion_tokens / dur_s if dur_s > 0 else 0.0
 
+            # Window match uses LLM_END event_timestamp (completion), not span_event_timestamp.
             phase = _infer_phase(ts, task_windows)
             key = (phase, model)
 

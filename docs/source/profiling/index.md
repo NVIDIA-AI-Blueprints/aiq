@@ -234,11 +234,11 @@ Full per-query table: cost, ISL, OSL, cached tokens, ISL:OSL ratio, LLM call cou
 
 ### Subagent Phase Attribution
 
-The Deep Research Agent runs three sub-agents: an **Orchestrator**, a **Planner**, and one or more parallel **Researcher** instances. NAT records all events under the single registered function `deep_research_agent` — the subagents are inline LangGraph graphs and are invisible to NAT's function-ancestry system.
+The Deep Research Agent runs three logical parts: an **Orchestrator**, a **Planner**, and one or more parallel **Researcher** instances. The workflow is registered as `deep_research_agent`. NAT profiler traces still include `FUNCTION_START` / `FUNCTION_END` for **tools** (for example search), but Planner and Researcher runs are implemented **inside the `task` tool** and do not get distinct `FUNCTION_*` names. Typical traces also omit per-step metadata such as `function_ancestry` for subagent identity.
 
-Phase attribution is therefore inferred post-hoc from timing windows. Each `task` tool call in the trace carries a `subagent_type` field and brackets a subagent invocation with a precise start and end timestamp. Any LLM call whose timestamp falls inside a window is attributed to that subagent's phase. Overlapping researcher windows (parallel invocations) are all labelled `researcher-phase` — the individual instance is ambiguous, but the phase is correct.
+Phase attribution is therefore inferred from **timing windows**: each `task` TOOL_START/END carries `subagent_type` and brackets one subagent invocation. Each `LLM_END` uses **`event_timestamp`** (completion time): if it falls inside a task window, that phase applies; otherwise orchestrator. Overlapping researcher windows (parallel invocations) are all labelled `researcher-phase` — the instance is ambiguous, but the phase is correct.
 
-This means cost breakdowns by phase are accurate even without native NAT subagent support. If NAT is later extended to propagate subagent names through `function_ancestry`, the attribution logic in `src/aiq_agent/tokenomics/nat_adapter.py` can be simplified to read the phase directly from the event rather than doing the timing join.
+Cost breakdowns by phase stay accurate without native subagent scopes in NAT. If NAT later exposes phase on each step (for example via `function_ancestry` or explicit `FUNCTION_*` boundaries for subagents), the logic in `src/aiq_agent/tokenomics/nat_adapter.py` can be simplified to read that field instead of joining on timestamps.
 
 ### Python API
 
