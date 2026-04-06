@@ -55,6 +55,24 @@ def register_token_fetcher(fetcher: Callable[[], str | None], priority: int = 0)
     logger.debug("Registered token fetcher (priority=%d), total fetchers: %d", priority, len(_token_fetchers))
 
 
+def unregister_token_fetcher(fetcher: Callable[[], str | None]) -> None:
+    """Remove a previously registered token fetcher.
+
+    Matches by callable identity (``is`` check). No-op if the fetcher
+    is not currently registered.
+
+    Args:
+        fetcher: The same callable object that was passed to
+            :func:`register_token_fetcher`.
+    """
+    with _fetcher_lock:
+        before = len(_token_fetchers)
+        _token_fetchers[:] = [(p, f) for p, f in _token_fetchers if f is not fetcher]
+        removed = before - len(_token_fetchers)
+    if removed:
+        logger.debug("Unregistered token fetcher, total fetchers: %d", len(_token_fetchers))
+
+
 def clear_token_fetchers() -> None:
     """Remove all registered token fetchers.
 
