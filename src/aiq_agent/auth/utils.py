@@ -16,8 +16,13 @@
 """Shared authentication utilities for token retrieval and user info.
 
 These utilities can be used by any tool or agent to get auth tokens or user info.
-Token source: Context cookies (idToken) - set by the frontend auth layer.
-Token source: Context cookies (idToken) - set by the frontend auth layer.
+
+Token sources checked in priority order by ``get_auth_token()``:
+
+1. **NAT/AIQ Context cookies** — ``idToken`` cookie set by the frontend auth layer
+   (server / web-UI mode).
+2. **NAT/AIQ Context Authorization header** — ``Authorization: Bearer <jwt>`` sent
+   by API callers who authenticate with a JWT directly.
 """
 
 import base64
@@ -104,13 +109,17 @@ def get_user_info_from_token(id_token: str) -> UserInfo:
 
 def get_auth_token() -> str | None:
     """
-    Get authentication token from the request context.
+    Return a token from the first available source.
+
+    Sources checked in order:
 
     Tries registered token fetchers in priority order (highest first),
     then falls back to the idToken cookie set by the frontend auth layer.
+    1. NAT ``Context`` cookies — ``idToken`` key (server / web-UI mode).
+    2. NAT ``Context`` Authorization header — ``Bearer <jwt>`` (API callers with JWT).
 
     Returns:
-        ID token string or None if not available.
+        ID token string, or ``None`` if no valid token is available.
     """
     # Try registered fetchers first (highest priority first).
     # Iterate a snapshot so concurrent register_token_fetcher() calls
@@ -125,17 +134,24 @@ def get_auth_token() -> str | None:
             logger.debug("Registered token fetcher failed: %s", e)
 
     # Default: Context cookies
-    from nat.builder.context import Context
-
     try:
+        from nat.builder.context import Context
+
         context_metadata = Context.get().metadata
 
+        # 1. NAT Context cookie (browser / web-UI mode)
         if context_metadata and context_metadata.cookies:
             id_token = context_metadata.cookies.get("idToken")
             if id_token:
-                token = id_token.strip()
                 logger.debug("Using token from Context cookies")
-                return token
+                return id_token.strip()
+
+        # 2. NAT Context Authorization header (API callers with JWT)
+        if context_metadata and context_metadata.headers:
+            auth_header = context_metadata.headers.get("authorization", "")
+            if auth_header.startswith("Bearer eyJ"):
+                logger.debug("Using token from Authorization header")
+                return auth_header[7:].strip()
     except Exception as e:
         logger.debug("Failed to retrieve token from Context: %s", e)
 
@@ -144,12 +160,10 @@ def get_auth_token() -> str | None:
 
 def get_current_user_info() -> UserInfo | None:
     """
-    Get current user information from the frontend auth token.
-
-    Reads the idToken cookie from Context (set by the frontend).
+    Get current user information from the first available token source.
 
     Returns:
-        UserInfo object or None if no token available.
+        ``UserInfo`` with email / name, or ``None`` if no token is available.
     """
     token = get_auth_token()
 

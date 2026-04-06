@@ -188,6 +188,82 @@ functions:
 | `NAT_JOB_STORE_DB_URL` | Job store + event store database | `sqlite+aiosqlite:///./jobs.db` (or via front_end.db_url) |
 
 
+## Authentication
+
+Authentication is handled by `AuthMiddleware`, which runs on every request.  It
+is disabled by default and opt-in via the `REQUIRE_AUTH` environment variable.
+
+### Environment variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `REQUIRE_AUTH` | Enforce authentication on all non-exempt routes | `false` |
+
+### Enabling authentication
+
+Set `REQUIRE_AUTH=true` and register at least one validator before the server
+starts.  The server raises a `RuntimeError` at startup if auth is required but
+no validators are registered.
+
+Two registration mechanisms are supported — pick whichever fits your deployment:
+
+#### 1. Programmatic (`register_validator`)
+
+Call `register_validator()` in any code that runs before `nat serve`:
+
+```python
+from aiq_api.plugin import register_validator
+from aiq_api.auth.jwt_validator import JWTValidator
+
+register_validator(JWTValidator(issuer_url="https://your-identity-provider.com"))
+```
+
+#### 2. Entry points (recommended for packages / submodule deployments)
+
+Any installed Python package can contribute validators by declaring an
+`aiq_api.validators` entry point.  The function must return a list of validator
+instances.
+
+```toml
+# pyproject.toml of your deployment package
+[project.entry-points."aiq_api.validators"]
+my_provider = "mypackage.auth:get_validators"
+```
+
+```python
+# mypackage/auth.py
+def get_validators() -> list:
+    from aiq_api.auth.jwt_validator import JWTValidator
+    return [JWTValidator(issuer_url="https://your-identity-provider.com")]
+```
+
+After `pip install` / `uv sync`, validators are discovered automatically — no
+code changes to the server are needed.
+
+### Writing a custom validator
+
+A validator is any object with an async `validate(token: str) -> dict | None`
+method.  Return a dict with at minimum `{"type": "<name>"}` on success, or
+`None` if the token is not recognized by this validator.  The first validator
+to return a non-`None` result wins.
+
+```python
+class MyValidator:
+    async def validate(self, token: str) -> dict | None:
+        payload = verify_token(token)   # your verification logic
+        if payload is None:
+            return None
+        return {"type": "my_provider", "sub": payload["sub"], "token": token}
+```
+
+### Caller types and the clarifier
+
+The middleware sets `skip_clarifier=True` for callers that cannot participate in
+interactive back-and-forth (anonymous requests, headless API callers).  Pass the
+`X-AIQ-Mode: headless` request header to force this for any authenticated caller.
+
+---
+
 ## Registering New Agents
 
 Agents are registered by type so the job runner can load them from NAT config. Register at import time (e.g. in your NAT plugin or app startup):

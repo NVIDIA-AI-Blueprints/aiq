@@ -23,6 +23,7 @@ import uuid
 import warnings
 from pathlib import Path
 
+import yaml
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
@@ -252,6 +253,36 @@ async def cli_user_input_callback(prompt: InteractionPrompt) -> HumanResponse:
     )
 
 
+def _check_interactive_auth(config_file: str) -> bool:
+    """Check if interactive_auth is enabled in the config file."""
+    try:
+        config_path = Path(config_file)
+        if not config_path.exists():
+            return False
+
+        with open(config_path, encoding="utf-8") as f:
+            config = yaml.safe_load(f)
+
+        workflow_config = config.get("workflow", {})
+        return workflow_config.get("interactive_auth", False)
+    except Exception as e:
+        logging.debug(f"Failed to read config for interactive_auth: {e}")
+        return False
+
+
+async def _initialize_auth() -> None:
+    """Initialize authentication for CLI mode."""
+    try:
+        from aiq_research_cli.auth import initialize_workflow_auth
+
+        console.print("[dim]Initializing authentication...[/dim]")
+        await initialize_workflow_auth(interactive_auth=True)
+        console.print("[green]✓ Authentication successful[/green]")
+    except Exception as e:
+        console.print(f"[yellow]⚠ Authentication failed: {e}[/yellow]")
+        console.print("[dim]Continuing without authentication...[/dim]")
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Build the argument parser for the CLI."""
     parser = argparse.ArgumentParser(
@@ -409,7 +440,12 @@ def main() -> None:
     except Exception as e:
         logger.debug(f"Failed to validate LLM config: {e}")
 
+    interactive_auth = _check_interactive_auth(args.config_file)
+
     async def _run():
+        if interactive_auth:
+            await _initialize_auth()
+
         async with load_workflow(args.config_file) as session_manager:
             await interactive_loop(session_manager, verbose=args.verbose)
 

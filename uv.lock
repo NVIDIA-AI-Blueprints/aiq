@@ -340,6 +340,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "langchain-core" },
     { name = "pydantic" },
+    { name = "pyjwt" },
     { name = "python-multipart" },
     { name = "sqlalchemy" },
 ]
@@ -364,6 +365,7 @@ requires-dist = [
     { name = "psycopg", extras = ["binary"], marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'postgres'", specifier = ">=3.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pyjwt", extras = ["cryptography"], specifier = ">=2.8.0" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "python-multipart", specifier = ">=0.0.6" },

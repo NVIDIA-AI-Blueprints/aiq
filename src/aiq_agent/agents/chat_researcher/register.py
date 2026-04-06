@@ -354,6 +354,21 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 "email": user_info.email,
             }
 
+        # Decide whether to skip the clarifier for this request.
+        # 1. Config (enable_clarifier=false) — operator disabled it entirely.
+        # 2. aiq_api.auth.middleware ContextVar — covers X-AIQ-Mode: headless,
+        #    NVAuth/anonymous callers, and unauthenticated internal callers.
+        skip_clarifier = not config.enable_clarifier
+        if not skip_clarifier:
+            try:
+                from aiq_api.auth.middleware import get_current_user as _get_mw_user
+
+                if _get_mw_user().get("skip_clarifier"):
+                    skip_clarifier = True
+            except (ImportError, Exception):
+                pass
+        logger.info("skip_clarifier=%s", skip_clarifier)
+
         query_text, data_sources = _extract_query_and_sources(query)
         logger.info("ChatDeepResearcherAgent: %s", query_text)
         logger.info("ChatDeepResearcherAgent: Data sources: %s", data_sources)
@@ -394,6 +409,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 user_info=user_info_dict,
                 data_sources=data_sources,
                 available_documents=available_documents,
+                skip_clarifier=skip_clarifier,
             )
             result = await agent.run(state, thread_id=nat_context_conversation_id)
         finally:

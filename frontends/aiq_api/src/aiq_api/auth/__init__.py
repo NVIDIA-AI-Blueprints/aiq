@@ -13,26 +13,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""CLI-specific authentication utilities.
+"""Auth components for the AIQ API frontend."""
 
-Shared utilities (get_current_user_info) are in aiq_agent.auth.
-"""
-
-from aiq_agent.auth import UserInfo
-from aiq_agent.auth import decode_jwt_payload
-from aiq_agent.auth import get_auth_token
-from aiq_agent.auth import get_current_user_info
-from aiq_agent.auth import get_user_info_from_token
-
-from .local_token_store import LocalTokenStore
-from .local_token_store import get_local_token_store
+from .base import TokenValidator
+from .jwt_validator import JWTValidator
+from .middleware import AuthMiddleware
+from .middleware import get_current_user
 
 __all__ = [
-    "LocalTokenStore",
-    "UserInfo",
-    "decode_jwt_payload",
-    "get_auth_token",
-    "get_current_user_info",
-    "get_local_token_store",
-    "get_user_info_from_token",
+    "AuthMiddleware",
+    "JWTValidator",
+    "TokenValidator",
+    "get_current_user",
 ]

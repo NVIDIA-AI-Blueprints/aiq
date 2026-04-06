@@ -137,7 +137,7 @@ class ChatResearcherAgent:
                         },
                     )
 
-            if self.enable_clarifier:
+            if self.enable_clarifier and not state.skip_clarifier:
                 if self.clarifier_fn is None:
                     raise ValueError(
                         "enable_clarifier is True but clarifier_agent is not defined in config. "
@@ -383,6 +383,7 @@ class ChatResearcherAgent:
                 "data_sources": state.data_sources,
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
+                "skip_clarifier": state.skip_clarifier,
             }
             messages = state.messages
 
