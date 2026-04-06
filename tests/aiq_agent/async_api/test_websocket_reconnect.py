@@ -79,6 +79,19 @@ class DummyStepAdaptor:
     """Minimal step adaptor stub."""
 
 
+class DummyWorker:
+    """Minimal FastApiFrontEndPluginWorker stand-in (NAT handler requires worker)."""
+
+    def set_conversation_handler(self, _conversation_id: str, _handler: object) -> None:
+        return None
+
+    def get_conversation_handler(self, _conversation_id: str) -> object | None:
+        return None
+
+    def remove_conversation_handler(self, _conversation_id: str) -> None:
+        return None
+
+
 class DummyMessage(BaseModel):
     """Simple pydantic message for tests."""
 
@@ -159,6 +172,7 @@ async def test_handler_create_websocket_message_uses_registry_send(
         socket=dummy_socket,
         session_manager=DummySessionManager(),
         step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
     )
     handler._conversation_id = "conv-1"
 
@@ -222,6 +236,7 @@ async def test_handler_create_websocket_message_drops_for_disconnected_conversat
         socket=dummy_socket,
         session_manager=DummySessionManager(),
         step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
     )
     handler._conversation_id = "conv-1"
 
@@ -280,6 +295,7 @@ async def test_handler_create_websocket_message_falls_back_to_socket_without_con
         socket=dummy_socket,
         session_manager=DummySessionManager(),
         step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
     )
     handler._conversation_id = None
 
@@ -337,6 +353,7 @@ async def test_handler_create_websocket_message_handles_socket_failure(
         socket=dummy_socket,
         session_manager=DummySessionManager(),
         step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
     )
     handler._conversation_id = "conv-1"
 
@@ -391,6 +408,7 @@ async def test_handler_run_resolves_pending_future(monkeypatch) -> None:
         socket=dummy_socket,
         session_manager=DummySessionManager(),
         step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
     )
     handler._conversation_id = "conv-1"
 
@@ -445,6 +463,7 @@ async def test_handler_run_uses_registry_when_no_future(
         socket=dummy_socket,
         session_manager=DummySessionManager(),
         step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
     )
     handler._conversation_id = "conv-1"
 
@@ -500,6 +519,7 @@ async def test_handler_run_processes_user_message(monkeypatch) -> None:
         socket=dummy_socket,
         session_manager=DummySessionManager(),
         step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
     )
 
     content = UserMessageContent(
@@ -547,6 +567,7 @@ async def test_handler_run_cancels_workflow_on_disconnect(monkeypatch) -> None:
         socket=dummy_socket,
         session_manager=DummySessionManager(),
         step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
     )
     handler._conversation_id = "conv-1"
 

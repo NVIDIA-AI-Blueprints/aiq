@@ -28,12 +28,9 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat==1.4.0",
-    "nvidia-nat-langchain==1.4.0",
-    "nvidia-nat[telemetry]==1.4.0",
-    "nvidia-nat-weave==1.4.0",
-    "nvidia-nat[async_endpoints]==1.4.0",
-    "nvidia-nat-phoenix==1.4.0",
+    "nvidia-nat[langchain,weave,async_endpoints,phoenix]==1.5.0",
+    # Provides nat.plugins.eval (required by workspace benchmark evaluators at plugin discovery)
+    "nvidia-nat-eval==1.5.0",
     "deepagents>=0.3.0",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
@@ -83,6 +80,7 @@ aiq_shallow_researcher = "aiq_agent.agents.shallow_researcher.register"
 aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
 aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
 aiq_clarifier = "aiq_agent.agents.clarifier.register"
+aiq_data_source_registry = "aiq_agent.common.data_source_registry"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]

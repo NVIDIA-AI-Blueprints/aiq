@@ -1,9 +1,8 @@
 -- =============================================================================
--- AI-Q Blueprint - Database Initialization
--- This script runs on first PostgreSQL startup (fresh volume only)
+-- AI-Q Blueprint - Database Initialization (idempotent — safe to re-run)
 -- =============================================================================
 --
--- What this script handles (requires admin privileges):
+-- What this script handles:
 --   - Creating databases (aiq_checkpoints)
 --   - Granting permissions
 --   - Creating NAT JobStore table (job_info)
@@ -16,8 +15,8 @@
 --
 -- =============================================================================
 
--- Create checkpoints database for LangGraph agent state
-CREATE DATABASE aiq_checkpoints;
+-- Create checkpoints database if it doesn't exist
+SELECT 'CREATE DATABASE aiq_checkpoints' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'aiq_checkpoints')\gexec
 
 -- Grant permissions
 GRANT ALL PRIVILEGES ON DATABASE aiq_jobs TO aiq;

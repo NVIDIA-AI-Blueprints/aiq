@@ -391,7 +391,7 @@ class TestSubmitDeepResearchJob:
                 "NAT_CONFIG_PATH": "/path/to/config.yml",
             },
         ):
-            with patch("nat.front_ends.fastapi.job_store.JobStore", return_value=mock_job_store):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
                 result = await submit_deep_research_job(
                     input_text="test query",
                     owner="test@example.com",
@@ -416,7 +416,7 @@ class TestSubmitDeepResearchJob:
                 "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
             },
         ):
-            with patch("nat.front_ends.fastapi.job_store.JobStore", return_value=mock_job_store):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
                 result = await submit_agent_job(
                     agent_type="deep_researcher",
                     input_text="test query",
@@ -444,7 +444,7 @@ class TestSubmitDeepResearchJob:
                 "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
             },
         ):
-            with patch("nat.front_ends.fastapi.job_store.JobStore", return_value=mock_job_store):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
                 result = await submit_deep_research_job(
                     input_text="test query",
                     owner="test@example.com",
@@ -934,69 +934,6 @@ class TestDataSourceModel:
         assert data["id"] == "sharepoint"
         assert data["name"] == "Microsoft SharePoint"
         assert data["description"] == "Enterprise docs."
-
-
-class TestCollectToolNames:
-    """Tests for _collect_tool_names helper function."""
-
-    def test_collect_empty_builder(self):
-        """Test collecting from builder with no functions."""
-        from aiq_api.routes.jobs import _collect_tool_names
-
-        mock_builder = MagicMock()
-        mock_builder.get_function_config.side_effect = KeyError("Not found")
-
-        result = _collect_tool_names(mock_builder)
-        assert result == set()
-
-    def test_collect_with_tools(self):
-        """Test collecting tool names from builder."""
-        from aiq_api.routes.jobs import _collect_tool_names
-
-        mock_tool1 = MagicMock()
-        mock_tool1.name = "tavily_search"
-
-        mock_config = MagicMock()
-        mock_config.tools = [mock_tool1]
-
-        mock_builder = MagicMock()
-        mock_builder.get_function_config.return_value = mock_config
-
-        result = _collect_tool_names(mock_builder)
-        assert "tavily_search" in result
-
-    def test_collect_with_no_tools_attribute(self):
-        """Test collecting when config has no tools attribute."""
-        from aiq_api.routes.jobs import _collect_tool_names
-
-        mock_config = MagicMock(spec=[])
-
-        mock_builder = MagicMock()
-        mock_builder.get_function_config.return_value = mock_config
-
-        result = _collect_tool_names(mock_builder)
-        assert result == set()
-
-    def test_collect_with_mixed_function_availability(self):
-        """Test collecting when some functions don't exist."""
-        from aiq_api.routes.jobs import _collect_tool_names
-
-        mock_tool = MagicMock()
-        mock_tool.name = "test_tool"
-        mock_config = MagicMock()
-        mock_config.tools = [mock_tool]
-
-        mock_builder = MagicMock()
-
-        def get_fn_config(name):
-            if name == "deep_research_agent":
-                return mock_config
-            raise KeyError(f"No function {name}")
-
-        mock_builder.get_function_config.side_effect = get_fn_config
-
-        result = _collect_tool_names(mock_builder)
-        assert "test_tool" in result
 
 
 class TestJobErrorEventEmission:

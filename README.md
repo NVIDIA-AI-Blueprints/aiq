@@ -98,7 +98,6 @@ This project is for:
 - NVIDIA API key from [NVIDIA AI](https://build.nvidia.com) (for NIM models)
 - Node.js 22+ and npm (optional, for web UI mode)
 
-> *Dependency Note:* This release is pinned to *NeMo Agent Toolkit (NAT) v1.4.0* (nvidia-nat==1.4.0). NAT v1.5 or later is *not yet supported* by AI-Q and upgrading may introduce breaking changes. The pin will be lifted in a future AI-Q release once compatibility has been validated.
 
 **Optional requirements:**
 - Tavily API key (for web search functionality)

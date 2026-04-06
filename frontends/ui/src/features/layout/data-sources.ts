@@ -23,10 +23,6 @@ export interface DataSource {
   category: DataSourceCategory
   /** Whether the source is enabled by default */
   defaultEnabled: boolean
+  /** Whether the source requires user authentication */
+  requiresAuth: boolean
 }
-
-/**
- * Default data source ID that works without authentication.
- * Web search uses backend API keys (Tavily), not user tokens.
- */
-export const WEB_SEARCH_SOURCE_ID = 'web_search'

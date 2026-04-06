@@ -232,7 +232,7 @@ version = "1.0.0"
 description = "NAT-based custom search tool"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "nvidia-nat==1.4.0",
+    "nvidia-nat==1.5.0",
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
 ]

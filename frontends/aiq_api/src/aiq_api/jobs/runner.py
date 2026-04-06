@@ -85,8 +85,8 @@ class CancellationMonitor:
 
     async def _poll_job_status(self) -> None:
         """Poll job status and set cancelled event if interrupted."""
-        from nat.front_ends.fastapi.job_store import JobStatus
-        from nat.front_ends.fastapi.job_store import JobStore
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
         job_store = JobStore(scheduler_address=self.scheduler_address, db_url=self.db_url)
 
@@ -242,8 +242,8 @@ async def run_agent_job(
     from aiq_agent.common import is_verbose
     from nat.builder.framework_enum import LLMFrameworkEnum
     from nat.builder.workflow_builder import WorkflowBuilder
-    from nat.front_ends.fastapi.job_store import JobStatus
-    from nat.front_ends.fastapi.job_store import JobStore
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStore
     from nat.runtime.loader import load_config
 
     if configure_logging:
@@ -285,10 +285,12 @@ async def run_agent_job(
         async with WorkflowBuilder.from_config(config=config) as builder:
             fn_config = builder.get_function_config(agent_config_name)
 
-            # Get LLMs for deep_researcher (orchestrator required)
-            orchestrator_llm = await builder.get_llm(
-                fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-            )
+            # Get LLMs - handle both deep_researcher (orchestrator_llm) and shallow/other agents (llm)
+            orchestrator_llm = None
+            if hasattr(fn_config, "orchestrator_llm") and fn_config.orchestrator_llm:
+                orchestrator_llm = await builder.get_llm(
+                    fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
+                )
             planner_llm = None
             researcher_llm = None
             if hasattr(fn_config, "planner_llm") and fn_config.planner_llm:
@@ -299,8 +301,23 @@ async def run_agent_job(
                 )
 
             llm = orchestrator_llm
+            if llm is None and hasattr(fn_config, "llm") and fn_config.llm:
+                llm = await builder.get_llm(fn_config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
-            tools = await builder.get_tools(tool_names=fn_config.tools, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            # Resolve tools: use explicit list or auto-inherit from data_source_registry
+            tool_refs = fn_config.tools
+            if not tool_refs:
+                from aiq_agent.common import get_all_tool_refs
+
+                tool_refs = get_all_tool_refs()
+
+            tools = await builder.get_tools(tool_names=tool_refs, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+            # Apply per-agent exclusions (e.g. deep_research excludes web_search_tool)
+            if hasattr(fn_config, "exclude_tools") and fn_config.exclude_tools:
+                excluded = set(fn_config.exclude_tools)
+                tools = [t for t in tools if getattr(t, "name", "") not in excluded]
+
             if data_sources is not None:
                 from aiq_agent.common import filter_tools_by_sources
 
@@ -315,7 +332,7 @@ async def run_agent_job(
             from nat.data_models.intermediate_step import TraceMetadata
             from nat.data_models.invocation_node import InvocationNode
             from nat.observability.exporter_manager import ExporterManager
-            from nat.profiler.callbacks.langchain_callback_handler import LangchainProfilerHandler
+            from nat.plugins.langchain.callback_handler import LangchainProfilerHandler
             from nat.utils.reactive.subject import Subject
 
             telemetry_exporters = {
@@ -538,13 +555,24 @@ def _create_agent_instance(
     1. llm_provider + tools pattern (DeepResearcherAgent style)
     2. llm + tools pattern (simpler agents)
     """
-    # Try llm_provider pattern first (DeepResearcherAgent)
+    # Try deep_researcher pattern (llm_provider + tools + max_loops + verbose)
     try:
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
             max_loops=getattr(fn_config, "max_loops", 3),
             verbose=verbose,
+            callbacks=callbacks,
+        )
+    except TypeError:
+        pass
+
+    # Try llm_provider + tools pattern (ShallowResearcherAgent style)
+    try:
+        return agent_cls(
+            llm_provider=llm_provider,
+            tools=tools,
+            max_tool_iterations=getattr(fn_config, "max_tool_iterations", 5),
             callbacks=callbacks,
         )
     except TypeError:

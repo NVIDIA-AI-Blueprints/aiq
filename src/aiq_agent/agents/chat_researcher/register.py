@@ -61,7 +61,14 @@ class IntentClassifierConfig(FunctionBaseConfig, name="intent_classifier"):
     """Configuration for the combined orchestration node (intent + meta response + depth)."""
 
     llm: LLMRef = Field(..., description="LLM to use")
-    tools: list[FunctionRef | FunctionGroupRef] = Field(default_factory=list)
+    tools: list[FunctionRef | FunctionGroupRef] = Field(
+        default_factory=list,
+        description="Explicit tool list. Empty = inherit all from data_source_registry.",
+    )
+    exclude_tools: list[str] = Field(
+        default_factory=list,
+        description="Tool names to exclude when inheriting from registry.",
+    )
     verbose: bool = Field(default=False)
     llm_timeout: float = Field(
         default=90,
@@ -75,7 +82,20 @@ async def intent_classifier(config: IntentClassifierConfig, builder: Builder):
     from .nodes import IntentClassifier
 
     llm = await builder.get_llm(config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-    tools = await builder.get_tools(tool_names=config.tools, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+    if config.tools:
+        tool_refs = config.tools
+    else:
+        from aiq_agent.common import get_all_tool_refs
+
+        tool_refs = get_all_tool_refs()
+
+    tools = await builder.get_tools(tool_names=tool_refs, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+    if config.exclude_tools:
+        excluded = set(config.exclude_tools)
+        tools = [t for t in tools if getattr(t, "name", "") not in excluded]
+
     verbose = is_verbose(config.verbose)
     callbacks = [VerboseTraceCallback()] if verbose else []
 
@@ -190,9 +210,16 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
     # Get deep research tools for early validation
     deep_research_config = builder.get_function_config("deep_research_agent")
-    deep_research_tools = await builder.get_tools(
-        tool_names=deep_research_config.tools, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-    )
+    if deep_research_config.tools:
+        deep_tool_refs = deep_research_config.tools
+    else:
+        from aiq_agent.common import get_all_tool_refs
+
+        deep_tool_refs = get_all_tool_refs()
+    deep_research_tools = await builder.get_tools(tool_names=deep_tool_refs, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+    if deep_research_config.exclude_tools:
+        excluded = set(deep_research_config.exclude_tools)
+        deep_research_tools = [t for t in deep_research_tools if getattr(t, "name", "") not in excluded]
 
     # Create a validation function to check if deep research tools are available
     def validate_deep_research_tools(data_sources: list[str] | None) -> tuple[bool, str]:

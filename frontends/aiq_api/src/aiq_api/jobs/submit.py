@@ -122,7 +122,7 @@ async def submit_agent_job(
             available_documents=[{"file_name": "doc.pdf", "summary": "A research paper"}],
         )
     """
-    from nat.front_ends.fastapi.job_store import JobStore
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
     # Get agent configuration from registry
     agent_config = get_agent_config(agent_type)

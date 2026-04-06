@@ -31,12 +31,12 @@ from nat.builder.evaluator import EvaluatorInfo
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.cli.register_workflow import register_evaluator
 from nat.data_models.component_ref import LLMRef
+from nat.data_models.evaluator import EvalInput
+from nat.data_models.evaluator import EvalInputItem
+from nat.data_models.evaluator import EvalOutput
+from nat.data_models.evaluator import EvalOutputItem
 from nat.data_models.evaluator import EvaluatorBaseConfig
-from nat.eval.evaluator.base_evaluator import BaseEvaluator
-from nat.eval.evaluator.evaluator_model import EvalInput
-from nat.eval.evaluator.evaluator_model import EvalInputItem
-from nat.eval.evaluator.evaluator_model import EvalOutput
-from nat.eval.evaluator.evaluator_model import EvalOutputItem
+from nat.plugins.eval.evaluator.base_evaluator import BaseEvaluator
 
 logger = logging.getLogger(__name__)
 
@@ -669,9 +669,10 @@ class FreshQAEvaluator(BaseEvaluator):
 
         from tqdm import tqdm
 
-        from nat.eval.utils.tqdm_position_registry import TqdmPositionRegistry
+        from nat.plugins.eval.utils.tqdm_position_registry import TqdmPositionRegistry
 
         pbar = None
+        tqdm_position = None
         try:
             tqdm_position = TqdmPositionRegistry.claim()
             pbar = tqdm(
@@ -699,6 +700,7 @@ class FreshQAEvaluator(BaseEvaluator):
         finally:
             if pbar:
                 pbar.close()
+            if tqdm_position is not None:
                 TqdmPositionRegistry.release(tqdm_position)
 
         result = self._compute_metrics(list(output_items))

@@ -16,16 +16,53 @@
 """Shared authentication utilities for token retrieval and user info.
 
 These utilities can be used by any tool or agent to get auth tokens or user info.
-Token source: AIQContext cookies (idToken) - set by the frontend auth layer.
+Token source: Context cookies (idToken) - set by the frontend auth layer.
 """
 
 import base64
 import json
 import logging
+import threading
+from collections.abc import Callable
 
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
+
+_token_fetchers: list[tuple[int, Callable[[], str | None]]] = []
+_fetcher_lock = threading.Lock()
+
+
+def register_token_fetcher(fetcher: Callable[[], str | None], priority: int = 0) -> None:
+    """Register an additional token source.
+
+    Registered fetchers are tried in priority order (highest first) before
+    the default Context cookie lookup. The first fetcher that returns a
+    non-None token wins.
+
+    Duplicate fetchers (same callable identity) are silently ignored.
+
+    Args:
+        fetcher: Callable that returns a token string or None.
+        priority: Higher priority fetchers are tried first. Default: 0.
+    """
+    with _fetcher_lock:
+        if any(f is fetcher for _, f in _token_fetchers):
+            logger.debug("Token fetcher already registered, skipping duplicate")
+            return
+        _token_fetchers.append((priority, fetcher))
+        _token_fetchers.sort(key=lambda x: x[0], reverse=True)
+    logger.debug("Registered token fetcher (priority=%d), total fetchers: %d", priority, len(_token_fetchers))
+
+
+def clear_token_fetchers() -> None:
+    """Remove all registered token fetchers.
+
+    Warning: This is intended for test isolation only. Calling in production
+    will silently remove all registered auth sources.
+    """
+    with _fetcher_lock:
+        _token_fetchers.clear()
 
 
 class UserInfo(BaseModel):
@@ -68,24 +105,38 @@ def get_auth_token() -> str | None:
     """
     Get authentication token from the request context.
 
-    Reads the idToken cookie set by the frontend auth layer.
+    Tries registered token fetchers in priority order (highest first),
+    then falls back to the idToken cookie set by the frontend auth layer.
 
     Returns:
         ID token string or None if not available.
     """
-    from nat.builder.context import AIQContext
+    # Try registered fetchers first (highest priority first).
+    # Iterate a snapshot so concurrent register_token_fetcher() calls
+    # don't mutate the list mid-iteration.
+    for _priority, fetcher in list(_token_fetchers):
+        try:
+            token = fetcher()
+            if token:
+                logger.debug("Token provided by registered fetcher")
+                return token
+        except Exception as e:
+            logger.debug("Registered token fetcher failed: %s", e)
+
+    # Default: Context cookies
+    from nat.builder.context import Context
 
     try:
-        context_metadata = AIQContext.get().metadata
+        context_metadata = Context.get().metadata
 
         if context_metadata and context_metadata.cookies:
             id_token = context_metadata.cookies.get("idToken")
             if id_token:
                 token = id_token.strip()
-                logger.debug("Using token from AIQContext cookies")
+                logger.debug("Using token from Context cookies")
                 return token
     except Exception as e:
-        logger.debug("Failed to retrieve token from AIQContext: %s", e)
+        logger.debug("Failed to retrieve token from Context: %s", e)
 
     return None
 
@@ -94,7 +145,7 @@ def get_current_user_info() -> UserInfo | None:
     """
     Get current user information from the frontend auth token.
 
-    Reads the idToken cookie from AIQContext (set by the frontend).
+    Reads the idToken cookie from Context (set by the frontend).
 
     Returns:
         UserInfo object or None if no token available.
