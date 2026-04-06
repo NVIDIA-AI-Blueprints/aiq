@@ -4,12 +4,23 @@
 """
 Generate a self-contained tokenomics HTML report from a NAT profiler trace.
 
-Usage
------
+Single-run
+----------
 python -m aiq_agent.tokenomics.report \\
-    --trace  frontends/benchmarks/deepresearch_bench/results/all_requests_profiler_traces.json \\
-    --config frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench.yml \\
-    [--output frontends/benchmarks/deepresearch_bench/results/tokenomics_report.html]
+    --trace  results/all_requests_profiler_traces.json \\
+    --config configs/config_tokenomics_pricing.yml \\
+    [--output results/tokenomics_report.html]
+
+Comparison (two or more runs)
+------------------------------
+python -m aiq_agent.tokenomics.report \\
+    --trace results/run_a/all_requests_profiler_traces.json \\
+    --trace results/run_b/all_requests_profiler_traces.json \\
+    --config configs/config_tokenomics_pricing.yml
+
+Passing ``--trace`` more than once activates comparison mode: all existing
+tabs show Run A data unchanged, and a new ``🔀 Compare`` tab appears with
+side-by-side cost/token charts and a per-query delta table.
 """
 
 from __future__ import annotations
@@ -375,6 +386,90 @@ def _build_report_data(
 
 
 # ---------------------------------------------------------------------------
+# Comparison data builder
+# ---------------------------------------------------------------------------
+
+
+def _build_comparison_data(run_datas: list[dict]) -> dict:
+    """Return an A-vs-B comparison block to embed in the primary run's report_data.
+
+    Only the first two runs are compared.  The per-query list is the UNION of
+    both runs' query IDs so that queries unique to one run are still visible in
+    the table (with null for the missing side).  The delta bar chart in the
+    report only renders bars for queries present in both runs.
+    """
+    a = run_datas[0]
+    b = run_datas[1]
+
+    a_by_id = {q["id"]: q for q in a.get("per_query", [])}
+    b_by_id = {q["id"]: q for q in b.get("per_query", [])}
+    all_ids = sorted(set(a_by_id) | set(b_by_id))
+    common_ids = set(a_by_id) & set(b_by_id)
+
+    per_query_cmp = []
+    for qid in all_ids:
+        qa = a_by_id.get(qid)
+        qb = b_by_id.get(qid)
+        in_both = qa is not None and qb is not None
+
+        cost_a = qa["cost_usd"] if qa else None
+        cost_b = qb["cost_usd"] if qb else None
+        if in_both:
+            cost_delta: float | None = round(cost_b - cost_a, 6)  # type: ignore[operator]
+            cost_pct: float | None = round((cost_delta / cost_a * 100) if cost_a else 0.0, 1)
+        else:
+            cost_delta = cost_pct = None
+
+        per_query_cmp.append(
+            {
+                "id": qid,
+                "question": (qa or qb).get("question", ""),  # type: ignore[union-attr]
+                "cost_a": cost_a,
+                "cost_b": cost_b,
+                "cost_delta": cost_delta,
+                "cost_pct": cost_pct,
+                "isl_a": qa.get("input_tokens") if qa else None,
+                "isl_b": qb.get("input_tokens") if qb else None,
+                "osl_a": qa.get("output_tokens") if qa else None,
+                "osl_b": qb.get("output_tokens") if qb else None,
+                "duration_a": qa.get("duration_s") if qa else None,
+                "duration_b": qb.get("duration_s") if qb else None,
+                "llm_calls_a": qa.get("entry_count") if qa else None,
+                "llm_calls_b": qb.get("entry_count") if qb else None,
+                "in_both": in_both,
+            }
+        )
+
+    cost_delta_total = b["total_cost_usd"] - a["total_cost_usd"]
+    cost_pct_total = (cost_delta_total / a["total_cost_usd"] * 100) if a["total_cost_usd"] else 0.0
+    prompt_a = a.get("total_prompt_tokens", 0)
+    prompt_b = b.get("total_prompt_tokens", 0)
+
+    return {
+        "label_a": a["label"],
+        "label_b": b["label"],
+        "num_queries_a": a["num_queries"],
+        "num_queries_b": b["num_queries"],
+        "num_common_queries": len(common_ids),
+        "total_cost_a": a["total_cost_usd"],
+        "total_cost_b": b["total_cost_usd"],
+        "llm_cost_a": a["llm_cost_usd"],
+        "llm_cost_b": b["llm_cost_usd"],
+        "total_llm_calls_a": a["total_llm_calls"],
+        "total_llm_calls_b": b["total_llm_calls"],
+        "cache_rate_a": round(a.get("total_cached_tokens", 0) / prompt_a, 4) if prompt_a else 0.0,
+        "cache_rate_b": round(b.get("total_cached_tokens", 0) / prompt_b, 4) if prompt_b else 0.0,
+        "cost_delta": round(cost_delta_total, 6),
+        "cost_pct_change": round(cost_pct_total, 1),
+        "by_model_a": a.get("by_model", {}),
+        "by_model_b": b.get("by_model", {}),
+        "by_phase_a": a.get("by_phase", {}),
+        "by_phase_b": b.get("by_phase", {}),
+        "per_query": per_query_cmp,
+    }
+
+
+# ---------------------------------------------------------------------------
 # HTML template
 # ---------------------------------------------------------------------------
 
@@ -443,6 +538,7 @@ _HTML = r"""<!DOCTYPE html>
   .stat.blue .value { color: var(--blue); }
   .stat.orange .value { color: var(--orange); }
   .stat.purple .value { color: var(--purple); }
+  .stat.red .value { color: var(--red); }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th {
     background: var(--surface2); padding: 10px 14px; text-align: left;
@@ -473,6 +569,7 @@ _HTML = r"""<!DOCTYPE html>
   <button onclick="showTab('efficiency',this)">📐 Efficiency</button>
   <button onclick="showTab('pricing',this)">🏷 Pricing</button>
   <button onclick="showTab('detail',this)">📋 Per-Query</button>
+  <button id="compareBtn" style="display:none" onclick="showTab('compare',this)">🔀 Compare</button>
 </nav>
 
 <main>
@@ -760,6 +857,53 @@ _HTML = r"""<!DOCTYPE html>
   </div>
 </div>
 
+<!-- ── COMPARE ────────────────────────────────────────────────────────────── -->
+<div id="tab-compare" class="tab-content">
+  <div class="stat-grid" id="compareStats"></div>
+  <div class="grid-2">
+    <div class="card">
+      <div class="card-header">🤖 Cost by Model — Run A vs Run B
+        <div class="card-sub">Same model appearing in both bars = same routing, different volumes or prompts.
+          A model present in only one run signals a model swap between the two experiments.</div>
+      </div>
+      <div class="card-body"><div id="compareModelBar"></div></div>
+    </div>
+    <div class="card">
+      <div class="card-header">🏗 Cost by Phase — Run A vs Run B
+        <div class="card-sub">A phase cost shift (e.g. lower Researcher spend) often indicates fewer
+          parallel search calls or a changed routing policy.</div>
+      </div>
+      <div class="card-body"><div id="comparePhaseBar"></div></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-header">📈 Per-Query Cost Delta (B − A)
+      <div class="card-sub">Green bars = Run B is cheaper for that query; red bars = Run B costs more.
+        Only queries present in both runs are shown — use the same filter.allowlist for both runs
+        to maximise alignment.</div>
+    </div>
+    <div class="card-body"><div id="compareDeltaBar"></div></div>
+  </div>
+  <div class="card">
+    <div class="card-header">📋 Per-Query Comparison Table
+      <div class="card-sub">All queries from both runs. Dimmed rows = query only in one run (— in missing columns).
+        Bold coloured rows = queries in both runs, with cost delta.</div>
+    </div>
+    <div class="card-body" style="padding:0;overflow-x:auto">
+      <table id="compareTable">
+        <thead><tr>
+          <th>Query #</th><th>Question</th>
+          <th>Cost A</th><th>Cost B</th><th>Δ Cost</th><th>Δ %</th>
+          <th>ISL A</th><th>ISL B</th><th>OSL A</th><th>OSL B</th>
+          <th>Dur A (s)</th><th>Dur B (s)</th>
+          <th>Calls A</th><th>Calls B</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 </main>
 
 <script>
@@ -808,11 +952,15 @@ function renderTab(id) {
   if (id === 'efficiency') renderEfficiency();
   if (id === 'pricing')    renderPricing();
   if (id === 'detail')     renderDetail();
+  if (id === 'compare')    renderComparison();
 }
 
 // ── INIT ─────────────────────────────────────────────────────────────────────
 document.getElementById('headerMeta').textContent =
   DATA.label + ' \u2022 ' + DATA.generated_at + ' \u2022 ' + DATA.num_queries + ' queries';
+if (DATA.comparison) {
+  document.getElementById('compareBtn').style.display = '';
+}
 
 // ── OVERVIEW ─────────────────────────────────────────────────────────────────
 function renderOverview() {
@@ -1381,6 +1529,109 @@ function renderDetail() {
   }).join('');
 }
 
+// ── COMPARE ───────────────────────────────────────────────────────────────────
+function renderComparison() {
+  const cmp = DATA.comparison;
+  if (!cmp) return;
+
+  const costSaved  = -cmp.cost_delta;
+  const savingsPct = -cmp.cost_pct_change;
+  const callsDelta = cmp.total_llm_calls_b - cmp.total_llm_calls_a;
+  const ds = v => (v >= 0 ? '+' : '') + v;
+
+  document.getElementById('compareStats').innerHTML = `
+    <div class="stat orange"><div class="label">Run A Total Cost</div>
+      <div class="value">${fmt$(cmp.total_cost_a,2)}</div>
+      <div class="sub">${cmp.label_a}</div></div>
+    <div class="stat orange"><div class="label">Run B Total Cost</div>
+      <div class="value">${fmt$(cmp.total_cost_b,2)}</div>
+      <div class="sub">${cmp.label_b}</div></div>
+    <div class="stat ${costSaved>=0?'green':'red'}"><div class="label">Cost Delta (B \u2212 A)</div>
+      <div class="value">${costSaved>=0?'\u2212':'+'}${fmt$(Math.abs(cmp.cost_delta),2)}</div>
+      <div class="sub">${
+        savingsPct>=0?savingsPct.toFixed(1)+'% cheaper':(-savingsPct).toFixed(1)+'% costlier'
+      }</div></div>
+    <div class="stat blue"><div class="label">Aligned / A / B</div>
+      <div class="value">${cmp.num_common_queries}</div>
+      <div class="sub">of ${cmp.num_queries_a} A &amp; ${cmp.num_queries_b} B</div></div>
+    <div class="stat purple"><div class="label">LLM Calls A \u2192 B</div>
+      <div class="value">${cmp.total_llm_calls_a} \u2192 ${cmp.total_llm_calls_b}</div>
+      <div class="sub">${ds(callsDelta)} calls</div></div>
+    <div class="stat green"><div class="label">Cache Rate A / B</div>
+      <div class="value">${(cmp.cache_rate_a*100).toFixed(1)}% / ${(cmp.cache_rate_b*100).toFixed(1)}%</div></div>
+  `;
+
+  // Cost by model grouped bar
+  const allMods = [...new Set([...Object.keys(cmp.by_model_a||{}), ...Object.keys(cmp.by_model_b||{})])];
+  const filtMods = allMods.filter(m => (cmp.by_model_a[m]||0) > 0.0001 || (cmp.by_model_b[m]||0) > 0.0001);
+  Plotly.newPlot('compareModelBar', [
+    { type:'bar', name:cmp.label_a, x:filtMods, y:filtMods.map(m=>cmp.by_model_a[m]||0), marker:{color:'#58a6ff'} },
+    { type:'bar', name:cmp.label_b, x:filtMods, y:filtMods.map(m=>cmp.by_model_b[m]||0), marker:{color:'#3fb950'} },
+  ], L({ height:300, barmode:'group', yaxis:{title:'Cost (USD)'},
+         xaxis:{automargin:true,tickangle:-25}, margin:{t:20,r:20,b:90,l:70} }), CFG);
+
+  // Cost by phase grouped bar
+  const allPhs = [...new Set([...Object.keys(cmp.by_phase_a||{}), ...Object.keys(cmp.by_phase_b||{})])];
+  Plotly.newPlot('comparePhaseBar', [
+    { type:'bar', name:cmp.label_a, x:allPhs, y:allPhs.map(p=>cmp.by_phase_a[p]||0), marker:{color:'#58a6ff'} },
+    { type:'bar', name:cmp.label_b, x:allPhs, y:allPhs.map(p=>cmp.by_phase_b[p]||0), marker:{color:'#3fb950'} },
+  ], L({ height:300, barmode:'group', yaxis:{title:'Cost (USD)'},
+         xaxis:{automargin:true,tickangle:-25}, margin:{t:20,r:20,b:90,l:70} }), CFG);
+
+  // Per-query delta bar — only queries present in BOTH runs
+  const pq     = cmp.per_query || [];
+  const pqBoth = pq.filter(q => q.in_both);
+  if (pqBoth.length) {
+    Plotly.newPlot('compareDeltaBar', [{
+      type:'bar', x:pqBoth.map(q=>'Q'+q.id), y:pqBoth.map(q=>q.cost_delta),
+      text:pqBoth.map(q=>(q.cost_delta<=0?'':'+')+'$'+(+q.cost_delta).toFixed(4)),
+      textposition:'outside',
+      marker:{ color:pqBoth.map(q=>q.cost_delta<=0?'#3fb950':'#f85149') },
+      hovertemplate:'Q%{x}: $%{y:.4f}<extra></extra>',
+    }], L({ height:320,
+            yaxis:{title:'Cost delta: B \u2212 A (USD)', zerolinecolor:'#8b949e', zeroline:true},
+            xaxis:{automargin:true, tickangle:-45},
+            margin:{t:20,r:20,b:110,l:70}, showlegend:false }), CFG);
+  } else {
+    document.getElementById('compareDeltaBar').innerHTML =
+      '<p style="padding:40px;color:var(--muted);text-align:center">No queries aligned between the two runs — '
+      + 'use the same filter.allowlist for both runs.</p>';
+  }
+
+  // Comparison table — full union: null values shown as em-dash
+  const fmt$N  = v => v == null ? '\u2014' : fmt$(v);
+  const fmtKN  = v => v == null ? '\u2014' : fmtK(v);
+  const fmtTN  = v => v == null ? '\u2014' : (+v).toFixed(1);
+  const fmtCN  = v => v == null ? '\u2014' : String(v);
+  const tbody  = document.querySelector('#compareTable tbody');
+  tbody.innerHTML = pq.map(q => {
+    const hasBoth = q.in_both;
+    const dc   = !hasBoth ? '#8b949e' : (q.cost_delta <= 0 ? '#3fb950' : '#f85149');
+    const dTxt = !hasBoth ? '\u2014'
+               : (q.cost_delta<0?'\u2212':q.cost_delta>0?'+':'')+'$'+Math.abs(q.cost_delta).toFixed(4);
+    const pStr = !hasBoth ? '\u2014'
+               : (q.cost_pct<=0?'':'+') + q.cost_pct.toFixed(1) + '%';
+    const qtxt = (q.question||'').substring(0,80) + (q.question&&q.question.length>80?'\u2026':'');
+    const rowStyle = !hasBoth ? ' style="opacity:.65"' : '';
+    return `<tr${rowStyle}>
+      <td><strong>${q.id}</strong></td>
+      <td style="color:#8b949e;max-width:200px;word-break:break-word;font-size:12px">${qtxt||'\u2014'}</td>
+      <td style="color:#d29922">${fmt$N(q.cost_a)}</td>
+      <td style="color:#d29922">${fmt$N(q.cost_b)}</td>
+      <td style="color:${dc};font-weight:600">${dTxt}</td>
+      <td style="color:${dc}">${pStr}</td>
+      <td>${fmtKN(q.isl_a)}</td>
+      <td>${fmtKN(q.isl_b)}</td>
+      <td>${fmtKN(q.osl_a)}</td>
+      <td>${fmtKN(q.osl_b)}</td>
+      <td>${fmtTN(q.duration_a)}</td>
+      <td>${fmtTN(q.duration_b)}</td>
+      <td>${fmtCN(q.llm_calls_a)}</td>
+      <td>${fmtCN(q.llm_calls_b)}</td>
+    </tr>`;
+  }).join('');
+}
+
 // ── INITIAL RENDER ────────────────────────────────────────────────────────────
 renderTab('overview');
 </script>
@@ -1403,30 +1654,80 @@ def render_html(report_data: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def generate_report(trace_path: str, config_path: str, output_path: str | None = None) -> str:
+def generate_report(
+    trace_path: str | list[str],
+    config_path: str,
+    output_path: str | None = None,
+) -> str:
+    """Generate a tokenomics HTML report.
+
+    Parameters
+    ----------
+    trace_path:
+        Path to a single ``all_requests_profiler_traces.json``, or a list of
+        paths for comparison mode.  When more than one path is provided the
+        report gains a ``🔀 Compare`` tab showing A-vs-B deltas; all other
+        tabs show Run A data unchanged.
+    config_path:
+        Path to the eval config YAML (provides pricing).
+    output_path:
+        Destination HTML file.  Defaults to ``<first_trace_dir>/tokenomics_report.html``.
+    """
+    if isinstance(trace_path, str):
+        trace_paths: list[str] = [trace_path]
+    else:
+        trace_paths = list(trace_path)
+
     with open(config_path) as f:
         config = yaml.safe_load(f)
 
     pricing_raw = (config.get("tokenomics") or {}).get("pricing") or {}
     pricing = PricingRegistry.from_dict(pricing_raw)
 
-    profiles = parse_trace(trace_path, pricing)
-    if not profiles:
-        print("WARNING: no request profiles parsed — check the trace file.", file=sys.stderr)
+    run_datas: list[dict] = []
+    for tp in trace_paths:
+        profiles = parse_trace(tp, pricing)
+        if not profiles:
+            print(f"WARNING: no request profiles parsed — check {tp}", file=sys.stderr)
 
-    predicted_osl_map = _load_csv_predictions(trace_path)
-    if predicted_osl_map:
-        print(f"Loaded {len(predicted_osl_map)} NOVA-Predicted-OSL values from CSV.")
+        predicted_osl_map = _load_csv_predictions(tp)
+        if predicted_osl_map:
+            print(f"Loaded {len(predicted_osl_map)} NOVA-Predicted-OSL values from {Path(tp).name}.")
 
-    report_data = _build_report_data(profiles, pricing, config_path, predicted_osl_map)
-    html = render_html(report_data)
+        rd = _build_report_data(profiles, pricing, config_path, predicted_osl_map)
+        # In multi-run mode use the trace's parent directory name as the run label
+        # so the comparison tab can distinguish "run_a" from "run_b".
+        if len(trace_paths) > 1:
+            rd["label"] = Path(tp).parent.name or Path(tp).stem
+        run_datas.append(rd)
+
+    primary = run_datas[0]
+    if len(run_datas) >= 2:
+        cmp = _build_comparison_data(run_datas)
+        primary["comparison"] = cmp
+        print(
+            f"Comparison mode: "
+            f"Run A ({cmp['label_a']}) = {cmp['num_queries_a']} queries, "
+            f"Run B ({cmp['label_b']}) = {cmp['num_queries_b']} queries, "
+            f"{cmp['num_common_queries']} aligned by query ID."
+        )
+        if cmp["num_common_queries"] == 0:
+            print(
+                "  WARNING: no overlapping query IDs — per-query deltas will be empty.\n"
+                "  Make sure both runs use the same filter.allowlist.",
+                file=sys.stderr,
+            )
+    else:
+        primary["comparison"] = None
+
+    html = render_html(primary)
 
     if output_path is None:
         output_dir = (config.get("eval") or {}).get("general", {}).get("output_dir")
         if output_dir:
             output_path = str(Path(output_dir) / "tokenomics_report.html")
         else:
-            output_path = str(Path(trace_path).parent / "tokenomics_report.html")
+            output_path = str(Path(trace_paths[0]).parent / "tokenomics_report.html")
 
     with open(output_path, "w", encoding="utf-8") as fh:
         fh.write(html)
@@ -1437,8 +1738,21 @@ def generate_report(trace_path: str, config_path: str, output_path: str | None =
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Generate a tokenomics HTML report from a NAT profiler trace.")
-    parser.add_argument("--trace", required=True, help="Path to all_requests_profiler_traces.json")
+    parser.add_argument(
+        "--trace",
+        required=True,
+        action="append",
+        metavar="TRACE",
+        help=(
+            "Path to all_requests_profiler_traces.json.  "
+            "Repeat the flag to compare multiple runs (e.g. --trace run_a/traces.json --trace run_b/traces.json)."
+        ),
+    )
     parser.add_argument("--config", required=True, help="Path to the eval config YAML")
-    parser.add_argument("--output", default=None, help="Output HTML path (default: <trace_dir>/tokenomics_report.html)")
+    parser.add_argument(
+        "--output",
+        default=None,
+        help="Output HTML path (default: <first_trace_dir>/tokenomics_report.html)",
+    )
     args = parser.parse_args()
     generate_report(args.trace, args.config, args.output)

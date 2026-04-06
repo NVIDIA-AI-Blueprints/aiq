@@ -129,7 +129,9 @@ The tokenomics report addresses all three. It reconstructs phase attribution fro
 
 ### Configuring Pricing
 
-Pricing is declared under `tokenomics.pricing` in the same config file used for profiling:
+Keep pricing in a **separate YAML** (for example `configs/config_tokenomics_pricing.yml`) and pass that file to the tokenomics report CLI.
+
+Declare prices under `tokenomics.pricing`:
 
 ```yaml
 tokenomics:
@@ -155,6 +157,8 @@ tokenomics:
       output_per_1m_tokens: 4.00
 ```
 
+You can optionally set `eval.general.output_dir` in that same file so the report’s default output path matches your eval artifacts directory (see `config_tokenomics_pricing.yml` in the bench configs).
+
 **Model name lookup** uses exact match first, then substring match, then the `default`. A key of `"gpt-5.2"` matches a trace model name of `"azure/openai/gpt-5.2"` because the key is a substring of the full name.
 
 **Tool name lookup** follows the same rule. A key of `"web_search"` matches `"advanced_web_search_tool"` because `"web_search"` is a substring of the tool name. Unknown tools default to $0 — no error is raised, so you only need to configure tools that have a real per-call cost.
@@ -168,14 +172,10 @@ After `nat eval` completes, run:
 ```bash
 PYTHONPATH=src python -m aiq_agent.tokenomics.report \
   --trace  frontends/benchmarks/deepresearch_bench/results/all_requests_profiler_traces.json \
-  --config frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench_profiling.yml
+  --config frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pricing.yml
 ```
 
-The report is written to `eval.general.output_dir` from the config (no `--output` flag needed):
-
-```
-frontends/benchmarks/deepresearch_bench/results/tokenomics_report.html
-```
+If the pricing YAML sets `eval.general.output_dir`, the report is written there as `tokenomics_report.html` when you omit `--output`. Otherwise it defaults to `<trace_directory>/tokenomics_report.html`.
 
 If `standardized_data_all.csv` is present in the same directory as the trace, it is automatically loaded to enrich the report with NOVA-Predicted-OSL data.
 
@@ -248,7 +248,7 @@ The tokenomics module can also be used programmatically:
 import yaml
 from aiq_agent.tokenomics import parse_trace, PricingRegistry
 
-with open("frontends/benchmarks/deepresearch_bench/configs/config_deep_research_bench_profiling.yml") as f:
+with open("frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pricing.yml") as f:
     config = yaml.safe_load(f)
 
 pricing = PricingRegistry.from_dict(config["tokenomics"]["pricing"])

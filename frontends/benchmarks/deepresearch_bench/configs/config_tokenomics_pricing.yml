@@ -1,0 +1,33 @@
+# Tokenomics pricing only (not loaded by `nat eval`).
+#
+# NAT's top-level config schema rejects unknown keys; keep `tokenomics` here and pass
+# this file to `python -m aiq_agent.tokenomics.report --config ...`.
+#
+# Prices are USD per 1 million tokens. Tool costs are USD per invocation.
+#
+# Optional: mirror `eval.general.output_dir` from your profiling eval config so the
+# report defaults to the same folder as the trace when you omit `--output`.
+
+eval:
+  general:
+    output_dir: frontends/benchmarks/deepresearch_bench/results
+
+tokenomics:
+  pricing:
+    models:
+      "gpt-5.2":
+        input_per_1m_tokens: 2.50
+        output_per_1m_tokens: 10.00
+      "nvidia/nemotron-3-nano-30b-a3b":
+        input_per_1m_tokens: 0.12
+        output_per_1m_tokens: 0.50
+        cached_input_per_1m_tokens: 0.10
+    tools:
+      # Key "web_search" matches "advanced_web_search_tool" via substring lookup.
+      "web_search":
+        cost_per_call: 0.016
+      "paper_search":
+        cost_per_call: 0.0003
+    default:
+      input_per_1m_tokens: 1.00
+      output_per_1m_tokens: 4.00

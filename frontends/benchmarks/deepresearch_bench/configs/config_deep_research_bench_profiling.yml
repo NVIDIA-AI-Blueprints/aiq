@@ -30,23 +30,10 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_llm_deep:
-    _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
-    base_url: "https://4c4438f1-e810-4543-b891-677ac4f20bc2.invocation.api.nvcf.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
-    num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: true
-
   openai_gpt_5_2:
     _type: openai
-    model_name: "azure/openai/gpt-5.2"
-    base_url: "https://inference-api.nvidia.com/v1"
-    api_key: ${INFERENCE_NVIDIA_API_KEY}
+    model_name: "gpt-5.2"
+    api_key: ${OPENAI_API_KEY}
 
   gpt_oss_llm:
     _type: nim
@@ -68,6 +55,7 @@ llms:
   #   temperature: 1.0
   #   top_p: 1.0
   #   max_tokens: 128000
+  #   api_key: ${NVIDIA_API_KEY}
   #   max_retries: 10
   #   timeout: 600
   #   chat_template_kwargs:
@@ -87,8 +75,11 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: openai_gpt_5_2
-    researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    planner_llm: openai_gpt_5_2
+    # Nemotron Super can trigger ChatNVIDIA AssertionError: duplicate model id in
+    # available_models (langchain_nvidia_ai_endpoints). Use nano for profiling or
+    # point nemotron_super_llm at a dedicated NVCF base_url if you need Super.
+    researcher_llm: nemotron_nano_llm
+    planner_llm: nemotron_nano_llm
     max_loops: 2
     tools:
       - paper_search_tool
@@ -144,34 +135,3 @@ eval:
         allowlist:
           field:
             id: [88, 80, 84, 90, 59, 51, 94, 96, 91, 99, 93, 86, 67, 100, 72, 76]
-
-# ---------------------------------------------------------------------------
-# Tokenomics analysis
-# Read by aiq_agent.tokenomics.PricingRegistry.from_dict(config["tokenomics"]["pricing"])
-# Prices are in USD per 1 million tokens.
-# ---------------------------------------------------------------------------
-tokenomics:
-  pricing:
-    models:
-      "azure/openai/gpt-5.2":
-        input_per_1m_tokens: 2.50
-        output_per_1m_tokens: 10.00
-      "nvidia/nemotron-3-nano-30b-a3b":
-        input_per_1m_tokens: 0.12
-        output_per_1m_tokens: 0.50
-        cached_input_per_1m_tokens: 0.10
-    tools:
-      # Tavily Search API: $0.016/call on the Pay-as-you-go plan
-      # https://tavily.com/pricing
-      # Key "web_search" matches "advanced_web_search_tool" via substring lookup.
-      "web_search":
-        cost_per_call: 0.016
-      # Serper Google Search API: ~$0.0003/call (~$0.30 / 1000 queries)
-      # https://serper.dev/pricing
-      "paper_search":
-        cost_per_call: 0.0003
-    # Fallback for any model not listed above.
-    # Set to null to raise an error on unknown models instead.
-    default:
-      input_per_1m_tokens: 1.00
-      output_per_1m_tokens: 4.00
