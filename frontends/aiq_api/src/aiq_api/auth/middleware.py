@@ -15,23 +15,7 @@
 
 """Raw ASGI authentication middleware.
 
-WHY RAW ASGI (not BaseHTTPMiddleware)
---------------------------------------
-Starlette's ``BaseHTTPMiddleware`` wraps ``call_next()`` with an internal
-``anyio.MemoryObjectStream`` that buffers the **entire** response body before
-forwarding it to the client.  For the ``/chat/stream`` and
-``/v1/jobs/async/job/{id}/stream`` SSE endpoints — which stream for up to
-8–10 minutes during deep research — this causes:
-
-* No incremental delivery (client sees nothing until the full stream ends).
-* Memory blowup (the entire event stream lives in RAM).
-* HAProxy / OpenShift route timeout (waiting for a "complete" response).
-
-A raw ASGI middleware calls ``self.app(scope, receive, send)`` and passes the
-``send`` callable through *untouched*, so ``StreamingResponse`` chunks flow
-directly to the client with zero buffering.
-
-SEPARATION OF CONCERNS (three independent checks)
+Three independent checks:
 --------------------------------------------------
 1. **Path allowlist** — blocks unexposed paths on external requests.
    *Always* enforced, regardless of ``REQUIRE_AUTH``.

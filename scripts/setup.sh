@@ -43,7 +43,7 @@ source .venv/bin/activate
 # Install core framework with dev dependencies (uses uv.lock to pin versions)
 echo ""
 echo "Installing core framework with dev dependencies..."
-"${UV_BIN}" sync --dev
+"${UV_BIN}" pip install -e .[dev]
 echo "Core framework installed"
 
 # Install frontends (--no-deps: dependencies already resolved by uv sync)
