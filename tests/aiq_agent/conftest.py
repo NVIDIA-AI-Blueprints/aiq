@@ -19,7 +19,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aiq_agent.common import LLMProvider
+from aiq_agent.common.llm_provider import LLMProvider
 
 
 @pytest.fixture
