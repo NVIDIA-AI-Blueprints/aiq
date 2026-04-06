@@ -6,7 +6,11 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { hasActiveDeepResearchJob, getPersistedActivityFlags } from './session-activity'
+import {
+  hasActiveDeepResearchJob,
+  getPersistedActivityFlags,
+  hasNoUserChatMessages,
+} from './session-activity'
 import type { ChatMessage } from '../types'
 
 /**
@@ -20,6 +24,21 @@ const makeMessage = (
   content: '',
   timestamp: new Date(),
   ...overrides,
+})
+
+describe('hasNoUserChatMessages', () => {
+  it('returns true when there are no user messages', () => {
+    expect(hasNoUserChatMessages([])).toBe(true)
+    expect(
+      hasNoUserChatMessages([
+        makeMessage({ messageType: 'file_upload_status', fileUploadStatusData: { type: 'uploaded', fileCount: 1, jobId: 'j1' } }),
+      ])
+    ).toBe(true)
+  })
+
+  it('returns false when a user message exists', () => {
+    expect(hasNoUserChatMessages([makeMessage({ messageType: 'user', content: 'hi' })])).toBe(false)
+  })
 })
 
 describe('hasActiveDeepResearchJob', () => {

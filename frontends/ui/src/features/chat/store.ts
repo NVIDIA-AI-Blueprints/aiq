@@ -40,7 +40,9 @@ import {
   clearAllDeepResearchSessions,
 } from './lib/deep-research-session-storage'
 import { isUnavailableDeepResearchJobError } from './lib/deep-research-errors'
-import { hasActiveDeepResearchJob } from './lib/session-activity'
+import { hasActiveDeepResearchJob, hasNoUserChatMessages } from './lib/session-activity'
+import { discardSessionDocumentsResources } from '@/features/documents/discard-session-resources'
+import { useDocumentsStore } from '@/features/documents/store'
 import {
   logStorageWrite,
   logQuotaExceededPruning,
@@ -277,6 +279,35 @@ const restoreConversationDataSources = (conversation: Conversation): void => {
   layoutStore.setEnabledDataSources(defaultIds)
 }
 
+/**
+ * When leaving an upload-only session (no user chat), remove it and tear down
+ * its document collection. Skips if uploads/ingestion are still in flight or
+ * the session is waiting on HITL / active deep research.
+ */
+const maybeDiscardAbandonedUploadOnlySession = (
+  get: () => ChatStore,
+  sessionId: string | null | undefined
+): void => {
+  if (!sessionId) return
+
+  const { conversations, currentUserId, pendingInteraction, currentConversation } = get()
+  if (pendingInteraction && currentConversation?.id === sessionId) return
+
+  const conv = conversations.find((c) => c.id === sessionId && c.userId === currentUserId)
+  if (!conv) return
+  if (!hasNoUserChatMessages(conv.messages)) return
+  if (hasActiveDeepResearchJob(conv.messages)) return
+
+  const docsInFlight = useDocumentsStore.getState().trackedFiles.some(
+    (f) =>
+      f.collectionName === sessionId && (f.status === 'uploading' || f.status === 'ingesting')
+  )
+  if (docsInFlight) return
+
+  discardSessionDocumentsResources(sessionId)
+  get().deleteConversation(sessionId)
+}
+
 export const useChatStore = create<ChatStore>()(
   devtools(
     persist(
@@ -397,10 +428,12 @@ export const useChatStore = create<ChatStore>()(
         },
 
         startNewSessionDraft: () => {
-          const { currentUserId } = get()
+          const { currentUserId, currentConversation } = get()
           if (!currentUserId) {
             throw new Error('Cannot start session draft without authenticated user')
           }
+
+          maybeDiscardAbandonedUploadOnlySession(get, currentConversation?.id)
 
           const layoutState = useLayoutStore.getState()
           const defaultEnabledDataSourceIds = getDefaultEnabledDataSourceIds()
@@ -492,6 +525,17 @@ export const useChatStore = create<ChatStore>()(
         },
 
         selectConversation: (conversationId: string) => {
+          const beforeLeave = get()
+          const leavingId =
+            beforeLeave.currentConversation?.id &&
+            beforeLeave.currentConversation.id !== conversationId
+              ? beforeLeave.currentConversation.id
+              : undefined
+
+          if (leavingId) {
+            maybeDiscardAbandonedUploadOnlySession(get, leavingId)
+          }
+
           const {
             conversations,
             currentUserId,

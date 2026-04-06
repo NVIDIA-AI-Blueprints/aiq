@@ -405,6 +405,30 @@ describe('UploadOrchestrator', () => {
     })
   })
 
+  describe('stopPollingIfCollection', () => {
+    test('stops polling when collection matches', () => {
+      UploadOrchestrator.startPolling('job-1', 'session-1')
+      mockDocumentsStore.setPolling.mockClear()
+      mockDocumentsStore.setActiveJobId.mockClear()
+
+      UploadOrchestrator.stopPollingIfCollection('session-1')
+
+      expect(mockDocumentsStore.setPolling).toHaveBeenCalledWith(false)
+      expect(mockDocumentsStore.setActiveJobId).toHaveBeenCalledWith(null)
+    })
+
+    test('does not stop when collection differs', () => {
+      UploadOrchestrator.startPolling('job-1', 'session-1')
+      mockDocumentsStore.setPolling.mockClear()
+      mockDocumentsStore.setActiveJobId.mockClear()
+
+      UploadOrchestrator.stopPollingIfCollection('other-session')
+
+      expect(mockDocumentsStore.setPolling).not.toHaveBeenCalled()
+      expect(mockDocumentsStore.setActiveJobId).not.toHaveBeenCalled()
+    })
+  })
+
   describe('cleanup', () => {
     test('stops polling and clears state', () => {
       UploadOrchestrator.startPolling('job-1', 'session-1')

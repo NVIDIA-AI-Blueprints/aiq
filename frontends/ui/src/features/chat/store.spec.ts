@@ -29,6 +29,12 @@ vi.mock('@/adapters/api/deep-research-client', () => ({
   cancelJob: mockDeepResearchApi.cancelJob,
 }))
 
+const mockDiscardSessionResources = vi.hoisted(() => vi.fn())
+
+vi.mock('@/features/documents/discard-session-resources', () => ({
+  discardSessionDocumentsResources: mockDiscardSessionResources,
+}))
+
 describe('useChatStore', () => {
   beforeEach(() => {
     // Clear localStorage before each test
@@ -37,6 +43,7 @@ describe('useChatStore', () => {
     mockLayoutState.setEnabledDataSources.mockClear()
     mockLayoutState.enabledDataSourceIds = ['web_search']
     mockLayoutState.availableDataSources = [{ id: 'web_search' }, { id: 'confluence' }]
+    mockDiscardSessionResources.mockClear()
     // Reset store to initial state before each test
     useChatStore.setState({
       currentUserId: null,
@@ -291,6 +298,136 @@ describe('useChatStore', () => {
       const result = useChatStore.getState().ensureSession()
 
       expect(result).toBeUndefined()
+    })
+  })
+
+  describe('upload-only session cleanup', () => {
+    const uploadOnlyConv = (id: string): Conversation => ({
+      id,
+      userId: 'user-1',
+      title: 'New chat',
+      messages: [
+        {
+          id: 'banner-1',
+          role: 'assistant',
+          content: '',
+          timestamp: new Date(),
+          messageType: 'file_upload_status',
+          fileUploadStatusData: { type: 'uploaded', fileCount: 2, jobId: 'job-1' },
+        },
+      ],
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    })
+
+    test('startNewSessionDraft removes upload-only session and discards documents', () => {
+      const conv = uploadOnlyConv('upload-only-1')
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: conv,
+        conversations: [conv],
+      })
+
+      useChatStore.getState().startNewSessionDraft()
+
+      expect(mockDiscardSessionResources).toHaveBeenCalledWith('upload-only-1')
+      expect(useChatStore.getState().conversations.some((c) => c.id === 'upload-only-1')).toBe(false)
+      expect(useChatStore.getState().currentConversation).toBeNull()
+    })
+
+    test('startNewSessionDraft keeps session after user has chatted', () => {
+      const conv: Conversation = {
+        ...uploadOnlyConv('with-user'),
+        messages: [
+          {
+            id: 'u1',
+            role: 'user',
+            content: 'hello',
+            timestamp: new Date(),
+            messageType: 'user',
+          },
+        ],
+      }
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: conv,
+        conversations: [conv],
+      })
+
+      useChatStore.getState().startNewSessionDraft()
+
+      expect(mockDiscardSessionResources).not.toHaveBeenCalled()
+      expect(useChatStore.getState().conversations.some((c) => c.id === 'with-user')).toBe(true)
+    })
+
+    test('selectConversation removes prior upload-only session when switching away', () => {
+      const uploadOnly = uploadOnlyConv('u-only')
+      const other: Conversation = {
+        id: 'other',
+        userId: 'user-1',
+        title: 'Other',
+        messages: [
+          {
+            id: 'm1',
+            role: 'user',
+            content: 'hi',
+            timestamp: new Date(),
+            messageType: 'user',
+          },
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: uploadOnly,
+        conversations: [uploadOnly, other],
+      })
+
+      useChatStore.getState().selectConversation('other')
+
+      expect(mockDiscardSessionResources).toHaveBeenCalledWith('u-only')
+      expect(useChatStore.getState().conversations.some((c) => c.id === 'u-only')).toBe(false)
+      expect(useChatStore.getState().currentConversation?.id).toBe('other')
+    })
+
+    test('selectConversation does not remove upload-only session while files are uploading', async () => {
+      const { useDocumentsStore } = await import('@/features/documents/store')
+      const uploadOnly = uploadOnlyConv('u-busy')
+      const other: Conversation = {
+        id: 'other-2',
+        userId: 'user-1',
+        title: 'Other',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      useDocumentsStore.setState({
+        trackedFiles: [
+          {
+            id: 'tf-1',
+            file: new File(['x'], 'x.txt'),
+            fileName: 'x.txt',
+            fileSize: 1,
+            status: 'uploading',
+            progress: 0,
+            collectionName: 'u-busy',
+            uploadedAt: new Date().toISOString(),
+          },
+        ],
+      })
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: uploadOnly,
+        conversations: [uploadOnly, other],
+      })
+
+      useChatStore.getState().selectConversation('other-2')
+
+      expect(mockDiscardSessionResources).not.toHaveBeenCalled()
+      expect(useChatStore.getState().conversations.some((c) => c.id === 'u-busy')).toBe(true)
+
+      useDocumentsStore.setState({ trackedFiles: [] })
     })
   })
 

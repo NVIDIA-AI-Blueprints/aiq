@@ -30,6 +30,13 @@ const ACTIVE_JOB_STATUSES: readonly DeepResearchJobStatus[] = ['submitted', 'run
  * @param messages - The conversation's message array (from persisted state)
  * @returns true if the most recent deep research job is still running
  */
+/**
+ * True when the user has never sent a typed chat message in this session.
+ * Upload banners (`file_upload_status`) and other non-user types do not count.
+ */
+export const hasNoUserChatMessages = (messages: ChatMessage[]): boolean =>
+  !messages.some((m) => m.messageType === 'user')
+
 export const hasActiveDeepResearchJob = (messages: ChatMessage[]): boolean => {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i]

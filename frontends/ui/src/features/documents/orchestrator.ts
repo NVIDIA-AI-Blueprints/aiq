@@ -304,6 +304,16 @@ class UploadOrchestratorImpl {
   }
 
   /**
+   * Stop polling only if it targets the given collection (session id).
+   * Used when removing an upload-only session without affecting other sessions.
+   */
+  stopPollingIfCollection(collectionName: string): void {
+    if (this.pollingState?.collectionName === collectionName) {
+      this.stopPolling()
+    }
+  }
+
+  /**
    * Poll job status
    */
   private async pollJobStatus(): Promise<void> {
