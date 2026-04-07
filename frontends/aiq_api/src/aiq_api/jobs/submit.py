@@ -91,6 +91,7 @@ async def submit_agent_job(
     expiry_seconds: int = 86400,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
+    auth_token: str | None = None,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -106,6 +107,8 @@ async def submit_agent_job(
         expiry_seconds: Job expiry time in seconds (default 24h).
         available_documents: Optional list of document dicts with file_name and summary.
         data_sources: Optional list of allowed data sources to enforce in the worker.
+        auth_token: Optional auth token to propagate to the Dask worker for
+            data sources that require authentication.
 
     Returns:
         The job ID.
@@ -168,6 +171,12 @@ async def submit_agent_job(
     if not scheduler_address:
         raise RuntimeError("Async job submission requires NAT_DASK_SCHEDULER_ADDRESS to be set")
 
+    # Auto-capture auth token if not explicitly provided
+    if auth_token is None:
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
 
@@ -188,6 +197,7 @@ async def submit_agent_job(
             *_get_parent_trace_context(),
             available_documents,
             data_sources,
+            auth_token,
         ],
     )
 
