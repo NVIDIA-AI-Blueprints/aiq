@@ -85,7 +85,6 @@ def get_current_user() -> dict[str, Any]:
     Returns the default ``{"type": "internal", "skip_clarifier": False}`` when
     the middleware is not registered or when called outside a request context.
     """
-    logger.info("get_current_user: %s", _current_user.get())
     return _current_user.get()
 
 
