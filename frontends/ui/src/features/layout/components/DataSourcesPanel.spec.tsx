@@ -72,7 +72,7 @@ import { useAuth } from '@/adapters/auth'
 
 /** Either auth banner string from DataSourcesPanel (depends on authRequired). */
 const AUTH_DATA_SOURCES_BANNER_TEXT =
-  /setup auth to enable more data sources|sign in to access more data sources/i
+  /enable authentication to access additional data sources|sign in to access additional data sources/i
 
 describe('DataSourcesPanel', () => {
   beforeEach(() => {

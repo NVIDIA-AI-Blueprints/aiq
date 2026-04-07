@@ -202,8 +202,8 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
               className="mb-6 px-4 py-3"
             >
               {!authRequired
-                ? 'Setup auth to enable more data sources.'
-                : 'Sign in to access more data sources.'}
+                ? 'Enable authentication to access additional data sources.'
+                : 'Sign in to access additional data sources.'}
             </Banner>
           )}
 
