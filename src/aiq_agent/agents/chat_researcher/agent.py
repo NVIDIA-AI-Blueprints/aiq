@@ -46,6 +46,14 @@ from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 
+# Optional: aiq_api may not be installed in all environments (e.g. CLI-only).
+# When present, AuthError allows auth failures to surface their message directly
+# to the user instead of the generic fallback.
+try:
+    from aiq_api.auth.errors import AuthError as _AuthError
+except ImportError:
+    _AuthError = None  # type: ignore[assignment,misc]
+
 from .models import ChatResearcherState
 from .models import ShallowResult
 from .utils import trim_message_history
@@ -217,6 +225,17 @@ class ChatResearcherAgent:
                     ),
                 }
             except Exception as e:
+                if _AuthError and isinstance(e, _AuthError):
+                    logger.warning("Auth error in shallow research: %s", e)
+                    err_msg = str(e)
+                    return {
+                        "messages": [AIMessage(content=err_msg)],
+                        "shallow_result": ShallowResult(
+                            answer=err_msg,
+                            confidence="high",
+                            escalate_to_deep=False,
+                        ),
+                    }
                 logger.exception("Error in shallow research: %s", e)
                 err_msg = "An error occurred while researching your question. Please try again."
                 # Same rationale as EmptySourceRegistryError: the system is certain an error
@@ -275,6 +294,11 @@ class ChatResearcherAgent:
                     "Please try again."
                 )
                 return {"messages": [AIMessage(content=err_msg)]}
+            except Exception as e:
+                if _AuthError and isinstance(e, _AuthError):
+                    logger.warning("Auth error in deep research: %s", e)
+                    return {"messages": [AIMessage(content=str(e))]}
+                raise
             if not result.messages:
                 error_message = "An error occurred during deep research."
                 logger.error(error_message)

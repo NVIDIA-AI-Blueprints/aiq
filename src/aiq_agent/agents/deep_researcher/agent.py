@@ -36,6 +36,14 @@ from .custom_middleware import ToolResultPruningMiddleware
 from .custom_middleware import ToolRetryMiddleware
 from .models import DeepResearchAgentState
 
+# Optional: aiq_api may not be installed in all environments (e.g. CLI-only).
+# When present, AuthError allows auth failures to propagate immediately instead
+# of being retried silently in the deep research retry loop.
+try:
+    from aiq_api.auth.errors import AuthError as _AuthError
+except ImportError:
+    _AuthError = None  # type: ignore[assignment,misc]
+
 logger = logging.getLogger(__name__)
 
 # Minimum character count for a report to be considered substantive.
@@ -390,6 +398,9 @@ class DeepResearcherAgent:
                 except Exception as ex:
                     logger.error("Deep Research attempt %d failed: %s", attempt + 1, ex, exc_info=True)
                     last_error = ex
+                    # Auth errors must propagate immediately — retrying won't fix them.
+                    if _AuthError and isinstance(ex, _AuthError):
+                        raise ex
                     # If we hit the recursion limit or asyncio error, we might want to stop
                     if "recursion" in str(ex).lower() or "reuse already awaited" in str(ex):
                         raise ex

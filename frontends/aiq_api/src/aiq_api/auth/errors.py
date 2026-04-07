@@ -13,18 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Auth components for the AIQ API frontend."""
+"""Auth-related exception types."""
 
-from .base import TokenValidator
-from .errors import AuthError
-from .jwt_validator import JWTValidator
-from .middleware import AuthMiddleware
-from .middleware import get_current_user
 
-__all__ = [
-    "AuthError",
-    "AuthMiddleware",
-    "JWTValidator",
-    "TokenValidator",
-    "get_current_user",
-]
+class AuthError(Exception):
+    """Raised when a request fails due to authentication or authorization issues.
+
+    Agent nodes catch this before the generic Exception handler and return
+    str(e) directly to the user. Subclass this for specific auth failure modes
+    (e.g. missing token, expired token, insufficient permissions) to ensure
+    actionable error messages reach the caller rather than a generic fallback.
+    """
