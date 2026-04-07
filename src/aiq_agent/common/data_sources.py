@@ -20,6 +20,9 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 
+from .data_source_registry import get_source
+from .data_source_registry import get_source_id_for_tool
+
 # Default to web_search when no data sources specified
 DEFAULT_DATA_SOURCES: list[str] = ["web_search"]
 
@@ -55,36 +58,31 @@ def parse_data_sources(raw: Any) -> list[str] | None:
 def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) -> list[Any]:
     """Filter tools based on selected data sources.
 
-    Knowledge tools are only included when 'knowledge_layer' is in data_sources.
+    Uses the tool->source map built at startup from config ``data_source`` fields.
+    Tools without a mapping (e.g. "think", calculator) are always included.
 
     Args:
         tools: List of LangChain tools.
-        data_sources: List of selected data source IDs, or None for all.
+        data_sources: List of selected data source IDs, None for all, or [] for none.
 
     Returns:
         Filtered list of tools matching the selected data sources.
     """
     if data_sources is None:
         return tools
+    if len(data_sources) == 0:
+        return []
 
-    normalized = {source.lower() for source in data_sources}
-    include_web_search = "web_search" in normalized
-    include_knowledge = "knowledge_layer" in normalized
-
+    selected = {s.lower() for s in data_sources}
     filtered = []
     for tool in tools:
         name = getattr(tool, "name", "")
-        name_lower = name.lower()
-
-        if "web" in name_lower or "tavily" in name_lower:
-            if include_web_search:
-                filtered.append(tool)
-        elif "knowledge" in name_lower or "document" in name_lower or "internal" in name_lower:
-            if include_knowledge:
-                filtered.append(tool)
-        else:
+        source_id = get_source_id_for_tool(name)
+        if source_id is None:
+            # Not a data source tool (e.g., "think", calculator) -> always include
             filtered.append(tool)
-
+        elif source_id.lower() in selected:
+            filtered.append(tool)
     return filtered
 
 
@@ -114,7 +112,8 @@ def extract_messages_and_sources(payload: Any) -> tuple[list[BaseMessage], list[
 def format_data_source_tools(data_sources: list[str]) -> list[dict[str, str]]:
     """Format data sources as tool info for meta chatter.
 
-    Knowledge tools are only included when 'knowledge_layer' is in data_sources.
+    Looks up display metadata from the registry first; falls back to
+    title-cased IDs for unregistered sources.
 
     Args:
         data_sources: List of data source IDs.
@@ -123,11 +122,11 @@ def format_data_source_tools(data_sources: list[str]) -> list[dict[str, str]]:
         List of tool info dicts with 'name' and 'description'.
     """
     tools_info: list[dict[str, str]] = []
-
-    for source in data_sources:
-        if source == "web_search":
-            tools_info.append({"name": "web_search", "description": "Search the web for real-time information."})
+    for source_id in data_sources:
+        meta = get_source(source_id)
+        if meta:
+            tools_info.append({"name": meta.name, "description": meta.description})
         else:
-            tools_info.append({"name": "knowledge_search", "description": "Search uploaded documents and files."})
-
+            label = source_id.replace("_", " ").title()
+            tools_info.append({"name": label, "description": f"Search {source_id.replace('_', ' ')}."})
     return tools_info

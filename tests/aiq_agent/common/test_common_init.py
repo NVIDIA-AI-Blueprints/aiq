@@ -194,7 +194,20 @@ class TestDataSourcesExports:
         """Test format_data_source_tools is exported and functional."""
         result = format_data_source_tools(["web_search"])
         assert len(result) == 1
-        assert result[0]["name"] == "web_search"
+        # Falls back to title-cased ID when registry is empty
+        assert result[0]["name"] == "Web Search"
+
+    def test_get_all_tool_refs_exported(self):
+        """Test get_all_tool_refs is exported."""
+        from aiq_agent.common import get_all_tool_refs
+
+        assert callable(get_all_tool_refs)
+
+    def test_get_source_id_for_tool_exported(self):
+        """Test get_source_id_for_tool is exported."""
+        from aiq_agent.common import get_source_id_for_tool
+
+        assert callable(get_source_id_for_tool)
 
 
 class TestIsPostgresDsn:

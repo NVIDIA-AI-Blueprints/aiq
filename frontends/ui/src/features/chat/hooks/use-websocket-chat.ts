@@ -36,6 +36,7 @@ import { useConnectionRecovery } from './use-connection-recovery'
 import { useLayoutStore } from '@/features/layout/store'
 import { useDocumentsStore } from '@/features/documents/store'
 import { useAuth } from '@/adapters/auth'
+import { isLikelyAuthRelatedTransportError } from '../lib/transport-auth-signals'
 import type {
   Conversation,
   PromptType,
@@ -152,7 +153,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
   // Ref to track the current status for detecting status changes
   const currentStatusRef = useRef<StatusType | null>(null)
 
-  const { user } = useAuth()
+  const { user, authRequired, error: authError } = useAuth()
 
   // Chat store
   const {
@@ -201,6 +202,28 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     const userId = user?.id ?? null
     setCurrentUser(userId)
   }, [user?.id, setCurrentUser])
+
+  /**
+   * Classify a transport failure as auth-related or generic connection error.
+   * Used when the backend is healthy but the WebSocket/SSE connection failed,
+   * which typically means the auth cookie or token drifted.
+   */
+  const getTransportFailure = useCallback(
+    (message: string, details?: string): { code: ErrorCode; message: string; details?: string } => {
+      if (!authRequired) {
+        return { code: 'connection.failed', message, details }
+      }
+      if (authError === 'RefreshAccessTokenError' || isLikelyAuthRelatedTransportError(message)) {
+        return {
+          code: 'auth.session_expired' as ErrorCode,
+          message: 'Your session has expired. Please sign in again to continue.',
+          details,
+        }
+      }
+      return { code: 'connection.failed', message, details }
+    },
+    [authRequired, authError]
+  )
 
   /**
    * Create WebSocket callbacks that route messages to the store
@@ -452,17 +475,12 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         // Connection errors (all retries exhausted) -- gate with health check
         if (errorContent.code === 'CONNECTION_FAILED') {
           const backendUp = await checkBackendHealthCached()
-          if (backendUp) {
-            // Backend is healthy -- this was a transient WebSocket issue.
-            // Don't alarm the user; the connection will re-establish on next send.
-            return
-          }
-          // Backend is truly down -- show error
-          addErrorCard(
-            'connection.failed',
-            errorContent.message,
-            errorContent.details,
-          )
+
+          const errorInfo = backendUp
+            ? getTransportFailure(errorContent.message, errorContent.details)
+            : { code: 'connection.failed' as const, message: errorContent.message, details: errorContent.details }
+
+          addErrorCard(errorInfo.code, errorInfo.message, errorInfo.details)
           setCurrentStatus(null)
           setStreaming(false)
           setLoading(false)
@@ -546,6 +564,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     addDeepResearchBanner,
     addPlanMessage,
     updateConversationTitle,
+    getTransportFailure,
   ])
 
   /**

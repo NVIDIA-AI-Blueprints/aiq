@@ -13,6 +13,7 @@ const mockSource: DataSource = {
   description: 'Bug Tracking System',
   category: 'enterprise',
   defaultEnabled: true,
+  requiresAuth: false,
 }
 
 describe('DataConnectionCard', () => {
@@ -120,12 +121,13 @@ describe('DataConnectionCard', () => {
 })
 
 describe('DataConnectionCard - Busy Session State', () => {
-  const mockSource = {
+  const mockSource: DataSource = {
     id: 'bug_tracker',
     name: 'Bug Tracker',
     description: 'Search bug database',
-    category: 'enterprise' as const,
+    category: 'enterprise',
     defaultEnabled: false,
+    requiresAuth: false,
   }
 
   test('disables switch when session is busy', () => {

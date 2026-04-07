@@ -26,20 +26,29 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { getToken } from 'next-auth/jwt'
 import {
-  TOKEN_REFRESH_BUFFER_SECONDS,
   SESSION_MAX_AGE_SECONDS,
   isAuthRequired,
   shouldUseSecureCookies,
 } from '@/adapters/auth/config'
 
 /**
- * Check if a token is expired or about to expire (within buffer period).
- * Returns true if the token should be considered invalid.
+ * Check if a token is actually expired (real expiry, not refresh buffer).
+ * The refresh buffer is for proactive token refresh in the NextAuth JWT
+ * callback — the cookie should remain valid until the token truly expires
+ * so that WebSocket and SSE transports can still authenticate.
  */
-const isTokenExpiredOrExpiring = (expiresAt: number | undefined): boolean => {
+const isTokenExpired = (expiresAt: number | undefined): boolean => {
   if (!expiresAt) return true
-  const expiresAtWithBuffer = expiresAt - TOKEN_REFRESH_BUFFER_SECONDS
-  return Date.now() >= expiresAtWithBuffer * 1000
+  return Date.now() >= expiresAt * 1000
+}
+
+/**
+ * Compute the cookie maxAge so it expires with the token rather than
+ * lasting a fixed 24 hours. Clamped to [1, SESSION_MAX_AGE_SECONDS].
+ */
+const idTokenCookieMaxAgeSeconds = (expiresAt: number): number => {
+  const nowSec = Math.floor(Date.now() / 1000)
+  return Math.min(SESSION_MAX_AGE_SECONDS, Math.max(1, expiresAt - nowSec))
 }
 
 export default async function proxy(req: NextRequest) {
@@ -83,23 +92,20 @@ export default async function proxy(req: NextRequest) {
 
       const expiresAt = token.expiresAt as number | undefined
 
-      // Set idToken cookie only if we have a valid, non-expired token
-      // If token is expired or expiring, don't set the cookie - this forces
-      // the client-side session check to trigger a refresh via useSession()
-      if (token.idToken && !isTokenExpiredOrExpiring(expiresAt)) {
+      // Set idToken cookie only if we have a valid, non-expired token.
+      // Unlike the refresh buffer (which proactively refreshes tokens),
+      // the cookie stays valid until real expiry so WebSocket/SSE
+      // transports don't lose auth while NextAuth refreshes in the background.
+      if (token.idToken && !isTokenExpired(expiresAt)) {
         response.cookies.set('idToken', token.idToken as string, {
           httpOnly: true,
           sameSite: 'lax',
           path: '/',
           secure: shouldUseSecureCookies(),
-          maxAge: SESSION_MAX_AGE_SECONDS,
+          maxAge: idTokenCookieMaxAgeSeconds(expiresAt!),
         })
-      } else if (isTokenExpiredOrExpiring(expiresAt)) {
-        // Token is expired or about to expire - clear the cookie
-        // This signals to the client that re-authentication or refresh is needed
-        response.cookies.delete('idToken')
       } else {
-        // No idToken in session - clear the cookie
+        // Token expired or absent - clear the cookie
         response.cookies.delete('idToken')
       }
     } else {

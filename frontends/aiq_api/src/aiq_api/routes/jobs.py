@@ -92,7 +92,7 @@ class JobStatusResponse(BaseModel):
             "examples": [
                 {
                     "job_id": "abc123",
-                    "status": "SUBMITTED",
+                    "status": "submitted",
                     "agent_type": "deep_researcher",
                     "error": None,
                     "created_at": "2026-02-12T10:30:00Z",
@@ -102,7 +102,10 @@ class JobStatusResponse(BaseModel):
     )
 
     job_id: str = Field(..., description="Unique job identifier")
-    status: str = Field(..., description="Current status (SUBMITTED, RUNNING, COMPLETED, FAILED, CANCELLED)")
+    status: str = Field(
+        ...,
+        description="Current status: submitted, running, success, failure, interrupted, not_found",
+    )
     agent_type: str | None = Field(None, description="Agent type used for this job")
     error: str | None = Field(None, description="Error message if job failed")
     created_at: str | None = Field(None, description="Creation timestamp (ISO format)")
@@ -144,23 +147,7 @@ class DataSource(BaseModel):
     id: str = Field(..., description="Unique identifier for the data source")
     name: str = Field(..., description="Display name")
     description: str | None = Field(default=None, description="Human-readable description")
-
-
-def _collect_tool_names(builder: WorkflowBuilder) -> set[str]:
-    """Collect tool names from workflow functions that declare tools (for data source list)."""
-    tool_names: set[str] = set()
-    # intent_classifier (orchestration) and research agents may have tools; meta_chatter/depth_router no longer exist
-    for fn_name in ("deep_research_agent", "shallow_research_agent", "intent_classifier"):
-        try:
-            fn_config = builder.get_function_config(fn_name)
-        except (KeyError, ValueError):
-            continue
-        tools = getattr(fn_config, "tools", None)
-        if not tools:
-            continue
-        for tool in tools:
-            tool_names.add(getattr(tool, "name", str(tool)))
-    return tool_names
+    requires_auth: bool = Field(default=False, description="Whether user authentication is required")
 
 
 async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: FastApiFrontEndPluginWorker) -> None:
@@ -173,10 +160,18 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     import logging as std_logging
     import os
 
-    from nat.front_ends.fastapi.job_store import JobStatus
+    from aiq_agent.common.data_source_registry import get_all_sources
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs import EventStore
     from ..jobs.runner import run_agent_job
+
+    if not get_all_sources():
+        logger.warning(
+            "No data sources registered. Add a 'data_sources' function with "
+            "_type: data_source_registry to your YAML config to enable "
+            "data source toggles in the UI."
+        )
 
     @app.get(
         "/v1/jobs/async/agents",
@@ -200,28 +195,16 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         summary="List data sources",
     )
     async def list_data_sources() -> list[DataSource]:
-        """List available data sources with metadata."""
-        data_sources = [
+        """List available data sources dynamically from the registry."""
+        return [
             DataSource(
-                id="web_search",
-                name="Web Search",
-                description="Search the web for real-time information.",
+                id=source.id,
+                name=source.name,
+                description=source.description,
+                requires_auth=source.requires_auth,
             )
+            for source in get_all_sources()
         ]
-
-        tool_names = _collect_tool_names(builder)
-
-        knowledge_configured = any("knowledge" in name.lower() or name == "knowledge_search" for name in tool_names)
-        if knowledge_configured:
-            data_sources.append(
-                DataSource(
-                    id="knowledge_layer",
-                    name="Knowledge Base",
-                    description="Search uploaded documents and files.",
-                )
-            )
-
-        return data_sources
 
     logger.info("Registered /v1/data_sources and /v1/jobs/async/agents routes")
 
@@ -306,6 +289,11 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         resolved_job_id = job_store.ensure_job_id(req.job_id)
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
 
+        # Propagate auth token to Dask worker for requires_auth data sources
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+
         job_args = [
             not use_threads,  # configure_logging
             log_level,
@@ -324,6 +312,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             None,  # parent_conversation_id
             None,  # available_documents
             None,  # data_sources
+            auth_token,  # auth_token
         ]
 
         job_id, _ = await job_store.submit_job(
@@ -553,7 +542,7 @@ async def _reap_ghost_jobs(job_store, db_url: str) -> None:
     GHOST_JOB_TIMEOUT_SECONDS with no new events in the job_events table.
     This catches Dask worker crashes and OOM kills that bypass Python exception handling.
     """
-    from nat.front_ends.fastapi.job_store import JobStatus
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs import EventStore
 
@@ -1013,7 +1002,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
 
     import asyncpg
 
-    from nat.front_ends.fastapi.job_store import JobStatus
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs import EventStore
     from ..jobs import get_connection_manager
@@ -1033,7 +1022,12 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
             sequence_id += 1
         return f"id: {sequence_id}\nevent: {event_type}\ndata: {json.dumps(data)}\n\n"
 
-    asyncpg_url = db_url.replace("+psycopg2", "").replace("+asyncpg", "").replace("postgresql://", "postgres://")
+    # LISTEN/NOTIFY needs a persistent session — incompatible with PgBouncer
+    # transaction pooling. Use AIQ_LISTEN_DB_URL to point directly at PostgreSQL.
+    import os
+
+    listen_db_url = os.environ.get("AIQ_LISTEN_DB_URL", db_url)
+    asyncpg_url = listen_db_url.replace("+psycopg2", "").replace("+asyncpg", "").replace("postgresql://", "postgres://")
     channel = f"job_events_{job_id.replace('-', '_')}"
 
     logger.info(f"SSE pub-sub stream starting for job_id={job_id}, channel={channel}")
@@ -1119,7 +1113,14 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
                                 event_type = event.pop("type", "event")
                                 yield format_sse(event_type, event, db_event_id)
                     except TimeoutError:
-                        pass
+                        # Fallback poll: catch events if NOTIFY was lost
+                        fallback_events = await EventStore.get_events_async(db_url, job_id, last_event_id, 100)
+                        for event in fallback_events:
+                            db_event_id = event.pop("_id", None)
+                            if db_event_id:
+                                last_event_id = db_event_id
+                            event_type = event.pop("type", "event")
+                            yield format_sse(event_type, event, db_event_id)
 
                     job = await job_store.get_job(job_id)
                     if not job:
@@ -1185,7 +1186,7 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     """
     import asyncio
 
-    from nat.front_ends.fastapi.job_store import JobStatus
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs import EventStore
     from ..jobs import get_connection_manager

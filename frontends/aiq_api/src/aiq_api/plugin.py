@@ -46,7 +46,7 @@ from pydantic import Field
 
 from nat.builder.workflow_builder import WorkflowBuilder
 from nat.cli.register_workflow import register_front_end
-from nat.data_models.config import AIQConfig
+from nat.data_models.config import Config
 from nat.front_ends.fastapi.fastapi_front_end_config import FastApiFrontEndConfig
 from nat.front_ends.fastapi.fastapi_front_end_plugin import FastApiFrontEndPlugin
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
@@ -222,7 +222,7 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
 class AIQAPIPlugin(FastApiFrontEndPlugin):
     """Plugin that adds unified AI-Q API endpoints to the FastAPI server."""
 
-    def __init__(self, full_config: AIQConfig, config: AIQAPIConfig):
+    def __init__(self, full_config: Config, config: AIQAPIConfig):
         super().__init__(full_config=full_config)
         self.config = config
 
@@ -232,6 +232,6 @@ class AIQAPIPlugin(FastApiFrontEndPlugin):
 
 
 @register_front_end(config_type=AIQAPIConfig)
-async def register_aiq_api(config: AIQAPIConfig, full_config: AIQConfig):
+async def register_aiq_api(config: AIQAPIConfig, full_config: Config):
     """Register unified AI-Q API with NAT framework."""
     yield AIQAPIPlugin(full_config=full_config, config=config)

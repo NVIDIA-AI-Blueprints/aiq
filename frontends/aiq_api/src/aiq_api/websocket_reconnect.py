@@ -153,6 +153,10 @@ _installed = False
 class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
     """WebSocket handler that supports HITL reconnects per conversation."""
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._user_interaction_response: asyncio.Future[TextContent] | None = None
+
     async def run(self) -> None:
         """Process websocket messages and allow reconnect HITL responses."""
         while True:

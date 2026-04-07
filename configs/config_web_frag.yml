@@ -12,6 +12,10 @@ general:
       console:
         _type: console
         level: INFO
+    # tracing:
+    #   langsmith: # Optional: LangSmith tracing - requires langsmith API key. Set using `export LANGSMITH_API_KEY=<your-langsmith-api-key>`
+    #     _type: langsmith
+    #     project: nvidia-aiq
 
   front_end:
     _type: aiq_api
@@ -92,6 +96,36 @@ llms:
   #     enable_thinking: true
 
 functions:
+  # =========================================================================
+  # Data Source Registry
+  # =========================================================================
+  # Central registry that controls:
+  #   1. UI toggles — each source appears as an on/off switch in the frontend
+  #   2. Per-message filtering — users can select active sources per request
+  #   3. Tool auto-inheritance — agents with no explicit `tools` list receive
+  #      every tool listed here (use `exclude_tools` on agents to specialize)
+  #
+  # Source entry fields:
+  #   id, name, description, tools, requires_auth (default: false),
+  #   default_enabled (default: true)
+  #
+  # See docs/source/customization/tools-and-sources.md for full details.
+  # =========================================================================
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      - id: knowledge_layer
+        name: "Knowledge Base"
+        description: "Search uploaded documents and files."
+        tools:
+          - knowledge_search
+
   web_search_tool:
     _type: tavily_web_search
     max_results: 5
@@ -119,21 +153,21 @@ functions:
   #   max_results: 5
   #   serper_api_key: ${SERPER_API_KEY}
 
+  # =========================================================================
+  # Agents — inherit all registry tools; use exclude_tools to specialize
+  # =========================================================================
   intent_classifier:
     _type: intent_classifier
     llm: nemotron_llm_intent
-    tools:
-      - web_search_tool
-      # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
-      - knowledge_search
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
 
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    tools:
-      - web_search_tool
-      - knowledge_search
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
     max_turns: 3
     enable_plan_approval: true
     log_response_max_chars: 2000
@@ -142,9 +176,9 @@ functions:
   shallow_research_agent:
     _type: shallow_research_agent
     llm: nemotron_nano_llm
-    tools:
-      - web_search_tool
-      - knowledge_search
+    # tools: omitted -> inherits all from data_source_registry
+    exclude_tools:
+      - advanced_web_search_tool
     max_llm_turns: 10
     max_tool_iterations: 5
 
@@ -153,11 +187,10 @@ functions:
     orchestrator_llm: gpt_oss_llm
     researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: gpt_oss_llm
+    # tools: omitted -> inherits all from data_source_registry
+    exclude_tools:
+      - web_search_tool
     max_loops: 2
-    tools:
-      # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
-      - advanced_web_search_tool
-      - knowledge_search
 
 workflow:
   _type: chat_deepresearcher_agent

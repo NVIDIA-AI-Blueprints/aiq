@@ -15,9 +15,9 @@ const mockSetEnabledDataSources = vi.fn()
 const mockFetchDataSources = vi.fn()
 
 const mockDataSources = [
-  { id: 'web_search', name: 'Web Search', description: 'Search the web' },
-  { id: 'knowledge_base', name: 'Knowledge Base', description: 'Wiki docs' },
-  { id: 'bug_tracker', name: 'Bug Tracker', description: 'Bug tracking' },
+  { id: 'web_search', name: 'Web Search', description: 'Search the web', requires_auth: false },
+  { id: 'knowledge_base', name: 'Knowledge Base', description: 'Wiki docs', requires_auth: true },
+  { id: 'bug_tracker', name: 'Bug Tracker', description: 'Bug tracking', requires_auth: true },
 ]
 
 vi.mock('../store', () => ({

@@ -20,15 +20,21 @@ by any tool or agent.
 """
 
 from .utils import UserInfo
+from .utils import clear_token_fetchers
 from .utils import decode_jwt_payload
 from .utils import get_auth_token
 from .utils import get_current_user_info
 from .utils import get_user_info_from_token
+from .utils import register_token_fetcher
+from .utils import unregister_token_fetcher
 
 __all__ = [
     "UserInfo",
+    "clear_token_fetchers",
     "decode_jwt_payload",
     "get_auth_token",
     "get_current_user_info",
     "get_user_info_from_token",
+    "register_token_fetcher",
+    "unregister_token_fetcher",
 ]

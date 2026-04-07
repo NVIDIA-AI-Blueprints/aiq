@@ -79,7 +79,11 @@ class ClarifierConfig(FunctionBaseConfig, name="clarifier_agent"):
     )
     tools: list[FunctionRef | FunctionGroupRef] = Field(
         default_factory=list,
-        description="Tools available for clarification context",
+        description="Explicit tool list. Empty = inherit all from data_source_registry.",
+    )
+    exclude_tools: list[str] = Field(
+        default_factory=list,
+        description="Tool names to exclude when inheriting from registry.",
     )
     max_turns: int = Field(
         default=3,
@@ -137,10 +141,21 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
             config.planner_llm,
             wrapper_type=LLMFrameworkEnum.LANGCHAIN,
         )
+    if config.tools:
+        tool_refs = config.tools
+    else:
+        from aiq_agent.common import get_all_tool_refs
+
+        tool_refs = get_all_tool_refs()
+
     tools = await builder.get_tools(
-        tool_names=config.tools,
+        tool_names=tool_refs,
         wrapper_type=LLMFrameworkEnum.LANGCHAIN,
     )
+
+    if config.exclude_tools:
+        excluded = set(config.exclude_tools)
+        tools = [t for t in tools if getattr(t, "name", "") not in excluded]
 
     provider = LLMProvider()
     provider.set_default(llm)

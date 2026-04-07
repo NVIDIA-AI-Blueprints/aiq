@@ -906,7 +906,7 @@ describe('useDeepResearch', () => {
       consoleErrorSpy.mockRestore()
     })
 
-    test('onError does nothing when backend is reachable (transient SSE error)', async () => {
+    test('onError surfaces error when backend is reachable (no longer silently swallowed)', async () => {
       await setupConnectedHook()
 
       mockCheckBackendHealthCached.mockResolvedValue(true)
@@ -923,9 +923,14 @@ describe('useDeepResearch', () => {
         await mockClient?.callbacks.onError?.(new Error('Transient error'))
       })
 
-      expect(mockAddErrorCard).not.toHaveBeenCalled()
-      expect(mockCompleteDeepResearch).not.toHaveBeenCalled()
-      expect(mockSetStreaming).not.toHaveBeenCalled()
+      // Errors are now surfaced instead of silently swallowed when backend is healthy
+      expect(mockAddErrorCard).toHaveBeenCalledWith(
+        'connection.failed',
+        'Transient error',
+        expect.any(String)
+      )
+      expect(mockCompleteDeepResearch).toHaveBeenCalled()
+      expect(mockSetStreaming).toHaveBeenCalledWith(false)
 
       consoleWarnSpy.mockRestore()
     })

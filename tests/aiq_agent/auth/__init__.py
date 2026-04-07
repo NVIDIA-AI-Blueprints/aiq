@@ -12,27 +12,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-[build-system]
-build-backend = "setuptools.build_meta"
-requires = ["setuptools >= 64", "setuptools-scm>=8"]
-
-[tool.setuptools]
-packages = ["deepsearch_qa_evaluator"]
-package-dir = {"deepsearch_qa_evaluator" = "src"}
-
-[project]
-name = "deepsearch-qa-evaluator"
-version = "1.0.0"
-description = "DeepSearch QA evaluator for NAT - DeepSearch QA evaluation methodology"
-readme = "README.md"
-requires-python = ">=3.11,<3.14"
-license = {text = "Apache-2.0"}
-dependencies = [
-    "nvidia-nat-eval==1.5.0",
-    "httpx>=0.24.0",
-    "pydantic>=2.0.0",
-]
-
-[project.entry-points."nat.plugins"]
-deepsearch_qa_evaluator = "deepsearch_qa_evaluator.register"

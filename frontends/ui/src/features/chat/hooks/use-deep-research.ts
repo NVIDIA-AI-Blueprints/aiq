@@ -24,6 +24,7 @@ import { useChatStore } from '../store'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 import { checkBackendHealthCached } from '@/shared/hooks/use-backend-health'
+import { isLikelyAuthRelatedTransportError, isDeepResearchReplayCompleteMode } from '../lib/transport-auth-signals'
 
 /** Timeout in milliseconds before showing a warning (60 seconds) */
 const TIMEOUT_WARNING_MS = 60000
@@ -75,7 +76,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
 
   // Auth token for authenticated requests
   // Note: idToken is used for backend auth, not accessToken
-  const { idToken } = useAuth()
+  const { idToken, authRequired, error: authError } = useAuth()
 
   // Chat store state and actions
   const {
@@ -135,6 +136,28 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
     lastEventTimeRef.current = Date.now()
     setIsTimedOut(false)
   }, [])
+
+  /**
+   * Classify a deep research stream failure as auth-related or generic.
+   * Used when the backend is healthy but the SSE stream errored,
+   * which typically means the auth cookie or token drifted.
+   */
+  const getDeepResearchStreamFailure = useCallback(
+    (message: string, details?: string): { code: string; message: string; details?: string } => {
+      if (!authRequired) {
+        return { code: 'connection.failed', message, details }
+      }
+      if (authError === 'RefreshAccessTokenError' || isLikelyAuthRelatedTransportError(message)) {
+        return {
+          code: 'auth.session_expired',
+          message: 'Your session has expired. Please sign in again to continue.',
+          details,
+        }
+      }
+      return { code: 'connection.failed', message, details }
+    },
+    [authRequired, authError]
+  )
 
   /**
    * Create and connect to the SSE stream
@@ -242,7 +265,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
           },
 
           onStreamMode: (mode) => {
-            if (mode === 'live' && buf.active) {
+            if (isDeepResearchReplayCompleteMode(mode) && buf.active) {
               flushBuffer()
               setCurrentStatus('researching')
             }
@@ -468,8 +491,17 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             const { isDeepResearchStreaming, deepResearchStatus } = useChatStore.getState()
             if (isDeepResearchStreaming && deepResearchStatus !== 'interrupted' && deepResearchStatus !== 'failure') {
               const backendUp = await checkBackendHealthCached()
-              if (backendUp) return
-              console.error('Deep research SSE failed (backend unreachable):', error)
+
+              const errorInfo = backendUp
+                ? getDeepResearchStreamFailure(error.message, error.stack)
+                : { code: 'agent.deep_research_failed' as const, message: error.message, details: error.stack }
+
+              console.error(
+                backendUp
+                  ? 'Deep research SSE failed while backend remained reachable:'
+                  : 'Deep research SSE failed (backend unreachable):',
+                error
+              )
               setCurrentStatus('error')
 
               const state = useChatStore.getState()
@@ -486,7 +518,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
                 })
               }
 
-              state.addErrorCard('agent.deep_research_failed', error.message, error.stack)
+              state.addErrorCard(errorInfo.code as Parameters<typeof state.addErrorCard>[0], errorInfo.message, errorInfo.details)
               addDeepResearchBanner('failure', jobId, ownerConvId || undefined)
               stopAllDeepResearchSpinners()
               clientRef.current?.disconnect()
@@ -513,6 +545,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
       completeDeepResearchLLMStep, addDeepResearchAgentWithId, completeDeepResearchAgent,
       addDeepResearchToolCall, completeDeepResearchToolCall, addDeepResearchFile,
       patchConversationMessage, addDeepResearchBanner, setStreaming, setStreamLoaded,
+      getDeepResearchStreamFailure,
     ]
   )
 

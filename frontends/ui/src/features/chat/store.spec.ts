@@ -9,7 +9,7 @@ const STORAGE_KEY = 'aiq-chat-store'
 const mockLayoutState = vi.hoisted(() => ({
   closeRightPanel: vi.fn(),
   enabledDataSourceIds: ['web_search'],
-  availableDataSources: [{ id: 'web_search' }, { id: 'confluence' }],
+  availableDataSources: [{ id: 'web_search' }, { id: 'knowledge_base', requires_auth: true }],
   setEnabledDataSources: vi.fn(),
 }))
 const mockDeepResearchApi = vi.hoisted(() => ({
@@ -42,8 +42,13 @@ describe('useChatStore', () => {
     mockLayoutState.closeRightPanel.mockClear()
     mockLayoutState.setEnabledDataSources.mockClear()
     mockLayoutState.enabledDataSourceIds = ['web_search']
-    mockLayoutState.availableDataSources = [{ id: 'web_search' }, { id: 'confluence' }]
+    mockLayoutState.availableDataSources = [
+      { id: 'web_search' },
+      { id: 'knowledge_base', requires_auth: true },
+    ]
     mockDiscardSessionResources.mockClear()
+    mockDeepResearchApi.getJobStatus.mockReset()
+    mockDeepResearchApi.cancelJob.mockReset()
     // Reset store to initial state before each test
     useChatStore.setState({
       currentUserId: null,
@@ -602,7 +607,7 @@ describe('useChatStore', () => {
     })
 
     test('creates conversation if none exists', () => {
-      mockLayoutState.enabledDataSourceIds = ['web_search', 'confluence']
+      mockLayoutState.enabledDataSourceIds = ['web_search', 'knowledge_base']
       useChatStore.setState({
         currentUserId: 'user-1',
         currentConversation: null,
@@ -615,7 +620,7 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().conversations).toHaveLength(1)
       expect(useChatStore.getState().currentConversation?.enabledDataSourceIds).toEqual([
         'web_search',
-        'confluence',
+        'knowledge_base',
       ])
     })
 
