@@ -40,6 +40,9 @@ dependencies = [
     "aiofiles>=23.0.0",
     "python-multipart>=0.0.9",
     "knowledge-layer[all]",
+    # CVE version floors for transitive dependencies
+    "cryptography>=46.0.6,<47",
+    "pygments>=2.20.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -189,9 +192,11 @@ dev = [
 [tool.uv]
 prerelease = "if-necessary-or-explicit"
 override-dependencies = [
-    "authlib>=1.6.9",
+    "authlib>=1.6.9,<2",
+    "cryptography>=46.0.6,<47",
+    "pygments>=2.20.0,<3",
+    "pyopenssl>=26.0.0,<27",
     "tornado>=6.5.5",
-    "pyopenssl>=26.0.0",
 ]
 
 [tool.uv.pip]
