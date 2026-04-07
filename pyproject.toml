@@ -28,12 +28,8 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    # Meta package ``nvidia-nat`` alone does not install ``nvidia-nat-core`` under uv’s resolver
-    # (see Requires-Dist nvidia-nat-core==v1.5.0 on the shim wheel).  Without core, ``nat`` only
-    # contains ``meta``/``plugins`` and ``import nat.data_models`` fails.  Pin core explicitly.
-    "nvidia-nat-core[async_endpoints]==1.5.0",
+    "nvidia-nat-core==1.5.0",
     "nvidia-nat[langchain,weave,async_endpoints,phoenix]==1.5.0",
-    # Provides nat.plugins.eval (required by workspace benchmark evaluators at plugin discovery)
     "nvidia-nat-eval==1.5.0",
     "deepagents>=0.3.0",
     "langgraph-checkpoint-postgres>=3.0.0",
