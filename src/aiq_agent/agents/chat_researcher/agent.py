@@ -46,9 +46,6 @@ from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 
-# Optional: aiq_api may not be installed in all environments (e.g. CLI-only).
-# When present, AuthError allows auth failures to surface their message directly
-# to the user instead of the generic fallback.
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
 except ImportError:

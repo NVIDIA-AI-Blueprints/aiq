@@ -106,10 +106,6 @@ class JobStatusResponse(BaseModel):
         ...,
         description="Current status: submitted, running, success, failure, interrupted, not_found",
     )
-    status: str = Field(
-        ...,
-        description="Current status: submitted, running, success, failure, interrupted, not_found",
-    )
     agent_type: str | None = Field(None, description="Agent type used for this job")
     error: str | None = Field(None, description="Error message if job failed")
     created_at: str | None = Field(None, description="Creation timestamp (ISO format)")

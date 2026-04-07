@@ -36,9 +36,6 @@ from .custom_middleware import ToolResultPruningMiddleware
 from .custom_middleware import ToolRetryMiddleware
 from .models import DeepResearchAgentState
 
-# Optional: aiq_api may not be installed in all environments (e.g. CLI-only).
-# When present, AuthError allows auth failures to propagate immediately instead
-# of being retried silently in the deep research retry loop.
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
 except ImportError:
