@@ -49,7 +49,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-env>=1.1.0",
     "pre-commit>=3.5.0",
-    "ruff~=0.12",
+    "ruff~=0.15.1",
     "yapf>=0.40.0",
     "mypy>=1.5.0",
 ]
@@ -173,7 +173,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-env>=1.1.0",
     "pre-commit>=3.5.0",
-    "ruff~=0.12",
+    "ruff~=0.15.1",
     "yapf>=0.40.0",
     "mypy>=1.5.0",
     "dask[distributed]>=2024.1.0",
