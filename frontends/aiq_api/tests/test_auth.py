@@ -28,14 +28,15 @@ from unittest.mock import patch
 
 import jwt
 import pytest
+from cryptography.hazmat.primitives.asymmetric import rsa
+from jwt import PyJWK
+from jwt.algorithms import RSAAlgorithm
+
 from aiq_api.auth import AuthMiddleware
 from aiq_api.auth import JWTValidator
 from aiq_api.auth import TokenValidator
 from aiq_api.auth import get_current_user
 from aiq_api.auth import middleware as middleware_module
-from cryptography.hazmat.primitives.asymmetric import rsa
-from jwt import PyJWK
-from jwt.algorithms import RSAAlgorithm
 
 # ---------------------------------------------------------------------------
 # TokenValidator (ABC)
@@ -66,6 +67,22 @@ class TestJWTValidatorInit:
         v = JWTValidator("https://issuer.example/")
         assert v.issuer_url == "https://issuer.example"
 
+    def test_is_token_validator(self) -> None:
+        v = JWTValidator("https://issuer.example/")
+        assert isinstance(v, TokenValidator)
+
+
+class TestJWTValidatorCanHandle:
+    def test_true_for_compact_jwt_shape(self) -> None:
+        v = JWTValidator("https://issuer.example/")
+        assert v.can_handle("eyJ.a.b")
+
+    def test_false_for_non_jwt(self) -> None:
+        v = JWTValidator("https://issuer.example/")
+        assert not v.can_handle("opaque-api-key")
+        assert not v.can_handle("a.b")
+        assert not v.can_handle("")
+
 
 class TestJWTValidatorValidate:
     @pytest.mark.asyncio
@@ -89,6 +106,10 @@ class TestJWTValidatorValidate:
 
         assert out is not None
         assert out["sub"] == "user-1"
+        assert out["type"] == "jwt"
+        assert out["token"] == token
+        assert out["skip_clarifier"] is False
+        assert out["iss"] == issuer
 
     @pytest.mark.asyncio
     async def test_returns_none_when_no_signing_key(self) -> None:
@@ -132,6 +153,9 @@ class TestJWTValidatorValidate:
         with patch.object(validator, "_get_signing_key", return_value=jwk):
             out = await validator.validate(token)
         assert out is not None and out["sub"] == "user-2"
+        assert out["type"] == "jwt"
+        assert out["token"] == token
+        assert out["skip_clarifier"] is False
 
 
 class TestJWTValidatorGetSigningKey:

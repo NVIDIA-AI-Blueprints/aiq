@@ -40,7 +40,7 @@ ENVIRONMENT VARIABLES
 ``AIQ_EXTERNAL_HOSTNAMES``
     Comma-separated list of external-facing hostnames.  Requests that arrive
     with a ``Host`` header matching one of these are treated as external (auth
-    + path filter applied).  Defaults to the internal staging hostname.
+    + path filter applied).
 
 ``REQUIRE_AUTH``
     ``"true"`` / ``"false"`` (case-insensitive).  When ``false``, token

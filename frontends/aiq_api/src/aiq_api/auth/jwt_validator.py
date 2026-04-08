@@ -24,15 +24,18 @@ Install: pip install 'PyJWT[cryptography]'
 
 import asyncio
 import logging
+import threading
 import time
 from typing import Any
+
+from .base import TokenValidator
 
 logger = logging.getLogger(__name__)
 
 _MISSING_PYJWT = "PyJWT[cryptography] is required for JWT validation. Install with: pip install 'PyJWT[cryptography]'"
 
 
-class JWTValidator:
+class JWTValidator(TokenValidator):
     """
     Validates OIDC JWTs (any standards-compliant provider).
 
@@ -69,6 +72,12 @@ class JWTValidator:
         # List of (kid_or_None, PyJWK) pairs; refreshed after TTL
         self._cached_keys: list[tuple[str | None, Any]] | None = None
         self._jwks_keys_fetched_at: float = 0.0
+        self._jwks_lock = threading.Lock()
+
+    def can_handle(self, token: str) -> bool:
+        """Accept any token that looks like a compact JWT (three dot-separated segments)."""
+        parts = token.split(".")
+        return len(parts) == 3
 
     # ------------------------------------------------------------------
     # Internal helpers (sync — run via asyncio.to_thread)
@@ -114,63 +123,70 @@ class JWTValidator:
         return keys
 
     def _get_signing_key(self, token: str):
-        """Return the signing key for *token*, or ``None`` on failure."""
+        """Return the signing key for *token*, or ``None`` on failure.
+
+        Cache reads/writes run under ``_jwks_lock`` because this method is
+        invoked from thread-pool workers via ``asyncio.to_thread``.
+        """
         import jwt as _jwt
 
-        now = time.monotonic()
-        if self._cached_keys is None or (now - self._jwks_keys_fetched_at) > self._jwks_cache_ttl:
-            if self._jwks_uri is None:
-                config = self._fetch_oidc_config()
-                self._jwks_uri = config["jwks_uri"]
-                logger.debug("JWKS URI: %s", self._jwks_uri)
-            try:
-                self._cached_keys = self._fetch_jwks_keys()
-                self._jwks_keys_fetched_at = now
-            except Exception as e:
-                logger.debug("JWKS fetch failed: %s", e)
-                self._cached_keys = None
+        with self._jwks_lock:
+            now = time.monotonic()
+            if self._cached_keys is None or (now - self._jwks_keys_fetched_at) > self._jwks_cache_ttl:
+                if self._jwks_uri is None:
+                    config = self._fetch_oidc_config()
+                    self._jwks_uri = config["jwks_uri"]
+                    logger.debug("JWKS URI: %s", self._jwks_uri)
+                try:
+                    self._cached_keys = self._fetch_jwks_keys()
+                    self._jwks_keys_fetched_at = time.monotonic()
+                except Exception as e:
+                    logger.debug("JWKS fetch failed: %s", e)
+                    self._cached_keys = None
+                    return None
+
+            if not self._cached_keys:
+                logger.debug("No usable keys in JWKS")
                 return None
 
-        if not self._cached_keys:
-            logger.debug("No usable keys in JWKS")
-            return None
-
-        # Match by kid if the token carries one
-        try:
-            header = _jwt.get_unverified_header(token)
-            kid = header.get("kid")
-        except Exception:
-            kid = None
-
-        if kid:
-            for key_kid, jwk in self._cached_keys:
-                if key_kid == kid:
-                    return jwk
-            # kid not in cache — force a refresh once and retry
-            logger.debug("kid %s not in cached keys, refreshing JWKS", kid)
-            self._cached_keys = None
+            # Match by kid if the token carries one
             try:
-                self._cached_keys = self._fetch_jwks_keys()
-                self._jwks_keys_fetched_at = now
+                header = _jwt.get_unverified_header(token)
+                kid = header.get("kid")
+            except Exception:
+                kid = None
+
+            if kid:
                 for key_kid, jwk in self._cached_keys:
                     if key_kid == kid:
                         return jwk
-            except Exception as e:
-                logger.debug("JWKS refresh failed: %s", e)
-            return None
+                # kid not in cache — force a refresh once and retry
+                logger.debug("kid %s not in cached keys, refreshing JWKS", kid)
+                self._cached_keys = None
+                try:
+                    self._cached_keys = self._fetch_jwks_keys()
+                    self._jwks_keys_fetched_at = time.monotonic()
+                    for key_kid, jwk in self._cached_keys:
+                        if key_kid == kid:
+                            return jwk
+                except Exception as e:
+                    logger.debug("JWKS refresh failed: %s", e)
+                return None
 
-        # No kid — return the only key, or the first one if multiple
-        return self._cached_keys[0][1]
+            # No kid — return the only key, or the first one if multiple
+            return self._cached_keys[0][1]
 
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
 
     async def validate(self, token: str) -> dict[str, Any] | None:
-        """Validate *token* and return the raw verified claims dict, or ``None``.
+        """Validate *token* and return a user dict per ``TokenValidator``, or ``None``.
 
-        Returns the JWT payload so provider-specific validators can map
-        claims to their own user dict shape.
+        Merges verified JWT claims with the required ``type`` / ``token`` /
+        ``skip_clarifier`` fields. Contract keys are applied after ``**claims``
+        so the bearer token and caller metadata cannot be spoofed by payload
+        claims.
         """
         try:
             import jwt as _jwt
@@ -196,7 +212,16 @@ class JWTValidator:
             else:
                 options["verify_aud"] = False
 
-            return _jwt.decode(token, signing_key.key, **decode_kwargs)
+            claims = _jwt.decode(token, signing_key.key, **decode_kwargs)
+            return {
+                **claims,
+                "type": "jwt",
+                "sub": claims.get("sub"),
+                "email": claims.get("email"),
+                "name": claims.get("name"),
+                "token": token,
+                "skip_clarifier": False,
+            }
 
         except _jwt.ExpiredSignatureError:
             logger.debug("JWT expired")
