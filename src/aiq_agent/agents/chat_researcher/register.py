@@ -254,9 +254,8 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         # Check if Dask scheduler is available
         scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
         if scheduler_address:
-            from aiq_api.jobs import submit_agent_job
-
             from aiq_agent.auth import get_current_user_info
+            from aiq_api.jobs import submit_agent_job
 
             async def _submit_deep_job(state: ChatResearcherState) -> str:
                 user_info = get_current_user_info()

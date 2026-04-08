@@ -68,6 +68,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+
 from aiq_api.jobs.callbacks import ArtifactType
 from aiq_api.jobs.callbacks import DeepResearchEventCallback
 from aiq_api.jobs.callbacks import EventCategory
