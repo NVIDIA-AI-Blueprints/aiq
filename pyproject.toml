@@ -134,7 +134,7 @@ extend-ignore = [
 combine-as-imports = true
 default-section = "third-party"
 force-single-line = true
-known-first-party = ["aiq", "nat", "nat_*", "_utils"]
+known-first-party = ["aiq", "aiq_api", "nat", "nat_*", "_utils"]
 known-third-party = [
   "agno",
   "autogen",
