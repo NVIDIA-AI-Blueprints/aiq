@@ -58,7 +58,7 @@ CREATE TABLE IF NOT EXISTS job_events (
     job_id VARCHAR(64) NOT NULL,
     event_type VARCHAR(64) NOT NULL,
     event_data TEXT,
-    created_at TIMESTAMP DEFAULT NOW()
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_job_events_job_id ON job_events(job_id);
@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS summaries (
     collection VARCHAR(256) NOT NULL,
     filename VARCHAR(512) NOT NULL,
     summary TEXT NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     PRIMARY KEY (collection, filename)
 );
 
