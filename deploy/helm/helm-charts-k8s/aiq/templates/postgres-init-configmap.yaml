@@ -1,0 +1,14 @@
+{{- $postgres := index .Values.apps "postgres" }}
+{{- if and $postgres $postgres.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-postgres-init
+  namespace: {{ include "aiq.namespace" . }}
+  labels:
+    app: {{ .Release.Name }}-postgres
+    component: postgres
+data:
+  init.sql: |
+{{ .Files.Get "files/init-db.sql" | indent 4 }}
+{{- end }}
