@@ -2,15 +2,23 @@
 -- AI-Q Blueprint - Database Initialization (idempotent — safe to re-run)
 -- =============================================================================
 --
--- What this script handles:
---   - Creating databases (aiq_checkpoints)
---   - Granting permissions
---   - Creating NAT JobStore table (job_info)
---   - Creating performance indices
+-- Run by the backend init container on every pod start. All statements are
+-- idempotent (IF NOT EXISTS) so re-runs are safe.
 --
--- What the app handles automatically:
---   - job_events table (event_store.py creates via SQLAlchemy)
---   - summaries table (summary_store.py creates if not exists)
+-- Databases:
+--   - aiq_jobs         (job metadata, events, document summaries)
+--   - aiq_checkpoints  (LangGraph conversation state)
+--
+-- Tables in aiq_jobs:
+--   - job_info      — NAT JobStore metadata (status, timestamps, expiry)
+--   - job_events    — SSE streaming events and job event persistence
+--   - summaries     — Document summaries (collection + filename keyed)
+--
+-- Tables in aiq_checkpoints:
+--   - checkpoints           — LangGraph conversation checkpoints
+--   - checkpoint_blobs      — LangGraph binary state data
+--   - checkpoint_writes     — LangGraph pending writes
+--   - checkpoint_migrations — LangGraph schema version tracking
 --
 -- =============================================================================
 
