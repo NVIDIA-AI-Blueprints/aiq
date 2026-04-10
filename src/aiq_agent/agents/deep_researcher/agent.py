@@ -210,6 +210,8 @@ class DeepResearcherAgent:
                 ),
                 "system_prompt": render_prompt_template(
                     self._prompts["planner"],
+                    current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    user_info=state.user_info,
                     tools=self.tools_info,
                     available_documents=available_docs,
                 ),
@@ -226,6 +228,7 @@ class DeepResearcherAgent:
                 "system_prompt": render_prompt_template(
                     self._prompts["researcher"],
                     current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    user_info=state.user_info,
                     tools=self.tools_info,
                     available_documents=available_docs,
                 ),
@@ -250,6 +253,7 @@ class DeepResearcherAgent:
         orchestrator_instructions = render_prompt_template(
             self._prompts["orchestrator"],
             current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            user_info=state.user_info,
             clarifier_result=state.clarifier_result,
             available_documents=available_docs,
             tools=self.tools_info,

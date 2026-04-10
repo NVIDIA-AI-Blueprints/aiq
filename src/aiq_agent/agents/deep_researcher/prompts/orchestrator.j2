@@ -149,6 +149,10 @@ Write final report using write_file to /report.md. Return ONLY the final report 
 
 ## Context
 Current date and time: {{ current_datetime }}
+{% if user_info and user_info.name %}
+Authenticated user: **{{ user_info.name }}** ({{ user_info.email or "email not provided" }})
+When the user says "me", "myself", or "my work", they mean this person.
+{% endif %}
 
 {% if clarifier_result %}
 ## Clarification Context

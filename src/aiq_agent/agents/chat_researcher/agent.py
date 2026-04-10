@@ -280,6 +280,7 @@ class ChatResearcherAgent:
                 data_sources=state.data_sources,
                 clarifier_result=state.clarifier_result,
                 available_documents=state.available_documents,
+                user_info=state.user_info,
             )
             try:
                 result = await self.deep_research_fn(deep_state)

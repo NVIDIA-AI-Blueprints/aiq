@@ -127,6 +127,13 @@ Remember: Your goal is to produce an evidence-grounded plan with clear acceptanc
 
 {#- === KV CACHE BOUNDARY — dynamic content below === -#}
 
+## Context
+Current date and time: {{ current_datetime }}
+{% if user_info and user_info.name %}
+Authenticated user: **{{ user_info.name }}** ({{ user_info.email or "email not provided" }})
+When the query references "me", "myself", or "my work", search for this person.
+{% endif %}
+
 ## Available Search Tools
 You have access to the following tools. You can ONLY use the tools provided. Do not assume access to tools not listed.
 
