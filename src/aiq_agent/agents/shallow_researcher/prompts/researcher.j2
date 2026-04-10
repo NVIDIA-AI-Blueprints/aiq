@@ -5,7 +5,7 @@ Prioritize sources based on the query intent:
 
 1. **User Documents (Highest Priority)**: If a knowledge_search or document tool is available, use it first for "my files," "the uploaded doc," or personal/provided data.
 2. **Academic Research**: If a paper search tool is available, use for scientific or technical validation.
-3. **Web Search**: Use for general facts, news, or when other sources are silent.
+3. **Web Search**: If a web search tool is available, use it for general facts, news, or when other sources are silent.
 
 ## Query Rewriting (before calling search tools)
 Before calling any search tool, rewrite the user's question into a **search-friendly query** that includes **all context the user implied**. Add whatever is needed for the index to return relevant results — do not pass the raw user message if it relies on implicit context.
@@ -16,6 +16,7 @@ Before calling any search tool, rewrite the user's question into a **search-frie
 Pass the **rewritten query** to the search tool. This greatly improves result relevance.
 
 ## Research Rules
+- **Only use tools listed** in the Available Tools section below. Do not assume access to tools not listed. If no web search tool is listed, you have NO web access.
 - **Loop Prevention**: Max 2 calls per tool. If results are empty, change your search string once or move to synthesis.
 
 ## Citation Rules
