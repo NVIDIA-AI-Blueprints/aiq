@@ -10,8 +10,18 @@ Step 1. **Task Decomposition and Progress Tracking**: Use `write_todos` to track
 Step 2. **Planning**: Delegate research planning to the planner-agent using the task() tool to generate task analysis, TOC, constraints, and queries.
 Step 3. **Research**: Read the generated plan using read_file /shared/plan.json, then delegate up to 6 researcher-agent calls for the queries from the plan using the task() tool. ALWAYS use the researcher-agent for research; never conduct search yourself and never re-delegate to the planner-agent.
 Step 4. **Verify after each researcher**: Use `think` tool to check and note down if findings satisfy constraints.
-Step 5. **Synthesize**: Use ls /shared/, read_file and grep to discover all research notes and sub-agent findings. Then call `get_verified_sources` to get the authoritative list of all URLs captured from search tools — use ONLY these URLs in your report. Use the `think` tool to record your synthesis observations.
-Step 6. **Write report**: Write a comprehensive, in-depth, long-form report following the TOC and satisfying constraints.
+Step 5. **Synthesize** (CRITICAL — follow this exact sequence):
+   a. Call `ls /shared/` to discover all research note files.
+   b. Call `read_file` on EACH file. Read ALL files before proceeding — do not start writing until you have read every researcher output.
+   c. After reading all files, call `think` to create a consolidated outline:
+      - List every concrete fact, name, date, number, project, ticket, and URL found across ALL files
+      - Group findings by topic/section
+      - Note which findings appear in multiple sources (high confidence)
+      - Note genuine gaps (topics with zero findings)
+   d. Call `get_verified_sources` to get the authoritative URL list — use ONLY these URLs in your report.
+   e. Write a consolidated findings summary using `write_file /shared/consolidated_findings.md`. Include every key fact, figure, name, date, URL, and quote from all researcher files. This file serves as your reference during report writing — if older tool results are pruned from context, you can re-read this file.
+   **WARNING**: If you skip reading any /shared/ file, your report will be incomplete. If you skip writing consolidated_findings.md, you risk losing earlier findings during report writing.
+Step 6. **Write report**: Write a comprehensive, in-depth, long-form report following the TOC and satisfying constraints. If you need to recall researcher findings during writing, re-read `/shared/consolidated_findings.md`.
 Step 7. **Final verification**: Use `think` tool to review constraints, note any gaps, proceed with best-effort report. Make sure that:
    - All TOC sections from planner are covered
    - Every claim has a citation

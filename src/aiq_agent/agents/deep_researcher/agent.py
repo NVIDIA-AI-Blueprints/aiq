@@ -169,7 +169,7 @@ class DeepResearcherAgent:
             ToolNameSanitizationMiddleware(valid_tool_names=[t.name for t in self.all_tools]),
             ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
             self.source_registry_middleware,
-            ToolResultPruningMiddleware(keep_last_n=3, max_chars=500),
+            ToolResultPruningMiddleware(keep_last_n=10, max_chars=2000),
             ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
         ]
 
