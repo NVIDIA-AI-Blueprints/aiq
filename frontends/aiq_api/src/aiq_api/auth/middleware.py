@@ -96,6 +96,9 @@ def get_current_user() -> dict[str, Any]:
 # does NOT match one of these receives 404.  Prefix entries must end with "/".
 EXTERNAL_ALLOWED_PATHS: list[str] = [
     "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
     "/chat",
     "/chat/stream",
     "/v1/chat/completions",
@@ -106,7 +109,7 @@ EXTERNAL_ALLOWED_PATHS: list[str] = [
 ]
 
 # External paths that require no token (monitoring, etc.)
-AUTH_EXEMPT_PATHS: set[str] = {"/health"}
+AUTH_EXEMPT_PATHS: set[str] = {"/health", "/docs", "/redoc", "/openapi.json"}
 
 
 def _load_external_hostnames() -> set[str]:
