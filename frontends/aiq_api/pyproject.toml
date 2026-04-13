@@ -45,6 +45,8 @@ dependencies = [
     "pydantic>=2.0.0",
     "langchain-core>=0.1.0",
     "python-multipart>=0.0.6",
+    # JWT validation for AuthMiddleware (RS256 via JWKS)
+    "PyJWT[cryptography]>=2.8.0",
 ]
 
 [project.optional-dependencies]

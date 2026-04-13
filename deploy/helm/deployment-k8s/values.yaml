@@ -148,34 +148,8 @@ aiq:
         POSTGRES_PASSWORD: DB_USER_PASSWORD
       env:
         POSTGRES_DB: aiq_jobs
-      configMaps:
-      - name: aiq-postgres-init
-        data:
-          init.sql: "-- =============================================================================\n\
-            -- AI-Q - Database Initialization\n-- This script runs on first PostgreSQL\
-            \ startup (fresh volume only)\n-- =============================================================================\n\
-            --\n-- What this script handles (requires admin privileges):\n--   - Creating\
-            \ databases (aiq_checkpoints)\n--   - Granting permissions\n--   - Creating\
-            \ NAT JobStore table (job_info)\n--   - Creating performance indices\n\
-            --\n-- What the app handles automatically:\n--   - job_events table (event_store.py\
-            \ creates via SQLAlchemy)\n--   - LangGraph checkpoint tables (AsyncPostgresSaver\
-            \ creates them)\n--   - summaries table (summary_store.py creates if not\
-            \ exists)\n--\n-- =============================================================================\n\
-            \n-- Create checkpoints database for LangGraph agent state\nCREATE DATABASE\
-            \ aiq_checkpoints;\n\n-- Grant permissions\nGRANT ALL PRIVILEGES ON DATABASE\
-            \ aiq_jobs TO :\"db_user\";\nGRANT ALL PRIVILEGES ON DATABASE aiq_checkpoints\
-            \ TO :\"db_user\";\n\n-- =============================================================================\n\
-            -- Create job store table in aiq_jobs database\n-- Note: job_events table\
-            \ is created by the app (event_store.py)\n-- =============================================================================\n\
-            \\connect aiq_jobs\n\n-- Job metadata table (NAT JobStore - not auto-created\
-            \ by NAT)\nCREATE TABLE IF NOT EXISTS job_info (\n    job_id VARCHAR PRIMARY\
-            \ KEY,\n    status VARCHAR NOT NULL,\n    config_file VARCHAR,\n    error\
-            \ VARCHAR,\n    output_path VARCHAR,\n    created_at TIMESTAMP WITH TIME\
-            \ ZONE,\n    updated_at TIMESTAMP WITH TIME ZONE,\n    expiry_seconds\
-            \ INTEGER,\n    output VARCHAR,\n    is_expired BOOLEAN DEFAULT FALSE\n\
-            );\n\n-- Performance indices\nCREATE INDEX IF NOT EXISTS idx_job_info_status\
-            \ ON job_info(status);\nCREATE INDEX IF NOT EXISTS idx_job_info_created_at\
-            \ ON job_info(created_at);\n"
+      # ConfigMap for init.sql is managed by postgres-init-configmap.yaml template
+      # which reads from files/init-db.sql (source of truth: deploy/compose/init-db.sql)
       persistence:
       - name: aiq-postgres-data
         accessModes:

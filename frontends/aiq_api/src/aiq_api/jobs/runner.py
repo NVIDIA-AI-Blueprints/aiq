@@ -207,6 +207,7 @@ async def run_agent_job(
     parent_conversation_id: str | None = None,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
+    auth_token: str | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -234,7 +235,19 @@ async def run_agent_job(
         parent_workflow_trace_id: Parent trace ID (int or hex string) for trace continuity.
         parent_conversation_id: Conversation ID for session grouping in Phoenix.
         available_documents: Optional list of document dicts with file_name and summary.
+        data_sources: Optional list of allowed data sources to enforce in the worker.
+        auth_token: Optional auth token propagated from the HTTP request for
+            data sources that require authentication (requires_auth: true).
     """
+
+    # Propagate auth token into the current async task's context so tools
+    # can retrieve it via get_auth_token(). Uses a ContextVar so concurrent
+    # jobs in the same Dask worker process don't leak tokens across tasks.
+    _auth_token_reset = None
+    if auth_token:
+        from ._auth_context import job_auth_token
+
+        _auth_token_reset = job_auth_token.set(auth_token)
 
     from aiq_agent.common import LLMProvider
     from aiq_agent.common import LLMRole
@@ -537,6 +550,11 @@ async def run_agent_job(
             event_store.flush()
         if cancellation_monitor:
             cancellation_monitor.stop()
+        # Clean up job-scoped auth token
+        if _auth_token_reset is not None:
+            from ._auth_context import job_auth_token
+
+            job_auth_token.reset(_auth_token_reset)
 
 
 def _create_agent_instance(

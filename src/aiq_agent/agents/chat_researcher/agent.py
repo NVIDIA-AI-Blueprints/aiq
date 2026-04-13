@@ -46,6 +46,11 @@ from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 
+try:
+    from aiq_api.auth.errors import AuthError as _AuthError
+except ImportError:
+    _AuthError = None  # type: ignore[assignment,misc]
+
 from .models import ChatResearcherState
 from .models import ShallowResult
 from .utils import trim_message_history
@@ -137,7 +142,7 @@ class ChatResearcherAgent:
                         },
                     )
 
-            if self.enable_clarifier:
+            if self.enable_clarifier and not state.skip_clarifier:
                 if self.clarifier_fn is None:
                     raise ValueError(
                         "enable_clarifier is True but clarifier_agent is not defined in config. "
@@ -217,6 +222,17 @@ class ChatResearcherAgent:
                     ),
                 }
             except Exception as e:
+                if _AuthError and isinstance(e, _AuthError):
+                    logger.warning("Auth error in shallow research: %s", e)
+                    err_msg = str(e)
+                    return {
+                        "messages": [AIMessage(content=err_msg)],
+                        "shallow_result": ShallowResult(
+                            answer=err_msg,
+                            confidence="high",
+                            escalate_to_deep=False,
+                        ),
+                    }
                 logger.exception("Error in shallow research: %s", e)
                 err_msg = "An error occurred while researching your question. Please try again."
                 # Same rationale as EmptySourceRegistryError: the system is certain an error
@@ -264,6 +280,7 @@ class ChatResearcherAgent:
                 data_sources=state.data_sources,
                 clarifier_result=state.clarifier_result,
                 available_documents=state.available_documents,
+                user_info=state.user_info,
             )
             try:
                 result = await self.deep_research_fn(deep_state)
@@ -275,6 +292,11 @@ class ChatResearcherAgent:
                     "Please try again."
                 )
                 return {"messages": [AIMessage(content=err_msg)]}
+            except Exception as e:
+                if _AuthError and isinstance(e, _AuthError):
+                    logger.warning("Auth error in deep research: %s", e)
+                    return {"messages": [AIMessage(content=str(e))]}
+                raise
             if not result.messages:
                 error_message = "An error occurred during deep research."
                 logger.error(error_message)
@@ -383,6 +405,7 @@ class ChatResearcherAgent:
                 "data_sources": state.data_sources,
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
+                "skip_clarifier": state.skip_clarifier,
             }
             messages = state.messages
 

@@ -68,6 +68,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+
 from aiq_api.jobs.callbacks import ArtifactType
 from aiq_api.jobs.callbacks import DeepResearchEventCallback
 from aiq_api.jobs.callbacks import EventCategory
@@ -427,7 +428,8 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        assert job_args[-1] == ["web_search"]
+        # data_sources is second-to-last (auth_token is last)
+        assert job_args[-2] == ["web_search"]
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):

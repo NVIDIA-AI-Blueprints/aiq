@@ -1,5 +1,6 @@
 -- =============================================================================
 -- AI-Q Blueprint - Database Initialization (idempotent — safe to re-run)
+-- KEEP IN SYNC with deploy/compose/init-db.sql (the source of truth)
 -- =============================================================================
 --
 -- Run by the backend init container on every pod start. All statements are

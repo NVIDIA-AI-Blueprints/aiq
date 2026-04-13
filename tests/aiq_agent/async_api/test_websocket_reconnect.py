@@ -23,12 +23,12 @@ import asyncio
 from collections.abc import AsyncGenerator
 
 import pytest
-from aiq_api import websocket_reconnect
-from aiq_api.websocket_reconnect import ReconnectableWebSocketMessageHandler
-from aiq_api.websocket_reconnect import WebSocketSessionRegistry
 from pydantic import BaseModel
 from starlette.websockets import WebSocketDisconnect
 
+from aiq_api import websocket_reconnect
+from aiq_api.websocket_reconnect import ReconnectableWebSocketMessageHandler
+from aiq_api.websocket_reconnect import WebSocketSessionRegistry
 from nat.data_models.api_server import TextContent
 from nat.data_models.api_server import UserMessageContent
 from nat.data_models.api_server import UserMessageContentRoleType

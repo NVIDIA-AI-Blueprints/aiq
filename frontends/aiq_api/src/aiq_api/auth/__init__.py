@@ -13,28 +13,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Shared authentication utilities for AI-Q blueprint.
+"""Auth components for the AIQ API frontend."""
 
-This module provides token retrieval and user info utilities that can be used
-by any tool or agent.
-"""
-
-from .utils import UserInfo
-from .utils import clear_token_fetchers
-from .utils import decode_jwt_payload
-from .utils import get_auth_token
-from .utils import get_current_user_info
-from .utils import get_user_info_from_token
-from .utils import register_token_fetcher
-from .utils import unregister_token_fetcher
+from .base import TokenValidator
+from .errors import AuthError
+from .jwt_validator import JWTValidator
+from .middleware import AuthMiddleware
+from .middleware import get_current_user
 
 __all__ = [
-    "UserInfo",
-    "clear_token_fetchers",
-    "decode_jwt_payload",
-    "get_auth_token",
-    "get_current_user_info",
-    "get_user_info_from_token",
-    "register_token_fetcher",
-    "unregister_token_fetcher",
+    "AuthError",
+    "AuthMiddleware",
+    "JWTValidator",
+    "TokenValidator",
+    "get_current_user",
 ]

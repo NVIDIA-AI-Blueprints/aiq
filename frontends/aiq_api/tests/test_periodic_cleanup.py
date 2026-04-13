@@ -25,6 +25,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+
 from aiq_api.jobs.event_store import EventStore
 
 

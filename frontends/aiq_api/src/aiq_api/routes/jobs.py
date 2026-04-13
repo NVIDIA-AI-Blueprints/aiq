@@ -289,6 +289,11 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         resolved_job_id = job_store.ensure_job_id(req.job_id)
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
 
+        # Propagate auth token to Dask worker for requires_auth data sources
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+
         job_args = [
             not use_threads,  # configure_logging
             log_level,
@@ -307,6 +312,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             None,  # parent_conversation_id
             None,  # available_documents
             None,  # data_sources
+            auth_token,  # auth_token
         ]
 
         job_id, _ = await job_store.submit_job(
