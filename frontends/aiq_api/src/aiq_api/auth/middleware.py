@@ -99,6 +99,11 @@ EXTERNAL_ALLOWED_PATHS: list[str] = [
     "/docs",
     "/redoc",
     "/openapi.json",
+    "/v1/docs",
+    "/v1/redoc",
+    "/v1/openapi.json",
+    "/v1/chat",
+    "/v1/chat/stream",
     "/chat",
     "/chat/stream",
     "/v1/chat/completions",
@@ -109,7 +114,15 @@ EXTERNAL_ALLOWED_PATHS: list[str] = [
 ]
 
 # External paths that require no token (monitoring, etc.)
-AUTH_EXEMPT_PATHS: set[str] = {"/health", "/docs", "/redoc", "/openapi.json"}
+AUTH_EXEMPT_PATHS: set[str] = {
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/v1/docs",
+    "/v1/redoc",
+    "/v1/openapi.json",
+}
 
 
 def _load_external_hostnames() -> set[str]:

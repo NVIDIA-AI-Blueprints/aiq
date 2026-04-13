@@ -200,6 +200,13 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
         app.description = "Async research jobs, knowledge management, and agent orchestration."
         app.version = "1.0.0"
 
+        _docs_paths = {app.docs_url, app.redoc_url, app.openapi_url, app.swagger_ui_oauth2_redirect_url}
+        app.router.routes = [r for r in app.router.routes if getattr(r, "path", None) not in _docs_paths]
+        app.docs_url = "/v1/docs"
+        app.redoc_url = "/v1/redoc"
+        app.openapi_url = "/v1/openapi.json"
+        app.setup()
+
         knowledge_router = APIRouter()
         add_collection_routes(knowledge_router)
         add_document_routes(knowledge_router)
