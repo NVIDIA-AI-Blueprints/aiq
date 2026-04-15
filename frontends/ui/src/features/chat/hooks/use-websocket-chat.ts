@@ -153,7 +153,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
   // Ref to track the current status for detecting status changes
   const currentStatusRef = useRef<StatusType | null>(null)
 
-  const { user, authRequired, error: authError } = useAuth()
+  const { user, authRequired, error: authError, idToken } = useAuth()
 
   // Chat store
   const {
@@ -593,6 +593,54 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       }
     }
   }, [currentConversation?.id, autoConnect, createCallbacks])
+
+  /**
+   * Reconnect the WebSocket when the OAuth idToken rotates.
+   *
+   * server.js decodes the NextAuth session JWT on every WebSocket upgrade
+   * and injects the idToken as a cookie. When a page is reopened after
+   * hours, the initial connection may carry a stale token. The
+   * SessionProvider refreshes tokens within seconds of mount — this effect
+   * detects the rotation and forces a reconnect so the new WebSocket gets
+   * the fresh credential. Also covers long-lived connections where the
+   * token refreshes every ~55 min.
+   */
+  const tokenInitRef = useRef(false)
+  const prevIdTokenRef = useRef(idToken)
+  const tokenReconnectPending = useRef(false)
+
+  useEffect(() => {
+    // First render — capture initial token, don't reconnect
+    if (!tokenInitRef.current) {
+      tokenInitRef.current = true
+      prevIdTokenRef.current = idToken
+      return
+    }
+
+    // Detect token rotation
+    if (prevIdTokenRef.current !== idToken) {
+      prevIdTokenRef.current = idToken
+      tokenReconnectPending.current = true
+    }
+
+    // Nothing pending
+    if (!tokenReconnectPending.current) return
+
+    // Don't interrupt an in-flight request or HITL interaction — defer
+    // until idle. The backend's WebSocketSessionRegistry supports socket
+    // swaps, but the brief disconnect window can race with the user
+    // submitting a HITL response.
+    if (isStreaming || isLoading || pendingInteraction) return
+
+    // Reconnect with fresh credentials
+    tokenReconnectPending.current = false
+    const client = wsClientRef.current
+    if (client?.isConnected()) {
+      console.info('[WS] Token refreshed — reconnecting for fresh auth')
+      client.disconnect()
+      client.connect()
+    }
+  }, [idToken, isStreaming, isLoading, pendingInteraction])
 
   /**
    * Send a message via WebSocket

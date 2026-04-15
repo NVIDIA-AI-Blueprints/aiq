@@ -90,8 +90,13 @@ const extractIdTokenFromSession = async (cookieHeader) => {
       secret: NEXTAUTH_SECRET,
     })
     if (!decoded || decoded.error) return null
-    const expiresAt = decoded.expiresAt
-    if (!expiresAt || Date.now() >= expiresAt * 1000) return null
+    // Note: do NOT reject based on expiresAt here. The session JWT is
+    // valid (NextAuth maxAge = 24h) even when the OAuth token inside it
+    // has expired. Sending an expired idToken is better than sending
+    // nothing — the backend can still identify the caller, and the
+    // SessionProvider will refresh the token within seconds of page load.
+    // The WebSocket reconnect (triggered by idToken rotation in the chat
+    // hook) will then pick up the fresh credential.
     return decoded.idToken || null
   } catch (err) {
     console.error('[WS Auth] Failed to decode NextAuth session:', err.message)
