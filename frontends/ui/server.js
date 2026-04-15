@@ -24,6 +24,7 @@
 const http = require('http')
 const httpProxy = require('http-proxy')
 const { parse } = require('url')
+const { decode: decodeJwt } = require('next-auth/jwt')
 
 const dev = process.env.NODE_ENV !== 'production'
 const hostname = process.env.HOSTNAME || '0.0.0.0'
@@ -42,6 +43,58 @@ const getBackendWsUrl = () => {
 const BACKEND_HTTP_URL = getBackendUrl()
 const BACKEND_WS_URL = getBackendWsUrl()
 const NEXT_INTERNAL_URL = process.env.NEXT_INTERNAL_URL || 'http://localhost:3001'
+const NEXTAUTH_SECRET = process.env.NEXTAUTH_SECRET
+
+/**
+ * Parse cookies from a raw Cookie header string.
+ */
+const parseCookies = (cookieHeader) => {
+  const cookies = {}
+  if (!cookieHeader) return cookies
+  for (const part of cookieHeader.split(';')) {
+    const idx = part.indexOf('=')
+    if (idx > 0) {
+      cookies[part.slice(0, idx).trim()] = part.slice(idx + 1).trim()
+    }
+  }
+  return cookies
+}
+
+/**
+ * Extract idToken from the NextAuth session JWT cookie.
+ *
+ * proxy.ts (Next.js middleware) sets the idToken cookie on HTTP responses,
+ * but WebSocket upgrades bypass Next.js entirely — the gateway handles them
+ * directly. If the browser hasn't received a recent HTTP response that set
+ * the cookie (first load, expired token, stale cache), the WebSocket
+ * connects without auth and downstream services that need the caller's
+ * identity (e.g. ECI search) fail.
+ *
+ * This function decodes the NextAuth session JWT (which the browser always
+ * sends) and extracts the idToken so the gateway can inject it into the
+ * proxied WebSocket request.
+ */
+const extractIdTokenFromSession = async (cookieHeader) => {
+  if (!NEXTAUTH_SECRET) return null
+  const cookies = parseCookies(cookieHeader)
+
+  // NextAuth 4 uses prefixed names when NEXTAUTH_URL is HTTPS
+  const sessionToken =
+    cookies['__Secure-next-auth.session-token'] ||
+    cookies['next-auth.session-token']
+  if (!sessionToken) return null
+
+  try {
+    const decoded = await decodeJwt({
+      token: sessionToken,
+      secret: NEXTAUTH_SECRET,
+    })
+    return decoded?.idToken || null
+  } catch (err) {
+    console.error('[WS Auth] Failed to decode NextAuth session:', err.message)
+    return null
+  }
+}
 
 // In production, we run Next.js in the same process
 let nextApp = null
@@ -144,7 +197,7 @@ const startServer = async () => {
   })
 
   // WebSocket upgrade handler
-  server.on('upgrade', (req, socket, head) => {
+  server.on('upgrade', async (req, socket, head) => {
     socket.setKeepAlive?.(true, 15000)
     socket.setTimeout?.(0)
 
@@ -161,6 +214,16 @@ const startServer = async () => {
     if (pathname === '/websocket' || pathname.startsWith('/websocket')) {
       req.url = '/websocket' + (parsedUrl.search || '')
 
+      // Ensure idToken cookie is present for backend auth.
+      // proxy.ts only runs on HTTP requests and can miss the WebSocket
+      // upgrade, leaving the backend without the caller's Starfleet token.
+      const cookies = parseCookies(req.headers.cookie)
+      if (!cookies.idToken) {
+        const idToken = await extractIdTokenFromSession(req.headers.cookie)
+        if (idToken) {
+          req.headers.cookie = `${req.headers.cookie || ''}; idToken=${idToken}`
+        }
+      }
 
       backendProxy.ws(
         req,
