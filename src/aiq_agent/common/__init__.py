@@ -160,6 +160,7 @@ async def get_checkpointer(checkpoint_db: str) -> BaseCheckpointSaver:
         if pool is None:
             pool = AsyncConnectionPool(
                 conninfo=checkpoint_db,
+                min_size=1,
                 max_size=3,
                 kwargs={"autocommit": True, "row_factory": dict_row},
             )
