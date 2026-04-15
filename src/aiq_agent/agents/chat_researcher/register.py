@@ -203,6 +203,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
     from .agent import ChatResearcherAgent
 
+    workflow_id = config.name or config.type
     intent_classifier_fn = await builder.get_function("intent_classifier")
     shallow_research_fn = await builder.get_function("shallow_research_agent")
     deep_research_fn = await builder.get_function("deep_research_agent")
@@ -436,6 +437,6 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
             threading.Thread(target=exit_after_response, daemon=False).start()
 
-        return _create_chat_response(response_content, response_id="research_response")
+        return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
 
     yield FunctionInfo.from_fn(_run, description="Chat deep researcher with intent routing and escalation.")

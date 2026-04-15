@@ -111,10 +111,15 @@ def is_verbose(config_verbose: bool) -> bool:
     return config_verbose
 
 
-def _create_chat_response(content: str, response_id: str = "conversational_response") -> ChatResponse:
+def _create_chat_response(
+    content: str,
+    response_id: str = "conversational_response",
+    model: str | None = None,
+) -> ChatResponse:
     """Create a standardized ChatResponse object."""
     return ChatResponse(
         id=response_id,
+        model=model or "unknown-model",
         choices=[
             ChatResponseChoice(
                 index=0,
