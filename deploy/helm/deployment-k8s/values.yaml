@@ -148,6 +148,7 @@ aiq:
         POSTGRES_PASSWORD: DB_USER_PASSWORD
       env:
         POSTGRES_DB: aiq_jobs
+        POSTGRES_EXTRA_FLAGS: '--max_connections=200'
       # ConfigMap for init.sql is managed by postgres-init-configmap.yaml template
       # which reads from files/init-db.sql (source of truth: deploy/compose/init-db.sql)
       persistence:
