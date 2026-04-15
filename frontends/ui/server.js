@@ -214,15 +214,21 @@ const startServer = async () => {
     if (pathname === '/websocket' || pathname.startsWith('/websocket')) {
       req.url = '/websocket' + (parsedUrl.search || '')
 
-      // Ensure idToken cookie is present for backend auth.
-      // proxy.ts only runs on HTTP requests and can miss the WebSocket
-      // upgrade, leaving the backend without the caller's Starfleet token.
-      const cookies = parseCookies(req.headers.cookie)
-      if (!cookies.idToken) {
-        const idToken = await extractIdTokenFromSession(req.headers.cookie)
-        if (idToken) {
-          req.headers.cookie = `${req.headers.cookie || ''}; idToken=${idToken}`
-        }
+      // Ensure the backend receives a fresh idToken for auth.
+      // proxy.ts (Next.js middleware) sets the idToken cookie on HTTP
+      // responses, but WebSocket upgrades bypass Next.js. The browser may
+      // send a stale or missing idToken cookie while the NextAuth session
+      // JWT (refreshed every ~30 min by the JWT callback) has the latest
+      // token. Always prefer the session JWT so the backend gets the
+      // freshest credential.
+      const idToken = await extractIdTokenFromSession(req.headers.cookie)
+      if (idToken) {
+        // Strip any existing idToken cookie and inject the fresh one
+        const cookieParts = (req.headers.cookie || '')
+          .split(';')
+          .filter((c) => !c.trim().startsWith('idToken='))
+        cookieParts.push(`idToken=${idToken}`)
+        req.headers.cookie = cookieParts.join('; ')
       }
 
       backendProxy.ws(
