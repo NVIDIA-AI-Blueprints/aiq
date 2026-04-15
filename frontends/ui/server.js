@@ -89,7 +89,10 @@ const extractIdTokenFromSession = async (cookieHeader) => {
       token: sessionToken,
       secret: NEXTAUTH_SECRET,
     })
-    return decoded?.idToken || null
+    if (!decoded || decoded.error) return null
+    const expiresAt = decoded.expiresAt
+    if (!expiresAt || Date.now() >= expiresAt * 1000) return null
+    return decoded.idToken || null
   } catch (err) {
     console.error('[WS Auth] Failed to decode NextAuth session:', err.message)
     return null
