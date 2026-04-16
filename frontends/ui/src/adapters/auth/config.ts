@@ -159,7 +159,7 @@ export const authOptions: AuthOptions = {
 
         // Let the provider enrich the JWT (e.g. group membership checks)
         if (providerConfig.onSignIn) {
-          const extra = await providerConfig.onSignIn({ token: base, account, user })
+          const extra = await providerConfig.onSignIn({ token: base, account: { ...account }, user: { ...user } })
           return { ...base, ...extra }
         }
         return base
@@ -194,7 +194,7 @@ export const authOptions: AuthOptions = {
 
       // Let the provider surface additional fields (e.g. hasAccess, dlGroup)
       if (providerConfig.onSession) {
-        return { ...base, ...providerConfig.onSession({ session: base, token }) }
+        return { ...base, ...providerConfig.onSession({ session: base, token: { ...token } }) }
       }
       return base
     },

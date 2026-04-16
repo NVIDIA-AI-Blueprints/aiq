@@ -191,9 +191,12 @@ describe('provider lifecycle hooks', () => {
     })
 
     expect(onSession).toHaveBeenCalledOnce()
-    expect(result.hasAccess).toBe(true)
-    expect(result.dlGroup).toBe('aiq-users')
-    expect(result.idToken).toBe('it')
+    // Session return type doesn't include provider-specific fields in its
+    // static type — access via bracket notation (they exist at runtime)
+    const sessionObj = result as unknown as Record<string, unknown>
+    expect(sessionObj.hasAccess).toBe(true)
+    expect(sessionObj.dlGroup).toBe('aiq-users')
+    expect(sessionObj.idToken).toBe('it')
   })
 
   test('config works without hooks (backward compatible)', async () => {
@@ -211,7 +214,7 @@ describe('provider lifecycle hooks', () => {
         type: 'oauth',
         providerAccountId: 'pa1',
       },
-      user: { id: 'u1', name: 'Test', email: null, image: null },
+      user: { id: 'u1', name: 'Test' },
       profile: undefined,
       trigger: undefined,
       isNewUser: false,
@@ -225,10 +228,10 @@ describe('provider lifecycle hooks', () => {
     const sessionResult = await authOptions.callbacks!.session!({
       session: { user: { name: 'Test' }, expires: '2099-01-01' },
       token: { accessToken: 'at', idToken: 'it', userId: 'u1' },
-      user: { id: 'u1', name: 'Test', email: null, image: null, emailVerified: null },
+      user: { id: 'u1', name: 'Test', email: 'test@example.com', emailVerified: null },
       trigger: 'update',
       newSession: undefined,
-    })
+    }) as unknown as Record<string, unknown>
 
     expect(sessionResult.idToken).toBe('it')
     // No extra fields from hooks
