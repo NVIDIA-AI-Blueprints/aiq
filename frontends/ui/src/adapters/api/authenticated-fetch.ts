@@ -79,7 +79,7 @@ export const authenticatedFetch = async (
     try {
       const body = await response.clone().json()
       const errorCode = body?.error || 'unknown'
-      const ddRum = (window as Record<string, unknown>).DD_RUM as
+      const ddRum = (window as unknown as Record<string, unknown>).DD_RUM as
         | { addError?: (error: Error, context: Record<string, unknown>) => void }
         | undefined
       if (ddRum?.addError) {
