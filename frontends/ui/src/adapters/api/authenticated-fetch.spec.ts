@@ -49,6 +49,7 @@ describe('authenticated-fetch', () => {
   })
 
   afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).DD_RUM
     vi.restoreAllMocks()
   })
 
@@ -190,6 +191,43 @@ describe('authenticated-fetch', () => {
       const calledHeaders = getCalledHeaders()
       expect(calledHeaders.get('Authorization')).toBe('Bearer test-id-token')
       expect(calledHeaders.get('X-Custom-Header')).toBe('custom-value')
+    })
+
+    test.each(['token_expired', 'token_invalid'])(
+      'emits RUM event when 401 error code is %s',
+      async (errorCode) => {
+        mockGetSession.mockResolvedValue(null)
+        const addError = vi.fn()
+        ;(window as unknown as Record<string, unknown>).DD_RUM = { addError }
+        mockFetch.mockResolvedValue(
+          new Response(JSON.stringify({ error: errorCode }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' },
+          })
+        )
+
+        await authenticatedFetch('/api/test-auth')
+
+        expect(addError).toHaveBeenCalledTimes(1)
+        expect(addError).toHaveBeenCalledWith(
+          expect.any(Error),
+          expect.objectContaining({
+            source: 'custom',
+            auth_error_code: errorCode,
+            path: '/api/test-auth',
+          })
+        )
+      }
+    )
+
+    test('does not emit RUM event when 401 body is non-JSON', async () => {
+      mockGetSession.mockResolvedValue(null)
+      const addError = vi.fn()
+      ;(window as unknown as Record<string, unknown>).DD_RUM = { addError }
+      mockFetch.mockResolvedValue(new Response('<html>unauthorized</html>', { status: 401 }))
+
+      await expect(authenticatedFetch('/api/test-auth')).resolves.toBeInstanceOf(Response)
+      expect(addError).not.toHaveBeenCalled()
     })
   })
 
