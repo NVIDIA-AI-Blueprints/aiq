@@ -2,9 +2,28 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
+import type { AuthProviderConfig } from './providers/types'
 
 const loadConfig = async () => {
   vi.resetModules()
+  return import('./config')
+}
+
+/**
+ * Load config with a custom provider config (for testing hooks).
+ * Mocks the providers module before config.ts is imported.
+ */
+const loadConfigWithProvider = async (overrides: Partial<AuthProviderConfig>) => {
+  vi.resetModules()
+  const base: AuthProviderConfig = {
+    provider: { id: 'test-provider', name: 'Test' },
+    providerId: 'test-provider',
+    refreshToken: async () => ({ access_token: 'new', expires_in: 3600 }),
+    ...overrides,
+  }
+  vi.doMock('./providers', () => ({
+    getAuthProviderConfig: () => base,
+  }))
   return import('./config')
 }
 
@@ -108,5 +127,128 @@ describe('auth jwt refresh behavior', () => {
 
     expect(result).toEqual(token)
     expect(result.error).toBeUndefined()
+  })
+})
+
+describe('provider lifecycle hooks', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+    vi.resetModules()
+    vi.restoreAllMocks()
+  })
+
+  test('onSignIn hook merges extra claims into JWT on initial sign-in', async () => {
+    vi.stubEnv('REQUIRE_AUTH', 'true')
+    vi.stubEnv('NEXTAUTH_SECRET', 'test-secret')
+
+    const onSignIn = vi.fn().mockResolvedValue({ hasAccess: true, groupName: 'testers' })
+    const { authOptions } = await loadConfigWithProvider({ onSignIn })
+
+    const result = await authOptions.callbacks!.jwt!({
+      token: {},
+      account: {
+        access_token: 'at',
+        id_token: 'it',
+        refresh_token: 'rt',
+        expires_at: 9999999999,
+        provider: 'test-provider',
+        type: 'oauth',
+        providerAccountId: 'pa1',
+      },
+      user: { id: 'u1', name: 'Test', email: 'test@example.com', image: null },
+      profile: undefined,
+      trigger: undefined,
+      isNewUser: false,
+      session: undefined,
+    })
+
+    expect(onSignIn).toHaveBeenCalledOnce()
+    expect(result.hasAccess).toBe(true)
+    expect(result.groupName).toBe('testers')
+    expect(result.accessToken).toBe('at')
+    expect(result.userId).toBe('u1')
+  })
+
+  test('onSession hook merges extra fields into session', async () => {
+    vi.stubEnv('REQUIRE_AUTH', 'true')
+    vi.stubEnv('NEXTAUTH_SECRET', 'test-secret')
+
+    const onSession = vi.fn().mockReturnValue({ hasAccess: true, dlGroup: 'aiq-users' })
+    const { authOptions } = await loadConfigWithProvider({ onSession })
+
+    const result = await authOptions.callbacks!.session!({
+      session: { user: { name: 'Test' }, expires: '2099-01-01' },
+      token: {
+        accessToken: 'at',
+        idToken: 'it',
+        userId: 'u1',
+        hasAccess: true,
+        dlGroup: 'aiq-users',
+      },
+      user: { id: 'u1', name: 'Test', email: 'test@example.com', image: null, emailVerified: null },
+      trigger: 'update',
+      newSession: undefined,
+    })
+
+    expect(onSession).toHaveBeenCalledOnce()
+    expect(result.hasAccess).toBe(true)
+    expect(result.dlGroup).toBe('aiq-users')
+    expect(result.idToken).toBe('it')
+  })
+
+  test('config works without hooks (backward compatible)', async () => {
+    const { authOptions } = await loadConfigWithProvider({})
+
+    // Initial sign-in without onSignIn hook
+    const jwtResult = await authOptions.callbacks!.jwt!({
+      token: {},
+      account: {
+        access_token: 'at',
+        id_token: 'it',
+        refresh_token: 'rt',
+        expires_at: 9999999999,
+        provider: 'test-provider',
+        type: 'oauth',
+        providerAccountId: 'pa1',
+      },
+      user: { id: 'u1', name: 'Test', email: null, image: null },
+      profile: undefined,
+      trigger: undefined,
+      isNewUser: false,
+      session: undefined,
+    })
+
+    expect(jwtResult.accessToken).toBe('at')
+    expect(jwtResult.userId).toBe('u1')
+
+    // Session without onSession hook
+    const sessionResult = await authOptions.callbacks!.session!({
+      session: { user: { name: 'Test' }, expires: '2099-01-01' },
+      token: { accessToken: 'at', idToken: 'it', userId: 'u1' },
+      user: { id: 'u1', name: 'Test', email: null, image: null, emailVerified: null },
+      trigger: 'update',
+      newSession: undefined,
+    })
+
+    expect(sessionResult.idToken).toBe('it')
+    // No extra fields from hooks
+    expect(sessionResult.hasAccess).toBeUndefined()
+  })
+
+  test('tokenRefreshBufferSeconds overrides env var default', async () => {
+    vi.stubEnv('TOKEN_REFRESH_BUFFER_MINUTES', '20')
+    const { TOKEN_REFRESH_BUFFER_SECONDS } = await loadConfigWithProvider({
+      tokenRefreshBufferSeconds: 42 * 60,
+    })
+
+    // Provider override takes precedence over env var
+    expect(TOKEN_REFRESH_BUFFER_SECONDS).toBe(42 * 60)
+  })
+
+  test('env var is used when provider does not set tokenRefreshBufferSeconds', async () => {
+    vi.stubEnv('TOKEN_REFRESH_BUFFER_MINUTES', '20')
+    const { TOKEN_REFRESH_BUFFER_SECONDS } = await loadConfigWithProvider({})
+
+    expect(TOKEN_REFRESH_BUFFER_SECONDS).toBe(20 * 60)
   })
 })
