@@ -105,9 +105,10 @@ class TestJWTValidatorValidate:
 
         validator = JWTValidator(issuer, audience="my-api", jwks_uri="https://unused/jwks")
         with patch.object(validator, "_get_signing_key", return_value=jwk):
-            out = await validator.validate(token)
+            out, error = await validator.validate(token)
 
         assert out is not None
+        assert error is None
         assert out["sub"] == "user-1"
         assert out["type"] == "jwt"
         assert out["token"] == token
@@ -118,7 +119,9 @@ class TestJWTValidatorValidate:
     async def test_returns_none_when_no_signing_key(self) -> None:
         validator = JWTValidator("https://issuer.example", jwks_uri="https://unused/jwks")
         with patch.object(validator, "_get_signing_key", return_value=None):
-            assert await validator.validate("any.token.here") is None
+            user, error = await validator.validate("any.token.here")
+            assert user is None
+            assert error == "token_invalid"
 
     @pytest.mark.asyncio
     async def test_returns_none_on_expired_token(self) -> None:
@@ -136,7 +139,9 @@ class TestJWTValidatorValidate:
 
         validator = JWTValidator(issuer, jwks_uri="https://unused/jwks")
         with patch.object(validator, "_get_signing_key", return_value=jwk):
-            assert await validator.validate(token) is None
+            user, error = await validator.validate(token)
+            assert user is None
+            assert error == "token_expired"
 
     @pytest.mark.asyncio
     async def test_skips_audience_when_not_configured(self) -> None:
@@ -154,8 +159,9 @@ class TestJWTValidatorValidate:
 
         validator = JWTValidator(issuer, audience=None, jwks_uri="https://unused/jwks")
         with patch.object(validator, "_get_signing_key", return_value=jwk):
-            out = await validator.validate(token)
+            out, error = await validator.validate(token)
         assert out is not None and out["sub"] == "user-2"
+        assert error is None
         assert out["type"] == "jwt"
         assert out["token"] == token
         assert out["skip_clarifier"] is False
@@ -325,8 +331,7 @@ class TestAuthMiddlewareAuthFlow:
         app, _state = capture_asgi
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate = AsyncMock(return_value=None)
-        mock_v.validate_with_error = AsyncMock(return_value=(None, "token_invalid"))
+        mock_v.validate = AsyncMock(return_value=(None, "token_invalid"))
         mw = AuthMiddleware(
             app,
             validators=[mock_v],
@@ -356,8 +361,7 @@ class TestAuthMiddlewareAuthFlow:
         user = {"type": "oidc", "sub": "u1", "token": "t"}
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate = AsyncMock(return_value=user)
-        mock_v.validate_with_error = AsyncMock(return_value=(user, None))
+        mock_v.validate = AsyncMock(return_value=(user, None))
         mw = AuthMiddleware(
             app,
             validators=[mock_v],
@@ -388,11 +392,9 @@ class TestAuthMiddlewareAuthFlow:
         v1 = MagicMock()
         v1.can_handle.return_value = False
         v1.validate = AsyncMock()
-        v1.validate_with_error = AsyncMock()
         v2 = MagicMock()
         v2.can_handle.return_value = True
-        v2.validate = AsyncMock(return_value={"type": "x", "token": "z"})
-        v2.validate_with_error = AsyncMock(return_value=({"type": "x", "token": "z"}, None))
+        v2.validate = AsyncMock(return_value=({"type": "x", "token": "z"}, None))
         mw = AuthMiddleware(
             app,
             validators=[v1, v2],
@@ -410,8 +412,8 @@ class TestAuthMiddlewareAuthFlow:
         )
         await mw(scope, AsyncMock(), send)
 
-        v1.validate_with_error.assert_not_awaited()
-        v2.validate_with_error.assert_awaited_once()
+        v1.validate.assert_not_awaited()
+        v2.validate.assert_awaited_once()
         assert state["user"]["type"] == "x"
 
 
@@ -551,44 +553,11 @@ class TestAuthErrorSubclasses:
 
 
 # ---------------------------------------------------------------------------
-# validate_with_error (base default + JWTValidator override)
+# validate() error codes (JWTValidator)
 # ---------------------------------------------------------------------------
 
 
-class TestValidateWithError:
-    @pytest.mark.asyncio
-    async def test_base_default_wraps_validate_success(self) -> None:
-        """Default validate_with_error delegates to validate on success."""
-
-        class FakeValidator(TokenValidator):
-            def can_handle(self, token):
-                return True
-
-            async def validate(self, token):
-                return {"type": "fake", "sub": "u1", "token": token, "skip_clarifier": False}
-
-        v = FakeValidator()
-        user, error = await v.validate_with_error("tok")
-        assert user is not None
-        assert user["sub"] == "u1"
-        assert error is None
-
-    @pytest.mark.asyncio
-    async def test_base_default_wraps_validate_failure(self) -> None:
-        """Default validate_with_error returns token_invalid when validate returns None."""
-
-        class FakeValidator(TokenValidator):
-            def can_handle(self, token):
-                return True
-
-            async def validate(self, token):
-                return None
-
-        v = FakeValidator()
-        user, error = await v.validate_with_error("tok")
-        assert user is None
-        assert error == "token_invalid"
-
+class TestValidateErrorCodes:
     @pytest.mark.asyncio
     async def test_jwt_validator_expired_returns_token_expired(self) -> None:
         priv = _rsa_private_key()
@@ -605,7 +574,7 @@ class TestValidateWithError:
 
         validator = JWTValidator(issuer, jwks_uri="https://unused/jwks")
         with patch.object(validator, "_get_signing_key", return_value=jwk):
-            user, error = await validator.validate_with_error(token)
+            user, error = await validator.validate(token)
 
         assert user is None
         assert error == "token_expired"
@@ -627,7 +596,7 @@ class TestValidateWithError:
 
         validator = JWTValidator(issuer, jwks_uri="https://unused/jwks")
         with patch.object(validator, "_get_signing_key", return_value=jwk):
-            user, error = await validator.validate_with_error(token)
+            user, error = await validator.validate(token)
 
         assert user is None
         assert error == "token_invalid"
@@ -649,7 +618,7 @@ class TestValidateWithError:
 
         validator = JWTValidator(issuer, audience="my-api", jwks_uri="https://unused/jwks")
         with patch.object(validator, "_get_signing_key", return_value=jwk):
-            user, error = await validator.validate_with_error(token)
+            user, error = await validator.validate(token)
 
         assert user is not None
         assert user["sub"] == "user-1"
@@ -684,7 +653,7 @@ class TestMiddlewareErrorCodes:
         app, _ = capture_asgi
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate_with_error = AsyncMock(return_value=(None, "token_expired"))
+        mock_v.validate = AsyncMock(return_value=(None, "token_expired"))
         mw = AuthMiddleware(
             app,
             validators=[mock_v],

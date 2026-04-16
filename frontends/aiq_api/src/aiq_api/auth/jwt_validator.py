@@ -197,13 +197,8 @@ class JWTValidator(TokenValidator):
     # Public API
     # ------------------------------------------------------------------
 
-    async def validate(self, token: str) -> dict[str, Any] | None:
-        """Validate *token* and return a user dict per ``TokenValidator``, or ``None``."""
-        result, _ = await self.validate_with_error(token)
-        return result
-
-    async def validate_with_error(self, token: str) -> tuple[dict[str, Any] | None, str | None]:
-        """Validate *token* with machine-readable error codes.
+    async def validate(self, token: str) -> tuple[dict[str, Any] | None, str | None]:
+        """Validate *token* and return ``(user_dict, error_code)``.
 
         Returns ``(user_dict, None)`` on success.  On failure returns
         ``(None, error_code)`` where *error_code* is one of:

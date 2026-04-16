@@ -208,7 +208,7 @@ class AuthMiddleware:
             await self._send_json(send, 401, {"detail": "Missing auth token", "error": "token_missing"})
             return
 
-        user, error_code = await self._validate_token_with_error(token)
+        user, error_code = await self._validate_token(token)
         if user is None:
             detail = {
                 "token_expired": "Token has expired",
@@ -271,16 +271,12 @@ class AuthMiddleware:
     def _is_headless(self, headers: dict[bytes, bytes]) -> bool:
         return headers.get(b"x-aiq-mode", b"").decode().lower() == "headless"
 
-    async def _validate_token(self, token: str) -> dict[str, Any] | None:
-        result, _ = await self._validate_token_with_error(token)
-        return result
-
-    async def _validate_token_with_error(self, token: str) -> tuple[dict[str, Any] | None, str | None]:
+    async def _validate_token(self, token: str) -> tuple[dict[str, Any] | None, str | None]:
         """Try each validator in order, returning ``(user, None)`` or ``(None, error_code)``."""
         last_error: str | None = "token_invalid"
         for validator in self._validators:
             if validator.can_handle(token):
-                user, error_code = await validator.validate_with_error(token)
+                user, error_code = await validator.validate(token)
                 if user is not None:
                     return (user, None)
                 if error_code:
