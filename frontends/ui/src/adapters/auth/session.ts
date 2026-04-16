@@ -16,7 +16,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useSession as useNextAuthSession, signIn, signOut } from 'next-auth/react'
 import { useAppConfig } from '@/shared/context'
-import { type AuthContext } from './types'
+import type { AuthContext } from './types'
 
 /**
  * Default user returned when authentication is disabled.
@@ -52,9 +52,9 @@ const DEFAULT_USER = {
  * ```
  */
 export const useAuth = (): AuthContext => {
-  const { authRequired, authProviderId, sessionRefreshIntervalSeconds } = useAppConfig()
+  const { authRequired, authProviderId } = useAppConfig()
   const authRequiredRef = useRef(authRequired)
-  const { data: session, status, update } = useNextAuthSession()
+  const { data: session, status } = useNextAuthSession()
   const hasTriggeredReauth = useRef(false)
 
   if (authRequiredRef.current !== authRequired) {
@@ -82,16 +82,12 @@ export const useAuth = (): AuthContext => {
     }
   }, [session?.error, authRequired, handleSignOut])
 
-  useEffect(() => {
-    if (!authRequired) return
-    if (status !== 'authenticated') return
-
-    const interval = setInterval(() => {
-      update()
-    }, sessionRefreshIntervalSeconds * 1000)
-
-    return () => clearInterval(interval)
-  }, [status, update, authRequired, sessionRefreshIntervalSeconds])
+  // Session refresh is handled solely by SessionProvider's refetchInterval
+  // (configured in providers.tsx). Do NOT add a duplicate setInterval here —
+  // concurrent refresh requests cause "invalid_grant" failures with providers
+  // that use rotating refresh tokens (single-use tokens invalidated on
+  // consumption, e.g. NVIDIA Starfleet SSO). Two concurrent refreshes means
+  // the second uses an already-consumed token and kills the session.
 
   if (!authRequired) {
     return {

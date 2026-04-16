@@ -42,7 +42,7 @@ describe('auth timing config', () => {
   test('uses defaults when timing env vars are unset', async () => {
     const { TOKEN_REFRESH_BUFFER_SECONDS, SESSION_MAX_AGE_SECONDS } = await loadConfig()
 
-    expect(TOKEN_REFRESH_BUFFER_SECONDS).toBe(5 * 60)
+    expect(TOKEN_REFRESH_BUFFER_SECONDS).toBe(15 * 60)
     expect(SESSION_MAX_AGE_SECONDS).toBe(24 * 60 * 60)
   })
 
@@ -52,7 +52,7 @@ describe('auth timing config', () => {
 
     const { TOKEN_REFRESH_BUFFER_SECONDS, SESSION_MAX_AGE_SECONDS } = await loadConfig()
 
-    expect(TOKEN_REFRESH_BUFFER_SECONDS).toBe(5 * 60)
+    expect(TOKEN_REFRESH_BUFFER_SECONDS).toBe(15 * 60)
     expect(SESSION_MAX_AGE_SECONDS).toBe(24 * 60 * 60)
   })
 
@@ -62,7 +62,7 @@ describe('auth timing config', () => {
 
     const { TOKEN_REFRESH_BUFFER_SECONDS, SESSION_MAX_AGE_SECONDS } = await loadConfig()
 
-    expect(TOKEN_REFRESH_BUFFER_SECONDS).toBe(5 * 60)
+    expect(TOKEN_REFRESH_BUFFER_SECONDS).toBe(15 * 60)
     expect(SESSION_MAX_AGE_SECONDS).toBe(24 * 60 * 60)
   })
 

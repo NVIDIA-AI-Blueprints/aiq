@@ -176,6 +176,34 @@ describe('useAuth', () => {
     })
   })
 
+  describe('refresh race condition prevention', () => {
+    test('does NOT set up its own setInterval for session polling', () => {
+      // Regression test: useAuth must NOT create a duplicate setInterval for
+      // session refresh. Session polling is handled solely by SessionProvider's
+      // refetchInterval (in providers.tsx). A duplicate interval causes
+      // concurrent token refresh requests, which breaks providers with rotating
+      // refresh tokens (e.g., "invalid_grant" errors with NVIDIA Starfleet SSO).
+      const setIntervalSpy = vi.spyOn(globalThis, 'setInterval')
+
+      mockUseSessionFn.mockReturnValue({
+        data: {
+          user: { email: 'test@example.com', name: 'Test User' },
+          idToken: 'valid-jwt-token',
+          accessToken: 'access-token',
+          error: undefined,
+        },
+        status: 'authenticated',
+      })
+
+      renderHook(() => useAuth(), { wrapper: createWrapper() })
+
+      // useAuth should NOT call setInterval — session refresh is SessionProvider's job
+      expect(setIntervalSpy).not.toHaveBeenCalled()
+
+      setIntervalSpy.mockRestore()
+    })
+  })
+
   describe('auth disabled mode', () => {
     test('returns mock authenticated user when auth is disabled', () => {
       // Session return value should be irrelevant when auth is disabled

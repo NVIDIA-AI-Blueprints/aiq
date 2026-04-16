@@ -89,13 +89,15 @@ const parsePositiveIntEnv = (envValue: string | undefined, defaultValue: number)
 
 /**
  * Buffer time (seconds) before token expiry to trigger proactive refresh.
- * Default: 5 minutes. For deployments with long-running jobs (deep research
- * can run 20-40+ minutes), set TOKEN_REFRESH_BUFFER_MINUTES=30.
+ * Default: 15 minutes. This ensures tokens are refreshed well before expiry,
+ * covering most operational scenarios. For deployments with long-running jobs
+ * (deep research with ECI can run 20-40+ minutes), set
+ * TOKEN_REFRESH_BUFFER_MINUTES=30.
  *
  * Override via TOKEN_REFRESH_BUFFER_MINUTES env var.
  */
 export const TOKEN_REFRESH_BUFFER_SECONDS =
-  parsePositiveIntEnv(process.env.TOKEN_REFRESH_BUFFER_MINUTES, 5) * 60
+  parsePositiveIntEnv(process.env.TOKEN_REFRESH_BUFFER_MINUTES, 15) * 60
 
 /**
  * Max age (seconds) for both the NextAuth session and the idToken cookie.
