@@ -38,7 +38,7 @@ class ExaWebSearchToolConfig(FunctionBaseConfig, name="exa_web_search"):
     Requires an EXA_API_KEY environment variable or api_key config.
     """
 
-    max_results: int = Field(default=3, description="Maximum number of search results to return")
+    max_results: int = Field(default=5, description="Maximum number of search results to return")
     api_key: SecretStr | None = Field(default=None, description="The API key for the Exa service")
     max_retries: int = Field(default=3, description="Maximum number of retries for the search request")
     search_type: Literal["auto", "deep", "fast"] = Field(

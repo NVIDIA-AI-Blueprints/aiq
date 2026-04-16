@@ -162,17 +162,18 @@ functions:
   web_search_tool:
     _type: exa_web_search
     max_results: 5
-    max_content_length: 1000
+    full_text: true
+    max_content_length: 10000
 
   deep_web_search_tool:
     _type: exa_web_search
-    max_results: 2
+    max_results: 5
     search_type: deep
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `max_results` | `int` | `3` | Maximum number of search results to return. |
+| `max_results` | `int` | `5` | Maximum number of search results to return. |
 | `api_key` | `str` | `None` | Exa API key. Falls back to `EXA_API_KEY` environment variable. |
 | `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
 | `search_type` | `str` | `"auto"` | Exa search type. See options below. |
