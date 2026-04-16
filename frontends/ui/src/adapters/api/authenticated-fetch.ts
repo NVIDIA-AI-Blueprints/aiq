@@ -66,11 +66,35 @@ export const authenticatedFetch = async (
   }
 
   // Return fetch with auth headers and credentials
-  return fetch(url, {
+  const response = await fetch(url, {
     ...fetchOptions,
     headers,
     credentials: fetchOptions.credentials || 'include', // Important for CORS
   })
+
+  // Emit structured auth error for observability (Datadog RUM or any APM).
+  // DD_RUM is injected by Datadog's browser SDK when configured; the
+  // existence check makes this a no-op in non-Datadog deployments.
+  if (response.status === 401 && typeof window !== 'undefined') {
+    try {
+      const body = await response.clone().json()
+      const errorCode = body?.error || 'unknown'
+      const ddRum = (window as Record<string, unknown>).DD_RUM as
+        | { addError?: (error: Error, context: Record<string, unknown>) => void }
+        | undefined
+      if (ddRum?.addError) {
+        ddRum.addError(new Error(`Auth failure: ${errorCode}`), {
+          source: 'custom',
+          auth_error_code: errorCode,
+          path: url,
+        })
+      }
+    } catch {
+      // Response may not be JSON (e.g. HTML error page) — skip silently
+    }
+  }
+
+  return response
 }
 
 /**

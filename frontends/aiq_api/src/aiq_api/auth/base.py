@@ -55,3 +55,17 @@ class TokenValidator(ABC):
         network calls here.
         """
         ...
+
+    async def validate_with_error(self, token: str) -> tuple[dict[str, Any] | None, str | None]:
+        """Validate *token*, returning ``(user_dict, error_code)``.
+
+        Default implementation wraps :meth:`validate` for backward
+        compatibility.  Subclasses may override to return richer error codes
+        (``"token_expired"``, ``"token_invalid"``) that let the middleware
+        surface machine-readable failure reasons to callers.
+
+        Returns ``(user_dict, None)`` on success and ``(None, error_code)``
+        on failure.
+        """
+        result = await self.validate(token)
+        return (result, None) if result is not None else (None, "token_invalid")

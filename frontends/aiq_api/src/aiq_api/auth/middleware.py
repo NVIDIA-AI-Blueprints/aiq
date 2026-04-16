@@ -205,12 +205,16 @@ class AuthMiddleware:
         # 5. Auth enabled — require a valid JWT Bearer token
         token = self._extract_token(headers)
         if not token:
-            await self._send_json(send, 401, {"detail": "Missing auth token"})
+            await self._send_json(send, 401, {"detail": "Missing auth token", "error": "token_missing"})
             return
 
-        user = await self._validate_token(token)
+        user, error_code = await self._validate_token_with_error(token)
         if user is None:
-            await self._send_json(send, 401, {"detail": "Invalid or expired auth token"})
+            detail = {
+                "token_expired": "Token has expired",
+                "token_invalid": "Invalid auth token",
+            }.get(error_code or "", "Authentication failed")
+            await self._send_json(send, 401, {"detail": detail, "error": error_code or "token_invalid"})
             return
 
         if self._is_headless(headers):
@@ -268,13 +272,21 @@ class AuthMiddleware:
         return headers.get(b"x-aiq-mode", b"").decode().lower() == "headless"
 
     async def _validate_token(self, token: str) -> dict[str, Any] | None:
+        result, _ = await self._validate_token_with_error(token)
+        return result
+
+    async def _validate_token_with_error(self, token: str) -> tuple[dict[str, Any] | None, str | None]:
+        """Try each validator in order, returning ``(user, None)`` or ``(None, error_code)``."""
+        last_error: str | None = "token_invalid"
         for validator in self._validators:
             if validator.can_handle(token):
-                user = await validator.validate(token)
+                user, error_code = await validator.validate_with_error(token)
                 if user is not None:
-                    return user
+                    return (user, None)
+                if error_code:
+                    last_error = error_code
         logger.debug("Token rejected by all %d configured validator(s)", len(self._validators))
-        return None
+        return (None, last_error)
 
     def _detect_internal_caller(self, headers: dict[bytes, bytes]) -> dict[str, Any]:
         """Classify an internal request without validating the token."""

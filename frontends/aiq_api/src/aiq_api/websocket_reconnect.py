@@ -384,8 +384,25 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
                     message_type=WebSocketMessageType.OBSERVABILITY_TRACE_MESSAGE,
                 )
                 self._pending_observability_trace = None
-        except Exception:
+        except Exception as exc:
             logger.exception("Error running workflow")
+            # Surface auth errors as typed messages so the frontend can
+            # distinguish auth failures from generic workflow errors.
+            from aiq_api.auth.errors import AuthError
+
+            if isinstance(exc, AuthError):
+                try:
+                    await self.create_websocket_message(
+                        data_model=Error(
+                            code=ErrorTypes.UNKNOWN_ERROR,
+                            message="auth_error",
+                            details=str(exc),
+                        ),
+                        message_type=WebSocketMessageType.ERROR_MESSAGE,
+                        status=WebSocketMessageStatus.COMPLETE,
+                    )
+                except Exception:  # pragma: no cover - socket may already be closed
+                    pass
 
 
 def install_reconnectable_handler() -> None:  # TODO: upstream to NAT
