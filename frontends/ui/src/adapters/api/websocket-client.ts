@@ -9,6 +9,7 @@
  * and error message types for full HITL (human-in-the-loop) support.
  */
 
+import { trackRumError } from '@/shared/utils/rum'
 import { getWebSocketUrl } from './config'
 import {
   // NAT protocol types
@@ -289,23 +290,11 @@ export class NATWebSocketClient {
         }
 
         case NATMessageType.ERROR: {
-          // Emit auth errors to observability (Datadog RUM) for monitoring.
-          // DD_RUM is present only when Datadog's browser SDK is configured;
-          // this is a no-op in non-Datadog deployments.
-          if (
-            message.content?.message === 'auth_error' &&
-            typeof window !== 'undefined'
-          ) {
-            const ddRum = (window as unknown as Record<string, unknown>).DD_RUM as
-              | { addError?: (error: Error, context: Record<string, unknown>) => void }
-              | undefined
-            if (ddRum?.addError) {
-              ddRum.addError(new Error('WebSocket auth failure'), {
-                source: 'custom',
-                auth_error_code: 'ws_auth_error',
-                details: message.content?.details,
-              })
-            }
+          if (message.content?.message === 'auth_error') {
+            trackRumError('WebSocket auth failure', {
+              auth_error_code: 'ws_auth_error',
+              details: message.content?.details,
+            })
           }
           this.options.callbacks.onError?.(message.content)
           break

@@ -9,6 +9,7 @@
  */
 
 import { getSession } from 'next-auth/react'
+import { trackRumError } from '@/shared/utils/rum'
 
 export interface AuthenticatedFetchOptions extends RequestInit {
   /** Skip authentication header (for public endpoints) */
@@ -72,23 +73,12 @@ export const authenticatedFetch = async (
     credentials: fetchOptions.credentials || 'include', // Important for CORS
   })
 
-  // Emit structured auth error for observability (Datadog RUM or any APM).
-  // DD_RUM is injected by Datadog's browser SDK when configured; the
-  // existence check makes this a no-op in non-Datadog deployments.
-  if (response.status === 401 && typeof window !== 'undefined') {
+  // Emit auth error for observability (Datadog RUM or any APM).
+  if (response.status === 401) {
     try {
       const body = await response.clone().json()
       const errorCode = body?.error || 'unknown'
-      const ddRum = (window as unknown as Record<string, unknown>).DD_RUM as
-        | { addError?: (error: Error, context: Record<string, unknown>) => void }
-        | undefined
-      if (ddRum?.addError) {
-        ddRum.addError(new Error(`Auth failure: ${errorCode}`), {
-          source: 'custom',
-          auth_error_code: errorCode,
-          path: url,
-        })
-      }
+      trackRumError(`Auth failure: ${errorCode}`, { auth_error_code: errorCode, path: url })
     } catch {
       // Response may not be JSON (e.g. HTML error page) — skip silently
     }
