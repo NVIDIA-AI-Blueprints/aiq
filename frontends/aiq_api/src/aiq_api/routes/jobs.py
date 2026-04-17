@@ -619,7 +619,7 @@ def _start_periodic_cleanup(
     try:
         from dask.distributed import fire_and_forget
 
-        from nat.front_ends.fastapi.async_job import periodic_cleanup
+        from nat.front_ends.fastapi.async_jobs import periodic_cleanup
 
         cleanup_future = job_store.dask_client.submit(
             periodic_cleanup,
