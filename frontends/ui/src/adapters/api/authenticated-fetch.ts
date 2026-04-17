@@ -9,7 +9,7 @@
  */
 
 import { getSession } from 'next-auth/react'
-import { trackRumError } from '@/shared/utils/rum'
+import { trackAuthEvent } from '@/shared/utils/rum'
 
 export interface AuthenticatedFetchOptions extends RequestInit {
   /** Skip authentication header (for public endpoints) */
@@ -78,7 +78,7 @@ export const authenticatedFetch = async (
     try {
       const body = await response.clone().json()
       const errorCode = body?.error || 'unknown'
-      trackRumError(`Auth failure: ${errorCode}`, { auth_error_code: errorCode, path: url })
+      trackAuthEvent(errorCode, { path: url })
     } catch {
       // Response may not be JSON (e.g. HTML error page) — skip silently
     }
