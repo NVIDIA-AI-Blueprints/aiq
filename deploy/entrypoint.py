@@ -118,7 +118,10 @@ def main() -> int:
     if memory_limit:
         worker_args += ["--memory-limit", memory_limit]
     if lifetime:
-        worker_args += ["--lifetime", lifetime, "--lifetime-restart"]
+        lifetime_restart = os.getenv("DASK_LIFETIME_RESTART", "true").lower() != "false"
+        worker_args += ["--lifetime", lifetime]
+        if lifetime_restart:
+            worker_args += ["--lifetime-restart"]
 
     worker_proc = subprocess.Popen(worker_args)
 
