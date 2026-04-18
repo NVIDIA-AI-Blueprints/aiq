@@ -108,32 +108,6 @@ export const SESSION_MAX_AGE_SECONDS =
   parsePositiveIntEnv(process.env.SESSION_MAX_AGE_HOURS, 24) * 60 * 60
 
 // ---------------------------------------------------------------------------
-// Token refresh (delegates to active provider)
-// ---------------------------------------------------------------------------
-
-const refreshAccessToken = async (token: JWT): Promise<JWT> => {
-  if (!activeProvider) {
-    console.error('[Auth] Token refresh called but no auth provider is configured')
-    return { ...token, error: 'RefreshAccessTokenError' }
-  }
-
-  try {
-    const refreshed = await refreshProviderToken(token.refreshToken as string)
-
-    return {
-      ...token,
-      accessToken: refreshed.access_token,
-      idToken: refreshed.id_token ?? token.idToken,
-      expiresAt: Math.floor(Date.now() / 1000) + refreshed.expires_in,
-      refreshToken: refreshed.refresh_token ?? token.refreshToken,
-    }
-  } catch (error) {
-    console.error('[Auth] Token refresh failed:', error)
-    return { ...token, error: 'RefreshAccessTokenError' }
-  }
-}
-
-// ---------------------------------------------------------------------------
 // NextAuth configuration
 // ---------------------------------------------------------------------------
 
@@ -212,6 +186,31 @@ export const authOptions: AuthOptions = {
   },
 
   debug: process.env.NODE_ENV === 'development',
+}
+
+/**
+ * Refresh the access token by delegating to the active provider.
+ */
+const refreshAccessToken = async (token: JWT): Promise<JWT> => {
+  if (!activeProvider) {
+    console.error('[Auth] Token refresh called but no auth provider is configured')
+    return { ...token, error: 'RefreshAccessTokenError' }
+  }
+
+  try {
+    const refreshed = await refreshProviderToken(token.refreshToken as string)
+
+    return {
+      ...token,
+      accessToken: refreshed.access_token,
+      idToken: refreshed.id_token ?? token.idToken,
+      expiresAt: Math.floor(Date.now() / 1000) + refreshed.expires_in,
+      refreshToken: refreshed.refresh_token ?? token.refreshToken,
+    }
+  } catch (error) {
+    console.error('[Auth] Token refresh failed:', error)
+    return { ...token, error: 'RefreshAccessTokenError' }
+  }
 }
 
 // ---------------------------------------------------------------------------

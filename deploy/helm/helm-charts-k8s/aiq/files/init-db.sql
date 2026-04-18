@@ -12,6 +12,7 @@
 --
 -- Tables in aiq_jobs:
 --   - job_info      — NAT JobStore metadata (status, timestamps, expiry)
+--   - job_access    — AIQ-owned job ownership/access control metadata
 --   - job_events    — SSE streaming events and job event persistence
 --   - summaries     — Document summaries (collection + filename keyed)
 --
@@ -51,6 +52,16 @@ CREATE TABLE IF NOT EXISTS job_info (
 
 CREATE INDEX IF NOT EXISTS idx_job_info_status ON job_info(status);
 CREATE INDEX IF NOT EXISTS idx_job_info_created_at ON job_info(created_at);
+
+CREATE TABLE IF NOT EXISTS job_access (
+    job_id VARCHAR PRIMARY KEY,
+    owner_auth_type VARCHAR NOT NULL,
+    owner_subject VARCHAR NOT NULL,
+    owner_email VARCHAR,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_job_access_owner ON job_access(owner_auth_type, owner_subject);
 
 -- Job events table (SSE streaming, event persistence)
 CREATE TABLE IF NOT EXISTS job_events (

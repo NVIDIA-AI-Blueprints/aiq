@@ -27,6 +27,12 @@ from pydantic import BaseModel
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
+from aiq_api.auth.middleware import detect_internal_caller
+from aiq_api.auth.middleware import extract_auth_token
+from aiq_api.auth.middleware import is_external_request
+from aiq_api.auth.middleware import is_headless_request
+from aiq_api.auth.middleware import user_context
+from aiq_api.auth.middleware import validate_token_with_validators
 from nat.data_models.api_server import Error
 from nat.data_models.api_server import ErrorTypes
 from nat.data_models.api_server import ResponseObservabilityTrace
@@ -44,10 +50,54 @@ from nat.data_models.interactive import HumanPromptNotification
 from nat.data_models.interactive import HumanResponse
 from nat.data_models.interactive import HumanResponseNotification
 from nat.data_models.interactive import InteractionPrompt
+from nat.front_ends.fastapi.auth_flow_handlers.websocket_flow_handler import WebSocketAuthenticationFlowHandler
 from nat.front_ends.fastapi.message_handler import WebSocketMessageHandler
 from nat.front_ends.fastapi.response_helpers import generate_streaming_response
 
 logger = logging.getLogger(__name__)
+
+_auth_validators: list = []
+_require_auth = False
+_external_hostnames: set[str] | None = None
+WS_POLICY_VIOLATION = 1008
+SESSION_COOKIE_NAME = "nat-session"
+
+
+def configure_websocket_auth(
+    *,
+    validators: list | None = None,
+    require_auth: bool = False,
+    external_hostnames: set[str] | None = None,
+) -> None:
+    """Configure WebSocket auth to mirror the HTTP middleware validator chain."""
+    global _auth_validators, _require_auth, _external_hostnames
+    _auth_validators = list(validators or [])
+    _require_auth = require_auth
+    _external_hostnames = external_hostnames
+
+
+async def authenticate_websocket_connection(socket: WebSocket) -> tuple[dict[str, Any] | None, int | None]:
+    """Resolve the caller identity for a WebSocket handshake."""
+    headers = dict(socket.scope.get("headers", []))
+    token = extract_auth_token(headers)
+
+    if not is_external_request(headers, _external_hostnames):
+        return detect_internal_caller(headers), None
+
+    if not _require_auth:
+        return {"type": "anonymous", "skip_clarifier": True}, None
+
+    if not token:
+        return None, WS_POLICY_VIOLATION
+
+    user = await validate_token_with_validators(token, _auth_validators)
+    if user is None:
+        return None, WS_POLICY_VIOLATION
+
+    if is_headless_request(headers):
+        user["skip_clarifier"] = True
+
+    return user, None
 
 
 class WebSocketSessionRegistry:
@@ -156,9 +206,16 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._user_interaction_response: asyncio.Future[TextContent] | None = None
+        self._authenticated_user: dict[str, Any] | None = None
 
     async def run(self) -> None:
         """Process websocket messages and allow reconnect HITL responses."""
+        if self._authenticated_user is None:
+            self._authenticated_user, close_code = await authenticate_websocket_connection(self._socket)
+            if close_code is not None:
+                await self._socket.close(code=close_code)
+                return
+
         while True:
             try:
                 message: dict[str, Any] = await self._socket.receive_json()
@@ -211,7 +268,9 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
     async def process_workflow_request(self, user_message_as_validated_type: WebSocketUserMessage) -> None:
         """Process user messages and register sockets for reconnect."""
         await _registry.set_socket(user_message_as_validated_type.conversation_id, self._socket)
-        await super().process_workflow_request(user_message_as_validated_type)
+        current_user = self._authenticated_user or detect_internal_caller(dict(self._socket.scope.get("headers", [])))
+        with user_context(current_user):
+            await super().process_workflow_request(user_message_as_validated_type)
         # TODO(NAT-upstream): _running_workflow_task is currently always None
         # because NAT's message_handler.py assigns via method chaining:
         #   self._running_workflow_task = asyncio.create_task(...).add_done_callback(cb)
@@ -346,46 +405,48 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
         output_type: type | None = None,
     ) -> None:
         """Run the workflow without breaking reconnect message delivery."""
-        try:
-            auth_callback = self._flow_handler.authenticate if self._flow_handler else None
-            async with self._session_manager.session(
-                user_message_id=user_message_id,
-                conversation_id=conversation_id,
-                http_connection=self._socket,
-                user_input_callback=self.human_interaction_callback,
-                user_authentication_callback=auth_callback,
-            ) as session:
-                async for value in generate_streaming_response(
-                    payload,
-                    session=session,
-                    streaming=True,
-                    step_adaptor=self._step_adaptor,
-                    result_type=result_type,
-                    output_type=output_type,
-                ):
-                    if isinstance(value, ResponseObservabilityTrace):
-                        if self._pending_observability_trace is None:
-                            self._pending_observability_trace = value
-                    else:
-                        await self.create_websocket_message(
-                            data_model=value,
-                            status=WebSocketMessageStatus.IN_PROGRESS,
-                        )
+        current_user = self._authenticated_user or detect_internal_caller(dict(self._socket.scope.get("headers", [])))
+        with user_context(current_user):
+            try:
+                auth_callback = self._flow_handler.authenticate if self._flow_handler else None
+                async with self._session_manager.session(
+                    user_message_id=user_message_id,
+                    conversation_id=conversation_id,
+                    http_connection=self._socket,
+                    user_input_callback=self.human_interaction_callback,
+                    user_authentication_callback=auth_callback,
+                ) as session:
+                    async for value in generate_streaming_response(
+                        payload,
+                        session=session,
+                        streaming=True,
+                        step_adaptor=self._step_adaptor,
+                        result_type=result_type,
+                        output_type=output_type,
+                    ):
+                        if isinstance(value, ResponseObservabilityTrace):
+                            if self._pending_observability_trace is None:
+                                self._pending_observability_trace = value
+                        else:
+                            await self.create_websocket_message(
+                                data_model=value,
+                                status=WebSocketMessageStatus.IN_PROGRESS,
+                            )
 
-            await self.create_websocket_message(
-                data_model=SystemResponseContent(),
-                message_type=WebSocketMessageType.RESPONSE_MESSAGE,
-                status=WebSocketMessageStatus.COMPLETE,
-            )
-
-            if self._pending_observability_trace:
                 await self.create_websocket_message(
-                    data_model=self._pending_observability_trace,
-                    message_type=WebSocketMessageType.OBSERVABILITY_TRACE_MESSAGE,
+                    data_model=SystemResponseContent(),
+                    message_type=WebSocketMessageType.RESPONSE_MESSAGE,
+                    status=WebSocketMessageStatus.COMPLETE,
                 )
-                self._pending_observability_trace = None
-        except Exception:
-            logger.exception("Error running workflow")
+
+                if self._pending_observability_trace:
+                    await self.create_websocket_message(
+                        data_model=self._pending_observability_trace,
+                        message_type=WebSocketMessageType.OBSERVABILITY_TRACE_MESSAGE,
+                    )
+                    self._pending_observability_trace = None
+            except Exception:
+                logger.exception("Error running workflow")
 
 
 def install_reconnectable_handler() -> None:  # TODO: upstream to NAT
@@ -394,6 +455,70 @@ def install_reconnectable_handler() -> None:  # TODO: upstream to NAT
     if _installed:
         return
     from nat.front_ends.fastapi import fastapi_front_end_plugin_worker as worker_module
+    from nat.front_ends.fastapi.routes import websocket as websocket_routes
 
     worker_module.WebSocketMessageHandler = ReconnectableWebSocketMessageHandler
+    websocket_routes.WebSocketMessageHandler = ReconnectableWebSocketMessageHandler
+
+    def patched_websocket_endpoint(*, worker: Any, session_manager: Any):
+        """Build websocket endpoint handler with reconnect support and verified auth."""
+
+        async def _websocket_endpoint(websocket: WebSocket):
+            session_id = websocket.query_params.get("session")
+            if session_id and not websocket_routes._SAFE_SESSION_ID_RE.match(session_id):
+                logger.warning("WebSocket: Rejected session ID with unsafe characters")
+                await websocket.close(code=WS_POLICY_VIOLATION, reason="Invalid session ID")
+                return
+
+            if session_id:
+                headers = list(websocket.scope.get("headers", []))
+                cookie_header = f"{SESSION_COOKIE_NAME}={session_id}"
+
+                cookie_exists = False
+                existing_session_cookie = False
+
+                for i, (name, value) in enumerate(headers):
+                    if name != b"cookie":
+                        continue
+
+                    cookie_exists = True
+                    cookie_str = value.decode()
+
+                    if f"{SESSION_COOKIE_NAME}=" in cookie_str:
+                        existing_session_cookie = True
+                        logger.info("WebSocket: Session cookie already present in headers (same-origin)")
+                    else:
+                        headers[i] = (name, f"{cookie_str}; {cookie_header}".encode())
+                        logger.info(
+                            "WebSocket: Added session cookie to existing cookie header: %s",
+                            session_id[:10] + "...",
+                        )
+                    break
+
+                if not cookie_exists and not existing_session_cookie:
+                    headers.append((b"cookie", cookie_header.encode()))
+                    logger.info("WebSocket: Added new session cookie header: %s", session_id[:10] + "...")
+
+                websocket.scope["headers"] = headers
+
+            user, close_code = await authenticate_websocket_connection(websocket)
+            if close_code is not None:
+                await websocket.close(code=close_code)
+                return
+
+            async with ReconnectableWebSocketMessageHandler(
+                websocket,
+                session_manager,
+                worker.get_step_adaptor(),
+                worker,
+            ) as handler:
+                handler._authenticated_user = user
+                flow_handler = WebSocketAuthenticationFlowHandler(worker._add_flow, worker._remove_flow, handler)
+                handler.set_flow_handler(flow_handler)
+                with user_context(user or detect_internal_caller(dict(websocket.scope.get("headers", [])))):
+                    await handler.run()
+
+        return _websocket_endpoint
+
+    websocket_routes.websocket_endpoint = patched_websocket_endpoint
     _installed = True

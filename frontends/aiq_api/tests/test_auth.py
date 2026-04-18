@@ -422,7 +422,7 @@ class TestAuthMiddlewareInternal:
         finally:
             middleware_module._current_user.reset(token)
 
-        assert state["user"]["type"] == "jwt"
+        assert state["user"]["type"] == "unverified_jwt"
         assert state["user"]["token"] == "eyJhbGciOiJIUzI1NiJ9.x.y"
 
     @pytest.mark.asyncio
@@ -439,7 +439,7 @@ class TestAuthMiddlewareInternal:
         )
         await mw(scope, AsyncMock(), send)
 
-        assert state["user"]["type"] == "jwt"
+        assert state["user"]["type"] == "unverified_jwt"
         assert state["user"]["token"] == "cookieval"
 
 

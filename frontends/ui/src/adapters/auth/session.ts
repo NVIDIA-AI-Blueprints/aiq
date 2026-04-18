@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /**
  * Session Hook Adapter
  *
@@ -41,7 +38,7 @@ const DEFAULT_USER = {
  * if (isLoading) return <Spinner />
  * if (!isAuthenticated) return <Button onClick={signIn}>Sign In</Button>
  *
- * // Use idToken for backend API calls (not available when !authRequired)
+ * // Use idToken for backend API calls (only available when authRequired)
  * if (idToken) {
  *   await fetch('/api/data', {
  *     headers: { 'Authorization': `Bearer ${idToken}` }
@@ -52,9 +49,9 @@ const DEFAULT_USER = {
  * ```
  */
 export const useAuth = (): AuthContext => {
-  const { authRequired, authProviderId, sessionRefreshIntervalSeconds } = useAppConfig()
+  const { authRequired, authProviderId } = useAppConfig()
   const authRequiredRef = useRef(authRequired)
-  const { data: session, status, update } = useNextAuthSession()
+  const { data: session, status } = useNextAuthSession()
   const hasTriggeredReauth = useRef(false)
 
   if (authRequiredRef.current !== authRequired) {
@@ -82,16 +79,6 @@ export const useAuth = (): AuthContext => {
     }
   }, [session?.error, authRequired, handleSignOut])
 
-  useEffect(() => {
-    if (!authRequired) return
-    if (status !== 'authenticated') return
-
-    const interval = setInterval(() => {
-      update()
-    }, sessionRefreshIntervalSeconds * 1000)
-
-    return () => clearInterval(interval)
-  }, [status, update, authRequired, sessionRefreshIntervalSeconds])
 
   if (!authRequired) {
     return {
