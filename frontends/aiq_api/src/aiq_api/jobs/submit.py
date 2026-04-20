@@ -21,6 +21,7 @@ Provides functions to submit agent jobs to the Dask cluster.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
@@ -218,6 +219,7 @@ async def submit_agent_job(
 
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
+    loop = asyncio.get_running_loop()
 
     try:
         await job_store.submit_job(
@@ -240,10 +242,10 @@ async def submit_agent_job(
                 auth_token,
             ],
         )
-        create_job_access(resolved_job_id, principal, db_url)
+        await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)
     except Exception:
         try:
-            rollback_job_submission(resolved_job_id, db_url)
+            await loop.run_in_executor(None, rollback_job_submission, resolved_job_id, db_url)
             logger.warning(
                 "Rolled back partial async job submission for %s after access persistence failure. "
                 "The Dask worker may still be running and should be investigated if it continues writing state.",
