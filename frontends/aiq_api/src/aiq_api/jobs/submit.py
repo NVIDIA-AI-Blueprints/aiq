@@ -29,6 +29,7 @@ from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
 
 from ..registry import get_agent_config
+from .access import _make_no_auth_principal
 from .access import create_job_access
 from .access import rollback_job_submission
 from .runner import run_agent_job
@@ -39,9 +40,9 @@ logger = logging.getLogger(__name__)
 def _resolve_submission_principal(owner: str) -> Principal | None:
     """Resolve the best available principal for async job ownership.
 
-    Verified middleware identity remains the preferred source. For deployments
-    with auth disabled, fall back to a compatibility principal so legacy
-    internal/anonymous flows can still submit async jobs.
+    Used only when submit_agent_job is called programmatically without an
+    explicit principal.  Verified middleware identity is preferred; falls back
+    to a compatibility principal when auth is disabled.
     """
     principal = get_current_principal()
     if principal is not None:
@@ -50,17 +51,7 @@ def _resolve_submission_principal(owner: str) -> Principal | None:
     if os.environ.get("REQUIRE_AUTH", "false").lower() == "true":
         return None
 
-    try:
-        from aiq_api.auth.middleware import get_current_user
-
-        current_user = get_current_user()
-    except Exception:
-        current_user = {}
-
-    principal_type = str(current_user.get("type") or "anonymous")
-    subject = owner if owner else principal_type
-    email = owner if "@" in owner else None
-    return Principal(type=principal_type, sub=subject, email=email)
+    return _make_no_auth_principal(owner)
 
 
 def _get_parent_trace_context() -> tuple[

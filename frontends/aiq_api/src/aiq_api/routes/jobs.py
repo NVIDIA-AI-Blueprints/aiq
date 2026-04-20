@@ -239,7 +239,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         db_url[:50],
         default_expiry_seconds,
     )
-    ensure_job_access_table(db_url)
+    await asyncio.get_running_loop().run_in_executor(None, ensure_job_access_table, db_url)
 
     @app.get("/health", tags=["health"], summary="Health check")
     async def health_check():
