@@ -28,11 +28,8 @@ from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
 from aiq_api.auth.middleware import detect_internal_caller
-from aiq_api.auth.middleware import extract_auth_token
-from aiq_api.auth.middleware import is_external_request
-from aiq_api.auth.middleware import is_headless_request
+from aiq_api.auth.middleware import resolve_request_user
 from aiq_api.auth.middleware import user_context
-from aiq_api.auth.middleware import validate_token_with_validators
 from nat.data_models.api_server import Error
 from nat.data_models.api_server import ErrorTypes
 from nat.data_models.api_server import ResponseObservabilityTrace
@@ -79,25 +76,22 @@ def configure_websocket_auth(
 async def authenticate_websocket_connection(socket: WebSocket) -> tuple[dict[str, Any] | None, int | None]:
     """Resolve the caller identity for a WebSocket handshake."""
     headers = dict(socket.scope.get("headers", []))
-    token = extract_auth_token(headers)
+    user, error_status, is_external = await resolve_request_user(
+        headers,
+        validators=_auth_validators,
+        require_auth=_require_auth,
+        external_hostnames=_external_hostnames,
+    )
+    if user is not None:
+        return user, None
 
-    if not is_external_request(headers, _external_hostnames):
+    if not is_external:
         return detect_internal_caller(headers), None
 
-    if not _require_auth:
-        return {"type": "anonymous", "skip_clarifier": True}, None
-
-    if not token:
+    if error_status == 401:
         return None, WS_POLICY_VIOLATION
 
-    user = await validate_token_with_validators(token, _auth_validators)
-    if user is None:
-        return None, WS_POLICY_VIOLATION
-
-    if is_headless_request(headers):
-        user["skip_clarifier"] = True
-
-    return user, None
+    return None, WS_POLICY_VIOLATION
 
 
 class WebSocketSessionRegistry:

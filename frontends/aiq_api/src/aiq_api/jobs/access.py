@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Mapping
 from typing import Any
 
@@ -28,7 +27,7 @@ from sqlalchemy.engine import Connection
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
 
-logger = logging.getLogger(__name__)
+_job_access_schema_initialized: set[str] = set()
 
 _JOB_ACCESS_INDEX_SQL = "CREATE INDEX IF NOT EXISTS idx_job_access_owner ON job_access(owner_auth_type, owner_subject)"
 _JOB_ACCESS_SELECT_SQL = text(
@@ -36,8 +35,7 @@ _JOB_ACCESS_SELECT_SQL = text(
 )
 _JOB_ACCESS_DELETE_SQL = text("DELETE FROM job_access WHERE job_id = :job_id")
 _JOB_ACCESS_CLEANUP_SQL = text(
-    "DELETE FROM job_access "
-    "WHERE job_id NOT IN (SELECT job_id FROM job_info WHERE is_expired = false OR is_expired = 0)"
+    "DELETE FROM job_access WHERE job_id NOT IN (SELECT job_id FROM job_info WHERE is_expired IS NOT TRUE)"
 )
 _JOB_INFO_DELETE_SQL = text("DELETE FROM job_info WHERE job_id = :job_id")
 _JOB_EVENTS_DELETE_SQL = text("DELETE FROM job_events WHERE job_id = :job_id")
@@ -67,7 +65,7 @@ def get_job_access(job_id: str, db_url: str) -> dict[str, Any] | None:
     with _job_access_connection(db_url) as conn:
         _ensure_job_access_schema(conn, db_url)
         row = conn.execute(_JOB_ACCESS_SELECT_SQL, {"job_id": job_id}).mappings().first()
-    return dict(row) if row is not None else None
+        return dict(row) if row is not None else None
 
 
 def delete_job_access(job_id: str, db_url: str) -> int:
@@ -146,8 +144,11 @@ def _job_access_connection(db_url: str):
 
 
 def _ensure_job_access_schema(conn: Connection, db_url: str) -> None:
+    if db_url in _job_access_schema_initialized:
+        return
     conn.execute(text(_job_access_table_sql(db_url)))
     conn.execute(text(_JOB_ACCESS_INDEX_SQL))
+    _job_access_schema_initialized.add(db_url)
 
 
 def _job_access_table_sql(db_url: str) -> str:

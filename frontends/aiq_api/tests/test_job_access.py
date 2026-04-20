@@ -13,6 +13,7 @@ import pytest
 from fastapi import HTTPException
 
 from aiq_agent.auth import Principal
+from aiq_api.jobs import access as job_access
 from aiq_api.jobs.access import authorize_job_access
 from aiq_api.jobs.access import cleanup_job_access
 from aiq_api.jobs.access import create_job_access
@@ -29,8 +30,10 @@ def db_url(tmp_path):
 @pytest.fixture(autouse=True)
 def clear_event_store_caches():
     EventStore._tables_initialized.clear()
+    job_access._job_access_schema_initialized.clear()
     yield
     EventStore._tables_initialized.clear()
+    job_access._job_access_schema_initialized.clear()
 
 
 def _insert_job_info(db_url: str, job_id: str, *, is_expired: bool = False) -> None:

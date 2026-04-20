@@ -176,6 +176,41 @@ def detect_internal_caller(headers: dict[bytes, bytes]) -> dict[str, Any]:
     return {"type": "internal", "skip_clarifier": headless}
 
 
+async def resolve_request_user(
+    headers: dict[bytes, bytes],
+    *,
+    validators: list,
+    require_auth: bool,
+    external_hostnames: set[str] | None = None,
+) -> tuple[dict[str, Any] | None, int | None, bool]:
+    """Resolve request identity from validated credentials when present.
+
+    Returns a tuple of:
+      - resolved user dict, or None when the request should be rejected
+      - HTTP status code to use on rejection, or None on success
+      - whether the request was classified as external
+    """
+    is_external = is_external_request(headers, external_hostnames)
+    token = extract_auth_token(headers)
+
+    if token:
+        user = await validate_token_with_validators(token, validators)
+        if user is not None:
+            if is_headless_request(headers):
+                user["skip_clarifier"] = True
+            return user, None, is_external
+
+        if is_external and require_auth:
+            return None, 401, is_external
+
+    if is_external:
+        if not require_auth:
+            return {"type": "anonymous", "skip_clarifier": True}, None, is_external
+        return None, 401, is_external
+
+    return detect_internal_caller(headers), None, is_external
+
+
 # ---------------------------------------------------------------------------
 # Middleware
 # ---------------------------------------------------------------------------
@@ -235,43 +270,28 @@ class AuthMiddleware:
 
         headers = dict(scope.get("headers", []))
         path: str = scope["path"]
+        is_external = self._is_external(headers)
 
-        # 1. Internal traffic
-        if not self._is_external(headers):
-            user = self._detect_internal_caller(headers)
-            await self._call_app(scope, receive, send, user)
-            return
-
-        # 2. External — enforce path allowlist
-        if not self._path_allowed(path):
+        # External requests still honor the public path allowlist before auth.
+        if is_external and not self._path_allowed(path):
             await self._send_json(send, 404, {"detail": "Not found"})
             return
 
-        # 3. Auth-exempt paths
-        if path in AUTH_EXEMPT_PATHS:
+        if is_external and path in AUTH_EXEMPT_PATHS:
             user = {"type": "anonymous", "skip_clarifier": True}
             await self._call_app(scope, receive, send, user)
             return
 
-        # 4. Auth disabled — allow as anonymous
-        if not self.require_auth:
-            user = {"type": "anonymous", "skip_clarifier": True}
-            await self._call_app(scope, receive, send, user)
-            return
-
-        # 5. Auth enabled — require a valid JWT Bearer token
-        token = self._extract_token(headers)
-        if not token:
-            await self._send_json(send, 401, {"detail": "Missing auth token"})
-            return
-
-        user = await self._validate_token(token)
+        user, error_status, _ = await resolve_request_user(
+            headers,
+            validators=self._validators,
+            require_auth=self.require_auth,
+            external_hostnames=self._external_hostnames,
+        )
         if user is None:
-            await self._send_json(send, 401, {"detail": "Invalid or expired auth token"})
+            detail = "Invalid or expired auth token" if self._extract_token(headers) else "Missing auth token"
+            await self._send_json(send, error_status or 401, {"detail": detail})
             return
-
-        if self._is_headless(headers):
-            user["skip_clarifier"] = True
 
         await self._call_app(scope, receive, send, user)
 

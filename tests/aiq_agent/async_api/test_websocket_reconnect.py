@@ -697,6 +697,18 @@ async def test_authenticate_websocket_connection_rejects_missing_external_token(
 
 
 @pytest.mark.asyncio
+async def test_authenticate_websocket_connection_validates_internal_token_when_present() -> None:
+    validator = DummyValidator(user={"type": "starfleet", "sub": "user-1", "skip_clarifier": False})
+    configure_websocket_auth(validators=[validator], require_auth=True, external_hostnames={"localhost"})
+    socket = DummySocket(headers=[(b"host", b"aiq-agent"), (b"cookie", b"idToken=test-token")])
+
+    user, close_code = await authenticate_websocket_connection(socket)
+
+    assert close_code is None
+    assert user == {"type": "starfleet", "sub": "user-1", "skip_clarifier": False}
+
+
+@pytest.mark.asyncio
 async def test_run_closes_socket_when_websocket_auth_fails() -> None:
     configure_websocket_auth(validators=[], require_auth=True, external_hostnames={"localhost"})
     socket = DummySocket(headers=[(b"host", b"localhost")])

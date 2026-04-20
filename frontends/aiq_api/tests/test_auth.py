@@ -405,30 +405,32 @@ class TestAuthMiddlewareAuthFlow:
 
 class TestAuthMiddlewareInternal:
     @pytest.mark.asyncio
-    async def test_internal_sets_jwt_user_for_bearer_jwt(self, capture_asgi):
+    async def test_internal_validates_bearer_jwt_when_validator_accepts(self, capture_asgi):
         app, state = capture_asgi
-        mw = AuthMiddleware(app, require_auth=True, external_hostnames=set())
-        token = middleware_module._current_user.set({})
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value={"type": "starfleet", "sub": "user-1", "token": "good"})
+        mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
 
         async def send(msg):
             pass
 
-        try:
-            scope = _http_scope(
-                "/any/path",
-                extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
-            )
-            await mw(scope, AsyncMock(), send)
-        finally:
-            middleware_module._current_user.reset(token)
+        scope = _http_scope(
+            "/any/path",
+            extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
+        )
+        await mw(scope, AsyncMock(), send)
 
-        assert state["user"]["type"] == "unverified_jwt"
-        assert state["user"]["token"] == "eyJhbGciOiJIUzI1NiJ9.x.y"
+        assert state["user"]["type"] == "starfleet"
+        assert state["user"]["sub"] == "user-1"
 
     @pytest.mark.asyncio
-    async def test_internal_idtoken_cookie(self, capture_asgi):
+    async def test_internal_idtoken_cookie_stays_unverified_without_valid_identity(self, capture_asgi):
         app, state = capture_asgi
-        mw = AuthMiddleware(app, require_auth=False, external_hostnames=set())
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value=None)
+        mw = AuthMiddleware(app, validators=[mock_v], require_auth=False, external_hostnames=set())
 
         async def send(msg):
             pass
@@ -441,6 +443,26 @@ class TestAuthMiddlewareInternal:
 
         assert state["user"]["type"] == "unverified_jwt"
         assert state["user"]["token"] == "cookieval"
+
+    @pytest.mark.asyncio
+    async def test_internal_invalid_bearer_token_falls_back_to_internal_when_auth_not_required(self, capture_asgi):
+        app, state = capture_asgi
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value=None)
+        mw = AuthMiddleware(app, validators=[mock_v], require_auth=False, external_hostnames=set())
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/any/path",
+            extra_headers=[(b"authorization", b"Bearer badtoken")],
+        )
+        await mw(scope, AsyncMock(), send)
+
+        assert state["user"]["type"] == "unverified_jwt"
+        assert state["user"]["token"] == "badtoken"
 
 
 class TestAuthMiddlewareHelpers:
