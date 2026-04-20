@@ -74,6 +74,12 @@ aiq:
         CONFIG_FILE: configs/config_web_default_llamaindex.yml
         DASK_NWORKERS: '1'
         DASK_NTHREADS: '4'
+        # Optional: bound per-worker memory; Dask spills/restarts above this
+        # DASK_MEMORY_LIMIT: '800MB'
+        # Optional: recycle workers every N seconds to drop accumulated state
+        # DASK_LIFETIME: '3600'
+        # Optional (default 'true'): set to 'false' for graceful exit without respawn
+        # DASK_LIFETIME_RESTART: 'true'
         NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
