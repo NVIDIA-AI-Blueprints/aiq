@@ -476,6 +476,7 @@ class TestSubmitDeepResearchJob:
             "os.environ",
             {
                 "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "REQUIRE_AUTH": "true",
             },
         ):
             with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
@@ -488,6 +489,41 @@ class TestSubmitDeepResearchJob:
                         )
 
         mock_job_store.submit_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_submit_uses_compatibility_principal_when_auth_disabled(self):
+        """Test submit_agent_job still works without verified principal when auth is disabled."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+                "REQUIRE_AUTH": "false",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=None):
+                    with patch(
+                        "aiq_api.jobs.submit.create_job_access",
+                    ) as create_job_access:
+                        result = await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                        )
+
+        assert result == "test-job-id"
+        create_job_access.assert_called_once()
+        principal = create_job_access.call_args.args[1]
+        assert principal.type == "internal"
+        assert principal.sub == "test@example.com"
+        assert principal.email == "test@example.com"
 
     @pytest.mark.asyncio
     async def test_submit_rolls_back_when_job_access_persistence_fails(self):

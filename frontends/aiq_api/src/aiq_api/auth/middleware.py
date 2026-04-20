@@ -133,7 +133,6 @@ def _load_external_hostnames() -> set[str]:
 def is_external_request(headers: dict[bytes, bytes], external_hostnames: set[str] | None = None) -> bool:
     """Return ``True`` when the Host header matches an external-facing hostname."""
     host = headers.get(b"host", b"").decode().split(":")[0]
-    logger.info("Host: %s", host)
     return host in (external_hostnames or _load_external_hostnames())
 
 

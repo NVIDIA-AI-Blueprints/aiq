@@ -35,6 +35,33 @@ from .runner import run_agent_job
 logger = logging.getLogger(__name__)
 
 
+def _resolve_submission_principal(owner: str) -> Principal | None:
+    """Resolve the best available principal for async job ownership.
+
+    Verified middleware identity remains the preferred source. For deployments
+    with auth disabled, fall back to a compatibility principal so legacy
+    internal/anonymous flows can still submit async jobs.
+    """
+    principal = get_current_principal()
+    if principal is not None:
+        return principal
+
+    if os.environ.get("REQUIRE_AUTH", "false").lower() == "true":
+        return None
+
+    try:
+        from aiq_api.auth.middleware import get_current_user
+
+        current_user = get_current_user()
+    except Exception:
+        current_user = {}
+
+    principal_type = str(current_user.get("type") or "anonymous")
+    subject = owner if owner else principal_type
+    email = owner if "@" in owner else None
+    return Principal(type=principal_type, sub=subject, email=email)
+
+
 def _get_parent_trace_context() -> tuple[
     str | None,  # parent_span_id
     str | None,  # parent_function_id
@@ -185,7 +212,7 @@ async def submit_agent_job(
         auth_token = get_auth_token()
 
     if principal is None:
-        principal = get_current_principal()
+        principal = _resolve_submission_principal(owner)
     if principal is None:
         raise RuntimeError("Verified current principal required for async job submission")
 
@@ -217,6 +244,11 @@ async def submit_agent_job(
     except Exception:
         try:
             rollback_job_submission(resolved_job_id, db_url)
+            logger.warning(
+                "Rolled back partial async job submission for %s after access persistence failure. "
+                "The Dask worker may still be running and should be investigated if it continues writing state.",
+                resolved_job_id,
+            )
         except Exception as cleanup_error:
             logger.warning(
                 "Failed to roll back partial async job submission for %s after access persistence failure: %s",
