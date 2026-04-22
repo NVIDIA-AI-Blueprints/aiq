@@ -563,7 +563,7 @@ def main_level() -> None:
                             subscription.unsubscribe()
 
                         if result:
-                            _emit_event("task", result)
+                            _emit_event("final_message", result)
                         _emit_event("end", "aiq-research-level finished")
                     else:
                         global _active_spinner
