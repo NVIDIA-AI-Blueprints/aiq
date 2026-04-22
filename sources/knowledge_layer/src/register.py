@@ -28,6 +28,7 @@ from typing import Literal
 from pydantic import Field
 from pydantic import model_validator
 
+from aiq_agent.common import SOURCE_DELIMITER
 from nat.builder.builder import Builder
 from nat.builder.context import Context
 from nat.builder.function_info import FunctionInfo
@@ -227,7 +228,7 @@ def _format_results(retrieval_result, query: str) -> str:
         lines.append(content)
         lines.append("")
 
-    return "\n".join(lines)
+    return SOURCE_DELIMITER.join(lines)
 
 
 @register_function(config_type=KnowledgeRetrievalConfig)

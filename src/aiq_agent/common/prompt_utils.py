@@ -27,6 +27,8 @@ import jinja2
 
 logger = logging.getLogger(__name__)
 
+SOURCE_DELIMITER = "\n\n---\n\n"
+
 
 class PromptError(Exception):
     """Error loading or rendering prompts."""

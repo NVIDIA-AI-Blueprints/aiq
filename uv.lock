@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 2
 requires-python = ">=3.11, <3.14"
 resolution-markers = [
     "python_full_version >= '3.13' and sys_platform == 'win32'",
@@ -23,6 +23,7 @@ members = [
     "freshqa-eval",
     "google-scholar-paper-search",
     "knowledge-layer",
+    "reranked-search",
     "tavily-web-search",
 ]
 overrides = [
@@ -274,6 +275,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-env" },
+    { name = "reranked-search" },
     { name = "ruff" },
     { name = "tavily-web-search" },
     { name = "yapf" },
@@ -331,6 +333,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
     { name = "pytest-cov", specifier = ">=4.1.0" },
     { name = "pytest-env", specifier = ">=1.1.0" },
+    { name = "reranked-search", editable = "sources/reranker" },
     { name = "ruff", specifier = "~=0.15.1" },
     { name = "tavily-web-search", editable = "sources/tavily_web_search" },
     { name = "yapf", specifier = ">=0.40.0" },
@@ -2463,16 +2466,17 @@ wheels = [
 
 [[package]]
 name = "langchain-nvidia-ai-endpoints"
-version = "1.0.3"
+version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
     { name = "filetype" },
     { name = "langchain-core" },
+    { name = "requests" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/5a/9e/30814da280f7a79b168f83180f6a0396c166f86a566e56bb9877bf562611/langchain_nvidia_ai_endpoints-1.0.3.tar.gz", hash = "sha256:11c48fd24e4a9d4c86c65bcef943400f4e709497c93254c7dc97c43f68c2be89", size = 46526, upload-time = "2026-01-28T22:04:33.93Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f0/d5/5d70c7b7a66dfabc4c355e408a066e8bef7d2715f3b7854ce44704886119/langchain_nvidia_ai_endpoints-1.2.1.tar.gz", hash = "sha256:055d2511fa7374da65e5d3dd1705fb09125620a124c6247212d661286f64fa8d", size = 57520, upload-time = "2026-03-16T16:42:34.682Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/04/c83f61106a245b74de11c1e075c1cc1e70462ece1dd9fc0584ad992a776d/langchain_nvidia_ai_endpoints-1.0.3-py3-none-any.whl", hash = "sha256:e5f170ad0a335637298bb90fb3df119793821e316355f61ab82f0106913eebbf", size = 50130, upload-time = "2026-01-28T22:04:33.065Z" },
+    { url = "https://files.pythonhosted.org/packages/c7/b7/99f72331842b0f62da891411c5590ff7fab70a1a753a9a1be9348921995e/langchain_nvidia_ai_endpoints-1.2.1-py3-none-any.whl", hash = "sha256:eafb2186dea25d163089552c062274664540f2cbe251861c515700645fbf256d", size = 61820, upload-time = "2026-03-16T16:42:33.657Z" },
 ]
 
 [[package]]
@@ -5280,6 +5284,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f3/61/d7545dafb7ac2230c70d38d31cbfe4cc64f7144dc41f6e4e4b78ecd9f5bb/requests-toolbelt-1.0.0.tar.gz", hash = "sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6", size = 206888, upload-time = "2023-05-01T04:11:33.229Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl", hash = "sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06", size = 54481, upload-time = "2023-05-01T04:11:28.427Z" },
+]
+
+[[package]]
+name = "reranked-search"
+version = "1.0.0"
+source = { editable = "sources/reranker" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "langchain-nvidia-ai-endpoints" },
+    { name = "nvidia-nat" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "langchain-core", specifier = ">=1.1.0" },
+    { name = "langchain-nvidia-ai-endpoints", specifier = ">=1.1.0" },
+    { name = "nvidia-nat", specifier = "==1.5.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
 [[package]]

@@ -67,6 +67,7 @@ echo "Installing data sources..."
 "${UV_BIN}" pip install -e ./sources/tavily_web_search
 "${UV_BIN}" pip install -e ./sources/google_scholar_paper_search
 "${UV_BIN}" pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
+"${UV_BIN}" pip install -e ./sources/reranker
 echo "Data Sources installed"
 
 # Setup pre-commit

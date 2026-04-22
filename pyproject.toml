@@ -85,6 +85,7 @@ aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
 aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
 aiq_clarifier = "aiq_agent.agents.clarifier.register"
 aiq_data_source_registry = "aiq_agent.common.data_source_registry"
+reranked_search = "reranked_search.register"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
@@ -185,6 +186,7 @@ dev = [
     "google-scholar-paper-search",
     "tavily-web-search",
     "knowledge-layer[all]",
+    "reranked-search",
     "aiq-api",
     "aiq-research-cli",
     "aiq-debug",
@@ -219,6 +221,7 @@ aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 knowledge-layer = { workspace = true }
+reranked-search = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }
 aiq-debug = { workspace = true }

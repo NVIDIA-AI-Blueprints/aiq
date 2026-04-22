@@ -24,6 +24,8 @@ from typing import Any
 
 import aiohttp
 
+from aiq_agent.common import SOURCE_DELIMITER
+
 logger = logging.getLogger(__name__)
 
 SERPER_API_URL = "https://google.serper.dev/scholar"
@@ -175,7 +177,7 @@ class PaperSearchTool:
             )
             formatted_papers.append(paper_str)
 
-        return "\n\n".join(formatted_papers)
+        return SOURCE_DELIMITER.join(formatted_papers)
 
     async def search(
         self,

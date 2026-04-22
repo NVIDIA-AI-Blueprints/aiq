@@ -20,6 +20,7 @@ import os
 from pydantic import Field
 from pydantic import SecretStr
 
+from aiq_agent.common import SOURCE_DELIMITER
 from nat.builder.builder import Builder
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
@@ -132,9 +133,9 @@ async def tavily_web_search(tool_config: TavilyWebSearchToolConfig, builder: Bui
 
                 answer_text = ""
                 if search_docs.get("answer"):
-                    answer_text = f"<Answer>\n{search_docs['answer']}\n</Answer>\n\n---\n\n"
+                    answer_text = f"<Answer>\n{search_docs['answer']}\n</Answer>" + SOURCE_DELIMITER
 
-                web_search_results = "\n\n---\n\n".join(
+                web_search_results = SOURCE_DELIMITER.join(
                     [
                         f'<Document href="{doc.get("url", "")}">\n'
                         f"<title>\n{doc.get('title')}\n</title>\n"
