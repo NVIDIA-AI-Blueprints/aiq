@@ -49,6 +49,15 @@ Starts the agent in CLI mode with browser-based authentication.
 | `--verbose` or `-v` | Enable verbose logging |
 | `--config_file <path>` | Use a custom configuration file |
 
+**Available Configs:**
+
+| Config File | Description |
+| ----------- | ----------- |
+| `configs/config_cli_default.yml` | CLI mode (default) |
+| `configs/config_cli_overview.yml` | Overview (shallow, 3 turns) |
+| `configs/config_cli_debrief.yml` | Debrief (deep, 2 loops) |
+| `configs/config_cli_deepdive.yml` | Deepdive (deep, 5 loops) |
+
 
 ### `start_server_in_debug_mode.sh` - Server Mode
 

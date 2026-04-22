@@ -41,7 +41,10 @@ while [[ $# -gt 0 ]]; do
             echo "  -h, --help          Show this help"
             echo ""
             echo "Available configs in configs/:"
-            echo "  config_cli_default.yml  - CLI mode (default)"
+            echo "  config_cli_default.yml   - CLI mode (default)"
+            echo "  config_cli_overview.yml  - Overview (shallow, 3 turns)"
+            echo "  config_cli_debrief.yml   - Debrief (deep, 2 loops)"
+            echo "  config_cli_deepdive.yml  - Deepdive (deep, 5 loops)"
             exit 0
             ;;
         *)

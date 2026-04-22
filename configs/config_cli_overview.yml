@@ -1,0 +1,144 @@
+# Overview configuration for CLI mode.
+# - Shallow research only (no deep research escalation)
+# - 3 LLM turns maximum
+# Estimated runtime: ~20-60 seconds (varies by model and tools)
+
+general:
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+    # tracing:
+    #   langsmith: # Optional: LangSmith tracing - requires langsmith API key. Set using `export LANGSMITH_API_KEY=<your-langsmith-api-key>`
+    #     _type: langsmith
+    #     project: nvidia-aiq
+
+llms:
+  nemotron_llm_intent:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.5
+    top_p: 0.9
+    max_tokens: 4096
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+
+  nemotron_nano_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.5
+    top_p: 0.9
+    max_tokens: 4096
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
+
+  gpt_oss_llm:
+    _type: nim
+    model_name: openai/gpt-oss-120b
+    base_url: https://integrate.api.nvidia.com/v1
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 256000
+    api_key: ${NVIDIA_API_KEY}
+    max_retries: 10
+
+  # Nemotron Super is compatible and tested with AIQ but has limited availability
+  # on the Build API due to high demand.
+  # Uncomment nemotron_super_llm below if the endpoint is accessible.
+  # nemotron_super_llm:
+  #   _type: nim
+  #   model_name: nvidia/nemotron-3-super-120b-a12b
+  #   base_url: "https://integrate.api.nvidia.com/v1"
+  #   temperature: 1.0
+  #   top_p: 1.0
+  #   max_tokens: 128000
+  #   num_retries: 5
+  #   chat_template_kwargs:
+  #     enable_thinking: true
+
+functions:
+  # =========================================================================
+  # Data Source Registry
+  # =========================================================================
+  # Central registry that controls:
+  #   1. UI toggles — each source appears as an on/off switch in the frontend
+  #   2. Per-message filtering — users can select active sources per request
+  #   3. Tool auto-inheritance — agents with no explicit `tools` list receive
+  #      every tool listed here (use `exclude_tools` on agents to specialize)
+  #
+  # Source entry fields:
+  #   id, name, description, tools, requires_auth (default: false),
+  #   default_enabled (default: true)
+  #
+  # See docs/source/customization/tools-and-sources.md for full details.
+  # =========================================================================
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      # - id: paper_search
+      #   name: "Academic Papers"
+      #   description: "Search academic papers and scientific publications."
+      #   tools:
+      #     - paper_search_tool
+
+  web_search_tool:
+    _type: tavily_web_search
+    max_results: 5
+    max_content_length: 1000
+
+  advanced_web_search_tool:
+    _type: tavily_web_search
+    max_results: 2
+    advanced_search: true
+
+  # Paper Search (optional - requires SERPER_API_KEY)
+  # Uncomment the block below and set SERPER_API_KEY to enable academic paper search.
+  # paper_search_tool:
+  #   _type: paper_search
+  #   max_results: 5
+  #   serper_api_key: ${SERPER_API_KEY}
+
+  # =========================================================================
+  # Agents — inherit all registry tools; use exclude_tools to specialize
+  # =========================================================================
+  intent_classifier:
+    _type: intent_classifier
+    llm: nemotron_llm_intent
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
+    # llm_timeout: 90  # optional; seconds for intent LLM call (default 90)
+
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: nemotron_nano_llm
+    # tools: omitted -> inherits all from data_source_registry
+    exclude_tools:
+      - advanced_web_search_tool
+    max_llm_turns: 3
+    max_tool_iterations: 5
+
+  deep_research_agent:
+    _type: deep_research_agent
+    orchestrator_llm: gpt_oss_llm
+    researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
+    planner_llm: gpt_oss_llm
+    max_loops: 2
+    exclude_tools:
+      - web_search_tool
+
+workflow:
+  _type: chat_deepresearcher_agent
+  enable_escalation: false
+  enable_clarifier: false
+  checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}

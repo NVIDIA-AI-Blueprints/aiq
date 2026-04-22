@@ -38,3 +38,4 @@ package-dir = {"aiq_research_cli" = "."}
 
 [project.scripts]
 aiq-research = "aiq_research_cli.cli:main"
+aiq-research-level = "aiq_research_cli.cli:main_level"

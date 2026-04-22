@@ -19,6 +19,7 @@ import logging
 import os
 import re
 import sys
+import json
 import uuid
 import warnings
 from pathlib import Path
@@ -50,6 +51,12 @@ logging.getLogger("langgraph.checkpoint").setLevel(logging.ERROR)
 logger = logging.getLogger(__name__)
 console = Console()
 
+LEVEL_CONFIGS = {
+    "overview": "configs/config_cli_overview.yml",
+    "debrief": "configs/config_cli_debrief.yml",
+    "deepdive": "configs/config_cli_deepdive.yml",
+}
+
 # Setup prompt_toolkit with persistent history for arrow key navigation
 _history_file = Path.home() / ".aiq" / "cli_history"
 _history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -63,6 +70,44 @@ _RESET = "\033[0m"
 # Keep references to the real stdout/stderr before anything can redirect them
 _real_stdout = sys.stdout
 _real_stderr = sys.stderr
+
+def _event_stream_enabled() -> bool:
+    val = os.environ.get("AIQ_EVENT_STREAM", "").strip().lower()
+    return val in {"1", "true", "yes", "on"}
+
+
+def _emit_event(kind: str, message: str, raw_line: str | None = None) -> None:
+    payload = {
+        "kind": kind,
+        "message": message,
+    }
+    if raw_line is not None:
+        payload["rawLine"] = raw_line
+    _real_stdout.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    _real_stdout.flush()
+
+
+def _map_step_to_event(step: IntermediateStep) -> tuple[str, str]:
+    event_type = getattr(step.event_type, "value", str(step.event_type))
+    event_type = str(event_type).lower()
+    name = step.name or ""
+
+    if "tool_start" in event_type:
+        return "tool_start", name or "tool_start"
+    if "tool_end" in event_type:
+        return "tool_end", name or "tool_end"
+    if "agent" in event_type and "start" in event_type:
+        return "subagent", name or "subagent_start"
+    if "agent" in event_type and "end" in event_type:
+        return "subagent", name or "subagent_end"
+    if "task" in event_type:
+        return "task", name or "task"
+
+    return "stdout", name or event_type
+
+
+if _event_stream_enabled():
+    console = Console(file=_real_stderr)
 
 
 class _BlankLineFilter:
@@ -308,6 +353,56 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_level_parser() -> argparse.ArgumentParser:
+    """Build the argument parser for level-based one-shot CLI."""
+    parser = argparse.ArgumentParser(
+        prog="aiq-research-level",
+        description="AI-Q Blueprint - One-shot CLI by research level",
+    )
+    parser.add_argument(
+        "--level",
+        choices=sorted(LEVEL_CONFIGS.keys()),
+        required=True,
+        help="Research level to run (overview, debrief, deepdive)",
+    )
+    parser.add_argument("input", help="Input prompt to research")
+    return parser
+
+
+def _load_env_file(env_file: Path) -> None:
+    if env_file.exists():
+        try:
+            from dotenv import load_dotenv
+
+            load_dotenv(dotenv_path=env_file)
+        except ImportError:
+            print("Warning: python-dotenv not installed. Environment variables must be set manually.")
+        except Exception as e:
+            print(f"Warning: Failed to load .env file: {e}")
+
+
+def _validate_llm_config(config_path: Path) -> None:
+    try:
+        if config_path.exists():
+            import yaml
+
+            with open(config_path, encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+
+            from aiq_agent.common.config_validation import validate_llm_configs
+
+            is_valid, missing_keys = validate_llm_configs(config)
+            if not is_valid:
+                console.print(
+                    f"\n[bold red]❌ Error: Missing required API keys ({', '.join(missing_keys)})[/bold red]\n"
+                    "[yellow]Please set these keys in your .env file or environment variables "
+                    "and restart the application.[/yellow]\n"
+                )
+                os._exit(1)
+    except Exception as e:
+        logger.debug(f"Failed to validate LLM config: {e}")
+
+
 async def interactive_loop(session_manager: SessionManager, verbose: bool = False):
     """Run the interactive chat loop.
 
@@ -408,37 +503,10 @@ def main() -> None:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(name)s - %(message)s")
 
     env_file = Path(args.env_file)
-    if env_file.exists():
-        try:
-            from dotenv import load_dotenv
+    _load_env_file(env_file)
 
-            load_dotenv(dotenv_path=env_file)
-        except ImportError:
-            print("Warning: python-dotenv not installed. Environment variables must be set manually.")
-        except Exception as e:
-            print(f"Warning: Failed to load .env file: {e}")
-
-    # Validate LLM API keys based on config
-    try:
-        config_path = Path(args.config_file)
-        if config_path.exists():
-            import yaml
-
-            with open(config_path, encoding="utf-8") as f:
-                config = yaml.safe_load(f)
-
-            from aiq_agent.common.config_validation import validate_llm_configs
-
-            is_valid, missing_keys = validate_llm_configs(config)
-            if not is_valid:
-                console.print(
-                    f"\n[bold red]❌ Error: Missing required API keys ({', '.join(missing_keys)})[/bold red]\n"
-                    "[yellow]Please set these keys in your .env file or environment variables "
-                    "and restart the application.[/yellow]\n"
-                )
-                os._exit(1)
-    except Exception as e:
-        logger.debug(f"Failed to validate LLM config: {e}")
+    config_path = Path(args.config_file)
+    _validate_llm_config(config_path)
 
     interactive_auth = _check_interactive_auth(args.config_file)
 
@@ -454,6 +522,80 @@ def main() -> None:
     except RuntimeError:
         loop = asyncio.get_event_loop()
         loop.run_until_complete(_run())
+    finally:
+        os._exit(0)
+
+
+def main_level() -> None:
+    """One-shot CLI entry point that takes --level and input."""
+    parser = build_level_parser()
+    args = parser.parse_args()
+
+    stream_events = _event_stream_enabled()
+
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(name)s - %(message)s")
+
+    env_file = Path("deploy/.env")
+    _load_env_file(env_file)
+
+    config_file = LEVEL_CONFIGS[args.level]
+    config_path = Path(config_file)
+    _validate_llm_config(config_path)
+
+    async def _run_once() -> None:
+        async with load_workflow(config_file) as session_manager:
+            async with session_manager.session(user_input_callback=cli_user_input_callback) as session:
+                context_state = ContextState.get()
+                context_state.conversation_id.set(str(uuid.uuid4()))
+
+                async with session.run(args.input) as runner:
+                    if stream_events:
+                        _emit_event("start", f"aiq-research-level start ({args.level})")
+
+                        def _on_step(step: IntermediateStep) -> None:
+                            kind, msg = _map_step_to_event(step)
+                            _emit_event(kind, msg)
+
+                        subscription = runner.context.intermediate_step_manager.subscribe(on_next=_on_step)
+                        try:
+                            result = await runner.result(to_type=str)
+                        finally:
+                            subscription.unsubscribe()
+
+                        if result:
+                            _emit_event("task", result)
+                        _emit_event("end", "aiq-research-level finished")
+                    else:
+                        global _active_spinner
+                        prefix = f"{_BOLD_MAGENTA}Assistant:{_RESET}"
+                        thinking = f"{_BOLD_CYAN}Thinking...{_RESET}"
+                        spinner = _Spinner(f"{prefix} {thinking}")
+                        _active_spinner = spinner
+                        spinner.start()
+
+                        def _on_step(step: IntermediateStep) -> None:
+                            if step.event_type == IntermediateStepType.TOOL_START and step.name:
+                                tool_label = f"{_BOLD_CYAN}Using tool:{_RESET} {step.name}"
+                                spinner.update(f"{prefix} {tool_label}")
+                            elif step.event_type == IntermediateStepType.TOOL_END:
+                                spinner.update(f"{prefix} {thinking}")
+
+                        subscription = runner.context.intermediate_step_manager.subscribe(on_next=_on_step)
+                        try:
+                            result = await runner.result(to_type=str)
+                        finally:
+                            subscription.unsubscribe()
+                            spinner.stop()
+                            _active_spinner = None
+
+                    if not stream_events:
+                        parse_and_display_response(result, verbose=False)
+
+    try:
+        asyncio.run(_run_once())
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(_run_once())
     finally:
         os._exit(0)
 
