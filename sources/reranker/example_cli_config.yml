@@ -111,7 +111,7 @@ functions:
     serper_api_key: ${SERPER_API_KEY}
 
   # ========================================================================
-  # reranked_search tool. Useful when 2 or more source are given to the agent.
+  # Example reranked_search tool config. Useful when 2 or more sources are given to the agent.
   # ========================================================================
   reranked_search:
     _type: reranked_search
@@ -119,7 +119,6 @@ functions:
     cross_encoder_model: nv-rerank-qa-mistral-4b:1
     search_tools:
       - web_search_tool
-      - advanced_web_search_tool
       - paper_search_tool
     top_k: 5
 

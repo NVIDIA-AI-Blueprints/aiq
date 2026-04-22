@@ -24,6 +24,8 @@ and reranks them using BM25, dense embedding similarity, or cross-encoder scorin
 import asyncio
 import logging
 
+from langchain_core.documents import Document
+from langchain_nvidia_ai_endpoints import NVIDIARerank
 from pydantic import BaseModel
 from pydantic import Field
 from pydantic import create_model
@@ -33,8 +35,6 @@ from nat.builder.builder import Builder
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
 from nat.data_models.function import FunctionBaseConfig
-
-from .cross_encoder import rerank_cross_encoder
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +65,15 @@ class RerankedSearchConfig(FunctionBaseConfig, name="reranked_search"):
 
 @register_function(config_type=RerankedSearchConfig)
 async def reranked_search(config: RerankedSearchConfig, builder: Builder):
-    """Register the reranked search tool."""
+    """
+    A cross-encoder feeds the query–document pair together into a single model pass and outputs a
+    relevance score directly.  This is more accurate but slower per document.
+
+    Uses `langchain-nvidia-ai-endpoints` (`NVIDIARerank`).  Expects `NVIDIA_API_KEY` in the environment.
+    """
+    compressor = NVIDIARerank(model=config.cross_encoder_model)
 
     # Resolve tool callables at registration time.
-    # Uses get_tools (not get_function) so function-group sub-tools like
-    # eci_search_and_retrieve resolve correctly.
     tool_fns: dict[str, object] = {}
     for name in config.search_tools:
         try:
@@ -97,7 +101,7 @@ async def reranked_search(config: RerankedSearchConfig, builder: Builder):
 
     RerankedSearchInput = create_model(
         "RerankedSearchInput",
-        overall_query=str,
+        overall_query=(str, Field(description="The overarching search query for this reranked search request.")),
         **{name: fn.input_schema for name, fn in tool_fns.items()},
     )
 
@@ -122,16 +126,17 @@ async def reranked_search(config: RerankedSearchConfig, builder: Builder):
         all_results = []
         for results in per_tool_results:
             all_results.extend(results)
+        logger.info(f"{len(all_results)} results found across all search tools.")
 
         if not all_results:
             return "No results found across any search tool."
 
         # Rerank. Use the overall_query for reranking purposes.
-        ranked: list[str] = rerank_cross_encoder(
-            input.overall_query, all_results, config.top_k, model_name=config.cross_encoder_model
-        )
+        documents = [Document(page_content=r) for r in all_results]
+        reranked_docs = await compressor.acompress_documents(query=input.overall_query, documents=documents)
+        ranked_contents: list[str] = [doc.page_content for doc in reranked_docs[: config.top_k]]
 
-        return "Top results ranked by relevance:\n" + SOURCE_DELIMITER.join(ranked)
+        return f"Top {config.top_k} results ranked by relevance:\n" + SOURCE_DELIMITER.join(ranked_contents)
 
     yield FunctionInfo.from_fn(
         _reranked_search,

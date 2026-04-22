@@ -211,22 +211,24 @@ def _format_results(retrieval_result, query: str) -> str:
         else:
             citation = chunk.file_name
 
+        chunk_lines = []
         # Header with source info
-        lines.append(f"--- Result {i} ---")
-        lines.append(f"Source: {chunk.file_name}")
+        chunk_lines.append(f"--- Result {i} ---")
+        chunk_lines.append(f"Source: {chunk.file_name}")
         if chunk.page_number and chunk.page_number > 0:
-            lines.append(f"Page: {chunk.page_number}")
-        lines.append(f"Citation: {citation}")
-        lines.append(f"Content Type: {chunk.content_type.value}")
-        lines.append(f"Relevance Score: {chunk.score:.2f}")
-        lines.append("")
+            chunk_lines.append(f"Page: {chunk.page_number}")
+        chunk_lines.append(f"Citation: {citation}")
+        chunk_lines.append(f"Content Type: {chunk.content_type.value}")
+        chunk_lines.append(f"Relevance Score: {chunk.score:.2f}")
+        chunk_lines.append("")
 
         # Content (truncate if very long)
         content = chunk.content
         if len(content) > 1500:
             content = content[:1500] + "... [truncated]"
-        lines.append(content)
-        lines.append("")
+        chunk_lines.append(content)
+        chunk_lines.append("")
+        lines.append("\n".join(chunk_lines))
 
     return SOURCE_DELIMITER.join(lines)
 
