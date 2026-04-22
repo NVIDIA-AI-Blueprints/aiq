@@ -49,7 +49,7 @@ functions:
       - your_group__tool_2
 
     # # uncomment to adjust default values
-    # top_k: 5
+    # top_k: 5  # adjust as necessary as you add more search tools, meaning more results to rerank.
     # timeout_seconds: 10 # per-tool timeout
 ```
 

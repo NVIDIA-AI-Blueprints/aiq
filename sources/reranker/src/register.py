@@ -102,7 +102,7 @@ async def reranked_search(config: RerankedSearchConfig, builder: Builder):
     RerankedSearchInput = create_model(
         "RerankedSearchInput",
         overall_query=(str, Field(description="The overarching search query for this reranked search request.")),
-        **{name: fn.input_schema for name, fn in tool_fns.items()},
+        **{name: (fn.input_schema, ...) for name, fn in tool_fns.items()},
     )
 
     # the query parameter is a pydantic model. It's a nested structure, dynamically

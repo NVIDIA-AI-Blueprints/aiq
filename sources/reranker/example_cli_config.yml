@@ -115,7 +115,6 @@ functions:
   # ========================================================================
   reranked_search:
     _type: reranked_search
-    llm: nemotron_nano_llm
     cross_encoder_model: nv-rerank-qa-mistral-4b:1
     search_tools:
       - web_search_tool
