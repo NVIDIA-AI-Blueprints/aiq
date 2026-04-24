@@ -206,6 +206,52 @@ general:
 | `redaction_headers` | Request headers checked to determine whether to redact. |
 | `resource_attributes` | Custom OTEL resource attributes attached to all spans. |
 
+### Request Classification Tags
+
+When the `aiq_api` auth middleware is enabled, request spans can include a set
+of low-risk request tags plus optional pseudonymous identity tags.
+
+Always-on request tags:
+
+- `aiq.caller.type` -- resolved caller type from auth middleware
+- `aiq.auth.transport` -- `bearer`, `cookie`, or `none`
+- `aiq.auth.verified` -- whether the request resolved to a verified principal
+- `aiq.access.channel` -- inferred request channel or the explicit `X-AIQ-Access-Channel` header
+
+Optional pseudonymous tags:
+
+- `enduser.id`, `aiq.user.id`, `aiq.auth.type` -- controlled by `AIQ_TRACE_USER_IDENTITY_MODE`
+- `aiq.user.email`, `aiq.user.name` -- added only in `full` mode
+- `aiq.client.id` -- controlled by `AIQ_TRACE_CLIENT_ID_MODE=ip`
+
+Environment variables:
+
+- `AIQ_TRACE_USER_IDENTITY_MODE=none|id|full`
+- `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET=<secret>`
+- `AIQ_TRACE_CLIENT_ID_MODE=none|ip`
+- `AIQ_TRACE_CLIENT_ID_HMAC_SECRET=<secret>`
+- `AIQ_TRACE_CLIENT_IP_HEADERS=x-real-ip,x-forwarded-for`
+
+The `id` and `ip` modes emit HMAC-derived pseudonymous identifiers rather than
+raw subjects or raw IP addresses.
+
+### Access Channel Header
+
+Deployment-specific wrappers can set the optional request header
+`X-AIQ-Access-Channel` to separate traffic sources without modifying public
+middleware. Supported values are:
+
+- `ui`
+- `skill`
+- `api`
+- `headless`
+- `anonymous`
+- `internal`
+- `unknown`
+
+When absent, the middleware falls back to generic inference from auth transport
+and request shape.
+
 ### Batch Configuration
 
 The exporter supports standard OTEL batch settings:

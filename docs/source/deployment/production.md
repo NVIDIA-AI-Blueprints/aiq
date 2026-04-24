@@ -120,6 +120,19 @@ Set `LOG_LEVEL=DEBUG` for verbose output during troubleshooting. Use `LOG_LEVEL=
 
 The backend supports OpenTelemetry-compatible tracing. See [Observability](./observability.md) for setup guides covering Phoenix, LangSmith, Weave, and the OTEL Collector with privacy redaction.
 
+If you are deploying the `aiq_api` front-end and want request correlation in
+traces, set the relevant environment variables at deploy time rather than
+hardcoding them in code:
+
+- `AIQ_TRACE_USER_IDENTITY_MODE`
+- `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET`
+- `AIQ_TRACE_CLIENT_ID_MODE`
+- `AIQ_TRACE_CLIENT_ID_HMAC_SECRET`
+- `AIQ_TRACE_CLIENT_IP_HEADERS`
+
+Deployment-specific wrappers may also set `X-AIQ-Access-Channel` to distinguish
+UI, skill, and API traffic at the request level.
+
 ### Metrics to Watch
 
 | Metric | Source | What to look for |

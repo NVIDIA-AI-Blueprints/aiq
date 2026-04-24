@@ -78,6 +78,16 @@ general:
 | `front_end.expiry_seconds` | `int` | `86400` | How long completed jobs remain in the database (seconds). |
 | `front_end.cors` | `object` | -- | CORS settings for the API server. |
 
+For `aiq_api`, request-trace enrichment is configured via environment variables
+rather than YAML fields. See `frontends/aiq_api/README.md` and the
+[Observability](../deployment/observability.md) guide for:
+
+- `AIQ_TRACE_USER_IDENTITY_MODE`
+- `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET`
+- `AIQ_TRACE_CLIENT_ID_MODE`
+- `AIQ_TRACE_CLIENT_ID_HMAC_SECRET`
+- `AIQ_TRACE_CLIENT_IP_HEADERS`
+
 ---
 
 ## `llms` Section

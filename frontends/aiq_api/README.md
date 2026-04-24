@@ -198,6 +198,11 @@ is disabled by default and opt-in via the `REQUIRE_AUTH` environment variable.
 | Variable | Purpose | Default |
 |----------|---------|---------|
 | `REQUIRE_AUTH` | Enforce authentication on all non-exempt routes | `false` |
+| `AIQ_TRACE_USER_IDENTITY_MODE` | Control whether verified user identity is attached to request traces: `none`, `id`, or `full` | `none` |
+| `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET` | Secret used to pseudonymize verified user IDs in traces when identity tagging is enabled | unset |
+| `AIQ_TRACE_CLIENT_ID_MODE` | Control whether a pseudonymous client identifier is attached to request traces: `none` or `ip` | `none` |
+| `AIQ_TRACE_CLIENT_ID_HMAC_SECRET` | Secret used to pseudonymize client IDs when client tagging is enabled; falls back to the user-identity secret | unset |
+| `AIQ_TRACE_CLIENT_IP_HEADERS` | Ordered comma-separated client IP headers to trust before falling back to the ASGI client address | `x-real-ip,x-forwarded-for` |
 
 ### Enabling authentication
 
@@ -206,6 +211,59 @@ starts.  The server raises a `RuntimeError` at startup if auth is required but
 no validators are registered.
 
 Two registration mechanisms are supported — pick whichever fits your deployment:
+
+### Trace identity tagging
+
+Auth middleware can enrich active Datadog / OpenTelemetry request spans with
+low-risk request tags and optional pseudonymous identity tags.
+
+Always-on request tags:
+
+- `aiq.caller.type`: resolved caller type from the auth middleware
+- `aiq.auth.transport`: `bearer`, `cookie`, or `none`
+- `aiq.auth.verified`: whether the request resolved to a verified principal
+- `aiq.access.channel`: inferred or explicitly supplied access channel
+
+Optional user identity tags are controlled by `AIQ_TRACE_USER_IDENTITY_MODE`:
+
+- `none`: disable user identity tagging entirely
+- `id`: tag only pseudonymous stable identifiers (`enduser.id`, `aiq.user.id`, `aiq.auth.type`)
+- `full`: tag pseudonymous identifiers plus `aiq.user.email` and `aiq.user.name` when present
+
+Only verified principals are tagged. Anonymous, internal, and unverified JWT
+fallback callers are never attached to traces.
+Set `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET` when using `id` or `full`; otherwise
+identity tagging is skipped.
+
+Optional client correlation is controlled by `AIQ_TRACE_CLIENT_ID_MODE`:
+
+- `none`: disable client correlation
+- `ip`: add `aiq.client.id` as an HMAC-derived pseudonymous identifier from the
+  client IP
+
+Set `AIQ_TRACE_CLIENT_ID_HMAC_SECRET` when using `ip`. If unset, the middleware
+falls back to `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET`. `AIQ_TRACE_CLIENT_IP_HEADERS`
+controls which ingress headers are consulted first.
+
+### Access Channel Header
+
+Upstream middleware accepts an optional low-cardinality request header:
+
+- `X-AIQ-Access-Channel: <channel>`
+
+Supported values are:
+
+- `ui`
+- `skill`
+- `api`
+- `headless`
+- `anonymous`
+- `internal`
+- `unknown`
+
+When absent, the middleware falls back to generic inference from auth transport
+and request shape. Deployment-specific wrappers can set this header explicitly
+to separate UI, skill, and API traffic without modifying public middleware.
 
 #### 1. Programmatic (`register_validator`)
 

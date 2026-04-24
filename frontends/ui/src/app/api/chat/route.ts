@@ -16,6 +16,8 @@ import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { isAuthRequired } from '@/adapters/auth/config'
 
+const ACCESS_CHANNEL_HEADER = 'X-AIQ-Access-Channel'
+
 const getBackendUrl = (): string => {
   const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
   return url.replace(/\/$/, '')
@@ -48,6 +50,7 @@ export async function POST(req: Request): Promise<Response> {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        [ACCESS_CHANNEL_HEADER]: 'ui',
         ...(authToken ? { Authorization: authToken } : {}),
         // Forward the idToken cookie to the backend
         ...(idToken ? { Cookie: `idToken=${idToken}` } : {}),

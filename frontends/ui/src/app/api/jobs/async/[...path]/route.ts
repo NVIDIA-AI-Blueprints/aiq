@@ -28,6 +28,8 @@ import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
 import { isAuthRequired } from '@/adapters/auth/config'
 
+const ACCESS_CHANNEL_HEADER = 'X-AIQ-Access-Channel'
+
 const getBackendUrl = (): string => {
   const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
   return url.replace(/\/$/, '')
@@ -52,7 +54,7 @@ const buildBackendUrl = (path: string[]): string => {
 const getAuthHeaders = async (req: Request, pathSegments: string[]): Promise<Record<string, string>> => {
   // Skip auth when REQUIRE_AUTH=false - don't forward any auth info to backend
   if (!isAuthRequired()) {
-    return {}
+    return { [ACCESS_CHANNEL_HEADER]: 'ui' }
   }
 
   // Only allow query token for stream paths (EventSource can't set headers).
@@ -73,6 +75,7 @@ const getAuthHeaders = async (req: Request, pathSegments: string[]): Promise<Rec
   const idToken = cookieIdToken || queryToken
 
   return {
+    [ACCESS_CHANNEL_HEADER]: 'ui',
     ...(authToken ? { Authorization: authToken } : {}),
     // Forward the idToken cookie to the backend
     ...(idToken ? { Cookie: `idToken=${idToken}` } : {}),
