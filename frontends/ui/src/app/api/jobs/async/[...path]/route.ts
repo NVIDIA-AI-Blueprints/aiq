@@ -26,9 +26,8 @@
 
 import { NextResponse } from 'next/server'
 import { cookies } from 'next/headers'
+import { ACCESS_CHANNEL_HEADER } from '@/adapters/auth/constants'
 import { isAuthRequired } from '@/adapters/auth/config'
-
-const ACCESS_CHANNEL_HEADER = 'X-AIQ-Access-Channel'
 
 const getBackendUrl = (): string => {
   const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'

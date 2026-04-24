@@ -741,6 +741,39 @@ class TestAuthMiddlewareInternal:
         assert span_tags["aiq.access.channel"] == "skill"
 
     @pytest.mark.asyncio
+    async def test_explicit_access_channel_ignored_for_external_anonymous_request(self, capture_asgi, external_host):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/health",
+            host=external_host,
+            extra_headers=[(b"x-aiq-access-channel", b"internal")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"AIQ_TRACE_USER_IDENTITY_MODE": "none", "AIQ_TRACE_CLIENT_ID_MODE": "none"},
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[], require_auth=False, external_hostnames={external_host.decode()})
+            await mw(scope, AsyncMock(), send)
+
+        assert span_tags["aiq.access.channel"] == "anonymous"
+
+    @pytest.mark.asyncio
     async def test_client_ip_mode_adds_pseudonymous_client_id(self, capture_asgi):
         app, _state = capture_asgi
         span_tags: dict[str, str] = {}

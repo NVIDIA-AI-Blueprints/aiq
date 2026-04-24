@@ -168,8 +168,11 @@ def _extract_client_ip(headers: dict[bytes, bytes], scope: Scope, header_names: 
     return None
 
 
-def _extract_explicit_access_channel(headers: dict[bytes, bytes]) -> str | None:
+def _extract_explicit_access_channel(headers: dict[bytes, bytes], *, allow_override: bool) -> str | None:
     """Return an explicit low-cardinality access-channel override header when present."""
+    if not allow_override:
+        return None
+
     value = _extract_header_text(headers, "x-aiq-access-channel")
     if not value:
         return None
@@ -180,9 +183,15 @@ def _extract_explicit_access_channel(headers: dict[bytes, bytes]) -> str | None:
     return None
 
 
-def _infer_access_channel(headers: dict[bytes, bytes], user: dict[str, Any], auth_transport: str) -> str:
+def _infer_access_channel(
+    headers: dict[bytes, bytes],
+    user: dict[str, Any],
+    auth_transport: str,
+    *,
+    allow_explicit_override: bool,
+) -> str:
     """Infer a low-cardinality access channel for observability."""
-    if explicit := _extract_explicit_access_channel(headers):
+    if explicit := _extract_explicit_access_channel(headers, allow_override=allow_explicit_override):
         return explicit
 
     caller_type = str(user.get("type") or "")
@@ -244,6 +253,7 @@ def _build_common_trace_tags(
     scope: Scope,
     user: dict[str, Any],
     *,
+    trust_access_channel_override: bool,
     client_id_mode: str,
     client_id_secret: str | None,
     client_ip_headers: list[str],
@@ -254,7 +264,12 @@ def _build_common_trace_tags(
         "aiq.caller.type": str(user.get("type") or "unknown"),
         "aiq.auth.transport": auth_transport,
         "aiq.auth.verified": "true" if _is_verified_trace_user(user) else "false",
-        "aiq.access.channel": _infer_access_channel(headers, user, auth_transport),
+        "aiq.access.channel": _infer_access_channel(
+            headers,
+            user,
+            auth_transport,
+            allow_explicit_override=trust_access_channel_override,
+        ),
     }
 
     if client_id_mode == "ip":
@@ -309,6 +324,7 @@ def attach_request_to_active_trace(
     scope: Scope,
     user: dict[str, Any],
     *,
+    trust_access_channel_override: bool,
     user_identity_mode: str,
     user_identity_secret: str | None,
     client_id_mode: str,
@@ -320,6 +336,7 @@ def attach_request_to_active_trace(
         headers,
         scope,
         user,
+        trust_access_channel_override=trust_access_channel_override,
         client_id_mode=client_id_mode,
         client_id_secret=client_id_secret,
         client_ip_headers=client_ip_headers,

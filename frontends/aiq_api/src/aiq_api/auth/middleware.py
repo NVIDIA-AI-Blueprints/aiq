@@ -363,10 +363,13 @@ class AuthMiddleware:
         if "state" not in scope:
             scope["state"] = {}
         scope["state"]["user"] = user
+        is_external = self._is_external(headers)
+        trust_access_channel_override = (not is_external) or bool(user.get("sub"))
         attach_request_to_active_trace(
             headers,
             scope,
             user,
+            trust_access_channel_override=trust_access_channel_override,
             user_identity_mode=self._trace_user_identity_mode,
             user_identity_secret=self._trace_user_identity_secret,
             client_id_mode=self._trace_client_id_mode,
