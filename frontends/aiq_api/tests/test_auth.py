@@ -502,7 +502,7 @@ class TestAuthMiddlewareInternal:
                 os.environ,
                 {
                     "AIQ_TRACE_USER_IDENTITY_MODE": "full",
-                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",
+                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",  # pragma: allowlist secret
                 },
                 clear=False,
             ),
@@ -553,7 +553,7 @@ class TestAuthMiddlewareInternal:
                 os.environ,
                 {
                     "AIQ_TRACE_USER_IDENTITY_MODE": "id",
-                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",
+                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",  # pragma: allowlist secret
                 },
                 clear=False,
             ),
@@ -770,7 +770,7 @@ class TestAuthMiddlewareInternal:
                 {
                     "AIQ_TRACE_USER_IDENTITY_MODE": "none",
                     "AIQ_TRACE_CLIENT_ID_MODE": "ip",
-                    "AIQ_TRACE_CLIENT_ID_HMAC_SECRET": "client-secret",
+                    "AIQ_TRACE_CLIENT_ID_HMAC_SECRET": "client-secret",  # pragma: allowlist secret
                 },
                 clear=False,
             ),
@@ -816,7 +816,7 @@ class TestAuthMiddlewareInternal:
                 os.environ,
                 {
                     "AIQ_TRACE_USER_IDENTITY_MODE": "full",
-                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",
+                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",  # pragma: allowlist secret
                 },
                 clear=False,
             ),

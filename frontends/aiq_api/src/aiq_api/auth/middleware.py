@@ -423,7 +423,7 @@ async def resolve_request_user(
 
 def _build_trace_user_tags(user: dict[str, Any], mode: str, secret: str | None) -> dict[str, str]:
     """Return trace tags for verified user identities according to policy."""
-    if mode == "none":
+    if mode == "none" or not _is_verified_trace_user(user):
         return {}
 
     principal_sub = user.get("sub")
@@ -542,8 +542,6 @@ def attach_request_to_active_trace(
         client_ip_headers=client_ip_headers,
     )
     tags.update(_build_trace_user_tags(user, user_identity_mode, user_identity_secret))
-    if not tags:
-        return
 
     _tag_current_ddtrace_span(tags)
     _tag_current_otel_span(tags)
