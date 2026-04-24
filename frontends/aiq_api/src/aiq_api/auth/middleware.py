@@ -511,9 +511,6 @@ def _tag_current_otel_span(tags: dict[str, str]) -> None:
     except Exception:
         return
 
-    if span is None:
-        return
-
     for key, value in tags.items():
         try:
             span.set_attribute(key, value)
