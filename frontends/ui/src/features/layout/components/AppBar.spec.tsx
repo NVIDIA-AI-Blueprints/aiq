@@ -11,13 +11,21 @@ const mockToggleSessionsPanel = vi.fn()
 const mockOpenRightPanel = vi.fn()
 const mockCloseRightPanel = vi.fn()
 
+const mockState = () => ({
+  toggleSessionsPanel: mockToggleSessionsPanel,
+  rightPanel: null as string | null,
+  openRightPanel: mockOpenRightPanel,
+  closeRightPanel: mockCloseRightPanel,
+})
+
 vi.mock('../store', () => ({
-  useLayoutStore: () => ({
-    toggleSessionsPanel: mockToggleSessionsPanel,
-    rightPanel: null,
-    openRightPanel: mockOpenRightPanel,
-    closeRightPanel: mockCloseRightPanel,
-  }),
+  useLayoutStore: Object.assign(
+    vi.fn((selector?: (s: any) => any) => {
+      const state = mockState()
+      return selector ? selector(state) : state
+    }),
+    { getState: () => mockState() }
+  ),
 }))
 
 describe('AppBar', () => {

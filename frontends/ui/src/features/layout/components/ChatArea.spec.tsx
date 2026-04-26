@@ -13,15 +13,18 @@ const mockGetThinkingStepsForMessage = vi.fn((_messageId: string) => [] as { id:
 const mockChatThinking = vi.fn((_props: unknown) => <div data-testid="chat-thinking">Thinking...</div>)
 
 vi.mock('@/features/chat', () => ({
-  useChatStore: vi.fn(() => ({
-    currentConversation: { messages: [] },
-    isLoading: false,
-    isStreaming: false,
-    thinkingSteps: [],
-    respondToPrompt: mockRespondToPrompt,
-    dismissErrorCard: mockDismissErrorCard,
-    getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
-  })),
+  useChatStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      currentConversation: { messages: [] },
+      isLoading: false,
+      isStreaming: false,
+      thinkingSteps: [],
+      respondToPrompt: mockRespondToPrompt,
+      dismissErrorCard: mockDismissErrorCard,
+      getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
+    }
+    return selector ? selector(state) : state
+  }),
   AgentPrompt: ({ content }: { content: string }) => (
     <div data-testid="agent-prompt">{content}</div>
   ),
@@ -70,17 +73,20 @@ describe('ChatArea', () => {
   })
 
   test('renders user messages', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [{ id: 'msg-1', role: 'user', content: 'Hello world', messageType: 'user' }],
-      },
-      isLoading: false,
-      isStreaming: false,
-      thinkingSteps: [],
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-      getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
-    } as unknown as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [{ id: 'msg-1', role: 'user', content: 'Hello world', messageType: 'user' }],
+        },
+        isLoading: false,
+        isStreaming: false,
+        thinkingSteps: [],
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+        getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -88,25 +94,28 @@ describe('ChatArea', () => {
   })
 
   test('renders status messages', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          {
-            id: 'msg-1',
-            role: 'assistant',
-            content: 'Processing...',
-            messageType: 'status',
-            statusType: 'thinking',
-          },
-        ],
-      },
-      isLoading: false,
-      isStreaming: false,
-      thinkingSteps: [],
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-      getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
-    } as unknown as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: 'Processing...',
+              messageType: 'status',
+              statusType: 'thinking',
+            },
+          ],
+        },
+        isLoading: false,
+        isStreaming: false,
+        thinkingSteps: [],
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+        getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -115,23 +124,26 @@ describe('ChatArea', () => {
   })
 
   test('renders agent prompts', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          {
-            id: 'msg-1',
-            role: 'assistant',
-            content: 'Please provide more details',
-            messageType: 'prompt',
-            promptType: 'input',
-          },
-        ],
-      },
-      isLoading: false,
-      isStreaming: false,
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-    } as unknown as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: 'Please provide more details',
+              messageType: 'prompt',
+              promptType: 'input',
+            },
+          ],
+        },
+        isLoading: false,
+        isStreaming: false,
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -139,22 +151,25 @@ describe('ChatArea', () => {
   })
 
   test('renders agent responses', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          {
-            id: 'msg-1',
-            role: 'assistant',
-            content: 'Here is your answer',
-            messageType: 'agent_response',
-          },
-        ],
-      },
-      isLoading: false,
-      isStreaming: false,
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-    } as unknown as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: 'Here is your answer',
+              messageType: 'agent_response',
+            },
+          ],
+        },
+        isLoading: false,
+        isStreaming: false,
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -162,29 +177,32 @@ describe('ChatArea', () => {
   })
 
   test('renders file messages', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          {
-            id: 'msg-1',
-            role: 'assistant',
-            content: '',
-            messageType: 'file',
-            fileData: {
-              fileName: 'document.pdf',
-              fileSize: 1024,
-              fileStatus: 'success',
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: '',
+              messageType: 'file',
+              fileData: {
+                fileName: 'document.pdf',
+                fileSize: 1024,
+                fileStatus: 'success',
+              },
             },
-          },
-        ],
-      },
-      isLoading: false,
-      isStreaming: false,
-      thinkingSteps: [],
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-      getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
-    } as unknown as ReturnType<typeof useChatStore>)
+          ],
+        },
+        isLoading: false,
+        isStreaming: false,
+        thinkingSteps: [],
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+        getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -193,28 +211,31 @@ describe('ChatArea', () => {
   })
 
   test('renders error banners', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          {
-            id: 'msg-1',
-            role: 'assistant',
-            content: '',
-            messageType: 'error',
-            errorData: {
-              errorCode: 'E001',
-              errorMessage: 'Something went wrong',
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: '',
+              messageType: 'error',
+              errorData: {
+                errorCode: 'E001',
+                errorMessage: 'Something went wrong',
+              },
             },
-          },
-        ],
-      },
-      isLoading: false,
-      isStreaming: false,
-      thinkingSteps: [],
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-      getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
-    } as unknown as ReturnType<typeof useChatStore>)
+          ],
+        },
+        isLoading: false,
+        isStreaming: false,
+        thinkingSteps: [],
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+        getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -222,22 +243,25 @@ describe('ChatArea', () => {
   })
 
   test('does not render assistant messages (full reports)', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          {
-            id: 'msg-1',
-            role: 'assistant',
-            content: 'Full report content',
-            messageType: 'assistant',
-          },
-        ],
-      },
-      isLoading: false,
-      isStreaming: false,
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-    } as unknown as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: 'Full report content',
+              messageType: 'assistant',
+            },
+          ],
+        },
+        isLoading: false,
+        isStreaming: false,
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -253,13 +277,16 @@ describe('ChatArea', () => {
   })
 
   test('handles null currentConversation', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: null,
-      isLoading: false,
-      isStreaming: false,
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-    } as unknown as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: null,
+        isLoading: false,
+        isStreaming: false,
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -268,26 +295,29 @@ describe('ChatArea', () => {
   })
 
   test('renders file upload banners', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          {
-            id: 'msg-1',
-            role: 'assistant',
-            content: '',
-            messageType: 'file_upload_status',
-            fileUploadStatusData: {
-              type: 'uploaded',
-              fileCount: 2,
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            {
+              id: 'msg-1',
+              role: 'assistant',
+              content: '',
+              messageType: 'file_upload_status',
+              fileUploadStatusData: {
+                type: 'uploaded',
+                fileCount: 2,
+              },
             },
-          },
-        ],
-      },
-      isLoading: false,
-      isStreaming: false,
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-    } as unknown as ReturnType<typeof useChatStore>)
+          ],
+        },
+        isLoading: false,
+        isStreaming: false,
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -301,21 +331,24 @@ describe('ChatArea', () => {
       return []
     })
 
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          { id: 'user-1', role: 'user', content: 'First question', messageType: 'user' },
-          { id: 'user-2', role: 'user', content: 'Second question', messageType: 'user' },
-          { id: 'answer-2', role: 'assistant', content: 'Second answer', messageType: 'agent_response' },
-        ],
-      },
-      isLoading: false,
-      isStreaming: false,
-      thinkingSteps: [],
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-      getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
-    } as unknown as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            { id: 'user-1', role: 'user', content: 'First question', messageType: 'user' },
+            { id: 'user-2', role: 'user', content: 'Second question', messageType: 'user' },
+            { id: 'answer-2', role: 'assistant', content: 'Second answer', messageType: 'agent_response' },
+          ],
+        },
+        isLoading: false,
+        isStreaming: false,
+        thinkingSteps: [],
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+        getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 
@@ -346,21 +379,24 @@ describe('ChatArea', () => {
       return []
     })
 
-    vi.mocked(useChatStore).mockReturnValue({
-      currentConversation: {
-        messages: [
-          { id: 'user-1', role: 'user', content: 'First question', messageType: 'user' },
-          { id: 'user-2', role: 'user', content: 'Second question', messageType: 'user' },
-        ],
-      },
-      isLoading: true,
-      isStreaming: true,
-      currentUserMessageId: 'user-2',
-      thinkingSteps: [],
-      respondToPrompt: mockRespondToPrompt,
-      dismissErrorCard: mockDismissErrorCard,
-      getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
-    } as unknown as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        currentConversation: {
+          messages: [
+            { id: 'user-1', role: 'user', content: 'First question', messageType: 'user' },
+            { id: 'user-2', role: 'user', content: 'Second question', messageType: 'user' },
+          ],
+        },
+        isLoading: true,
+        isStreaming: true,
+        currentUserMessageId: 'user-2',
+        thinkingSteps: [],
+        respondToPrompt: mockRespondToPrompt,
+        dismissErrorCard: mockDismissErrorCard,
+        getThinkingStepsForMessage: mockGetThinkingStepsForMessage,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ChatArea isAuthenticated={true} />)
 

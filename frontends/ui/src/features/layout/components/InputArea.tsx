@@ -16,9 +16,9 @@
 
 'use client'
 
-import { type FC, useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react'
+import { type FC, memo, useState, useCallback, useRef, useEffect, type KeyboardEvent } from 'react'
 import { Flex, Text, Button, TextArea, Banner, Popover } from '@/adapters/ui'
-import { useChat, useWebSocketChat, useChatStore, useIsCurrentSessionBusy } from '@/features/chat'
+import { useWebSocketChat, useChatStore, useIsCurrentSessionBusy } from '@/features/chat'
 import { useLayoutStore } from '../store'
 import { useAppConfig } from '@/shared/context'
 import { useFileUpload, useFileDragDrop, useFileUploadBanners } from '@/features/documents'
@@ -49,11 +49,11 @@ interface InputAreaProps {
  * - Uses respondToInteraction instead of sendMessage
  * - Shows visual indicator
  */
-export const InputArea: FC<InputAreaProps> = ({
+export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   placeholder = 'Check data sources and ask a research question...',
   isAuthenticated = false,
   connectionMode = 'sse',
-}) => {
+}) {
   const [message, setMessage] = useState('')
 
   // File input ref for attachment button
@@ -65,8 +65,7 @@ export const InputArea: FC<InputAreaProps> = ({
   // Check if current session is busy with operations
   const isBusy = useIsCurrentSessionBusy()
 
-  // Use appropriate hook based on connection mode
-  const sseChat = useChat()
+  // WebSocket chat hook for full HITL support
   const wsChat = useWebSocketChat({ autoConnect: connectionMode === 'websocket' })
 
   // Get current conversation for filtering files and ensureSession for auto-creation
@@ -174,9 +173,7 @@ export const InputArea: FC<InputAreaProps> = ({
     prevPendingCountRef.current = pendingCount
   }, [pendingCount, pendingFilesWarningActive, removeFileUploadWarning])
 
-  // Select the active hook's methods based on mode
-  const activeChat = connectionMode === 'websocket' ? wsChat : sseChat
-  const { sendMessage, isLoading, respondToInteraction, pendingInteraction } = activeChat
+  const { sendMessage, isLoading, respondToInteraction, pendingInteraction } = wsChat
 
   // Register respondToInteraction in the store so sibling components (e.g. AgentPrompt) can use it
   const setRespondToInteractionFn = useChatStore((state) => state.setRespondToInteractionFn)
@@ -185,16 +182,13 @@ export const InputArea: FC<InputAreaProps> = ({
     return () => setRespondToInteractionFn(null)
   }, [respondToInteraction, setRespondToInteractionFn])
 
-  // Layout store for opening data sources panel
-  const {
-    rightPanel,
-    openRightPanel,
-    closeRightPanel,
-    setDataSourcesPanelTab,
-    enabledDataSourceIds,
-    knowledgeLayerAvailable,
-    availableDataSources,
-  } = useLayoutStore()
+  // Layout store — individual selectors for minimal re-render surface
+  const enabledDataSourceIds = useLayoutStore((s) => s.enabledDataSourceIds)
+  const knowledgeLayerAvailable = useLayoutStore((s) => s.knowledgeLayerAvailable)
+  const availableDataSources = useLayoutStore((s) => s.availableDataSources)
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
+  const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
 
   // Check if we're in response mode (responding to a HITL prompt)
   const isResponseMode = !!pendingInteraction
@@ -410,7 +404,7 @@ export const InputArea: FC<InputAreaProps> = ({
               kind="tertiary"
               size="tiny"
               onClick={() => {
-                if (rightPanel === 'data-sources') {
+                if (useLayoutStore.getState().rightPanel === 'data-sources') {
                   closeRightPanel()
                 } else {
                   setDataSourcesPanelTab('connections')
@@ -434,7 +428,7 @@ export const InputArea: FC<InputAreaProps> = ({
               kind="tertiary"
               size="tiny"
               onClick={() => {
-                if (rightPanel === 'data-sources') {
+                if (useLayoutStore.getState().rightPanel === 'data-sources') {
                   closeRightPanel()
                 } else {
                   setDataSourcesPanelTab('files')
@@ -541,4 +535,4 @@ export const InputArea: FC<InputAreaProps> = ({
       </Flex>
     </Flex>
   )
-}
+})

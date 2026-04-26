@@ -19,7 +19,8 @@
 
 'use client'
 
-import { useCallback, useRef, useEffect, useState } from 'react'
+import { useCallback, useRef, useEffect, useState, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   NATWebSocketClient,
   createNATWebSocketClient,
@@ -38,6 +39,7 @@ import { useDocumentsStore } from '@/features/documents/store'
 import { useAuth } from '@/adapters/auth'
 import { isLikelyAuthRelatedTransportError } from '../lib/transport-auth-signals'
 import type {
+  ChatMessage,
   Conversation,
   PromptType,
   PendingInteraction,
@@ -53,6 +55,9 @@ import {
   isFunctionStepName,
   formatPayload,
 } from '../lib/intermediate-step-parser'
+
+const EMPTY_MESSAGES: ChatMessage[] = []
+const EMPTY_CONVERSATIONS: Conversation[] = []
 
 /**
  * Map NAT/backend error codes to frontend ErrorCode for consistent UI display.
@@ -155,47 +160,56 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
 
   const { user, authRequired, error: authError } = useAuth()
 
-  // Chat store
+  // Chat store — reactive state only
   const {
     currentConversation,
+    conversations,
+    currentUserId,
     isStreaming,
     isLoading,
     thinkingSteps,
     reportContent,
     currentStatus,
     pendingInteraction,
-    addUserMessage,
-    addAgentResponse,
-    addAgentResponseWithMeta,
-    addThinkingStep,
-    appendToThinkingStep,
-    completeThinkingStep,
-    updateThinkingStepByFunctionName,
-    findThinkingStepByFunctionName,
-    addAgentPrompt,
-    addErrorCard,
-    dismissConnectionErrors,
-    setCurrentStatus,
-    setPendingInteraction,
-    clearPendingInteraction,
-    setLoading,
-    setStreaming,
-    clearReportContent,
-    createConversation: storeCreateConversation,
-    setCurrentUser,
-    getUserConversations,
-    selectConversation: storeSelectConversation,
-    respondToPrompt,
-    // Deep research SSE
-    startDeepResearch,
-    // Deep research banners
-    addDeepResearchBanner,
-    // Plan messages for PlanTab
-    addPlanMessage,
-    updatePlanMessageResponse,
-    // Conversation management
-    updateConversationTitle,
-  } = useChatStore()
+  } = useChatStore(useShallow((s) => ({
+    currentConversation: s.currentConversation,
+    conversations: s.conversations,
+    currentUserId: s.currentUserId,
+    isStreaming: s.isStreaming,
+    isLoading: s.isLoading,
+    thinkingSteps: s.thinkingSteps,
+    reportContent: s.reportContent,
+    currentStatus: s.currentStatus,
+    pendingInteraction: s.pendingInteraction,
+  })))
+
+  // Actions — stable references, individual selectors won't cause re-renders
+  const addUserMessage = useChatStore((s) => s.addUserMessage)
+  const addAgentResponse = useChatStore((s) => s.addAgentResponse)
+  const addAgentResponseWithMeta = useChatStore((s) => s.addAgentResponseWithMeta)
+  const addThinkingStep = useChatStore((s) => s.addThinkingStep)
+  const appendToThinkingStep = useChatStore((s) => s.appendToThinkingStep)
+  const completeThinkingStep = useChatStore((s) => s.completeThinkingStep)
+  const updateThinkingStepByFunctionName = useChatStore((s) => s.updateThinkingStepByFunctionName)
+  const findThinkingStepByFunctionName = useChatStore((s) => s.findThinkingStepByFunctionName)
+  const addAgentPrompt = useChatStore((s) => s.addAgentPrompt)
+  const addErrorCard = useChatStore((s) => s.addErrorCard)
+  const dismissConnectionErrors = useChatStore((s) => s.dismissConnectionErrors)
+  const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
+  const setPendingInteraction = useChatStore((s) => s.setPendingInteraction)
+  const clearPendingInteraction = useChatStore((s) => s.clearPendingInteraction)
+  const setLoading = useChatStore((s) => s.setLoading)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const clearReportContent = useChatStore((s) => s.clearReportContent)
+  const storeCreateConversation = useChatStore((s) => s.createConversation)
+  const setCurrentUser = useChatStore((s) => s.setCurrentUser)
+  const storeSelectConversation = useChatStore((s) => s.selectConversation)
+  const respondToPrompt = useChatStore((s) => s.respondToPrompt)
+  const startDeepResearch = useChatStore((s) => s.startDeepResearch)
+  const addDeepResearchBanner = useChatStore((s) => s.addDeepResearchBanner)
+  const addPlanMessage = useChatStore((s) => s.addPlanMessage)
+  const updatePlanMessageResponse = useChatStore((s) => s.updatePlanMessageResponse)
+  const updateConversationTitle = useChatStore((s) => s.updateConversationTitle)
 
   // Sync authenticated user ID to store when auth state changes
   useEffect(() => {
@@ -804,8 +818,11 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     [storeSelectConversation]
   )
 
-  // Get user's filtered conversations
-  const userConversations = getUserConversations()
+  const messages = currentConversation?.messages ?? EMPTY_MESSAGES
+  const userConversations = useMemo(
+    () => (currentUserId ? conversations.filter((c) => c.userId === currentUserId) : EMPTY_CONVERSATIONS),
+    [conversations, currentUserId]
+  )
 
   return {
     sendMessage,
@@ -815,7 +832,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     isConnected,
     isStreaming,
     isLoading,
-    messages: currentConversation?.messages ?? [],
+    messages,
     conversation: currentConversation,
     createConversation,
     userConversations,

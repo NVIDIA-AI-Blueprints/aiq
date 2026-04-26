@@ -7,11 +7,14 @@ import { ReportTab } from './ReportTab'
 
 // Mock the chat store
 vi.mock('@/features/chat', () => ({
-  useChatStore: vi.fn(() => ({
-    reportContent: '',
-    isStreaming: false,
-    currentStatus: null,
-  })),
+  useChatStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      reportContent: '',
+      isStreaming: false,
+      currentStatus: null,
+    }
+    return selector ? selector(state) : state
+  }),
 }))
 
 // Mock MarkdownRenderer
@@ -41,11 +44,14 @@ describe('ReportTab', () => {
   })
 
   test('renders report content via MarkdownRenderer', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      reportContent: '# Report Title\n\nReport content here',
-      isStreaming: false,
-      currentStatus: null,
-    } as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent: '# Report Title\n\nReport content here',
+        isStreaming: false,
+        currentStatus: null,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ReportTab />)
 
@@ -53,11 +59,14 @@ describe('ReportTab', () => {
   })
 
   test('renders title when provided', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      reportContent: 'Some content',
-      isStreaming: false,
-      currentStatus: null,
-    } as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent: 'Some content',
+        isStreaming: false,
+        currentStatus: null,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ReportTab />)
 
@@ -65,11 +74,14 @@ describe('ReportTab', () => {
   })
 
   test('shows generating indicator when streaming and writing', () => {
-    vi.mocked(useChatStore).mockReturnValue({
-      reportContent: 'Partial content...',
-      isStreaming: true,
-      currentStatus: 'writing',
-    } as ReturnType<typeof useChatStore>)
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent: 'Partial content...',
+        isStreaming: true,
+        currentStatus: 'writing',
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<ReportTab />)
 

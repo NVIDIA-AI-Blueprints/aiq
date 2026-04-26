@@ -63,7 +63,8 @@ vi.mock('@/shared/context', () => ({
 }))
 
 vi.mock('../store', () => ({
-  useDocumentsStore: () => mockDocumentsStoreState,
+  useDocumentsStore: (selector?: (state: typeof mockDocumentsStoreState) => unknown) =>
+    selector ? selector(mockDocumentsStoreState) : mockDocumentsStoreState,
 }))
 
 vi.mock('@/features/chat', () => {

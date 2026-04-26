@@ -13,6 +13,7 @@
 'use client'
 
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   createDeepResearchClient,
   cancelJob,
@@ -78,37 +79,37 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
   // Note: idToken is used for backend auth, not accessToken
   const { idToken, authRequired, error: authError } = useAuth()
 
-  // Chat store state and actions
-  const {
-    deepResearchJobId,
-    isDeepResearchStreaming,
-    deepResearchStatus,
-    updateDeepResearchStatus,
-    completeDeepResearch,
-    addDeepResearchCitation,
-    setReportContent,
-    addThinkingStep,
-    appendToThinkingStep,
-    completeThinkingStep,
-    setCurrentStatus,
-    setStreaming,
-    setDeepResearchTodos,
-    stopAllDeepResearchSpinners,
-    // New dedicated actions for ThinkingTab sub-tabs
-    addDeepResearchLLMStep,
-    appendToDeepResearchLLMStep,
-    completeDeepResearchLLMStep,
-    addDeepResearchAgentWithId,
-    completeDeepResearchAgent,
-    addDeepResearchToolCall,
-    completeDeepResearchToolCall,
-    addDeepResearchFile,
-    // Actions for message patching
-    patchConversationMessage,
-    // Actions for deep research banners
-    addDeepResearchBanner,
-    setStreamLoaded,
-  } = useChatStore()
+  // Chat store — reactive state only
+  const { deepResearchJobId, isDeepResearchStreaming, deepResearchStatus } =
+    useChatStore(useShallow((s) => ({
+      deepResearchJobId: s.deepResearchJobId,
+      isDeepResearchStreaming: s.isDeepResearchStreaming,
+      deepResearchStatus: s.deepResearchStatus,
+    })))
+
+  // Actions — stable references, won't trigger re-renders
+  const updateDeepResearchStatus = useChatStore((s) => s.updateDeepResearchStatus)
+  const completeDeepResearch = useChatStore((s) => s.completeDeepResearch)
+  const addDeepResearchCitation = useChatStore((s) => s.addDeepResearchCitation)
+  const setReportContent = useChatStore((s) => s.setReportContent)
+  const addThinkingStep = useChatStore((s) => s.addThinkingStep)
+  const appendToThinkingStep = useChatStore((s) => s.appendToThinkingStep)
+  const completeThinkingStep = useChatStore((s) => s.completeThinkingStep)
+  const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const setDeepResearchTodos = useChatStore((s) => s.setDeepResearchTodos)
+  const stopAllDeepResearchSpinners = useChatStore((s) => s.stopAllDeepResearchSpinners)
+  const addDeepResearchLLMStep = useChatStore((s) => s.addDeepResearchLLMStep)
+  const appendToDeepResearchLLMStep = useChatStore((s) => s.appendToDeepResearchLLMStep)
+  const completeDeepResearchLLMStep = useChatStore((s) => s.completeDeepResearchLLMStep)
+  const addDeepResearchAgentWithId = useChatStore((s) => s.addDeepResearchAgentWithId)
+  const completeDeepResearchAgent = useChatStore((s) => s.completeDeepResearchAgent)
+  const addDeepResearchToolCall = useChatStore((s) => s.addDeepResearchToolCall)
+  const completeDeepResearchToolCall = useChatStore((s) => s.completeDeepResearchToolCall)
+  const addDeepResearchFile = useChatStore((s) => s.addDeepResearchFile)
+  const patchConversationMessage = useChatStore((s) => s.patchConversationMessage)
+  const addDeepResearchBanner = useChatStore((s) => s.addDeepResearchBanner)
+  const setStreamLoaded = useChatStore((s) => s.setStreamLoaded)
 
   /**
    * Check if the current session owns the active deep research stream.
@@ -124,7 +125,8 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
   }, [])
 
   // Layout store for opening research panel
-  const { openRightPanel, setResearchPanelTab } = useLayoutStore()
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
 
   // Ref to track active thinking step IDs by name
   const activeStepIdsRef = useRef<Map<string, string>>(new Map())

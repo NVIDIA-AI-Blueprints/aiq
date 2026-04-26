@@ -15,7 +15,7 @@
 
 'use client'
 
-import { type FC, useCallback, useState } from 'react'
+import { type FC, memo, useCallback, useState } from 'react'
 import { Flex, Text, Button, Logo, Avatar, Popover, Divider } from '@/adapters/ui'
 import { Menu, Globe, Settings, Book, Lock, Logout, ChevronRight, Info } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
@@ -47,7 +47,7 @@ interface AppBarProps {
  * Main navigation bar at the top of the application.
  * Controls sidebar toggles and navigation actions.
  */
-export const AppBar: FC<AppBarProps> = ({
+export const AppBar: FC<AppBarProps> = memo(function AppBar({
   sessionTitle = 'New Session',
   isAuthenticated = false,
   authRequired = false,
@@ -56,8 +56,8 @@ export const AppBar: FC<AppBarProps> = ({
   isNewSessionDisabled = false,
   onSignIn,
   onSignOut,
-}) => {
-  const { toggleSessionsPanel, rightPanel, openRightPanel, closeRightPanel } = useLayoutStore()
+}) {
+  const toggleSessionsPanel = useLayoutStore((s) => s.toggleSessionsPanel)
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false)
 
   const handleMenuClick = useCallback(() => {
@@ -67,21 +67,23 @@ export const AppBar: FC<AppBarProps> = ({
 
   const handleAddSourcesClick = useCallback(() => {
     if (!isAuthenticated) return
+    const { rightPanel, closeRightPanel, openRightPanel } = useLayoutStore.getState()
     if (rightPanel === 'data-sources') {
       closeRightPanel()
     } else {
       openRightPanel('data-sources')
     }
-  }, [rightPanel, openRightPanel, closeRightPanel, isAuthenticated])
+  }, [isAuthenticated])
 
   const handleSettingsClick = useCallback(() => {
     if (!isAuthenticated) return
+    const { rightPanel, closeRightPanel, openRightPanel } = useLayoutStore.getState()
     if (rightPanel === 'settings') {
       closeRightPanel()
     } else {
       openRightPanel('settings')
     }
-  }, [rightPanel, openRightPanel, closeRightPanel, isAuthenticated])
+  }, [isAuthenticated])
 
   const handleDocsClick = useCallback(() => {
     window.open('https://github.com/NVIDIA-AI-Blueprints/aiq', '_blank')
@@ -253,7 +255,7 @@ export const AppBar: FC<AppBarProps> = ({
       </Flex>
     </header>
   )
-}
+})
 
 /**
  * User dropdown content with profile info and sign out button

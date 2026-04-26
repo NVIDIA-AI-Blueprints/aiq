@@ -28,7 +28,7 @@ type CitationFilter = 'referenced' | 'read'
  * Separates citations into "Cited" (used in report) and "Referenced" (discovered).
  */
 export const CitationsTab: FC = () => {
-  const { deepResearchCitations } = useChatStore()
+  const deepResearchCitations = useChatStore((s) => s.deepResearchCitations)
   const [filter, setFilter] = useState<CitationFilter>('referenced')
 
   const handleFilterChange = useCallback((value: string) => {

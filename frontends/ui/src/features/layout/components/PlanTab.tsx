@@ -16,6 +16,7 @@
 
 import { type FC } from 'react'
 import { Flex, Text } from '@/adapters/ui'
+import { useShallow } from 'zustand/react/shallow'
 import { Document } from '@/adapters/ui/icons'
 import { useChatStore } from '@/features/chat'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
@@ -33,7 +34,11 @@ const formatTime = (date: Date | string): string => {
  * Subscribes to planMessages from the chat store.
  */
 export const PlanTab: FC = () => {
-  const { planMessages, isStreaming, isLoading } = useChatStore()
+  const { planMessages, isStreaming, isLoading } = useChatStore(useShallow((s) => ({
+    planMessages: s.planMessages,
+    isStreaming: s.isStreaming,
+    isLoading: s.isLoading,
+  })))
 
   const isEmpty = planMessages.length === 0
   const isActive = isStreaming || isLoading

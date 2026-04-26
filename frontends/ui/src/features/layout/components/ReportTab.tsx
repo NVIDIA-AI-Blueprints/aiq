@@ -16,6 +16,7 @@
 
 import { type FC, type ReactNode } from 'react'
 import { Flex, Text } from '@/adapters/ui'
+import { useShallow } from 'zustand/react/shallow'
 import { Document } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
 import { useChatStore } from '@/features/chat'
@@ -32,7 +33,13 @@ interface ReportTabProps {
  * Renders research notes with a subtle preview treatment and the final report at full prominence.
  */
 export const ReportTab: FC<ReportTabProps> = ({ children }) => {
-  const { reportContent, reportContentCategory, isStreaming, currentStatus } = useChatStore()
+  const { reportContent, reportContentCategory, isStreaming, currentStatus } =
+    useChatStore(useShallow((s) => ({
+      reportContent: s.reportContent,
+      reportContentCategory: s.reportContentCategory,
+      isStreaming: s.isStreaming,
+      currentStatus: s.currentStatus,
+    })))
 
   const reportContentStr = typeof reportContent === 'string' ? reportContent : ''
   const isEmpty = !reportContentStr.trim()

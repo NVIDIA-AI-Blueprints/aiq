@@ -16,11 +16,15 @@
 
 'use client'
 
-import { useCallback, useRef, useEffect } from 'react'
+import { useCallback, useRef, useEffect, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { streamGenerate } from '@/adapters/api/chat-client'
 import { useChatStore } from '../store'
 import { useAuth } from '@/adapters/auth'
-import type { Conversation, StatusType, ThinkingStep, PendingInteraction } from '../types'
+import type { ChatMessage, Conversation, StatusType, ThinkingStep, PendingInteraction } from '../types'
+
+const EMPTY_MESSAGES: ChatMessage[] = []
+const EMPTY_CONVERSATIONS: Conversation[] = []
 
 interface UseChatReturn {
   /** Send a message and stream the response */
@@ -75,33 +79,45 @@ export const useChat = (): UseChatReturn => {
   // Ref to store the final report content for adding to chat on completion
   const finalReportContentRef = useRef<string | null>(null)
 
-  // Chat store
+  // Chat store — reactive state (only these cause re-renders)
   const {
     currentConversation,
+    conversations,
+    currentUserId,
     isStreaming,
     isLoading,
     thinkingSteps,
     reportContent,
     currentStatus,
-    addUserMessage,
-    addThinkingStep,
-    appendToThinkingStep,
-    completeThinkingStep,
-    setReportContent,
-    addStatusCard,
-    addAgentPrompt,
-    addAgentResponse,
-    addErrorCard,
-    setCurrentStatus,
-    setLoading,
-    setStreaming,
-    clearThinkingSteps,
-    clearReportContent,
-    createConversation: storeCreateConversation,
-    setCurrentUser,
-    getUserConversations,
-    selectConversation: storeSelectConversation,
-  } = useChatStore()
+  } = useChatStore(useShallow((s) => ({
+    currentConversation: s.currentConversation,
+    conversations: s.conversations,
+    currentUserId: s.currentUserId,
+    isStreaming: s.isStreaming,
+    isLoading: s.isLoading,
+    thinkingSteps: s.thinkingSteps,
+    reportContent: s.reportContent,
+    currentStatus: s.currentStatus,
+  })))
+
+  // Actions — stable references, won't cause re-renders
+  const addUserMessage = useChatStore((s) => s.addUserMessage)
+  const addThinkingStep = useChatStore((s) => s.addThinkingStep)
+  const appendToThinkingStep = useChatStore((s) => s.appendToThinkingStep)
+  const completeThinkingStep = useChatStore((s) => s.completeThinkingStep)
+  const setReportContent = useChatStore((s) => s.setReportContent)
+  const addStatusCard = useChatStore((s) => s.addStatusCard)
+  const addAgentPrompt = useChatStore((s) => s.addAgentPrompt)
+  const addAgentResponse = useChatStore((s) => s.addAgentResponse)
+  const addErrorCard = useChatStore((s) => s.addErrorCard)
+  const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
+  const setLoading = useChatStore((s) => s.setLoading)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const clearThinkingSteps = useChatStore((s) => s.clearThinkingSteps)
+  const clearReportContent = useChatStore((s) => s.clearReportContent)
+  const storeCreateConversation = useChatStore((s) => s.createConversation)
+  const setCurrentUser = useChatStore((s) => s.setCurrentUser)
+  const storeSelectConversation = useChatStore((s) => s.selectConversation)
 
   // Sync authenticated user ID to store when auth state changes
   useEffect(() => {
@@ -313,15 +329,18 @@ export const useChat = (): UseChatReturn => {
     )
   }, [])
 
-  // Get user's filtered conversations
-  const userConversations = getUserConversations()
+  const messages = currentConversation?.messages ?? EMPTY_MESSAGES
+  const userConversations = useMemo(
+    () => (currentUserId ? conversations.filter((c) => c.userId === currentUserId) : EMPTY_CONVERSATIONS),
+    [conversations, currentUserId]
+  )
 
   return {
     sendMessage,
     respondToInteraction,
     isStreaming,
     isLoading,
-    messages: currentConversation?.messages ?? [],
+    messages,
     conversation: currentConversation,
     createConversation,
     userConversations,

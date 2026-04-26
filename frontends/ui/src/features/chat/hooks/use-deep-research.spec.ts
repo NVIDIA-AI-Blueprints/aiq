@@ -55,36 +55,39 @@ let mockStoreState = {
 
 vi.mock('../store', () => ({
   useChatStore: Object.assign(
-    vi.fn(() => ({
-      ...mockStoreState,
-      updateDeepResearchStatus: mockUpdateDeepResearchStatus,
-      completeDeepResearch: mockCompleteDeepResearch,
-      addDeepResearchCitation: mockAddDeepResearchCitation,
-      setReportContent: mockSetReportContent,
-      addThinkingStep: mockAddThinkingStep,
-      appendToThinkingStep: mockAppendToThinkingStep,
-      completeThinkingStep: mockCompleteThinkingStep,
-      setCurrentStatus: mockSetCurrentStatus,
-      setStreaming: mockSetStreaming,
-      setDeepResearchTodos: mockSetDeepResearchTodos,
-      stopDeepResearchTodos: mockStopDeepResearchTodos,
-      stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
-      setDeepResearchLastEventId: mockSetDeepResearchLastEventId,
-      addDeepResearchLLMStep: mockAddDeepResearchLLMStep,
-      appendToDeepResearchLLMStep: mockAppendToDeepResearchLLMStep,
-      completeDeepResearchLLMStep: mockCompleteDeepResearchLLMStep,
-      addDeepResearchAgent: mockAddDeepResearchAgent,
-      addDeepResearchAgentWithId: mockAddDeepResearchAgentWithId,
-      completeDeepResearchAgent: mockCompleteDeepResearchAgent,
-      addDeepResearchToolCall: mockAddDeepResearchToolCall,
-      completeDeepResearchToolCall: mockCompleteDeepResearchToolCall,
-      addDeepResearchFile: mockAddDeepResearchFile,
-      addAgentResponse: mockAddAgentResponse,
-      patchConversationMessage: mockPatchConversationMessage,
-      persistDeepResearchToSession: mockPersistDeepResearchToSession,
-      addDeepResearchBanner: mockAddDeepResearchBanner,
-      setStreamLoaded: mockSetStreamLoaded,
-    })),
+    vi.fn((selector?: (s: any) => any) => {
+      const state = {
+        ...mockStoreState,
+        updateDeepResearchStatus: mockUpdateDeepResearchStatus,
+        completeDeepResearch: mockCompleteDeepResearch,
+        addDeepResearchCitation: mockAddDeepResearchCitation,
+        setReportContent: mockSetReportContent,
+        addThinkingStep: mockAddThinkingStep,
+        appendToThinkingStep: mockAppendToThinkingStep,
+        completeThinkingStep: mockCompleteThinkingStep,
+        setCurrentStatus: mockSetCurrentStatus,
+        setStreaming: mockSetStreaming,
+        setDeepResearchTodos: mockSetDeepResearchTodos,
+        stopDeepResearchTodos: mockStopDeepResearchTodos,
+        stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
+        setDeepResearchLastEventId: mockSetDeepResearchLastEventId,
+        addDeepResearchLLMStep: mockAddDeepResearchLLMStep,
+        appendToDeepResearchLLMStep: mockAppendToDeepResearchLLMStep,
+        completeDeepResearchLLMStep: mockCompleteDeepResearchLLMStep,
+        addDeepResearchAgent: mockAddDeepResearchAgent,
+        addDeepResearchAgentWithId: mockAddDeepResearchAgentWithId,
+        completeDeepResearchAgent: mockCompleteDeepResearchAgent,
+        addDeepResearchToolCall: mockAddDeepResearchToolCall,
+        completeDeepResearchToolCall: mockCompleteDeepResearchToolCall,
+        addDeepResearchFile: mockAddDeepResearchFile,
+        addAgentResponse: mockAddAgentResponse,
+        patchConversationMessage: mockPatchConversationMessage,
+        persistDeepResearchToSession: mockPersistDeepResearchToSession,
+        addDeepResearchBanner: mockAddDeepResearchBanner,
+        setStreamLoaded: mockSetStreamLoaded,
+      }
+      return selector ? selector(state) : state
+    }),
     {
       getState: vi.fn(() => ({
         ...mockStoreState,
@@ -111,10 +114,13 @@ const mockOpenRightPanel = vi.fn()
 const mockSetResearchPanelTab = vi.fn()
 
 vi.mock('@/features/layout/store', () => ({
-  useLayoutStore: vi.fn(() => ({
-    openRightPanel: mockOpenRightPanel,
-    setResearchPanelTab: mockSetResearchPanelTab,
-  })),
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      openRightPanel: mockOpenRightPanel,
+      setResearchPanelTab: mockSetResearchPanelTab,
+    }
+    return selector ? selector(state) : state
+  }),
 }))
 
 // Mock auth hook
