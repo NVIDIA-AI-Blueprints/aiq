@@ -6,7 +6,7 @@
  *
  * Chat input area at the bottom of the chat view.
  * Includes text input, tool buttons, and send action.
- * Supports both SSE (useChat) and WebSocket (useWebSocketChat) connections.
+ * Uses WebSocket (useWebSocketChat) for full HITL support.
  *
  * When there's a pending interaction (HITL prompt), the input switches
  * to response mode and uses respondToInteraction instead of sendMessage.
@@ -32,7 +32,7 @@ interface InputAreaProps {
   placeholder?: string
   /** Whether the user is authenticated */
   isAuthenticated?: boolean
-  /** Connection mode: 'sse' for SSE endpoint, 'websocket' for WebSocket (default: 'sse') */
+  /** Connection mode: 'websocket' auto-connects, 'sse' disables auto-connect (default: 'websocket') */
   connectionMode?: ConnectionMode
 }
 
@@ -40,9 +40,8 @@ interface InputAreaProps {
  * Chat input component with text area and action buttons.
  * Positioned at the bottom of the chat area.
  *
- * Supports two connection modes:
- * - 'sse': Uses SSE endpoint (/generate/stream) via useChat hook
- * - 'websocket': Uses WebSocket for full HITL support via useWebSocketChat hook
+ * Uses WebSocket connection for full HITL (human-in-the-loop) support.
+ * Set connectionMode='sse' to disable auto-connect (useful for testing).
  *
  * When pendingInteraction exists, input switches to response mode:
  * - Different placeholder text
@@ -52,7 +51,7 @@ interface InputAreaProps {
 export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   placeholder = 'Check data sources and ask a research question...',
   isAuthenticated = false,
-  connectionMode = 'sse',
+  connectionMode = 'websocket',
 }) {
   const [message, setMessage] = useState('')
 
