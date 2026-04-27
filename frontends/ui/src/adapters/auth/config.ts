@@ -103,6 +103,10 @@ const parsePositiveIntEnv = (envValue: string | undefined, defaultValue: number)
  * For deployments with long-running jobs (deep research with ECI can run
  * 20-40+ minutes), set TOKEN_REFRESH_BUFFER_MINUTES=30 or configure the
  * provider's tokenRefreshBufferSeconds.
+ *
+ * The UI session poll interval is derived from this value as
+ * max(60, TOKEN_REFRESH_BUFFER_SECONDS - 60), so changing the buffer also
+ * changes how often the browser asks NextAuth to refresh the session.
  */
 export const TOKEN_REFRESH_BUFFER_SECONDS =
   providerConfig.tokenRefreshBufferSeconds ??

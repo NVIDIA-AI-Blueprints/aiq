@@ -44,7 +44,7 @@ export const trackRumAction = (name: string, context: Record<string, unknown> = 
 // --- Auth-specific helpers ---
 
 /** Auth error codes that represent expected lifecycle events, not bugs. */
-const EXPECTED_AUTH_CODES = new Set(['token_expired', 'session_refresh_failed'])
+const EXPECTED_AUTH_CODES = new Set(['token_missing', 'token_expired', 'session_refresh_failed'])
 
 /**
  * Route an auth event to the appropriate RUM channel based on the error code.
