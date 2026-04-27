@@ -251,8 +251,8 @@ async def run_agent_job(
 
         _auth_token_reset = job_auth_token.set(auth_token)
 
-    from aiq_agent.observability.request_trace_injector import install_request_trace_span_injection
-    from aiq_agent.observability.request_trace_injector import request_trace_tag_context
+    from aiq_api.auth.request_trace import install_request_trace_span_injection
+    from aiq_api.auth.request_trace import request_trace_tag_context
 
     install_request_trace_span_injection()
 

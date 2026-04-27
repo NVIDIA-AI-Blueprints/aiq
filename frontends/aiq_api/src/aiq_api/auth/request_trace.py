@@ -50,12 +50,20 @@ def install_request_trace_span_injection() -> None:
 
     def patched_process_start_event(self, event) -> None:
         process_start_event(self, event)
+        tags = get_request_trace_tags()
+        if not tags:
+            return
+
         try:
             span = self._outstanding_spans.get(event.UUID)
         except Exception:
-            span = None
-        if span is not None:
-            _inject_request_trace_attributes(span)
+            logger.debug("Failed to look up NAT span for request trace tags", exc_info=True)
+            return
+        if span is None:
+            logger.debug("No NAT span found for request trace tag injection: %s", event.UUID)
+            return
+
+        _inject_request_trace_attributes(span)
 
     patched_process_start_event.__aiq_request_trace_patched__ = True
     SpanExporter._process_start_event = patched_process_start_event

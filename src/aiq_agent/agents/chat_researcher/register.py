@@ -33,7 +33,6 @@ from aiq_agent.common.citation_verification import set_session_registry
 from aiq_agent.observability.otel_header_redaction_exporter import (
     ensure_registered as _ensure_otel_redaction_registered,
 )
-from aiq_agent.observability.request_trace_injector import install_request_trace_span_injection
 from nat.builder.builder import Builder
 from nat.builder.context import Context
 from nat.builder.framework_enum import LLMFrameworkEnum
@@ -51,7 +50,6 @@ from .utils import _extract_query_and_sources
 logger = logging.getLogger(__name__)
 
 _ensure_otel_redaction_registered()
-install_request_trace_span_injection()
 
 
 ########################################################

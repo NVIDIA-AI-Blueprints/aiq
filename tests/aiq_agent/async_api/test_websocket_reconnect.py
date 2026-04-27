@@ -29,6 +29,7 @@ from starlette.websockets import WebSocketDisconnect
 
 from aiq_api import websocket_reconnect
 from aiq_api.auth.middleware import get_current_user
+from aiq_api.auth.request_trace import get_request_trace_tags
 from aiq_api.websocket_reconnect import ReconnectableWebSocketMessageHandler
 from aiq_api.websocket_reconnect import WebSocketSessionRegistry
 from aiq_api.websocket_reconnect import authenticate_websocket_connection
@@ -748,3 +749,51 @@ async def test_run_workflow_binds_authenticated_user_context(monkeypatch) -> Non
     await handler._run_workflow(payload="hello", conversation_id="conv-1")
 
     assert seen_users == [{"type": "starfleet", "sub": "user-1", "skip_clarifier": False}]
+
+
+@pytest.mark.asyncio
+async def test_process_workflow_request_binds_request_trace_tags(monkeypatch) -> None:
+    configure_websocket_auth(validators=[], require_auth=False, external_hostnames={"localhost"})
+    socket = DummySocket(headers=[(b"host", b"localhost"), (b"cookie", b"idToken=test-token")])
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
+    )
+    handler._authenticated_user = {"type": "starfleet", "sub": "user-1", "skip_clarifier": False}
+    user_message = WebSocketUserMessage(
+        type=WebSocketMessageType.USER_MESSAGE,
+        schema_type=WorkflowSchemaType.CHAT_STREAM,
+        id="msg-1",
+        conversation_id="conv-1",
+        content=UserMessageContent(
+            messages=[
+                UserMessages(
+                    role=UserMessageContentRoleType.USER,
+                    content=[TextContent(text="hello")],
+                )
+            ]
+        ),
+    )
+    seen_tags: list[dict[str, str]] = []
+
+    async def fake_process_workflow_request(_self, _message):
+        seen_tags.append(get_request_trace_tags())
+
+    monkeypatch.setattr(
+        websocket_reconnect.WebSocketMessageHandler,
+        "process_workflow_request",
+        fake_process_workflow_request,
+    )
+
+    await handler.process_workflow_request(user_message)
+
+    assert seen_tags == [
+        {
+            "aiq.caller.type": "starfleet",
+            "aiq.auth.transport": "cookie",
+            "aiq.auth.verified": "true",
+            "aiq.access.channel": "ui",
+        }
+    ]

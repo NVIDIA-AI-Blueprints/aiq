@@ -99,16 +99,17 @@ from starlette.types import Receive
 from starlette.types import Scope
 from starlette.types import Send
 
-from aiq_agent.observability.request_trace_injector import get_request_trace_tags
-from aiq_agent.observability.request_trace_injector import request_trace_tag_context
-
 from . import utils as auth_utils
+from .request_trace import get_request_trace_tags
+from .request_trace import install_request_trace_span_injection
+from .request_trace import request_trace_tag_context
 from .utils import _load_trace_client_id_mode
 from .utils import _load_trace_client_id_secret
 from .utils import _load_trace_client_ip_headers
 from .utils import _load_trace_user_identity_mode
 from .utils import _load_trace_user_identity_secret
 from .utils import attach_request_to_active_trace
+from .utils import build_request_trace_tags as _build_request_trace_tags
 from .utils import is_headless_request
 
 logger = logging.getLogger(__name__)
@@ -148,6 +149,29 @@ def user_context(user: dict[str, Any]):
         yield
     finally:
         _current_user.reset(token)
+
+
+def build_request_trace_tags(
+    headers: dict[bytes, bytes],
+    scope: Scope,
+    user: dict[str, Any],
+    *,
+    external_hostnames: set[str] | None = None,
+) -> dict[str, str]:
+    """Build request trace tags using the same policy as ``AuthMiddleware``."""
+    is_external = is_external_request(headers, external_hostnames)
+    trust_access_channel_override = (not is_external) or bool(user.get("sub"))
+    return _build_request_trace_tags(
+        headers,
+        scope,
+        user,
+        trust_access_channel_override=trust_access_channel_override,
+        user_identity_mode=_load_trace_user_identity_mode(),
+        user_identity_secret=_load_trace_user_identity_secret(),
+        client_id_mode=_load_trace_client_id_mode(),
+        client_id_secret=_load_trace_client_id_secret(),
+        client_ip_headers=_load_trace_client_ip_headers(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -296,6 +320,7 @@ class AuthMiddleware:
         self._trace_client_id_mode: str = _load_trace_client_id_mode()
         self._trace_client_id_secret: str | None = _load_trace_client_id_secret()
         self._trace_client_ip_headers: list[str] = _load_trace_client_ip_headers()
+        install_request_trace_span_injection()
 
         if require_auth and not self._validators:
             logger.warning(
