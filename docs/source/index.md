@@ -82,6 +82,13 @@ Benchmarks <./evaluation/benchmarks/index.md>
 
 ```{toctree}
 :hidden:
+:caption: Profiling
+
+Profiling & Cost Analysis <./profiling/index.md>
+```
+
+```{toctree}
+:hidden:
 :caption: Deployment
 
 Overview <./deployment/index.md>

@@ -62,21 +62,24 @@ vi.mock('@/adapters/api', () => ({
 
 vi.mock('../store', () => ({
   useChatStore: Object.assign(
-    vi.fn(() => ({
-      setReportContent: mockSetReportContent,
-      addDeepResearchToolCall: mockAddDeepResearchToolCall,
-      completeDeepResearchToolCall: mockCompleteDeepResearchToolCall,
-      clearDeepResearch: mockClearDeepResearch,
-      setCurrentStatus: mockSetCurrentStatus,
-      setLoadedJobId: mockSetLoadedJobId,
-      setStreamLoaded: mockSetStreamLoaded,
-      stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
-      addErrorCard: mockAddErrorCard,
-      completeDeepResearch: mockCompleteDeepResearch,
-      setStreaming: mockSetStreaming,
-      patchConversationMessage: mockPatchConversationMessage,
-      addDeepResearchBanner: mockAddDeepResearchBanner,
-    })),
+    vi.fn((selector?: (s: any) => any) => {
+      const state = {
+        setReportContent: mockSetReportContent,
+        addDeepResearchToolCall: mockAddDeepResearchToolCall,
+        completeDeepResearchToolCall: mockCompleteDeepResearchToolCall,
+        clearDeepResearch: mockClearDeepResearch,
+        setCurrentStatus: mockSetCurrentStatus,
+        setLoadedJobId: mockSetLoadedJobId,
+        setStreamLoaded: mockSetStreamLoaded,
+        stopAllDeepResearchSpinners: mockStopAllDeepResearchSpinners,
+        addErrorCard: mockAddErrorCard,
+        completeDeepResearch: mockCompleteDeepResearch,
+        setStreaming: mockSetStreaming,
+        patchConversationMessage: mockPatchConversationMessage,
+        addDeepResearchBanner: mockAddDeepResearchBanner,
+      }
+      return selector ? selector(state) : state
+    }),
     {
       getState: vi.fn(() => mockStoreState),
     }
@@ -90,10 +93,13 @@ vi.mock('@/adapters/auth', () => ({
 }))
 
 vi.mock('@/features/layout/store', () => ({
-  useLayoutStore: vi.fn(() => ({
-    openRightPanel: mockOpenRightPanel,
-    setResearchPanelTab: mockSetResearchPanelTab,
-  })),
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      openRightPanel: mockOpenRightPanel,
+      setResearchPanelTab: mockSetResearchPanelTab,
+    }
+    return selector ? selector(state) : state
+  }),
 }))
 
 describe('useLoadJobData', () => {

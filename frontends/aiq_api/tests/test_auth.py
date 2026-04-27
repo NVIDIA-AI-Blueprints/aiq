@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import json
 import os
+import sys
+import types
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -419,30 +421,32 @@ class TestAuthMiddlewareAuthFlow:
 
 class TestAuthMiddlewareInternal:
     @pytest.mark.asyncio
-    async def test_internal_sets_jwt_user_for_bearer_jwt(self, capture_asgi):
+    async def test_internal_validates_bearer_jwt_when_validator_accepts(self, capture_asgi):
         app, state = capture_asgi
-        mw = AuthMiddleware(app, require_auth=True, external_hostnames=set())
-        token = middleware_module._current_user.set({})
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-1", "token": "good"})
+        mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
 
         async def send(msg):
             pass
 
-        try:
-            scope = _http_scope(
-                "/any/path",
-                extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
-            )
-            await mw(scope, AsyncMock(), send)
-        finally:
-            middleware_module._current_user.reset(token)
+        scope = _http_scope(
+            "/any/path",
+            extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
+        )
+        await mw(scope, AsyncMock(), send)
 
-        assert state["user"]["type"] == "jwt"
-        assert state["user"]["token"] == "eyJhbGciOiJIUzI1NiJ9.x.y"
+        assert state["user"]["type"] == "oidc"
+        assert state["user"]["sub"] == "user-1"
 
     @pytest.mark.asyncio
-    async def test_internal_idtoken_cookie(self, capture_asgi):
+    async def test_internal_idtoken_cookie_stays_unverified_without_valid_identity(self, capture_asgi):
         app, state = capture_asgi
-        mw = AuthMiddleware(app, require_auth=False, external_hostnames=set())
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value=None)
+        mw = AuthMiddleware(app, validators=[mock_v], require_auth=False, external_hostnames=set())
 
         async def send(msg):
             pass
@@ -453,8 +457,427 @@ class TestAuthMiddlewareInternal:
         )
         await mw(scope, AsyncMock(), send)
 
-        assert state["user"]["type"] == "jwt"
+        assert state["user"]["type"] == "unverified_jwt"
         assert state["user"]["token"] == "cookieval"
+
+    @pytest.mark.asyncio
+    async def test_internal_invalid_bearer_token_falls_back_to_internal_when_auth_not_required(self, capture_asgi):
+        app, state = capture_asgi
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value=None)
+        mw = AuthMiddleware(app, validators=[mock_v], require_auth=False, external_hostnames=set())
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/any/path",
+            extra_headers=[(b"authorization", b"Bearer badtoken")],
+        )
+        await mw(scope, AsyncMock(), send)
+
+        assert state["user"]["type"] == "unverified_jwt"
+        assert state["user"]["token"] == "badtoken"
+
+    @pytest.mark.asyncio
+    async def test_verified_user_tags_active_ddtrace_span(self, capture_asgi):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(
+            return_value={
+                "type": "oidc",
+                "sub": "user-123",
+                "email": "alice@example.com",
+                "name": "Alice",
+                "token": "good",
+            }
+        )
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/chat",
+            extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AIQ_TRACE_USER_IDENTITY_MODE": "full",
+                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",  # pragma: allowlist secret
+                },
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
+            await mw(scope, AsyncMock(), send)
+
+        expected_id = middleware_module._build_pseudonymous_trace_user_id("oidc", "user-123", "test-secret")
+        assert span_tags == {
+            "enduser.id": expected_id,
+            "aiq.user.id": expected_id,
+            "aiq.auth.type": "oidc",
+            "aiq.user.email": "alice@example.com",
+            "aiq.user.name": "Alice",
+            "aiq.caller.type": "oidc",
+            "aiq.auth.transport": "bearer",
+            "aiq.auth.verified": "true",
+            "aiq.access.channel": "api",
+        }
+
+    @pytest.mark.asyncio
+    async def test_verified_user_tags_active_otel_span(self, capture_asgi):
+        app, _state = capture_asgi
+        span_attributes: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_attribute(self, key: str, value: str) -> None:
+                span_attributes[key] = value
+
+        opentelemetry_module = types.ModuleType("opentelemetry")
+        trace_module = types.ModuleType("opentelemetry.trace")
+        trace_module.get_current_span = lambda: FakeSpan()
+
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value={"type": "service", "sub": "svc-user", "token": "good"})
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/chat",
+            extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AIQ_TRACE_USER_IDENTITY_MODE": "id",
+                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",  # pragma: allowlist secret
+                },
+                clear=False,
+            ),
+            patch.dict(
+                sys.modules,
+                {"opentelemetry": opentelemetry_module, "opentelemetry.trace": trace_module},
+                clear=False,
+            ),
+        ):
+            mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
+            await mw(scope, AsyncMock(), send)
+
+        expected_id = middleware_module._build_pseudonymous_trace_user_id("service", "svc-user", "test-secret")
+        assert span_attributes == {
+            "enduser.id": expected_id,
+            "aiq.user.id": expected_id,
+            "aiq.auth.type": "service",
+            "aiq.caller.type": "service",
+            "aiq.auth.transport": "bearer",
+            "aiq.auth.verified": "true",
+            "aiq.access.channel": "api",
+        }
+
+    @pytest.mark.asyncio
+    async def test_none_mode_does_not_tag_verified_user(self, capture_asgi):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-123", "token": "good"})
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/chat",
+            extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"AIQ_TRACE_USER_IDENTITY_MODE": "none"},
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
+            await mw(scope, AsyncMock(), send)
+
+        assert span_tags == {
+            "aiq.caller.type": "oidc",
+            "aiq.auth.transport": "bearer",
+            "aiq.auth.verified": "true",
+            "aiq.access.channel": "api",
+        }
+
+    @pytest.mark.asyncio
+    async def test_always_on_common_tags_present_without_user_identity(self, capture_asgi):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-123", "token": "good"})
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/chat",
+            extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"AIQ_TRACE_USER_IDENTITY_MODE": "none", "AIQ_TRACE_CLIENT_ID_MODE": "none"},
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
+            await mw(scope, AsyncMock(), send)
+
+        assert span_tags == {
+            "aiq.caller.type": "oidc",
+            "aiq.auth.transport": "bearer",
+            "aiq.auth.verified": "true",
+            "aiq.access.channel": "api",
+        }
+
+    @pytest.mark.asyncio
+    async def test_missing_secret_does_not_tag_verified_user(self, capture_asgi):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-123", "token": "good"})
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/chat",
+            extra_headers=[(b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"AIQ_TRACE_USER_IDENTITY_MODE": "id", "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": ""},
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
+            await mw(scope, AsyncMock(), send)
+
+        assert span_tags == {
+            "aiq.caller.type": "oidc",
+            "aiq.auth.transport": "bearer",
+            "aiq.auth.verified": "true",
+            "aiq.access.channel": "api",
+        }
+
+    @pytest.mark.asyncio
+    async def test_explicit_access_channel_override_wins(self, capture_asgi):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-123", "token": "good"})
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/chat",
+            extra_headers=[
+                (b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y"),
+                (b"x-aiq-access-channel", b"headless"),
+                (b"x-aiq-mode", b"headless"),
+            ],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"AIQ_TRACE_USER_IDENTITY_MODE": "none", "AIQ_TRACE_CLIENT_ID_MODE": "none"},
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
+            await mw(scope, AsyncMock(), send)
+
+        assert span_tags["aiq.access.channel"] == "headless"
+
+    @pytest.mark.asyncio
+    async def test_explicit_access_channel_ignored_for_external_anonymous_request(self, capture_asgi, external_host):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/health",
+            host=external_host,
+            extra_headers=[(b"x-aiq-access-channel", b"internal")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {"AIQ_TRACE_USER_IDENTITY_MODE": "none", "AIQ_TRACE_CLIENT_ID_MODE": "none"},
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[], require_auth=False, external_hostnames={external_host.decode()})
+            await mw(scope, AsyncMock(), send)
+
+        assert span_tags["aiq.access.channel"] == "anonymous"
+
+    @pytest.mark.asyncio
+    async def test_client_ip_mode_adds_pseudonymous_client_id(self, capture_asgi):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value={"type": "anonymous", "skip_clarifier": True})
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/health",
+            host=b"api.public.example",
+            extra_headers=[(b"x-forwarded-for", b"203.0.113.10, 10.0.0.1")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AIQ_TRACE_USER_IDENTITY_MODE": "none",
+                    "AIQ_TRACE_CLIENT_ID_MODE": "ip",
+                    "AIQ_TRACE_CLIENT_ID_HMAC_SECRET": "client-secret",  # pragma: allowlist secret
+                },
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[mock_v], require_auth=False, external_hostnames={"api.public.example"})
+            await mw(scope, AsyncMock(), send)
+
+        expected_client_id = middleware_module._build_pseudonymous_trace_client_id("203.0.113.10", "client-secret")
+        assert span_tags == {
+            "aiq.caller.type": "anonymous",
+            "aiq.auth.transport": "none",
+            "aiq.auth.verified": "false",
+            "aiq.access.channel": "anonymous",
+            "aiq.client.id": expected_client_id,
+        }
+
+    @pytest.mark.asyncio
+    async def test_unverified_internal_token_does_not_tag_active_span(self, capture_asgi):
+        app, _state = capture_asgi
+        span_tags: dict[str, str] = {}
+
+        class FakeSpan:
+            def set_tag(self, key: str, value: str) -> None:
+                span_tags[key] = value
+
+        ddtrace_module = types.ModuleType("ddtrace")
+        ddtrace_module.tracer = types.SimpleNamespace(current_span=lambda: FakeSpan())
+
+        mock_v = MagicMock()
+        mock_v.can_handle.return_value = True
+        mock_v.validate = AsyncMock(return_value=None)
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope(
+            "/chat",
+            extra_headers=[(b"authorization", b"Bearer badtoken")],
+        )
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "AIQ_TRACE_USER_IDENTITY_MODE": "full",
+                    "AIQ_TRACE_USER_IDENTITY_HMAC_SECRET": "test-secret",  # pragma: allowlist secret
+                },
+                clear=False,
+            ),
+            patch.dict(sys.modules, {"ddtrace": ddtrace_module}, clear=False),
+        ):
+            mw = AuthMiddleware(app, validators=[mock_v], require_auth=False, external_hostnames=set())
+            await mw(scope, AsyncMock(), send)
+
+        assert span_tags == {
+            "aiq.caller.type": "unverified_jwt",
+            "aiq.auth.transport": "bearer",
+            "aiq.auth.verified": "false",
+            "aiq.access.channel": "api",
+        }
 
 
 class TestAuthMiddlewareHelpers:

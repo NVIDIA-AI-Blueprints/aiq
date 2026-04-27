@@ -77,6 +77,7 @@ RUN uv sync --frozen --no-dev --no-install-workspace
 RUN uv pip install --no-deps -e . \
     && uv pip install --no-deps -e ./sources/google_scholar_paper_search \
     && uv pip install --no-deps -e ./sources/tavily_web_search \
+    && uv pip install --no-deps -e ./sources/exa_web_search \
     && uv pip install --no-deps -e "./sources/knowledge_layer[all]" \
     && uv pip install --no-deps -e ./frontends/aiq_api \
     && uv pip install "psycopg[binary]>=3.0.0"

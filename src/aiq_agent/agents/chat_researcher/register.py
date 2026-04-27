@@ -255,12 +255,12 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         # Check if Dask scheduler is available
         scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
         if scheduler_address:
-            from aiq_agent.auth import get_current_user_info
-            from aiq_api.jobs import submit_agent_job
+            from aiq_agent.auth import get_current_principal
+            from aiq_api.jobs.submit import submit_agent_job
 
             async def _submit_deep_job(state: ChatResearcherState) -> str:
-                user_info = get_current_user_info()
-                owner = user_info.email if user_info and user_info.email else "anonymous"
+                principal = get_current_principal()
+                owner = principal.email if principal and principal.email else "anonymous"
                 query = state.original_query
                 if not query:
                     if not state.messages:
@@ -343,21 +343,21 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             else:
                 logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
 
-        from aiq_agent.auth import get_current_user_info
+        from aiq_agent.auth import get_current_principal
 
-        user_info = get_current_user_info()
+        principal = get_current_principal()
         user_info_dict = None
-        if user_info:
+        if principal:
             logger.debug("User authenticated")
             user_info_dict = {
-                "name": user_info.name,
-                "email": user_info.email,
+                "name": principal.name,
+                "email": principal.email,
             }
 
         # Decide whether to skip the clarifier for this request.
         # 1. Config (enable_clarifier=false) — operator disabled it entirely.
         # 2. aiq_api.auth.middleware ContextVar — covers X-AIQ-Mode: headless,
-        #    NVAuth/anonymous callers, and unauthenticated internal callers.
+        #    anonymous callers, and unauthenticated internal callers.
         skip_clarifier = not config.enable_clarifier
         if not skip_clarifier:
             try:

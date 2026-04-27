@@ -14,6 +14,7 @@
 
 import { type FC } from 'react'
 import { Flex, Text, ProgressBar } from '@/adapters/ui'
+import { useShallow } from 'zustand/react/shallow'
 import { CheckCircle } from '@/adapters/ui/icons'
 import { useChatStore } from '@/features/chat'
 import { TaskCard } from './TaskCard'
@@ -23,7 +24,13 @@ import { TaskCard } from './TaskCard'
  * Uses deepResearchTodos from the store (populated by SSE artifact.update events).
  */
 export const TasksTab: FC = () => {
-  const { deepResearchTodos, deepResearchJobId, currentStatus, isDeepResearchStreaming } = useChatStore()
+  const { deepResearchTodos, deepResearchJobId, currentStatus, isDeepResearchStreaming } =
+    useChatStore(useShallow((s) => ({
+      deepResearchTodos: s.deepResearchTodos,
+      deepResearchJobId: s.deepResearchJobId,
+      currentStatus: s.currentStatus,
+      isDeepResearchStreaming: s.isDeepResearchStreaming,
+    })))
 
   const isEmpty = deepResearchTodos.length === 0
 

@@ -13,6 +13,7 @@
 
 import { type FC, useMemo } from 'react'
 import { Flex, Text, Button } from '@/adapters/ui'
+import { useShallow } from 'zustand/react/shallow'
 import { LoadingSpinner } from '@/adapters/ui/icons'
 import { type DataSource } from '../data-sources'
 import { DataConnectionCard } from './DataConnectionCard'
@@ -33,8 +34,13 @@ export const DataConnectionsTab: FC<DataConnectionsTabProps> = ({
   enabledSourceIds,
   onToggle,
 }) => {
-  const { availableDataSources, dataSourcesLoading, dataSourcesError, fetchDataSources } =
-    useLayoutStore()
+  const { availableDataSources, dataSourcesLoading, dataSourcesError } =
+    useLayoutStore(useShallow((s) => ({
+      availableDataSources: s.availableDataSources,
+      dataSourcesLoading: s.dataSourcesLoading,
+      dataSourcesError: s.dataSourcesError,
+    })))
+  const fetchDataSources = useLayoutStore((s) => s.fetchDataSources)
 
   // Convert API data sources to UI format - no fallback
   const displaySources: DataSource[] = useMemo(() => {

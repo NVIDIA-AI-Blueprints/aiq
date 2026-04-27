@@ -184,6 +184,7 @@ dev = [
     # Workspace packages for testing
     "google-scholar-paper-search",
     "tavily-web-search",
+    "exa-web-search",
     "knowledge-layer[all]",
     "aiq-api",
     "aiq-research-cli",
@@ -193,7 +194,7 @@ dev = [
 [tool.uv]
 prerelease = "if-necessary-or-explicit"
 override-dependencies = [
-    "authlib>=1.6.9,<2",
+    "authlib>=1.6.11,<2",
     "cryptography>=46.0.6,<47",
     "pillow>=12.2.0,<13",
     "pygments>=2.20.0,<3",
@@ -218,6 +219,7 @@ members = [
 aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
+exa-web-search = { workspace = true }
 knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }

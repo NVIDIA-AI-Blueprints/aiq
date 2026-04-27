@@ -11,21 +11,28 @@ const mockOpenRightPanel = vi.fn()
 const mockSetResearchPanelTab = vi.fn()
 
 vi.mock('@/features/layout/store', () => ({
-  useLayoutStore: () => ({
-    openRightPanel: mockOpenRightPanel,
-    setResearchPanelTab: mockSetResearchPanelTab,
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      openRightPanel: mockOpenRightPanel,
+      setResearchPanelTab: mockSetResearchPanelTab,
+    }
+    return selector ? selector(state) : state
   }),
 }))
 
 // Mock the chat store
 vi.mock('../store', () => ({
-  useChatStore: () => ({
-    reportContent: '',
-    deepResearchJobId: null,
-    isDeepResearchStreaming: false,
-    currentConversation: null,
-    patchConversationMessage: vi.fn(),
-    reconnectToActiveJob: vi.fn(),
+  useChatStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      reportContent: '',
+      deepResearchJobId: null,
+      isDeepResearchStreaming: false,
+      deepResearchStreamLoaded: false,
+      currentConversation: null,
+      patchConversationMessage: vi.fn(),
+      reconnectToActiveJob: vi.fn(),
+    }
+    return selector ? selector(state) : state
   }),
 }))
 

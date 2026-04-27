@@ -69,6 +69,7 @@ from unittest.mock import patch
 
 import pytest
 
+from aiq_agent.auth import Principal
 from aiq_api.jobs.callbacks import ArtifactType
 from aiq_api.jobs.callbacks import DeepResearchEventCallback
 from aiq_api.jobs.callbacks import EventCategory
@@ -363,6 +364,8 @@ class TestDeepResearchEventCallback:
 class TestSubmitDeepResearchJob:
     """Tests for the submit_deep_research_job function."""
 
+    principal = Principal(type="test", sub="user-1", email="test@example.com", name="Test User")
+
     @pytest.mark.asyncio
     async def test_submit_without_scheduler_raises(self):
         """Test submit_deep_research_job raises without NAT_DASK_SCHEDULER_ADDRESS."""
@@ -393,10 +396,12 @@ class TestSubmitDeepResearchJob:
             },
         ):
             with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
-                result = await submit_deep_research_job(
-                    input_text="test query",
-                    owner="test@example.com",
-                )
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        result = await submit_deep_research_job(
+                            input_text="test query",
+                            owner="test@example.com",
+                        )
 
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
@@ -418,12 +423,14 @@ class TestSubmitDeepResearchJob:
             },
         ):
             with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
-                result = await submit_agent_job(
-                    agent_type="deep_researcher",
-                    input_text="test query",
-                    owner="test@example.com",
-                    data_sources=["web_search"],
-                )
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        result = await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                            data_sources=["web_search"],
+                        )
 
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
@@ -447,14 +454,109 @@ class TestSubmitDeepResearchJob:
             },
         ):
             with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
-                result = await submit_deep_research_job(
-                    input_text="test query",
-                    owner="test@example.com",
-                    job_id="custom-job-id",
-                )
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        result = await submit_deep_research_job(
+                            input_text="test query",
+                            owner="test@example.com",
+                            job_id="custom-job-id",
+                        )
 
         assert result == "custom-job-id"
         mock_job_store.ensure_job_id.assert_called_with("custom-job-id")
+
+    @pytest.mark.asyncio
+    async def test_submit_requires_verified_principal(self):
+        """Test submit_agent_job fails closed when no verified principal is available."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "REQUIRE_AUTH": "true",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=None):
+                    with pytest.raises(RuntimeError, match="Verified current principal required"):
+                        await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                        )
+
+        mock_job_store.submit_job.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_submit_uses_compatibility_principal_when_auth_disabled(self):
+        """Test submit_agent_job still works without verified principal when auth is disabled."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+                "REQUIRE_AUTH": "false",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=None):
+                    with patch(
+                        "aiq_api.jobs.submit.create_job_access",
+                    ) as create_job_access:
+                        result = await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                        )
+
+        assert result == "test-job-id"
+        create_job_access.assert_called_once()
+        principal = create_job_access.call_args.args[1]
+        assert principal.type == "internal"
+        assert principal.sub == "test@example.com"
+        assert principal.email == "test@example.com"
+
+    @pytest.mark.asyncio
+    async def test_submit_rolls_back_when_job_access_persistence_fails(self):
+        """Test submit_agent_job rolls back partial submission on access persistence failure."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch(
+                        "aiq_api.jobs.submit.create_job_access",
+                        side_effect=RuntimeError("db write failed"),
+                    ):
+                        with patch("aiq_api.jobs.submit.rollback_job_submission") as rollback_job_submission:
+                            with pytest.raises(RuntimeError, match="db write failed"):
+                                await submit_agent_job(
+                                    agent_type="deep_researcher",
+                                    input_text="test query",
+                                    owner="test@example.com",
+                                )
+
+        mock_job_store.submit_job.assert_called_once()
+        rollback_job_submission.assert_called_once_with("test-job-id", "sqlite:///./test.db")
 
 
 class TestEventStore:

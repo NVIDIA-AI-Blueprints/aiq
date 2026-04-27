@@ -30,9 +30,12 @@ vi.mock('../store', () => ({
 }))
 
 vi.mock('@/features/layout/store', () => ({
-  useLayoutStore: () => ({
-    openRightPanel: mockOpenRightPanel,
-    setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      openRightPanel: mockOpenRightPanel,
+      setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+    }
+    return selector ? selector(state) : state
   }),
 }))
 

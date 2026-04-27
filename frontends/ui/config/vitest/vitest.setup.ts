@@ -57,22 +57,31 @@ Object.defineProperty(global, 'crypto', {
   },
 })
 
-// Session storage mock
-const sessionStorageMock = (function () {
-  let storage: Record<string, unknown> = {}
+// Storage mocks — Node.js 22+ exposes a broken built-in localStorage when
+// `--localstorage-file` is passed without a valid path, overriding happy-dom's
+// implementation.  Provide explicit in-memory mocks for both storages.
+function createStorageMock() {
+  let storage: Record<string, string> = {}
 
   return {
     clear: () => (storage = {}),
-    getItem: (key: string) => storage[key],
+    getItem: (key: string) => (key in storage ? storage[key] : null),
     getAll: () => storage,
+    key: (index: number) => Object.keys(storage)[index] ?? null,
+    get length() {
+      return Object.keys(storage).length
+    },
     removeItem: (key: string) => {
       delete storage[key]
     },
-    setItem: (key: string, value: unknown) => {
-      storage[key] = value
+    setItem: (key: string, value: string) => {
+      storage[key] = String(value)
     },
   }
-})()
+}
+
+const localStorageMock = createStorageMock()
+const sessionStorageMock = createStorageMock()
 
 // Browser API mocks for happy-dom
 class ResizeObserver {
@@ -93,7 +102,8 @@ class MutationObserver {
   disconnect() {}
 }
 
-Object.defineProperty(global, 'sessionStorage', { value: sessionStorageMock })
+Object.defineProperty(global, 'localStorage', { value: localStorageMock, configurable: true })
+Object.defineProperty(global, 'sessionStorage', { value: sessionStorageMock, configurable: true })
 global.ResizeObserver = ResizeObserver
 // @ts-expect-error - Partial mock
 global.IntersectionObserver = IntersectionObserver
@@ -102,6 +112,7 @@ global.MutationObserver = MutationObserver
 
 // MSW server lifecycle
 beforeAll(() => {
+  localStorageMock.clear()
   sessionStorageMock.clear()
   return server.listen({ onUnhandledRequest: 'bypass' })
 })

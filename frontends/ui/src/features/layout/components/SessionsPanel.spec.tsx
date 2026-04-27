@@ -10,10 +10,13 @@ import { SessionsPanel } from './SessionsPanel'
 const mockSetSessionsPanelOpen = vi.fn()
 
 vi.mock('../store', () => ({
-  useLayoutStore: vi.fn(() => ({
-    isSessionsPanelOpen: true,
-    setSessionsPanelOpen: mockSetSessionsPanelOpen,
-  })),
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      isSessionsPanelOpen: true,
+      setSessionsPanelOpen: mockSetSessionsPanelOpen,
+    }
+    return selector ? selector(state) : state
+  }),
 }))
 
 // Mock the chat store (no longer uses useIsCurrentSessionBusy for navigation)
@@ -84,10 +87,13 @@ describe('SessionsPanel', () => {
     setupChatStoreMock()
 
     // Reset mock to default open state
-    vi.mocked(useLayoutStore).mockReturnValue({
-      isSessionsPanelOpen: true,
-      setSessionsPanelOpen: mockSetSessionsPanelOpen,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        isSessionsPanelOpen: true,
+        setSessionsPanelOpen: mockSetSessionsPanelOpen,
+      }
+      return selector ? selector(state) : state
+    })
   })
 
   test('renders panel with heading', () => {
@@ -167,10 +173,13 @@ describe('SessionsPanel', () => {
   })
 
   test('does not show session content when panel is closed', () => {
-    vi.mocked(useLayoutStore).mockReturnValue({
-      isSessionsPanelOpen: false,
-      setSessionsPanelOpen: mockSetSessionsPanelOpen,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        isSessionsPanelOpen: false,
+        setSessionsPanelOpen: mockSetSessionsPanelOpen,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<SessionsPanel sessions={mockSessions} />)
 
@@ -191,10 +200,13 @@ describe('SessionsPanel - Session Switching', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     setupChatStoreMock()
-    vi.mocked(useLayoutStore).mockReturnValue({
-      isSessionsPanelOpen: true,
-      setSessionsPanelOpen: mockSetSessionsPanelOpen,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        isSessionsPanelOpen: true,
+        setSessionsPanelOpen: mockSetSessionsPanelOpen,
+      }
+      return selector ? selector(state) : state
+    })
   })
 
   test('allows switching sessions during active deep research (server-side SSE)', async () => {
@@ -305,10 +317,13 @@ describe('SessionsPanel - New Session Button', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     setupChatStoreMock()
-    vi.mocked(useLayoutStore).mockReturnValue({
-      isSessionsPanelOpen: true,
-      setSessionsPanelOpen: mockSetSessionsPanelOpen,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        isSessionsPanelOpen: true,
+        setSessionsPanelOpen: mockSetSessionsPanelOpen,
+      }
+      return selector ? selector(state) : state
+    })
   })
 
   test('disables new session button when shallow streaming is active', () => {
@@ -369,10 +384,13 @@ describe('SessionsPanel - Delete Button States', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     setupChatStoreMock()
-    vi.mocked(useLayoutStore).mockReturnValue({
-      isSessionsPanelOpen: true,
-      setSessionsPanelOpen: mockSetSessionsPanelOpen,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        isSessionsPanelOpen: true,
+        setSessionsPanelOpen: mockSetSessionsPanelOpen,
+      }
+      return selector ? selector(state) : state
+    })
   })
 
   test('disables individual delete button when session has active deep research', async () => {

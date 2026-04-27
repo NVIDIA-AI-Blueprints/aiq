@@ -10,16 +10,19 @@ import { DataConnectionsTab } from './DataConnectionsTab'
 const mockFetchDataSources = vi.fn()
 
 vi.mock('../store', () => ({
-  useLayoutStore: vi.fn(() => ({
-    availableDataSources: [
-      { id: 'web_search', name: 'Web Search', description: 'Search the web for information' },
-      { id: 'knowledge_base', name: 'Knowledge Base', description: 'Search knowledge base wikis' },
-      { id: 'document_store', name: 'Document Store', description: 'Search document store' },
-    ],
-    dataSourcesLoading: false,
-    dataSourcesError: null,
-    fetchDataSources: mockFetchDataSources,
-  })),
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      availableDataSources: [
+        { id: 'web_search', name: 'Web Search', description: 'Search the web for information' },
+        { id: 'knowledge_base', name: 'Knowledge Base', description: 'Search knowledge base wikis' },
+        { id: 'document_store', name: 'Document Store', description: 'Search document store' },
+      ],
+      dataSourcesLoading: false,
+      dataSourcesError: null,
+      fetchDataSources: mockFetchDataSources,
+    }
+    return selector ? selector(state) : state
+  }),
 }))
 
 // Mock DataConnectionCard
@@ -57,16 +60,19 @@ describe('DataConnectionsTab', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Reset to default state with data sources
-    vi.mocked(useLayoutStore).mockReturnValue({
-      availableDataSources: [
-        { id: 'web_search', name: 'Web Search', description: 'Search the web for information' },
-        { id: 'knowledge_base', name: 'Knowledge Base', description: 'Search knowledge base wikis' },
-        { id: 'document_store', name: 'Document Store', description: 'Search document store' },
-      ],
-      dataSourcesLoading: false,
-      dataSourcesError: null,
-      fetchDataSources: mockFetchDataSources,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        availableDataSources: [
+          { id: 'web_search', name: 'Web Search', description: 'Search the web for information' },
+          { id: 'knowledge_base', name: 'Knowledge Base', description: 'Search knowledge base wikis' },
+          { id: 'document_store', name: 'Document Store', description: 'Search document store' },
+        ],
+        dataSourcesLoading: false,
+        dataSourcesError: null,
+        fetchDataSources: mockFetchDataSources,
+      }
+      return selector ? selector(state) : state
+    })
   })
 
   describe('rendering', () => {
@@ -93,12 +99,15 @@ describe('DataConnectionsTab', () => {
 
   describe('loading state', () => {
     test('renders loading spinner when loading', () => {
-      vi.mocked(useLayoutStore).mockReturnValue({
-        availableDataSources: null,
-        dataSourcesLoading: true,
-        dataSourcesError: null,
-        fetchDataSources: mockFetchDataSources,
-      } as unknown as ReturnType<typeof useLayoutStore>)
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          availableDataSources: null,
+          dataSourcesLoading: true,
+          dataSourcesError: null,
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
 
       render(<DataConnectionsTab enabledSourceIds={new Set()} onToggle={mockOnToggle} />)
 
@@ -109,12 +118,15 @@ describe('DataConnectionsTab', () => {
 
   describe('error state', () => {
     test('renders error message when API fails', () => {
-      vi.mocked(useLayoutStore).mockReturnValue({
-        availableDataSources: null,
-        dataSourcesLoading: false,
-        dataSourcesError: 'Failed to connect to server',
-        fetchDataSources: mockFetchDataSources,
-      } as unknown as ReturnType<typeof useLayoutStore>)
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          availableDataSources: null,
+          dataSourcesLoading: false,
+          dataSourcesError: 'Failed to connect to server',
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
 
       render(<DataConnectionsTab enabledSourceIds={new Set()} onToggle={mockOnToggle} />)
 
@@ -123,12 +135,15 @@ describe('DataConnectionsTab', () => {
     })
 
     test('renders retry button on error', () => {
-      vi.mocked(useLayoutStore).mockReturnValue({
-        availableDataSources: null,
-        dataSourcesLoading: false,
-        dataSourcesError: 'Network error',
-        fetchDataSources: mockFetchDataSources,
-      } as unknown as ReturnType<typeof useLayoutStore>)
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          availableDataSources: null,
+          dataSourcesLoading: false,
+          dataSourcesError: 'Network error',
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
 
       render(<DataConnectionsTab enabledSourceIds={new Set()} onToggle={mockOnToggle} />)
 
@@ -137,12 +152,15 @@ describe('DataConnectionsTab', () => {
 
     test('calls fetchDataSources when retry is clicked', async () => {
       const user = userEvent.setup()
-      vi.mocked(useLayoutStore).mockReturnValue({
-        availableDataSources: null,
-        dataSourcesLoading: false,
-        dataSourcesError: 'Network error',
-        fetchDataSources: mockFetchDataSources,
-      } as unknown as ReturnType<typeof useLayoutStore>)
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          availableDataSources: null,
+          dataSourcesLoading: false,
+          dataSourcesError: 'Network error',
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
 
       render(<DataConnectionsTab enabledSourceIds={new Set()} onToggle={mockOnToggle} />)
 
@@ -154,12 +172,15 @@ describe('DataConnectionsTab', () => {
 
   describe('empty state', () => {
     test('renders empty state when no sources available', () => {
-      vi.mocked(useLayoutStore).mockReturnValue({
-        availableDataSources: [],
-        dataSourcesLoading: false,
-        dataSourcesError: null,
-        fetchDataSources: mockFetchDataSources,
-      } as unknown as ReturnType<typeof useLayoutStore>)
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          availableDataSources: [],
+          dataSourcesLoading: false,
+          dataSourcesError: null,
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
 
       render(<DataConnectionsTab enabledSourceIds={new Set()} onToggle={mockOnToggle} />)
 

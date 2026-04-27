@@ -21,14 +21,19 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from contextlib import asynccontextmanager
 
 import pytest
 from pydantic import BaseModel
 from starlette.websockets import WebSocketDisconnect
 
 from aiq_api import websocket_reconnect
+from aiq_api.auth.middleware import get_current_user
+from aiq_api.auth.request_trace import get_request_trace_tags
 from aiq_api.websocket_reconnect import ReconnectableWebSocketMessageHandler
 from aiq_api.websocket_reconnect import WebSocketSessionRegistry
+from aiq_api.websocket_reconnect import authenticate_websocket_connection
+from aiq_api.websocket_reconnect import configure_websocket_auth
 from nat.data_models.api_server import TextContent
 from nat.data_models.api_server import UserMessageContent
 from nat.data_models.api_server import UserMessageContentRoleType
@@ -46,11 +51,14 @@ class DummySocket:
         self,
         messages: list[dict] | None = None,
         raise_on_send: bool = False,
+        headers: list[tuple[bytes, bytes]] | None = None,
     ) -> None:
         self._messages = messages or []
         self._index = 0
         self.raise_on_send = raise_on_send
         self.sent: list[dict] = []
+        self.closed_with: int | None = None
+        self.scope = {"headers": headers or [], "type": "websocket"}
 
     async def receive_json(self) -> dict:
         if self._index >= len(self._messages):
@@ -64,6 +72,9 @@ class DummySocket:
             raise RuntimeError("send failed")
         self.sent.append(payload)
 
+    async def close(self, code: int) -> None:
+        self.closed_with = code
+
 
 class DummySessionManager:
     """Minimal session manager stub for handler initialization."""
@@ -73,6 +84,10 @@ class DummySessionManager:
 
     def get_workflow_streaming_output_schema(self):
         return None
+
+    @asynccontextmanager
+    async def session(self, **_kwargs):
+        yield object()
 
 
 class DummyStepAdaptor:
@@ -96,6 +111,20 @@ class DummyMessage(BaseModel):
     """Simple pydantic message for tests."""
 
     content: str = "ok"
+
+
+class DummyValidator:
+    def __init__(self, user: dict | None = None) -> None:
+        self.user = user
+        self.tokens: list[str] = []
+
+    def can_handle(self, token: str) -> bool:
+        self.tokens.append(token)
+        return True
+
+    async def validate(self, token: str) -> dict | None:
+        self.tokens.append(token)
+        return self.user
 
 
 @pytest.fixture(name="event_loop")
@@ -642,3 +671,129 @@ def test_install_reconnectable_handler(monkeypatch) -> None:
     assert worker_module.WebSocketMessageHandler is ReconnectableWebSocketMessageHandler
     worker_module.WebSocketMessageHandler = original_handler
     monkeypatch.setattr(websocket_reconnect, "_installed", False)
+
+
+@pytest.mark.asyncio
+async def test_authenticate_websocket_connection_validates_external_token() -> None:
+    validator = DummyValidator(user={"type": "oidc", "sub": "user-1", "skip_clarifier": False})
+    configure_websocket_auth(validators=[validator], require_auth=True, external_hostnames={"localhost"})
+    socket = DummySocket(headers=[(b"host", b"localhost"), (b"cookie", b"idToken=test-token")])
+
+    user, close_code = await authenticate_websocket_connection(socket)
+
+    assert close_code is None
+    assert user == {"type": "oidc", "sub": "user-1", "skip_clarifier": False}
+    assert validator.tokens == ["test-token", "test-token"]
+
+
+@pytest.mark.asyncio
+async def test_authenticate_websocket_connection_rejects_missing_external_token() -> None:
+    configure_websocket_auth(validators=[], require_auth=True, external_hostnames={"localhost"})
+    socket = DummySocket(headers=[(b"host", b"localhost")])
+
+    user, close_code = await authenticate_websocket_connection(socket)
+
+    assert user is None
+    assert close_code == 1008
+
+
+@pytest.mark.asyncio
+async def test_authenticate_websocket_connection_validates_internal_token_when_present() -> None:
+    validator = DummyValidator(user={"type": "oidc", "sub": "user-1", "skip_clarifier": False})
+    configure_websocket_auth(validators=[validator], require_auth=True, external_hostnames={"localhost"})
+    socket = DummySocket(headers=[(b"host", b"aiq-agent"), (b"cookie", b"idToken=test-token")])
+
+    user, close_code = await authenticate_websocket_connection(socket)
+
+    assert close_code is None
+    assert user == {"type": "oidc", "sub": "user-1", "skip_clarifier": False}
+
+
+@pytest.mark.asyncio
+async def test_run_closes_socket_when_websocket_auth_fails() -> None:
+    configure_websocket_auth(validators=[], require_auth=True, external_hostnames={"localhost"})
+    socket = DummySocket(headers=[(b"host", b"localhost")])
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
+    )
+
+    await handler.run()
+
+    assert socket.closed_with == 1008
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_binds_authenticated_user_context(monkeypatch) -> None:
+    configure_websocket_auth(validators=[], require_auth=False, external_hostnames={"localhost"})
+    socket = DummySocket(headers=[(b"host", b"localhost")])
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
+    )
+    handler._authenticated_user = {"type": "oidc", "sub": "user-1", "skip_clarifier": False}
+
+    seen_users: list[dict] = []
+
+    async def fake_stream(*_args, **_kwargs):
+        seen_users.append(get_current_user())
+        if False:
+            yield None
+
+    monkeypatch.setattr(websocket_reconnect, "generate_streaming_response", fake_stream)
+
+    await handler._run_workflow(payload="hello", conversation_id="conv-1")
+
+    assert seen_users == [{"type": "oidc", "sub": "user-1", "skip_clarifier": False}]
+
+
+@pytest.mark.asyncio
+async def test_process_workflow_request_binds_request_trace_tags(monkeypatch) -> None:
+    configure_websocket_auth(validators=[], require_auth=False, external_hostnames={"localhost"})
+    socket = DummySocket(headers=[(b"host", b"localhost"), (b"cookie", b"idToken=test-token")])
+    handler = ReconnectableWebSocketMessageHandler(
+        socket=socket,
+        session_manager=DummySessionManager(),
+        step_adaptor=DummyStepAdaptor(),
+        worker=DummyWorker(),
+    )
+    handler._authenticated_user = {"type": "oidc", "sub": "user-1", "skip_clarifier": False}
+    user_message = WebSocketUserMessage(
+        type=WebSocketMessageType.USER_MESSAGE,
+        schema_type=WorkflowSchemaType.CHAT_STREAM,
+        id="msg-1",
+        conversation_id="conv-1",
+        content=UserMessageContent(
+            messages=[
+                UserMessages(
+                    role=UserMessageContentRoleType.USER,
+                    content=[TextContent(text="hello")],
+                )
+            ]
+        ),
+    )
+    seen_tags: list[dict[str, str]] = []
+
+    async def fake_process_workflow_request(_self, _message):
+        seen_tags.append(get_request_trace_tags())
+
+    monkeypatch.setattr(
+        websocket_reconnect.WebSocketMessageHandler,
+        "process_workflow_request",
+        fake_process_workflow_request,
+    )
+
+    await handler.process_workflow_request(user_message)
+
+    assert seen_tags == [
+        {
+            "aiq.caller.type": "oidc",
+            "aiq.auth.transport": "cookie",
+            "aiq.auth.verified": "true",
+            "aiq.access.channel": "ui",
+        }
+    ]

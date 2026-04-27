@@ -48,12 +48,28 @@ vi.mock('@/features/chat', () => ({
 const mockOpenRightPanel = vi.fn()
 const mockSetDataSourcePanelTab = vi.fn()
 
+const mockCloseRightPanel = vi.fn()
+const mockSetDataSourcesPanelTab = vi.fn()
+
+const mockLayoutState = () => ({
+  openRightPanel: mockOpenRightPanel,
+  closeRightPanel: mockCloseRightPanel,
+  setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+  setDataSourcePanelTab: mockSetDataSourcePanelTab,
+  enabledDataSourceIds: ['source-1', 'source-2'],
+  knowledgeLayerAvailable: true,
+  availableDataSources: [{ id: 'source-1' }, { id: 'source-2' }],
+  rightPanel: null as string | null,
+})
+
 vi.mock('../store', () => ({
-  useLayoutStore: vi.fn(() => ({
-    openRightPanel: mockOpenRightPanel,
-    setDataSourcePanelTab: mockSetDataSourcePanelTab,
-    enabledDataSourceIds: ['source-1', 'source-2'],
-  })),
+  useLayoutStore: Object.assign(
+    vi.fn((selector?: (s: any) => any) => {
+      const state = mockLayoutState()
+      return selector ? selector(state) : state
+    }),
+    { getState: () => mockLayoutState() }
+  ),
 }))
 
 // Mock useAppConfig

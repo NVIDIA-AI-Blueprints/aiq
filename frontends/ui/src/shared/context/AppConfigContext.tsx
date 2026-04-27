@@ -41,7 +41,7 @@ export interface FileUploadConfig {
 export interface AppConfig {
   /** Whether authentication is required (set REQUIRE_AUTH=true to enable OAuth) */
   authRequired: boolean
-  /** The NextAuth provider ID for signIn() calls (e.g. 'oauth', 'nvlogin', 'disabled-auth') */
+  /** The NextAuth provider ID for signIn() calls (e.g. 'oauth', 'disabled-auth') */
   authProviderId: string
   /** Client-side session polling interval in seconds, derived from TOKEN_REFRESH_BUFFER_SECONDS */
   sessionRefreshIntervalSeconds: number
