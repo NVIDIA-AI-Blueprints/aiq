@@ -357,7 +357,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         # Decide whether to skip the clarifier for this request.
         # 1. Config (enable_clarifier=false) — operator disabled it entirely.
         # 2. aiq_api.auth.middleware ContextVar — covers X-AIQ-Mode: headless,
-        #    NVAuth/anonymous callers, and unauthenticated internal callers.
+        #    anonymous callers, and unauthenticated internal callers.
         skip_clarifier = not config.enable_clarifier
         if not skip_clarifier:
             try:

@@ -411,7 +411,7 @@ class TestAuthMiddlewareInternal:
         app, state = capture_asgi
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate = AsyncMock(return_value={"type": "starfleet", "sub": "user-1", "token": "good"})
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-1", "token": "good"})
         mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
 
         async def send(msg):
@@ -423,7 +423,7 @@ class TestAuthMiddlewareInternal:
         )
         await mw(scope, AsyncMock(), send)
 
-        assert state["user"]["type"] == "starfleet"
+        assert state["user"]["type"] == "oidc"
         assert state["user"]["sub"] == "user-1"
 
     @pytest.mark.asyncio
@@ -482,7 +482,7 @@ class TestAuthMiddlewareInternal:
         mock_v.can_handle.return_value = True
         mock_v.validate = AsyncMock(
             return_value={
-                "type": "starfleet",
+                "type": "oidc",
                 "sub": "user-123",
                 "email": "alice@example.com",
                 "name": "Alice",
@@ -511,14 +511,14 @@ class TestAuthMiddlewareInternal:
             mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
             await mw(scope, AsyncMock(), send)
 
-        expected_id = middleware_module._build_pseudonymous_trace_user_id("starfleet", "user-123", "test-secret")
+        expected_id = middleware_module._build_pseudonymous_trace_user_id("oidc", "user-123", "test-secret")
         assert span_tags == {
             "enduser.id": expected_id,
             "aiq.user.id": expected_id,
-            "aiq.auth.type": "starfleet",
+            "aiq.auth.type": "oidc",
             "aiq.user.email": "alice@example.com",
             "aiq.user.name": "Alice",
-            "aiq.caller.type": "starfleet",
+            "aiq.caller.type": "oidc",
             "aiq.auth.transport": "bearer",
             "aiq.auth.verified": "true",
             "aiq.access.channel": "api",
@@ -539,7 +539,7 @@ class TestAuthMiddlewareInternal:
 
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate = AsyncMock(return_value={"type": "nvauth", "sub": "svc-user", "token": "good"})
+        mock_v.validate = AsyncMock(return_value={"type": "service", "sub": "svc-user", "token": "good"})
 
         async def send(msg):
             pass
@@ -566,12 +566,12 @@ class TestAuthMiddlewareInternal:
             mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
             await mw(scope, AsyncMock(), send)
 
-        expected_id = middleware_module._build_pseudonymous_trace_user_id("nvauth", "svc-user", "test-secret")
+        expected_id = middleware_module._build_pseudonymous_trace_user_id("service", "svc-user", "test-secret")
         assert span_attributes == {
             "enduser.id": expected_id,
             "aiq.user.id": expected_id,
-            "aiq.auth.type": "nvauth",
-            "aiq.caller.type": "nvauth",
+            "aiq.auth.type": "service",
+            "aiq.caller.type": "service",
             "aiq.auth.transport": "bearer",
             "aiq.auth.verified": "true",
             "aiq.access.channel": "api",
@@ -591,7 +591,7 @@ class TestAuthMiddlewareInternal:
 
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate = AsyncMock(return_value={"type": "starfleet", "sub": "user-123", "token": "good"})
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-123", "token": "good"})
 
         async def send(msg):
             pass
@@ -612,7 +612,7 @@ class TestAuthMiddlewareInternal:
             await mw(scope, AsyncMock(), send)
 
         assert span_tags == {
-            "aiq.caller.type": "starfleet",
+            "aiq.caller.type": "oidc",
             "aiq.auth.transport": "bearer",
             "aiq.auth.verified": "true",
             "aiq.access.channel": "api",
@@ -632,7 +632,7 @@ class TestAuthMiddlewareInternal:
 
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate = AsyncMock(return_value={"type": "starfleet", "sub": "user-123", "token": "good"})
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-123", "token": "good"})
 
         async def send(msg):
             pass
@@ -653,7 +653,7 @@ class TestAuthMiddlewareInternal:
             await mw(scope, AsyncMock(), send)
 
         assert span_tags == {
-            "aiq.caller.type": "starfleet",
+            "aiq.caller.type": "oidc",
             "aiq.auth.transport": "bearer",
             "aiq.auth.verified": "true",
             "aiq.access.channel": "api",
@@ -673,7 +673,7 @@ class TestAuthMiddlewareInternal:
 
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate = AsyncMock(return_value={"type": "starfleet", "sub": "user-123", "token": "good"})
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-123", "token": "good"})
 
         async def send(msg):
             pass
@@ -694,7 +694,7 @@ class TestAuthMiddlewareInternal:
             await mw(scope, AsyncMock(), send)
 
         assert span_tags == {
-            "aiq.caller.type": "starfleet",
+            "aiq.caller.type": "oidc",
             "aiq.auth.transport": "bearer",
             "aiq.auth.verified": "true",
             "aiq.access.channel": "api",
@@ -714,7 +714,7 @@ class TestAuthMiddlewareInternal:
 
         mock_v = MagicMock()
         mock_v.can_handle.return_value = True
-        mock_v.validate = AsyncMock(return_value={"type": "starfleet", "sub": "user-123", "token": "good"})
+        mock_v.validate = AsyncMock(return_value={"type": "oidc", "sub": "user-123", "token": "good"})
 
         async def send(msg):
             pass
@@ -723,7 +723,7 @@ class TestAuthMiddlewareInternal:
             "/chat",
             extra_headers=[
                 (b"authorization", b"Bearer eyJhbGciOiJIUzI1NiJ9.x.y"),
-                (b"x-aiq-access-channel", b"skill"),
+                (b"x-aiq-access-channel", b"headless"),
                 (b"x-aiq-mode", b"headless"),
             ],
         )
@@ -738,7 +738,7 @@ class TestAuthMiddlewareInternal:
             mw = AuthMiddleware(app, validators=[mock_v], require_auth=True, external_hostnames=set())
             await mw(scope, AsyncMock(), send)
 
-        assert span_tags["aiq.access.channel"] == "skill"
+        assert span_tags["aiq.access.channel"] == "headless"
 
     @pytest.mark.asyncio
     async def test_explicit_access_channel_ignored_for_external_anonymous_request(self, capture_asgi, external_host):

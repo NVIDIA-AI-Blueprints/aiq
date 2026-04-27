@@ -31,7 +31,6 @@ TRACE_CLIENT_ID_MODES = frozenset({"none", "ip"})
 TRACE_ACCESS_CHANNELS = frozenset(
     {
         "ui",
-        "skill",
         "api",
         "headless",
         "anonymous",

@@ -675,14 +675,14 @@ def test_install_reconnectable_handler(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_authenticate_websocket_connection_validates_external_token() -> None:
-    validator = DummyValidator(user={"type": "starfleet", "sub": "user-1", "skip_clarifier": False})
+    validator = DummyValidator(user={"type": "oidc", "sub": "user-1", "skip_clarifier": False})
     configure_websocket_auth(validators=[validator], require_auth=True, external_hostnames={"localhost"})
     socket = DummySocket(headers=[(b"host", b"localhost"), (b"cookie", b"idToken=test-token")])
 
     user, close_code = await authenticate_websocket_connection(socket)
 
     assert close_code is None
-    assert user == {"type": "starfleet", "sub": "user-1", "skip_clarifier": False}
+    assert user == {"type": "oidc", "sub": "user-1", "skip_clarifier": False}
     assert validator.tokens == ["test-token", "test-token"]
 
 
@@ -699,14 +699,14 @@ async def test_authenticate_websocket_connection_rejects_missing_external_token(
 
 @pytest.mark.asyncio
 async def test_authenticate_websocket_connection_validates_internal_token_when_present() -> None:
-    validator = DummyValidator(user={"type": "starfleet", "sub": "user-1", "skip_clarifier": False})
+    validator = DummyValidator(user={"type": "oidc", "sub": "user-1", "skip_clarifier": False})
     configure_websocket_auth(validators=[validator], require_auth=True, external_hostnames={"localhost"})
     socket = DummySocket(headers=[(b"host", b"aiq-agent"), (b"cookie", b"idToken=test-token")])
 
     user, close_code = await authenticate_websocket_connection(socket)
 
     assert close_code is None
-    assert user == {"type": "starfleet", "sub": "user-1", "skip_clarifier": False}
+    assert user == {"type": "oidc", "sub": "user-1", "skip_clarifier": False}
 
 
 @pytest.mark.asyncio
@@ -735,7 +735,7 @@ async def test_run_workflow_binds_authenticated_user_context(monkeypatch) -> Non
         step_adaptor=DummyStepAdaptor(),
         worker=DummyWorker(),
     )
-    handler._authenticated_user = {"type": "starfleet", "sub": "user-1", "skip_clarifier": False}
+    handler._authenticated_user = {"type": "oidc", "sub": "user-1", "skip_clarifier": False}
 
     seen_users: list[dict] = []
 
@@ -748,7 +748,7 @@ async def test_run_workflow_binds_authenticated_user_context(monkeypatch) -> Non
 
     await handler._run_workflow(payload="hello", conversation_id="conv-1")
 
-    assert seen_users == [{"type": "starfleet", "sub": "user-1", "skip_clarifier": False}]
+    assert seen_users == [{"type": "oidc", "sub": "user-1", "skip_clarifier": False}]
 
 
 @pytest.mark.asyncio
@@ -761,7 +761,7 @@ async def test_process_workflow_request_binds_request_trace_tags(monkeypatch) ->
         step_adaptor=DummyStepAdaptor(),
         worker=DummyWorker(),
     )
-    handler._authenticated_user = {"type": "starfleet", "sub": "user-1", "skip_clarifier": False}
+    handler._authenticated_user = {"type": "oidc", "sub": "user-1", "skip_clarifier": False}
     user_message = WebSocketUserMessage(
         type=WebSocketMessageType.USER_MESSAGE,
         schema_type=WorkflowSchemaType.CHAT_STREAM,
@@ -791,7 +791,7 @@ async def test_process_workflow_request_binds_request_trace_tags(monkeypatch) ->
 
     assert seen_tags == [
         {
-            "aiq.caller.type": "starfleet",
+            "aiq.caller.type": "oidc",
             "aiq.auth.transport": "cookie",
             "aiq.auth.verified": "true",
             "aiq.access.channel": "ui",
