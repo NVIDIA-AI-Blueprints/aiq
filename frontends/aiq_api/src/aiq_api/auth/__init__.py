@@ -19,6 +19,7 @@ from .base import TokenValidator
 from .errors import AuthError
 from .jwt_validator import JWTValidator
 from .middleware import AuthMiddleware
+from .middleware import get_current_trace_tags
 from .middleware import get_current_user
 
 __all__ = [
@@ -26,5 +27,6 @@ __all__ = [
     "AuthMiddleware",
     "JWTValidator",
     "TokenValidator",
+    "get_current_trace_tags",
     "get_current_user",
 ]

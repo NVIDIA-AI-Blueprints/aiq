@@ -330,7 +330,7 @@ def attach_request_to_active_trace(
     client_id_mode: str,
     client_id_secret: str | None,
     client_ip_headers: list[str],
-) -> None:
+) -> dict[str, str]:
     """Attach request classification and optional pseudonymous identity to active trace spans."""
     tags = _build_common_trace_tags(
         headers,
@@ -345,3 +345,4 @@ def attach_request_to_active_trace(
 
     _tag_current_ddtrace_span(tags)
     _tag_current_otel_span(tags)
+    return tags

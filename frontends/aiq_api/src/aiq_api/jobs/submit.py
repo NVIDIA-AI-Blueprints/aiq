@@ -27,6 +27,7 @@ import os
 
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
+from aiq_api.auth import get_current_trace_tags
 
 from ..registry import get_agent_config
 from .access import _make_no_auth_principal
@@ -61,6 +62,7 @@ def _get_parent_trace_context() -> tuple[
     str | None,  # parent_workflow_run_id
     int | str | None,  # parent_workflow_trace_id
     str | None,  # parent_conversation_id
+    dict[str, str],  # request_trace_tags
 ]:
     """
     Extract trace context from current workflow for propagation to async jobs.
@@ -70,12 +72,12 @@ def _get_parent_trace_context() -> tuple[
 
     Returns:
         Tuple of (parent_span_id, parent_function_id, parent_function_name,
-                  parent_workflow_run_id, parent_workflow_trace_id, parent_conversation_id)
+                  parent_workflow_run_id, parent_workflow_trace_id, parent_conversation_id, request_trace_tags)
     """
     try:
         from nat.builder.context import ContextState
     except ImportError:
-        return (None, None, None, None, None, None)
+        return (None, None, None, None, None, None, {})
 
     context_state = ContextState.get()
 
@@ -104,6 +106,7 @@ def _get_parent_trace_context() -> tuple[
         parent_workflow_run_id,
         parent_workflow_trace_id,
         parent_conversation_id,
+        get_current_trace_tags(),
     )
 
 

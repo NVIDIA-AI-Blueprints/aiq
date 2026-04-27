@@ -27,6 +27,8 @@ from pydantic import BaseModel
 from pydantic import ValidationError
 from starlette.websockets import WebSocketDisconnect
 
+from aiq_agent.observability.request_trace_injector import request_trace_tag_context
+from aiq_api.auth.middleware import build_request_trace_tags
 from aiq_api.auth.middleware import detect_internal_caller
 from aiq_api.auth.middleware import resolve_request_user
 from aiq_api.auth.middleware import user_context
@@ -262,8 +264,10 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
     async def process_workflow_request(self, user_message_as_validated_type: WebSocketUserMessage) -> None:
         """Process user messages and register sockets for reconnect."""
         await _registry.set_socket(user_message_as_validated_type.conversation_id, self._socket)
-        current_user = self._authenticated_user or detect_internal_caller(dict(self._socket.scope.get("headers", [])))
-        with user_context(current_user):
+        headers = dict(self._socket.scope.get("headers", []))
+        current_user = self._authenticated_user or detect_internal_caller(headers)
+        request_trace_tags = build_request_trace_tags(headers, self._socket.scope, current_user)
+        with user_context(current_user), request_trace_tag_context(request_trace_tags):
             await super().process_workflow_request(user_message_as_validated_type)
         # TODO(NAT-upstream): _running_workflow_task is currently always None
         # because NAT's message_handler.py assigns via method chaining:

@@ -99,6 +99,9 @@ from starlette.types import Receive
 from starlette.types import Scope
 from starlette.types import Send
 
+from aiq_agent.observability.request_trace_injector import get_request_trace_tags
+from aiq_agent.observability.request_trace_injector import request_trace_tag_context
+
 from . import utils as auth_utils
 from .utils import _load_trace_client_id_mode
 from .utils import _load_trace_client_id_secret
@@ -130,6 +133,11 @@ def get_current_user() -> dict[str, Any]:
     the middleware is not registered or when called outside a request context.
     """
     return _current_user.get()
+
+
+def get_current_trace_tags() -> dict[str, str]:
+    """Return request trace tags resolved by ``AuthMiddleware`` for this request."""
+    return get_request_trace_tags()
 
 
 @contextmanager
@@ -365,7 +373,7 @@ class AuthMiddleware:
         scope["state"]["user"] = user
         is_external = self._is_external(headers)
         trust_access_channel_override = (not is_external) or bool(user.get("sub"))
-        attach_request_to_active_trace(
+        request_trace_tags = attach_request_to_active_trace(
             headers,
             scope,
             user,
@@ -377,7 +385,7 @@ class AuthMiddleware:
             client_ip_headers=self._trace_client_ip_headers,
         )
 
-        with user_context(user):
+        with user_context(user), request_trace_tag_context(request_trace_tags):
             await self.app(scope, receive, send)
 
     def _is_external(self, headers: dict[bytes, bytes]) -> bool:
