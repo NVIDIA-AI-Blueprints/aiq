@@ -73,8 +73,8 @@ describe('NATWebSocketClient auth observability', () => {
     expect(addError).toHaveBeenCalledWith(
       expect.any(Error),
       expect.objectContaining({
-        source: 'custom',
-        auth_error_code: 'ws_auth_error',
+        source: 'websocket',
+        auth_error_code: 'auth_error',
         details: 'Token expired',
       })
     )

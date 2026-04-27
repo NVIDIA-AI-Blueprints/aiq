@@ -193,12 +193,16 @@ describe('authenticated-fetch', () => {
       expect(calledHeaders.get('X-Custom-Header')).toBe('custom-value')
     })
 
-    test.each(['token_expired', 'token_invalid'])(
+    test.each([
+      ['token_expired', 'addAction', 'Auth: token_expired'],
+      ['token_invalid', 'addError', expect.any(Error)],
+    ] as const)(
       'emits RUM event when 401 error code is %s',
-      async (errorCode) => {
+      async (errorCode, rumMethod, expectedEvent) => {
         mockGetSession.mockResolvedValue(null)
         const addError = vi.fn()
-        ;(window as unknown as Record<string, unknown>).DD_RUM = { addError }
+        const addAction = vi.fn()
+        ;(window as unknown as Record<string, unknown>).DD_RUM = { addAction, addError }
         mockFetch.mockResolvedValue(
           new Response(JSON.stringify({ error: errorCode }), {
             status: 401,
@@ -208,11 +212,11 @@ describe('authenticated-fetch', () => {
 
         await authenticatedFetch('/api/test-auth')
 
-        expect(addError).toHaveBeenCalledTimes(1)
-        expect(addError).toHaveBeenCalledWith(
-          expect.any(Error),
+        const rumCall = rumMethod === 'addAction' ? addAction : addError
+        expect(rumCall).toHaveBeenCalledTimes(1)
+        expect(rumCall).toHaveBeenCalledWith(
+          expectedEvent,
           expect.objectContaining({
-            source: 'custom',
             auth_error_code: errorCode,
             path: '/api/test-auth',
           })

@@ -106,8 +106,8 @@ export interface AuthProviderConfig {
   /**
    * Provider-specific token refresh buffer override (in seconds).
    * When set, takes precedence over the TOKEN_REFRESH_BUFFER_MINUTES env var.
-   * Use this when the provider knows the optimal refresh timing (e.g. 30 min
-   * for NVIDIA Starfleet with long-running ECI operations).
+   * Use this when the provider knows the optimal refresh timing for its token
+   * lifetimes or long-running operations.
    */
   tokenRefreshBufferSeconds?: number
 

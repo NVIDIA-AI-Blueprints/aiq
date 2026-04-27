@@ -43,6 +43,7 @@ class TestWebSocketAuthErrors:
             _flow_handler=None,
             _session_manager=_SessionManager(),
             _socket=object(),
+            _authenticated_user=None,
             human_interaction_callback=AsyncMock(),
             _step_adaptor=None,
             _pending_observability_trace=None,
