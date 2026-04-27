@@ -169,6 +169,44 @@ describe('provider lifecycle hooks', () => {
     expect(result.userId).toBe('u1')
   })
 
+  test('onSignIn hook cannot override core JWT fields', async () => {
+    vi.stubEnv('REQUIRE_AUTH', 'true')
+    vi.stubEnv('NEXTAUTH_SECRET', 'test-secret')
+
+    const onSignIn = vi.fn().mockResolvedValue({
+      accessToken: 'hook-at',
+      refreshToken: 'hook-rt',
+      expiresAt: 1,
+      userId: 'hook-user',
+      hasAccess: true,
+    })
+    const { authOptions } = await loadConfigWithProvider({ onSignIn })
+
+    const result = await authOptions.callbacks!.jwt!({
+      token: {},
+      account: {
+        access_token: 'at',
+        id_token: 'it',
+        refresh_token: 'rt',
+        expires_at: 9999999999,
+        provider: 'test-provider',
+        type: 'oauth',
+        providerAccountId: 'pa1',
+      },
+      user: { id: 'u1', name: 'Test', email: 'test@example.com', image: null },
+      profile: undefined,
+      trigger: undefined,
+      isNewUser: false,
+      session: undefined,
+    })
+
+    expect(result.accessToken).toBe('at')
+    expect(result.refreshToken).toBe('rt')
+    expect(result.expiresAt).toBe(9999999999)
+    expect(result.userId).toBe('u1')
+    expect(result.hasAccess).toBe(true)
+  })
+
   test('onSession hook merges extra fields into session', async () => {
     vi.stubEnv('REQUIRE_AUTH', 'true')
     vi.stubEnv('NEXTAUTH_SECRET', 'test-secret')
@@ -197,6 +235,40 @@ describe('provider lifecycle hooks', () => {
     expect(sessionObj.hasAccess).toBe(true)
     expect(sessionObj.dlGroup).toBe('aiq-users')
     expect(sessionObj.idToken).toBe('it')
+  })
+
+  test('onSession hook cannot override core session fields', async () => {
+    vi.stubEnv('REQUIRE_AUTH', 'true')
+    vi.stubEnv('NEXTAUTH_SECRET', 'test-secret')
+
+    const onSession = vi.fn().mockReturnValue({
+      accessToken: 'hook-at',
+      idToken: 'hook-it',
+      userId: 'hook-user',
+      error: 'hook-error',
+      hasAccess: true,
+    })
+    const { authOptions } = await loadConfigWithProvider({ onSession })
+
+    const result = await authOptions.callbacks!.session!({
+      session: { user: { name: 'Test' }, expires: '2099-01-01' },
+      token: {
+        accessToken: 'at',
+        idToken: 'it',
+        userId: 'u1',
+        error: undefined,
+      },
+      user: { id: 'u1', name: 'Test', email: 'test@example.com', image: null, emailVerified: null },
+      trigger: 'update',
+      newSession: undefined,
+    })
+
+    const sessionObj = result as unknown as Record<string, unknown>
+    expect(sessionObj.accessToken).toBe('at')
+    expect(sessionObj.idToken).toBe('it')
+    expect(sessionObj.userId).toBe('u1')
+    expect(sessionObj.error).toBeUndefined()
+    expect(sessionObj.hasAccess).toBe(true)
   })
 
   test('config works without hooks (backward compatible)', async () => {

@@ -90,6 +90,10 @@ const parsePositiveIntEnv = (envValue: string | undefined, defaultValue: number)
 
 /**
  * Buffer time (seconds) before token expiry to trigger proactive refresh.
+ * Default: 15 minutes. This ensures tokens are refreshed well before expiry,
+ * covering most operational scenarios. For deployments with long-running jobs
+ * (deep research with ECI can run 20-40+ minutes), set
+ * TOKEN_REFRESH_BUFFER_MINUTES=30.
  *
  * Resolution order:
  * 1. Provider-level override (AuthProviderConfig.tokenRefreshBufferSeconds)
@@ -160,7 +164,7 @@ export const authOptions: AuthOptions = {
         // Let the provider enrich the JWT (e.g. group membership checks)
         if (providerConfig.onSignIn) {
           const extra = await providerConfig.onSignIn({ token: base, account: { ...account }, user: { ...user } })
-          return { ...base, ...extra }
+          return { ...extra, ...base }
         }
         return base
       }
@@ -194,7 +198,7 @@ export const authOptions: AuthOptions = {
 
       // Let the provider surface additional fields (e.g. hasAccess, dlGroup)
       if (providerConfig.onSession) {
-        return { ...base, ...providerConfig.onSession({ session: base, token: { ...token } }) }
+        return { ...providerConfig.onSession({ session: base, token: { ...token } }), ...base }
       }
       return base
     },

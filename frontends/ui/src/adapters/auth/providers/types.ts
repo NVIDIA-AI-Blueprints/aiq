@@ -71,7 +71,8 @@ export interface AuthProviderConfig {
 
   /**
    * Called after initial OAuth sign-in to enrich the JWT with provider-specific claims.
-   * Return an object whose keys are merged into the JWT token.
+   * Return an object whose keys are merged into the JWT token. Core token
+   * fields win on key collisions to avoid corrupting token rotation state.
    *
    * @example
    * ```ts
@@ -86,6 +87,7 @@ export interface AuthProviderConfig {
   /**
    * Called during every session callback to surface provider-specific fields.
    * Return an object whose keys are merged into the session sent to the client.
+   * Core session fields win on key collisions.
    *
    * @example
    * ```ts
