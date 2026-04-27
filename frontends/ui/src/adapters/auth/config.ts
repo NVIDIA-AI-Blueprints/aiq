@@ -167,8 +167,13 @@ export const authOptions: AuthOptions = {
 
         // Let the provider enrich the JWT (e.g. group membership checks)
         if (providerConfig.onSignIn) {
-          const extra = await providerConfig.onSignIn({ token: base, account: { ...account }, user: { ...user } })
-          return { ...extra, ...base }
+          try {
+            const extra = await providerConfig.onSignIn({ token: base, account: { ...account }, user: { ...user } })
+            return { ...extra, ...base }
+          } catch (error) {
+            console.error('[Auth] onSignIn hook failed:', error)
+            return base
+          }
         }
         return base
       }

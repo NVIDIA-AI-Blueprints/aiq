@@ -81,6 +81,10 @@ export interface AuthProviderConfig {
    *   return { hasAccess, groupName: 'my-group' }
    * }
    * ```
+   *
+   * Throwing from this hook is treated as a provider integration failure:
+   * the error is logged and the base JWT is returned. Return explicit claims
+   * such as `{ hasAccess: false }` for intentional access denial.
    */
   onSignIn?: (params: SignInHookParams) => Promise<Record<string, unknown>>
 

@@ -207,6 +207,42 @@ describe('provider lifecycle hooks', () => {
     expect(result.hasAccess).toBe(true)
   })
 
+  test('onSignIn hook failure falls back to base JWT fields', async () => {
+    vi.stubEnv('REQUIRE_AUTH', 'true')
+    vi.stubEnv('NEXTAUTH_SECRET', 'test-secret')
+
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const onSignIn = vi.fn().mockRejectedValue(new Error('group lookup failed'))
+    const { authOptions } = await loadConfigWithProvider({ onSignIn })
+
+    const result = await authOptions.callbacks!.jwt!({
+      token: {},
+      account: {
+        access_token: 'at',
+        id_token: 'it',
+        refresh_token: 'rt',
+        expires_at: 9999999999,
+        provider: 'test-provider',
+        type: 'oauth',
+        providerAccountId: 'pa1',
+      },
+      user: { id: 'u1', name: 'Test', email: 'test@example.com', image: null },
+      profile: undefined,
+      trigger: undefined,
+      isNewUser: false,
+      session: undefined,
+    })
+
+    expect(onSignIn).toHaveBeenCalledOnce()
+    expect(consoleError).toHaveBeenCalledWith('[Auth] onSignIn hook failed:', expect.any(Error))
+    expect(result.accessToken).toBe('at')
+    expect(result.idToken).toBe('it')
+    expect(result.refreshToken).toBe('rt')
+    expect(result.expiresAt).toBe(9999999999)
+    expect(result.userId).toBe('u1')
+    expect(result.hasAccess).toBeUndefined()
+  })
+
   test('onSession hook merges extra fields into session', async () => {
     vi.stubEnv('REQUIRE_AUTH', 'true')
     vi.stubEnv('NEXTAUTH_SECRET', 'test-secret')

@@ -34,7 +34,8 @@
  *   onSignIn({ token, account, user }) → Promise<Record<string, unknown>>
  *     Called once after initial OAuth callback. Use to check group membership,
  *     enrich the JWT with custom claims, or gate access. Returned object is
- *     merged into the JWT.
+ *     merged into the JWT. Throwing is logged and falls back to the base JWT;
+ *     return explicit claims such as { hasAccess: false } to deny access.
  *
  *   onSession({ session, token }) → Record<string, unknown>
  *     Called on every session check. Use to surface provider-specific fields
