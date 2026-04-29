@@ -23,6 +23,10 @@ import {
   SESSION_MAX_AGE_SECONDS,
   shouldUseSecureCookies,
 } from '@/adapters/auth/config'
+import {
+  getIdTokenCookieDecision,
+  idTokenCookieMaxAgeSeconds,
+} from '@/adapters/auth/id-token-cookie'
 
 const nextAuthHandler = NextAuth(authOptions)
 
@@ -36,16 +40,6 @@ const clearAuthCookies = (response: NextResponse): void => {
   response.cookies.delete('__Secure-next-auth.callback-url')
 }
 
-const isTokenExpired = (expiresAt: number | undefined): boolean => {
-  if (!expiresAt) return true
-  return Date.now() >= expiresAt * 1000
-}
-
-const idTokenCookieMaxAgeSeconds = (expiresAt: number): number => {
-  const nowSec = Math.floor(Date.now() / 1000)
-  return Math.min(SESSION_MAX_AGE_SECONDS, Math.max(1, expiresAt - nowSec))
-}
-
 const cloneResponse = (response: Response): NextResponse =>
   new NextResponse(response.body, {
     status: response.status,
@@ -55,7 +49,8 @@ const cloneResponse = (response: Response): NextResponse =>
 
 const syncIdTokenCookie = async (
   req: NextRequest,
-  response: Response
+  response: Response,
+  { preserveExpiredRequestToken = false }: { preserveExpiredRequestToken?: boolean } = {}
 ): Promise<NextResponse> => {
   const newResponse = cloneResponse(response)
 
@@ -67,17 +62,29 @@ const syncIdTokenCookie = async (
     })
 
     const expiresAt = token?.expiresAt as number | undefined
-    if (token?.error === 'RefreshAccessTokenError' || !token?.idToken || isTokenExpired(expiresAt)) {
+    const idToken = token?.idToken as string | undefined
+    const cookieDecision = getIdTokenCookieDecision({
+      tokenError: token?.error,
+      idToken,
+      expiresAt,
+      preserveExpiredRequestToken,
+    })
+
+    if (cookieDecision === 'delete') {
       newResponse.cookies.delete('idToken')
       return newResponse
     }
 
-    newResponse.cookies.set('idToken', token.idToken as string, {
+    if (cookieDecision === 'preserve') {
+      return newResponse
+    }
+
+    newResponse.cookies.set('idToken', idToken!, {
       httpOnly: true,
       sameSite: 'lax',
       path: '/',
       secure: shouldUseSecureCookies(),
-      maxAge: idTokenCookieMaxAgeSeconds(expiresAt!),
+      maxAge: idTokenCookieMaxAgeSeconds(expiresAt!, SESSION_MAX_AGE_SECONDS),
     })
   } catch (error) {
     console.error('[NextAuth] Error syncing idToken cookie:', error)
@@ -121,7 +128,10 @@ const withIdTokenCookie = async (
   // Check if this is a callback (OAuth GET or Credentials POST)
   const isCallback = params.nextauth?.includes('callback')
   if (action === 'session') {
-    return syncIdTokenCookie(req, response)
+    // On session requests, NextAuth may refresh the JWT and write it only to
+    // the response Set-Cookie header. getToken(req) still sees the old request
+    // JWT, so expiry alone should not clear idToken in the same response.
+    return syncIdTokenCookie(req, response, { preserveExpiredRequestToken: true })
   }
 
   if (isCallback) {

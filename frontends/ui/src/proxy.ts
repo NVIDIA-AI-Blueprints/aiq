@@ -30,26 +30,10 @@ import {
   isAuthRequired,
   shouldUseSecureCookies,
 } from '@/adapters/auth/config'
-
-/**
- * Check if a token is actually expired (real expiry, not refresh buffer).
- * The refresh buffer is for proactive token refresh in the NextAuth JWT
- * callback — the cookie should remain valid until the token truly expires
- * so that WebSocket and SSE transports can still authenticate.
- */
-const isTokenExpired = (expiresAt: number | undefined): boolean => {
-  if (!expiresAt) return true
-  return Date.now() >= expiresAt * 1000
-}
-
-/**
- * Compute the cookie maxAge so it expires with the token rather than
- * lasting a fixed 24 hours. Clamped to [1, SESSION_MAX_AGE_SECONDS].
- */
-const idTokenCookieMaxAgeSeconds = (expiresAt: number): number => {
-  const nowSec = Math.floor(Date.now() / 1000)
-  return Math.min(SESSION_MAX_AGE_SECONDS, Math.max(1, expiresAt - nowSec))
-}
+import {
+  getIdTokenCookieDecision,
+  idTokenCookieMaxAgeSeconds,
+} from '@/adapters/auth/id-token-cookie'
 
 export default async function proxy(req: NextRequest) {
   if (!isAuthRequired()) {
@@ -84,25 +68,24 @@ export default async function proxy(req: NextRequest) {
     })
 
     if (token) {
-      // Check for refresh error from NextAuth JWT callback
-      if (token.error === 'RefreshAccessTokenError' || token.error === 'DevTokenExpired') {
-        response.cookies.delete('idToken')
-        return response
-      }
-
       const expiresAt = token.expiresAt as number | undefined
+      const cookieDecision = getIdTokenCookieDecision({
+        tokenError: token.error,
+        idToken: token.idToken,
+        expiresAt,
+      })
 
       // Set idToken cookie only if we have a valid, non-expired token.
       // Unlike the refresh buffer (which proactively refreshes tokens),
       // the cookie stays valid until real expiry so WebSocket/SSE
       // transports don't lose auth while NextAuth refreshes in the background.
-      if (token.idToken && !isTokenExpired(expiresAt)) {
+      if (cookieDecision === 'set') {
         response.cookies.set('idToken', token.idToken as string, {
           httpOnly: true,
           sameSite: 'lax',
           path: '/',
           secure: shouldUseSecureCookies(),
-          maxAge: idTokenCookieMaxAgeSeconds(expiresAt!),
+          maxAge: idTokenCookieMaxAgeSeconds(expiresAt!, SESSION_MAX_AGE_SECONDS),
         })
       } else {
         // Token expired or absent - clear the cookie
