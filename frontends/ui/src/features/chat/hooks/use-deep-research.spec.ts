@@ -650,6 +650,26 @@ describe('useDeepResearch', () => {
       )
     })
 
+    test('onJobStatus interrupted without error shows fallback failure', async () => {
+      await setupConnectedHook()
+
+      expect(() => {
+        act(() => {
+          mockClient?.callbacks.onJobStatus?.('interrupted', undefined)
+        })
+      }).not.toThrow()
+
+      expect(mockAddDeepResearchBanner).toHaveBeenCalledWith(
+        'failure',
+        'job-456',
+        'test-conv-123'
+      )
+      expect(mockAddErrorCard).toHaveBeenCalledWith(
+        'agent.deep_research_failed',
+        'Research was interrupted before completion.'
+      )
+    })
+
     test('onWorkflowStart adds thinking step and agent', async () => {
       await setupConnectedHook()
 

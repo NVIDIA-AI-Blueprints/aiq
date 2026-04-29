@@ -35,6 +35,15 @@ const TIMEOUT_CHECK_INTERVAL_MS = 10000
  *  job.status "interrupted" within this window, clean up locally so the
  *  UI never stays stuck in a streaming state. */
 const CANCEL_FALLBACK_TIMEOUT_MS = 5000
+const USER_CANCELLED_ERROR_MARKER = 'cancelled by user'
+
+const isUserCancelledStatus = (
+  status: DeepResearchJobStatus,
+  error?: string
+): boolean => (
+  status === 'interrupted' &&
+  error?.toLowerCase().includes(USER_CANCELLED_ERROR_MARKER) === true
+)
 
 interface UseDeepResearchReturn {
   /** Whether deep research is currently streaming */
@@ -314,8 +323,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               setCurrentStatus('error')
               stopAllDeepResearchSpinners()
               const hasReport = Boolean(state.reportContent?.trim())
-              const isUserCancelled =
-                status === 'interrupted' && error?.toLowerCase().includes('cancelled by user')
+              const isUserCancelled = isUserCancelledStatus(status, error)
 
               if (ownerConvId && messageId) {
                 patchConversationMessage(ownerConvId, messageId, {
