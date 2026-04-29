@@ -47,11 +47,48 @@ const cloneResponse = (response: Response): NextResponse =>
     headers: new Headers(response.headers),
   })
 
+interface SessionCookieSource {
+  idToken?: string
+  expiresAt?: number
+  error?: string
+}
+
+const readSessionCookieSource = async (
+  response: Response
+): Promise<SessionCookieSource | undefined> => {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!contentType.includes('application/json')) {
+    return undefined
+  }
+
+  try {
+    const session = (await response.clone().json()) as {
+      idToken?: unknown
+      idTokenExpiresAt?: unknown
+      error?: unknown
+    }
+
+    return {
+      idToken: typeof session.idToken === 'string' ? session.idToken : undefined,
+      expiresAt: typeof session.idTokenExpiresAt === 'number' ? session.idTokenExpiresAt : undefined,
+      error: typeof session.error === 'string' ? session.error : undefined,
+    }
+  } catch {
+    return undefined
+  }
+}
+
 const syncIdTokenCookie = async (
   req: NextRequest,
   response: Response,
-  { preserveExpiredRequestToken = false }: { preserveExpiredRequestToken?: boolean } = {}
+  {
+    preserveExpiredRequestToken = false,
+    preferResponseSessionToken = false,
+  }: { preserveExpiredRequestToken?: boolean; preferResponseSessionToken?: boolean } = {}
 ): Promise<NextResponse> => {
+  const responseSession = preferResponseSessionToken
+    ? await readSessionCookieSource(response)
+    : undefined
   const newResponse = cloneResponse(response)
 
   try {
@@ -61,10 +98,10 @@ const syncIdTokenCookie = async (
       secureCookie: shouldUseSecureCookies(),
     })
 
-    const expiresAt = token?.expiresAt as number | undefined
-    const idToken = token?.idToken as string | undefined
+    const expiresAt = responseSession?.expiresAt ?? (token?.expiresAt as number | undefined)
+    const idToken = responseSession?.idToken ?? (token?.idToken as string | undefined)
     const cookieDecision = getIdTokenCookieDecision({
-      tokenError: token?.error,
+      tokenError: responseSession?.error ?? token?.error,
       idToken,
       expiresAt,
       preserveExpiredRequestToken,
@@ -129,9 +166,13 @@ const withIdTokenCookie = async (
   const isCallback = params.nextauth?.includes('callback')
   if (action === 'session') {
     // On session requests, NextAuth may refresh the JWT and write it only to
-    // the response Set-Cookie header. getToken(req) still sees the old request
-    // JWT, so expiry alone should not clear idToken in the same response.
-    return syncIdTokenCookie(req, response, { preserveExpiredRequestToken: true })
+    // the response. Prefer the session payload so idToken gets the refreshed
+    // token and TTL; fall back to preserving when only the old request JWT is
+    // visible.
+    return syncIdTokenCookie(req, response, {
+      preserveExpiredRequestToken: true,
+      preferResponseSessionToken: true,
+    })
   }
 
   if (isCallback) {

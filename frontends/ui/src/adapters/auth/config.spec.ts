@@ -255,6 +255,7 @@ describe('provider lifecycle hooks', () => {
       token: {
         accessToken: 'at',
         idToken: 'it',
+        expiresAt: 9999999999,
         userId: 'u1',
         hasAccess: true,
         dlGroup: 'aiq-users',
@@ -271,6 +272,7 @@ describe('provider lifecycle hooks', () => {
     expect(sessionObj.hasAccess).toBe(true)
     expect(sessionObj.dlGroup).toBe('aiq-users')
     expect(sessionObj.idToken).toBe('it')
+    expect(sessionObj.idTokenExpiresAt).toBe(9999999999)
   })
 
   test('onSession hook cannot override core session fields', async () => {
@@ -291,6 +293,7 @@ describe('provider lifecycle hooks', () => {
       token: {
         accessToken: 'at',
         idToken: 'it',
+        expiresAt: 9999999999,
         userId: 'u1',
         error: undefined,
       },
@@ -302,6 +305,7 @@ describe('provider lifecycle hooks', () => {
     const sessionObj = result as unknown as Record<string, unknown>
     expect(sessionObj.accessToken).toBe('at')
     expect(sessionObj.idToken).toBe('it')
+    expect(sessionObj.idTokenExpiresAt).toBe(9999999999)
     expect(sessionObj.userId).toBe('u1')
     expect(sessionObj.error).toBeUndefined()
     expect(sessionObj.hasAccess).toBe(true)
@@ -335,13 +339,14 @@ describe('provider lifecycle hooks', () => {
     // Session without onSession hook
     const sessionResult = await authOptions.callbacks!.session!({
       session: { user: { name: 'Test' }, expires: '2099-01-01' },
-      token: { accessToken: 'at', idToken: 'it', userId: 'u1' },
+      token: { accessToken: 'at', idToken: 'it', expiresAt: 9999999999, userId: 'u1' },
       user: { id: 'u1', name: 'Test', email: 'test@example.com', emailVerified: null },
       trigger: 'update',
       newSession: undefined,
     }) as unknown as Record<string, unknown>
 
     expect(sessionResult.idToken).toBe('it')
+    expect(sessionResult.idTokenExpiresAt).toBe(9999999999)
     // No extra fields from hooks
     expect(sessionResult.hasAccess).toBeUndefined()
   })
