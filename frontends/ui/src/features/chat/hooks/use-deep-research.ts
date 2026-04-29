@@ -314,6 +314,8 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               setCurrentStatus('error')
               stopAllDeepResearchSpinners()
               const hasReport = Boolean(state.reportContent?.trim())
+              const isUserCancelled =
+                status === 'interrupted' && error?.toLowerCase().includes('cancelled by user')
 
               if (ownerConvId && messageId) {
                 patchConversationMessage(ownerConvId, messageId, {
@@ -323,7 +325,6 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
                   showViewReport: hasReport,
                 })
               }
-              const isUserCancelled = status === 'interrupted'
               addDeepResearchBanner(isUserCancelled ? 'cancelled' : 'failure', jobId, ownerConvId || undefined)
               researchStartTimeRef.current = null
               clientRef.current?.disconnect()
@@ -333,6 +334,9 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               if (error && !isUserCancelled) {
                 const { addErrorCard } = useChatStore.getState()
                 addErrorCard('agent.deep_research_failed', error)
+              } else if (status === 'interrupted' && !isUserCancelled) {
+                const { addErrorCard } = useChatStore.getState()
+                addErrorCard('agent.deep_research_failed', 'Research was interrupted before completion.')
               }
             }
           },

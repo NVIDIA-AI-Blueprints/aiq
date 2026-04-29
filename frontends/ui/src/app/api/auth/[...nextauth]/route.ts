@@ -36,6 +36,56 @@ const clearAuthCookies = (response: NextResponse): void => {
   response.cookies.delete('__Secure-next-auth.callback-url')
 }
 
+const isTokenExpired = (expiresAt: number | undefined): boolean => {
+  if (!expiresAt) return true
+  return Date.now() >= expiresAt * 1000
+}
+
+const idTokenCookieMaxAgeSeconds = (expiresAt: number): number => {
+  const nowSec = Math.floor(Date.now() / 1000)
+  return Math.min(SESSION_MAX_AGE_SECONDS, Math.max(1, expiresAt - nowSec))
+}
+
+const cloneResponse = (response: Response): NextResponse =>
+  new NextResponse(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  })
+
+const syncIdTokenCookie = async (
+  req: NextRequest,
+  response: Response
+): Promise<NextResponse> => {
+  const newResponse = cloneResponse(response)
+
+  try {
+    const token = await getToken({
+      req,
+      secret: process.env.NEXTAUTH_SECRET,
+      secureCookie: shouldUseSecureCookies(),
+    })
+
+    const expiresAt = token?.expiresAt as number | undefined
+    if (token?.error === 'RefreshAccessTokenError' || !token?.idToken || isTokenExpired(expiresAt)) {
+      newResponse.cookies.delete('idToken')
+      return newResponse
+    }
+
+    newResponse.cookies.set('idToken', token.idToken as string, {
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+      secure: shouldUseSecureCookies(),
+      maxAge: idTokenCookieMaxAgeSeconds(expiresAt!),
+    })
+  } catch (error) {
+    console.error('[NextAuth] Error syncing idToken cookie:', error)
+  }
+
+  return newResponse
+}
+
 /**
  * Wrapper that sets idToken cookie after successful auth callback.
  * The middleware skips /api/auth/ routes, so we need to set the cookie here.
@@ -66,41 +116,17 @@ const withIdTokenCookie = async (
 
   // Run NextAuth handler first
   const response = await nextAuthHandler(req, context)
+  const action = params.nextauth?.[0]
 
   // Check if this is a callback (OAuth GET or Credentials POST)
   const isCallback = params.nextauth?.includes('callback')
+  if (action === 'session') {
+    return syncIdTokenCookie(req, response)
+  }
 
   if (isCallback) {
-    try {
-      const token = await getToken({
-        req,
-        secret: process.env.NEXTAUTH_SECRET,
-      })
-
-      if (token?.idToken) {
-        console.log('[NextAuth] Setting idToken cookie after callback')
-
-        // Clone the response to modify headers
-        const newResponse = new NextResponse(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: new Headers(response.headers),
-        })
-
-        // Keep callback-set cookies aligned with the shared auth session lifetime.
-        newResponse.cookies.set('idToken', token.idToken as string, {
-          httpOnly: true,
-          sameSite: 'lax',
-          path: '/',
-          secure: shouldUseSecureCookies(),
-          maxAge: SESSION_MAX_AGE_SECONDS,
-        })
-
-        return newResponse
-      }
-    } catch (error) {
-      console.error('[NextAuth] Error setting idToken cookie:', error)
-    }
+    console.log('[NextAuth] Syncing idToken cookie after callback')
+    return syncIdTokenCookie(req, response)
   }
 
   return response
