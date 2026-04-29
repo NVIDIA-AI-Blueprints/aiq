@@ -98,10 +98,17 @@ const syncIdTokenCookie = async (
       secureCookie: shouldUseSecureCookies(),
     })
 
+    const hasResponseSessionCookieSource =
+      responseSession?.idToken !== undefined ||
+      responseSession?.expiresAt !== undefined ||
+      responseSession?.error !== undefined
     const expiresAt = responseSession?.expiresAt ?? (token?.expiresAt as number | undefined)
     const idToken = responseSession?.idToken ?? (token?.idToken as string | undefined)
     const cookieDecision = getIdTokenCookieDecision({
-      tokenError: responseSession?.error ?? token?.error,
+      // If the session response includes refreshed token fields, it is the
+      // authoritative state. Do not let a stale request-side refresh error
+      // shadow a successful recovery from the same /api/auth/session response.
+      tokenError: hasResponseSessionCookieSource ? responseSession?.error : token?.error,
       idToken,
       expiresAt,
       preserveExpiredRequestToken,

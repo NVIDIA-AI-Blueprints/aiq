@@ -63,6 +63,10 @@ describe('idToken cookie decisions', () => {
     expect(getIdTokenCookieDecision({ idToken: 'id-token' })).toBe('delete')
   })
 
+  test('deletes cookie when token expiry is zero', () => {
+    expect(getIdTokenCookieDecision({ idToken: 'id-token', expiresAt: 0 })).toBe('delete')
+  })
+
   test('deletes cookie when token is expired by default', () => {
     const expiresAt = Math.floor(Date.now() / 1000) - 10
 
@@ -91,6 +95,7 @@ describe('idToken cookie decisions', () => {
 
     expect(isTokenExpired(nowSec + 1)).toBe(false)
     expect(isTokenExpired(nowSec)).toBe(true)
+    expect(isTokenExpired(0)).toBe(true)
     expect(isTokenExpired(undefined)).toBe(true)
   })
 

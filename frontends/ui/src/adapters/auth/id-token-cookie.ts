@@ -18,7 +18,7 @@ interface IdTokenCookieDecisionInput {
  * callback; transport auth should remain usable until real token expiry.
  */
 export const isTokenExpired = (expiresAt: number | undefined): boolean => {
-  if (!expiresAt) return true
+  if (expiresAt === undefined) return true
   return Date.now() >= expiresAt * 1000
 }
 
@@ -48,7 +48,7 @@ export const getIdTokenCookieDecision = ({
     return 'delete'
   }
 
-  if (!expiresAt) {
+  if (expiresAt === undefined) {
     return 'delete'
   }
 
