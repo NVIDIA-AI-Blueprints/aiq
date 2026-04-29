@@ -94,6 +94,7 @@ Profiling & Cost Analysis <./profiling/index.md>
 Overview <./deployment/index.md>
 Docker Compose <./deployment/docker-compose.md>
 Docker Build System <./deployment/docker-build.md>
+Authentication <./deployment/authentication.md>
 Observability <./deployment/observability.md>
 Production <./deployment/production.md>
 Kubernetes <./deployment/kubernetes.md>
