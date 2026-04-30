@@ -396,6 +396,39 @@ class TestGenericUrlExtractor:
         assert len(entries) == 1
         assert entries[0].title == "Correct Title"
 
+    def test_url_with_commas_in_path(self):
+        """Commas inside URL paths (e.g., lat/lon coordinates) must not truncate the URL.
+
+        Regression: the generic URL regex previously excluded ``,`` from the
+        character class, so an FAA cam URL like
+        ``https://weathercams.faa.gov/map/-122.31167,47.22287,10/...`` was
+        registered as ``https://weathercams.faa.gov/map/-122.31167``. The LLM
+        would then cite the full URL, the verifier would compare full vs.
+        truncated, and the citation would be silently removed as
+        ``url_not_in_registry``.
+        """
+        full_url = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
+        content = f'<Document href="{full_url}">\n<title>\nFAA Cam\n</title>\nObservation.\n</Document>'
+        entries = extract_sources_from_tool_result("tavily_web_search", content)
+        assert len(entries) == 1
+        assert entries[0].url == full_url
+
+    def test_trailing_comma_still_trimmed(self):
+        """A comma immediately followed by whitespace is still treated as
+        sentence punctuation and stripped from the captured URL."""
+        content = "See https://example.com/page, then continue reading."
+        entries = extract_sources_from_tool_result("any_tool", content)
+        assert len(entries) == 1
+        assert entries[0].url == "https://example.com/page"
+
+    def test_markdown_bracket_still_terminates(self):
+        """``]`` continues to terminate a URL match so markdown links don't
+        leak the closing bracket into the captured URL."""
+        content = "[See here](https://example.com/page) for details."
+        entries = extract_sources_from_tool_result("any_tool", content)
+        assert len(entries) == 1
+        assert entries[0].url == "https://example.com/page"
+
 
 class TestKnowledgeLayerParser:
     """Tests for knowledge layer output parser."""

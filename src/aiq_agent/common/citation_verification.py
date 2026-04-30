@@ -437,8 +437,13 @@ def extract_sources_from_tool_result(tool_name: str, content: str) -> list[Sourc
 # Built-in parsers
 # ---------------------------------------------------------------------------
 
-# Generic URL extractor — works for any tool output format
-_GENERIC_URL_RE = re.compile(r"https?://[^\s<>\"',\]]+")
+# Generic URL extractor — works for any tool output format.
+# Commas are valid URL path characters (RFC 3986 sub-delim) and appear in real
+# URLs like https://weathercams.faa.gov/map/-122.31167,47.22287,10/...; we
+# include them in the match and rely on the trailing rstrip below to remove
+# any comma that's actually punctuation. ``]`` stays excluded because it
+# almost always terminates a markdown link rather than appearing in a path.
+_GENERIC_URL_RE = re.compile(r"https?://[^\s<>\"'\]]+")
 
 
 # Patterns for extracting titles near URLs in common tool output formats
