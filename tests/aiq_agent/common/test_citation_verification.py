@@ -706,6 +706,19 @@ class TestSanitizeReport:
         assert result.body_urls_removed == 1
         assert result.body_urls_replaced == 0
 
+    def test_body_url_with_commas_matched_to_reference(self):
+        """Regression: ``_BODY_URL_RE`` previously stopped at the first comma,
+        so a bare body URL with commas in its path was truncated, only the
+        prefix got replaced with ``[N]``, and the rest of the URL was left as
+        dangling text in the sanitized report."""
+        full_url = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
+        report = f"Live cam at {full_url} confirms it [1].\n\n## Sources\n[1] FAA cam: {full_url}"
+        result = sanitize_report(report)
+        assert "Live cam at [1] confirms it [1]" in result.sanitized_report
+        # No fragment of the URL should be left dangling in the body
+        assert ",47.22287" not in result.sanitized_report.split("## Sources", 1)[0]
+        assert result.body_urls_replaced == 1
+
     def test_body_url_matching_ref_replaced_with_citation(self):
         """Bare body URL matching a reference is replaced with [N]."""
         report = (

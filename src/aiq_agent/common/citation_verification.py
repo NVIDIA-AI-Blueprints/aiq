@@ -801,11 +801,13 @@ _TRUNCATED_URL_RE = re.compile(r"\.\.\.$|…$")  # ends in ... or ellipsis
 # Suspicious URL patterns
 _IP_ADDRESS_RE = re.compile(r"^https?://\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}")
 _SUSPICIOUS_SCHEMES_RE = re.compile(r"^(?:javascript|data|vbscript|file):", re.IGNORECASE)
-_BARE_URL_RE = re.compile(r"https?://[^\s<>\"',\]]+")
+# See _GENERIC_URL_RE for the rationale on why ``,`` is matched and stripped
+# via _URL_TRIM_CHARS rather than excluded in the character class.
+_BARE_URL_RE = re.compile(r"https?://[^\s<>\"'\]]+")
 
 # Body URL patterns (used by sanitize_report)
 _MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(\s*\w+://[^\s)]+\)")
-_BODY_URL_RE = re.compile(r"\w+://[^\s<>\"',\]]+")
+_BODY_URL_RE = re.compile(r"\w+://[^\s<>\"'\]]+")
 
 
 @dataclass
