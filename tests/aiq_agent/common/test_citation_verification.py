@@ -537,6 +537,23 @@ class TestVerifyCitations:
         assert len(result.valid_citations) == 2
         assert len(result.removed_citations) == 0
 
+    def test_url_in_markdown_brackets_still_verifies(self, registry):
+        """Regression: when the LLM wraps a citation URL in markdown brackets
+        (``[https://valid.com/article1]``), the verifier captured the trailing
+        ``]`` as part of the URL and then failed to resolve it against the
+        registry, silently removing an otherwise-valid citation."""
+        report = "Finding [1].\n\n## Sources\n[1] Article 1: [https://valid.com/article1]"
+        result = verify_citations(report, registry)
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 0
+
+    def test_url_in_angle_brackets_still_verifies(self, registry):
+        """Same idea as above for ``<https://...>`` Markdown-style autolinks."""
+        report = "Finding [1].\n\n## Sources\n[1] Article 1: <https://valid.com/article1>"
+        result = verify_citations(report, registry)
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 0
+
     def test_invalid_citation_removed(self, registry):
         report = (
             "Good finding [1]. Bad finding [2].\n\n"
