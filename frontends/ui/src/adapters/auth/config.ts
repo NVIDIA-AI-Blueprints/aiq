@@ -201,6 +201,7 @@ export const authOptions: AuthOptions = {
         ...session,
         accessToken: token.accessToken as string | undefined,
         idToken: token.idToken as string | undefined,
+        idTokenExpiresAt: token.expiresAt as number | undefined,
         userId: token.userId as string | undefined,
         error: token.error as string | undefined,
       }

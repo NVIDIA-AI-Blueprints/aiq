@@ -20,6 +20,8 @@ declare module 'next-auth' {
     accessToken?: string
     /** The OIDC ID token (used for backend auth) */
     idToken?: string
+    /** Expiration timestamp for the OIDC ID token (seconds since epoch) */
+    idTokenExpiresAt?: number
     /** User ID from the OAuth provider */
     userId?: string
     /** Error state for token refresh failures */

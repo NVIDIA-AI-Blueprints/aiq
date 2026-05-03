@@ -460,6 +460,8 @@ describe('useWebSocketChat', () => {
   test('onResponse callback adds streaming content to chat', () => {
     renderWebSocketHook()
 
+    mockStoreState.isStreaming = true
+
     // Simulate streaming response (not final)
     act(() => {
       capturedCallbacks.onResponse?.('Partial content...', 'in_progress', false)
@@ -468,6 +470,23 @@ describe('useWebSocketChat', () => {
     // Non-final responses with content are now added to chat as AgentResponse
     // reportContent is only set by deep research SSE events
     expect(mockAddAgentResponse).toHaveBeenCalledWith('Partial content...')
+  })
+
+  test('onResponse drops stale content when not streaming', () => {
+    const consoleWarnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    renderWebSocketHook()
+
+    mockStoreState.isStreaming = false
+
+    act(() => {
+      capturedCallbacks.onResponse?.('Repeated stale response', 'complete', true)
+    })
+
+    expect(mockAddAgentResponse).not.toHaveBeenCalled()
+    expect(mockSetStreaming).not.toHaveBeenCalledWith(false)
+    expect(consoleWarnSpy).toHaveBeenCalledWith('Ignoring stale isFinal -- not currently streaming')
+
+    consoleWarnSpy.mockRestore()
   })
 
   test('onIntermediateStep callback creates thinking step if none exists', () => {
@@ -828,6 +847,7 @@ describe('useWebSocketChat', () => {
     })
 
     renderWebSocketHook()
+    mockStoreState.isStreaming = true
 
     // Simulate response with deep research escalation signal
     act(() => {

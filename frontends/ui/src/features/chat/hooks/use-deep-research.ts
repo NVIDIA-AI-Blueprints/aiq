@@ -35,6 +35,15 @@ const TIMEOUT_CHECK_INTERVAL_MS = 10000
  *  job.status "interrupted" within this window, clean up locally so the
  *  UI never stays stuck in a streaming state. */
 const CANCEL_FALLBACK_TIMEOUT_MS = 5000
+const USER_CANCELLED_ERROR_MARKER = 'cancelled by user'
+
+const isUserCancelledStatus = (
+  status: DeepResearchJobStatus,
+  error?: string
+): boolean => (
+  status === 'interrupted' &&
+  error?.toLowerCase().includes(USER_CANCELLED_ERROR_MARKER) === true
+)
 
 interface UseDeepResearchReturn {
   /** Whether deep research is currently streaming */
@@ -314,6 +323,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               setCurrentStatus('error')
               stopAllDeepResearchSpinners()
               const hasReport = Boolean(state.reportContent?.trim())
+              const isUserCancelled = isUserCancelledStatus(status, error)
 
               if (ownerConvId && messageId) {
                 patchConversationMessage(ownerConvId, messageId, {
@@ -323,7 +333,6 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
                   showViewReport: hasReport,
                 })
               }
-              const isUserCancelled = status === 'interrupted'
               addDeepResearchBanner(isUserCancelled ? 'cancelled' : 'failure', jobId, ownerConvId || undefined)
               researchStartTimeRef.current = null
               clientRef.current?.disconnect()
@@ -333,6 +342,9 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               if (error && !isUserCancelled) {
                 const { addErrorCard } = useChatStore.getState()
                 addErrorCard('agent.deep_research_failed', error)
+              } else if (status === 'interrupted' && !isUserCancelled) {
+                const { addErrorCard } = useChatStore.getState()
+                addErrorCard('agent.deep_research_failed', 'Research was interrupted before completion.')
               }
             }
           },

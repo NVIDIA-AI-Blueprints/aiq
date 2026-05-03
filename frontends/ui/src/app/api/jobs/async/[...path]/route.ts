@@ -62,15 +62,14 @@ const getAuthHeaders = async (req: Request, pathSegments: string[]): Promise<Rec
   const allowQueryToken = pathSegments.includes('stream')
   const rawQueryToken = new URL(req.url).searchParams.get('token')?.trim()
   const queryToken = allowQueryToken && rawQueryToken ? rawQueryToken : undefined
+  const cookieStore = await cookies()
+  const cookieIdToken = cookieStore.get('idToken')?.value?.trim()
+  const idToken = cookieIdToken || queryToken
+  const authToken = req.headers.get('Authorization') || (idToken ? `Bearer ${idToken}` : null)
 
-  if (queryToken) {
+  if (queryToken && !cookieIdToken) {
     console.warn('[Deep Research API] SSE stream using ?token= query fallback (idToken cookie missing)')
   }
-
-  const authToken = req.headers.get('Authorization') || (queryToken ? `Bearer ${queryToken}` : null)
-  const cookieStore = await cookies()
-  const cookieIdToken = cookieStore.get('idToken')?.value
-  const idToken = cookieIdToken || queryToken
 
   return {
     ...(authToken ? { Authorization: authToken } : {}),

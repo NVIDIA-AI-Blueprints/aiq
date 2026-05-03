@@ -260,6 +260,19 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           return
         }
 
+        // If the UI is no longer streaming, this response belongs to a
+        // workflow that outlived its request lifecycle. Drop it before adding
+        // content; otherwise stale final responses can duplicate agent replies.
+        const { isStreaming: currentlyStreaming } = useChatStore.getState()
+        if (!currentlyStreaming) {
+          console.warn(
+            isFinal
+              ? 'Ignoring stale isFinal -- not currently streaming'
+              : 'Ignoring stale system_response -- not currently streaming'
+          )
+          return
+        }
+
         // Check for deep research escalation signal
         // Backend sends: "Deep research job submitted. Job ID: {uuid}"
         const deepResearchMatch = content?.match(
@@ -365,14 +378,6 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
 
         // status: "complete" with null text signals task completion
         if (isFinal) {
-          // Guard: if we're not streaming, this is a stale COMPLETE from a
-          // previous workflow that outlived its socket (e.g. after disconnect).
-          const { isStreaming: currentlyStreaming } = useChatStore.getState()
-          if (!currentlyStreaming) {
-            console.warn('Ignoring stale isFinal -- not currently streaming')
-            return
-          }
-
           // Complete any pending thinking step
           if (currentThinkingStepIdRef.current) {
             completeThinkingStep(currentThinkingStepIdRef.current)
