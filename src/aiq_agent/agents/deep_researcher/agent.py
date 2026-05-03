@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends import CompositeBackend
-from deepagents.backends import StateBackend
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
@@ -34,6 +32,9 @@ from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
 from .custom_middleware import ToolRetryMiddleware
+from .deepagents_runtime import DeepAgentsRuntime
+from .deepagents_runtime import SandboxConfig
+from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
 
 try:
@@ -113,6 +114,10 @@ class DeepResearcherAgent:
         max_loops: int = 2,
         verbose: bool = True,
         callbacks: list[Any] | None = None,
+        skills: SkillsConfig | None = None,
+        sandbox: SandboxConfig | None = None,
+        config: Any | None = None,
+        job_id: str | None = None,
     ) -> None:
         """
         Initialize the deep researcher subagent.
@@ -123,6 +128,10 @@ class DeepResearcherAgent:
             max_loops: Maximum number of research loops (default 2).
             verbose: Enable detailed logging.
             callbacks: Optional list of callbacks.
+            skills: Optional DeepAgents skills config.
+            sandbox: Optional DeepAgents sandbox config.
+            config: Optional agent config. Used by async workers to pass function config generically.
+            job_id: Optional async job identifier used to scope sandbox backends.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -132,6 +141,10 @@ class DeepResearcherAgent:
 
         if self.verbose:
             logger.info("Tools configured: %d", len(self.tools))
+        if config is not None:
+            skills = skills or getattr(config, "skills", None)
+            sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
+        self.deepagents_runtime = DeepAgentsRuntime(skills=skills, sandbox=sandbox, job_id=job_id)
 
         self._prompts = self._load_prompts()
         self.tools_info = []
@@ -198,58 +211,68 @@ class DeepResearcherAgent:
         }
         return defaults.get(name, f"You are a {name} agent.")
 
+    def _deepagents_prompt_context(self) -> dict[str, Any]:
+        """Return prompt variables for optional DeepAgents skills and sandbox support."""
+        skill_sources = self.deepagents_runtime.skill_sources
+        sandbox = self.deepagents_runtime.sandbox
+        return {
+            "skills_enabled": skill_sources is not None,
+            "skill_sources": skill_sources or [],
+            "sandbox_enabled": sandbox is not None,
+            "sandbox_python_packages": tuple(sandbox.python_packages) if sandbox is not None else (),
+        }
+
     def _get_subagents(self, state: DeepResearchAgentState) -> list[dict[str, Any]]:
         """Build subagent configs with state-dependent prompts (e.g. available_documents)."""
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
-        return [
-            {
-                "name": "planner-agent",
-                "description": (
-                    "Content-driven research planning - iteratively builds evidence-grounded "
-                    "outlines through interleaved search and outline optimization"
-                ),
-                "system_prompt": render_prompt_template(
-                    self._prompts["planner"],
-                    current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    user_info=state.user_info,
-                    tools=self.tools_info,
-                    available_documents=available_docs,
-                ),
-                "tools": self.all_tools,
-                "model": self.llm_provider.get(LLMRole.PLANNER),
-                "middleware": self.middleware,
-            },
-            {
-                "name": "researcher-agent",
-                "description": (
-                    "Information gathering - executes search queries and synthesizes "
-                    "relevant content from available sources"
-                ),
-                "system_prompt": render_prompt_template(
-                    self._prompts["researcher"],
-                    current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    user_info=state.user_info,
-                    tools=self.tools_info,
-                    available_documents=available_docs,
-                ),
-                "tools": self.all_tools,
-                "model": self.llm_provider.get(LLMRole.RESEARCHER),
-                "middleware": self.middleware,
-            },
-        ]
+        deepagents_prompt_context = self._deepagents_prompt_context()
+        skill_sources = self.deepagents_runtime.skill_sources
+        planner_agent: dict[str, Any] = {
+            "name": "planner-agent",
+            "description": (
+                "Content-driven research planning - iteratively builds evidence-grounded "
+                "outlines through interleaved search and outline optimization"
+            ),
+            "system_prompt": render_prompt_template(
+                self._prompts["planner"],
+                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                user_info=state.user_info,
+                tools=self.tools_info,
+                available_documents=available_docs,
+                **deepagents_prompt_context,
+            ),
+            "tools": self.all_tools,
+            "model": self.llm_provider.get(LLMRole.PLANNER),
+            "middleware": self.middleware,
+        }
+        researcher_agent: dict[str, Any] = {
+            "name": "researcher-agent",
+            "description": (
+                "Information gathering - executes search queries and synthesizes "
+                "relevant content from available sources"
+            ),
+            "system_prompt": render_prompt_template(
+                self._prompts["researcher"],
+                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                user_info=state.user_info,
+                tools=self.tools_info,
+                available_documents=available_docs,
+                **deepagents_prompt_context,
+            ),
+            "tools": self.all_tools,
+            "model": self.llm_provider.get(LLMRole.RESEARCHER),
+            "middleware": self.middleware,
+        }
+        if skill_sources is not None:
+            planner_agent["skills"] = skill_sources
+            researcher_agent["skills"] = skill_sources
+        return [planner_agent, researcher_agent]
 
     def _build_orchestrator_agent(self, state: DeepResearchAgentState) -> str:
         """Get the orchestrator instructions for the deep research agent."""
 
-        def backend(runtime):
-            return CompositeBackend(
-                default=StateBackend(runtime),
-                routes={
-                    "/shared/": StateBackend(runtime),
-                },
-            )
-
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
+        deepagents_prompt_context = self._deepagents_prompt_context()
         orchestrator_instructions = render_prompt_template(
             self._prompts["orchestrator"],
             current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -257,17 +280,20 @@ class DeepResearcherAgent:
             clarifier_result=state.clarifier_result,
             available_documents=available_docs,
             tools=self.tools_info,
+            **deepagents_prompt_context,
         )
+
+        deepagents_kwargs = self.deepagents_runtime.create_agent_kwargs
 
         agent = create_deep_agent(
             model=self.llm_provider.get(LLMRole.ORCHESTRATOR),
             tools=self.all_tools,
-            backend=backend,
             system_prompt=orchestrator_instructions,
             subagents=self._get_subagents(state),
             store=InMemoryStore(),
             context_schema=DeepResearchAgentState,
             middleware=self.middleware,
+            **deepagents_kwargs,
         )
         return agent.with_config({"recursion_limit": 1000})
 
@@ -373,7 +399,7 @@ class DeepResearcherAgent:
         """
         Execute deep research with multi-phase workflow.
         """
-
+        state = self.deepagents_runtime.prepare_state(state)
         agent = self._build_orchestrator_agent(state)
 
         messages = state.messages

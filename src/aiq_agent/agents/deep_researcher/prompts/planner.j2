@@ -4,9 +4,10 @@ Return the final plan to the orchestrator in your final message.
 
 ## Other Tools
 - `think`: record your thoughts for downstream steps
-- `ls`: to see if /shared/plan.json exists
-- `write_file`: to write plan to /shared/plan.json if it doesn't exist
-- `edit_file`: to edit the plan at /shared/plan.json if it exists
+- `ls`: filesystem tool to see if `/shared/plan.json` exists
+- `write_file`: filesystem tool to write plan to `/shared/plan.json` if it doesn't exist
+- `edit_file`: filesystem tool to edit the plan at `/shared/plan.json` if it exists
+
 
 ## Task Analysis
 Before generating the research plan, deeply analyze the user's request:
@@ -19,6 +20,7 @@ Before generating the research plan, deeply analyze the user's request:
 
 ## Workflow
 - **Task Decomposition**: Use a todo list with write_todos to break down the research into focused tasks and update this todo list based on progress.
+{% if skills_enabled %}- **Skill-aware planning**: Review the Skills System section and available skill sources ({% for source in skill_sources %}`{{ source }}`{% if not loop.last %}, {% endif %}{% endfor %}). If a skill could apply to specialized analysis, calculations, transformations, visualizations, file generation, sandbox execution, or structured outputs, read its `SKILL.md` and include that skill-use requirement in the plan. Do not plan for downstream agents to perform covered specialized work ad hoc when an available skill applies.{% endif %}
 - **Internal vs external (you must use tools)**: If a knowledge_search or document tool is available, call it first to see if the topic or named entities are covered in the uploaded documents. If they are, treat them as internal and do not add web/paper queries for those. If not found internally, treat as external and use web/paper search.
 - **Discover what exists (you must use tools)**: Call available search tools to discover what information exists for the task. Use the results to shape your TOC, constraints, and query list — do not guess.
 - **Think**: After each search, use `think` to reason through:
@@ -27,7 +29,7 @@ Before generating the research plan, deeply analyze the user's request:
    - What gaps remain?
    - What constraints should I add based on these findings?
 - **Evolve**: Refine TOC and constraints based on findings.
-- **Output**: Write to /shared/plan.json and return the plan.
+- **Output**: Write to `/shared/plan.json` with the `write_file` filesystem tool and return the plan.
 
 ## TOC Structure
 The final TOC must be hierarchical with 2 levels (sections and subsections). Guidelines:
@@ -42,6 +44,7 @@ Generate that the final report must satisfy. Constraints are acceptance criteria
 - Deep understanding of the user's request
 - Search tool findings
 - Your reasoning about what is relevant vs tangential, what adds value, and what degrades quality
+{% if skills_enabled %}- Applicable skill instructions, when a skill covers part of the requested work{% endif %}
 
 ### Constraint Principles
 1. **Maximize Specificity**: Include all user-stated details. If user mentions specific entities, dates, or attributes, create constraints for them.
@@ -122,7 +125,7 @@ Remember: Your goal is to produce an evidence-grounded plan with clear acceptanc
 **Important**:
 - You MUST match the language of the task for all outputs e.g if the task is in Chinese, the outputs should be in Chinese.
 - You MUST be confident about your planning outputs grounded with discovered information through search tools.
-- You MUST write the plan to using write_file tool to /shared/plan.json
+- You MUST write the plan using the `write_file` filesystem tool with `file_path="/shared/plan.json"`
 - You MUST return the final plan to the orchestrator in your final message.
 
 {#- === KV CACHE BOUNDARY — dynamic content below === -#}

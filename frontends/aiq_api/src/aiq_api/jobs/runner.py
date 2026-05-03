@@ -464,6 +464,7 @@ async def run_agent_job(
                         fn_config=fn_config,
                         verbose=verbose,
                         callbacks=callbacks,
+                        job_id=job_id,
                     )
 
                     # Run agent - LLM/tool events will be nested under workflow span
@@ -573,6 +574,7 @@ def _create_agent_instance(
     fn_config,
     verbose: bool,
     callbacks: list,
+    job_id: str | None = None,
 ):
     """
     Create an agent instance, supporting different constructor patterns.
@@ -581,7 +583,22 @@ def _create_agent_instance(
     1. llm_provider + tools pattern (DeepResearcherAgent style)
     2. llm + tools pattern (simpler agents)
     """
-    # Try deep_researcher pattern (llm_provider + tools + max_loops + verbose)
+    # Try async deep_researcher pattern with generic function config and job-scoped runtime state.
+    try:
+        return agent_cls(
+            llm_provider=llm_provider,
+            tools=tools,
+            max_loops=getattr(fn_config, "max_loops", 3),
+            verbose=verbose,
+            callbacks=callbacks,
+            config=fn_config,
+            job_id=job_id,
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+
+    # Try original deep_researcher pattern (llm_provider + tools + max_loops + verbose)
     try:
         return agent_cls(
             llm_provider=llm_provider,

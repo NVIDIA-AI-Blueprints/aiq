@@ -37,6 +37,8 @@ from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
 from .agent import DeepResearcherAgent
+from .deepagents_runtime import SandboxConfig
+from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,11 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     )
     max_loops: int = Field(default=2)
     verbose: bool = Field(default=True)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    sandbox: SandboxConfig | None = Field(
+        default=None,
+        description="Optional DeepAgents sandbox backend for execute support.",
+    )
 
 
 @register_function(config_type=DeepResearchAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -110,6 +117,8 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         max_loops=config.max_loops,
         verbose=verbose,
         callbacks=callbacks,
+        skills=config.skills,
+        sandbox=config.sandbox,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -118,13 +127,15 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
             data_sources = state.data_sources
             selected_tools = filter_tools_by_sources(tools, data_sources)
             active_agent = agent
-            if data_sources is not None and selected_tools != tools:
+            if config.sandbox is not None or (data_sources is not None and selected_tools != tools):
                 active_agent = DeepResearcherAgent(
                     llm_provider=provider,
                     tools=selected_tools,
                     max_loops=config.max_loops,
                     verbose=verbose,
                     callbacks=callbacks,
+                    skills=config.skills,
+                    sandbox=config.sandbox,
                 )
             elif data_sources is not None and not selected_tools:
                 logger.warning("Deep research received data_sources with no matching tools")

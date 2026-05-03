@@ -109,6 +109,9 @@ The core deep research agent using the DeepAgents library.
 
 **Location**: `src/aiq_agent/agents/deep_researcher/`
 
+For optional DeepAgents sandbox behavior and v1 operational notes, see
+[`SANDBOX.md`](SANDBOX.md).
+
 **Configuration:**
 
 ```yaml

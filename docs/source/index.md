@@ -137,4 +137,5 @@ FAQ <./resources/faq.md>
 ./examples/full-pipeline-web.md
 ./examples/cli-with-local-nims.md
 ./examples/hybrid-frontier-model.md
+./examples/skills-sandbox/index.md
 ```

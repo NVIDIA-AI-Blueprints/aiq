@@ -20,6 +20,9 @@ requires = ["setuptools >= 64", "setuptools-scm>=8"]
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.package-data]
+"aiq_agent.agents.deep_researcher" = ["skills/**/*"]
+
 [project]
 name = "aiq-agent"
 version = "2.0.0"
@@ -31,7 +34,8 @@ dependencies = [
     "nvidia-nat-core==1.5.0",
     "nvidia-nat[langchain,weave,async_endpoints,phoenix]==1.5.0",
     "nvidia-nat-eval==1.5.0",
-    "deepagents>=0.3.0",
+    "deepagents==0.5.0",
+    "langchain-modal==0.0.3",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
     "psycopg[binary]>=3.0.0",
