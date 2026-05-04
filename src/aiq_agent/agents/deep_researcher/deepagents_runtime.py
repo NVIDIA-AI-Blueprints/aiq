@@ -28,9 +28,11 @@ from uuid import uuid4
 
 from deepagents.backends import CompositeBackend
 from deepagents.backends import StateBackend
+from deepagents.backends.protocol import EditResult
 from deepagents.backends.protocol import ExecuteResponse
 from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.backends.protocol import FileUploadResponse
+from deepagents.backends.protocol import WriteResult
 from deepagents.backends.sandbox import BaseSandbox
 from pydantic import BaseModel
 from pydantic import Field
@@ -40,6 +42,51 @@ logger = logging.getLogger(__name__)
 AGENT_DIR = Path(__file__).parent
 BUILTIN_SKILLS_DIR = AGENT_DIR / "skills"
 BUILTIN_SKILL_SOURCE = "/skills/"
+SHARED_ROUTE = "/shared/"
+
+
+class _PrefixedStateBackend(StateBackend):
+    """StateBackend that re-prepends a route prefix on error messages.
+
+    Why: deepagents' CompositeBackend strips the route prefix before delegating
+    to the routed backend, then rewrites WriteResult.path back to the full path
+    on success — but does NOT rewrite the path embedded in WriteResult.error /
+    EditResult.error. The agent then sees an error referencing a path it never
+    wrote to (e.g. ``/0_weather_data.txt`` instead of ``/shared/0_weather_data.txt``)
+    and chases the phantom path via shell, which routes to a different backend.
+    Restore the user-visible path here so error messages are consistent with
+    what the agent actually invoked.
+    """
+
+    def __init__(self, route_prefix: str) -> None:
+        super().__init__()
+        self._prefix = route_prefix.rstrip("/")
+
+    def _restore(self, key: str) -> str:
+        if key.startswith("/"):
+            return f"{self._prefix}{key}"
+        return f"{self._prefix}/{key}"
+
+    def _rewrite_error(self, error: str, file_path: str) -> str:
+        return error.replace(file_path, self._restore(file_path))
+
+    def write(self, file_path: str, content: str) -> WriteResult:
+        result = super().write(file_path, content)
+        if result.error and file_path in result.error:
+            return WriteResult(error=self._rewrite_error(result.error, file_path))
+        return result
+
+    def edit(
+        self,
+        file_path: str,
+        old_string: str,
+        new_string: str,
+        replace_all: bool = False,
+    ) -> EditResult:
+        result = super().edit(file_path, old_string, new_string, replace_all=replace_all)
+        if result.error and file_path in result.error:
+            return EditResult(error=self._rewrite_error(result.error, file_path))
+        return result
 
 
 class SkillsConfig(BaseModel):
@@ -124,8 +171,8 @@ class DeepAgentsRuntime:
             self._backend = CompositeBackend(
                 default=sandbox_backend,
                 routes={
-                    BUILTIN_SKILL_SOURCE: StateBackend(),
-                    "/shared/": StateBackend(),
+                    BUILTIN_SKILL_SOURCE: _PrefixedStateBackend(BUILTIN_SKILL_SOURCE),
+                    SHARED_ROUTE: _PrefixedStateBackend(SHARED_ROUTE),
                 },
             )
             return self._backend
@@ -133,8 +180,8 @@ class DeepAgentsRuntime:
         self._backend = CompositeBackend(
             default=StateBackend(),
             routes={
-                BUILTIN_SKILL_SOURCE: StateBackend(),
-                "/shared/": StateBackend(),
+                BUILTIN_SKILL_SOURCE: _PrefixedStateBackend(BUILTIN_SKILL_SOURCE),
+                SHARED_ROUTE: _PrefixedStateBackend(SHARED_ROUTE),
             },
         )
         return self._backend

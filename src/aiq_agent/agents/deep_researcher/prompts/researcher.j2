@@ -73,6 +73,10 @@ Do NOT add URLs from memory — only use URLs that appeared in tool call respons
 
 Write this output using the `write_file` filesystem tool with `file_path="/shared/[query_topic_x].txt"` and return.
 
+## Filesystem Notes
+- `/shared/` is a virtual path managed by the agent runtime, NOT a real directory. Inspect it ONLY via `read_file`, `ls`, `glob`. Shell commands (`execute "ls /shared"`, `rm`, `stat`, `mv`, `find`) will not see `/shared/` files and will fail or show an empty directory — do not use them on `/shared/` paths.
+- `write_file` cannot overwrite an existing file. If you need to revise content, either pick a new filename (e.g. `[topic]_v2.txt`) or use `edit_file` to modify the existing file. Do not loop on `write_file` for the same path.
+
 {#- === KV CACHE BOUNDARY — dynamic content below === -#}
 
 ## Context

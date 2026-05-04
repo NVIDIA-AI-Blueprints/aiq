@@ -128,6 +128,16 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
             selected_tools = filter_tools_by_sources(tools, data_sources)
             active_agent = agent
             if config.sandbox is not None or (data_sources is not None and selected_tools != tools):
+                # Scope the Modal sandbox to the async job_id when one is in
+                # NAT context (set by aiq_api/jobs/runner.py). Falls back to a
+                # per-request uuid in DeepAgentsRuntime when None.
+                job_id: str | None = None
+                try:
+                    from nat.builder.context import Context
+
+                    job_id = Context.get().workflow_run_id
+                except Exception:  # noqa: BLE001 - Context may be unavailable in sync/eval paths
+                    job_id = None
                 active_agent = DeepResearcherAgent(
                     llm_provider=provider,
                     tools=selected_tools,
@@ -136,6 +146,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     callbacks=callbacks,
                     skills=config.skills,
                     sandbox=config.sandbox,
+                    job_id=job_id,
                 )
             elif data_sources is not None and not selected_tools:
                 logger.warning("Deep research received data_sources with no matching tools")

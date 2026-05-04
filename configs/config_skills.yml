@@ -235,6 +235,7 @@ functions:
         - numpy
         - pandas
         - pillow
+        - tabulate  # required by pandas.DataFrame.to_markdown(), used by data-table-analysis skill
       block_network: true
 
 workflow:
