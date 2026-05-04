@@ -18,10 +18,12 @@ Usage:
     # Quick mode - registration check only (no files/services needed)
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend llamaindex --quick
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend foundational_rag --quick
+    python tests/knowledge_layer_tests/run_adapter_compliance.py --backend opensearch --quick
 
     # Full mode - complete ingestion + retrieval test
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend llamaindex
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend foundational_rag
+    python tests/knowledge_layer_tests/run_adapter_compliance.py --backend opensearch
 
 Exit codes:
     0 - All tests passed
@@ -92,6 +94,7 @@ class AdapterComplianceTest:
         backend_imports = {
             "llamaindex": "knowledge_layer.llamaindex",
             "foundational_rag": "knowledge_layer.foundational_rag",
+            "opensearch": "knowledge_layer.opensearch",
         }
 
         module_name = backend_imports.get(self.backend.lower())
@@ -451,7 +454,9 @@ def main():
         epilog=__doc__,
     )
 
-    parser.add_argument("--backend", "-b", required=True, help="Backend name (e.g., llamaindex, foundational_rag)")
+    parser.add_argument(
+        "--backend", "-b", required=True, help="Backend name (e.g., llamaindex, foundational_rag, opensearch)"
+    )
 
     parser.add_argument("--config", "-c", default="{}", help="Backend config as JSON string (default: {})")
 
