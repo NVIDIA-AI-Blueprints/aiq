@@ -39,6 +39,7 @@ Overview <./architecture/index.md>
 Architecture <./architecture/overview.md>
 Agents <./architecture/agents/index.md>
 Data Flow <./architecture/data-flow.md>
+Deep Research Sandbox <./architecture/agents/sandbox.md>
 ```
 
 ```{toctree}

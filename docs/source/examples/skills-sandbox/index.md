@@ -25,6 +25,8 @@ The example config enables:
 
 The current built-in example skill is `data-table-analysis`. It is intended for quantitative research tasks where the agent must normalize researched facts and compute tabular outputs such as growth rates, rankings, summary statistics, CSV, JSON, or markdown tables.
 
+**Models and report quality:** For clearer tables, stronger reasoning over numbers, and more reliable use of the data-table-analysis skill end-to-end, prefer **frontier-class models** for the orchestrator, planner, and researcher in your config ([Swapping models](../../customization/swapping-models.md)). Smaller or faster models may complete runs but often produce weaker structured outputs and more formatting mistakes in long reports.
+
 ## Prerequisites
 
 Install and configure AI-Q as usual, then make sure these credentials are available to the process running AI-Q:
@@ -78,7 +80,7 @@ When `skills.enabled` is true, AI-Q preloads the built-in skill files into the D
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat run \
   --config_file configs/config_skills.yml \
-  --input "Compare AI infrastructure capex for Microsoft, Google, and Meta over the last 8 quarters. Include QoQ and YoY growth."
+  --input "Compare the top 10 publicly traded semiconductor companies by 2024 revenue. Build a markdown table with revenue, YoY growth, market cap, and gross margin. Then rank them and compute summary statistics. Use the data analysis tool for all calculations."
 ```
 
 For API or UI testing:
@@ -94,7 +96,15 @@ Then submit a deep research request through the AI-Q API or UI.
 
 ## Example Queries
 
-Use queries that require researched numeric facts plus computed tabular analysis:
+Use queries that require researched numeric facts plus computed tabular analysis.
+
+**Example prompt:**
+
+```text
+Compare the top 10 publicly traded semiconductor companies by 2024 revenue. Build a markdown table with revenue, YoY growth, market cap, and gross margin. Then rank them and compute summary statistics. Use the data analysis tool for all calculations.
+```
+
+Additional prompts that exercise the same pattern:
 
 ```text
 Compare AI infrastructure capex for Microsoft, Google, Meta, and Amazon over the last 8 quarters. Include QoQ and YoY growth.

@@ -1,3 +1,8 @@
+<!--
+SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+SPDX-License-Identifier: Apache-2.0
+-->
+
 # Deep Research Sandbox Notes
 
 Deep research can optionally run DeepAgents `execute` calls in a Modal sandbox.
