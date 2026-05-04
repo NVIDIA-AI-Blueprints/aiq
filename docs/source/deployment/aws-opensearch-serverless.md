@@ -9,6 +9,13 @@ AI-Q can use the built-in OpenSearch knowledge backend with Amazon OpenSearch Se
 uses SigV4 service `aoss`, creates one OpenSearch index per AI-Q collection/session, and supports Dask ingestion workers
 by creating the OpenSearch client inside the worker process.
 
+```{note}
+**Migrating from AI-Q v1.0.** On v1.0, OpenSearch support shipped through a custom Docker image
+built from [`awslabs/ai-on-eks`](https://github.com/awslabs/ai-on-eks) via `./deploy.sh build`. On
+v2.0, OpenSearch is a built-in knowledge backend selected through workflow YAML
+(`backend: opensearch`). You no longer need to maintain a custom image build pipeline.
+```
+
 ## Workflow Config
 
 Use `configs/config_web_opensearch.yml`:
