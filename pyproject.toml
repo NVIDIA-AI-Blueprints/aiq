@@ -95,6 +95,11 @@ aiq_data_source_registry = "aiq_agent.common.data_source_registry"
 testpaths = ["tests", "sources/**/tests"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+markers = [
+    "aws: tests that require AWS resources",
+    "integration: tests that require external services",
+    "opensearch_serverless: tests that require Amazon OpenSearch Serverless",
+]
 
 
 [tool.ruff]
