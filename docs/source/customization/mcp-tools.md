@@ -242,6 +242,11 @@ async def internal_search(config: InternalSearchConfig, builder):
 
         # Use an async HTTP client in production code.
         # Forward only to trusted services over HTTPS.
+        # `call_internal_search` is a placeholder for your own async HTTP call, e.g.:
+        #   async with httpx.AsyncClient() as client:
+        #       resp = await client.get(config.endpoint, params={"q": query},
+        #                               headers={"Authorization": f"Bearer {token}"})
+        #       return resp.text
         return await call_internal_search(
             endpoint=config.endpoint,
             query=query,

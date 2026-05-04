@@ -51,6 +51,7 @@ export const MySSOProvider = {
     params: { scope: 'openid profile email', response_type: 'code' },
   },
   clientId: process.env.MY_SSO_CLIENT_ID,
+  // MY_SSO_CLIENT_SECRET must be set; an empty string causes silent OAuth failures.
   clientSecret: process.env.MY_SSO_CLIENT_SECRET || '',
   checks: ['pkce', 'state'] as ('pkce' | 'state' | 'nonce')[],
   idToken: true,
@@ -217,6 +218,8 @@ async def internal_lookup(config: InternalLookupConfig, builder):
         if not token:
             return "Sign in before using Internal Lookup."
 
+        # `call_internal_service` is a placeholder for your own async HTTP call
+        # (e.g. via httpx.AsyncClient) — replace with the real client invocation.
         return await call_internal_service(
             endpoint=config.endpoint,
             query=query,
