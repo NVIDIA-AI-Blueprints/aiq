@@ -32,6 +32,7 @@ from deepagents.backends.protocol import EditResult
 from deepagents.backends.protocol import ExecuteResponse
 from deepagents.backends.protocol import FileDownloadResponse
 from deepagents.backends.protocol import FileUploadResponse
+from deepagents.backends.protocol import ReadResult
 from deepagents.backends.protocol import WriteResult
 from deepagents.backends.sandbox import BaseSandbox
 from pydantic import BaseModel
@@ -86,6 +87,12 @@ class _PrefixedStateBackend(StateBackend):
         result = super().edit(file_path, old_string, new_string, replace_all=replace_all)
         if result.error and file_path in result.error:
             return EditResult(error=self._rewrite_error(result.error, file_path))
+        return result
+
+    def read(self, file_path: str, offset: int = 0, limit: int = 2000) -> ReadResult:
+        result = super().read(file_path, offset=offset, limit=limit)
+        if result.error and file_path in result.error:
+            return ReadResult(error=self._rewrite_error(result.error, file_path))
         return result
 
 
@@ -330,11 +337,22 @@ class _LazyModalSandboxBackend(BaseSandbox):
 
         with self._lock:
             if self._backend is None:
+                logger.info(
+                    "Modal sandbox backend init: sandbox_name=%s app=%s",
+                    self.sandbox_name,
+                    self.config.app_name,
+                )
                 self._backend = _create_modal_backend_now(self.config, self.sandbox_name)
             return self._backend
 
     def _reset_backend(self) -> None:
         with self._lock:
+            logger.warning(
+                "Modal sandbox backend RESET: sandbox_name=%s app=%s "
+                "(any uploaded files in the previous sandbox are now lost)",
+                self.sandbox_name,
+                self.config.app_name,
+            )
             self._backend = _create_modal_backend_now(self.config, self.sandbox_name, force_new=True)
 
 
@@ -351,9 +369,11 @@ def _create_modal_backend_now(config: SandboxConfig, sandbox_name: str, *, force
     app = modal.App.lookup(name=config.app_name, create_if_missing=True)
     if not force_new:
         try:
-            return ModalSandbox(sandbox=modal.Sandbox.from_name(config.app_name, sandbox_name))
+            sandbox = modal.Sandbox.from_name(config.app_name, sandbox_name)
+            logger.info("Modal sandbox attached to existing instance: name=%s", sandbox_name)
+            return ModalSandbox(sandbox=sandbox)
         except modal.exception.NotFoundError:
-            pass
+            logger.info("Modal sandbox not found, creating fresh instance: name=%s", sandbox_name)
 
     image = modal.Image.from_registry(config.image)
     if config.python_packages:
@@ -371,8 +391,16 @@ def _create_modal_backend_now(config: SandboxConfig, sandbox_name: str, *, force
             idle_timeout=config.idle_timeout,
             block_network=config.block_network,
         )
+        logger.info(
+            "Modal sandbox CREATED: name=%s image=%s workdir=%s timeout=%ds",
+            sandbox_name,
+            config.image,
+            config.workdir,
+            config.timeout,
+        )
     except modal.exception.AlreadyExistsError:
         sandbox = modal.Sandbox.from_name(config.app_name, sandbox_name)
+        logger.info("Modal sandbox attached after AlreadyExistsError: name=%s", sandbox_name)
     return ModalSandbox(sandbox=sandbox)
 
 

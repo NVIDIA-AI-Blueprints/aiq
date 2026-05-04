@@ -85,6 +85,24 @@ class TestPrefixedStateBackend:
         assert result.error is not None
         assert "/shared/missing.md" in result.error
 
+    def test_read_missing_file_error_uses_full_path(self) -> None:
+        # Same bug as write/edit: StateBackend.read embeds the stripped key in
+        # its "File '/X' not found" error. The wrapper must restore /shared/X.
+        backend = _PrefixedStateBackend(SHARED_ROUTE)
+        _attach_dict_state(backend)
+        result = backend.read("/missing.json")
+        assert result.error is not None
+        assert "/shared/missing.json" in result.error
+        assert result.error.startswith("File '/shared/missing.json'")
+
+    def test_read_existing_file_passes_through(self) -> None:
+        backend = _PrefixedStateBackend(SHARED_ROUTE)
+        _attach_dict_state(backend)
+        backend.write("/notes.md", "hello")
+        result = backend.read("/notes.md")
+        assert result.error is None
+        assert result.file_data is not None
+
     def test_edit_error_without_path_is_passed_through_unchanged(self) -> None:
         # StateBackend's "string not found" error does not embed the path, so
         # the wrapper should be a no-op for it (vs. spuriously injecting the
