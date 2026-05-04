@@ -16,6 +16,26 @@ v2.0, OpenSearch is a built-in knowledge backend selected through workflow YAML
 (`backend: opensearch`). You no longer need to maintain a custom image build pipeline.
 ```
 
+## Architecture
+
+```{mermaid}
+flowchart LR
+    user[User / UI] -->|HTTPS| backend[aiq-agent pod<br/>service account: aiq-backend]
+    backend -->|submit ingest| dask_sched[Dask scheduler]
+    dask_sched --> dask_worker[Dask worker<br/>same service account]
+    backend -->|SigV4 retrieval| aoss[(Amazon OpenSearch<br/>Serverless collection)]
+    dask_worker -->|SigV4 ingest| aoss
+    pod_identity[EKS Pod Identity<br/>association] -.maps SA to.-> iam[IAM role<br/>aoss:APIAccessAll]
+    iam -.assumed by.-> backend
+    iam -.assumed by.-> dask_worker
+    aoss_dap[AOSS data access policy] -.grants index ops.-> iam
+```
+
+The backend pod and every Dask worker assume the same IAM role through the EKS Pod Identity
+association on the `aiq-backend` service account. Each Dask worker constructs its own OpenSearch
+client, so SigV4 signing happens in the worker's process — no signer state is serialized across
+the cluster.
+
 ## Workflow Config
 
 Use `configs/config_web_opensearch.yml`:
