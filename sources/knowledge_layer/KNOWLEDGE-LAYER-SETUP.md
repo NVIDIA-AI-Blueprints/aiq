@@ -9,7 +9,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 - **Collection Management** - create/delete/list collections per session or use case
 - **File Management** - upload/delete/list files with status tracking (UPLOADING → INGESTING → SUCCESS/FAILED)
 - **Content Typing** - TEXT, TABLE, CHART, IMAGE enums for frontend rendering
-- **Backend Agnostic** - Swap between local (LlamaIndex) and hosted (RAG Blueprint) without core agent code changes
+- **Backend Agnostic** - Swap between local (LlamaIndex), OpenSearch, and hosted RAG Blueprint without core agent code changes
 
 ---
 
@@ -34,6 +34,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 | Backend | Config Name | Mode | Vector Store | Best For |
 |---------|-------------|------|--------------|----------|
 | `llamaindex` | `"llamaindex"` | Local Library | ChromaDB | Dev, prototyping, macOS/Linux |
+| `opensearch` | `"opensearch"` | Direct Client | OpenSearch k-NN | Self-hosted OpenSearch, Amazon OpenSearch Serverless |
 | `foundational_rag` | `"foundational_rag"` | Hosted Service | Remote Milvus | Production, multi-user |
 
 **Local Library Mode** - Everything runs in your Python process. No external services needed.
@@ -42,6 +43,10 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 **Hosted Service Mode** - Connects to deployed services via HTTP. Requires infrastructure but scales better.
 - **`foundational_rag`** - Connects to [NVIDIA RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag) via HTTP.
   - [Deployment Guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/deploy-docker-self-hosted.md)
+
+**OpenSearch Mode** - Stores AIQ collections directly in OpenSearch vector indexes.
+- **`opensearch`** - Uses one OpenSearch index per AIQ collection/session. Supports unauthenticated local clusters,
+  basic auth, and SigV4 for Amazon OpenSearch Service or Amazon OpenSearch Serverless.
 
 ---
 
@@ -58,6 +63,7 @@ export NVIDIA_API_KEY=nvapi-your-key-here
 # 2. Install backend (choose one)
 uv pip install -e "sources/knowledge_layer[llamaindex]"        # Recommended for local dev - works on macOS/Linux
 uv pip install -e "sources/knowledge_layer[foundational_rag]"  # Requires deployed server
+uv pip install -e "sources/knowledge_layer[opensearch]"        # Requires OpenSearch/OpenSearch Serverless
 ```
 
 > **New to Knowledge Layer?** Start with `llamaindex` - it requires no external services and works on macOS and Linux.
@@ -89,6 +95,8 @@ functions:
     rag_url: http://localhost:8081/v1         # foundational_rag only
     ingest_url: http://localhost:8082/v1      # foundational_rag only
     timeout: 120                              # foundational_rag only
+    opensearch_url: http://localhost:9200     # opensearch only
+    opensearch_auth_type: none                # opensearch only: none, basic, sigv4
 ```
 
 You can also use environment variable substitution in YAML for sensitive values:
@@ -173,6 +181,133 @@ functions:
 ```
 
 > **Separate Docker stacks:** When AI-Q and RAG run as separate Docker Compose stacks, connect the AI-Q backend to the RAG network: `docker network connect nvidia-rag aiq-agent`. See the [Docker Compose README](../../deploy/compose/README.md#networking-when-aiq-and-rag-run-as-separate-compose-stacks) for details.
+
+**OpenSearch (Self-hosted)**
+```yaml
+functions:
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: opensearch
+    collection_name: my_docs
+    top_k: 5
+    opensearch_url: http://localhost:9200
+    opensearch_auth_type: none
+    opensearch_index_prefix: aiq
+    opensearch_embedding_dim: 2048
+    embed_model: nvidia/llama-nemotron-embed-vl-1b-v2
+    embed_base_url: https://integrate.api.nvidia.com/v1
+```
+
+For self-hosted clusters with basic auth:
+
+```yaml
+functions:
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: opensearch
+    collection_name: my_docs
+    opensearch_url: https://opensearch.example.com:9200
+    opensearch_auth_type: basic
+    opensearch_username: ${OPENSEARCH_USERNAME}
+    opensearch_password: ${OPENSEARCH_PASSWORD}
+    opensearch_verify_certs: true
+```
+
+For Amazon OpenSearch Serverless, use SigV4 with service `aoss`. For Amazon OpenSearch Service domains, use
+service `es`.
+
+```yaml
+functions:
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: opensearch
+    collection_name: my_docs
+    opensearch_url: https://abc123.us-west-2.aoss.amazonaws.com
+    opensearch_auth_type: sigv4
+    opensearch_aws_region: us-west-2
+    opensearch_aws_service: aoss
+    opensearch_index_prefix: aiq
+    opensearch_ingestion_mode: auto
+    opensearch_dask_file_transfer: bytes
+```
+
+OpenSearch creates one physical index per collection using `<opensearch_index_prefix>-<collection_name>`, sanitized
+for OpenSearch index naming rules. The adapter stores collection metadata in mapping `_meta` and stores each text chunk
+as one OpenSearch document with a `knn_vector` field.
+
+For session-isolated web uploads, AI-Q uses the conversation/session collection name, such as `s_<uuid>`. The OpenSearch
+adapter maps that session collection to a dynamic index in the same OpenSearch endpoint, for example
+`aiq-s_<uuid>`. The TTL cleanup task removes expired OpenSearch indexes based on their collection `_meta.updated_at`
+timestamp.
+
+OpenSearch ingestion runs locally by default. Set `opensearch_ingestion_mode: auto` or `OPENSEARCH_INGESTION_MODE=auto`
+to use Dask when `NAT_DASK_SCHEDULER_ADDRESS` is configured, falling back to local ingestion when it is not. Set
+`opensearch_ingestion_mode: dask` to require Dask. In Dask mode, each worker constructs its own OpenSearch client, so
+AWS SigV4 credentials are resolved in the worker environment. This supports EKS Pod Identity, SSO-backed local workers,
+and standard AWS SDK environment/profile credentials. `opensearch_dask_file_transfer: bytes` sends uploaded file
+contents to workers and works without a shared volume; `paths` requires API and worker pods to share the same file path.
+
+#### Live OpenSearch Integration Tests
+
+Live tests are opt-in because they create and delete real OpenSearch indexes. They patch embeddings with deterministic
+local vectors, so the tests validate OpenSearch indexing/search behavior without requiring `NVIDIA_API_KEY`.
+
+For an unauthenticated local OpenSearch cluster:
+
+```bash
+AIQ_OPENSEARCH_LIVE_TESTS=1 \
+OPENSEARCH_URL=http://localhost:9200 \
+OPENSEARCH_AUTH_TYPE=none \
+uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_live.py
+```
+
+For a self-hosted cluster with basic auth:
+
+```bash
+AIQ_OPENSEARCH_LIVE_TESTS=1 \
+OPENSEARCH_URL=https://opensearch.example.com:9200 \
+OPENSEARCH_AUTH_TYPE=basic \
+OPENSEARCH_USERNAME=admin \
+OPENSEARCH_PASSWORD=admin \
+uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_live.py
+```
+
+For Amazon OpenSearch Serverless:
+
+```bash
+AIQ_OPENSEARCH_LIVE_TESTS=1 \
+OPENSEARCH_URL=https://abc123.us-west-2.aoss.amazonaws.com \
+OPENSEARCH_AUTH_TYPE=sigv4 \
+OPENSEARCH_AWS_SERVICE=aoss \
+AWS_REGION=us-west-2 \
+uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_live.py
+```
+
+For Amazon OpenSearch Service domains, use `OPENSEARCH_AWS_SERVICE=es`. If you use a development cluster with
+self-signed certificates, set `OPENSEARCH_VERIFY_CERTS=false`.
+
+A dedicated Amazon OpenSearch Serverless suite is also available. It always uses SigV4 service `aoss` and expects an
+AOSS data endpoint:
+
+```bash
+AIQ_OPENSEARCH_SERVERLESS_LIVE_TESTS=1 \
+OPENSEARCH_URL=https://abc123.us-west-2.aoss.amazonaws.com \
+AWS_REGION=us-west-2 \
+uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_serverless_live.py
+```
+
+If you set the variables on separate lines, export them first:
+
+```bash
+export AIQ_OPENSEARCH_SERVERLESS_LIVE_TESTS=1
+export OPENSEARCH_URL=https://abc123.us-west-2.aoss.amazonaws.com
+export AWS_REGION=us-west-2
+uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_serverless_live.py
+```
+
+This suite validates SigV4 health checks, collection lifecycle, vector ingestion, k-NN retrieval, filtered k-NN
+retrieval, and file deletion against OpenSearch Serverless. The AWS principal must have data access permissions for
+index creation/deletion and document read/write operations on the target collection.
 
 ### Programmatic Usage
 
@@ -853,6 +988,19 @@ Configuration values are resolved in the following order (highest to lowest prio
 | `AIQ_SUMMARY_DB` | All | Summary database URL (SQLite or PostgreSQL) |
 | `RAG_SERVER_URL` | foundational_rag | Query server URL (port 8081) |
 | `RAG_INGEST_URL` | foundational_rag | Ingestion server URL (port 8082) |
+| `OPENSEARCH_URL` | opensearch | OpenSearch endpoint URL |
+| `OPENSEARCH_AUTH_TYPE` | opensearch | Auth mode: `none`, `basic`, or `sigv4` |
+| `OPENSEARCH_USERNAME` | opensearch | Username for basic auth |
+| `OPENSEARCH_PASSWORD` | opensearch | Password for basic auth |
+| `AWS_REGION` / `AWS_DEFAULT_REGION` | opensearch | AWS region for SigV4 auth |
+| `OPENSEARCH_AWS_SERVICE` | opensearch | SigV4 service: `aoss` or `es` |
+| `OPENSEARCH_INDEX_PREFIX` | opensearch | Prefix for physical OpenSearch indexes |
+| `OPENSEARCH_CA_CERTS` | opensearch | Optional custom CA bundle path |
+| `OPENSEARCH_INGESTION_MODE` | opensearch | Ingestion execution: `local`, `dask`, or `auto` |
+| `OPENSEARCH_DASK_SCHEDULER_ADDRESS` | opensearch | Dask scheduler for distributed ingestion; falls back to `NAT_DASK_SCHEDULER_ADDRESS` |
+| `OPENSEARCH_DASK_FILE_TRANSFER` | opensearch | Dask file transfer mode: `bytes` or `paths` |
+| `OPENSEARCH_ALLOW_DOCUMENT_IDS` | opensearch | Override explicit document ID behavior; defaults off for AOSS |
+| `OPENSEARCH_BULK_REFRESH` | opensearch | Override bulk refresh behavior; defaults off for AOSS |
 | `COLLECTION_NAME` | All | Default collection name |
 
 ---
@@ -866,6 +1014,10 @@ Configuration values are resolved in the following order (highest to lowest prio
 | Empty retrieval results | Collection empty | Run ingestion first, verify collection name matches |
 | Job status 404 | Different process/instance | Factory uses singletons - ensure same process |
 | `milvus-lite` required | Missing dependency | `uv pip install "pymilvus[milvus_lite]"` |
+| OpenSearch SigV4 auth fails | Missing AWS credentials or wrong service | Configure AWS credentials and use `aoss` for Serverless or `es` for managed domains |
+| OpenSearch SSO works in AWS CLI but fails in tests | Expired `AWS_ACCESS_KEY_ID`/`AWS_SESSION_TOKEN` environment variables override `AWS_PROFILE` | `unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION`, then run `aws sso login --profile <profile>` |
+| OpenSearch mapping dimension error | Embedding dimension does not match index mapping | Set `opensearch_embedding_dim` to the selected embedding model dimension before creating the collection |
+| AOSS returns 403 | IAM role or data access policy is incomplete | Grant the pod/user IAM role `aoss:APIAccessAll` and an AOSS data access policy covering `index/<collection>/*` |
 | Backend registered twice | Module imported multiple times | Normal - factory logs warning but works fine |
 
 ### Debug Registration
