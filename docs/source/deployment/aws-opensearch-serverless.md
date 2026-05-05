@@ -36,6 +36,35 @@ association on the `aiq-backend` service account. Each Dask worker constructs it
 client, so SigV4 signing happens in the worker's process — no signer state is serialized across
 the cluster.
 
+## Prerequisites
+
+| Item | Version / detail |
+|------|------------------|
+| AWS account | with permissions to create AOSS collections, IAM roles, and EKS Pod Identity associations |
+| AWS CLI | v2.15+ (Pod Identity associations require recent AWS CLI) |
+| `kubectl` | v1.29+ |
+| `helm` | v3.14+ |
+| EKS cluster | v1.29+ with the EKS Pod Identity Agent add-on installed |
+| Region | the same region for the EKS cluster and the AOSS collection |
+| `nvcr.io` access | NGC API key for pulling `nvcr.io/nvidia/blueprint/aiq-agent` |
+
+Install the EKS Pod Identity Agent add-on once per cluster:
+
+```bash
+aws eks create-addon \
+  --cluster-name <cluster-name> \
+  --addon-name eks-pod-identity-agent
+```
+
+Confirm it is `ACTIVE` before continuing:
+
+```bash
+aws eks describe-addon --cluster-name <cluster-name> --addon-name eks-pod-identity-agent \
+  --query 'addon.status' --output text
+```
+
+Expected: `ACTIVE`.
+
 ## Workflow Config
 
 Use `configs/config_web_opensearch.yml`:
