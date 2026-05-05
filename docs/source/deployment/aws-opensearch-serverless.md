@@ -440,6 +440,7 @@ uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_serverless_l
 | `Credentials were refreshed, but the refreshed credentials are still expired` | Stale exported AWS session credentials override SSO | Unset the `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, and `AWS_CREDENTIAL_EXPIRATION` variables |
 | Empty results immediately after ingest | AOSS search visibility delay | Retry retrieval; live tests wait for document visibility |
 | Mapping dimension error | Embedding model dimension does not match index mapping | Set `OPENSEARCH_EMBEDDING_DIM` before creating the index |
+| Dask worker stdout is empty during local testing | `DASK_DISTRIBUTED__LOGGING__DISTRIBUTED=warning` (default in `deploy/.env`) silences worker logs. Ingestion still succeeds — verify by counting docs in AOSS, not by tailing the worker. | Override locally with `DASK_DISTRIBUTED__LOGGING__DISTRIBUTED=info` if you need worker logs during development. |
 
 ## Cleanup
 
