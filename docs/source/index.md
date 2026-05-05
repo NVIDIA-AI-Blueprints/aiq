@@ -100,6 +100,7 @@ Authentication <./deployment/authentication.md>
 Observability <./deployment/observability.md>
 Production <./deployment/production.md>
 Kubernetes <./deployment/kubernetes.md>
+Amazon OpenSearch Serverless <./deployment/aws-opensearch-serverless.md>
 ```
 
 ```{toctree}
