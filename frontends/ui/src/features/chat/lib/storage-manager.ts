@@ -283,40 +283,6 @@ export const getExpiredSessionIds = (
 }
 
 /**
- * Standalone variant of getExpiredSessionIds that reads from and writes
- * back to localStorage directly. Use when no in-memory store snapshot is
- * available (e.g. before Zustand has hydrated). When called from the store,
- * prefer getExpiredSessionIds + a single set() so persist middleware handles
- * the write — otherwise we'd write to localStorage twice for one prune.
- *
- * Unlike cleanupOldSessions, this runs unconditionally — it does not depend
- * on storage being above the warning threshold.
- *
- * @returns Array of deleted session IDs (empty when nothing was removed).
- */
-export const cleanupExpiredSessions = (): string[] => {
-  const data = getChatStoreData()
-  if (!data) return []
-
-  const { conversations, currentConversationId } = data
-  const deletedIds = getExpiredSessionIds(conversations)
-  if (deletedIds.length === 0) return []
-
-  const beforeMB = bytesToMB(calculateTotalStorageSize())
-  const deletedSet = new Set(deletedIds)
-  const remaining = conversations.filter((c) => !deletedSet.has(c.id))
-  const newCurrentId =
-    currentConversationId && deletedSet.has(currentConversationId)
-      ? null
-      : currentConversationId
-  saveChatStoreData(remaining, newCurrentId)
-  const afterMB = bytesToMB(calculateTotalStorageSize())
-  logStorageCleanup(deletedIds, beforeMB - afterMB, beforeMB, afterMB)
-
-  return deletedIds
-}
-
-/**
  * Ensure storage capacity by cleaning up old sessions if needed.
  * Uses tiered cleanup priority (stale > current user oldest).
  *
