@@ -339,6 +339,71 @@ aiq:
         tag: <tag>
 ```
 
+## Verify the deployment
+
+### 1. Pod is running and Pod Identity is attached
+
+```bash
+kubectl -n ns-aiq get pods -l app.kubernetes.io/name=aiq-agent
+kubectl -n ns-aiq describe pod -l app.kubernetes.io/name=aiq-agent | grep -A2 'AWS_CONTAINER_CREDENTIALS'
+```
+
+Expected: pod is `Running`, the describe output shows
+`AWS_CONTAINER_CREDENTIALS_FULL_URI` injected by the EKS Pod Identity Agent. If that variable
+is missing, the Pod Identity association is not in effect — re-check the cluster, namespace,
+and service-account triple in the previous section.
+
+### 2. Backend health check
+
+```bash
+kubectl -n ns-aiq port-forward svc/aiq-agent 8000:8000 &
+curl -sf http://localhost:8000/health
+```
+
+Expected: `{"status":"ok"}` (or equivalent — match the health route exposed by the deployed
+`aiq_api` front end).
+
+### 3. Upload a document
+
+```bash
+curl -sf -X POST http://localhost:8000/v1/collections \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"smoke","description":"smoke test"}'
+
+curl -sf -X POST http://localhost:8000/v1/collections/smoke/documents \
+  -F 'files=@README.md'
+```
+
+Expected: a `job_id` is returned. Poll `GET /v1/documents/{job_id}/status` until `status` is
+`SUCCESS`. If it stalls in `INGESTING`, check the Dask worker logs for SigV4 errors:
+
+```bash
+kubectl -n ns-aiq logs -l app.kubernetes.io/name=aiq-agent --tail=200 | grep -i opensearch
+```
+
+### 4. Confirm the index appears in AOSS
+
+```bash
+aws opensearchserverless list-collections --region "$REGION"
+```
+
+```bash
+curl -sf "http://localhost:8000/v1/collections" | jq
+```
+
+Expected: `aiq-smoke` index visible in the AOSS console under the collection's index browser,
+and the `smoke` collection listed by the AIQ API.
+
+### 5. Run a knowledge query
+
+```bash
+curl -sf -X POST http://localhost:8000/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -d '{"messages":[{"role":"user","content":"what is in the smoke document"}]}'
+```
+
+Expected: response includes content from `README.md` with citations.
+
 ## Local Live Test
 
 For SSO credentials, clear stale environment credentials before running the test. Environment credentials take
