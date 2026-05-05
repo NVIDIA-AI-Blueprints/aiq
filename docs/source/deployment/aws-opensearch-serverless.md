@@ -273,6 +273,24 @@ expired session indexes.
 
 Use the example values file as a starting point:
 
+### Pull secret for `nvcr.io`
+
+The example values reference `nvcr.io/nvidia/blueprint/aiq-agent`. Create an NGC API key at
+[`ngc.nvidia.com`](https://ngc.nvidia.com), then create the pull secret in the release namespace:
+
+```bash
+kubectl create namespace ns-aiq --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl -n ns-aiq create secret docker-registry ngc-image-pull-secret \
+  --docker-server=nvcr.io \
+  --docker-username='$oauthtoken' \
+  --docker-password=<your-ngc-api-key>
+```
+
+The secret name `ngc-image-pull-secret` matches the
+[`deploy/helm/examples/aws-opensearch-serverless-values.yaml`](../../../deploy/helm/examples/aws-opensearch-serverless-values.yaml)
+`imagePullSecrets` entry. Change both if you use a different name.
+
 ```bash
 helm upgrade --install aiq deploy/helm/deployment-k8s \
   -n ns-aiq --create-namespace \
