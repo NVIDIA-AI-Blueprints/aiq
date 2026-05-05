@@ -399,6 +399,13 @@ curl -sf "http://localhost:8000/v1/collections" | jq
 Expected: `aiq-smoke` index visible in the AOSS console under the collection's index browser,
 and the `smoke` collection listed by the AIQ API.
 
+```{note}
+**AOSS visibility delay.** AOSS is eventually consistent for search after writes. A `_count` immediately
+after a successful upload may report `0` for ~5–30 seconds before catching up. If the AIQ status says
+`completed` but the AOSS console index browser shows zero docs, wait 30s and refresh — the index will
+populate. This is also why the live-test suite includes a polling visibility wait.
+```
+
 ### 5. Run a knowledge query
 
 ```bash
