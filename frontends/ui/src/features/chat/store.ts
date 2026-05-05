@@ -50,7 +50,7 @@ import {
   logStoreHydration,
 } from './lib/storage-logger'
 import { pruneMessageForStorage } from './lib/prune-message-for-storage'
-import { ensureStorageCapacity, checkStorageHealth } from './lib/storage-manager'
+import { ensureStorageCapacity, checkStorageHealth, getExpiredSessionIds } from './lib/storage-manager'
 import { useLayoutStore } from '@/features/layout/store'
 
 const isQuotaExceededError = (error: unknown): boolean => {
@@ -884,6 +884,58 @@ export const useChatStore = create<ChatStore>()(
             false,
             'deleteAllConversations'
           )
+        },
+
+        pruneExpiredSessions: () => {
+          const { conversations, currentConversation } = get()
+          const deletedIds = getExpiredSessionIds(conversations)
+          if (deletedIds.length === 0) return []
+
+          const deletedSet = new Set(deletedIds)
+          const remaining = conversations.filter((c) => !deletedSet.has(c.id))
+          const currentWasDeleted =
+            currentConversation !== null && deletedSet.has(currentConversation.id)
+
+          // If the current session got pruned, mirror the clearState branch
+          // from setCurrentUser to drop dangling ephemeral state. NOTE: unlike
+          // setCurrentUser, we deliberately do NOT auto-select the freshest
+          // surviving session for the same user — pruning is a maintenance
+          // op, not a user action, so we land on a clean draft instead of
+          // teleporting the user into an unrelated conversation.
+          if (currentWasDeleted) {
+            set(
+              {
+                conversations: remaining,
+                currentConversation: null,
+                thinkingSteps: [],
+                activeThinkingStepId: null,
+                reportContent: '',
+                reportContentCategory: null,
+                currentStatus: null,
+                planMessages: [],
+                deepResearchCitations: [],
+                deepResearchTodos: [],
+                deepResearchLLMSteps: [],
+                deepResearchAgents: [],
+                deepResearchToolCalls: [],
+                deepResearchFiles: [],
+                deepResearchStreamLoaded: false,
+                deepResearchJobId: null,
+                deepResearchLastEventId: null,
+                isDeepResearchStreaming: false,
+                deepResearchStatus: null,
+                deepResearchOwnerConversationId: null,
+                activeDeepResearchMessageId: null,
+                pendingInteraction: null,
+              },
+              false,
+              'pruneExpiredSessions:currentWasDeleted'
+            )
+          } else {
+            set({ conversations: remaining }, false, 'pruneExpiredSessions')
+          }
+
+          return deletedIds
         },
 
         updateConversationTitle: (conversationId: string, title: string) => {
@@ -2688,6 +2740,15 @@ export const useChatStore = create<ChatStore>()(
           // Persist pending HITL interaction for page refresh recovery
           pendingInteraction: state.pendingInteraction,
         }),
+        // After rehydration, prune sessions that exceed the backend job TTL
+        // (24h). Microtask defers until the rehydrated state is committed so
+        // pruneExpiredSessions sees the freshly hydrated conversations.
+        onRehydrateStorage: () => (state) => {
+          if (!state || typeof window === 'undefined') return
+          queueMicrotask(() => {
+            useChatStore.getState().pruneExpiredSessions()
+          })
+        },
       }
     ),
     { name: 'ChatStore' }

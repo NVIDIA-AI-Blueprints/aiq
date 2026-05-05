@@ -62,6 +62,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
 
   const isSessionBusy = useChatStore((s) => s.isSessionBusy)
   const anySessionBusy = useChatStore((s) => s.hasAnyBusySession())
+  const pruneExpiredSessions = useChatStore((s) => s.pruneExpiredSessions)
   // Navigation-specific busy check: only shallow thinking (WebSocket) and HITL prompts
   // block session switching. Deep research runs server-side and can be reconnected,
   // so it should NOT prevent navigation.
@@ -79,10 +80,13 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
   const [storagePercent, setStoragePercent] = useState<number>(0)
   useEffect(() => {
     if (isSessionsPanelOpen) {
+      // Drop sessions older than the backend job TTL (24h) so the list
+      // never shows ghost entries whose reports are gone server-side.
+      pruneExpiredSessions()
       const { percentUsed } = checkStorageHealth()
       setStoragePercent(Math.round(percentUsed))
     }
-  }, [isSessionsPanelOpen])
+  }, [isSessionsPanelOpen, pruneExpiredSessions])
 
   const handleDeleteClick = useCallback((sessionId: string) => {
     setSessionToDelete(sessionId)

@@ -756,6 +756,137 @@ describe('useChatStore', () => {
     })
   })
 
+  describe('pruneExpiredSessions', () => {
+    const HOUR_MS = 60 * 60 * 1000
+
+    const makeConv = (id: string, hoursAgo: number, messages: Conversation['messages'] = []): Conversation => {
+      const ts = new Date(Date.now() - hoursAgo * HOUR_MS)
+      return {
+        id,
+        userId: 'user-1',
+        title: `Session ${id}`,
+        messages,
+        createdAt: ts,
+        updatedAt: ts,
+      }
+    }
+
+    const writeStorage = (
+      conversations: Conversation[],
+      currentId: string | null = null,
+    ) => {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({
+          state: {
+            currentUserId: 'user-1',
+            conversations,
+            currentConversation: currentId,
+            pendingInteraction: null,
+          },
+          version: 0,
+        }),
+      )
+    }
+
+    test('removes expired sessions from in-memory state and returns their IDs', () => {
+      const old = makeConv('s_old', 30)
+      const fresh = makeConv('s_fresh', 2)
+      writeStorage([old, fresh])
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: fresh,
+        conversations: [old, fresh],
+      })
+
+      const deleted = useChatStore.getState().pruneExpiredSessions()
+
+      expect(deleted).toEqual(['s_old'])
+      const ids = useChatStore.getState().conversations.map((c) => c.id)
+      expect(ids).toEqual(['s_fresh'])
+      expect(useChatStore.getState().currentConversation?.id).toBe('s_fresh')
+    })
+
+    test('clears currentConversation and ephemeral state when current is expired', () => {
+      const oldCurrent = makeConv('s_current_old', 48)
+      writeStorage([oldCurrent], 's_current_old')
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: oldCurrent,
+        conversations: [oldCurrent],
+        reportContent: 'stale report',
+        thinkingSteps: [
+          {
+            id: 'step-1',
+            userMessageId: 'msg-1',
+            category: 'agents',
+            functionName: 'fn',
+            displayName: 'Fn',
+            content: '',
+            timestamp: new Date(),
+            isComplete: true,
+          },
+        ],
+        deepResearchJobId: 'job-old',
+        isDeepResearchStreaming: false,
+      })
+
+      const deleted = useChatStore.getState().pruneExpiredSessions()
+
+      expect(deleted).toEqual(['s_current_old'])
+      const state = useChatStore.getState()
+      expect(state.conversations).toEqual([])
+      expect(state.currentConversation).toBeNull()
+      expect(state.reportContent).toBe('')
+      expect(state.thinkingSteps).toEqual([])
+      expect(state.deepResearchJobId).toBeNull()
+    })
+
+    test('keeps expired session with active deep research job (busy protection)', () => {
+      const busy = makeConv('s_busy', 48, [
+        {
+          id: 'msg-1',
+          role: 'assistant',
+          content: 'Running...',
+          timestamp: new Date(),
+          messageType: 'agent_response',
+          deepResearchJobId: 'job-1',
+          deepResearchJobStatus: 'running',
+        },
+      ])
+      const idleOld = makeConv('s_idle_old', 48)
+      writeStorage([busy, idleOld])
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: null,
+        conversations: [busy, idleOld],
+      })
+
+      const deleted = useChatStore.getState().pruneExpiredSessions()
+
+      expect(deleted).toEqual(['s_idle_old'])
+      const ids = useChatStore.getState().conversations.map((c) => c.id)
+      expect(ids).toEqual(['s_busy'])
+    })
+
+    test('returns empty array and does not mutate state when nothing expired', () => {
+      const a = makeConv('s_a', 1)
+      const b = makeConv('s_b', 23)
+      writeStorage([a, b])
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: a,
+        conversations: [a, b],
+      })
+
+      const before = useChatStore.getState().conversations
+      const deleted = useChatStore.getState().pruneExpiredSessions()
+
+      expect(deleted).toEqual([])
+      expect(useChatStore.getState().conversations).toBe(before)
+    })
+  })
+
   describe('thinking steps', () => {
     // Helper to set up a user message context for thinking steps tests
     const setupUserMessageContext = () => {
