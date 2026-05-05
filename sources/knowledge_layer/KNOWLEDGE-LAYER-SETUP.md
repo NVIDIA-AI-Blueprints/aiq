@@ -399,6 +399,41 @@ For more details, see the [Docker Compose README](../../deploy/compose/README.md
 
 Both LlamaIndex and Foundational RAG support session-based collections (`s_<uuid>`) created by the UI. Each browser session gets its own isolated collection.
 
+#### How collection routing works
+
+When a request arrives the `knowledge_search` tool reads `Context.conversation_id` and uses it as the
+collection name, falling back to the static `collection_name` from YAML config when the context value
+is absent.
+
+`Context.conversation_id` is populated by the `nat` framework **from the `conversation-id` HTTP
+request header** (see `SessionManager.set_metadata_from_http_request` in the `nat` package).
+The AI-Q UI sets this header automatically for every WebSocket and HTTP request it sends, which is why
+session-isolated uploads work seamlessly through the UI.
+
+**Known limitation — `/v1/chat/completions` JSON body field is ignored.**
+The OpenAI-compatible `POST /v1/chat/completions` endpoint uses `nat.data_models.api_server.ChatRequest`
+as its request body model.  `ChatRequest` does **not** declare a `conversation_id` field; the model uses
+`extra="allow"`, so any `conversation_id` key in the JSON body is silently accepted and then discarded.
+The framework never reads it back into the context.
+
+Consequence: callers that send `{"messages": [...], "conversation_id": "my-collection"}` in the body
+will have that value silently dropped, and the tool will fall back to the configured `collection_name`
+default instead of routing to `my-collection`.
+
+**Workaround (until upstream `nat` is patched):** pass the collection name as the
+`conversation-id` HTTP header instead of a JSON body field:
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "conversation-id: my-collection" \
+  -d '{"messages": [{"role": "user", "content": "..."}], "stream": false}'
+```
+
+This is tracked as a known gap.  The permanent fix requires adding `conversation_id` to `ChatRequest`
+and wiring it into `Context.conversation_id` inside the `nat` framework — a change that belongs in the
+upstream `nat` / `aiq_api` repository, not in this repo.
+
 ### TTL Cleanup
 
 Collections inactive for 24 hours are auto-deleted based on `last_indexed` timestamp. Background thread runs hourly.
