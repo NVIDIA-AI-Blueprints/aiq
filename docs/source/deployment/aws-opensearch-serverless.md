@@ -291,6 +291,37 @@ The secret name `ngc-image-pull-secret` matches the
 [`deploy/helm/examples/aws-opensearch-serverless-values.yaml`](../../../deploy/helm/examples/aws-opensearch-serverless-values.yaml)
 `imagePullSecrets` entry. Change both if you use a different name.
 
+### Embedding endpoint
+
+The OpenSearch ingestor calls an OpenAI-compatible embeddings endpoint to vectorize chunks
+before indexing. Two options:
+
+**Option A: NVIDIA hosted API (default).** The ingestor calls
+`https://integrate.api.nvidia.com/v1` and reads `NVIDIA_API_KEY` from the pod environment.
+Create the shared credentials secret once and the example values' `secretEnv` block injects
+`NVIDIA_API_KEY` into the backend container:
+
+```bash
+kubectl -n ns-aiq create secret generic aiq-credentials \
+  --from-literal=NVIDIA_API_KEY=<your-nvidia-api-key>
+```
+
+The chart's `secretEnv` pattern maps env-var names to keys in this shared secret. Add other
+keys (database credentials, etc.) to the same secret if your release needs them.
+
+**Option B: Self-hosted NIM on the same cluster.** Override `AIQ_EMBED_BASE_URL` to point at
+your in-cluster NIM service and leave `NVIDIA_API_KEY` empty. Add to `backend.env` in your
+values:
+
+```yaml
+        AIQ_EMBED_BASE_URL: http://nim-embedqa.ns-nim.svc.cluster.local:8000/v1
+        AIQ_EMBED_MODEL: nvidia/llama-nemotron-embed-vl-1b-v2
+```
+
+The embedding model dimension must match `OPENSEARCH_EMBEDDING_DIM` in the workflow config
+(default `2048` for `nvidia/llama-nemotron-embed-vl-1b-v2`). Mismatched dimensions surface
+as `mapper_parsing_exception` on the first ingest.
+
 ```bash
 helm upgrade --install aiq deploy/helm/deployment-k8s \
   -n ns-aiq --create-namespace \
