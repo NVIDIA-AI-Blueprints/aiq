@@ -708,3 +708,37 @@ def test_setup_backend_uses_opensearch_environment_defaults(monkeypatch):
     assert backend_config["ingestion_mode"] == "auto"
     assert backend_config["dask_scheduler_address"] == "tcp://scheduler:8786"
     assert backend_config["dask_file_transfer"] == "paths"
+
+
+def test_ingestor_embed_raises_when_hosted_api_and_missing_key(monkeypatch):
+    """Hosted NVIDIA API with no key should raise a clear error before HTTP."""
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    from knowledge_layer.opensearch.adapter import OpenSearchIngestor
+
+    ingestor = OpenSearchIngestor({
+        "endpoint": "http://localhost:9200",
+        "auth_type": "none",
+        "embed_base_url": "https://integrate.api.nvidia.com/v1",
+        "start_ttl_cleanup": False,
+    })
+    with pytest.raises(RuntimeError, match="NVIDIA_API_KEY"):
+        ingestor._embed_texts(["hello world"])
+
+
+def test_ingestor_embed_allows_local_nim_without_key(monkeypatch):
+    """Self-hosted NIM with no key should pass through without complaint."""
+    monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
+    from knowledge_layer.opensearch.adapter import OpenSearchIngestor
+
+    ingestor = OpenSearchIngestor({
+        "endpoint": "http://localhost:9200",
+        "auth_type": "none",
+        "embed_base_url": "http://nim-embed.ns-nim.svc.cluster.local:8000/v1",
+        "start_ttl_cleanup": False,
+    })
+    class _FakeOpenAI:
+        def __init__(self, base_url, api_key):
+            self.embeddings = type("E", (), {"create": staticmethod(lambda **kw: type("R", (), {"data": [type("D", (), {"embedding": [0.0] * 4})()]})())})()
+    monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
+    result = ingestor._embed_texts(["hello"])
+    assert result == [[0.0, 0.0, 0.0, 0.0]]

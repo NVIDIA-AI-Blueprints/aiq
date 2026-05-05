@@ -259,6 +259,18 @@ def _chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
     return chunks
 
 
+def _resolve_embedding_api_key(embed_base_url: str) -> str:
+    api_key = os.environ.get("NVIDIA_API_KEY", "")
+    is_hosted_nvidia = "integrate.api.nvidia.com" in (embed_base_url or "")
+    if is_hosted_nvidia and not api_key:
+        raise RuntimeError(
+            "NVIDIA_API_KEY is required for the hosted NVIDIA embeddings API "
+            "(embed_base_url contains integrate.api.nvidia.com). Either set "
+            "NVIDIA_API_KEY or override AIQ_EMBED_BASE_URL to a self-hosted NIM endpoint."
+        )
+    return api_key
+
+
 class _OpenSearchConfigMixin:
     """Shared OpenSearch configuration and client helpers."""
 
@@ -505,7 +517,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                 "OpenSearch ingestion requires openai for embeddings. Install knowledge-layer[opensearch]."
             ) from e
 
-        client = OpenAI(base_url=self.embed_base_url, api_key=os.environ.get("NVIDIA_API_KEY", ""))
+        client = OpenAI(base_url=self.embed_base_url, api_key=_resolve_embedding_api_key(self.embed_base_url))
         embeddings: list[list[float]] = []
         for start in range(0, len(texts), self.embedding_batch_size):
             batch = texts[start : start + self.embedding_batch_size]
@@ -1342,7 +1354,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
                 "OpenSearch retrieval requires openai for embeddings. Install knowledge-layer[opensearch]."
             ) from e
 
-        client = OpenAI(base_url=self.embed_base_url, api_key=os.environ.get("NVIDIA_API_KEY", ""))
+        client = OpenAI(base_url=self.embed_base_url, api_key=_resolve_embedding_api_key(self.embed_base_url))
         response = client.embeddings.create(
             model=self.embed_model_name,
             input=texts,
