@@ -65,6 +65,58 @@ aws eks describe-addon --cluster-name <cluster-name> --addon-name eks-pod-identi
 
 Expected: `ACTIVE`.
 
+## Create the OpenSearch Serverless collection
+
+AOSS requires an encryption policy and a network policy before the collection can be created.
+Replace `<collection-name>` and `<region>` throughout. The examples below use AWS-owned KMS keys
+and a public network policy; harden these for production.
+
+### 1. Encryption policy
+
+```bash
+COLLECTION=<collection-name>
+REGION=<region>
+
+aws opensearchserverless create-security-policy \
+  --region "$REGION" \
+  --name "${COLLECTION}-enc" \
+  --type encryption \
+  --policy "{\"Rules\":[{\"ResourceType\":\"collection\",\"Resource\":[\"collection/${COLLECTION}\"]}],\"AWSOwnedKey\":true}"
+```
+
+### 2. Network policy
+
+```bash
+aws opensearchserverless create-security-policy \
+  --region "$REGION" \
+  --name "${COLLECTION}-net" \
+  --type network \
+  --policy "[{\"Rules\":[{\"ResourceType\":\"collection\",\"Resource\":[\"collection/${COLLECTION}\"]},{\"ResourceType\":\"dashboard\",\"Resource\":[\"collection/${COLLECTION}\"]}],\"AllowFromPublic\":true}]"
+```
+
+For private VPC access, replace `AllowFromPublic` with `SourceVPCEs`. See the
+[AOSS network policy docs](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-network.html).
+
+### 3. Create the collection
+
+```bash
+aws opensearchserverless create-collection \
+  --region "$REGION" \
+  --name "$COLLECTION" \
+  --type VECTORSEARCH
+```
+
+Wait until the collection is `ACTIVE` and capture the data endpoint:
+
+```bash
+aws opensearchserverless batch-get-collection \
+  --region "$REGION" --names "$COLLECTION" \
+  --query 'collectionDetails[0].[status,collectionEndpoint]' --output text
+```
+
+Expected output: `ACTIVE   https://abc123.<region>.aoss.amazonaws.com`. Save the endpoint — it
+is the `OPENSEARCH_URL` value used in Helm values.
+
 ## Workflow Config
 
 Use `configs/config_web_opensearch.yml`:
