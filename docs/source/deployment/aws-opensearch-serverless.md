@@ -117,6 +117,69 @@ aws opensearchserverless batch-get-collection \
 Expected output: `ACTIVE   https://abc123.<region>.aoss.amazonaws.com`. Save the endpoint — it
 is the `OPENSEARCH_URL` value used in Helm values.
 
+## IAM role for the AIQ pod
+
+Pod Identity assumes an IAM role through `pods.eks.amazonaws.com`. The trust policy for this role
+must allow `sts:AssumeRole` and `sts:TagSession` for that principal.
+
+### 1. Trust policy
+
+Save as `aiq-trust-policy.json`:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Principal": { "Service": "pods.eks.amazonaws.com" },
+      "Action": ["sts:AssumeRole", "sts:TagSession"]
+    }
+  ]
+}
+```
+
+### 2. Permissions policy
+
+The role needs `aoss:APIAccessAll` on the collection, plus the AOSS dashboard endpoint if you
+want to inspect indexes from the AWS console. Save as `aiq-permissions-policy.json` and substitute
+your account ID and collection name:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "aoss:APIAccessAll",
+      "Resource": "arn:aws:aoss:<region>:<account-id>:collection/<collection-id>"
+    }
+  ]
+}
+```
+
+The `<collection-id>` is the suffix returned by `batch-get-collection` under `id` (a 26-character
+identifier), not the human-readable name.
+
+### 3. Create the role
+
+```bash
+aws iam create-role \
+  --role-name aiq-opensearch-role \
+  --assume-role-policy-document file://aiq-trust-policy.json
+
+aws iam put-role-policy \
+  --role-name aiq-opensearch-role \
+  --policy-name aiq-opensearch-access \
+  --policy-document file://aiq-permissions-policy.json
+```
+
+Capture the role ARN — it goes into the Pod Identity association in Task 6.
+
+```bash
+aws iam get-role --role-name aiq-opensearch-role --query 'Role.Arn' --output text
+```
+
 ## Workflow Config
 
 Use `configs/config_web_opensearch.yml`:
