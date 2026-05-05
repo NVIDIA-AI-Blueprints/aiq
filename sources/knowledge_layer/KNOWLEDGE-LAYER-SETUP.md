@@ -216,6 +216,12 @@ functions:
 For Amazon OpenSearch Serverless, use SigV4 with service `aoss`. For Amazon OpenSearch Service domains, use
 service `es`.
 
+> **Note: text-only ingestion.** The OpenSearch backend extracts plain text from PDFs, DOCX, and PPTX
+> via `pypdf`/`docx2txt`/`python-pptx`. It does **not** currently honor `AIQ_EXTRACT_TABLES`,
+> `AIQ_EXTRACT_IMAGES`, or `AIQ_EXTRACT_CHARTS` (those flags are LlamaIndex-only). For multimodal
+> ingestion against OpenSearch, run the LlamaIndex backend instead, or use Foundational RAG which
+> handles multimodal extraction server-side.
+
 ```yaml
 functions:
   knowledge_search:

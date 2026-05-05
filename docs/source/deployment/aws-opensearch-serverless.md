@@ -250,6 +250,12 @@ required — Pod Identity does not use OIDC trust like IRSA.
 
 Use `configs/config_web_opensearch.yml`:
 
+```{note}
+**Text-only ingestion.** The OpenSearch backend extracts plain text from PDFs, DOCX, and PPTX. It does
+not currently support table/image/chart extraction (those flags are LlamaIndex-only). For multimodal,
+use the LlamaIndex backend or Foundational RAG.
+```
+
 ```yaml
 functions:
   knowledge_search:
