@@ -231,6 +231,11 @@ functions:
     opensearch_dask_file_transfer: bytes
 ```
 
+> **Deploying on EKS?** See the
+> [Amazon OpenSearch Serverless deployment guide](../../docs/source/deployment/aws-opensearch-serverless.md)
+> for the end-to-end EKS Pod Identity setup, AOSS data access policy, Helm values, and
+> verification commands.
+
 OpenSearch creates one physical index per collection using `<opensearch_index_prefix>-<collection_name>`, sanitized
 for OpenSearch index naming rules. The adapter stores collection metadata in mapping `_meta` and stores each text chunk
 as one OpenSearch document with a `knn_vector` field.
