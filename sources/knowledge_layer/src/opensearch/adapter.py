@@ -509,7 +509,11 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         embeddings: list[list[float]] = []
         for start in range(0, len(texts), self.embedding_batch_size):
             batch = texts[start : start + self.embedding_batch_size]
-            response = client.embeddings.create(model=self.embed_model_name, input=batch)
+            response = client.embeddings.create(
+                model=self.embed_model_name,
+                input=batch,
+                extra_body={"input_type": "passage"},
+            )
             embeddings.extend([list(item.embedding) for item in response.data])
         return embeddings
 
@@ -1339,7 +1343,11 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
             ) from e
 
         client = OpenAI(base_url=self.embed_base_url, api_key=os.environ.get("NVIDIA_API_KEY", ""))
-        response = client.embeddings.create(model=self.embed_model_name, input=texts)
+        response = client.embeddings.create(
+            model=self.embed_model_name,
+            input=texts,
+            extra_body={"input_type": "query"},
+        )
         return [list(item.embedding) for item in response.data]
 
     async def retrieve(
