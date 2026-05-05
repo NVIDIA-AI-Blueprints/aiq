@@ -180,6 +180,72 @@ Capture the role ARN — it goes into the Pod Identity association in Task 6.
 aws iam get-role --role-name aiq-opensearch-role --query 'Role.Arn' --output text
 ```
 
+## Grant the role access to AOSS
+
+AOSS authorizes data plane operations (index create, document write, search) through a
+*data access policy* that is separate from IAM. The policy lists IAM principals and the
+collections/indexes they can act on.
+
+Save as `aiq-data-access-policy.json`. Substitute your role ARN and AIQ index prefix
+(`aiq` matches the default `OPENSEARCH_INDEX_PREFIX`):
+
+```json
+[
+  {
+    "Rules": [
+      {
+        "ResourceType": "collection",
+        "Resource": ["collection/<collection-name>"],
+        "Permission": ["aoss:DescribeCollectionItems"]
+      },
+      {
+        "ResourceType": "index",
+        "Resource": ["index/<collection-name>/aiq*"],
+        "Permission": [
+          "aoss:CreateIndex",
+          "aoss:DeleteIndex",
+          "aoss:UpdateIndex",
+          "aoss:DescribeIndex",
+          "aoss:ReadDocument",
+          "aoss:WriteDocument"
+        ]
+      }
+    ],
+    "Principal": ["arn:aws:iam::<account-id>:role/aiq-opensearch-role"],
+    "Description": "AIQ backend access to AOSS indexes"
+  }
+]
+```
+
+```bash
+aws opensearchserverless create-access-policy \
+  --region "$REGION" \
+  --name "${COLLECTION}-aiq" \
+  --type data \
+  --policy file://aiq-data-access-policy.json
+```
+
+The index resource pattern `index/<collection>/aiq*` covers every AIQ session collection, since
+the OpenSearch backend creates indexes named `aiq-<collection>` (or `aiq-s_<uuid>` for session
+collections).
+
+## Associate the role with the AIQ service account
+
+EKS Pod Identity binds an IAM role to a Kubernetes service account. With the default Helm
+release names, the namespace is `ns-aiq` and the backend service account is `aiq-backend`.
+
+```bash
+aws eks create-pod-identity-association \
+  --cluster-name <cluster-name> \
+  --namespace ns-aiq \
+  --service-account aiq-backend \
+  --role-arn arn:aws:iam::<account-id>:role/aiq-opensearch-role
+```
+
+The same service account is used by the embedded Dask scheduler and worker, so SigV4
+credentials are available throughout the ingestion pipeline. No service-account annotation is
+required — Pod Identity does not use OIDC trust like IRSA.
+
 ## Workflow Config
 
 Use `configs/config_web_opensearch.yml`:
@@ -202,25 +268,6 @@ functions:
 Session collection names such as `s_<uuid>` map to physical indexes like `aiq-s_<uuid>` inside the same Serverless
 collection endpoint. The backend stores collection metadata in mapping `_meta` and the TTL cleanup thread deletes
 expired session indexes.
-
-## EKS Pod Identity
-
-For EKS deployments, use Pod Identity to provide AWS credentials to the backend pod and any Dask worker process. With the
-default Helm release names, the namespace is `ns-aiq` and the backend service account is `aiq-backend`.
-
-Create the Pod Identity association outside the chart:
-
-```bash
-aws eks create-pod-identity-association \
-  --cluster-name <cluster-name> \
-  --namespace ns-aiq \
-  --service-account aiq-backend \
-  --role-arn arn:aws:iam::<account-id>:role/<aiq-opensearch-role>
-```
-
-The IAM role must allow OpenSearch Serverless API access to the target collection. The collection must also have a data
-access policy granting index permissions to the same role. For dynamic AI-Q indexes, use an index resource pattern such
-as `index/<collection-name>/aiq*`.
 
 ## Helm Values
 
