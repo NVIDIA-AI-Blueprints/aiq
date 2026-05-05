@@ -366,8 +366,7 @@ kubectl -n ns-aiq port-forward svc/aiq-agent 8000:8000 &
 curl -sf http://localhost:8000/health
 ```
 
-Expected: `{"status":"ok"}` (or equivalent — match the health route exposed by the deployed
-`aiq_api` front end).
+Expected: `{"status":"healthy"}` (the `aiq_api` front end exposes a JSON health route at `/health`).
 
 ### 3. Upload a document
 
