@@ -428,3 +428,37 @@ uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_serverless_l
 | `Credentials were refreshed, but the refreshed credentials are still expired` | Stale exported AWS session credentials override SSO | Unset the `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN`, and `AWS_CREDENTIAL_EXPIRATION` variables |
 | Empty results immediately after ingest | AOSS search visibility delay | Retry retrieval; live tests wait for document visibility |
 | Mapping dimension error | Embedding model dimension does not match index mapping | Set `OPENSEARCH_EMBEDDING_DIM` before creating the index |
+
+## Cleanup
+
+```bash
+helm uninstall aiq -n ns-aiq
+kubectl delete namespace ns-aiq
+
+aws eks delete-pod-identity-association \
+  --cluster-name <cluster-name> \
+  --association-id <association-id>
+
+aws iam delete-role-policy --role-name aiq-opensearch-role --policy-name aiq-opensearch-access
+aws iam delete-role --role-name aiq-opensearch-role
+
+aws opensearchserverless delete-access-policy --type data --name "${COLLECTION}-aiq"
+aws opensearchserverless delete-collection --id <collection-id>
+aws opensearchserverless delete-security-policy --type network --name "${COLLECTION}-net"
+aws opensearchserverless delete-security-policy --type encryption --name "${COLLECTION}-enc"
+```
+
+Get the Pod Identity `<association-id>` with:
+
+```bash
+aws eks list-pod-identity-associations \
+  --cluster-name <cluster-name> --namespace ns-aiq \
+  --query 'associations[?serviceAccount==`aiq-backend`].associationId' --output text
+```
+
+Get the AOSS `<collection-id>` with:
+
+```bash
+aws opensearchserverless batch-get-collection --names "$COLLECTION" \
+  --query 'collectionDetails[0].id' --output text
+```
