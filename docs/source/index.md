@@ -70,6 +70,7 @@ Adding a Data Source <./extending/adding-a-data-source.md>
 :caption: Integration
 
 Overview <./integration/index.md>
+Agent Skills <./integration/agent-skills.md>
 REST API <./integration/rest-api.md>
 ```
 
