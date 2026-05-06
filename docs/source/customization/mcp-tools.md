@@ -18,7 +18,6 @@ version with `uv pip show nvidia-nat`.
 - Connect AIQ to an unauthenticated MCP server.
 - Connect AIQ to an MCP server with backend service-account credentials.
 - Forward the signed-in AIQ user's identity to a downstream service from a custom AIQ tool.
-- Publish AIQ workflows as an MCP server.
 
 **Planned for AIQ 2.2 / 2.3:**
 
@@ -43,7 +42,6 @@ For the full NAT MCP reference:
 | MCP server uses backend / app credentials | `mcp_client` + `mcp_service_account` | [Service-Account MCP Servers](#service-account-mcp-servers) |
 | Downstream API trusts the AIQ user's bearer token | Custom AIQ tool using `get_auth_token()` | [Forwarding AIQ User Identity](#forwarding-aiq-user-identity-from-a-tool) |
 | MCP server requires per-user OAuth consent | Planned for AIQ 2.2 / 2.3 | [Per-User MCP OAuth (planned)](#per-user-mcp-oauth-planned) |
-| Another app should call AIQ tools over MCP | `nat mcp serve` or `nat fastmcp server run` | [Publish AIQ as an MCP Server](#publish-aiq-tools-as-an-mcp-server) |
 
 ## Prerequisites
 
@@ -307,44 +305,10 @@ backend status APIs, UI controls, and worker-side token resolution — is tracke
 [NAT MCP authentication guide](https://docs.nvidia.com/nemo/agent-toolkit/latest/components/auth/mcp-auth/index.html)
 if you want to follow NAT's MCP OAuth surface directly.
 
-## Publish AIQ Tools as an MCP Server
-
-You can publish the functions in a NAT workflow as MCP tools:
-
-```bash
-nat mcp serve --config_file configs/config_web_frag.yml --port 9901
-```
-
-The MCP server is available at `http://localhost:9901/mcp`.
-
-List tools and call them while debugging:
-
-```bash
-nat mcp client tool list --url http://localhost:9901/mcp
-nat mcp client tool list --url http://localhost:9901/mcp --tool <tool_name> --detail
-
-nat mcp client tool call <tool_name> \
-  --url http://localhost:9901/mcp \
-  --json-args '{"query": "example"}'
-```
-
-NAT also supports a FastMCP server runtime:
-
-```bash
-uv pip install nvidia-nat-fastmcp
-nat fastmcp server run --config_file configs/config_web_frag.yml --port 9902
-```
-
-FastMCP publishes tools at `http://localhost:9902/mcp` by default. NAT's FastMCP docs note this
-runtime depends on a beta FastMCP release; validate against your deployment requirements before
-using it in production.
-
 ## Security Guidance
 
 - Prefer `streamable-http` for MCP servers, especially protected servers. Avoid `sse` for
   production authentication scenarios.
-- Do not expose `nat mcp serve` to the public internet without an authenticating reverse proxy or
-  private network boundary.
 - Store secrets in environment variables or a secret manager, not in YAML checked into source
   control.
 - Use service-account MCP auth only when shared app-level access is acceptable.
