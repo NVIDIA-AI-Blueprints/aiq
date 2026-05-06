@@ -33,7 +33,9 @@ import asyncio
 import json
 import logging
 from typing import TYPE_CHECKING
+from typing import Annotated
 
+from fastapi import Body
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -54,19 +56,6 @@ logger = logging.getLogger(__name__)
 class JobSubmitRequest(BaseModel):
     """Request to submit an async job."""
 
-    model_config = ConfigDict(
-        json_schema_extra={
-            "examples": [
-                {
-                    "agent_type": "deep_researcher",
-                    "input": "What are the latest advances in quantum computing?",
-                    "job_id": None,
-                    "expiry_seconds": 86400,
-                }
-            ]
-        }
-    )
-
     agent_type: str = Field(..., description="Agent type (e.g., 'deep_researcher')")
     input: str = Field(..., min_length=1, description="Input query for the agent")
     job_id: str | None = Field(
@@ -81,6 +70,34 @@ class JobSubmitRequest(BaseModel):
         le=604800,
         description="Job expiry in seconds (default from config, max 7 days)",
     )
+    data_sources: list[str] | None = Field(
+        None,
+        description=(
+            "Optional data source IDs to target. Omit or set null to use all data-source tools. "
+            "When specific IDs are passed, unmapped utility tools (e.g., 'think') remain available. "
+            "Pass an empty list to run the agent with no tools."
+        ),
+    )
+
+
+JOB_SUBMIT_EXAMPLES: dict[str, dict] = {
+    "default": {
+        "summary": "Default (all data sources)",
+        "value": {
+            "agent_type": "deep_researcher",
+            "input": "What are the latest advances in quantum computing?",
+            "expiry_seconds": 86400,
+        },
+    },
+    "scoped": {
+        "summary": "Scoped to specific data sources",
+        "value": {
+            "agent_type": "deep_researcher",
+            "input": "What are the latest advances in quantum computing?",
+            "data_sources": ["web_search"],
+        },
+    },
+}
 
 
 class JobStatusResponse(BaseModel):
@@ -279,10 +296,13 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         ),
         responses={
             400: {"description": "Unknown agent type or invalid request"},
+            422: {"description": "One or more unknown data source IDs"},
             503: {"description": "Dask scheduler not available"},
         },
     )
-    async def submit_job(req: JobSubmitRequest) -> JobStatusResponse:
+    async def submit_job(
+        req: Annotated[JobSubmitRequest, Body(openapi_examples=JOB_SUBMIT_EXAMPLES)],
+    ) -> JobStatusResponse:
         """Submit a new async job for deep research or other registered agents."""
         try:
             get_agent_config(req.agent_type)
@@ -290,6 +310,14 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             raise HTTPException(400, str(e))
 
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
+        if req.data_sources is not None:
+            available_source_ids = {source.id.lower() for source in get_all_sources()}
+            invalid_source_ids = [
+                source_id for source_id in req.data_sources if source_id.lower() not in available_source_ids
+            ]
+            if invalid_source_ids:
+                raise HTTPException(422, f"Unknown data source(s): {', '.join(invalid_source_ids)}")
+
         principal = require_verified_principal()
 
         # Propagate auth token to Dask worker for requires_auth data sources
@@ -304,6 +332,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 principal=principal,
                 job_id=req.job_id,
                 expiry_seconds=expiry,
+                data_sources=req.data_sources,
                 auth_token=auth_token,
             )
         except RuntimeError as e:

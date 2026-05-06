@@ -315,7 +315,7 @@ functions:
 The `data_source_registry` provides:
 
 - **`GET /v1/data_sources`** API endpoint returns the registered sources (the UI renders these as toggles)
-- **Per-message filtering** via `data_sources: ["web_search"]` in the chat payload -- only tools belonging to selected sources are active
+- **Per-message filtering** via `data_sources: ["web_search"]` in the WebSocket chat payload, or as a `data_sources` field on `POST /v1/jobs/async/submit` -- only tools belonging to selected sources are active
 - **Display metadata** (name, description) shown in the UI
 - **Auth gating** -- set `requires_auth: true` on a source to grey it out in the UI until the user signs in (e.g., enterprise sources that need user-level OAuth tokens). Sources using backend API keys (Tavily, Serper) should leave this `false` (the default).
 - **Auto-inheritance** -- all agents get every registered tool by default (use `exclude_tools` on an agent for per-agent specialization)
