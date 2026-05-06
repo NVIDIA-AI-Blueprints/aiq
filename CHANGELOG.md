@@ -7,7 +7,7 @@ Release v2.1.0 (Unreleased — target 2026-05-19)
 - Data source registry driving UI toggles, per-message filtering, and agent tool inheritance
 - New `exa_web_search` data source with `full_text` and `highlights` controls
 - Deep researcher consumes DeepAgents skills with a job-scoped Modal sandbox; built-in `data-table-analysis` skill and `configs/config_skills.yml` example
-- AI-Q is consumable as a Claude Code skill (`.claude/skills/aiq-research/`) for routed `/chat` and async job lifecycle against a local AI-Q server
+- AI-Q is consumable as a portable Agent Skill (`.agents/skills/aiq-research/`), with `.claude/skills/aiq-research/` retained as a Claude Code compatibility symlink for routed `/chat` and async job lifecycle against a local AI-Q server
 - Cost analysis tool with pricing configs and profiling example
 - Documented MCP client patterns scoped for 2.1: `mcp_client`, `mcp_service_account`, and user-identity tools
 - Prompt restructure across all agents for KV cache prefix reuse
