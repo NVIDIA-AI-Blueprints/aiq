@@ -82,7 +82,8 @@ helm show chart aiq2-web-2.0.0.tgz
 helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq --create-namespace \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
-  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret'
 ```
 
 - Replace `<YOUR_NGC_API_KEY>` with your NGC API key (or use `$NGC_API_KEY` if set in your environment).
@@ -97,7 +98,8 @@ helm upgrade --install aiq https://helm.ngc.nvidia.com/nvidia/blueprint/charts/a
   -n ns-aiq --create-namespace \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
-  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret'
 ```
 
 ### Override values
@@ -109,6 +111,7 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.image.tag=<tag>
 ```
 
@@ -172,7 +175,8 @@ To upgrade an existing release to a newer chart version, pull the new chart arch
 helm upgrade aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
-  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret'
 ```
 
 ### Uninstall
@@ -198,6 +202,7 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml
 ```
 
@@ -214,6 +219,7 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml \
   --set aiq.apps.backend.env.RAG_SERVER_URL=http://rag-server.<rag-namespace>.svc.cluster.local:8081/v1 \
   --set aiq.apps.backend.env.RAG_INGEST_URL=http://ingestor-server.<rag-namespace>.svc.cluster.local:8082/v1
@@ -230,6 +236,7 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml \
   --set aiq.apps.backend.env.RAG_SERVER_URL=http://<rag-host>:8081/v1 \
   --set aiq.apps.backend.env.RAG_INGEST_URL=http://<rag-ingest-host>:8082/v1

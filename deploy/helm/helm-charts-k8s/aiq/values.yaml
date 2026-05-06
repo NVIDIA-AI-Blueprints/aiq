@@ -28,9 +28,11 @@ namespace:
 # ==========================================
 # OPTIONAL: Image Pull Secrets
 # ==========================================
-imagePullSecrets:
-  dockerRegistry: null
-  artifactRegistry: null
+# Default null so deployment.yaml's per-app fallback never renders this dict
+# directly into a pod spec (which expects a list). To auto-create a registry
+# secret in-cluster, set dockerRegistry / artifactRegistry to a base64-encoded
+# .dockerconfigjson — this is consumed by templates/imagepullsecrets.yaml.
+imagePullSecrets: null
 
 # ==========================================
 # OPTIONAL: Global Image Repository
