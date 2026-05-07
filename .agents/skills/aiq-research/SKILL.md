@@ -4,7 +4,7 @@ description: Use when calling a locally running NVIDIA AI-Q Blueprint server for
 license: Apache-2.0
 compatibility: Claude Code, OpenCode, Codex, and Agent Skills-compatible tools. Requires Python 3.10+ and access to a running local AI-Q Blueprint server.
 metadata:
-  version: "1.0.0"
+  version: "2.1.0"
   github-url: "https://github.com/NVIDIA-AI-Blueprints/aiq"
   tags: "nvidia aiq blueprint deep-research agent-skills"
   languages: "python bash"
