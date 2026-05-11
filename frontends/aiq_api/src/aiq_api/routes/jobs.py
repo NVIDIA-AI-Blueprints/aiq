@@ -75,7 +75,7 @@ class JobSubmitRequest(BaseModel):
         description=(
             "Optional data source IDs to target. Omit or set null to use all data-source tools. "
             "When specific IDs are passed, unmapped utility tools (e.g., 'think') remain available. "
-            "Pass an empty list to run the agent with no tools."
+            "Pass an empty list to run the agent with no tools, including unmapped utility tools."
         ),
     )
 
@@ -311,12 +311,21 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
         if req.data_sources is not None:
-            available_source_ids = {source.id.lower() for source in get_all_sources()}
+            known_source_ids = sorted(source.id for source in get_all_sources())
+            available_source_ids = {source_id.lower() for source_id in known_source_ids}
             invalid_source_ids = [
                 source_id for source_id in req.data_sources if source_id.lower() not in available_source_ids
             ]
             if invalid_source_ids:
-                raise HTTPException(422, f"Unknown data source(s): {', '.join(invalid_source_ids)}")
+                message = f"Unknown data source(s): {', '.join(invalid_source_ids)}"
+                raise HTTPException(
+                    422,
+                    {
+                        "message": message,
+                        "invalid_ids": invalid_source_ids,
+                        "known_ids": known_source_ids,
+                    },
+                )
 
         principal = require_verified_principal()
 

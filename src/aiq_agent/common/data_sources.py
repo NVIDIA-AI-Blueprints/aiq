@@ -59,11 +59,13 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
     """Filter tools based on selected data sources.
 
     Uses the tool->source map built at startup from config ``data_source`` fields.
-    Tools without a mapping (e.g. "think", calculator) are always included.
+    Tools without a mapping (e.g. "think", calculator) are included when
+    filtering to one or more selected sources. An explicit empty list disables
+    all tools.
 
     Args:
         tools: List of LangChain tools.
-        data_sources: List of selected data source IDs, None for all, or [] for none.
+        data_sources: List of selected data source IDs, None for all, or [] for no tools.
 
     Returns:
         Filtered list of tools matching the selected data sources.
@@ -79,7 +81,7 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
         name = getattr(tool, "name", "")
         source_id = get_source_id_for_tool(name)
         if source_id is None:
-            # Not a data source tool (e.g., "think", calculator) -> always include
+            # Not a data source tool (e.g., "think", calculator) -> include when filtering to sources
             filtered.append(tool)
         elif source_id.lower() in selected:
             filtered.append(tool)

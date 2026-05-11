@@ -175,7 +175,7 @@ class DeepResearcherAgent:
                 return source_list
             return "No sources captured yet. Run research queries first."
 
-        self.all_tools = [think, get_verified_sources, *self.tools]
+        self.all_tools = [think, get_verified_sources, *self.tools] if self.tools else []
 
         self.middleware = [
             EmptyContentFixMiddleware(),

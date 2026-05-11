@@ -172,8 +172,11 @@ async def test_submit_job_rejects_unknown_data_sources(submit_app):
         )
 
     assert response.status_code == 422
-    assert "does_not_exist" in response.text
-    assert "also_missing" in response.text
+    assert response.json()["detail"] == {
+        "message": "Unknown data source(s): does_not_exist, also_missing",
+        "invalid_ids": ["does_not_exist", "also_missing"],
+        "known_ids": ["knowledge_layer", "web_search"],
+    }
     submitted_job.assert_not_awaited()
 
 
@@ -210,6 +213,9 @@ async def test_submit_job_mixed_valid_and_unknown_rejects_naming_only_unknown(su
         )
 
     assert response.status_code == 422
-    assert "does_not_exist" in response.text
-    assert "web_search" not in response.text
+    assert response.json()["detail"] == {
+        "message": "Unknown data source(s): does_not_exist",
+        "invalid_ids": ["does_not_exist"],
+        "known_ids": ["knowledge_layer", "web_search"],
+    }
     submitted_job.assert_not_awaited()

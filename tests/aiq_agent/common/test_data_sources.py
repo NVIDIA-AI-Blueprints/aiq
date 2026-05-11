@@ -141,7 +141,7 @@ class TestFilterToolsBySourcesBasic:
         assert result == tools
 
     def test_filter_empty_sources_returns_empty(self):
-        """Test that empty data_sources excludes web and knowledge tools (only 'other' tools included)."""
+        """Test that empty data_sources disables all tools."""
         web_tool = MagicMock()
         web_tool.name = "web_search_tool"
         knowledge_tool = MagicMock()
