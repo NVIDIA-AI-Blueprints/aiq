@@ -28,6 +28,8 @@ _ALLOWED_METHODS = frozenset({"GET", "POST"})
 
 DEFAULT_SERVER_URL = "http://localhost:8000"
 AIQ_SERVER_URL = os.environ.get("AIQ_SERVER_URL", DEFAULT_SERVER_URL)
+
+_HEADLESS_HEADERS = {"Content-Type": "application/json", "X-AIQ-Mode": "headless"}
 DEFAULT_AGENT_TYPE = "shallow_researcher"
 
 DEFAULT_API_TIMEOUT_SECONDS = 120
@@ -90,8 +92,11 @@ def _api_request(
 
     url = f"{_validate_base_url(AIQ_SERVER_URL)}{path}"
     data = None if body is None else json.dumps(body).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
-    req = urllib.request.Request(url, data=data, headers=headers, method=method)
+    if method == "POST":
+        request_payload = {"url": url, "headers": dict(_HEADLESS_HEADERS), "method": method, "data": data}
+    else:
+        request_payload = {"url": url, "method": method}
+    req = urllib.request.Request(**request_payload)
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
