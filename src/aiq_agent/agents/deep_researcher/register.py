@@ -24,6 +24,7 @@ from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
+from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
 from nat.builder.builder import Builder
@@ -148,7 +149,8 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     sandbox=config.sandbox,
                     job_id=job_id,
                 )
-            elif data_sources is not None and not selected_tools:
+
+            if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
                 logger.warning("Deep research received data_sources with no matching tools")
 
             # Validate tool availability before starting deep research

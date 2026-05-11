@@ -78,7 +78,7 @@ The central state model carries data through the entire workflow:
 | ----- | ---- | ------- |
 | `messages` | `list[AnyMessage]` | Conversation history (LangGraph message reducer) |
 | `user_info` | `dict` or `None` | Authenticated user information for personalization |
-| `data_sources` | `list[str]` or `None` | User-selected data source IDs for tool filtering |
+| `data_sources` | `list[str]` or `None` | User-selected data source IDs for tool filtering. `None` uses all configured tools; `[]` keeps only unmapped utility tools; a populated list scopes to the named sources plus unmapped utility tools. |
 | `user_intent` | `IntentResult` or `None` | Classification result: `meta` or `research` |
 | `depth_decision` | `DepthDecision` or `None` | Routing decision: `shallow` or `deep` |
 | `final_report` | `str` or `None` | Final report output from deep research |

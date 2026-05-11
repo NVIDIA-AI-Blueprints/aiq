@@ -76,7 +76,7 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 | `input` | `string` | Yes | Research query (min 1 character) |
 | `job_id` | `string` | No | Custom job ID. Auto-generated UUID if omitted. Pattern: `[a-zA-Z0-9_-]`, max 64 chars |
 | `expiry_seconds` | `integer` | No | Job expiry in seconds. Range: 600--604800 (10 min to 7 days). Default from config |
-| `data_sources` | `list[string]` | No | Optional data source IDs (from `/v1/data_sources`) to scope the job. Omit or `null` for all sources; `[]` to run with no tools. Unknown IDs return 422 |
+| `data_sources` | `list[string]` | No | Optional data source IDs (from `/v1/data_sources`) to scope the job. Omit or `null` for all data-source tools; `[]` for no data-source tools. Unmapped utility tools remain available. Unknown IDs return 422 |
 
 **Response (`JobStatusResponse`):**
 

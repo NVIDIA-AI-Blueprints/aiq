@@ -37,6 +37,7 @@ from pydantic import Field
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import VerboseTraceCallback
+from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
 from nat.builder.builder import Builder
@@ -225,7 +226,8 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
                 verbose=verbose,
                 callbacks=callbacks,
             )
-        elif data_sources is not None and not selected_tools:
+
+        if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
             logger.warning("Clarifier received data_sources with no matching tools")
         return await active_agent.run(state)
 

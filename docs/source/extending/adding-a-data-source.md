@@ -320,7 +320,7 @@ The `data_source_registry` provides:
 - **Auth gating** -- set `requires_auth: true` on a source to grey it out in the UI until the user signs in (e.g., enterprise sources that need user-level OAuth tokens). Sources using backend API keys (Tavily, Serper) should leave this `false` (the default).
 - **Auto-inheritance** -- all agents get every registered tool by default (use `exclude_tools` on an agent for per-agent specialization)
 
-If a tool isn't listed in any `data_source_registry` source entry, it is included when filtering to one or more selected sources (e.g., utility tools like "think" or "calculator"). Passing an explicit empty list (`data_sources: []`) disables all tools.
+If a tool isn't listed in any `data_source_registry` source entry, it is always included regardless of filtering (e.g., utility tools like "think" or "calculator"). Passing an explicit empty list (`data_sources: []`) -- in the WebSocket chat payload or in a `POST /v1/jobs/async/submit` body -- disables data-source tools while leaving those unmapped utility tools available.
 
 ### Source Entry Field Reference
 

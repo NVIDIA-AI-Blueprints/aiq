@@ -77,7 +77,7 @@ graph TD
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `messages` | `Annotated[list[AnyMessage], add_messages]` | required | Conversation history with [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) message reducer |
-| `data_sources` | `list[str]` or `None` | `None` | Data source IDs for tool filtering |
+| `data_sources` | `list[str]` or `None` | `None` | Data source IDs for tool filtering. `None` uses all configured tools; `[]` keeps only unmapped utility tools; a populated list scopes to the named sources plus unmapped utility tools. |
 | `available_documents` | `list[dict[str, Any]]` or `None` | `None` | User-uploaded documents (file name, summary) for context; the user may refer to these |
 | `max_turns` | `int` | `3` | Maximum clarification Q&A turns |
 | `clarifier_log` | `str` | `""` | Accumulated clarification dialog log |

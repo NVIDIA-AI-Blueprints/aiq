@@ -23,6 +23,7 @@ from pydantic import Field
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
+from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
 from nat.builder.builder import Builder
@@ -115,7 +116,8 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                     max_tool_iterations=config.max_tool_iterations,
                     callbacks=callbacks,
                 )
-            elif data_sources is not None and not selected_tools:
+
+            if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
                 logger.warning("Shallow research received data_sources with no matching tools")
 
             # Validate tool availability before starting shallow research

@@ -88,7 +88,7 @@ class TestJobSubmitRequest:
         assert req.data_sources is None
 
     def test_empty_data_sources_accepted(self):
-        """Test that empty data_sources is accepted as a deliberate 'no tools' signal."""
+        """Test that empty data_sources is accepted as a deliberate 'no data-source tools' signal."""
         req = JobSubmitRequest(agent_type="deep_researcher", input="query", data_sources=[])
 
         assert req.data_sources == []

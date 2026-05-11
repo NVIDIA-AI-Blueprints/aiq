@@ -75,7 +75,7 @@ class JobSubmitRequest(BaseModel):
         description=(
             "Optional data source IDs to target. Omit or set null to use all data-source tools. "
             "When specific IDs are passed, unmapped utility tools (e.g., 'think') remain available. "
-            "Pass an empty list to run the agent with no tools, including unmapped utility tools."
+            "Pass an empty list to run the agent with no data-source tools; unmapped utility tools remain available."
         ),
     )
 

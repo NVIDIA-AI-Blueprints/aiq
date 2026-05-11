@@ -46,6 +46,7 @@ from .citation_verification import verify_citations
 from .data_source_registry import get_all_tool_refs
 from .data_source_registry import get_source_id_for_tool
 from .data_sources import DEFAULT_DATA_SOURCES
+from .data_sources import all_mapped_tools_filtered_out
 from .data_sources import extract_messages_and_sources
 from .data_sources import filter_tools_by_sources
 from .data_sources import format_data_source_tools
@@ -72,6 +73,7 @@ __all__ = [
     "LLMRole",
     "SourceRegistry",
     "VerboseTraceCallback",
+    "all_mapped_tools_filtered_out",
     "extract_json",
     "extract_messages_and_sources",
     "filter_tools_by_sources",
