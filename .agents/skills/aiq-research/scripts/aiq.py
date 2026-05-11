@@ -92,7 +92,11 @@ def _api_request(
 
     url = f"{_validate_base_url(AIQ_SERVER_URL)}{path}"
     data = None if body is None else json.dumps(body).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=dict(_HEADLESS_HEADERS), method=method)
+    if method == "POST":
+        request_payload = {"url": url, "headers": dict(_HEADLESS_HEADERS), "method": method, "data": data}
+    else:
+        request_payload = {"url": url, "method": method}
+    req = urllib.request.Request(**request_payload)
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
@@ -117,7 +121,7 @@ def _api_request(
 def _stream_request(path: str, *, timeout: int = DEFAULT_LONG_HTTP_TIMEOUT_SECONDS) -> Iterator[str]:
     _validate_api_path(path)
     url = f"{_validate_base_url(AIQ_SERVER_URL)}{path}"
-    req = urllib.request.Request(url, headers=dict(_HEADLESS_HEADERS), method="GET")
+    req = urllib.request.Request(url, method="GET")
 
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp:
