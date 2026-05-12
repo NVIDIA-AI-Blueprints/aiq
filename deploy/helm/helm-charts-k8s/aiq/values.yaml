@@ -65,6 +65,14 @@ externalSecrets:
         expirationSeconds: 600
 
 # ==========================================
+# OPTIONAL: Bootstrap Resources
+# ==========================================
+# Create chart-owned resources needed by the default chart.
+bootstrap:
+  createPostgresInitConfigMap: true
+  postgresInitConfigMapName: ""  # Auto-generated: {project.name}-postgres-init
+
+# ==========================================
 # OPTIONAL: Shared Secrets (Simplified)
 # ==========================================
 # One secret mounted on ALL pods - simplifies secret management

@@ -1,12 +1,17 @@
 {{- $postgres := index .Values.apps "postgres" }}
-{{- if and $postgres $postgres.enabled }}
+{{- $bootstrap := .Values.bootstrap | default dict }}
+{{- $createPostgresInitConfigMap := true }}
+{{- if hasKey $bootstrap "createPostgresInitConfigMap" }}
+{{- $createPostgresInitConfigMap = $bootstrap.createPostgresInitConfigMap }}
+{{- end }}
+{{- if and $createPostgresInitConfigMap $postgres $postgres.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ .Release.Name }}-postgres-init
+  name: {{ $bootstrap.postgresInitConfigMapName | default (printf "%s-postgres-init" .Values.project.name) }}
   namespace: {{ include "aiq.namespace" . }}
   labels:
-    app: {{ .Release.Name }}-postgres
+    app: {{ .Values.project.name }}-postgres
     component: postgres
 data:
   init.sql: |
