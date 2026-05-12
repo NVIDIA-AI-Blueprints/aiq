@@ -213,10 +213,17 @@ class FakeFuture:
 
 
 class FakeDaskClient:
-    def __init__(self):
+    def __init__(self, submit_raises: Exception | None = None):
         self.submissions: list[dict[str, Any]] = []
+        self.closed = False
+        self._submit_raises = submit_raises
+
+    def close(self) -> None:
+        self.closed = True
 
     def submit(self, fn, config, payloads, collection_name, **kwargs):
+        if self._submit_raises is not None:
+            raise self._submit_raises
         self.submissions.append(
             {
                 "fn": fn,
@@ -565,6 +572,31 @@ def test_dask_ingestion_submits_bytes_payload_and_updates_job(tmp_path):
     assert status is not None
     assert status.status == FileStatus.SUCCESS
     assert status.chunk_count == 1
+
+
+def test_dask_client_closed_when_submit_raises(tmp_path):
+    """If client.submit() raises (scheduler unreachable, serialisation error,
+    key conflict), _start_dask_ingestion must close the Dask client before
+    propagating so the scheduler TCP connection does not leak across retries."""
+    test_file = tmp_path / "dask.txt"
+    test_file.write_text("doc", encoding="utf-8")
+    ingestor = OpenSearchIngestor(
+        {
+            "ingestion_mode": "dask",
+            "dask_scheduler_address": "tcp://scheduler:8786",
+            "dask_file_transfer": "bytes",
+            "start_ttl_cleanup": False,
+        }
+    )
+    fake_dask = FakeDaskClient(submit_raises=RuntimeError("serialisation error"))
+    ingestor._create_dask_client = lambda: fake_dask
+
+    job_id = ingestor.submit_job([str(test_file)], "docs")
+    job = ingestor.get_job_status(job_id)
+
+    assert job.status == JobState.FAILED
+    assert "serialisation error" in job.error_message
+    assert fake_dask.closed, "Dask client must be closed when submit() raises"
 
 
 def test_dask_ingestion_submission_failure_marks_job_failed(tmp_path):

@@ -675,14 +675,27 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         payloads = self._build_dask_file_payloads(job_id, file_paths, job_config)
         worker_config = self._worker_config(job_config)
         client = self._create_dask_client()
-        future = client.submit(
-            run_opensearch_ingestion_task,
-            worker_config,
-            payloads,
-            collection_name,
-            key=f"aiq-opensearch-ingest-{job_id}",
-            pure=False,
-        )
+        try:
+            future = client.submit(
+                run_opensearch_ingestion_task,
+                worker_config,
+                payloads,
+                collection_name,
+                key=f"aiq-opensearch-ingest-{job_id}",
+                pure=False,
+            )
+        except Exception:
+            # The monitor thread (which has client.close() in its finally) is only
+            # started when submit succeeds. If submit raises — scheduler unreachable,
+            # serialisation error, key conflict — close the just-opened client here
+            # so the scheduler TCP connection does not leak across auto-mode retries.
+            close = getattr(client, "close", None)
+            if close is not None:
+                try:
+                    close()
+                except Exception:
+                    logger.debug("Failed to close Dask client after submit error", exc_info=True)
+            raise
         thread = threading.Thread(
             target=self._monitor_dask_ingestion,
             args=(job_id, future, client, file_paths, job_config),
