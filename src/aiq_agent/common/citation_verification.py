@@ -430,7 +430,17 @@ def extract_sources_from_tool_result(tool_name: str, content: str) -> list[Sourc
                 logger.warning("Parser failed for tool %s, falling back to generic", tool_name, exc_info=True)
                 break
     # Generic fallback: extract all URLs from content
-    return _parse_generic_urls(content, tool_name)
+    entries = _parse_generic_urls(content, tool_name)
+    if entries:
+        return entries
+
+    # MCP tools can be authoritative compute/data sources without returning
+    # citeable URLs. Register the tool result itself so successful MCP calls do
+    # not look like an empty source registry.
+    if "__" in tool_name and content.strip():
+        return [SourceEntry(citation_key=tool_name, source_type="mcp_tool_result", tool_name=tool_name)]
+
+    return []
 
 
 # ---------------------------------------------------------------------------

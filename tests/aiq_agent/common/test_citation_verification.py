@@ -477,6 +477,15 @@ class TestParserDispatcher:
         entries = extract_sources_from_tool_result("totally_unknown_tool", "some content without links")
         assert entries == []
 
+    def test_mcp_tool_without_urls_registers_tool_result_source(self):
+        entries = extract_sources_from_tool_result("mcp_time__get_current_time", "2026-05-11T14:30:00+09:00")
+
+        assert len(entries) == 1
+        assert entries[0].url is None
+        assert entries[0].citation_key == "mcp_time__get_current_time"
+        assert entries[0].source_type == "mcp_tool_result"
+        assert entries[0].tool_name == "mcp_time__get_current_time"
+
     def test_unknown_tool_with_urls_extracts_them(self):
         """Generic fallback extracts URLs from any unknown tool."""
         entries = extract_sources_from_tool_result("future_tool", "See https://example.com for details")
