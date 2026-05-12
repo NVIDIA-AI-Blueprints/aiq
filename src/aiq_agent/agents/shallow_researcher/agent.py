@@ -300,9 +300,11 @@ class ShallowResearcherAgent:
             if hasattr(last_msg, "content") and last_msg.content:
                 content = str(last_msg.content)
 
-                # Step 1: verify citations against registry
+                # Step 1: verify citations against registry. Shallow research
+                # passes everything through (threshold=0.0) — the UI surfaces
+                # confidence via the badge, no need to strip weak matches.
                 if registry.all_sources():
-                    verification = verify_citations(content, registry)
+                    verification = verify_citations(content, registry, passthrough_threshold=0.0)
                     logger.debug(
                         "Shallow researcher: citation verification complete — "
                         "%d valid, %d removed, %d sources in registry",

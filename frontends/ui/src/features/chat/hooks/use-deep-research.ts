@@ -22,6 +22,7 @@ import {
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
+import type { CitationSource } from '../types'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 import { checkBackendHealthCached } from '@/shared/hooks/use-backend-health'
@@ -209,7 +210,13 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         llmSteps: new Map<string, { name: string; workflow?: string; content: string; thinking?: string; usage?: { input_tokens: number; output_tokens: number } }>(),
         toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string }>(),
         todos: null as TodoItem[] | null,
-        citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
+        citations: [] as Array<{
+          url: string
+          content: string
+          isCited: boolean
+          confidence?: number
+          matchKind?: CitationSource['matchKind']
+        }>,
         files: new Map<string, string>(),
         reportContent: null as string | null,
       }
@@ -224,7 +231,15 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         const agents = Array.from(buf.agents.entries()).map(([id, a]) => ({ id, name: a.name, input: a.input, output: a.output, status: 'complete' as const, startedAt: now, completedAt: now }))
         const llmSteps = Array.from(buf.llmSteps.entries()).map(([id, s]) => ({ id, name: s.name, workflow: s.workflow, content: s.content, thinking: s.thinking, usage: s.usage, isComplete: true, timestamp: now }))
         const toolCalls = Array.from(buf.toolCalls.entries()).map(([id, t]) => ({ id, name: t.name, input: t.input, output: t.output, workflow: t.workflow, agentId: t.agentId, status: 'complete' as const, timestamp: now }))
-        const citations = buf.citations.map((c, i) => ({ id: `citation-${i}`, url: c.url, content: c.content, isCited: c.isCited, timestamp: now }))
+        const citations = buf.citations.map((c, i) => ({
+          id: `citation-${i}`,
+          url: c.url,
+          content: c.content,
+          isCited: c.isCited,
+          confidence: c.confidence,
+          matchKind: c.matchKind,
+          timestamp: now,
+        }))
         const files = Array.from(buf.files.entries()).map(([filename, content], i) => ({ id: `file-${i}`, filename, content, timestamp: now }))
         const todos = buf.todos?.map((t, i) => ({ id: `todo-${i}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`, content: t.content, status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped' }))
 
@@ -461,10 +476,20 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
 
           },
 
-          onCitationUpdate: (url, content, isCited) => {
-            if (buf.active) { buf.citations.push({ url, content, isCited: isCited ?? false }); return }
+          onCitationUpdate: (url, content, isCited, confidence, matchKind) => {
+            if (buf.active) {
+              buf.citations.push({
+                url,
+                content,
+                isCited: isCited ?? false,
+                confidence,
+                matchKind: matchKind as CitationSource['matchKind'],
+              })
+              return
+            }
             if (!isOwnerActive()) return
-            resetTimeout(); addDeepResearchCitation(url, content, isCited)
+            resetTimeout()
+            addDeepResearchCitation(url, content, isCited, confidence, matchKind as CitationSource['matchKind'])
           },
 
           onFileUpdate: (filename, content) => {

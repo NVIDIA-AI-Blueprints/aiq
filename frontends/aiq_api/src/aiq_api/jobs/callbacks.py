@@ -447,9 +447,11 @@ class AgentEventCallback(BaseCallbackHandler):
     def _emit_cited_urls(self, content: str) -> None:
         """Extract URLs from output content and emit citation_use events.
 
-        When a SourceRegistry is attached, validates against it (consistent
-        with verify_citations). Otherwise falls back to the callback's own
-        _discovered_urls set.
+        When a SourceRegistry is attached, resolves against it (consistent
+        with verify_citations) and emits the match's confidence / match_kind
+        alongside the URL so the UI can render a verification badge. Falls
+        back to the callback's own _discovered_urls set when no registry is
+        attached (no confidence is emitted in that case).
         """
         urls = self._extract_urls(content)
         for url in urls:
@@ -457,20 +459,33 @@ class AgentEventCallback(BaseCallbackHandler):
             if normalized in self._cited_urls:
                 continue
 
+            confidence: float | None = None
+            match_kind: str | None = None
             is_valid = False
+
             registry = self._get_source_registry()
             if registry is not None:
-                is_valid = registry.has_url(url)
+                match = registry.resolve_url(url)
+                if match is not None and match.kind != "ambiguous":
+                    is_valid = True
+                    confidence = match.confidence
+                    match_kind = match.kind
             else:
                 is_valid = normalized in self._discovered_urls
 
             if is_valid:
                 self._cited_urls.add(normalized)
+                extra: dict[str, Any] = {}
+                if confidence is not None:
+                    extra["confidence"] = confidence
+                if match_kind is not None:
+                    extra["match_kind"] = match_kind
                 self._emit_artifact(
                     ArtifactType.CITATION_USE,
                     url,
                     name=url,
                     url=url,
+                    **extra,
                 )
 
     def _emit_tool_artifact(self, tool_name: str, tool_input: Any, run_id: str = "") -> None:

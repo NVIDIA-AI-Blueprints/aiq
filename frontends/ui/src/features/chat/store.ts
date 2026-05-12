@@ -1880,7 +1880,13 @@ export const useChatStore = create<ChatStore>()(
           )
         },
 
-        addDeepResearchCitation: (url: string, content: string, isCited?: boolean) => {
+        addDeepResearchCitation: (
+          url: string,
+          content: string,
+          isCited?: boolean,
+          confidence?: number,
+          matchKind?: CitationSource['matchKind'],
+        ) => {
           const { deepResearchCitations } = get()
 
           // Check if citation with same URL already exists
@@ -1890,11 +1896,23 @@ export const useChatStore = create<ChatStore>()(
             // Update existing citation - if it's being marked as cited, update that
             const updatedCitations = deepResearchCitations.map((c, i) => {
               if (i === existingIndex) {
+                // Confidence is monotonic: never downgrade from a previously
+                // observed higher confidence (e.g. exact → child_path).
+                const nextConfidence =
+                  confidence === undefined
+                    ? c.confidence
+                    : c.confidence === undefined
+                      ? confidence
+                      : Math.max(c.confidence, confidence)
+                const nextMatchKind =
+                  nextConfidence === confidence ? matchKind ?? c.matchKind : c.matchKind
                 return {
                   ...c,
                   content: content || c.content,
                   // Once cited, always cited (citation_use trumps citation_source)
                   isCited: isCited || c.isCited,
+                  confidence: nextConfidence,
+                  matchKind: nextMatchKind,
                 }
               }
               return c
@@ -1913,6 +1931,8 @@ export const useChatStore = create<ChatStore>()(
               content,
               timestamp: new Date(),
               isCited,
+              confidence,
+              matchKind,
             }
 
             set(

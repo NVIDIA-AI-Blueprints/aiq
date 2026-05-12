@@ -31,6 +31,7 @@ import {
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
+import type { CitationSource } from '../types'
 import { isUnavailableDeepResearchJobError } from '../lib/deep-research-errors'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
@@ -249,7 +250,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           llmSteps: new Map<string, { name: string; workflow?: string; content: string; thinking?: string; usage?: { input_tokens: number; output_tokens: number } }>(),
           toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string }>(),
           todos: null as TodoItem[] | null,
-          citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
+          citations: [] as Array<{
+            url: string
+            content: string
+            isCited: boolean
+            confidence?: number
+            matchKind?: CitationSource['matchKind']
+          }>,
           files: new Map<string, string>(),  // filename -> latest content (deduped)
           reportContent: null as string | null,
         }
@@ -298,6 +305,8 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             url: c.url,
             content: c.content,
             isCited: c.isCited,
+            confidence: c.confidence,
+            matchKind: c.matchKind,
             timestamp: now,
           }))
 
@@ -429,8 +438,14 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               buffer.todos = todos
             },
 
-            onCitationUpdate: (url, content, isCited) => {
-              buffer.citations.push({ url, content, isCited: isCited ?? false })
+            onCitationUpdate: (url, content, isCited, confidence, matchKind) => {
+              buffer.citations.push({
+                url,
+                content,
+                isCited: isCited ?? false,
+                confidence,
+                matchKind: matchKind as CitationSource['matchKind'],
+              })
             },
 
             onFileUpdate: (filename, content) => {

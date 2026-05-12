@@ -35,7 +35,9 @@ from nat.data_models.api_server import Usage
 from nat.data_models.api_server import UserMessageContentRoleType
 
 from .callbacks import VerboseTraceCallback
+from .citation_verification import MatchKind
 from .citation_verification import SourceRegistry
+from .citation_verification import VerifiedCitation
 from .citation_verification import get_or_create_session_registry
 from .citation_verification import get_session_registry
 from .citation_verification import register_source_parser
@@ -70,8 +72,10 @@ __all__ = [
     "DEFAULT_DATA_SOURCES",
     "LLMProvider",
     "LLMRole",
+    "MatchKind",
     "SourceRegistry",
     "VerboseTraceCallback",
+    "VerifiedCitation",
     "extract_json",
     "extract_messages_and_sources",
     "filter_tools_by_sources",

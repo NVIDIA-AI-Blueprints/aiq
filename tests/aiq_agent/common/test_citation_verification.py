@@ -183,17 +183,27 @@ class TestSourceRegistry:
 
     def test_resolve_url_exact_match(self, registry):
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
-        assert registry.resolve_url("https://arxiv.org/abs/1706.03762") == "https://arxiv.org/abs/1706.03762"
+        match = registry.resolve_url("https://arxiv.org/abs/1706.03762")
+        assert match is not None
+        assert match.url == "https://arxiv.org/abs/1706.03762"
+        assert match.kind == "exact"
+        assert match.confidence == 1.0
 
     def test_resolve_url_truncated_path(self, registry):
         """LLM truncated the URL path — resolve to full canonical URL."""
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
-        assert registry.resolve_url("https://arxiv.org/abs/1706") == "https://arxiv.org/abs/1706.03762"
+        match = registry.resolve_url("https://arxiv.org/abs/1706")
+        assert match is not None
+        assert match.url == "https://arxiv.org/abs/1706.03762"
+        assert match.kind == "truncation"
+        assert match.confidence == 0.85
 
     def test_resolve_url_domain_only(self, registry):
         """LLM kept domain but dropped entire path."""
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
-        assert registry.resolve_url("https://arxiv.org") == "https://arxiv.org/abs/1706.03762"
+        match = registry.resolve_url("https://arxiv.org")
+        assert match is not None
+        assert match.url == "https://arxiv.org/abs/1706.03762"
 
     def test_resolve_url_no_match(self, registry):
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
@@ -203,8 +213,9 @@ class TestSourceRegistry:
         """LLM wrote URL with trailing '...' which gets stripped."""
         registry.add(SourceEntry(url="https://example.com/very/long/path/article"))
         # After stripping "...", the truncated URL should match
-        resolved = registry.resolve_url("https://example.com/very/long")
-        assert resolved == "https://example.com/very/long/path/article"
+        match = registry.resolve_url("https://example.com/very/long")
+        assert match is not None
+        assert match.url == "https://example.com/very/long/path/article"
 
     def test_resolve_url_truncated_mid_query(self, registry):
         """Report URL cut mid-query (e.g. copy-paste); match by raw prefix."""
@@ -213,34 +224,52 @@ class TestSourceRegistry:
         truncated = (
             "https://example.sharepoint.com/sites/foo/_layouts/15/Doc.aspx?sourcedoc=%7BGUID%7D&file=US%20Benefit"
         )
-        resolved = registry.resolve_url(truncated)
-        assert resolved == full
+        match = registry.resolve_url(truncated)
+        assert match is not None
+        assert match.url == full
+        assert match.kind == "truncation"
 
-    def test_resolve_url_ambiguous_returns_none(self, registry):
-        """Shallow ambiguous prefix (e.g. arxiv abs/1706) — reject."""
+    def test_resolve_url_ambiguous_returns_ambiguous_kind(self, registry):
+        """Shallow ambiguous prefix (e.g. arxiv abs/1706) — surfaces as ambiguous."""
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.08500"))
         # path "abs/1706" has only 2 segments — too shallow to treat as parent
-        assert registry.resolve_url("https://arxiv.org/abs/1706") is None
+        match = registry.resolve_url("https://arxiv.org/abs/1706")
+        assert match is not None
+        assert match.kind == "ambiguous"
+        assert match.confidence == 0.0
+        assert match.diagnostics["candidate_count"] >= 2
 
     def test_resolve_url_prefix_ambiguous_rejected(self, registry):
-        """Report URL is prefix of multiple registry URLs — ambiguous, reject."""
+        """Report URL is prefix of multiple registry URLs — ambiguous, surfaces as ambiguous."""
         registry.add(SourceEntry(url="https://example.sharepoint.com/sites/hr/Pages/New-Employees.aspx"))
         registry.add(SourceEntry(url="https://example.sharepoint.com/sites/hr/Pages/ourculture.aspx"))
-        assert registry.resolve_url("https://example.sharepoint.com/sites/hr/") is None
+        match = registry.resolve_url("https://example.sharepoint.com/sites/hr/")
+        assert match is not None and match.kind == "ambiguous"
+
+    def test_has_url_false_for_ambiguous(self, registry):
+        """has_url() returns False when resolve_url is ambiguous."""
+        registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
+        registry.add(SourceEntry(url="https://arxiv.org/abs/1706.08500"))
+        assert not registry.has_url("https://arxiv.org/abs/1706")
 
     def test_resolve_url_unique_prefix_succeeds(self, registry):
         """Single registry URL matches the prefix — unambiguous, return it."""
         registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
         registry.add(SourceEntry(url="https://arxiv.org/abs/2301.00001"))
         # "https://arxiv.org/abs/1706" only matches the first
-        assert registry.resolve_url("https://arxiv.org/abs/1706") == "https://arxiv.org/abs/1706.03762"
+        match = registry.resolve_url("https://arxiv.org/abs/1706")
+        assert match is not None
+        assert match.url == "https://arxiv.org/abs/1706.03762"
 
     def test_resolve_url_child_path_single_match(self, registry):
         """LLM expanded a registry URL to a subpage — child-path match."""
         registry.add(SourceEntry(url="https://www.example.com/us/benefits/"))
-        resolved = registry.resolve_url("https://www.example.com/us/benefits/healthcare/")
-        assert resolved == "https://www.example.com/us/benefits/"
+        match = registry.resolve_url("https://www.example.com/us/benefits/healthcare/")
+        assert match is not None
+        assert match.url == "https://www.example.com/us/benefits/"
+        assert match.kind == "child_path"
+        assert match.confidence == 0.6
 
     def test_resolve_url_child_path_requires_depth(self, registry):
         """Domain-only registry URLs (< 2 path segments) should NOT child-match."""
@@ -253,8 +282,9 @@ class TestSourceRegistry:
         registry.add(SourceEntry(url="https://example.com/us/benefits/time-off/"))
         # "healthcare/" is under "benefits/" but not under "time-off/"
         # Only one match, so this should succeed
-        resolved = registry.resolve_url("https://example.com/us/benefits/healthcare/")
-        assert resolved == "https://example.com/us/benefits/"
+        match = registry.resolve_url("https://example.com/us/benefits/healthcare/")
+        assert match is not None
+        assert match.url == "https://example.com/us/benefits/"
 
     def test_resolve_url_child_path_different_domain(self, registry):
         """Child-path match requires same domain."""
@@ -271,7 +301,9 @@ class TestSourceRegistry:
         partial_url = (
             "https://example.sharepoint.com/:p:/r/sites/benefits/_layouts/15/Doc.aspx?sourcedoc=%7BGUID-AAA%7D"
         )
-        assert registry.resolve_url(partial_url) == full_url
+        match = registry.resolve_url(partial_url)
+        assert match is not None
+        assert match.url == full_url
 
     def test_resolve_url_query_subset_disambiguates_by_params(self, registry):
         """Multiple SharePoint docs with same path — query-subset uses params to pick the right one."""
@@ -286,7 +318,9 @@ class TestSourceRegistry:
         registry.add(SourceEntry(url=url_a))
         registry.add(SourceEntry(url=url_b))
         partial = "https://example.sharepoint.com/:p:/r/sites/benefits/_layouts/15/Doc.aspx?sourcedoc=%7BGUID-BBB%7D"
-        assert registry.resolve_url(partial) == url_b
+        match = registry.resolve_url(partial)
+        assert match is not None
+        assert match.url == url_b
 
     def test_resolve_url_query_subset_no_match_wrong_value(self, registry):
         """Query-subset rejects when param values differ."""
@@ -303,13 +337,50 @@ class TestSourceRegistry:
         # Reordered param (action before sourcedoc) — not a raw prefix, so Strategy 2 won't match.
         # Normalization sorts params, so if the subset params match, Strategy 5 picks it up.
         reordered = "https://example.sharepoint.com/sites/hr/_layouts/15/Doc.aspx?action=edit&sourcedoc=%7BGUID-X%7D"
-        assert registry.resolve_url(reordered) == full_url
+        match = registry.resolve_url(reordered)
+        assert match is not None
+        assert match.url == full_url
+        assert match.kind == "query_subset"
 
     def test_resolve_url_no_query_params_matched_by_prefix(self, registry):
         """Dropping ALL query params is handled by prefix match (step 2), not query-subset."""
         registry.add(SourceEntry(url="https://example.com/doc?id=123&mode=view"))
         # The path-only URL is a prefix of the full normalized URL → prefix match succeeds
-        assert registry.resolve_url("https://example.com/doc") == "https://example.com/doc?id=123&mode=view"
+        match = registry.resolve_url("https://example.com/doc")
+        assert match is not None
+        assert match.url == "https://example.com/doc?id=123&mode=view"
+
+    def test_resolve_url_normalized_match_kind(self, registry):
+        """Tracking-param drift resolves as ``normalized`` rather than ``exact``.
+
+        ``add()`` stores both raw and normalized forms as keys, so casing /
+        trailing-slash differences hit the exact branch. The ``normalized``
+        branch is for inputs whose raw form differs from any stored key but
+        whose normalized form matches — e.g. a different ``fbclid`` tracking
+        value, or a fragment the report adds.
+        """
+        registry.add(SourceEntry(url="https://example.com/page"))
+        match = registry.resolve_url("https://example.com/page?utm_source=x#section")
+        assert match is not None
+        assert match.kind == "normalized"
+        assert match.confidence == 0.95
+
+    def test_resolve_url_legacy_truncated_registry_returns_none_but_is_observable(self):
+        """Regression scaffolding for #209-style failures.
+
+        If registration ever truncated a URL again (registry has the short
+        URL, the LLM cites the full URL), none of the five resolve strategies
+        match — they all assume the report URL ⊆ registry URL. The point
+        of #210 is that this is now *observable* via the verifications list
+        rather than silently dropped. Documenting the contract here.
+        """
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://weathercams.faa.gov/map/-122.31167"))
+        full = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
+        # resolve_url itself still returns None — this is the limit of the
+        # current strategies. The improvement is downstream: verify_citations
+        # now records the failure with diagnostics so we can count it.
+        assert registry.resolve_url(full) is None
 
 
 # ---------------------------------------------------------------------------
@@ -682,6 +753,206 @@ class TestVerifyCitations:
         result = verify_citations(report, reg)
         assert len(result.valid_citations) == 1
         assert "https://arxiv.org/abs/1706.03762" in result.verified_report
+
+
+# ---------------------------------------------------------------------------
+# Confidence-scored verification tests
+# ---------------------------------------------------------------------------
+
+
+class TestVerifyCitationsConfidence:
+    """Tests for confidence-scored verification (per-MatchKind + thresholds)."""
+
+    @pytest.fixture(name="registry")
+    def fixture_registry(self):
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url="https://valid.com/article1", source_type="tavily"))
+        reg.add(SourceEntry(citation_key="report.pdf, p.15", source_type="knowledge_layer"))
+        return reg
+
+    def test_valid_citation_dict_carries_confidence_and_match_kind(self, registry):
+        report = "F [1].\n\n## Sources\n[1] Article: https://valid.com/article1"
+        result = verify_citations(report, registry)
+        assert len(result.valid_citations) == 1
+        c = result.valid_citations[0]
+        assert c["confidence"] == 1.0
+        assert c["match_kind"] == "exact"
+        assert c["url"] == "https://valid.com/article1"
+        assert c["verified"] is True
+        assert c["resolved"] is True
+
+    def test_removed_citation_dict_carries_confidence_and_match_kind(self, registry):
+        report = "F [1].\n\n## Sources\n[1] Fake: https://fake.com"
+        result = verify_citations(report, registry)
+        assert len(result.removed_citations) == 1
+        c = result.removed_citations[0]
+        assert c["match_kind"] == "unmatched"
+        assert c["confidence"] == 0.0
+        assert c["resolved"] is False
+        assert c["verified"] is False
+        assert c["reason"] == "url_not_in_registry"
+
+    def test_verifications_list_populated_for_all_citations(self, registry):
+        report = "A [1]. B [2].\n\n## Sources\n[1] OK: https://valid.com/article1\n[2] Bad: https://fake.com"
+        result = verify_citations(report, registry)
+        assert len(result.verifications) == 2
+        resolved = next(v for v in result.verifications if v.resolved)
+        unresolved = next(v for v in result.verifications if not v.resolved)
+        assert resolved.match_kind == "exact"
+        assert unresolved.match_kind == "unmatched"
+
+    def test_passthrough_keeps_weak_match_below_default_threshold(self):
+        """child_path matches at confidence 0.6 — at threshold 0.0 they pass through."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://example.com/us/benefits/"))
+        report = "Finding [1].\n\n## Sources\n[1] Healthcare: https://example.com/us/benefits/healthcare/details/"
+        result = verify_citations(report, registry, passthrough_threshold=0.0)
+        # At threshold 0.0 every resolved citation is kept; the line stays.
+        assert len(result.valid_citations) == 1
+        assert result.valid_citations[0]["match_kind"] == "child_path"
+        assert result.valid_citations[0]["verified"] is True
+        assert "[1]" in result.verified_report
+
+    def test_threshold_below_marks_unverified_but_keeps_citation(self):
+        """Below-threshold resolved citations stay in the report with verified=False.
+
+        This is the core #210 contract: ``passthrough_threshold`` controls the
+        ``verified`` bool (a UI hint about strength), NOT whether the citation
+        stays in the report. Only unresolved citations get stripped.
+        """
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://example.com/us/benefits/"))
+        report = "Finding [1].\n\n## Sources\n[1] Healthcare: https://example.com/us/benefits/healthcare/details/"
+        result = verify_citations(report, registry, passthrough_threshold=0.8)
+        # Citation STAYS in the report (the verifier doesn't strip resolved cites)
+        assert len(result.valid_citations) == 1
+        assert "[1]" in result.verified_report
+        c = result.valid_citations[0]
+        assert c["match_kind"] == "child_path"
+        assert c["resolved"] is True
+        # But verified=False because confidence 0.6 < threshold 0.8
+        assert c["verified"] is False
+        # Not in removed_citations either — never removed
+        assert len(result.removed_citations) == 0
+
+    def test_unmatched_citation_always_stripped_regardless_of_threshold(self):
+        """Genuinely unresolved citations (confidence 0) are stripped even at threshold=0.
+
+        Stripping is decoupled from the threshold: ``unmatched`` / ``ambiguous``
+        / ``unverifiable`` (all confidence 0) are always removed because they
+        represent likely fabrication, not weak verification.
+        """
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://real.com/article"))
+        report = "F [1].\n\n## Sources\n[1] Fake: https://totally-different.com/x"
+        result = verify_citations(report, registry, passthrough_threshold=0.0)
+        assert len(result.valid_citations) == 0
+        assert len(result.removed_citations) == 1
+        assert "[1]" not in result.verified_report
+        assert result.removed_citations[0]["match_kind"] == "unmatched"
+
+    def test_ambiguous_match_records_as_ambiguous(self):
+        """Ambiguous candidates surface in verifications with match_kind='ambiguous'."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://arxiv.org/abs/1706.03762"))
+        registry.add(SourceEntry(url="https://arxiv.org/abs/1706.08500"))
+        report = "F [1].\n\n## Sources\n[1] Paper: https://arxiv.org/abs/1706"
+        result = verify_citations(report, registry)
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["match_kind"] == "ambiguous"
+        # Ambiguous is unresolved → stripped from report
+        assert result.removed_citations[0]["resolved"] is False
+        assert "[1]" not in result.verified_report
+
+    def test_structured_telemetry_in_summary_log(self, caplog):
+        """The summary info-log carries structured counts/threshold for monitoring."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://real.com/article"))
+        report = "A [1]. B [2].\n\n## Sources\n[1] OK: https://real.com/article\n[2] Fake: https://fake.example.com/x"
+        with caplog.at_level("INFO", logger="aiq_agent.common.citation_verification"):
+            verify_citations(report, registry, passthrough_threshold=0.5)
+
+        summary_records = [r for r in caplog.records if "summary" in r.getMessage()]
+        assert summary_records, "expected a summary log entry"
+        rec = summary_records[-1]
+        # The structured `extra=` payload is attached as attributes on the record
+        assert rec.total == 2
+        assert rec.kept == 1
+        assert rec.stripped == 1
+        assert rec.passthrough_threshold == 0.5
+        assert isinstance(rec.counts_by_match_kind, dict)
+        assert rec.counts_by_match_kind.get("exact") == 1
+        assert rec.counts_by_match_kind.get("unmatched") == 1
+
+    def test_structured_telemetry_per_citation_debug_log(self, caplog):
+        """Each citation outcome gets a debug log with the full record as extras."""
+        registry = SourceRegistry()
+        registry.add(SourceEntry(url="https://real.com/article"))
+        report = "F [1].\n\n## Sources\n[1] OK: https://real.com/article"
+        with caplog.at_level("DEBUG", logger="aiq_agent.common.citation_verification"):
+            verify_citations(report, registry)
+
+        outcome_records = [r for r in caplog.records if "citation outcome" in r.getMessage()]
+        assert outcome_records, "expected per-citation debug log"
+        rec = outcome_records[0]
+        assert rec.citation_number == 1
+        assert rec.match_kind == "exact"
+        assert rec.confidence == 1.0
+        assert rec.verified is True
+        assert rec.resolved is True
+        assert rec.url == "https://real.com/article"
+
+    @pytest.mark.parametrize(
+        "registry_url,report_url,expected_kind,expected_confidence",
+        [
+            ("https://valid.com/article1", "https://valid.com/article1", "exact", 1.0),
+            # Tracking params + fragment only differ from registered — normalized hit
+            (
+                "https://valid.com/page",
+                "https://valid.com/page?utm_source=x#section",
+                "normalized",
+                0.95,
+            ),
+            (
+                "https://example.com/very/long/path/article",
+                "https://example.com/very/long",
+                "truncation",
+                0.85,
+            ),
+            # Prefix fires when truncation can't: registry URL has a longer path
+            # that diverges from the input AFTER the prefix point (the report URL
+            # adds a tracking param that normalization strips, so the raw forms
+            # don't share a clean prefix but the normalized ones do).
+            (
+                "https://example.com/page/article",
+                "https://example.com/page?utm_source=x",
+                "prefix",
+                0.75,
+            ),
+            (
+                "https://example.com/us/benefits/",
+                "https://example.com/us/benefits/healthcare/x/",
+                "child_path",
+                0.6,
+            ),
+        ],
+    )
+    def test_match_kinds_via_verify_citations(
+        self,
+        registry_url: str,
+        report_url: str,
+        expected_kind: str,
+        expected_confidence: float,
+    ) -> None:
+        """End-to-end parametrized check that each MatchKind flows through to valid_citations."""
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url=registry_url, source_type="tavily"))
+        report = f"Finding [1].\n\n## Sources\n[1] Source: {report_url}"
+        result = verify_citations(report, reg, passthrough_threshold=0.0)
+        assert len(result.valid_citations) == 1
+        c = result.valid_citations[0]
+        assert c["match_kind"] == expected_kind
+        assert c["confidence"] == pytest.approx(expected_confidence)
 
 
 # ---------------------------------------------------------------------------

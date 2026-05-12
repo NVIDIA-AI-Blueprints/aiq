@@ -252,6 +252,19 @@ export interface PendingInteraction {
 /** Deep research job status (from SSE stream) */
 export type DeepResearchJobStatus = 'submitted' | 'running' | 'success' | 'failure' | 'interrupted'
 
+/** Match strategy that resolved a citation against the source registry. */
+export type CitationMatchKind =
+  | 'exact'
+  | 'normalized'
+  | 'truncation'
+  | 'prefix'
+  | 'child_path'
+  | 'query_subset'
+  | 'citation_key'
+  | 'unmatched'
+  | 'ambiguous'
+  | 'unverifiable'
+
 /** Citation source from deep research */
 export interface CitationSource {
   id: string
@@ -260,6 +273,10 @@ export interface CitationSource {
   timestamp: Date
   /** Whether this source was actually cited in the report (vs just referenced/discovered) */
   isCited?: boolean
+  /** Verification confidence (0–1) reported by the backend, when available. */
+  confidence?: number
+  /** Match strategy that resolved this citation against the source registry. */
+  matchKind?: CitationMatchKind
 }
 
 /** Plan message for PlanTab display */
@@ -607,7 +624,13 @@ export interface ChatActions {
   /** Clean up orphaned 'starting' banners by polling job status via REST */
   cleanupOrphanedStartingBanners: () => Promise<void>
   /** Add a citation from deep research (isCited=true for citation_use, false for citation_source) */
-  addDeepResearchCitation: (url: string, content: string, isCited?: boolean) => void
+  addDeepResearchCitation: (
+    url: string,
+    content: string,
+    isCited?: boolean,
+    confidence?: number,
+    matchKind?: CitationMatchKind,
+  ) => void
   /** Set the full todo list from deep research (replaces existing) */
   setDeepResearchTodos: (todos: Array<{ content: string; status: string }>) => void
   /** Mark all in-progress and pending todos as stopped (on error) */

@@ -159,6 +159,10 @@ export interface ArtifactUpdateEvent extends DeepResearchSSEEvent {
       type: ArtifactType
       content: string | TodoItem[]
       url?: string // For citation_source and citation_use types
+      /** Citation verification confidence (0–1). Optional; emitted by citation_use when a registry resolved the URL. */
+      confidence?: number
+      /** Citation match strategy. See Python MatchKind for the full list. */
+      match_kind?: string
     }
     metadata?: {
       workflow?: string
@@ -207,7 +211,13 @@ export interface DeepResearchCallbacks {
   onToolEnd?: (name: string, output?: string, eventId?: string, agentId?: string) => void
   /** Called on artifact updates */
   onTodoUpdate?: (todos: TodoItem[], workflow?: string) => void
-  onCitationUpdate?: (url: string, content: string, isCited?: boolean) => void
+  onCitationUpdate?: (
+    url: string,
+    content: string,
+    isCited?: boolean,
+    confidence?: number,
+    matchKind?: string,
+  ) => void
   onFileUpdate?: (filename: string, content: string) => void
   onOutputUpdate?: (content: string, outputCategory?: string, workflow?: string) => void
   /** Called on job heartbeat (confirms job is alive during long operations) */
@@ -485,11 +495,20 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
       case 'artifact.update': {
         // artifact.update has nested structure: { id, timestamp, data: { type, content, url?, output_category? }, metadata?: { workflow } }
         const artifactWrapper = rawData as {
-          data?: { type: ArtifactType; content: string | TodoItem[]; url?: string; output_category?: string }
+          data?: {
+            type: ArtifactType
+            content: string | TodoItem[]
+            url?: string
+            output_category?: string
+            confidence?: number
+            match_kind?: string
+          }
           type?: ArtifactType
           content?: string | TodoItem[]
           url?: string
           output_category?: string
+          confidence?: number
+          match_kind?: string
           metadata?: { workflow?: string }
         }
         // Handle both nested (data.type) and flat (type) structures
@@ -502,11 +521,23 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
             break
           case 'citation_source':
             // citation_source = "Referenced" sources (discovered during search)
-            callbacks.onCitationUpdate?.(artifactData.url || '', artifactData.content as string, false)
+            callbacks.onCitationUpdate?.(
+              artifactData.url || '',
+              artifactData.content as string,
+              false,
+              artifactData.confidence,
+              artifactData.match_kind,
+            )
             break
           case 'citation_use':
             // citation_use = "Cited" sources (actually used in the report)
-            callbacks.onCitationUpdate?.(artifactData.url || '', artifactData.content as string, true)
+            callbacks.onCitationUpdate?.(
+              artifactData.url || '',
+              artifactData.content as string,
+              true,
+              artifactData.confidence,
+              artifactData.match_kind,
+            )
             break
           case 'file': {
             // file artifacts are written during research — extract filename from path

@@ -54,7 +54,12 @@ class TestShallowResearcherAgent:
             patch("aiq_agent.agents.shallow_researcher.agent.verify_citations") as mock_verify,
             patch("aiq_agent.agents.shallow_researcher.agent.sanitize_report") as mock_sanitize,
         ):
-            mock_verify.side_effect = lambda content, reg: MagicMock(verified_report=content, removed_citations=[])
+            mock_verify.side_effect = lambda content, reg, **kw: MagicMock(
+                verified_report=content,
+                removed_citations=[],
+                valid_citations=[],
+                verifications=[],
+            )
             mock_sanitize.side_effect = lambda content: MagicMock(sanitized_report=content)
             yield
 

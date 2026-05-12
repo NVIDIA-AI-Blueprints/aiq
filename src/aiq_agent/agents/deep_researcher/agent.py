@@ -118,6 +118,7 @@ class DeepResearcherAgent:
         sandbox: SandboxConfig | None = None,
         config: Any | None = None,
         job_id: str | None = None,
+        citation_passthrough_threshold: float = 0.6,
     ) -> None:
         """
         Initialize the deep researcher subagent.
@@ -132,6 +133,11 @@ class DeepResearcherAgent:
             sandbox: Optional DeepAgents sandbox config.
             config: Optional agent config. Used by async workers to pass function config generically.
             job_id: Optional async job identifier used to scope sandbox backends.
+            citation_passthrough_threshold: Minimum citation confidence
+                (``[0.0, 1.0]``) to keep a citation in the final report.
+                Default 0.6 keeps exact / normalized / truncation / prefix
+                matches; weaker child_path / query_subset matches still ride
+                through to the UI but are dropped from the report body.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -144,6 +150,12 @@ class DeepResearcherAgent:
         if config is not None:
             skills = skills or getattr(config, "skills", None)
             sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
+            citation_passthrough_threshold = getattr(
+                config,
+                "citation_passthrough_threshold",
+                citation_passthrough_threshold,
+            )
+        self.citation_passthrough_threshold = citation_passthrough_threshold
         self.deepagents_runtime = DeepAgentsRuntime(skills=skills, sandbox=sandbox, job_id=job_id)
 
         self._prompts = self._load_prompts()
@@ -344,36 +356,19 @@ class DeepResearcherAgent:
         if not has_sources:
             return False, "missing_sources_section"
 
-        # Quick citation quality check — only reject if ALL citations are invalid
-        # (full verification with repair/renumbering happens in run() post-processing)
+        # Quick citation quality check — escalate when NO citation resolved
+        # to a registered source at all (likely fabrication). Weakly-verified
+        # citations still count as resolved; the agent's strict-threshold view
+        # is encoded in ``verified`` and used downstream by the UI, not here.
         registry = self.source_registry_middleware._get_registry()
         if registry.all_sources():
-            from aiq_agent.common.citation_verification import _CITATION_LINE_RE
-            from aiq_agent.common.citation_verification import _REFERENCE_SECTION_RE
-            from aiq_agent.common.citation_verification import _URL_IN_LINE_RE
-            from aiq_agent.common.citation_verification import _is_knowledge_citation
-
-            ref_match = _REFERENCE_SECTION_RE.search(content)
-            if ref_match:
-                ref_section = content[ref_match.start() :]
-                has_any_valid = False
-                for line_match in _CITATION_LINE_RE.finditer(ref_section):
-                    ref_text = line_match.group(2).strip()
-                    # Check URL citations
-                    url_match = _URL_IN_LINE_RE.search(ref_text)
-                    if url_match:
-                        url = url_match.group(0).rstrip(".,;)")
-                        if registry.resolve_url(url):
-                            has_any_valid = True
-                            break
-                        continue
-                    # Check knowledge-layer citation keys (lenient — passes registry for fuzzy match)
-                    is_kl, citation_key = _is_knowledge_citation(ref_text, registry)
-                    if is_kl and citation_key:
-                        has_any_valid = True
-                        break
-                if not has_any_valid:
-                    return False, "no_valid_citations"
+            verification = verify_citations(
+                content,
+                registry,
+                passthrough_threshold=self.citation_passthrough_threshold,
+            )
+            if verification.verifications and not any(v.resolved for v in verification.verifications):
+                return False, "no_valid_citations"
 
         giving_up_patterns = [
             "please confirm",
@@ -505,9 +500,16 @@ class DeepResearcherAgent:
             if result and result.get("messages"):
                 final_message = self._extract_report_content(result["messages"])
 
-            # Post-process: verify citations against source registry
+            # Post-process: verify citations against source registry. Deep
+            # research applies a confidence threshold (default 0.6) so weak
+            # heuristic matches don't bleed into the report; the UI still
+            # receives them via streaming callbacks with their match_kind.
             if self.source_registry_middleware._get_registry().all_sources():
-                verification = verify_citations(final_message, self.source_registry_middleware._get_registry())
+                verification = verify_citations(
+                    final_message,
+                    self.source_registry_middleware._get_registry(),
+                    passthrough_threshold=self.citation_passthrough_threshold,
+                )
                 if verification.removed_citations:
                     removed_details = []
                     for c in verification.removed_citations:

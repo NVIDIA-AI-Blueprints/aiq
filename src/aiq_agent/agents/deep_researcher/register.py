@@ -65,6 +65,17 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default=None,
         description="Optional DeepAgents sandbox backend for execute support.",
     )
+    citation_passthrough_threshold: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Minimum citation confidence (0.0-1.0) to keep in the final report. "
+            "Default 0.6 keeps exact/normalized/truncation/prefix matches; lower "
+            "values let weaker heuristic matches (child_path, query_subset) ride "
+            "through. Set to 1.0 to require exact matches only."
+        ),
+    )
 
 
 @register_function(config_type=DeepResearchAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -119,6 +130,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         callbacks=callbacks,
         skills=config.skills,
         sandbox=config.sandbox,
+        citation_passthrough_threshold=config.citation_passthrough_threshold,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -147,6 +159,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     skills=config.skills,
                     sandbox=config.sandbox,
                     job_id=job_id,
+                    citation_passthrough_threshold=config.citation_passthrough_threshold,
                 )
             elif data_sources is not None and not selected_tools:
                 logger.warning("Deep research received data_sources with no matching tools")

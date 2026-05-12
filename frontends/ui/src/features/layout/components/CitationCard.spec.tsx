@@ -127,4 +127,100 @@ describe('CitationCard', () => {
       expect(screen.getByText(/\d{1,2}:\d{2}/)).toBeInTheDocument()
     })
   })
+
+  describe('confidence badge', () => {
+    test('no badge for exact match (common case stays visually unchanged)', () => {
+      render(
+        <CitationCard
+          citation={createCitation({ matchKind: 'exact', confidence: 1.0 })}
+        />
+      )
+      expect(screen.queryByTestId('citation-confidence-badge')).toBeNull()
+    })
+
+    test('no badge for normalized match (also high-confidence)', () => {
+      render(
+        <CitationCard
+          citation={createCitation({ matchKind: 'normalized', confidence: 0.95 })}
+        />
+      )
+      expect(screen.queryByTestId('citation-confidence-badge')).toBeNull()
+    })
+
+    test('no badge when matchKind is undefined (legacy / pre-2.2 events)', () => {
+      render(<CitationCard citation={createCitation()} />)
+      expect(screen.queryByTestId('citation-confidence-badge')).toBeNull()
+    })
+
+    test('medium-tier badge for truncation match', () => {
+      render(
+        <CitationCard
+          citation={createCitation({ matchKind: 'truncation', confidence: 0.85 })}
+        />
+      )
+      const badge = screen.getByTestId('citation-confidence-badge')
+      expect(badge).toHaveAttribute('data-tier', 'medium')
+      expect(badge).toHaveAttribute('data-match-kind', 'truncation')
+      // Tooltip surfaces match kind + confidence percentage
+      expect(badge.getAttribute('title')).toMatch(/truncation/i)
+      expect(badge.getAttribute('title')).toContain('85%')
+    })
+
+    test('medium-tier badge for citation_key match', () => {
+      render(
+        <CitationCard
+          citation={createCitation({ matchKind: 'citation_key', confidence: 0.9 })}
+        />
+      )
+      const badge = screen.getByTestId('citation-confidence-badge')
+      expect(badge).toHaveAttribute('data-tier', 'medium')
+      expect(badge).toHaveAttribute('data-match-kind', 'citation_key')
+    })
+
+    test('low-tier badge for child_path match', () => {
+      render(
+        <CitationCard
+          citation={createCitation({ matchKind: 'child_path', confidence: 0.6 })}
+        />
+      )
+      const badge = screen.getByTestId('citation-confidence-badge')
+      expect(badge).toHaveAttribute('data-tier', 'low')
+      expect(badge).toHaveAttribute('data-match-kind', 'child_path')
+      expect(badge.getAttribute('title')).toContain('60%')
+    })
+
+    test('low-tier badge for prefix and query_subset matches', () => {
+      const { rerender } = render(
+        <CitationCard
+          citation={createCitation({ matchKind: 'prefix', confidence: 0.75 })}
+        />
+      )
+      expect(screen.getByTestId('citation-confidence-badge')).toHaveAttribute(
+        'data-tier',
+        'low',
+      )
+
+      rerender(
+        <CitationCard
+          citation={createCitation({ matchKind: 'query_subset', confidence: 0.7 })}
+        />
+      )
+      expect(screen.getByTestId('citation-confidence-badge')).toHaveAttribute(
+        'data-tier',
+        'low',
+      )
+    })
+
+    test('omits confidence percentage when undefined', () => {
+      render(
+        <CitationCard
+          citation={createCitation({ matchKind: 'truncation' })}
+        />
+      )
+      const badge = screen.getByTestId('citation-confidence-badge')
+      // Title still labels the match kind even without a numeric score
+      expect(badge.getAttribute('title')).toMatch(/truncation/i)
+      expect(badge.getAttribute('title')).not.toMatch(/%/)
+    })
+  })
 })

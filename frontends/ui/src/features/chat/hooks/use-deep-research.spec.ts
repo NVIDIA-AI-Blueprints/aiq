@@ -833,7 +833,31 @@ describe('useDeepResearch', () => {
       expect(mockAddDeepResearchCitation).toHaveBeenCalledWith(
         'https://example.com',
         'Citation content',
-        true
+        true,
+        undefined,
+        undefined,
+      )
+    })
+
+    test('onCitationUpdate forwards confidence + matchKind to store', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onCitationUpdate?.(
+          'https://example.com',
+          'Citation content',
+          true,
+          0.85,
+          'truncation',
+        )
+      })
+
+      expect(mockAddDeepResearchCitation).toHaveBeenCalledWith(
+        'https://example.com',
+        'Citation content',
+        true,
+        0.85,
+        'truncation',
       )
     })
 
