@@ -409,7 +409,11 @@ def register_source_parser(
     _PARSER_REGISTRY.append((match_fn, parser_fn))
 
 
-def extract_sources_from_tool_result(tool_name: str, content: str) -> list[SourceEntry]:
+def extract_sources_from_tool_result(
+    tool_name: str,
+    content: str,
+    source_id: str | None = None,
+) -> list[SourceEntry]:
     """Extract sources from a tool's output.
 
     Strategy:
@@ -417,9 +421,19 @@ def extract_sources_from_tool_result(tool_name: str, content: str) -> list[Sourc
        formats like knowledge layer citation keys).
     2. Otherwise, fall back to the generic URL extractor which finds all
        URLs in any tool output regardless of format.
+    3. If neither produces entries, and ``source_id`` is provided (i.e.
+       the caller has resolved this tool to a configured data source),
+       register the tool result itself as a non-URL citation source.
 
     This means new sources (Bing, Perplexity, etc.) work automatically
     without any parser registration — as long as their output contains URLs.
+
+    The ``source_id`` argument is the contract that guards the non-URL
+    fallback: arbitrary tool output is *not* turned into a fabricated
+    source entry unless the caller has already confirmed the tool is a
+    configured data source (typically via
+    :func:`aiq_agent.common.data_source_registry.get_source_id_for_tool`).
+    Callers that do not pass ``source_id`` only get URL-based entries.
     """
     name_lower = tool_name.lower()
     for match_fn, parser_fn in _PARSER_REGISTRY:
@@ -434,10 +448,11 @@ def extract_sources_from_tool_result(tool_name: str, content: str) -> list[Sourc
     if entries:
         return entries
 
-    # Some registered data sources are authoritative without returning
-    # citeable URLs. Source capture gates decide whether the tool is a
-    # configured data source before this parser is called.
-    if content.strip():
+    # Non-URL fallback: register the tool result itself as a source, but
+    # only when the caller has confirmed this is a configured data source.
+    # Without that confirmation we return nothing rather than fabricate an
+    # entry for arbitrary tool output.
+    if source_id is not None and content.strip():
         return [SourceEntry(citation_key=tool_name, source_type="tool_result", tool_name=tool_name)]
 
     return []

@@ -364,8 +364,14 @@ class TestGenericUrlExtractor:
             entries = extract_sources_from_tool_result(name, content)
             assert len(entries) == 1, f"Failed for tool name: {name}"
 
-    def test_non_url_content_registers_tool_result_source(self):
+    def test_non_url_content_without_source_id_returns_empty(self):
+        """Without a resolved source_id the parser must not fabricate a source entry."""
         entries = extract_sources_from_tool_result("any_tool", "Search returned no results")
+        assert entries == []
+
+    def test_non_url_content_with_source_id_registers_tool_result_source(self):
+        """When the caller has resolved a source_id, non-URL output becomes a tool_result source."""
+        entries = extract_sources_from_tool_result("any_tool", "Search returned no results", source_id="some_source")
         assert len(entries) == 1
         assert entries[0].citation_key == "any_tool"
         assert entries[0].source_type == "tool_result"
@@ -476,12 +482,14 @@ class TestParserDispatcher:
     """Tests for parser dispatcher and fallback behavior."""
 
     def test_tool_without_content_returns_empty(self):
-        entries = extract_sources_from_tool_result("weather_observation_tool", "   ")
+        entries = extract_sources_from_tool_result("weather_observation_tool", "   ", source_id="weather")
 
         assert entries == []
 
     def test_data_source_tool_without_urls_registers_tool_result_source(self):
-        entries = extract_sources_from_tool_result("weather_observation_tool", "Visibility: 10 miles")
+        entries = extract_sources_from_tool_result(
+            "weather_observation_tool", "Visibility: 10 miles", source_id="weather"
+        )
 
         assert len(entries) == 1
         assert entries[0].url is None

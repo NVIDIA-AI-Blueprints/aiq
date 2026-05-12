@@ -268,6 +268,17 @@ class TestShallowResearcherAgent:
             )
             assert "research" in agent.system_prompt.lower()
 
+    def test_default_prompt_requires_tool_result_references(self, mock_llm_provider, real_tool):
+        """Default prompt tells the model to cite non-URL tool results by exact tool name."""
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[real_tool],
+        )
+
+        assert "If you use a tool result to answer" in agent.system_prompt
+        assert "exact tool name" in agent.system_prompt
+        assert "- [1] mcp_time__get_current_time" in agent.system_prompt
+
     @pytest.mark.asyncio
     async def test_tool_iterations_incremented_on_tool_calls(self, mock_llm_provider, mock_llm, real_tool):
         """Test tool_iterations counter increments when LLM makes tool calls."""
@@ -501,6 +512,39 @@ class TestShallowResearcherSourceRegistryGating:
         assert sources[0].citation_key == "mcp_time__get_current_time"
         assert sources[0].source_type == "tool_result"
         assert result.messages[-1].content.rstrip().endswith("[1] mcp_time__get_current_time")
+
+    @pytest.mark.asyncio
+    async def test_missing_tool_result_citation_is_appended(self, mock_llm_provider, mock_llm):
+        """Captured non-URL tool sources are appended when the model omits references."""
+        populate_from_config(
+            [
+                {
+                    "id": "mcp_time",
+                    "name": "MCP Time",
+                    "description": "Get current time and timezone information through MCP.",
+                    "tools": ["mcp_time"],
+                }
+            ],
+            group_names={"mcp_time"},
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"}],
+        )
+        final_response = AIMessage(content="It's currently 4:54 AM in Tokyo.")
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[mcp_time__get_current_time],
+        )
+
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="What time is it in Tokyo?")])
+        result = await agent.run(state)
+
+        assert result.messages[-1].content.rstrip() == (
+            "It's currently 4:54 AM in Tokyo [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
+        )
 
     @pytest.mark.asyncio
     async def test_registered_exact_data_source_tool_without_urls_is_captured(self, mock_llm_provider, mock_llm):

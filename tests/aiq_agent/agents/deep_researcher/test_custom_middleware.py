@@ -128,13 +128,21 @@ class TestSourceRegistryMiddleware:
     def source_tools(self):
         return {"advanced_web_search_tool", "knowledge_search", "paper_search_tool"}
 
-    @pytest.fixture
-    def middleware(self, source_tools):
-        return SourceRegistryMiddleware(source_tool_names=source_tools)
-
     @pytest.fixture(autouse=True)
-    def _register_source_tools(self):
+    def _reset_data_source_registry(self):
+        """Keep the global data_source_registry clean across tests.
+
+        Tests that need a populated registry either depend on
+        ``_default_data_sources`` (via the ``middleware`` fixture) or
+        populate their own registry explicitly in the test body.
+        """
         reset_registry()
+        yield
+        reset_registry()
+
+    @pytest.fixture
+    def _default_data_sources(self):
+        """Populate the three default data sources used by the shared tests."""
         populate_from_config(
             [
                 {
@@ -157,8 +165,10 @@ class TestSourceRegistryMiddleware:
                 },
             ]
         )
-        yield
-        reset_registry()
+
+    @pytest.fixture
+    def middleware(self, source_tools, _default_data_sources):
+        return SourceRegistryMiddleware(source_tool_names=source_tools)
 
     def _make_request(self, tool_name: str):
         req = MagicMock()
@@ -242,7 +252,7 @@ class TestSourceRegistryMiddleware:
     @pytest.mark.asyncio
     async def test_allowlisted_tool_not_in_data_source_registry_ignored(self):
         """Loaded tools are not enough; tools must be registered data sources."""
-        reset_registry()
+        # Autouse fixture already reset the registry; leave it empty.
         mw = SourceRegistryMiddleware(source_tool_names={"mcp_time__get_current_time"})
         content = "2026-05-11T14:30:00+09:00"
         handler = AsyncMock(return_value=self._make_tool_result(content))
@@ -255,7 +265,6 @@ class TestSourceRegistryMiddleware:
     @pytest.mark.asyncio
     async def test_registered_group_tool_without_urls_captured(self):
         """Registered group child tools without URLs can be non-URL citation sources."""
-        reset_registry()
         populate_from_config(
             [
                 {
@@ -282,7 +291,6 @@ class TestSourceRegistryMiddleware:
     @pytest.mark.asyncio
     async def test_registered_exact_data_source_tool_without_urls_captured(self):
         """Any exact tool declared under data_sources can be a non-URL citation source."""
-        reset_registry()
         populate_from_config(
             [
                 {

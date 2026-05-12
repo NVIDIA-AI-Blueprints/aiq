@@ -237,13 +237,14 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 tool_name = request.tool_call.get("name", "")
             if tool_name not in self._source_tool_names:
                 return result
-            if get_source_id_for_tool(tool_name) is None:
+            source_id = get_source_id_for_tool(tool_name)
+            if source_id is None:
                 logger.debug(
                     "[CitationRegistry] Skipping non-data-source tool result from %s",
                     tool_name,
                 )
                 return result
-            sources = extract_sources_from_tool_result(tool_name, str(result.content))
+            sources = extract_sources_from_tool_result(tool_name, str(result.content), source_id=source_id)
             active_registry = self._get_registry()
             for source in sources:
                 active_registry.add(source)
