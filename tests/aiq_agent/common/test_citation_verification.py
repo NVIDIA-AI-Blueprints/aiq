@@ -364,9 +364,11 @@ class TestGenericUrlExtractor:
             entries = extract_sources_from_tool_result(name, content)
             assert len(entries) == 1, f"Failed for tool name: {name}"
 
-    def test_empty_content_returns_empty(self):
+    def test_non_url_content_registers_tool_result_source(self):
         entries = extract_sources_from_tool_result("any_tool", "Search returned no results")
-        assert len(entries) == 0
+        assert len(entries) == 1
+        assert entries[0].citation_key == "any_tool"
+        assert entries[0].source_type == "tool_result"
 
     def test_duplicate_urls_deduplicated(self):
         content = "See https://example.com/page and also https://example.com/page for reference."
@@ -473,18 +475,19 @@ class TestKnowledgeLayerParser:
 class TestParserDispatcher:
     """Tests for parser dispatcher and fallback behavior."""
 
-    def test_unknown_tool_no_urls_returns_empty(self):
-        entries = extract_sources_from_tool_result("totally_unknown_tool", "some content without links")
+    def test_tool_without_content_returns_empty(self):
+        entries = extract_sources_from_tool_result("weather_observation_tool", "   ")
+
         assert entries == []
 
-    def test_mcp_tool_without_urls_registers_tool_result_source(self):
-        entries = extract_sources_from_tool_result("mcp_time__get_current_time", "2026-05-11T14:30:00+09:00")
+    def test_data_source_tool_without_urls_registers_tool_result_source(self):
+        entries = extract_sources_from_tool_result("weather_observation_tool", "Visibility: 10 miles")
 
         assert len(entries) == 1
         assert entries[0].url is None
-        assert entries[0].citation_key == "mcp_time__get_current_time"
-        assert entries[0].source_type == "mcp_tool_result"
-        assert entries[0].tool_name == "mcp_time__get_current_time"
+        assert entries[0].citation_key == "weather_observation_tool"
+        assert entries[0].source_type == "tool_result"
+        assert entries[0].tool_name == "weather_observation_tool"
 
     def test_unknown_tool_with_urls_extracts_them(self):
         """Generic fallback extracts URLs from any unknown tool."""

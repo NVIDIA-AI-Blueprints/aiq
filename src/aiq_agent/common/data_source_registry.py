@@ -212,6 +212,10 @@ def get_source_id_for_tool(tool_name: str) -> str | None:
         if any(tool_name.startswith(group_name + sep) for sep in _GROUP_SEPARATORS):
             return _group_source_map[group_name]
 
+    for ref_name, source_id in sorted(_tool_source_map.items(), key=lambda item: len(item[0]), reverse=True):
+        if any(tool_name.startswith(ref_name + sep) for sep in _GROUP_SEPARATORS):
+            return source_id
+
     return None
 
 

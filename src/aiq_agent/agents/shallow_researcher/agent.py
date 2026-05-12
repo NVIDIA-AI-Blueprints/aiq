@@ -34,6 +34,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt import tools_condition
 
+from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
@@ -226,8 +227,6 @@ class ShallowResearcherAgent:
 
         tool_node = ToolNode(self.tools)
 
-        _source_tool_names = {t.name for t in self.tools}
-
         async def tool_node_with_source_capture(state: ShallowResearchAgentState) -> dict[str, Any]:
             """Execute tools and capture source URLs/citations for verification.
 
@@ -241,7 +240,11 @@ class ShallowResearcherAgent:
             for msg in result.get("messages", []):
                 if isinstance(msg, ToolMessage) and msg.content:
                     tool_name = getattr(msg, "name", "") or ""
-                    if tool_name not in _source_tool_names:
+                    if get_source_id_for_tool(tool_name) is None:
+                        logger.debug(
+                            "[CitationRegistry] Skipping non-data-source tool result from %s",
+                            tool_name,
+                        )
                         continue
                     sources = extract_sources_from_tool_result(tool_name, str(msg.content))
                     for source in sources:

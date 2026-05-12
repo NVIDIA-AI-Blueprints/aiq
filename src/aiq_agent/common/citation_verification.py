@@ -434,11 +434,11 @@ def extract_sources_from_tool_result(tool_name: str, content: str) -> list[Sourc
     if entries:
         return entries
 
-    # MCP tools can be authoritative compute/data sources without returning
-    # citeable URLs. Register the tool result itself so successful MCP calls do
-    # not look like an empty source registry.
-    if "__" in tool_name and content.strip():
-        return [SourceEntry(citation_key=tool_name, source_type="mcp_tool_result", tool_name=tool_name)]
+    # Some registered data sources are authoritative without returning
+    # citeable URLs. Source capture gates decide whether the tool is a
+    # configured data source before this parser is called.
+    if content.strip():
+        return [SourceEntry(citation_key=tool_name, source_type="tool_result", tool_name=tool_name)]
 
     return []
 

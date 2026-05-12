@@ -28,8 +28,11 @@ from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
+from aiq_agent.common.data_source_registry import populate_from_config
+from aiq_agent.common.data_source_registry import reset_registry
 
 
 @tool
@@ -405,6 +408,135 @@ def web_search_with_urls(query: str) -> str:
     )
 
 
+@tool
+def mcp_time__get_current_time(timezone: str = "UTC") -> str:
+    """Get the current time for a timezone."""
+    return "2026-05-11T14:30:00+09:00"
+
+
+@tool
+def weather_observation_tool(location: str) -> str:
+    """Get current observed weather conditions."""
+    return f"Current conditions for {location}: clear, 68F"
+
+
+class TestShallowResearcherSourceRegistryGating:
+    """Tests that shallow source capture is gated by data_source_registry."""
+
+    @pytest.fixture(autouse=True)
+    def _reset_data_source_registry(self):
+        reset_registry()
+        yield
+        reset_registry()
+
+    @pytest.fixture
+    def mock_llm(self):
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        return llm
+
+    @pytest.fixture
+    def mock_llm_provider(self, mock_llm):
+        provider = MagicMock(spec=LLMProvider)
+        provider.get = MagicMock(return_value=mock_llm)
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_explicit_tool_not_declared_as_data_source_is_not_captured(self, mock_llm_provider, mock_llm):
+        """Loaded agent tools are not enough; the tool must be in data_source_registry."""
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"}],
+        )
+        final_response = AIMessage(
+            content=("The current time was returned by the MCP tool.\n\n## Sources\n[1] mcp_time__get_current_time")
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[mcp_time__get_current_time],
+        )
+
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="What time is it in Tokyo?")])
+        with pytest.raises(EmptySourceRegistryError):
+            await agent.run(state)
+
+        assert agent.source_registry.all_sources() == []
+
+    @pytest.mark.asyncio
+    async def test_registered_group_tool_without_urls_is_captured(self, mock_llm_provider, mock_llm):
+        """Registered group child tools without URLs can be non-URL citation sources."""
+        populate_from_config(
+            [
+                {
+                    "id": "mcp_time",
+                    "name": "MCP Time",
+                    "description": "Get current time and timezone information through MCP.",
+                    "tools": ["mcp_time"],
+                }
+            ],
+            group_names={"mcp_time"},
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"}],
+        )
+        final_response = AIMessage(
+            content=("The current time was returned by the MCP tool.\n\n## Sources\n[1] mcp_time__get_current_time")
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[mcp_time__get_current_time],
+        )
+
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="What time is it in Tokyo?")])
+        result = await agent.run(state)
+
+        sources = agent.source_registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].citation_key == "mcp_time__get_current_time"
+        assert sources[0].source_type == "tool_result"
+        assert result.messages[-1].content.rstrip().endswith("[1] mcp_time__get_current_time")
+
+    @pytest.mark.asyncio
+    async def test_registered_exact_data_source_tool_without_urls_is_captured(self, mock_llm_provider, mock_llm):
+        """Any exact tool declared under data_sources can be a non-URL citation source."""
+        populate_from_config(
+            [
+                {
+                    "id": "weather_observations",
+                    "name": "Weather Observations",
+                    "description": "Current observed weather conditions.",
+                    "tools": ["weather_observation_tool"],
+                }
+            ]
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "weather_observation_tool", "args": {"location": "San Francisco"}, "id": "1"}],
+        )
+        final_response = AIMessage(content="The weather is clear.\n\n## Sources\n[1] weather_observation_tool")
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[weather_observation_tool],
+        )
+
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="What is the weather in San Francisco?")])
+        result = await agent.run(state)
+
+        sources = agent.source_registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].citation_key == "weather_observation_tool"
+        assert sources[0].source_type == "tool_result"
+        assert result.messages[-1].content.rstrip().endswith("[1] weather_observation_tool")
+
+
 class TestShallowResearcherSourceCaptureIntegration:
     """Integration tests verifying source capture through the full pipeline.
 
@@ -425,6 +557,22 @@ class TestShallowResearcherSourceCaptureIntegration:
         provider = MagicMock(spec=LLMProvider)
         provider.get = MagicMock(return_value=mock_llm)
         return provider
+
+    @pytest.fixture(autouse=True)
+    def _register_web_search_source(self):
+        reset_registry()
+        populate_from_config(
+            [
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "description": "Search the web for real-time information.",
+                    "tools": ["web_search_with_urls"],
+                }
+            ]
+        )
+        yield
+        reset_registry()
 
     @pytest.mark.asyncio
     async def test_source_registry_populated_from_tool_call(self, mock_llm_provider, mock_llm):

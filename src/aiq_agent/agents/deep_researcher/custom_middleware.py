@@ -24,6 +24,7 @@ from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
 from langchain_core.messages import ToolMessage
 
+from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import SourceRegistry
@@ -209,10 +210,9 @@ class SourceRegistryMiddleware(AgentMiddleware):
        so the orchestrator has a single, authoritative reference list when
        writing the final report (no manual reconciliation across subagent files)
 
-    Only tools whose names appear in ``source_tool_names`` contribute to the
-    registry.  This set is derived from the YAML config at construction time,
-    so user-added search tools are captured automatically and no internal-tool
-    blocklist needs to be maintained.
+    Only tools whose names appear in ``source_tool_names`` and are registered
+    in the data source registry contribute to the registry. This keeps source
+    capture tied to configured data sources rather than incidental tool access.
 
     The registry is also used by verify_citations() to strip fabricated,
     stale, or intermediate-artifact citations from the final report.
@@ -236,6 +236,12 @@ class SourceRegistryMiddleware(AgentMiddleware):
             if hasattr(request, "tool_call") and isinstance(request.tool_call, dict):
                 tool_name = request.tool_call.get("name", "")
             if tool_name not in self._source_tool_names:
+                return result
+            if get_source_id_for_tool(tool_name) is None:
+                logger.debug(
+                    "[CitationRegistry] Skipping non-data-source tool result from %s",
+                    tool_name,
+                )
                 return result
             sources = extract_sources_from_tool_result(tool_name, str(result.content))
             active_registry = self._get_registry()
