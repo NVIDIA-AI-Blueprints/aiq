@@ -951,17 +951,21 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                 result = client.delete_by_query(index=index_name, body=body, refresh=True, conflicts="proceed")
                 deleted = int(result.get("deleted", 0)) if isinstance(result, dict) else 0
 
-            with self._lock:
-                for tracked_id, tracked_file in list(self._files.items()):
-                    if (
-                        tracked_file.collection_name == collection_name
-                        and tracked_file.file_name in (resolved_name, file_id)
-                    ):
-                        self._files.pop(tracked_id, None)
-                    elif tracked_id == file_id:
-                        self._files.pop(tracked_id, None)
-
             if deleted > 0:
+                # Only evict in-memory tracking when OpenSearch actually had documents
+                # to delete. If deleted == 0 (file still UPLOADING/INGESTING, or already
+                # gone), keeping the tracking entry lets get_file_status return the
+                # live job state instead of falling through to an empty index scan.
+                with self._lock:
+                    for tracked_id, tracked_file in list(self._files.items()):
+                        if (
+                            tracked_file.collection_name == collection_name
+                            and tracked_file.file_name in (resolved_name, file_id)
+                        ):
+                            self._files.pop(tracked_id, None)
+                        elif tracked_id == file_id:
+                            self._files.pop(tracked_id, None)
+
                 from aiq_agent.knowledge import unregister_summary
 
                 unregister_summary(collection_name, resolved_name)

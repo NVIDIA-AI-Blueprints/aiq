@@ -31,6 +31,7 @@ from knowledge_layer.opensearch.adapter import OpenSearchRetriever
 
 from aiq_agent.knowledge.schema import Chunk
 from aiq_agent.knowledge.schema import ContentType
+from aiq_agent.knowledge.schema import FileInfo
 from aiq_agent.knowledge.schema import FileStatus
 from aiq_agent.knowledge.schema import JobState
 
@@ -572,6 +573,46 @@ def test_dask_ingestion_submits_bytes_payload_and_updates_job(tmp_path):
     assert status is not None
     assert status.status == FileStatus.SUCCESS
     assert status.chunk_count == 1
+
+
+def test_delete_file_preserves_inflight_tracking_when_nothing_deleted():
+    """If delete_file finds no documents to delete (file still UPLOADING or
+    INGESTING, or already gone), in-memory tracking must be left intact so
+    get_file_status keeps returning the live job state."""
+    fake_client = FakeOpenSearchClient()
+    ingestor = OpenSearchIngestor(
+        {
+            "endpoint": "localhost:9200",
+            "embedding_dim": 4,
+            "index_prefix": "aiq-test",
+        }
+    )
+    ingestor._client = fake_client
+
+    # Create an empty index — exists() returns True but delete_by_query finds nothing.
+    fake_client.indices.create(index="aiq-test-c", body={})
+
+    # Mark a file as INGESTING in-memory; not yet in the index (job still running).
+    file_id = "inflight-1"
+    ingestor._files[file_id] = FileInfo(
+        file_id=file_id,
+        file_name="in-flight.pdf",
+        collection_name="c",
+        status=FileStatus.INGESTING,
+        file_size=100,
+        uploaded_at=datetime.now(tz=UTC),
+        metadata={"job_id": "job-1"},
+    )
+
+    result = ingestor.delete_file(file_id, "c")
+
+    assert result is False, "delete_file must return False when no documents were deleted"
+    assert file_id in ingestor._files, (
+        "in-memory tracking must survive a no-op delete so an INGESTING job is not silently dropped"
+    )
+    status = ingestor.get_file_status(file_id, "c")
+    assert status is not None, "get_file_status must still see the in-flight entry"
+    assert status.status == FileStatus.INGESTING
 
 
 def test_dask_client_closed_when_submit_raises(tmp_path):
