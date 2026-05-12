@@ -250,8 +250,14 @@ class TestSourceRegistryMiddleware:
         assert len(middleware.registry.all_sources()) == 0
 
     @pytest.mark.asyncio
-    async def test_allowlisted_tool_not_in_data_source_registry_ignored(self):
-        """Loaded tools are not enough; tools must be registered data sources."""
+    async def test_allowlisted_tool_not_in_data_source_registry_is_still_captured(self):
+        """Agent-loaded tools are captured even when not declared under data_sources.
+
+        Tools may be passed directly to the agent (programmatically or via
+        `tools:` in YAML) without being declared under `data_sources:`. Their
+        outputs are still real, citable evidence and must contribute to the
+        citation registry.
+        """
         # Autouse fixture already reset the registry; leave it empty.
         mw = SourceRegistryMiddleware(source_tool_names={"mcp_time__get_current_time"})
         content = "2026-05-11T14:30:00+09:00"
@@ -260,7 +266,10 @@ class TestSourceRegistryMiddleware:
 
         await mw.awrap_tool_call(request, handler)
 
-        assert mw.registry.all_sources() == []
+        sources = mw.registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].citation_key == "mcp_time__get_current_time"
+        assert sources[0].source_type == "tool_result"
 
     @pytest.mark.asyncio
     async def test_registered_group_tool_without_urls_captured(self):

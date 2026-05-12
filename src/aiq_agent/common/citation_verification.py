@@ -421,19 +421,20 @@ def extract_sources_from_tool_result(
        formats like knowledge layer citation keys).
     2. Otherwise, fall back to the generic URL extractor which finds all
        URLs in any tool output regardless of format.
-    3. If neither produces entries, and ``source_id`` is provided (i.e.
-       the caller has resolved this tool to a configured data source),
-       register the tool result itself as a non-URL citation source.
+    3. If neither produces entries, register the tool result itself as a
+       non-URL citation source.
 
     This means new sources (Bing, Perplexity, etc.) work automatically
     without any parser registration — as long as their output contains URLs.
 
-    The ``source_id`` argument is the contract that guards the non-URL
-    fallback: arbitrary tool output is *not* turned into a fabricated
-    source entry unless the caller has already confirmed the tool is a
-    configured data source (typically via
-    :func:`aiq_agent.common.data_source_registry.get_source_id_for_tool`).
-    Callers that do not pass ``source_id`` only get URL-based entries.
+    The non-URL fallback is permissive on purpose: callers (the shallow and
+    deep researchers) are responsible for deciding which tool calls are
+    eligible to contribute sources, typically by limiting capture to the
+    agent's loaded tool set. The optional ``source_id`` is stored on the
+    returned entries when callers have resolved this tool to a configured
+    data source via
+    :func:`aiq_agent.common.data_source_registry.get_source_id_for_tool`,
+    but it does not gate the fallback.
     """
     name_lower = tool_name.lower()
     for match_fn, parser_fn in _PARSER_REGISTRY:
@@ -448,11 +449,11 @@ def extract_sources_from_tool_result(
     if entries:
         return entries
 
-    # Non-URL fallback: register the tool result itself as a source, but
-    # only when the caller has confirmed this is a configured data source.
-    # Without that confirmation we return nothing rather than fabricate an
-    # entry for arbitrary tool output.
-    if source_id is not None and content.strip():
+    # Non-URL fallback: register the tool result itself as a source whenever
+    # the tool produced non-empty output. The caller has already decided
+    # this tool is eligible to contribute sources (typically by limiting
+    # capture to the agent's loaded tool set).
+    if content.strip():
         return [SourceEntry(citation_key=tool_name, source_type="tool_result", tool_name=tool_name)]
 
     return []

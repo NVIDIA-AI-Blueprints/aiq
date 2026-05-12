@@ -364,13 +364,15 @@ class TestGenericUrlExtractor:
             entries = extract_sources_from_tool_result(name, content)
             assert len(entries) == 1, f"Failed for tool name: {name}"
 
-    def test_non_url_content_without_source_id_returns_empty(self):
-        """Without a resolved source_id the parser must not fabricate a source entry."""
+    def test_non_url_content_without_source_id_registers_tool_result_source(self):
+        """Non-URL content always registers a tool_result source — eligibility is enforced by callers."""
         entries = extract_sources_from_tool_result("any_tool", "Search returned no results")
-        assert entries == []
+        assert len(entries) == 1
+        assert entries[0].citation_key == "any_tool"
+        assert entries[0].source_type == "tool_result"
 
     def test_non_url_content_with_source_id_registers_tool_result_source(self):
-        """When the caller has resolved a source_id, non-URL output becomes a tool_result source."""
+        """source_id is accepted but does not affect whether a fallback entry is produced."""
         entries = extract_sources_from_tool_result("any_tool", "Search returned no results", source_id="some_source")
         assert len(entries) == 1
         assert entries[0].citation_key == "any_tool"

@@ -25,6 +25,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 
 from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
+from aiq_agent.agents.shallow_researcher.agent import _append_minimal_citation
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
@@ -791,3 +792,47 @@ class TestShallowResearcherSessionRegistry:
             assert agent.source_registry is original_registry
         finally:
             set_session_registry(None)
+
+
+class TestAppendMinimalCitation:
+    """Unit tests for the `_append_minimal_citation` fallback."""
+
+    def _tool_source(self) -> SourceEntry:
+        return SourceEntry(
+            source_type="tool_result",
+            citation_key="mcp_time__get_current_time",
+            tool_name="mcp_time__get_current_time",
+        )
+
+    def test_strips_leftover_bold_references_header(self):
+        # Simulates verify_citations stripping every fabricated citation under
+        # a **References:** section but leaving the bare header behind.
+        report = "Body sentence.\n\n**References:**\n"
+
+        result = _append_minimal_citation(report, self._tool_source())
+
+        assert result.count("**References:**") == 1
+        assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
+
+    def test_strips_leftover_references_heading(self):
+        report = "Body sentence.\n\n## References\n"
+
+        result = _append_minimal_citation(report, self._tool_source())
+
+        assert "## References" not in result
+        assert result.count("**References:**") == 1
+
+    def test_strips_leftover_sources_heading(self):
+        report = "Body sentence.\n\n### Sources\n"
+
+        result = _append_minimal_citation(report, self._tool_source())
+
+        assert "### Sources" not in result
+        assert result.count("**References:**") == 1
+
+    def test_no_leftover_header_passes_through(self):
+        report = "Body sentence."
+
+        result = _append_minimal_citation(report, self._tool_source())
+
+        assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"

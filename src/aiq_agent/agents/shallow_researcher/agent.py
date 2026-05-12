@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -62,7 +63,23 @@ def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
     if not citation_target:
         return report_text
 
+    # verify_citations may strip every citation line under a **References:**
+    # (or ## References / ## Sources) header and leave the empty header
+    # behind. Drop that trailing header before we append our own so the final
+    # output has exactly one references section.
     content = report_text.rstrip()
+    content = re.sub(
+        r"\n{1,2}\*\*References:?\*\*\s*$",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    ).rstrip()
+    content = re.sub(
+        r"\n{1,2}#{2,3}\s+(?:References|Sources)\s*$",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    ).rstrip()
     if content.endswith((".", "!", "?")):
         content = f"{content[:-1]} [1]{content[-1]}"
     else:

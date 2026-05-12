@@ -507,7 +507,8 @@ class DeepResearcherAgent:
 
             # Post-process: verify citations against source registry
             if self.source_registry_middleware._get_registry().all_sources():
-                verification = verify_citations(final_message, self.source_registry_middleware._get_registry())
+                registry = self.source_registry_middleware._get_registry()
+                verification = verify_citations(final_message, registry)
                 if verification.removed_citations:
                     removed_details = []
                     for c in verification.removed_citations:
@@ -520,6 +521,11 @@ class DeepResearcherAgent:
                         "\n  ".join(removed_details),
                     )
                 final_message = verification.verified_report
+                if not verification.valid_citations:
+                    logger.warning(
+                        "Deep researcher produced no valid citations after verification; "
+                        "returning sanitized report without fabricating references."
+                    )
             else:
                 from aiq_agent.common.tool_validation import validate_tool_availability
 

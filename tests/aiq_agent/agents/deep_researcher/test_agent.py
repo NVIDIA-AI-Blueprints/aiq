@@ -563,7 +563,7 @@ class TestDeepResearcherAgent:
 
             result = await agent.run(state)
 
-            # All valid content should be preserved
+            # All valid content should be preserved without synthetic citations.
             assert result.messages[0].content == "Original query"
             assert result.messages[1].content == "I'll help with that."
             assert result.messages[2].content == "Search results here"
@@ -814,3 +814,80 @@ class TestIsReportComplete:
             is_complete, reason = agent._is_report_complete(result)
             assert is_complete is True
             assert "complete" in reason.lower()
+
+
+class TestDeepResearcherCitationVerification:
+    """Tests for deep researcher citation post-processing."""
+
+    @pytest.fixture
+    def mock_llm(self):
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        return llm
+
+    @pytest.fixture
+    def mock_llm_provider(self, mock_llm):
+        provider = LLMProvider()
+        provider.set_default(mock_llm)
+        provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
+        provider.configure(LLMRole.PLANNER, mock_llm)
+        provider.configure(LLMRole.RESEARCHER, mock_llm)
+        return provider
+
+    @pytest.fixture
+    def real_tool(self):
+        return web_search_tool
+
+    @pytest.mark.asyncio
+    async def test_run_does_not_fabricate_citation_when_verify_finds_none(self, mock_llm_provider, real_tool):
+        """If verification finds no valid citations, the report is not patched with a source."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        # Report passes _is_report_complete: long enough, has section headers, has Sources header,
+        # and includes one URL that matches the registry so the cheap completeness check accepts it.
+        report = (
+            "A" * 1600
+            + "\n## Introduction\n\nCUDA findings here.\n"
+            + "## Body\n\nMore details.\n"
+            + "## Sources\n[1] https://docs.nvidia.com/cuda/"
+        )
+        deep_result = {"messages": [AIMessage(content=report)]}
+
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value=deep_result)
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+
+            # Pre-populate registry with the matching URL plus an unrelated tool source.
+            agent.source_registry_middleware.registry.add(
+                SourceEntry(
+                    citation_key="weather_observation_tool",
+                    source_type="tool_result",
+                    tool_name="weather_observation_tool",
+                )
+            )
+            agent.source_registry_middleware.registry.add(
+                SourceEntry(url="https://docs.nvidia.com/cuda/", title="CUDA Docs", tool_name="web_search")
+            )
+
+            # Force the verifier to report "no valid citations" while leaving the report unchanged,
+            # so we can assert post-processing does not synthesize a citation.
+            with patch(
+                "aiq_agent.agents.deep_researcher.agent.verify_citations",
+                return_value=MagicMock(
+                    verified_report=report,
+                    removed_citations=[],
+                    valid_citations=[],
+                ),
+            ):
+                state = DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
+                result = await agent.run(state)
+
+        final_text = result.messages[-1].content
+        assert final_text.rstrip() == report

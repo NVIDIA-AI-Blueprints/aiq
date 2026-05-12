@@ -210,9 +210,13 @@ class SourceRegistryMiddleware(AgentMiddleware):
        so the orchestrator has a single, authoritative reference list when
        writing the final report (no manual reconciliation across subagent files)
 
-    Only tools whose names appear in ``source_tool_names`` and are registered
-    in the data source registry contribute to the registry. This keeps source
-    capture tied to configured data sources rather than incidental tool access.
+    Source capture is gated only by the agent's loaded tool set
+    (``source_tool_names``). Internal scratchpad/runtime tools (think,
+    write_file, read_file, etc.) are added by deepagents itself and never
+    appear in that set, so they are implicitly excluded. Tools registered as
+    configured data sources additionally carry a ``source_id`` label, but a
+    tool does *not* have to be declared under ``data_sources`` to contribute
+    sources — agents can be passed citable tools directly.
 
     The registry is also used by verify_citations() to strip fabricated,
     stale, or intermediate-artifact citations from the final report.
@@ -229,7 +233,20 @@ class SourceRegistryMiddleware(AgentMiddleware):
         return get_session_registry() or self.registry
 
     async def awrap_tool_call(self, request, handler):
-        """Capture sources from tool results after execution."""
+        """Capture sources from tool results after execution.
+
+        Capture is gated only by the agent's loaded tool set
+        (``source_tool_names``). Internal scratchpad/runtime tools (think,
+        write_file, read_file, etc.) are added by deepagents itself and never
+        appear in that set, so they are implicitly excluded.
+
+        Tools that resolve to a configured data source via
+        :func:`get_source_id_for_tool` get a ``source_id`` label. Tools passed
+        directly to the agent without a data-source declaration are still
+        captured — their results are real, citable evidence even when
+        ``data_source_registry`` does not know about them — but their entries
+        carry no ``source_id``.
+        """
         result = await handler(request)
         if isinstance(result, ToolMessage) and result.content:
             tool_name = ""
@@ -238,12 +255,6 @@ class SourceRegistryMiddleware(AgentMiddleware):
             if tool_name not in self._source_tool_names:
                 return result
             source_id = get_source_id_for_tool(tool_name)
-            if source_id is None:
-                logger.debug(
-                    "[CitationRegistry] Skipping non-data-source tool result from %s",
-                    tool_name,
-                )
-                return result
             sources = extract_sources_from_tool_result(tool_name, str(result.content), source_id=source_id)
             active_registry = self._get_registry()
             for source in sources:
