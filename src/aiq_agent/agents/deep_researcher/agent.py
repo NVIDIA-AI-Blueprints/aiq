@@ -133,11 +133,13 @@ class DeepResearcherAgent:
             sandbox: Optional DeepAgents sandbox config.
             config: Optional agent config. Used by async workers to pass function config generically.
             job_id: Optional async job identifier used to scope sandbox backends.
-            citation_passthrough_threshold: Minimum citation confidence
-                (``[0.0, 1.0]``) to keep a citation in the final report.
-                Default 0.6 keeps exact / normalized / truncation / prefix
-                matches; weaker child_path / query_subset matches still ride
-                through to the UI but are dropped from the report body.
+            citation_passthrough_threshold: Confidence cutoff
+                (``[0.0, 1.0]``) used to set the ``verified`` UI hint on
+                each citation — citations at or above the threshold are
+                marked verified, weaker matches are marked unverified.
+                Does NOT filter the report body: every resolved citation
+                (including weaker child_path / query_subset matches) stays
+                in the report so the UI can render a confidence badge.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -360,13 +362,11 @@ class DeepResearcherAgent:
         # to a registered source at all (likely fabrication). Weakly-verified
         # citations still count as resolved; the agent's strict-threshold view
         # is encoded in ``verified`` and used downstream by the UI, not here.
+        # The passthrough threshold is intentionally omitted: this gate keys
+        # off ``v.resolved``, which is independent of the ``verified`` flag.
         registry = self.source_registry_middleware._get_registry()
         if registry.all_sources():
-            verification = verify_citations(
-                content,
-                registry,
-                passthrough_threshold=self.citation_passthrough_threshold,
-            )
+            verification = verify_citations(content, registry)
             if verification.verifications and not any(v.resolved for v in verification.verifications):
                 return False, "no_valid_citations"
 
@@ -500,10 +500,11 @@ class DeepResearcherAgent:
             if result and result.get("messages"):
                 final_message = self._extract_report_content(result["messages"])
 
-            # Post-process: verify citations against source registry. Deep
-            # research applies a confidence threshold (default 0.6) so weak
-            # heuristic matches don't bleed into the report; the UI still
-            # receives them via streaming callbacks with their match_kind.
+            # Post-process: verify citations against source registry. The
+            # threshold (default 0.6) sets the ``verified`` UI hint on each
+            # citation; the report itself keeps every resolved citation so
+            # weaker child_path / query_subset matches still appear with a
+            # confidence badge instead of being silently dropped.
             if self.source_registry_middleware._get_registry().all_sources():
                 verification = verify_citations(
                     final_message,

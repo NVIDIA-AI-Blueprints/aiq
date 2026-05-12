@@ -794,10 +794,15 @@ def _citation_to_dict(v: VerifiedCitation, *, include_reason: bool = False) -> d
     }
     if include_reason:
         # Map match_kind to the legacy short reason strings tests expect.
+        # ``ambiguous`` is split out from ``url_not_in_registry`` so audit
+        # logs can distinguish multi-candidate collisions from genuinely
+        # missing URLs.
         if v.url is None and v.citation_key is None:
             d["reason"] = "unverifiable"
         elif v.citation_key is not None:
             d["reason"] = "citation_key_not_in_registry"
+        elif v.match_kind == "ambiguous":
+            d["reason"] = "url_ambiguous"
         else:
             d["reason"] = "url_not_in_registry"
     return d
@@ -812,9 +817,10 @@ def verify_citations(
     """Verify citations in a report against the source registry.
 
     Each citation is scored against the registry and gets a structured
-    ``VerifiedCitation`` record. Citations whose confidence is below
-    ``passthrough_threshold`` are stripped from the report (just like the
-    old binary behavior); the rest stay, carrying their score.
+    ``VerifiedCitation`` record. Only *unresolved* citations
+    (``unmatched`` / ``ambiguous`` / ``unverifiable``) are stripped from
+    the report; every resolved citation passes through regardless of
+    confidence, carrying its score so the UI can render a badge.
 
     Renumbering is NOT done here — it is deferred to ``sanitize_report()``
     which always runs after this function and handles it in a single pass.
@@ -822,9 +828,11 @@ def verify_citations(
     Args:
         report_text: The full report text with citations.
         registry: SourceRegistry populated from tool call results.
-        passthrough_threshold: Citations with ``confidence >= threshold`` are
-            kept in the report. Default 0.0 = pass everything that resolved.
-            Pass ``1.0`` to recover the old strict-only-exact behavior.
+        passthrough_threshold: Sets the ``verified`` flag on each
+            ``VerifiedCitation`` (``True`` when ``confidence >= threshold``).
+            This is a UI display hint only — it does **not** filter which
+            citations remain in the report. Default 0.0 marks every
+            resolved citation as verified.
 
     Returns:
         CitationVerificationResult with cleaned report, per-citation
