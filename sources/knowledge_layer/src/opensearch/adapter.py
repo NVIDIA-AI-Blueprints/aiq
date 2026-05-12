@@ -351,8 +351,7 @@ class _OpenSearchConfigMixin:
                 from opensearchpy import AWSV4SignerAuth
             except ImportError as e:
                 raise RuntimeError(
-                    "OpenSearch SigV4 auth requires boto3 and opensearch-py. "
-                    "Install with: knowledge-layer[opensearch]"
+                    "OpenSearch SigV4 auth requires boto3 and opensearch-py. Install with: knowledge-layer[opensearch]"
                 ) from e
 
             credentials = boto3.Session(region_name=self.aws_region).get_credentials()
@@ -958,9 +957,9 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                 # live job state instead of falling through to an empty index scan.
                 with self._lock:
                     for tracked_id, tracked_file in list(self._files.items()):
-                        if (
-                            tracked_file.collection_name == collection_name
-                            and tracked_file.file_name in (resolved_name, file_id)
+                        if tracked_file.collection_name == collection_name and tracked_file.file_name in (
+                            resolved_name,
+                            file_id,
                         ):
                             self._files.pop(tracked_id, None)
                         elif tracked_id == file_id:
@@ -1028,46 +1027,70 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
     def list_files(self, collection_name: str) -> list[FileInfo]:
         client = self._get_client()
         index_name = self._index_name_for_collection(collection_name)
+        # Paginate via a composite aggregation. terms+size silently drops buckets past
+        # the cap; composite walks every distinct file_name deterministically via
+        # after_key. max_pages is a runaway guard, not a product limit — at page size
+        # 1000 it covers 10M files before bailing with a warning.
+        page_size = 1000
+        max_pages = 10_000
+        buckets: list[dict[str, Any]] = []
+        after_key: dict[str, Any] | None = None
         try:
             if not client.indices.exists(index=index_name):
                 return []
-            # Aggregate by file_name with one representative document per file. Avoids the
-            # 10 000-hit index.max_result_window cap that would silently truncate large
-            # collections, and gives accurate per-file chunk counts directly from bucket
-            # doc_counts.
-            response = client.search(
-                index=index_name,
-                body={
-                    "size": 0,
-                    "aggs": {
-                        "by_file": {
-                            "terms": {"field": "file_name", "size": 10000},
-                            "aggs": {
-                                "doc": {
-                                    "top_hits": {
-                                        "size": 1,
-                                        "_source": [
-                                            "file_id",
-                                            "file_name",
-                                            "file_size",
-                                            "content_type",
-                                            "created_at",
-                                            "updated_at",
-                                            "metadata",
-                                        ],
+            for page in range(max_pages):
+                composite: dict[str, Any] = {
+                    "size": page_size,
+                    "sources": [{"file_name": {"terms": {"field": "file_name"}}}],
+                }
+                if after_key is not None:
+                    composite["after"] = after_key
+                response = client.search(
+                    index=index_name,
+                    body={
+                        "size": 0,
+                        "aggs": {
+                            "by_file": {
+                                "composite": composite,
+                                "aggs": {
+                                    "doc": {
+                                        "top_hits": {
+                                            "size": 1,
+                                            "_source": [
+                                                "file_id",
+                                                "file_name",
+                                                "file_size",
+                                                "content_type",
+                                                "created_at",
+                                                "updated_at",
+                                                "metadata",
+                                            ],
+                                        },
                                     },
+                                    "content_types": {"terms": {"field": "content_type", "size": 50}},
                                 },
-                                "content_types": {"terms": {"field": "content_type", "size": 50}},
                             },
                         },
                     },
-                },
-            )
+                )
+                by_file = (response.get("aggregations") or {}).get("by_file") or {}
+                page_buckets = by_file.get("buckets") or []
+                buckets.extend(page_buckets)
+                after_key = by_file.get("after_key")
+                if not after_key or not page_buckets:
+                    break
+            else:
+                logger.warning(
+                    "list_files for %s hit max_pages=%d at page_size=%d — results may be truncated",
+                    collection_name,
+                    max_pages,
+                    page_size,
+                )
         except Exception as e:
             logger.error("Failed to list OpenSearch files for %s: %s", collection_name, e)
             return []
 
-        files = self._files_from_aggregations(response, collection_name)
+        files = self._files_from_buckets(buckets, collection_name)
         existing_names = {f.file_name for f in files}
         with self._lock:
             for tracked in self._files.values():
@@ -1320,15 +1343,19 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             },
         )
 
-    def _files_from_aggregations(self, response: dict[str, Any], collection_name: str) -> list[FileInfo]:
+    def _files_from_buckets(self, buckets: list[dict[str, Any]], collection_name: str) -> list[FileInfo]:
         files: list[FileInfo] = []
-        buckets = ((response.get("aggregations") or {}).get("by_file") or {}).get("buckets") or []
         for bucket in buckets:
-            file_name = bucket.get("key", "unknown")
+            # composite bucket keys are dicts ({"file_name": "..."}); legacy terms keys are scalars.
+            key = bucket.get("key")
+            if isinstance(key, dict):
+                file_name = key.get("file_name") or "unknown"
+            else:
+                file_name = key or "unknown"
             chunk_count = int(bucket.get("doc_count", 0))
-            top_hits = (((bucket.get("doc") or {}).get("hits") or {}).get("hits") or [])
+            top_hits = ((bucket.get("doc") or {}).get("hits") or {}).get("hits") or []
             source = (top_hits[0].get("_source") if top_hits else {}) or {}
-            content_type_buckets = ((bucket.get("content_types") or {}).get("buckets") or [])
+            content_type_buckets = (bucket.get("content_types") or {}).get("buckets") or []
             content_types = sorted(b.get("key") for b in content_type_buckets if b.get("key"))
             files.append(
                 FileInfo(

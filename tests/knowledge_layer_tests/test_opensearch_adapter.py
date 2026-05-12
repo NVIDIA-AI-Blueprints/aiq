@@ -102,14 +102,25 @@ class FakeOpenSearchClient:
             docs = self.docs.get(index, {})
             aggs = (body or {}).get("aggs") or {}
             if "by_file" in aggs:
-                # List-files aggregation path: group by terms field, emit bucket per group.
-                field = aggs["by_file"]["terms"].get("field", "file_name")
-                source_filter = aggs["by_file"]["aggs"]["doc"]["top_hits"].get("_source")
+                # List-files composite aggregation: group by field, paginate via after_key.
+                by_file = aggs["by_file"]
+                composite = by_file.get("composite") or {}
+                source_field = composite["sources"][0]["file_name"]["terms"]["field"]
+                page_size = int(composite.get("size", 10))
+                after_key = composite.get("after") or {}
+                after_value = after_key.get("file_name")
+                source_filter = by_file["aggs"]["doc"]["top_hits"].get("_source")
                 grouped: dict[str, list[dict[str, Any]]] = {}
                 for doc_id, doc in docs.items():
-                    grouped.setdefault(doc.get(field, "unknown"), []).append({"_id": doc_id, "_source": doc})
+                    grouped.setdefault(doc.get(source_field, "unknown"), []).append({"_id": doc_id, "_source": doc})
+                # composite iterates keys in deterministic (sorted) order.
+                ordered_keys = sorted(grouped)
+                if after_value is not None:
+                    ordered_keys = [k for k in ordered_keys if k > after_value]
+                page_keys = ordered_keys[:page_size]
                 buckets = []
-                for key, group_docs in grouped.items():
+                for key in page_keys:
+                    group_docs = grouped[key]
                     ct_counts: dict[str, int] = {}
                     for hit in group_docs:
                         ct = hit["_source"].get("content_type")
@@ -118,13 +129,17 @@ class FakeOpenSearchClient:
                     top_source = self._filter_source(group_docs[0]["_source"], source_filter)
                     buckets.append(
                         {
-                            "key": key,
+                            "key": {"file_name": key},
                             "doc_count": len(group_docs),
                             "doc": {"hits": {"hits": [{"_source": top_source}]}},
                             "content_types": {"buckets": [{"key": k, "doc_count": v} for k, v in ct_counts.items()]},
                         }
                     )
-                return {"hits": {"hits": []}, "aggregations": {"by_file": {"buckets": buckets}}}
+                agg_result: dict[str, Any] = {"buckets": buckets}
+                # Emit after_key only when more pages remain — mirrors real OpenSearch.
+                if len(page_keys) == page_size and len(ordered_keys) > page_size:
+                    agg_result["after_key"] = {"file_name": page_keys[-1]}
+                return {"hits": {"hits": []}, "aggregations": {"by_file": agg_result}}
             hits = []
             for doc_id, source_doc in docs.items():
                 source = self._filter_source(source_doc, body.get("_source"))
@@ -918,9 +933,10 @@ def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
             "hits": {"hits": []},
             "aggregations": {
                 "by_file": {
+                    # No after_key — single page, iteration terminates.
                     "buckets": [
                         {
-                            "key": "huge.pdf",
+                            "key": {"file_name": "huge.pdf"},
                             "doc_count": 50_000,
                             "doc": {
                                 "hits": {
@@ -941,7 +957,7 @@ def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
                             "content_types": {"buckets": [{"key": "text", "doc_count": 50_000}]},
                         },
                         {
-                            "key": "small.md",
+                            "key": {"file_name": "small.md"},
                             "doc_count": 3,
                             "doc": {
                                 "hits": {
@@ -974,7 +990,8 @@ def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
     files = ingestor.list_files("smoke")
 
     assert captured_body.get("size") == 0, "search body must request 0 hits and aggregate instead"
-    assert "by_file" in (captured_body.get("aggs") or {}), "must aggregate by file_name"
+    by_file_agg = (captured_body.get("aggs") or {}).get("by_file") or {}
+    assert "composite" in by_file_agg, "must use composite aggregation to paginate exhaustively"
 
     by_name = {f.file_name: f for f in files}
     assert set(by_name) == {"huge.pdf", "small.md"}
@@ -983,6 +1000,63 @@ def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
     assert by_name["huge.pdf"].file_size == 12_345_678
     assert by_name["huge.pdf"].metadata["content_types"] == ["text"]
     assert by_name["small.md"].chunk_count == 3
+
+
+def test_list_files_paginates_composite_until_after_key_exhausted(monkeypatch):
+    """Composite aggregation pages through every distinct file_name. With more files
+    than a single page can hold, list_files must follow after_key until exhaustion —
+    otherwise large collections silently lose files past the first page."""
+    from knowledge_layer.opensearch.adapter import OpenSearchIngestor
+
+    ingestor = OpenSearchIngestor(
+        {
+            "endpoint": "http://localhost:9200",
+            "auth_type": "none",
+            "start_ttl_cleanup": False,
+        }
+    )
+
+    # 7 distinct files; emit in pages of 3. Must take ceil(7/3) = 3 requests.
+    all_files = [f"f{i:02d}.txt" for i in range(7)]
+    page_size = 3
+    search_calls: list[dict[str, Any] | None] = []
+
+    def fake_search(index: str, body: dict[str, Any]) -> dict[str, Any]:
+        composite = body["aggs"]["by_file"]["composite"]
+        after = composite.get("after")
+        search_calls.append(after)
+        after_value = (after or {}).get("file_name")
+        remaining = [name for name in all_files if after_value is None or name > after_value]
+        page = remaining[:page_size]
+        buckets = [
+            {
+                "key": {"file_name": name},
+                "doc_count": 1,
+                "doc": {"hits": {"hits": [{"_source": {"file_id": name, "file_name": name}}]}},
+                "content_types": {"buckets": []},
+            }
+            for name in page
+        ]
+        agg: dict[str, Any] = {"buckets": buckets}
+        if len(page) == page_size and len(remaining) > page_size:
+            agg["after_key"] = {"file_name": page[-1]}
+        return {"hits": {"hits": []}, "aggregations": {"by_file": agg}}
+
+    fake_client = type("C", (), {})()
+    fake_client.indices = type("I", (), {"exists": staticmethod(lambda index: True)})()
+    fake_client.search = staticmethod(fake_search)
+    monkeypatch.setattr(ingestor, "_get_client", lambda: fake_client)
+
+    files = ingestor.list_files("paginated")
+
+    # All 7 files surface, none dropped.
+    assert sorted(f.file_name for f in files) == all_files
+    # First call has no after; subsequent calls carry the cursor; the run that returns
+    # < page_size buckets ends the loop without another request.
+    assert search_calls[0] is None
+    assert search_calls[1] == {"file_name": "f02.txt"}
+    assert search_calls[2] == {"file_name": "f05.txt"}
+    assert len(search_calls) == 3, f"expected 3 paginated requests, got {len(search_calls)}"
 
 
 def test_ensure_index_reraises_when_create_fails_for_other_reasons(monkeypatch):
