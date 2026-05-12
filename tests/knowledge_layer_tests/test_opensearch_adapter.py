@@ -115,12 +115,15 @@ class FakeOpenSearchClient:
                         ct = hit["_source"].get("content_type")
                         if ct:
                             ct_counts[ct] = ct_counts.get(ct, 0) + 1
-                    buckets.append({
-                        "key": key,
-                        "doc_count": len(group_docs),
-                        "doc": {"hits": {"hits": [{"_source": self._filter_source(group_docs[0]["_source"], source_filter)}]}},
-                        "content_types": {"buckets": [{"key": k, "doc_count": v} for k, v in ct_counts.items()]},
-                    })
+                    top_source = self._filter_source(group_docs[0]["_source"], source_filter)
+                    buckets.append(
+                        {
+                            "key": key,
+                            "doc_count": len(group_docs),
+                            "doc": {"hits": {"hits": [{"_source": top_source}]}},
+                            "content_types": {"buckets": [{"key": k, "doc_count": v} for k, v in ct_counts.items()]},
+                        }
+                    )
                 return {"hits": {"hits": []}, "aggregations": {"by_file": {"buckets": buckets}}}
             hits = []
             for doc_id, source_doc in docs.items():
@@ -811,12 +814,14 @@ def test_ingestor_embed_raises_when_hosted_api_and_missing_key(monkeypatch):
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     from knowledge_layer.opensearch.adapter import OpenSearchIngestor
 
-    ingestor = OpenSearchIngestor({
-        "endpoint": "http://localhost:9200",
-        "auth_type": "none",
-        "embed_base_url": "https://integrate.api.nvidia.com/v1",
-        "start_ttl_cleanup": False,
-    })
+    ingestor = OpenSearchIngestor(
+        {
+            "endpoint": "http://localhost:9200",
+            "auth_type": "none",
+            "embed_base_url": "https://integrate.api.nvidia.com/v1",
+            "start_ttl_cleanup": False,
+        }
+    )
     with pytest.raises(RuntimeError, match="NVIDIA_API_KEY"):
         ingestor._embed_texts(["hello world"])
 
@@ -826,15 +831,21 @@ def test_ingestor_embed_allows_local_nim_without_key(monkeypatch):
     monkeypatch.delenv("NVIDIA_API_KEY", raising=False)
     from knowledge_layer.opensearch.adapter import OpenSearchIngestor
 
-    ingestor = OpenSearchIngestor({
-        "endpoint": "http://localhost:9200",
-        "auth_type": "none",
-        "embed_base_url": "http://nim-embed.ns-nim.svc.cluster.local:8000/v1",
-        "start_ttl_cleanup": False,
-    })
+    ingestor = OpenSearchIngestor(
+        {
+            "endpoint": "http://localhost:9200",
+            "auth_type": "none",
+            "embed_base_url": "http://nim-embed.ns-nim.svc.cluster.local:8000/v1",
+            "start_ttl_cleanup": False,
+        }
+    )
+
     class _FakeOpenAI:
         def __init__(self, base_url, api_key):
-            self.embeddings = type("E", (), {"create": staticmethod(lambda **kw: type("R", (), {"data": [type("D", (), {"embedding": [0.0] * 4})()]})())})()
+            fake_emb = type("D", (), {"embedding": [0.0] * 4})()
+            fake_resp = type("R", (), {"data": [fake_emb]})()
+            self.embeddings = type("E", (), {"create": staticmethod(lambda **kw: fake_resp)})()
+
     monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
     result = ingestor._embed_texts(["hello"])
     assert result == [[0.0, 0.0, 0.0, 0.0]]
@@ -844,14 +855,16 @@ def test_ensure_index_recovers_when_concurrent_create_races(monkeypatch):
     """Two concurrent jobs both see not-exists and both call create(); the
     losing call must not raise — re-check exists() and treat the index as
     ready if another worker already created it."""
-    from opensearchpy.exceptions import RequestError
     from knowledge_layer.opensearch.adapter import OpenSearchIngestor
+    from opensearchpy.exceptions import RequestError
 
-    ingestor = OpenSearchIngestor({
-        "endpoint": "http://localhost:9200",
-        "auth_type": "none",
-        "start_ttl_cleanup": False,
-    })
+    ingestor = OpenSearchIngestor(
+        {
+            "endpoint": "http://localhost:9200",
+            "auth_type": "none",
+            "start_ttl_cleanup": False,
+        }
+    )
 
     exists_calls: list[str] = []
 
@@ -874,9 +887,7 @@ def test_ensure_index_recovers_when_concurrent_create_races(monkeypatch):
         )
 
     fake_client = type("C", (), {})()
-    fake_client.indices = type(
-        "I", (), {"exists": staticmethod(fake_exists), "create": staticmethod(fake_create)}
-    )()
+    fake_client.indices = type("I", (), {"exists": staticmethod(fake_exists), "create": staticmethod(fake_create)})()
     monkeypatch.setattr(ingestor, "_get_client", lambda: fake_client)
 
     # Must not raise — race recovery should swallow the exists exception.
@@ -891,11 +902,13 @@ def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
     Chunk counts must come from bucket doc_count, not from counted hits."""
     from knowledge_layer.opensearch.adapter import OpenSearchIngestor
 
-    ingestor = OpenSearchIngestor({
-        "endpoint": "http://localhost:9200",
-        "auth_type": "none",
-        "start_ttl_cleanup": False,
-    })
+    ingestor = OpenSearchIngestor(
+        {
+            "endpoint": "http://localhost:9200",
+            "auth_type": "none",
+            "start_ttl_cleanup": False,
+        }
+    )
 
     captured_body: dict[str, Any] = {}
 
@@ -976,14 +989,16 @@ def test_ensure_index_reraises_when_create_fails_for_other_reasons(monkeypatch):
     """If create() fails for a non-race reason (index still missing after the
     failure), the original exception must propagate so the caller can fail
     the job rather than silently swallowing it."""
-    from opensearchpy.exceptions import RequestError
     from knowledge_layer.opensearch.adapter import OpenSearchIngestor
+    from opensearchpy.exceptions import RequestError
 
-    ingestor = OpenSearchIngestor({
-        "endpoint": "http://localhost:9200",
-        "auth_type": "none",
-        "start_ttl_cleanup": False,
-    })
+    ingestor = OpenSearchIngestor(
+        {
+            "endpoint": "http://localhost:9200",
+            "auth_type": "none",
+            "start_ttl_cleanup": False,
+        }
+    )
 
     def fake_exists(index: str) -> bool:  # Always not-exists, even after failure
         return False
@@ -996,9 +1011,7 @@ def test_ensure_index_reraises_when_create_fails_for_other_reasons(monkeypatch):
         )
 
     fake_client = type("C", (), {})()
-    fake_client.indices = type(
-        "I", (), {"exists": staticmethod(fake_exists), "create": staticmethod(fake_create)}
-    )()
+    fake_client.indices = type("I", (), {"exists": staticmethod(fake_exists), "create": staticmethod(fake_create)})()
     monkeypatch.setattr(ingestor, "_get_client", lambda: fake_client)
 
     with pytest.raises(RequestError):
