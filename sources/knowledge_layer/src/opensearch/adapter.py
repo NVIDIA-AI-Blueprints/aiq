@@ -1014,27 +1014,43 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         try:
             if not client.indices.exists(index=index_name):
                 return []
+            # Aggregate by file_name with one representative document per file. Avoids the
+            # 10 000-hit index.max_result_window cap that would silently truncate large
+            # collections, and gives accurate per-file chunk counts directly from bucket
+            # doc_counts.
             response = client.search(
                 index=index_name,
                 body={
-                    "size": 10000,
-                    "_source": [
-                        "file_id",
-                        "file_name",
-                        "file_size",
-                        "content_type",
-                        "created_at",
-                        "updated_at",
-                        "metadata",
-                    ],
-                    "query": {"match_all": {}},
+                    "size": 0,
+                    "aggs": {
+                        "by_file": {
+                            "terms": {"field": "file_name", "size": 10000},
+                            "aggs": {
+                                "doc": {
+                                    "top_hits": {
+                                        "size": 1,
+                                        "_source": [
+                                            "file_id",
+                                            "file_name",
+                                            "file_size",
+                                            "content_type",
+                                            "created_at",
+                                            "updated_at",
+                                            "metadata",
+                                        ],
+                                    },
+                                },
+                                "content_types": {"terms": {"field": "content_type", "size": 50}},
+                            },
+                        },
+                    },
                 },
             )
         except Exception as e:
             logger.error("Failed to list OpenSearch files for %s: %s", collection_name, e)
             return []
 
-        files = self._files_from_hits(response, collection_name)
+        files = self._files_from_aggregations(response, collection_name)
         existing_names = {f.file_name for f in files}
         with self._lock:
             for tracked in self._files.values():
@@ -1287,42 +1303,29 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             },
         )
 
-    def _files_from_hits(self, response: dict[str, Any], collection_name: str) -> list[FileInfo]:
-        grouped: dict[str, dict[str, Any]] = {}
-        for hit in (response.get("hits") or {}).get("hits", []):
-            source = hit.get("_source") or {}
-            file_name = source.get("file_name", "unknown")
-            entry = grouped.setdefault(
-                file_name,
-                {
-                    "file_id": source.get("file_id") or file_name,
-                    "chunk_count": 0,
-                    "file_size": source.get("file_size"),
-                    "content_types": set(),
-                    "uploaded_at": _parse_timestamp(source.get("created_at")),
-                    "ingested_at": _parse_timestamp(source.get("updated_at")),
-                    "metadata": source.get("metadata") or {},
-                },
-            )
-            entry["chunk_count"] += 1
-            if source.get("content_type"):
-                entry["content_types"].add(source["content_type"])
-
-        files = []
-        for file_name, info in grouped.items():
+    def _files_from_aggregations(self, response: dict[str, Any], collection_name: str) -> list[FileInfo]:
+        files: list[FileInfo] = []
+        buckets = ((response.get("aggregations") or {}).get("by_file") or {}).get("buckets") or []
+        for bucket in buckets:
+            file_name = bucket.get("key", "unknown")
+            chunk_count = int(bucket.get("doc_count", 0))
+            top_hits = (((bucket.get("doc") or {}).get("hits") or {}).get("hits") or [])
+            source = (top_hits[0].get("_source") if top_hits else {}) or {}
+            content_type_buckets = ((bucket.get("content_types") or {}).get("buckets") or [])
+            content_types = sorted(b.get("key") for b in content_type_buckets if b.get("key"))
             files.append(
                 FileInfo(
-                    file_id=info["file_id"],
+                    file_id=source.get("file_id") or file_name,
                     file_name=file_name,
                     collection_name=collection_name,
                     status=FileStatus.SUCCESS,
-                    file_size=info["file_size"],
-                    chunk_count=info["chunk_count"],
-                    uploaded_at=info["uploaded_at"],
-                    ingested_at=info["ingested_at"],
+                    file_size=source.get("file_size"),
+                    chunk_count=chunk_count,
+                    uploaded_at=_parse_timestamp(source.get("created_at")),
+                    ingested_at=_parse_timestamp(source.get("updated_at")),
                     metadata={
-                        **info["metadata"],
-                        "content_types": sorted(info["content_types"]),
+                        **(source.get("metadata") or {}),
+                        "content_types": content_types,
                     },
                 )
             )

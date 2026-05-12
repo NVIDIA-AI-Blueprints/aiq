@@ -98,8 +98,31 @@ class FakeOpenSearchClient:
     def search(self, index: str, body: dict[str, Any], request_timeout: int | None = None) -> dict[str, Any]:
         del request_timeout
         with self.lock:
+            docs = self.docs.get(index, {})
+            aggs = (body or {}).get("aggs") or {}
+            if "by_file" in aggs:
+                # List-files aggregation path: group by terms field, emit bucket per group.
+                field = aggs["by_file"]["terms"].get("field", "file_name")
+                source_filter = aggs["by_file"]["aggs"]["doc"]["top_hits"].get("_source")
+                grouped: dict[str, list[dict[str, Any]]] = {}
+                for doc_id, doc in docs.items():
+                    grouped.setdefault(doc.get(field, "unknown"), []).append({"_id": doc_id, "_source": doc})
+                buckets = []
+                for key, group_docs in grouped.items():
+                    ct_counts: dict[str, int] = {}
+                    for hit in group_docs:
+                        ct = hit["_source"].get("content_type")
+                        if ct:
+                            ct_counts[ct] = ct_counts.get(ct, 0) + 1
+                    buckets.append({
+                        "key": key,
+                        "doc_count": len(group_docs),
+                        "doc": {"hits": {"hits": [{"_source": self._filter_source(group_docs[0]["_source"], source_filter)}]}},
+                        "content_types": {"buckets": [{"key": k, "doc_count": v} for k, v in ct_counts.items()]},
+                    })
+                return {"hits": {"hits": []}, "aggregations": {"by_file": {"buckets": buckets}}}
             hits = []
-            for doc_id, source_doc in self.docs.get(index, {}).items():
+            for doc_id, source_doc in docs.items():
                 source = self._filter_source(source_doc, body.get("_source"))
                 hits.append({"_id": doc_id, "_index": index, "_score": 0.87, "_source": source})
             return {"hits": {"hits": hits[: body.get("size", 10)]}}
@@ -787,6 +810,93 @@ def test_ensure_index_recovers_when_concurrent_create_races(monkeypatch):
     result = ingestor._ensure_index("smoke")
     assert result.startswith("aiq-smoke")
     assert len(exists_calls) == 2, "expected pre-create check + post-failure recovery check"
+
+
+def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
+    """list_files must request 0 hits and aggregate by file_name so collections
+    with more than the 10k index.max_result_window are not silently truncated.
+    Chunk counts must come from bucket doc_count, not from counted hits."""
+    from knowledge_layer.opensearch.adapter import OpenSearchIngestor
+
+    ingestor = OpenSearchIngestor({
+        "endpoint": "http://localhost:9200",
+        "auth_type": "none",
+        "start_ttl_cleanup": False,
+    })
+
+    captured_body: dict[str, Any] = {}
+
+    def fake_search(index: str, body: dict[str, Any]) -> dict[str, Any]:
+        captured_body.update(body)
+        return {
+            "hits": {"hits": []},
+            "aggregations": {
+                "by_file": {
+                    "buckets": [
+                        {
+                            "key": "huge.pdf",
+                            "doc_count": 50_000,
+                            "doc": {
+                                "hits": {
+                                    "hits": [
+                                        {
+                                            "_source": {
+                                                "file_id": "f1",
+                                                "file_name": "huge.pdf",
+                                                "file_size": 12_345_678,
+                                                "created_at": "2026-05-01T00:00:00Z",
+                                                "updated_at": "2026-05-01T00:01:00Z",
+                                                "metadata": {"k": "v"},
+                                            }
+                                        }
+                                    ]
+                                }
+                            },
+                            "content_types": {"buckets": [{"key": "text", "doc_count": 50_000}]},
+                        },
+                        {
+                            "key": "small.md",
+                            "doc_count": 3,
+                            "doc": {
+                                "hits": {
+                                    "hits": [
+                                        {
+                                            "_source": {
+                                                "file_id": "f2",
+                                                "file_name": "small.md",
+                                                "file_size": 1234,
+                                                "created_at": "2026-05-02T00:00:00Z",
+                                                "updated_at": "2026-05-02T00:00:30Z",
+                                                "metadata": {},
+                                            }
+                                        }
+                                    ]
+                                }
+                            },
+                            "content_types": {"buckets": []},
+                        },
+                    ]
+                }
+            },
+        }
+
+    fake_client = type("C", (), {})()
+    fake_client.indices = type("I", (), {"exists": staticmethod(lambda index: True)})()
+    fake_client.search = staticmethod(fake_search)
+    monkeypatch.setattr(ingestor, "_get_client", lambda: fake_client)
+
+    files = ingestor.list_files("smoke")
+
+    assert captured_body.get("size") == 0, "search body must request 0 hits and aggregate instead"
+    assert "by_file" in (captured_body.get("aggs") or {}), "must aggregate by file_name"
+
+    by_name = {f.file_name: f for f in files}
+    assert set(by_name) == {"huge.pdf", "small.md"}
+    # 50 000 > 10 000 max_result_window — only an aggregation can carry this count.
+    assert by_name["huge.pdf"].chunk_count == 50_000
+    assert by_name["huge.pdf"].file_size == 12_345_678
+    assert by_name["huge.pdf"].metadata["content_types"] == ["text"]
+    assert by_name["small.md"].chunk_count == 3
 
 
 def test_ensure_index_reraises_when_create_fails_for_other_reasons(monkeypatch):
