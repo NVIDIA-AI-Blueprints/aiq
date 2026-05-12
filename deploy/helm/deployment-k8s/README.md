@@ -9,14 +9,34 @@ Deploy AI-Q from the cloned repository using the local Helm chart.
 - Kubernetes cluster (EKS, GKE, AKS, etc.) or local cluster (Kind, Minikube)
 - `kubectl` configured with cluster access
 - `helm` v3.x installed
-- Secrets created per the [Helm README — Setup](../README.md#3-create-secrets) (credentials and image pull secrets)
+- An `aiq-credentials` Secret with database credentials and required API keys.
 
 ## Deploy
 
+Create the namespace and required user-supplied credentials first:
+
+```bash
+kubectl create namespace ns-aiq --dry-run=client -o yaml | kubectl apply -f -
+
+DB_USER_NAME="${DB_USER_NAME:-aiq}"
+DB_USER_PASSWORD="${DB_USER_PASSWORD:-aiq_dev}" # pragma: allowlist secret
+
+kubectl create secret generic aiq-credentials -n ns-aiq \
+  --from-literal=DB_USER_NAME="$DB_USER_NAME" \
+  --from-literal=DB_USER_PASSWORD="$DB_USER_PASSWORD" \
+  --from-literal=NVIDIA_API_KEY="$NVIDIA_API_KEY" \
+  --from-literal=TAVILY_API_KEY="$TAVILY_API_KEY"
+```
+
+Then install the chart:
+
 ```bash
 helm dependency update deployment-k8s/
-helm install aiq deployment-k8s/ -n ns-aiq --create-namespace
+helm install aiq deployment-k8s/ -n ns-aiq
 ```
+
+The default source install creates the PostgreSQL init ConfigMap. The credentials
+Secret is user-supplied so API keys are provided explicitly.
 
 If pulling images from NGC, include the image pull secret and repository overrides:
 
@@ -147,9 +167,9 @@ helm upgrade --install aiq deployment-k8s/ -n ns-aiq --create-namespace \
   --set aiq.apps.frontend.image.pullPolicy=IfNotPresent
 ```
 
-### 4. Create the credentials secret and deploy
+### 4. Create credentials and deploy
 
-Follow the [Helm README — Setup](../README.md#2-create-the-namespace) to create your namespace and secrets, then deploy.
+Create the `aiq-credentials` Secret shown above, then deploy.
 
 After a rebuild, reload the updated image with `kind load docker-image ...` and restart the affected deployment:
 

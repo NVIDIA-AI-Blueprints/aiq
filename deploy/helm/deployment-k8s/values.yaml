@@ -23,6 +23,8 @@ aiq:
     autoMount: true
     refreshInterval: 5m
     dataFrom: []
+  bootstrap:
+    createPostgresInitConfigMap: true
   apps:
     backend:
       enabled: true
