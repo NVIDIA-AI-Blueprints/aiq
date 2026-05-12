@@ -742,3 +742,81 @@ def test_ingestor_embed_allows_local_nim_without_key(monkeypatch):
     monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
     result = ingestor._embed_texts(["hello"])
     assert result == [[0.0, 0.0, 0.0, 0.0]]
+
+
+def test_ensure_index_recovers_when_concurrent_create_races(monkeypatch):
+    """Two concurrent jobs both see not-exists and both call create(); the
+    losing call must not raise — re-check exists() and treat the index as
+    ready if another worker already created it."""
+    from opensearchpy.exceptions import RequestError
+    from knowledge_layer.opensearch.adapter import OpenSearchIngestor
+
+    ingestor = OpenSearchIngestor({
+        "endpoint": "http://localhost:9200",
+        "auth_type": "none",
+        "start_ttl_cleanup": False,
+    })
+
+    exists_calls: list[str] = []
+
+    def fake_exists(index: str) -> bool:
+        # First call (pre-create) returns False; subsequent re-check after the
+        # race loss returns True (the winning worker has created it).
+        exists_calls.append(index)
+        return len(exists_calls) >= 2
+
+    def fake_create(index: str, body: dict) -> None:
+        raise RequestError(
+            400,
+            "resource_already_exists_exception",
+            {
+                "error": {
+                    "type": "resource_already_exists_exception",
+                    "reason": f"index [{index}/abc] already exists",
+                }
+            },
+        )
+
+    fake_client = type("C", (), {})()
+    fake_client.indices = type(
+        "I", (), {"exists": staticmethod(fake_exists), "create": staticmethod(fake_create)}
+    )()
+    monkeypatch.setattr(ingestor, "_get_client", lambda: fake_client)
+
+    # Must not raise — race recovery should swallow the exists exception.
+    result = ingestor._ensure_index("smoke")
+    assert result.startswith("aiq-smoke")
+    assert len(exists_calls) == 2, "expected pre-create check + post-failure recovery check"
+
+
+def test_ensure_index_reraises_when_create_fails_for_other_reasons(monkeypatch):
+    """If create() fails for a non-race reason (index still missing after the
+    failure), the original exception must propagate so the caller can fail
+    the job rather than silently swallowing it."""
+    from opensearchpy.exceptions import RequestError
+    from knowledge_layer.opensearch.adapter import OpenSearchIngestor
+
+    ingestor = OpenSearchIngestor({
+        "endpoint": "http://localhost:9200",
+        "auth_type": "none",
+        "start_ttl_cleanup": False,
+    })
+
+    def fake_exists(index: str) -> bool:  # Always not-exists, even after failure
+        return False
+
+    def fake_create(index: str, body: dict) -> None:
+        raise RequestError(
+            400,
+            "invalid_index_name_exception",
+            {"error": {"type": "invalid_index_name_exception", "reason": "bad name"}},
+        )
+
+    fake_client = type("C", (), {})()
+    fake_client.indices = type(
+        "I", (), {"exists": staticmethod(fake_exists), "create": staticmethod(fake_create)}
+    )()
+    monkeypatch.setattr(ingestor, "_get_client", lambda: fake_client)
+
+    with pytest.raises(RequestError):
+        ingestor._ensure_index("smoke")

@@ -456,8 +456,16 @@ class _OpenSearchConfigMixin:
     def _ensure_index(self, collection_name: str, description: str | None = None) -> str:
         client = self._get_client()
         index_name = self._index_name_for_collection(collection_name)
-        if not client.indices.exists(index=index_name):
+        if client.indices.exists(index=index_name):
+            return index_name
+        try:
             client.indices.create(index=index_name, body=self._index_mapping(collection_name, description))
+        except Exception:
+            # A concurrent ingestion may have raced us to create the same index. Re-check
+            # existence; if the index is now present, the other worker won and we proceed.
+            # Otherwise the create failed for a real reason and the error must propagate.
+            if not client.indices.exists(index=index_name):
+                raise
         return index_name
 
     def _update_collection_timestamp(self, collection_name: str) -> None:
