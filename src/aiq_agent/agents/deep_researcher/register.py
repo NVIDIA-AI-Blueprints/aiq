@@ -70,10 +70,14 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         ge=0.0,
         le=1.0,
         description=(
-            "Minimum citation confidence (0.0-1.0) to keep in the final report. "
-            "Default 0.6 keeps exact/normalized/truncation/prefix matches; lower "
-            "values let weaker heuristic matches (child_path, query_subset) ride "
-            "through. Set to 1.0 to require exact matches only."
+            "Confidence cutoff (0.0-1.0) that sets the `verified` UI hint on each "
+            "citation. Citations at or above the threshold are marked verified; "
+            "weaker matches are marked unverified so the UI can render a badge. "
+            "Does NOT filter the report body — every resolved citation stays in "
+            "the report regardless of this value. Default 0.6 marks exact/"
+            "normalized/truncation/prefix matches as verified and weaker "
+            "child_path / query_subset matches as unverified. Set to 1.0 to "
+            "mark only exact matches as verified."
         ),
     )
 
