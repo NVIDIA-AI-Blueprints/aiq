@@ -30,7 +30,7 @@ FROM nvcr.io/nvidia/base/ubuntu:jammy-20251013 AS builder
 
 WORKDIR /app
 
-# Install system dependencies and Python 3.12
+# Install system dependencies and Python 3.13
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     tzdata \
     build-essential \
@@ -40,15 +40,15 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     && add-apt-repository ppa:deadsnakes/ppa \
     && rm -rf /var/lib/apt/lists/* \
     && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3.12 \
-    python3.12-dev \
-    python3.12-venv \
+    python3.13 \
+    python3.13-dev \
+    python3.13-venv \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3.12 -m ensurepip --upgrade \
-    && python3.12 -m pip install --no-cache-dir uv \
-    && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
-    && ln -sf /usr/bin/python3.12 /usr/local/bin/python3
+RUN python3.13 -m ensurepip --upgrade \
+    && python3.13 -m pip install --no-cache-dir uv \
+    && ln -sf /usr/bin/python3.13 /usr/local/bin/python \
+    && ln -sf /usr/bin/python3.13 /usr/local/bin/python3
 
 RUN uv venv /app/.venv --python /usr/local/bin/python
 
@@ -102,7 +102,7 @@ RUN /app/.venv/bin/python -c "import aiq_api; import aiq_research_cli; import ai
 # =============================================================================
 # Stage 3: Development runtime
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.12-v4.0.4 AS dev
+FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS dev
 
 WORKDIR /app
 
@@ -121,7 +121,7 @@ ENTRYPOINT ["python", "/app/deploy/entrypoint.py"]
 # =============================================================================
 # Stage 4: Release (production - no CLI)
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.12-v4.0.4 AS release
+FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS release
 
 WORKDIR /app
 

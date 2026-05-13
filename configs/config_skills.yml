@@ -229,7 +229,7 @@ functions:
     sandbox:
       provider: modal
       app_name: aiq-deep-research
-      image: python:3.12-slim
+      image: python:3.13-slim
       python_packages:
         - matplotlib
         - numpy
