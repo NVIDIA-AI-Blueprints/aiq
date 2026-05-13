@@ -749,6 +749,44 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
         logger.debug("[CitationVerify]   [%d] REMOVE — unverifiable: %s", num, ref_text[:80])
         removed_citations.append({"number": num, "line": full_line, "reason": "unverifiable"})
 
+    # Dedup: collapse multiple [N] reference lines that resolve to the same
+    # registry source. The model often makes the same tool call twice (e.g.
+    # ``mcp_time__get_current_time`` for two timezones) and emits a separate
+    # ``[N] tool_name`` line for each call; without this pass both lines
+    # survive verification because each is independently valid. We keep the
+    # lowest-numbered occurrence and rewrite later inline citations to that
+    # number so the prose still cites the source.
+    seen_keys: dict[str, int] = {}  # canonical_key -> kept citation number
+    duplicate_rewrites: dict[int, int] = {}  # duplicate_num -> canonical_num
+    deduped_valid: list[dict] = []
+    for c in valid_citations:
+        key = c["url"] or c["citation_key"]
+        if key is None:
+            # Defensive: a valid citation must have one of url/citation_key.
+            # If neither is set we cannot dedup, so keep the entry.
+            deduped_valid.append(c)
+            continue
+        canonical_num = seen_keys.get(key)
+        if canonical_num is None:
+            seen_keys[key] = c["number"]
+            deduped_valid.append(c)
+            continue
+        duplicate_rewrites[c["number"]] = canonical_num
+        removed_citations.append(
+            {
+                "number": c["number"],
+                "line": c["line"],
+                "reason": f"duplicate_of_citation_{canonical_num}",
+            }
+        )
+        logger.debug(
+            "[CitationVerify]   [%d] REMOVE — duplicate of [%d]: %s",
+            c["number"],
+            canonical_num,
+            key,
+        )
+    valid_citations = deduped_valid
+
     # Apply URL replacements (garbled -> canonical) in the references section
     if url_replacements:
         for garbled, canonical in url_replacements.items():
@@ -764,7 +802,7 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
 
     removed_numbers = {c["number"] for c in removed_citations}
 
-    # Remove invalid reference lines from the references section
+    # Remove invalid (and duplicate) reference lines from the references section.
     cleaned_ref_lines = []
     for line in ref_section.split("\n"):
         line_match = _CITATION_LINE_RE.match(line)
@@ -773,9 +811,16 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
         cleaned_ref_lines.append(line)
     cleaned_ref_section = "\n".join(cleaned_ref_lines)
 
-    # Remove orphaned inline citations from body
+    # Body fixups:
+    #  * Duplicate citations get rewritten to the canonical number — the
+    #    cited source is real, only the [N] label is wrong.
+    #  * Genuinely invalid citations get stripped — the source is fabricated
+    #    or unverifiable.
     cleaned_body = body
-    for num in removed_numbers:
+    for old_num, canonical_num in duplicate_rewrites.items():
+        cleaned_body = re.sub(rf"\[{old_num}\]", f"[{canonical_num}]", cleaned_body)
+    invalid_numbers = removed_numbers - set(duplicate_rewrites)
+    for num in invalid_numbers:
         cleaned_body = re.sub(rf"\[{num}\]", "", cleaned_body)
 
     # Note: renumbering is deferred to sanitize_report() which always runs after
