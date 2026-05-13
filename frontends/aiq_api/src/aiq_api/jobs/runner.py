@@ -85,8 +85,8 @@ class CancellationMonitor:
 
     async def _poll_job_status(self) -> None:
         """Poll job status and set cancelled event if interrupted."""
-        from nat.front_ends.fastapi.job_store import JobStatus
-        from nat.front_ends.fastapi.job_store import JobStore
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
         job_store = JobStore(scheduler_address=self.scheduler_address, db_url=self.db_url)
 
@@ -205,8 +205,10 @@ async def run_agent_job(
     parent_workflow_run_id: str | None = None,
     parent_workflow_trace_id: int | str | None = None,
     parent_conversation_id: str | None = None,
+    request_trace_tags: dict[str, str] | None = None,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
+    auth_token: str | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -233,8 +235,26 @@ async def run_agent_job(
         parent_workflow_run_id: Parent workflow run ID for trace grouping.
         parent_workflow_trace_id: Parent trace ID (int or hex string) for trace continuity.
         parent_conversation_id: Conversation ID for session grouping in Phoenix.
+        request_trace_tags: Request trace tags captured at async submission time.
         available_documents: Optional list of document dicts with file_name and summary.
+        data_sources: Optional list of allowed data sources to enforce in the worker.
+        auth_token: Optional auth token propagated from the HTTP request for
+            data sources that require authentication (requires_auth: true).
     """
+
+    # Propagate auth token into the current async task's context so tools
+    # can retrieve it via get_auth_token(). Uses a ContextVar so concurrent
+    # jobs in the same Dask worker process don't leak tokens across tasks.
+    _auth_token_reset = None
+    if auth_token:
+        from ._auth_context import job_auth_token
+
+        _auth_token_reset = job_auth_token.set(auth_token)
+
+    from aiq_api.auth.request_trace import install_request_trace_span_injection
+    from aiq_api.auth.request_trace import request_trace_tag_context
+
+    install_request_trace_span_injection()
 
     from aiq_agent.common import LLMProvider
     from aiq_agent.common import LLMRole
@@ -242,8 +262,8 @@ async def run_agent_job(
     from aiq_agent.common import is_verbose
     from nat.builder.framework_enum import LLMFrameworkEnum
     from nat.builder.workflow_builder import WorkflowBuilder
-    from nat.front_ends.fastapi.job_store import JobStatus
-    from nat.front_ends.fastapi.job_store import JobStore
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStore
     from nat.runtime.loader import load_config
 
     if configure_logging:
@@ -285,10 +305,12 @@ async def run_agent_job(
         async with WorkflowBuilder.from_config(config=config) as builder:
             fn_config = builder.get_function_config(agent_config_name)
 
-            # Get LLMs for deep_researcher (orchestrator required)
-            orchestrator_llm = await builder.get_llm(
-                fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-            )
+            # Get LLMs - handle both deep_researcher (orchestrator_llm) and shallow/other agents (llm)
+            orchestrator_llm = None
+            if hasattr(fn_config, "orchestrator_llm") and fn_config.orchestrator_llm:
+                orchestrator_llm = await builder.get_llm(
+                    fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
+                )
             planner_llm = None
             researcher_llm = None
             if hasattr(fn_config, "planner_llm") and fn_config.planner_llm:
@@ -299,8 +321,23 @@ async def run_agent_job(
                 )
 
             llm = orchestrator_llm
+            if llm is None and hasattr(fn_config, "llm") and fn_config.llm:
+                llm = await builder.get_llm(fn_config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
-            tools = await builder.get_tools(tool_names=fn_config.tools, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            # Resolve tools: use explicit list or auto-inherit from data_source_registry
+            tool_refs = fn_config.tools
+            if not tool_refs:
+                from aiq_agent.common import get_all_tool_refs
+
+                tool_refs = get_all_tool_refs()
+
+            tools = await builder.get_tools(tool_names=tool_refs, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+            # Apply per-agent exclusions (e.g. deep_research excludes web_search_tool)
+            if hasattr(fn_config, "exclude_tools") and fn_config.exclude_tools:
+                excluded = set(fn_config.exclude_tools)
+                tools = [t for t in tools if getattr(t, "name", "") not in excluded]
+
             if data_sources is not None:
                 from aiq_agent.common import filter_tools_by_sources
 
@@ -315,7 +352,7 @@ async def run_agent_job(
             from nat.data_models.intermediate_step import TraceMetadata
             from nat.data_models.invocation_node import InvocationNode
             from nat.observability.exporter_manager import ExporterManager
-            from nat.profiler.callbacks.langchain_callback_handler import LangchainProfilerHandler
+            from nat.plugins.langchain.callback_handler import LangchainProfilerHandler
             from nat.utils.reactive.subject import Subject
 
             telemetry_exporters = {
@@ -364,113 +401,115 @@ async def run_agent_job(
             )
 
             # Run with telemetry - exporter must start before pushing events
-            async with exporter_manager.start(context_state=context_state):
-                # Link to parent span if provided (for nested trace continuity)
-                parent_metadata: TraceMetadata | None = None
-                if parent_span_id and parent_span_id != "root":
-                    parent_metadata = TraceMetadata(
-                        provided_metadata={
-                            "workflow_run_id": parent_workflow_run_id,
-                            "workflow_trace_id": f"{workflow_trace_id:032x}",
-                            "conversation_id": parent_conversation_id,
-                            "workflow_name": parent_function_name,
-                        }
-                    )
+            with request_trace_tag_context(request_trace_tags or {}):
+                async with exporter_manager.start(context_state=context_state):
+                    # Link to parent span if provided (for nested trace continuity)
+                    parent_metadata: TraceMetadata | None = None
+                    if parent_span_id and parent_span_id != "root":
+                        parent_metadata = TraceMetadata(
+                            provided_metadata={
+                                "workflow_run_id": parent_workflow_run_id,
+                                "workflow_trace_id": f"{workflow_trace_id:032x}",
+                                "conversation_id": parent_conversation_id,
+                                "workflow_name": parent_function_name,
+                            }
+                        )
+                        context.intermediate_step_manager.push_intermediate_step(
+                            IntermediateStepPayload(
+                                UUID=parent_span_id,
+                                event_type=IntermediateStepType.SPAN_START,
+                                name=parent_function_name or "parent_workflow",
+                                metadata=parent_metadata,
+                            )
+                        )
+
+                    # Push WORKFLOW_START first so LLM/tool events become children
                     context.intermediate_step_manager.push_intermediate_step(
                         IntermediateStepPayload(
-                            UUID=parent_span_id,
-                            event_type=IntermediateStepType.SPAN_START,
-                            name=parent_function_name or "parent_workflow",
-                            metadata=parent_metadata,
+                            UUID=job_id,
+                            event_type=IntermediateStepType.WORKFLOW_START,
+                            name=workflow_span_name,
+                            metadata=workflow_metadata,
+                            data=StreamEventData(input=input_text),
                         )
                     )
 
-                # Push WORKFLOW_START first so LLM/tool events become children
-                context.intermediate_step_manager.push_intermediate_step(
-                    IntermediateStepPayload(
-                        UUID=job_id,
-                        event_type=IntermediateStepType.WORKFLOW_START,
-                        name=workflow_span_name,
-                        metadata=workflow_metadata,
-                        data=StreamEventData(input=input_text),
+                    # Create profiler callback AFTER workflow starts (ensures correct parent)
+                    nat_profiler_callback = LangchainProfilerHandler()
+
+                    # Set up LLM provider
+                    provider = LLMProvider()
+                    provider.set_default(llm)
+                    if orchestrator_llm:
+                        provider.configure(LLMRole.ORCHESTRATOR, orchestrator_llm)
+                    if planner_llm:
+                        provider.configure(LLMRole.PLANNER, planner_llm)
+                    if researcher_llm:
+                        provider.configure(LLMRole.RESEARCHER, researcher_llm)
+
+                    verbose = is_verbose(getattr(fn_config, "verbose", False))
+                    callbacks = [VerboseTraceCallback()] if verbose else []
+
+                    raw_event_store = EventStore(db_url, job_id)
+                    event_store = BatchingEventStore(raw_event_store)
+                    callbacks.append(AgentEventCallback(event_store))
+                    callbacks.append(nat_profiler_callback)
+
+                    # Instantiate agent with callbacks
+                    agent = _create_agent_instance(
+                        agent_cls=agent_cls,
+                        llm_provider=provider,
+                        llm=llm,
+                        tools=tools,
+                        fn_config=fn_config,
+                        verbose=verbose,
+                        callbacks=callbacks,
+                        job_id=job_id,
                     )
-                )
 
-                # Create profiler callback AFTER workflow starts (ensures correct parent)
-                nat_profiler_callback = LangchainProfilerHandler()
-
-                # Set up LLM provider
-                provider = LLMProvider()
-                provider.set_default(llm)
-                if orchestrator_llm:
-                    provider.configure(LLMRole.ORCHESTRATOR, orchestrator_llm)
-                if planner_llm:
-                    provider.configure(LLMRole.PLANNER, planner_llm)
-                if researcher_llm:
-                    provider.configure(LLMRole.RESEARCHER, researcher_llm)
-
-                verbose = is_verbose(getattr(fn_config, "verbose", False))
-                callbacks = [VerboseTraceCallback()] if verbose else []
-
-                raw_event_store = EventStore(db_url, job_id)
-                event_store = BatchingEventStore(raw_event_store)
-                callbacks.append(AgentEventCallback(event_store))
-                callbacks.append(nat_profiler_callback)
-
-                # Instantiate agent with callbacks
-                agent = _create_agent_instance(
-                    agent_cls=agent_cls,
-                    llm_provider=provider,
-                    llm=llm,
-                    tools=tools,
-                    fn_config=fn_config,
-                    verbose=verbose,
-                    callbacks=callbacks,
-                )
-
-                # Run agent - LLM/tool events will be nested under workflow span
-                result = await _run_agent(
-                    agent=agent,
-                    input_text=input_text,
-                    monitor=cancellation_monitor,
-                    available_documents=available_documents,
-                    data_sources=data_sources,
-                    event_store=event_store,
-                )
-
-                # Emit WORKFLOW_END event for Phoenix
-                context.intermediate_step_manager.push_intermediate_step(
-                    IntermediateStepPayload(
-                        UUID=job_id,
-                        event_type=IntermediateStepType.WORKFLOW_END,
-                        name=workflow_span_name,
-                        metadata=workflow_metadata,
-                        data=StreamEventData(output=_extract_result(result)),
+                    # Run agent - LLM/tool events will be nested under workflow span
+                    result = await _run_agent(
+                        agent=agent,
+                        input_text=input_text,
+                        monitor=cancellation_monitor,
+                        available_documents=available_documents,
+                        data_sources=data_sources,
+                        event_store=event_store,
                     )
-                )
 
-                if parent_metadata:
+                    # Emit WORKFLOW_END event for Phoenix
                     context.intermediate_step_manager.push_intermediate_step(
                         IntermediateStepPayload(
-                            UUID=parent_span_id,
-                            event_type=IntermediateStepType.SPAN_END,
-                            name=parent_function_name or "parent_workflow",
-                            metadata=parent_metadata,
+                            UUID=job_id,
+                            event_type=IntermediateStepType.WORKFLOW_END,
+                            name=workflow_span_name,
+                            metadata=workflow_metadata,
+                            data=StreamEventData(output=_extract_result(result)),
                         )
                     )
 
-                # Signal event stream completion
-                event_stream.on_complete()
+                    if parent_metadata:
+                        context.intermediate_step_manager.push_intermediate_step(
+                            IntermediateStepPayload(
+                                UUID=parent_span_id,
+                                event_type=IntermediateStepType.SPAN_END,
+                                name=parent_function_name or "parent_workflow",
+                                metadata=parent_metadata,
+                            )
+                        )
 
-                # Flush any buffered events before updating status
-                if hasattr(event_store, "flush"):
-                    event_store.flush()
+                    # Signal event stream completion
+                    event_stream.on_complete()
 
-                # Extract report and update status inside the context manager
-                # so the UI sees completion before exporter flush and cleanup
-                report = _extract_result(result)
-                await job_store.update_status(job_id, JobStatus.SUCCESS, output={"report": report})
-                logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    # Flush any buffered events before updating status
+                    if hasattr(event_store, "flush"):
+                        event_store.flush()
+
+                    # Extract report and update status inside the context manager
+                    # so the UI sees completion before exporter flush and cleanup
+                    report = _extract_result(result)
+                    await job_store.update_status(job_id, JobStatus.SUCCESS, output={"report": report})
+                    logger.info("Job %s completed (report: %d chars)", job_id, len(report))
 
     except asyncio.CancelledError:
         logger.info("Job %s cancelled", job_id)
@@ -520,6 +559,11 @@ async def run_agent_job(
             event_store.flush()
         if cancellation_monitor:
             cancellation_monitor.stop()
+        # Clean up job-scoped auth token
+        if _auth_token_reset is not None:
+            from ._auth_context import job_auth_token
+
+            job_auth_token.reset(_auth_token_reset)
 
 
 def _create_agent_instance(
@@ -530,6 +574,7 @@ def _create_agent_instance(
     fn_config,
     verbose: bool,
     callbacks: list,
+    job_id: str | None = None,
 ):
     """
     Create an agent instance, supporting different constructor patterns.
@@ -538,13 +583,39 @@ def _create_agent_instance(
     1. llm_provider + tools pattern (DeepResearcherAgent style)
     2. llm + tools pattern (simpler agents)
     """
-    # Try llm_provider pattern first (DeepResearcherAgent)
+    # Try async deep_researcher pattern with generic function config and job-scoped runtime state.
     try:
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
             max_loops=getattr(fn_config, "max_loops", 3),
             verbose=verbose,
+            callbacks=callbacks,
+            config=fn_config,
+            job_id=job_id,
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument" not in str(exc):
+            raise
+
+    # Try original deep_researcher pattern (llm_provider + tools + max_loops + verbose)
+    try:
+        return agent_cls(
+            llm_provider=llm_provider,
+            tools=tools,
+            max_loops=getattr(fn_config, "max_loops", 3),
+            verbose=verbose,
+            callbacks=callbacks,
+        )
+    except TypeError:
+        pass
+
+    # Try llm_provider + tools pattern (ShallowResearcherAgent style)
+    try:
+        return agent_cls(
+            llm_provider=llm_provider,
+            tools=tools,
+            max_tool_iterations=getattr(fn_config, "max_tool_iterations", 5),
             callbacks=callbacks,
         )
     except TypeError:

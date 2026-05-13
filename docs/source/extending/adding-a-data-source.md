@@ -257,7 +257,7 @@ version = "1.0.0"
 description = "NAT-based patent search data source"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "nvidia-nat==1.4.0",
+    "nvidia-nat==1.5.0",
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
 ]
@@ -274,29 +274,105 @@ uv pip install -e ./sources/my_data_source
 
 ---
 
-## Step 5: Use in a YAML Config
+## Step 5: Register as a Data Source in YAML
+
+To make your data source appear in the UI as a toggleable source with per-message filtering, add it to the `data_source_registry` in your config. Agents automatically inherit all registry tools, so **this is the only config change needed**:
 
 ```yaml
 functions:
+  # Register data sources for UI toggles and filtering
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+      - id: patent_search
+        name: "Patent Search"
+        description: "Search patent databases for intellectual property filings."
+        tools:
+          - patent_tool
+
+  # Define the tool instances
   patent_tool:
     _type: patent_search
     max_results: 5
     timeout: 15
 
-  web_search:
+  web_search_tool:
     _type: tavily_web_search
     max_results: 3
 
+  # Agents inherit all registry tools automatically --
+  # no need to list tools per-agent unless you want to exclude specific ones
   shallow_research_agent:
     _type: shallow_research_agent
     llm: research_llm
-    tools:
-      - patent_tool
-      - web_search
-
-workflow:
-  _type: shallow_research_workflow
 ```
+
+The `data_source_registry` provides:
+
+- **`GET /v1/data_sources`** API endpoint returns the registered sources (the UI renders these as toggles)
+- **Per-message filtering** via `data_sources: ["web_search"]` in the chat payload -- only tools belonging to selected sources are active
+- **Display metadata** (name, description) shown in the UI
+- **Auth gating** -- set `requires_auth: true` on a source to grey it out in the UI until the user signs in (e.g., enterprise sources that need user-level OAuth tokens). Sources using backend API keys (Tavily, Serper) should leave this `false` (the default).
+- **Auto-inheritance** -- all agents get every registered tool by default (use `exclude_tools` on an agent for per-agent specialization)
+
+If a tool isn't listed in any `data_source_registry` source entry, it is always included regardless of filtering (e.g., utility tools like "think" or "calculator").
+
+### Source Entry Field Reference
+
+| Field | Type | Default | Description |
+|---|---|---|---|
+| `id` | string | *required* | Unique key used in API payloads and filtering |
+| `name` | string | *required* | Display name shown in the UI |
+| `description` | string | `""` | Human-readable description for the UI |
+| `tools` | list | `[]` | NAT function or function group names belonging to this source |
+| `requires_auth` | bool | `false` | Grey out in UI until user signs in (for user-token sources) |
+| `default_enabled` | bool | `true` | Whether enabled by default in the UI |
+
+---
+
+## Using MCP Tools as Data Sources
+
+NAT MCP client tools are function groups. They work with the data source registry the same way as any other function group -- just reference the group name in `tools`:
+
+```yaml
+function_groups:
+  mcp_docs_search:
+    _type: mcp_client
+    server:
+      transport: streamable-http
+      url: "http://localhost:9901/mcp"
+
+functions:
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+      - id: docs_search
+        name: "Internal Docs"
+        description: "Search internal documentation via MCP."
+        tools:
+          - mcp_docs_search
+
+  web_search_tool:
+    _type: tavily_web_search
+
+  deep_research_agent:
+    _type: deep_research_agent
+    tools:
+      - web_search_tool
+      - mcp_docs_search
+```
+
+The registry auto-detects that `mcp_docs_search` is a function group and uses NAT's group separator (`__`) for prefix matching. All tools exposed by the MCP server (e.g., `mcp_docs_search__find_pages`, `mcp_docs_search__get_page`) will map to the `docs_search` data source.
 
 ---
 
@@ -378,31 +454,12 @@ async def search(self, query: str) -> str:
 
 ---
 
-## Integrating with Source Hierarchy
-
-The shallow researcher's prompt template detects data sources by tool name patterns. If you want your data source to appear in the source hierarchy, name it so the template can detect it:
-
-```python
-# From the shallow researcher's Jinja2 template:
-{% set t_name = tool.name.lower() %}
-{% if 'knowledge' in t_name or 'document' in t_name or 'internal' in t_name %}
-  {# Internal knowledge source #}
-{% elif 'paper' in t_name or 'academic' in t_name or 'arxiv' in t_name %}
-  {# Academic source #}
-{% elif 'web' in t_name or 'tavily' in t_name %}
-  {# Web search source #}
-{% endif %}
-```
-
-To have your tool recognized by the source hierarchy, include a keyword like `patent`, `academic`, or `web` in its registered function name, or extend the template to recognize your tool type.
-
----
-
 ## Existing Data Source Reference
 
 | Data Source | `_type` | Package | Description |
 |---|---|---|---|
 | Tavily Web Search | `tavily_web_search` | `sources/tavily_web_search` | General web search through Tavily API |
+| Exa Web Search | `exa_web_search` | `sources/exa_web_search` | General web search through Exa API |
 | Google Scholar | `paper_search` | `sources/google_scholar_paper_search` | Academic papers through Serper/Google Scholar |
 | Knowledge Layer | `knowledge_retrieval` | `sources/knowledge_layer` | Document retrieval through pluggable backends |
 
@@ -418,6 +475,7 @@ To have your tool recognized by the source hierarchy, include a keyword like `pa
 - [ ] Optional search parameters with descriptions for the LLM
 - [ ] Proper error handling and retries
 - [ ] Entry point in `pyproject.toml`
+- [ ] Added to `data_source_registry` in YAML config for UI integration
 - [ ] Installed and tested with `nat run`
 
 ---
@@ -426,4 +484,4 @@ To have your tool recognized by the source hierarchy, include a keyword like `pa
 
 - [Adding a Tool](./adding-a-tool.md) -- General tool creation guide
 - [Knowledge Layer SDK](../reference/knowledge-layer-sdk.md) -- Build custom retrieval backends
-- [Prompts](../customization/prompts.md) -- Modify source hierarchy detection
+- [Prompts](../customization/prompts.md) -- Modify agent behavior

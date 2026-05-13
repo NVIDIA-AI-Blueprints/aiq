@@ -12,7 +12,7 @@
 
 'use client'
 
-import { type FC, type ReactNode, useCallback, useRef, useEffect } from 'react'
+import { type FC, type ReactNode, memo, useCallback, useRef, useEffect } from 'react'
 import { Flex, Button, SegmentedControl, Spinner, Text } from '@/adapters/ui'
 import { Close, Generate, StopCircle } from '@/adapters/ui/icons'
 import { cancelJob } from '@/adapters/api'
@@ -45,8 +45,12 @@ interface ResearchPanelProps {
  * Opens from the right side of the screen, pushing the chat area.
  * Takes 60% of the screen width when open.
  */
-export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticated = false }) => {
-  const { rightPanel, researchPanelTab, setResearchPanelTab, closeRightPanel, openRightPanel } = useLayoutStore()
+export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel({ children, isAuthenticated = false }) {
+  const isOpen = useLayoutStore((s) => s.rightPanel === 'research')
+  const researchPanelTab = useLayoutStore((s) => s.researchPanelTab)
+  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
+  const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const deepResearchJobId = useChatStore((state) => state.deepResearchJobId)
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
@@ -54,8 +58,6 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
   const { idToken } = useAuth()
 
   const prefersReducedMotion = useReducedMotion()
-
-  const isOpen = rightPanel === 'research'
   const cancelFallbackRef = useRef<NodeJS.Timeout | null>(null)
 
   // Clean up cancel fallback timer on unmount
@@ -286,4 +288,4 @@ export const ResearchPanel: FC<ResearchPanelProps> = ({ children, isAuthenticate
       </div>
     </div>
   )
-}
+})

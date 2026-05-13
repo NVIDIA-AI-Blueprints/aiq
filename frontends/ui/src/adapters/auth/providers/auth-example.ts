@@ -28,4 +28,42 @@
  *   - INTERNAL_AUTH_TOKEN_URL
  *   - INTERNAL_AUTH_USERINFO_URL
  *   - INTERNAL_AUTH_PROVIDER_ID  (override callback path, default: internalauth)
+ *
+ * LIFECYCLE HOOKS (optional):
+ *
+ *   onSignIn({ token, account, user }) → Promise<Record<string, unknown>>
+ *     Called once after initial OAuth callback. Use to check group membership,
+ *     enrich the JWT with custom claims, or gate access. Returned object is
+ *     merged into the JWT. Throwing is logged and falls back to the base JWT;
+ *     return explicit claims such as { hasAccess: false } to deny access.
+ *
+ *   onSession({ session, token }) → Record<string, unknown>
+ *     Called on every session check. Use to surface provider-specific fields
+ *     (e.g. hasAccess, groupName) to the client. Returned object is merged
+ *     into the session.
+ *
+ *   tokenRefreshBufferSeconds: number
+ *     Override the default TOKEN_REFRESH_BUFFER_MINUTES. Use when the provider
+ *     knows the optimal refresh timing for its token lifetimes.
+ *
+ *   requiredEnvVars: string[]
+ *     Additional env vars validated by validateAuthEnv() on startup.
+ *
+ * Example with hooks:
+ *
+ *   export const getAuthProviderConfig = (): AuthProviderConfig => ({
+ *     provider: MyOIDCProvider,
+ *     providerId: 'my-sso',
+ *     refreshToken: refreshMyToken,
+ *     tokenRefreshBufferSeconds: 30 * 60,
+ *     requiredEnvVars: ['MY_SSO_CLIENT_ID'],
+ *     onSignIn: async ({ user }) => {
+ *       const hasAccess = await checkGroupMembership(user.email as string)
+ *       return { hasAccess, groupName: process.env.MY_GROUP }
+ *     },
+ *     onSession: ({ token }) => ({
+ *       hasAccess: token.hasAccess ?? true,
+ *       groupName: token.groupName,
+ *     }),
+ *   })
  */

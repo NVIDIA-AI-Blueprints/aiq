@@ -7,7 +7,6 @@ import {
   selectFilesInProgress,
   selectCompletedFiles,
   selectFailedFiles,
-  selectIsProcessing,
 } from './store'
 import type { TrackedFile, CollectionInfo, IngestionJobStatus, FileInfo } from './types'
 
@@ -22,6 +21,9 @@ describe('useDocumentsStore', () => {
       isCreatingCollection: false,
       isUploading: false,
       isPolling: false,
+      isLoadingFiles: false,
+      loadedSessionId: null,
+      recentlyDeletedIds: new Set<string>(),
       error: null,
       shownBannersForJobs: {},
     })
@@ -38,6 +40,9 @@ describe('useDocumentsStore', () => {
       expect(state.isCreatingCollection).toBe(false)
       expect(state.isUploading).toBe(false)
       expect(state.isPolling).toBe(false)
+      expect(state.isLoadingFiles).toBe(false)
+      expect(state.loadedSessionId).toBeNull()
+      expect(state.recentlyDeletedIds).toEqual(new Set())
       expect(state.error).toBeNull()
       expect(state.shownBannersForJobs).toEqual({})
     })
@@ -149,6 +154,40 @@ describe('useDocumentsStore', () => {
       const files = useDocumentsStore.getState().trackedFiles
       expect(files).toHaveLength(1)
       expect(files[0].id).toBe('file-2')
+    })
+
+    test('removeRecentlyDeletedIds removes given ids from tombstone set', () => {
+      useDocumentsStore.setState({ recentlyDeletedIds: new Set(['a', 'b']) })
+
+      useDocumentsStore.getState().removeRecentlyDeletedIds(['a'])
+
+      expect(useDocumentsStore.getState().recentlyDeletedIds).toEqual(new Set(['b']))
+    })
+
+    test('removeRecentlyDeletedIds allows setFilesFromServer to show that file_id again', () => {
+      useDocumentsStore.setState({
+        trackedFiles: [],
+        recentlyDeletedIds: new Set(['reused-id']),
+      })
+
+      useDocumentsStore.getState().removeRecentlyDeletedIds(['reused-id'])
+
+      const serverFiles: FileInfo[] = [
+        {
+          file_id: 'reused-id',
+          file_name: 'doc.pdf',
+          file_size: 100,
+          collection_name: 'session-1',
+          status: 'success',
+          chunk_count: 1,
+          metadata: {},
+        },
+      ]
+
+      useDocumentsStore.getState().setFilesFromServer('session-1', serverFiles)
+
+      expect(useDocumentsStore.getState().trackedFiles).toHaveLength(1)
+      expect(useDocumentsStore.getState().trackedFiles[0].id).toBe('reused-id')
     })
 
     test('clearTrackedFiles removes all files', () => {
@@ -586,6 +625,115 @@ describe('useDocumentsStore', () => {
       const files = useDocumentsStore.getState().trackedFiles
       expect(files[0].uploadedAt).toBe('2025-02-12')
     })
+
+    test('preserves polled success when server returns an empty list (race after job complete)', () => {
+      useDocumentsStore.setState({
+        trackedFiles: [
+          {
+            id: 'server-abc',
+            fileName: 'fresh.pdf',
+            fileSize: 512,
+            status: 'success',
+            progress: 100,
+            collectionName: 'session-1',
+            serverFileId: 'server-abc',
+            jobId: 'job-9',
+          },
+        ],
+      })
+
+      useDocumentsStore.getState().setFilesFromServer('session-1', [])
+
+      const files = useDocumentsStore.getState().trackedFiles
+      expect(files).toHaveLength(1)
+      expect(files[0].serverFileId).toBe('server-abc')
+      expect(files[0].status).toBe('success')
+      expect(files[0].jobId).toBe('job-9')
+    })
+
+    test('does not preserve success when server lists the same file name (prefer server row)', () => {
+      useDocumentsStore.setState({
+        trackedFiles: [
+          {
+            id: 'server-abc',
+            fileName: 'same.pdf',
+            fileSize: 100,
+            status: 'success',
+            progress: 100,
+            collectionName: 'session-1',
+            serverFileId: 'server-abc',
+          },
+        ],
+      })
+
+      const serverFiles: FileInfo[] = [
+        {
+          file_id: 'server-xyz',
+          file_name: 'same.pdf',
+          file_size: 200,
+          collection_name: 'session-1',
+          status: 'success',
+          chunk_count: 3,
+          metadata: {},
+        },
+      ]
+
+      useDocumentsStore.getState().setFilesFromServer('session-1', serverFiles)
+
+      const files = useDocumentsStore.getState().trackedFiles
+      expect(files).toHaveLength(1)
+      expect(files[0].id).toBe('server-xyz')
+      expect(files[0].serverFileId).toBe('server-xyz')
+    })
+
+    test('re-upload with same file name is visible when tombstone holds old ids (not fileName)', () => {
+      useDocumentsStore.setState({
+        trackedFiles: [],
+        recentlyDeletedIds: new Set(['old-server-id', 'client-old']),
+      })
+
+      const serverFiles: FileInfo[] = [
+        {
+          file_id: 'new-server-id',
+          file_name: 'report.pdf',
+          file_size: 200,
+          collection_name: 'session-1',
+          status: 'success',
+          chunk_count: 2,
+          metadata: {},
+        },
+      ]
+
+      useDocumentsStore.getState().setFilesFromServer('session-1', serverFiles)
+
+      const files = useDocumentsStore.getState().trackedFiles
+      expect(files).toHaveLength(1)
+      expect(files[0].id).toBe('new-server-id')
+      expect(files[0].fileName).toBe('report.pdf')
+    })
+
+    test('tombstone filters stale server row by deleted file_id', () => {
+      useDocumentsStore.setState({
+        trackedFiles: [],
+        recentlyDeletedIds: new Set(['gone-id']),
+      })
+
+      const serverFiles: FileInfo[] = [
+        {
+          file_id: 'gone-id',
+          file_name: 'stale.pdf',
+          file_size: 100,
+          collection_name: 'session-1',
+          status: 'success',
+          chunk_count: 1,
+          metadata: {},
+        },
+      ]
+
+      useDocumentsStore.getState().setFilesFromServer('session-1', serverFiles)
+
+      expect(useDocumentsStore.getState().trackedFiles).toHaveLength(0)
+    })
   })
 
   describe('banner tracking', () => {
@@ -668,24 +816,6 @@ describe('useDocumentsStore', () => {
 
       expect(failed).toHaveLength(1)
       expect(failed[0].id).toBe('1')
-    })
-
-    test('selectIsProcessing returns true when uploading', () => {
-      const state = { isUploading: true, isPolling: false }
-
-      expect(selectIsProcessing(state as any)).toBe(true)
-    })
-
-    test('selectIsProcessing returns true when polling', () => {
-      const state = { isUploading: false, isPolling: true }
-
-      expect(selectIsProcessing(state as any)).toBe(true)
-    })
-
-    test('selectIsProcessing returns false when idle', () => {
-      const state = { isUploading: false, isPolling: false }
-
-      expect(selectIsProcessing(state as any)).toBe(false)
     })
   })
 })

@@ -21,4 +21,5 @@ intent-classifier.md
 clarifier.md
 shallow-researcher.md
 deep-researcher.md
+sandbox.md
 ```

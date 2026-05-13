@@ -9,6 +9,7 @@
  * and error message types for full HITL (human-in-the-loop) support.
  */
 
+import { trackAuthEvent } from '@/shared/utils/rum'
 import { getWebSocketUrl } from './config'
 import {
   // NAT protocol types
@@ -289,6 +290,16 @@ export class NATWebSocketClient {
         }
 
         case NATMessageType.ERROR: {
+          // Auth errors carry the specific error_code in `message`
+          // (e.g. "token_expired", "token_invalid", "auth_error").
+          const authCodes = new Set(['auth_error', 'token_expired', 'token_invalid'])
+          const errorMsg = message.content?.message
+          if (errorMsg && authCodes.has(errorMsg)) {
+            trackAuthEvent(errorMsg, {
+              details: message.content?.details,
+              source: 'websocket',
+            })
+          }
           this.options.callbacks.onError?.(message.content)
           break
         }

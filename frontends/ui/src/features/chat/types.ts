@@ -457,6 +457,22 @@ export interface ChatActions {
   deleteConversation: (conversationId: string) => void
   /** Delete all conversations for the current user */
   deleteAllConversations: () => void
+  /**
+   * Remove sessions older than 24h to mirror the backend job TTL
+   * (configs use expiry_seconds: 86400). Sessions with an active deep
+   * research job in their message history are protected. If the current
+   * conversation gets removed, related ephemeral state is cleared.
+   *
+   * Not user-scoped: prunes expired sessions across all userIds, since
+   * localStorage is per-browser and stale entries from previously logged-in
+   * users would otherwise also 404 on "View Report".
+   *
+   * Does NOT auto-select a surviving session when the current one is
+   * pruned — the user lands on a clean draft (in contrast to setCurrentUser).
+   *
+   * @returns IDs of removed sessions (empty when nothing was removed).
+   */
+  pruneExpiredSessions: () => string[]
   /** Update conversation title */
   updateConversationTitle: (conversationId: string, title: string) => void
   /** Persist enabled data source IDs to the current conversation for per-session storage */

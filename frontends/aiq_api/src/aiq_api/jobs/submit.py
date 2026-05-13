@@ -21,13 +21,38 @@ Provides functions to submit agent jobs to the Dask cluster.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 
+from aiq_agent.auth import Principal
+from aiq_agent.auth import get_current_principal
+from aiq_api.auth import get_current_trace_tags
+
 from ..registry import get_agent_config
+from .access import _make_no_auth_principal
+from .access import create_job_access
+from .access import rollback_job_submission
 from .runner import run_agent_job
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_submission_principal(owner: str) -> Principal | None:
+    """Resolve the best available principal for async job ownership.
+
+    Used only when submit_agent_job is called programmatically without an
+    explicit principal.  Verified middleware identity is preferred; falls back
+    to a compatibility principal when auth is disabled.
+    """
+    principal = get_current_principal()
+    if principal is not None:
+        return principal
+
+    if os.environ.get("REQUIRE_AUTH", "false").lower() == "true":
+        return None
+
+    return _make_no_auth_principal(owner)
 
 
 def _get_parent_trace_context() -> tuple[
@@ -37,6 +62,7 @@ def _get_parent_trace_context() -> tuple[
     str | None,  # parent_workflow_run_id
     int | str | None,  # parent_workflow_trace_id
     str | None,  # parent_conversation_id
+    dict[str, str],  # request_trace_tags
 ]:
     """
     Extract trace context from current workflow for propagation to async jobs.
@@ -46,12 +72,12 @@ def _get_parent_trace_context() -> tuple[
 
     Returns:
         Tuple of (parent_span_id, parent_function_id, parent_function_name,
-                  parent_workflow_run_id, parent_workflow_trace_id, parent_conversation_id)
+                  parent_workflow_run_id, parent_workflow_trace_id, parent_conversation_id, request_trace_tags)
     """
     try:
         from nat.builder.context import ContextState
     except ImportError:
-        return (None, None, None, None, None, None)
+        return (None, None, None, None, None, None, {})
 
     context_state = ContextState.get()
 
@@ -80,6 +106,7 @@ def _get_parent_trace_context() -> tuple[
         parent_workflow_run_id,
         parent_workflow_trace_id,
         parent_conversation_id,
+        get_current_trace_tags(),
     )
 
 
@@ -87,10 +114,12 @@ async def submit_agent_job(
     agent_type: str,
     input_text: str,
     owner: str,
+    principal: Principal | None = None,
     job_id: str | None = None,
     expiry_seconds: int = 86400,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
+    auth_token: str | None = None,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -102,10 +131,13 @@ async def submit_agent_job(
         agent_type: Agent type identifier (e.g., 'deep_researcher').
         input_text: The user's query/request.
         owner: Owner email for the job.
+        principal: Verified principal that owns the job.
         job_id: Optional custom job ID.
         expiry_seconds: Job expiry time in seconds (default 24h).
         available_documents: Optional list of document dicts with file_name and summary.
         data_sources: Optional list of allowed data sources to enforce in the worker.
+        auth_token: Optional auth token to propagate to the Dask worker for
+            data sources that require authentication.
 
     Returns:
         The job ID.
@@ -122,7 +154,7 @@ async def submit_agent_job(
             available_documents=[{"file_name": "doc.pdf", "summary": "A research paper"}],
         )
     """
-    from nat.front_ends.fastapi.job_store import JobStore
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
     # Get agent configuration from registry
     agent_config = get_agent_config(agent_type)
@@ -168,34 +200,66 @@ async def submit_agent_job(
     if not scheduler_address:
         raise RuntimeError("Async job submission requires NAT_DASK_SCHEDULER_ADDRESS to be set")
 
+    # Auto-capture auth token if not explicitly provided
+    if auth_token is None:
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+
+    if principal is None:
+        principal = _resolve_submission_principal(owner)
+    if principal is None:
+        raise RuntimeError("Verified current principal required for async job submission")
+
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
+    loop = asyncio.get_running_loop()
 
-    await job_store.submit_job(
-        job_id=resolved_job_id,
-        expiry_seconds=expiry_seconds,
-        job_fn=run_agent_job,
-        job_args=[
-            not use_threads,  # configure_logging
-            log_level,
-            scheduler_address,
-            db_url,
-            config_path,
-            resolved_job_id,
-            input_text,
-            agent_config.class_path,
-            agent_config.config_name,
-            *_get_parent_trace_context(),
-            available_documents,
-            data_sources,
-        ],
-    )
+    try:
+        await job_store.submit_job(
+            job_id=resolved_job_id,
+            expiry_seconds=expiry_seconds,
+            job_fn=run_agent_job,
+            job_args=[
+                not use_threads,  # configure_logging
+                log_level,
+                scheduler_address,
+                db_url,
+                config_path,
+                resolved_job_id,
+                input_text,
+                agent_config.class_path,
+                agent_config.config_name,
+                *_get_parent_trace_context(),
+                available_documents,
+                data_sources,
+                auth_token,
+            ],
+        )
+        await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)
+    except Exception:
+        try:
+            await loop.run_in_executor(None, rollback_job_submission, resolved_job_id, db_url)
+            logger.warning(
+                "Rolled back partial async job submission for %s after access persistence failure. "
+                "The Dask worker may still be running and should be investigated if it continues writing state.",
+                resolved_job_id,
+            )
+        except Exception as cleanup_error:
+            logger.warning(
+                "Failed to roll back partial async job submission for %s after access persistence failure: %s",
+                resolved_job_id,
+                cleanup_error,
+            )
+        raise
 
     logger.info(
-        "Submitted %s job %s for owner %s",
+        "Submitted %s job %s for owner %s (%s:%s)",
         agent_type,
         resolved_job_id,
         owner,
+        principal.type,
+        principal.sub,
     )
     return resolved_job_id
 

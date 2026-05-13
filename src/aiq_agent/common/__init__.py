@@ -43,6 +43,8 @@ from .citation_verification import reset_session_registry
 from .citation_verification import sanitize_report
 from .citation_verification import set_session_registry
 from .citation_verification import verify_citations
+from .data_source_registry import get_all_tool_refs
+from .data_source_registry import get_source_id_for_tool
 from .data_sources import DEFAULT_DATA_SOURCES
 from .data_sources import extract_messages_and_sources
 from .data_sources import filter_tools_by_sources
@@ -55,6 +57,7 @@ from .message_utils import get_latest_user_query
 from .prompt_utils import load_prompt
 from .prompt_utils import render_prompt_template
 from .tool_validation import format_tool_unavailability_error
+from .tool_validation import format_user_facing_tool_error
 from .tool_validation import validate_tool_availability
 
 logger = logging.getLogger(__name__)
@@ -74,8 +77,11 @@ __all__ = [
     "filter_tools_by_sources",
     "format_data_source_tools",
     "format_tool_unavailability_error",
+    "format_user_facing_tool_error",
+    "get_all_tool_refs",
     "get_checkpointer",
     "get_or_create_session_registry",
+    "get_source_id_for_tool",
     "get_session_registry",
     "get_latest_user_query",
     "is_postgres_dsn",
@@ -107,10 +113,15 @@ def is_verbose(config_verbose: bool) -> bool:
     return config_verbose
 
 
-def _create_chat_response(content: str, response_id: str = "conversational_response") -> ChatResponse:
+def _create_chat_response(
+    content: str,
+    response_id: str = "conversational_response",
+    model: str | None = None,
+) -> ChatResponse:
     """Create a standardized ChatResponse object."""
     return ChatResponse(
         id=response_id,
+        model=model or "unknown-model",
         choices=[
             ChatResponseChoice(
                 index=0,
@@ -156,7 +167,8 @@ async def get_checkpointer(checkpoint_db: str) -> BaseCheckpointSaver:
         if pool is None:
             pool = AsyncConnectionPool(
                 conninfo=checkpoint_db,
-                max_size=20,
+                min_size=1,
+                max_size=3,
                 kwargs={"autocommit": True, "row_factory": dict_row},
             )
             _postgres_pools[checkpoint_db] = pool

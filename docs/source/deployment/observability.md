@@ -206,6 +206,37 @@ general:
 | `redaction_headers` | Request headers checked to determine whether to redact. |
 | `resource_attributes` | Custom OTEL resource attributes attached to all spans. |
 
+### Request Tags on NAT Spans
+
+When the `aiq_api` auth middleware is enabled, NAT-exported workflow spans can
+include low-cardinality request tags plus optional pseudonymous identity tags.
+These tags are propagated across HTTP requests, WebSocket workflows, and async
+job execution.
+
+Always-on NAT span tags:
+
+- `nat.aiq.caller.type` -- resolved caller type from auth middleware
+- `nat.aiq.auth.transport` -- `bearer`, `cookie`, or `none`
+- `nat.aiq.auth.verified` -- whether the request resolved to a verified principal
+- `nat.aiq.access.channel` -- inferred request channel or trusted explicit access-channel header
+
+Optional pseudonymous tags:
+
+- `nat.enduser.id`, `nat.aiq.user.id`, `nat.aiq.auth.type` -- controlled by `AIQ_TRACE_USER_IDENTITY_MODE`
+- `nat.aiq.user.email`, `nat.aiq.user.name` -- added only in `full` mode
+- `nat.aiq.client.id` -- controlled by `AIQ_TRACE_CLIENT_ID_MODE=ip`
+
+Environment variables:
+
+- `AIQ_TRACE_USER_IDENTITY_MODE=none|id|full`
+- `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET=<secret>`
+- `AIQ_TRACE_CLIENT_ID_MODE=none|ip`
+- `AIQ_TRACE_CLIENT_ID_HMAC_SECRET=<secret>`
+- `AIQ_TRACE_CLIENT_IP_HEADERS=x-real-ip,x-forwarded-for`
+
+The `id` and `ip` modes emit HMAC-derived pseudonymous identifiers rather than
+raw subjects or raw IP addresses.
+
 ### Batch Configuration
 
 The exporter supports standard OTEL batch settings:

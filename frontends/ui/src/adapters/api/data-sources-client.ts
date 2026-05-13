@@ -30,6 +30,8 @@ export interface DataSourceFromAPI {
   category?: 'web' | 'enterprise' | 'storage' | 'collaboration'
   /** Whether the source is enabled by default */
   default_enabled?: boolean
+  /** Whether the source requires user authentication */
+  requires_auth?: boolean
 }
 
 export interface DataSourcesResponse {

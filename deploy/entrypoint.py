@@ -78,6 +78,8 @@ def main() -> int:
     scheduler_port = int(os.getenv("DASK_SCHEDULER_PORT", "8786"))
     nworkers = os.getenv("DASK_NWORKERS", "1")
     nthreads = os.getenv("DASK_NTHREADS", "4")
+    memory_limit = os.getenv("DASK_MEMORY_LIMIT")
+    lifetime = os.getenv("DASK_LIFETIME")
 
     print("============================================", flush=True)
     print("NVIDIA NeMo Agent toolkit - Local Dask Mode", flush=True)
@@ -104,17 +106,24 @@ def main() -> int:
         _terminate_process(scheduler_proc)
         raise SystemExit(str(exc)) from exc
 
-    worker_proc = subprocess.Popen(
-        [
-            "dask-worker",
-            f"tcp://localhost:{scheduler_port}",
-            "--nworkers",
-            str(nworkers),
-            "--nthreads",
-            str(nthreads),
-            "--no-dashboard",
-        ],
-    )
+    worker_args = [
+        "dask-worker",
+        f"tcp://localhost:{scheduler_port}",
+        "--nworkers",
+        str(nworkers),
+        "--nthreads",
+        str(nthreads),
+        "--no-dashboard",
+    ]
+    if memory_limit:
+        worker_args += ["--memory-limit", memory_limit]
+    if lifetime:
+        lifetime_restart = os.getenv("DASK_LIFETIME_RESTART", "true").lower() != "false"
+        worker_args += ["--lifetime", lifetime]
+        if lifetime_restart:
+            worker_args += ["--lifetime-restart"]
+
+    worker_proc = subprocess.Popen(worker_args)
 
     print("Waiting for worker to connect...", flush=True)
     time.sleep(3)

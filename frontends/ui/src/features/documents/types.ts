@@ -100,7 +100,7 @@ export interface DocumentsState {
   isLoadingFiles: boolean
   /** Session ID for which files were last loaded from the server (null = never loaded) */
   loadedSessionId: string | null
-  /** File IDs/names recently deleted — prevents stale server responses from resurrecting them */
+  /** Client id + serverFileId tombstoned after delete — filters stale server rows by file_id; not fileName (re-upload) */
   recentlyDeletedIds: Set<string>
   /** Error message */
   error: string | null
@@ -120,6 +120,8 @@ export interface DocumentsActions {
   removeTrackedFile: (id: string) => void
   /** Remove a file's IDs from recentlyDeletedIds (used to undo optimistic delete on failure) */
   unmarkRecentlyDeleted: (file: TrackedFile) => void
+  /** Drop tombstone entries for these ids (e.g. backend reused file_id after a new upload) */
+  removeRecentlyDeletedIds: (ids: string[]) => void
   clearTrackedFiles: () => void
   /** Clear files for a specific collection (used when switching sessions) */
   clearFilesForCollection: (collectionName: string) => void

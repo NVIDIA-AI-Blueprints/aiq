@@ -43,18 +43,33 @@ const buildBackendUrl = (path: string[]): string => {
 }
 
 /**
- * Get auth headers from request, including idToken cookie
- * Returns empty object when REQUIRE_AUTH=false to prevent user identification
+ * Get auth headers from request, including idToken cookie.
+ * Returns empty object when REQUIRE_AUTH=false to prevent user identification.
+ *
+ * For SSE stream paths, accepts a ?token= query parameter as a fallback
+ * because EventSource cannot set custom headers or cookies.
  */
-const getAuthHeaders = async (req: Request): Promise<Record<string, string>> => {
+const getAuthHeaders = async (req: Request, pathSegments: string[]): Promise<Record<string, string>> => {
   // Skip auth when REQUIRE_AUTH=false - don't forward any auth info to backend
   if (!isAuthRequired()) {
     return {}
   }
 
-  const authToken = req.headers.get('Authorization')
+  // Only allow query token for stream paths (EventSource can't set headers).
+  // Note: tokens in URLs may appear in server access logs. This is a
+  // server-side route handler — the token is extracted here and forwarded
+  // only via headers, never passed on as a URL to the backend.
+  const allowQueryToken = pathSegments.includes('stream')
+  const rawQueryToken = new URL(req.url).searchParams.get('token')?.trim()
+  const queryToken = allowQueryToken && rawQueryToken ? rawQueryToken : undefined
   const cookieStore = await cookies()
-  const idToken = cookieStore.get('idToken')?.value
+  const cookieIdToken = cookieStore.get('idToken')?.value?.trim()
+  const idToken = cookieIdToken || queryToken
+  const authToken = req.headers.get('Authorization') || (idToken ? `Bearer ${idToken}` : null)
+
+  if (queryToken && !cookieIdToken) {
+    console.warn('[Deep Research API] SSE stream using ?token= query fallback (idToken cookie missing)')
+  }
 
   return {
     ...(authToken ? { Authorization: authToken } : {}),
@@ -78,7 +93,7 @@ export async function GET(
     console.log('[Deep Research API] GET:', backendUrl, isStreamRequest ? '(SSE)' : '')
 
     // Get auth headers (includes idToken cookie)
-    const authHeaders = await getAuthHeaders(req)
+    const authHeaders = await getAuthHeaders(req, path)
     console.log('[Deep Research API] idToken cookie present:', !!authHeaders.Cookie)
 
     // Forward the request to the backend
@@ -88,6 +103,7 @@ export async function GET(
         ...authHeaders,
         Accept: isStreamRequest ? 'text/event-stream' : 'application/json',
       },
+      ...(isStreamRequest ? { signal: req.signal } : {}),
     })
 
     // Handle error responses
@@ -185,7 +201,7 @@ export async function POST(
     }
 
     // Get auth headers (includes idToken cookie)
-    const authHeaders = await getAuthHeaders(req)
+    const authHeaders = await getAuthHeaders(req, path)
     console.log('[Deep Research API] POST idToken cookie present:', !!authHeaders.Cookie)
 
     // Forward the request to the backend

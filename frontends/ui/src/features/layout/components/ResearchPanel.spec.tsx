@@ -14,12 +14,15 @@ let mockRightPanel: string | null = 'research'
 let mockResearchPanelTab = 'tasks'
 
 vi.mock('../store', () => ({
-  useLayoutStore: () => ({
-    rightPanel: mockRightPanel,
-    researchPanelTab: mockResearchPanelTab,
-    setResearchPanelTab: mockSetResearchPanelTab,
-    closeRightPanel: mockCloseRightPanel,
-    openRightPanel: mockOpenRightPanel,
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      rightPanel: mockRightPanel,
+      researchPanelTab: mockResearchPanelTab,
+      setResearchPanelTab: mockSetResearchPanelTab,
+      closeRightPanel: mockCloseRightPanel,
+      openRightPanel: mockOpenRightPanel,
+    }
+    return selector ? selector(state) : state
   }),
 }))
 
@@ -141,25 +144,13 @@ describe('ResearchPanel', () => {
     })
 
     test('displays correct tab content based on researchPanelTab', () => {
-      mockResearchPanelTab = 'tasks'
-      const { rerender } = render(<ResearchPanel isAuthenticated={true} />)
-      expect(screen.getByTestId('tasks-tab')).toBeInTheDocument()
-
-      mockResearchPanelTab = 'plan'
-      rerender(<ResearchPanel isAuthenticated={true} />)
-      expect(screen.getByTestId('plan-tab')).toBeInTheDocument()
-
-      mockResearchPanelTab = 'thinking'
-      rerender(<ResearchPanel isAuthenticated={true} />)
-      expect(screen.getByTestId('thinking-tab')).toBeInTheDocument()
-
-      mockResearchPanelTab = 'citations'
-      rerender(<ResearchPanel isAuthenticated={true} />)
-      expect(screen.getByTestId('citations-tab')).toBeInTheDocument()
-
-      mockResearchPanelTab = 'report'
-      rerender(<ResearchPanel isAuthenticated={true} />)
-      expect(screen.getByTestId('report-tab')).toBeInTheDocument()
+      const tabs = ['tasks', 'plan', 'thinking', 'citations', 'report'] as const
+      for (const tab of tabs) {
+        mockResearchPanelTab = tab
+        const { unmount } = render(<ResearchPanel isAuthenticated={true} />)
+        expect(screen.getByTestId(`${tab}-tab`)).toBeInTheDocument()
+        unmount()
+      }
     })
   })
 

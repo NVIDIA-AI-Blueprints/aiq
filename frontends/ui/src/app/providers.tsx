@@ -179,7 +179,7 @@ export const Providers = ({ children, config }: ProvidersProps): ReactNode => {
   return (
     <AppConfigProvider config={config}>
       <SessionProvider
-        refetchInterval={config.authRequired ? 4 * 60 : 0}
+        refetchInterval={config.authRequired ? config.sessionRefreshIntervalSeconds : 0}
         refetchOnWindowFocus={config.authRequired}
         refetchWhenOffline={false}
       >

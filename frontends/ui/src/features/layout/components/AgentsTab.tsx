@@ -14,6 +14,7 @@
 
 import { type FC, useMemo } from 'react'
 import { Flex, Text } from '@/adapters/ui'
+import { useShallow } from 'zustand/react/shallow'
 import { Wand } from '@/adapters/ui/icons'
 import { useChatStore } from '@/features/chat'
 import { AgentCard, type AgentInfo } from './AgentCard'
@@ -23,7 +24,10 @@ import { AgentCard, type AgentInfo } from './AgentCard'
  * Groups tool calls under their parent agents using agent_id.
  */
 export const AgentsTab: FC = () => {
-  const { deepResearchAgents, deepResearchToolCalls } = useChatStore()
+  const { deepResearchAgents, deepResearchToolCalls } = useChatStore(useShallow((s) => ({
+    deepResearchAgents: s.deepResearchAgents,
+    deepResearchToolCalls: s.deepResearchToolCalls,
+  })))
 
   const agentsWithToolCalls = useMemo((): AgentInfo[] => {
     return deepResearchAgents.map((agent) => {

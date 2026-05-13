@@ -71,7 +71,7 @@ spec:
       {{- if and $appConfig.imagePullSecrets (gt (len $appConfig.imagePullSecrets) 0) }}
       imagePullSecrets:
         {{- toYaml $appConfig.imagePullSecrets | nindent 8 }}
-      {{- else if and $.Values.imagePullSecrets (gt (len $.Values.imagePullSecrets) 0) }}
+      {{- else if and $.Values.imagePullSecrets (kindIs "slice" $.Values.imagePullSecrets) (gt (len $.Values.imagePullSecrets) 0) }}
       imagePullSecrets:
         {{- toYaml $.Values.imagePullSecrets | nindent 8 }}
       {{- end }}

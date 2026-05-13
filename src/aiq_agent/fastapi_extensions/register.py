@@ -31,7 +31,7 @@ from pydantic import model_validator
 
 from nat.builder.workflow_builder import WorkflowBuilder
 from nat.cli.register_workflow import register_front_end
-from nat.data_models.config import AIQConfig
+from nat.data_models.config import Config
 from nat.front_ends.fastapi.fastapi_front_end_config import FastApiFrontEndConfig
 from nat.front_ends.fastapi.fastapi_front_end_plugin import FastApiFrontEndPlugin
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
@@ -152,7 +152,7 @@ class KnowledgeAPIWorker(FastApiFrontEndPluginWorker):
 class KnowledgeAPIPlugin(FastApiFrontEndPlugin):
     """Plugin that adds knowledge management endpoints to the FastAPI server."""
 
-    def __init__(self, full_config: AIQConfig, config: KnowledgeAPIConfig):
+    def __init__(self, full_config: Config, config: KnowledgeAPIConfig):
         super().__init__(full_config=full_config)
         self.config = config
 
@@ -162,6 +162,6 @@ class KnowledgeAPIPlugin(FastApiFrontEndPlugin):
 
 
 @register_front_end(config_type=KnowledgeAPIConfig)
-async def register_knowledge_api(config: KnowledgeAPIConfig, full_config: AIQConfig):
+async def register_knowledge_api(config: KnowledgeAPIConfig, full_config: Config):
     """Register Knowledge API with NAT framework."""
     yield KnowledgeAPIPlugin(full_config=full_config, config=config)

@@ -20,6 +20,9 @@ requires = ["setuptools >= 64", "setuptools-scm>=8"]
 [tool.setuptools]
 package-dir = {"" = "src"}
 
+[tool.setuptools.package-data]
+"aiq_agent.agents.deep_researcher" = ["skills/**/*"]
+
 [project]
 name = "aiq-agent"
 version = "2.0.0"
@@ -28,13 +31,12 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat==1.4.0",
-    "nvidia-nat-langchain==1.4.0",
-    "nvidia-nat[telemetry]==1.4.0",
-    "nvidia-nat-weave==1.4.0",
-    "nvidia-nat[async_endpoints]==1.4.0",
-    "nvidia-nat-phoenix==1.4.0",
-    "deepagents>=0.3.0",
+    "nvidia-nat-core==1.6.0",
+    "nvidia-nat[langchain,async_endpoints,phoenix]==1.6.0",
+    "nvidia-nat-eval==1.6.0",
+    "nvidia-nat-profiler==1.6.0",
+    "deepagents==0.5.0",
+    "langchain-modal==0.0.3",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
     "psycopg[binary]>=3.0.0",
@@ -43,6 +45,10 @@ dependencies = [
     "aiofiles>=23.0.0",
     "python-multipart>=0.0.9",
     "knowledge-layer[all]",
+    # CVE version floors for transitive dependencies
+    "cryptography>=46.0.6,<47",
+    "pillow>=12.2.0,<13",
+    "pygments>=2.20.0,<3",
 ]
 
 [project.optional-dependencies]
@@ -52,7 +58,7 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-env>=1.1.0",
     "pre-commit>=3.5.0",
-    "ruff~=0.12",
+    "ruff~=0.15.1",
     "yapf>=0.40.0",
     "mypy>=1.5.0",
 ]
@@ -83,6 +89,7 @@ aiq_shallow_researcher = "aiq_agent.agents.shallow_researcher.register"
 aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
 aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
 aiq_clarifier = "aiq_agent.agents.clarifier.register"
+aiq_data_source_registry = "aiq_agent.common.data_source_registry"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
@@ -136,7 +143,7 @@ extend-ignore = [
 combine-as-imports = true
 default-section = "third-party"
 force-single-line = true
-known-first-party = ["aiq", "nat", "nat_*", "_utils"]
+known-first-party = ["aiq", "aiq_api", "nat", "nat_*", "_utils"]
 known-third-party = [
   "agno",
   "autogen",
@@ -175,13 +182,14 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-env>=1.1.0",
     "pre-commit>=3.5.0",
-    "ruff~=0.12",
+    "ruff~=0.15.1",
     "yapf>=0.40.0",
     "mypy>=1.5.0",
     "dask[distributed]>=2024.1.0",
     # Workspace packages for testing
     "google-scholar-paper-search",
     "tavily-web-search",
+    "exa-web-search",
     "knowledge-layer[all]",
     "aiq-api",
     "aiq-research-cli",
@@ -191,9 +199,12 @@ dev = [
 [tool.uv]
 prerelease = "if-necessary-or-explicit"
 override-dependencies = [
-    "authlib>=1.6.9",
+    "authlib>=1.6.11,<2",
+    "cryptography>=46.0.6,<47",
+    "pillow>=12.2.0,<13",
+    "pygments>=2.20.0,<3",
+    "pyopenssl>=26.0.0,<27",
     "tornado>=6.5.5",
-    "pyopenssl>=26.0.0",
 ]
 
 [tool.uv.pip]
@@ -213,6 +224,7 @@ members = [
 aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
+exa-web-search = { workspace = true }
 knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }

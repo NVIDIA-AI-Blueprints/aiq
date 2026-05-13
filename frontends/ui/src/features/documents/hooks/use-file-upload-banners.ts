@@ -26,7 +26,8 @@ export const useFileUploadBanners = () => {
   const trackedFiles = useDocumentsStore((state) => state.trackedFiles)
   const shownBannersForJobs = useDocumentsStore((state) => state.shownBannersForJobs)
   const markBannerShown = useDocumentsStore((state) => state.markBannerShown)
-  const { openRightPanel, setDataSourcesPanelTab } = useLayoutStore()
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
 
   useEffect(() => {
     // Group files by jobId (each upload batch has its own job)

@@ -102,23 +102,22 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
   const clientRef = useRef<DeepResearchClient | null>(null)
 
   const { idToken } = useAuth()
-  const {
-    setReportContent,
-    addDeepResearchToolCall,
-    completeDeepResearchToolCall,
-    clearDeepResearch,
-    setCurrentStatus,
-    setLoadedJobId,
-    setStreamLoaded,
-    stopAllDeepResearchSpinners,
-    addErrorCard,
-    completeDeepResearch,
-    setStreaming,
-    patchConversationMessage,
-    addDeepResearchBanner,
-  } = useChatStore()
+  const setReportContent = useChatStore((s) => s.setReportContent)
+  const addDeepResearchToolCall = useChatStore((s) => s.addDeepResearchToolCall)
+  const completeDeepResearchToolCall = useChatStore((s) => s.completeDeepResearchToolCall)
+  const clearDeepResearch = useChatStore((s) => s.clearDeepResearch)
+  const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
+  const setLoadedJobId = useChatStore((s) => s.setLoadedJobId)
+  const setStreamLoaded = useChatStore((s) => s.setStreamLoaded)
+  const stopAllDeepResearchSpinners = useChatStore((s) => s.stopAllDeepResearchSpinners)
+  const addErrorCard = useChatStore((s) => s.addErrorCard)
+  const completeDeepResearch = useChatStore((s) => s.completeDeepResearch)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const patchConversationMessage = useChatStore((s) => s.patchConversationMessage)
+  const addDeepResearchBanner = useChatStore((s) => s.addDeepResearchBanner)
 
-  const { openRightPanel, setResearchPanelTab } = useLayoutStore()
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
 
   const clearError = useCallback(() => {
     setError(null)

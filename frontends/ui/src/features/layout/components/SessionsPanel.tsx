@@ -10,8 +10,9 @@
 
 'use client'
 
-import { type FC, type KeyboardEvent, useCallback, useMemo, useState, useRef, useEffect } from 'react'
+import { type FC, type KeyboardEvent, memo, useCallback, useMemo, useState, useRef, useEffect } from 'react'
 import { Flex, Text, Button, SidePanel } from '@/adapters/ui'
+import { useShallow } from 'zustand/react/shallow'
 import { Chat, Edit, Trash, Plus, Search, LoadingSpinner } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 import { useChatStore } from '@/features/chat'
@@ -47,7 +48,7 @@ interface SessionsPanelProps {
  * Sessions panel with history grouped by date.
  * Opens from the left side of the screen.
  */
-export const SessionsPanel: FC<SessionsPanelProps> = ({
+export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel({
   sessions = [],
   selectedSessionId,
   onSelectSession,
@@ -55,16 +56,20 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
   onDeleteSession,
   onDeleteAllSessions,
   onRenameSession,
-}) => {
-  const { isSessionsPanelOpen, setSessionsPanelOpen } = useLayoutStore()
-  const isSessionBusy = useChatStore((state) => state.isSessionBusy)
-  const hasAnyBusySession = useChatStore((state) => state.hasAnyBusySession)
+}) {
+  const isSessionsPanelOpen = useLayoutStore((s) => s.isSessionsPanelOpen)
+  const setSessionsPanelOpen = useLayoutStore((s) => s.setSessionsPanelOpen)
 
+  const isSessionBusy = useChatStore((s) => s.isSessionBusy)
+  const anySessionBusy = useChatStore((s) => s.hasAnyBusySession())
+  const pruneExpiredSessions = useChatStore((s) => s.pruneExpiredSessions)
   // Navigation-specific busy check: only shallow thinking (WebSocket) and HITL prompts
   // block session switching. Deep research runs server-side and can be reconnected,
   // so it should NOT prevent navigation.
-  const isStreaming = useChatStore((state) => state.isStreaming)
-  const hasPendingInteraction = useChatStore((state) => state.pendingInteraction !== null)
+  const { isStreaming, hasPendingInteraction } = useChatStore(useShallow((s) => ({
+    isStreaming: s.isStreaming,
+    hasPendingInteraction: s.pendingInteraction !== null,
+  })))
   const isNavigationBlocked = isStreaming || hasPendingInteraction
   const [searchQuery, setSearchQuery] = useState('')
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
@@ -75,13 +80,13 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
   const [storagePercent, setStoragePercent] = useState<number>(0)
   useEffect(() => {
     if (isSessionsPanelOpen) {
+      // Drop sessions older than the backend job TTL (24h) so the list
+      // never shows ghost entries whose reports are gone server-side.
+      pruneExpiredSessions()
       const { percentUsed } = checkStorageHealth()
       setStoragePercent(Math.round(percentUsed))
     }
-  }, [isSessionsPanelOpen])
-
-  // Check if any session has active operations
-  const anySessionBusy = hasAnyBusySession()
+  }, [isSessionsPanelOpen, pruneExpiredSessions])
 
   const handleDeleteClick = useCallback((sessionId: string) => {
     setSessionToDelete(sessionId)
@@ -133,8 +138,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
     return sessions.filter((s) => s.title.toLowerCase().includes(query))
   }, [sessions, searchQuery])
 
-  // Group sessions by date
-  const groupedSessions = groupSessionsByDate(filteredSessions)
+  const groupedSessions = useMemo(() => groupSessionsByDate(filteredSessions), [filteredSessions])
 
   return (
     <SidePanel
@@ -263,7 +267,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = ({
       />
     </SidePanel>
   )
-}
+})
 
 /**
  * SessionItem Component

@@ -12,27 +12,3 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
-"""CLI-specific authentication utilities.
-
-Shared utilities (get_current_user_info) are in aiq_agent.auth.
-"""
-
-from aiq_agent.auth import UserInfo
-from aiq_agent.auth import decode_jwt_payload
-from aiq_agent.auth import get_auth_token
-from aiq_agent.auth import get_current_user_info
-from aiq_agent.auth import get_user_info_from_token
-
-from .local_token_store import LocalTokenStore
-from .local_token_store import get_local_token_store
-
-__all__ = [
-    "LocalTokenStore",
-    "UserInfo",
-    "decode_jwt_payload",
-    "get_auth_token",
-    "get_current_user_info",
-    "get_local_token_store",
-    "get_user_info_from_token",
-]

@@ -55,6 +55,7 @@ Test coverage:
 from unittest.mock import MagicMock
 
 import pytest
+
 from aiq_api.routes.jobs import JobReportResponse
 from aiq_api.routes.jobs import JobStateResponse
 from aiq_api.routes.jobs import JobStatusResponse

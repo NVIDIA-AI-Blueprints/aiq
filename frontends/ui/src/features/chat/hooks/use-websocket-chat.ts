@@ -19,7 +19,8 @@
 
 'use client'
 
-import { useCallback, useRef, useEffect, useState } from 'react'
+import { useCallback, useRef, useEffect, useState, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   NATWebSocketClient,
   createNATWebSocketClient,
@@ -36,7 +37,9 @@ import { useConnectionRecovery } from './use-connection-recovery'
 import { useLayoutStore } from '@/features/layout/store'
 import { useDocumentsStore } from '@/features/documents/store'
 import { useAuth } from '@/adapters/auth'
+import { isLikelyAuthRelatedTransportError } from '../lib/transport-auth-signals'
 import type {
+  ChatMessage,
   Conversation,
   PromptType,
   PendingInteraction,
@@ -52,6 +55,9 @@ import {
   isFunctionStepName,
   formatPayload,
 } from '../lib/intermediate-step-parser'
+
+const EMPTY_MESSAGES: ChatMessage[] = []
+const EMPTY_CONVERSATIONS: Conversation[] = []
 
 /**
  * Map NAT/backend error codes to frontend ErrorCode for consistent UI display.
@@ -152,55 +158,86 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
   // Ref to track the current status for detecting status changes
   const currentStatusRef = useRef<StatusType | null>(null)
 
-  const { user } = useAuth()
+  const { user, authRequired, error: authError } = useAuth()
 
-  // Chat store
+  // Chat store — reactive state only
   const {
     currentConversation,
+    conversations,
+    currentUserId,
     isStreaming,
     isLoading,
     thinkingSteps,
     reportContent,
     currentStatus,
     pendingInteraction,
-    addUserMessage,
-    addAgentResponse,
-    addAgentResponseWithMeta,
-    addThinkingStep,
-    appendToThinkingStep,
-    completeThinkingStep,
-    updateThinkingStepByFunctionName,
-    findThinkingStepByFunctionName,
-    addAgentPrompt,
-    addErrorCard,
-    dismissConnectionErrors,
-    setCurrentStatus,
-    setPendingInteraction,
-    clearPendingInteraction,
-    setLoading,
-    setStreaming,
-    clearReportContent,
-    createConversation: storeCreateConversation,
-    setCurrentUser,
-    getUserConversations,
-    selectConversation: storeSelectConversation,
-    respondToPrompt,
-    // Deep research SSE
-    startDeepResearch,
-    // Deep research banners
-    addDeepResearchBanner,
-    // Plan messages for PlanTab
-    addPlanMessage,
-    updatePlanMessageResponse,
-    // Conversation management
-    updateConversationTitle,
-  } = useChatStore()
+  } = useChatStore(useShallow((s) => ({
+    currentConversation: s.currentConversation,
+    conversations: s.conversations,
+    currentUserId: s.currentUserId,
+    isStreaming: s.isStreaming,
+    isLoading: s.isLoading,
+    thinkingSteps: s.thinkingSteps,
+    reportContent: s.reportContent,
+    currentStatus: s.currentStatus,
+    pendingInteraction: s.pendingInteraction,
+  })))
+
+  // Actions — stable references, individual selectors won't cause re-renders
+  const addUserMessage = useChatStore((s) => s.addUserMessage)
+  const addAgentResponse = useChatStore((s) => s.addAgentResponse)
+  const addAgentResponseWithMeta = useChatStore((s) => s.addAgentResponseWithMeta)
+  const addThinkingStep = useChatStore((s) => s.addThinkingStep)
+  const appendToThinkingStep = useChatStore((s) => s.appendToThinkingStep)
+  const completeThinkingStep = useChatStore((s) => s.completeThinkingStep)
+  const updateThinkingStepByFunctionName = useChatStore((s) => s.updateThinkingStepByFunctionName)
+  const findThinkingStepByFunctionName = useChatStore((s) => s.findThinkingStepByFunctionName)
+  const addAgentPrompt = useChatStore((s) => s.addAgentPrompt)
+  const addErrorCard = useChatStore((s) => s.addErrorCard)
+  const dismissConnectionErrors = useChatStore((s) => s.dismissConnectionErrors)
+  const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
+  const setPendingInteraction = useChatStore((s) => s.setPendingInteraction)
+  const clearPendingInteraction = useChatStore((s) => s.clearPendingInteraction)
+  const setLoading = useChatStore((s) => s.setLoading)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const clearReportContent = useChatStore((s) => s.clearReportContent)
+  const storeCreateConversation = useChatStore((s) => s.createConversation)
+  const setCurrentUser = useChatStore((s) => s.setCurrentUser)
+  const storeSelectConversation = useChatStore((s) => s.selectConversation)
+  const respondToPrompt = useChatStore((s) => s.respondToPrompt)
+  const startDeepResearch = useChatStore((s) => s.startDeepResearch)
+  const addDeepResearchBanner = useChatStore((s) => s.addDeepResearchBanner)
+  const addPlanMessage = useChatStore((s) => s.addPlanMessage)
+  const updatePlanMessageResponse = useChatStore((s) => s.updatePlanMessageResponse)
+  const updateConversationTitle = useChatStore((s) => s.updateConversationTitle)
 
   // Sync authenticated user ID to store when auth state changes
   useEffect(() => {
     const userId = user?.id ?? null
     setCurrentUser(userId)
   }, [user?.id, setCurrentUser])
+
+  /**
+   * Classify a transport failure as auth-related or generic connection error.
+   * Used when the backend is healthy but the WebSocket/SSE connection failed,
+   * which typically means the auth cookie or token drifted.
+   */
+  const getTransportFailure = useCallback(
+    (message: string, details?: string): { code: ErrorCode; message: string; details?: string } => {
+      if (!authRequired) {
+        return { code: 'connection.failed', message, details }
+      }
+      if (authError === 'RefreshAccessTokenError' || isLikelyAuthRelatedTransportError(message)) {
+        return {
+          code: 'auth.session_expired' as ErrorCode,
+          message: 'Your session has expired. Please sign in again to continue.',
+          details,
+        }
+      }
+      return { code: 'connection.failed', message, details }
+    },
+    [authRequired, authError]
+  )
 
   /**
    * Create WebSocket callbacks that route messages to the store
@@ -220,6 +257,19 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       onResponse: (content: string, status: string, isFinal: boolean, parentId?: string) => {
         if (isStaleMessage(parentId)) {
           console.warn('Dropping stale system_response (parent_id mismatch)', { parentId, active: wsClientRef.current?.activeParentId })
+          return
+        }
+
+        // If the UI is no longer streaming, this response belongs to a
+        // workflow that outlived its request lifecycle. Drop it before adding
+        // content; otherwise stale final responses can duplicate agent replies.
+        const { isStreaming: currentlyStreaming } = useChatStore.getState()
+        if (!currentlyStreaming) {
+          console.warn(
+            isFinal
+              ? 'Ignoring stale isFinal -- not currently streaming'
+              : 'Ignoring stale system_response -- not currently streaming'
+          )
           return
         }
 
@@ -328,14 +378,6 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
 
         // status: "complete" with null text signals task completion
         if (isFinal) {
-          // Guard: if we're not streaming, this is a stale COMPLETE from a
-          // previous workflow that outlived its socket (e.g. after disconnect).
-          const { isStreaming: currentlyStreaming } = useChatStore.getState()
-          if (!currentlyStreaming) {
-            console.warn('Ignoring stale isFinal -- not currently streaming')
-            return
-          }
-
           // Complete any pending thinking step
           if (currentThinkingStepIdRef.current) {
             completeThinkingStep(currentThinkingStepIdRef.current)
@@ -452,17 +494,12 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         // Connection errors (all retries exhausted) -- gate with health check
         if (errorContent.code === 'CONNECTION_FAILED') {
           const backendUp = await checkBackendHealthCached()
-          if (backendUp) {
-            // Backend is healthy -- this was a transient WebSocket issue.
-            // Don't alarm the user; the connection will re-establish on next send.
-            return
-          }
-          // Backend is truly down -- show error
-          addErrorCard(
-            'connection.failed',
-            errorContent.message,
-            errorContent.details,
-          )
+
+          const errorInfo = backendUp
+            ? getTransportFailure(errorContent.message, errorContent.details)
+            : { code: 'connection.failed' as const, message: errorContent.message, details: errorContent.details }
+
+          addErrorCard(errorInfo.code, errorInfo.message, errorInfo.details)
           setCurrentStatus(null)
           setStreaming(false)
           setLoading(false)
@@ -546,6 +583,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     addDeepResearchBanner,
     addPlanMessage,
     updateConversationTitle,
+    getTransportFailure,
   ])
 
   /**
@@ -785,8 +823,11 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     [storeSelectConversation]
   )
 
-  // Get user's filtered conversations
-  const userConversations = getUserConversations()
+  const messages = currentConversation?.messages ?? EMPTY_MESSAGES
+  const userConversations = useMemo(
+    () => (currentUserId ? conversations.filter((c) => c.userId === currentUserId) : EMPTY_CONVERSATIONS),
+    [conversations, currentUserId]
+  )
 
   return {
     sendMessage,
@@ -796,7 +837,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     isConnected,
     isStreaming,
     isLoading,
-    messages: currentConversation?.messages ?? [],
+    messages,
     conversation: currentConversation,
     createConversation,
     userConversations,

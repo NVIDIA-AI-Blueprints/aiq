@@ -45,6 +45,9 @@ class ChatResearcherState(BaseModel):
         clarifier_result: Log from clarifier agent dialog.
         original_query: The latest user query, preserved for deep research.
         available_documents: User-uploaded documents with summaries for context.
+        skip_clarifier: When True the clarifier node is bypassed regardless of
+            ``enable_clarifier``.  Set automatically for API-key and anonymous
+            callers so headless workflows do not stall waiting for user input.
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
@@ -57,3 +60,4 @@ class ChatResearcherState(BaseModel):
     clarifier_result: str | None = None
     original_query: str | None = None
     available_documents: list[AvailableDocument] | None = None
+    skip_clarifier: bool = False

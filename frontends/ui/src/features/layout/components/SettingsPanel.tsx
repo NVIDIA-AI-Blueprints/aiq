@@ -10,7 +10,7 @@
 
 'use client'
 
-import { type FC, useCallback } from 'react'
+import { type FC, memo, useCallback } from 'react'
 import { Flex, Text, SidePanel, Select } from '@/adapters/ui'
 import { Settings } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
@@ -20,10 +20,12 @@ import type { ThemeMode } from '../types'
  * Settings panel for application preferences.
  * Opens from the right side of the screen.
  */
-export const SettingsPanel: FC = () => {
-  const { rightPanel, closeRightPanel, openRightPanel, theme, setTheme } = useLayoutStore()
-
-  const isOpen = rightPanel === 'settings'
+export const SettingsPanel: FC = memo(function SettingsPanel() {
+  const isOpen = useLayoutStore((s) => s.rightPanel === 'settings')
+  const theme = useLayoutStore((s) => s.theme)
+  const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setTheme = useLayoutStore((s) => s.setTheme)
 
   const handleOpenChange = useCallback(
     (open: boolean) => {
@@ -82,4 +84,4 @@ export const SettingsPanel: FC = () => {
       </Flex>
     </SidePanel>
   )
-}
+})

@@ -121,6 +121,18 @@ class TestCreateChatResponse:
         assert response.id == "custom_id"
         assert response.choices[0].message.content == "Test content"
 
+    def test_create_chat_response_custom_model(self):
+        """Test chat response creation with custom model."""
+        response = _create_chat_response("Test content", model="deep_research_workflow")
+
+        assert response.model == "deep_research_workflow"
+
+    def test_create_chat_response_default_model(self):
+        """Test chat response creation falls back to unknown-model."""
+        response = _create_chat_response("Test content")
+
+        assert response.model == "unknown-model"
+
     def test_create_chat_response_empty_content(self):
         """Test chat response with empty content."""
         response = _create_chat_response("")
@@ -194,7 +206,20 @@ class TestDataSourcesExports:
         """Test format_data_source_tools is exported and functional."""
         result = format_data_source_tools(["web_search"])
         assert len(result) == 1
-        assert result[0]["name"] == "web_search"
+        # Falls back to title-cased ID when registry is empty
+        assert result[0]["name"] == "Web Search"
+
+    def test_get_all_tool_refs_exported(self):
+        """Test get_all_tool_refs is exported."""
+        from aiq_agent.common import get_all_tool_refs
+
+        assert callable(get_all_tool_refs)
+
+    def test_get_source_id_for_tool_exported(self):
+        """Test get_source_id_for_tool is exported."""
+        from aiq_agent.common import get_source_id_for_tool
+
+        assert callable(get_source_id_for_tool)
 
 
 class TestIsPostgresDsn:

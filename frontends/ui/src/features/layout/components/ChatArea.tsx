@@ -16,9 +16,10 @@
 
 'use client'
 
-import { type FC, useRef, useEffect, useCallback, useState } from 'react'
+import { type FC, memo, useRef, useEffect, useCallback, useState, useMemo } from 'react'
 import { Flex, Text, Button } from '@/adapters/ui'
 import { Document, Lock } from '@/adapters/ui/icons'
+import { useShallow } from 'zustand/react/shallow'
 import { useChatStore, AgentPrompt, AgentResponse, ErrorBanner, FileUploadBanner, DeepResearchBanner, UserMessage, ChatThinking } from '@/features/chat'
 import type { ChatMessage } from '@/features/chat'
 import { StarfieldAnimation } from '@/shared/components/StarfieldAnimation'
@@ -34,28 +35,40 @@ interface ChatAreaProps {
  * Main chat area container with scrollable message list.
  * Shows welcome state when no messages exist.
  */
-export const ChatArea: FC<ChatAreaProps> = ({ isAuthenticated = false, onSignIn }) => {
-  const { currentConversation, respondToPrompt, getThinkingStepsForMessage, isStreaming, currentUserMessageId, dismissErrorCard } =
-    useChatStore()
+export const ChatArea: FC<ChatAreaProps> = memo(function ChatArea({ isAuthenticated = false, onSignIn }) {
+  const { currentConversation, isStreaming, currentUserMessageId } =
+    useChatStore(useShallow((s) => ({
+      currentConversation: s.currentConversation,
+      isStreaming: s.isStreaming,
+      currentUserMessageId: s.currentUserMessageId,
+    })))
+
+  const respondToPrompt = useChatStore((s) => s.respondToPrompt)
+  const getThinkingStepsForMessage = useChatStore((s) => s.getThinkingStepsForMessage)
+  const dismissErrorCard = useChatStore((s) => s.dismissErrorCard)
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const messages = currentConversation?.messages ?? []
+  const messages = currentConversation?.messages
 
   // Filter to only show displayable message types in the chat area
   // Assistant text messages (full reports) are displayed in the Details Panel instead
-  const displayableMessages = messages.filter((msg) => {
-    const messageType = msg.messageType || (msg.role === 'user' ? 'user' : 'assistant')
-    return (
-      messageType === 'user' ||
-      messageType === 'status' ||
-      messageType === 'prompt' ||
-      messageType === 'agent_response' ||
-      messageType === 'file' ||
-      messageType === 'file_upload_status' ||
-      messageType === 'error' ||
-      messageType === 'deep_research_banner'
-    )
-  })
+  const displayableMessages = useMemo(
+    () =>
+      (messages ?? []).filter((msg) => {
+        const messageType = msg.messageType || (msg.role === 'user' ? 'user' : 'assistant')
+        return (
+          messageType === 'user' ||
+          messageType === 'status' ||
+          messageType === 'prompt' ||
+          messageType === 'agent_response' ||
+          messageType === 'file' ||
+          messageType === 'file_upload_status' ||
+          messageType === 'error' ||
+          messageType === 'deep_research_banner'
+        )
+      }),
+    [messages]
+  )
 
   const isEmpty = displayableMessages.length === 0
 
@@ -176,7 +189,7 @@ export const ChatArea: FC<ChatAreaProps> = ({ isAuthenticated = false, onSignIn 
       )}
     </Flex>
   )
-}
+})
 
 /**
  * Message renderer that dispatches to the correct component based on message type

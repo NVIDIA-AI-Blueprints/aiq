@@ -24,6 +24,7 @@ const { mockClient, mockDocumentsStoreState, mockOrchestratorFns } = vi.hoisted(
     updateTrackedFile: vi.fn(),
     removeTrackedFile: vi.fn(),
     unmarkRecentlyDeleted: vi.fn(),
+    removeRecentlyDeletedIds: vi.fn(),
     setUploading: vi.fn(),
     setError: vi.fn(),
     clearError: vi.fn(),
@@ -62,7 +63,8 @@ vi.mock('@/shared/context', () => ({
 }))
 
 vi.mock('../store', () => ({
-  useDocumentsStore: () => mockDocumentsStoreState,
+  useDocumentsStore: (selector?: (state: typeof mockDocumentsStoreState) => unknown) =>
+    selector ? selector(mockDocumentsStoreState) : mockDocumentsStoreState,
 }))
 
 vi.mock('@/features/chat', () => {
@@ -245,6 +247,7 @@ describe('useFileUpload', () => {
 
       expect(mockDocumentsStoreState.setUploading).toHaveBeenCalledWith(true)
       expect(mockClient.uploadFiles).toHaveBeenCalled()
+      expect(mockDocumentsStoreState.removeRecentlyDeletedIds).toHaveBeenCalledWith(['file-id-1'])
       expect(mockOrchestratorFns.startPolling).toHaveBeenCalledWith(
         'job-1',
         'session-1',

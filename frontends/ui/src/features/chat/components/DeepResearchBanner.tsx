@@ -120,7 +120,8 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   toolCallCount,
   timestamp,
 }) => {
-  const { openRightPanel, setResearchPanelTab } = useLayoutStore()
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
   const reportContent = useChatStore((state) => state.reportContent)
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)

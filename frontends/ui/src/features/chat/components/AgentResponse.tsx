@@ -13,6 +13,7 @@
 
 import { type FC, useCallback } from 'react'
 import { Flex, Text, Button } from '@/adapters/ui'
+import { useShallow } from 'zustand/react/shallow'
 import { ChevronRight, LoadingSpinner } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
 import { formatTime } from '@/shared/utils/format-time'
@@ -49,8 +50,17 @@ export const AgentResponse: FC<AgentResponseProps> = ({
   isDeepResearchActive = false,
   deepResearchJobStatus,
 }) => {
-  const { openRightPanel, setResearchPanelTab } = useLayoutStore()
-  const { reportContent, deepResearchJobId, isDeepResearchStreaming, reconnectToActiveJob, deepResearchStreamLoaded } = useChatStore()
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
+
+  const { reportContent, deepResearchJobId, isDeepResearchStreaming, deepResearchStreamLoaded } =
+    useChatStore(useShallow((s) => ({
+      reportContent: s.reportContent,
+      deepResearchJobId: s.deepResearchJobId,
+      isDeepResearchStreaming: s.isDeepResearchStreaming,
+      deepResearchStreamLoaded: s.deepResearchStreamLoaded,
+    })))
+  const reconnectToActiveJob = useChatStore((s) => s.reconnectToActiveJob)
   const { importJobStream, isLoading, error } = useLoadJobData()
 
   // Determine if we should show the action button

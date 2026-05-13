@@ -232,7 +232,7 @@ version = "1.0.0"
 description = "NAT-based custom search tool"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "nvidia-nat==1.4.0",
+    "nvidia-nat==1.5.0",
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
 ]
@@ -419,6 +419,7 @@ f'<Document href="{url}">\n<title>\n{title}\n</title>\n{content}\n</Document>'
 | Tool | `_type` | Package | API Key |
 |---|---|---|---|
 | Tavily Web Search | `tavily_web_search` | `sources/tavily_web_search` | `TAVILY_API_KEY` |
+| Exa Web Search | `exa_web_search` | `sources/exa_web_search` | `EXA_API_KEY` |
 | Google Scholar | `paper_search` | `sources/google_scholar_paper_search` | `SERPER_API_KEY` |
 | Knowledge Layer | `knowledge_retrieval` | `sources/knowledge_layer` | (varies by backend) |
 

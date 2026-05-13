@@ -52,21 +52,20 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
   const clientRef = useRef(createDocumentsClient({ authToken: idToken }))
   const previousSessionIdRef = useRef<string | undefined>(undefined)
 
-  const {
-    trackedFiles,
-    isUploading,
-    isPolling,
-    error,
-    setCurrentCollection,
-    setCollectionInfo,
-    addTrackedFile,
-    updateTrackedFile,
-    removeTrackedFile,
-    unmarkRecentlyDeleted,
-    setUploading,
-    setError,
-    clearError,
-  } = useDocumentsStore()
+  const trackedFiles = useDocumentsStore((s) => s.trackedFiles)
+  const isUploading = useDocumentsStore((s) => s.isUploading)
+  const isPolling = useDocumentsStore((s) => s.isPolling)
+  const error = useDocumentsStore((s) => s.error)
+  const setCurrentCollection = useDocumentsStore((s) => s.setCurrentCollection)
+  const setCollectionInfo = useDocumentsStore((s) => s.setCollectionInfo)
+  const addTrackedFile = useDocumentsStore((s) => s.addTrackedFile)
+  const updateTrackedFile = useDocumentsStore((s) => s.updateTrackedFile)
+  const removeTrackedFile = useDocumentsStore((s) => s.removeTrackedFile)
+  const unmarkRecentlyDeleted = useDocumentsStore((s) => s.unmarkRecentlyDeleted)
+  const removeRecentlyDeletedIds = useDocumentsStore((s) => s.removeRecentlyDeletedIds)
+  const setUploading = useDocumentsStore((s) => s.setUploading)
+  const setError = useDocumentsStore((s) => s.setError)
+  const clearError = useDocumentsStore((s) => s.clearError)
 
   const sessionFiles = useMemo(
     () => (sessionId ? trackedFiles.filter((f) => f.collectionName === sessionId) : []),
@@ -207,6 +206,10 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
 
         const { job_id, file_ids } = await clientRef.current.uploadFiles(collectionName, validFiles)
 
+        // New upload supersedes tombstones: some backends reuse the same file_id after delete,
+        // which would otherwise hide the row in setFilesFromServer and preservedSuccessNotOnServer.
+        removeRecentlyDeletedIds(file_ids.filter((id): id is string => Boolean(id)))
+
         // Upload POST response means upload is complete and ingestion has started
         // Set status to 'ingesting' immediately
         const filesToPersist: TrackedFile[] = []
@@ -260,6 +263,7 @@ export const useFileUpload = (options: UseFileUploadOptions = {}): UseFileUpload
       clearError,
       setError,
       onError,
+      removeRecentlyDeletedIds,
     ]
   )
 

@@ -70,7 +70,7 @@ Packages under the Apache License, Version 2.0:
 
    @nvidia/foundations-react-core    0.600.0
    chromadb                          1.5.0
-   nvidia-nat                        1.4.0
+   nvidia-nat                        1.5.0
    openai                            2.20.0
    python-multipart                  0.0.22
    requests                          2.32.5
@@ -204,7 +204,7 @@ and must be validated from upstream repositories:
    llama-index                       0.14.14
    llama-index-embeddings-nvidia     0.4.2
    llama-index-vector-stores-chroma  0.5.5
-   pillow                            12.1.1
+   pillow                            12.2.0
    psycopg                           3.3.2
    pydantic                          2.12.5
    pytest                            9.0.2

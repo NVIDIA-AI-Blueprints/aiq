@@ -26,7 +26,7 @@ const mockGetUserConversations = vi.fn((): unknown[] => [])
 const mockSelectConversation = vi.fn()
 
 // Mock store state
-let mockStoreState = {
+let mockStoreState: Record<string, any> = {
   currentUserId: 'user-1',
   currentConversation: { id: 'conv-1', messages: [], userId: 'user-1' },
   conversations: [],
@@ -41,27 +41,30 @@ let mockStoreState = {
 
 vi.mock('../store', () => ({
   useChatStore: Object.assign(
-    vi.fn(() => ({
-      ...mockStoreState,
-      addUserMessage: mockAddUserMessage,
-      addAgentResponse: mockAddAgentResponse,
-      addThinkingStep: mockAddThinkingStep,
-      appendToThinkingStep: mockAppendToThinkingStep,
-      completeThinkingStep: mockCompleteThinkingStep,
-      setReportContent: mockSetReportContent,
-      addStatusCard: mockAddStatusCard,
-      addAgentPrompt: mockAddAgentPrompt,
-      addErrorCard: mockAddErrorCard,
-      setCurrentStatus: mockSetCurrentStatus,
-      setLoading: mockSetLoading,
-      setStreaming: mockSetStreaming,
-      clearThinkingSteps: mockClearThinkingSteps,
-      clearReportContent: mockClearReportContent,
-      createConversation: mockCreateConversation,
-      setCurrentUser: mockSetCurrentUser,
-      getUserConversations: mockGetUserConversations,
-      selectConversation: mockSelectConversation,
-    })),
+    vi.fn((selector?: (s: any) => any) => {
+      const state = {
+        ...mockStoreState,
+        addUserMessage: mockAddUserMessage,
+        addAgentResponse: mockAddAgentResponse,
+        addThinkingStep: mockAddThinkingStep,
+        appendToThinkingStep: mockAppendToThinkingStep,
+        completeThinkingStep: mockCompleteThinkingStep,
+        setReportContent: mockSetReportContent,
+        addStatusCard: mockAddStatusCard,
+        addAgentPrompt: mockAddAgentPrompt,
+        addErrorCard: mockAddErrorCard,
+        setCurrentStatus: mockSetCurrentStatus,
+        setLoading: mockSetLoading,
+        setStreaming: mockSetStreaming,
+        clearThinkingSteps: mockClearThinkingSteps,
+        clearReportContent: mockClearReportContent,
+        createConversation: mockCreateConversation,
+        setCurrentUser: mockSetCurrentUser,
+        getUserConversations: mockGetUserConversations,
+        selectConversation: mockSelectConversation,
+      }
+      return selector ? selector(state) : state
+    }),
     {
       getState: vi.fn(() => mockStoreState),
     }
@@ -382,11 +385,14 @@ describe('useChat', () => {
       { id: 'conv-1', userId: 'user-1', title: 'Conv 1' },
       { id: 'conv-2', userId: 'user-1', title: 'Conv 2' },
     ]
-    mockGetUserConversations.mockReturnValue(mockConversations)
+    mockStoreState.conversations = mockConversations
 
     const { result } = renderHook(() => useChat())
 
-    expect(result.current.userConversations).toEqual(mockConversations)
+    expect(result.current.userConversations).toEqual([
+      { id: 'conv-1', userId: 'user-1', title: 'Conv 1' },
+      { id: 'conv-2', userId: 'user-1', title: 'Conv 2' },
+    ])
   })
 
   test('status change creates new thinking step', async () => {

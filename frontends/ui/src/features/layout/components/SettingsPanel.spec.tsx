@@ -12,13 +12,16 @@ const mockOpenRightPanel = vi.fn()
 const mockSetTheme = vi.fn()
 
 vi.mock('../store', () => ({
-  useLayoutStore: vi.fn(() => ({
-    rightPanel: 'settings',
-    closeRightPanel: mockCloseRightPanel,
-    openRightPanel: mockOpenRightPanel,
-    theme: 'system',
-    setTheme: mockSetTheme,
-  })),
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      rightPanel: 'settings',
+      closeRightPanel: mockCloseRightPanel,
+      openRightPanel: mockOpenRightPanel,
+      theme: 'system',
+      setTheme: mockSetTheme,
+    }
+    return selector ? selector(state) : state
+  }),
 }))
 
 import { useLayoutStore } from '../store'
@@ -27,12 +30,15 @@ describe('SettingsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Reset mock to default open state
-    vi.mocked(useLayoutStore).mockReturnValue({
-      rightPanel: 'settings',
-      closeRightPanel: mockCloseRightPanel,
-      openRightPanel: mockOpenRightPanel,
-      theme: 'system',
-      setTheme: mockSetTheme,
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        rightPanel: 'settings',
+        closeRightPanel: mockCloseRightPanel,
+        openRightPanel: mockOpenRightPanel,
+        theme: 'system',
+        setTheme: mockSetTheme,
+      }
+      return selector ? selector(state) : state
     })
   })
 
@@ -50,12 +56,15 @@ describe('SettingsPanel', () => {
   })
 
   test('select trigger reflects current theme', () => {
-    vi.mocked(useLayoutStore).mockReturnValue({
-      rightPanel: 'settings',
-      closeRightPanel: mockCloseRightPanel,
-      openRightPanel: mockOpenRightPanel,
-      theme: 'dark',
-      setTheme: mockSetTheme,
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        rightPanel: 'settings',
+        closeRightPanel: mockCloseRightPanel,
+        openRightPanel: mockOpenRightPanel,
+        theme: 'dark',
+        setTheme: mockSetTheme,
+      }
+      return selector ? selector(state) : state
     })
 
     render(<SettingsPanel />)
@@ -76,12 +85,15 @@ describe('SettingsPanel', () => {
   })
 
   test('does not render when panel is closed', () => {
-    vi.mocked(useLayoutStore).mockReturnValue({
-      rightPanel: null,
-      closeRightPanel: mockCloseRightPanel,
-      openRightPanel: mockOpenRightPanel,
-      theme: 'system',
-      setTheme: mockSetTheme,
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        rightPanel: null,
+        closeRightPanel: mockCloseRightPanel,
+        openRightPanel: mockOpenRightPanel,
+        theme: 'system',
+        setTheme: mockSetTheme,
+      }
+      return selector ? selector(state) : state
     })
 
     render(<SettingsPanel />)
