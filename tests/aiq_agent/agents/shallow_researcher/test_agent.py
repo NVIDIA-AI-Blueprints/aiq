@@ -548,6 +548,50 @@ class TestShallowResearcherSourceRegistryGating:
         )
 
     @pytest.mark.asyncio
+    async def test_missing_citation_fallback_skips_ambiguous_multi_source_registry(self, mock_llm_provider, mock_llm):
+        """Do not inject the first captured source when multiple sources exist."""
+        populate_from_config(
+            [
+                {
+                    "id": "mcp_time",
+                    "name": "MCP Time",
+                    "description": "Get current time and timezone information through MCP.",
+                    "tools": ["mcp_time"],
+                },
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "description": "Search the web for real-time information.",
+                    "tools": ["web_search_with_urls"],
+                },
+            ],
+            group_names={"mcp_time"},
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"},
+                {"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "2"},
+            ],
+        )
+        final_response = AIMessage(content="CUDA is a parallel computing platform.")
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[mcp_time__get_current_time, web_search_with_urls],
+        )
+
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA? Also note the time.")])
+        result = await agent.run(state)
+
+        sources = agent.source_registry.all_sources()
+        assert len(sources) >= 2
+        assert sources[0].citation_key == "mcp_time__get_current_time"
+        assert any(source.url == "https://docs.nvidia.com/cuda/" for source in sources)
+        assert result.messages[-1].content == "CUDA is a parallel computing platform."
+
+    @pytest.mark.asyncio
     async def test_registered_exact_data_source_tool_without_urls_is_captured(self, mock_llm_provider, mock_llm):
         """Any exact tool declared under data_sources can be a non-URL citation source."""
         populate_from_config(

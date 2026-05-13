@@ -373,8 +373,9 @@ class ShallowResearcherAgent:
                         len(registry.all_sources()),
                     )
                     content = verification.verified_report
-                    if not verification.valid_citations:
-                        content = _append_minimal_citation(content, registry.all_sources()[0])
+                    sources = registry.all_sources()
+                    if not verification.valid_citations and len(sources) == 1:
+                        content = _append_minimal_citation(content, sources[0])
                 else:
                     from aiq_agent.common.tool_validation import validate_tool_availability
 
