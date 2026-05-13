@@ -26,7 +26,7 @@
 # =============================================================================
 # Stage 1: Builder (shared between dev and release)
 # =============================================================================
-FROM nvcr.io/nvidia/base/ubuntu:jammy-20251013 AS builder
+FROM nvcr.io/nvidia/base/ubuntu:jammy-20260217 AS builder
 
 WORKDIR /app
 

@@ -74,7 +74,7 @@
 # =============================================================================
 # Stage 1: Base with Node.js
 # =============================================================================
-FROM nvcr.io/nvidia/base/ubuntu:jammy-20251013 AS base
+FROM nvcr.io/nvidia/base/ubuntu:jammy-20260217 AS base
 
 RUN apt-get update && apt-get install -y \
     curl \
