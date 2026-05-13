@@ -509,9 +509,49 @@ def test_ingestion_and_retrieval_with_fake_client(tmp_path):
     assert result.chunks[0].file_name == "doc.txt"
     assert result.chunks[0].display_citation == "doc.txt"
     assert result.chunks[0].metadata["tenant"] == "alpha"
+    # source_path leaks internal filesystem paths (e.g. /tmp/tmpXXX.pdf in byte-upload
+    # paths) into API responses and LLM context — must never appear in retrieved metadata.
+    assert "source_path" not in result.chunks[0].metadata
 
     assert ingestor.delete_file(file_info.file_id, "collection_a")
     assert ingestor.list_files("collection_a") == []
+
+
+def test_indexed_documents_omit_internal_source_path(tmp_path):
+    """source_path leaks internal filesystem paths (such as /tmp/tmpXXX.pdf temp files
+    used in Dask and byte-upload modes) into the OpenSearch index, and via normalize()
+    into every Chunk returned to API consumers and LLM context windows. Indexed docs
+    must never carry it in metadata."""
+    fake_client = FakeOpenSearchClient()
+    test_file = tmp_path / "leak-check.txt"
+    test_file.write_text("Short payload to chunk.", encoding="utf-8")
+
+    ingestor = OpenSearchIngestor(
+        {
+            "endpoint": "localhost:9200",
+            "embedding_dim": 4,
+            "chunk_size": 8,
+            "chunk_overlap": 1,
+            "index_prefix": "aiq-leak",
+        }
+    )
+    ingestor._client = fake_client
+    ingestor._embed_texts = lambda texts: [[0.0, 0.0, 0.0, 0.0] for _ in texts]
+
+    file_info = ingestor.upload_file(str(test_file), "collection_leak")
+    deadline = time.time() + 5
+    job = ingestor.get_job_status(file_info.metadata["job_id"])
+    while time.time() < deadline and not job.is_terminal:
+        time.sleep(0.05)
+        job = ingestor.get_job_status(file_info.metadata["job_id"])
+    assert job.status == JobState.COMPLETED
+
+    # Inspect every indexed document directly — the fake stores them under docs[index].
+    indexed_docs = [doc for index_docs in fake_client.docs.values() for doc in index_docs.values()]
+    assert indexed_docs, "expected at least one chunk to be indexed"
+    for doc in indexed_docs:
+        metadata = doc.get("metadata") or {}
+        assert "source_path" not in metadata, f"source_path leaked into indexed metadata: {metadata!r}"
 
 
 def test_ttl_cleanup_deletes_only_expired_opensearch_session_indexes():

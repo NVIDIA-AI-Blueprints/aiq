@@ -1264,7 +1264,6 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                             **file_metadata,
                             **segment_metadata,
                             "chunk_index": chunk_index,
-                            "source_path": file_path,
                         },
                         "created_at": now,
                         "updated_at": now,
