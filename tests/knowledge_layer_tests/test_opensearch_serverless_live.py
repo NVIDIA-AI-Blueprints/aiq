@@ -231,8 +231,7 @@ def _file_statuses_with_retry(
     statuses = {}
     while time.time() < deadline:
         statuses = {
-            file_name: ingestor.get_file_status(file_id, collection_name)
-            for file_name, file_id in file_ids.items()
+            file_name: ingestor.get_file_status(file_id, collection_name) for file_name, file_id in file_ids.items()
         }
         if all(status is not None and status.status == FileStatus.SUCCESS for status in statuses.values()):
             return statuses
