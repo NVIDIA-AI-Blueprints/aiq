@@ -204,7 +204,7 @@ and must be validated from upstream repositories:
    llama-index                       0.14.14
    llama-index-embeddings-nvidia     0.4.2
    llama-index-vector-stores-chroma  0.5.5
-   pillow                            12.1.1
+   pillow                            12.2.0
    psycopg                           3.3.2
    pydantic                          2.12.5
    pytest                            9.0.2

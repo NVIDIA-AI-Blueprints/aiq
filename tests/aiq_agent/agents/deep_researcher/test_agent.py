@@ -90,11 +90,16 @@ class TestDeepResearcherAgent:
             assert agent.max_loops == 2
             assert agent.verbose is True
             assert agent.callbacks == []
+            assert agent.deepagents_runtime.skill_sources is None
+            assert agent.deepagents_runtime.sandbox is None
 
     def test_init_with_custom_settings(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization with custom settings."""
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+            from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
+            from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
+            from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
 
             callbacks = [MagicMock()]
             agent = DeepResearcherAgent(
@@ -103,11 +108,59 @@ class TestDeepResearcherAgent:
                 max_loops=5,
                 verbose=False,
                 callbacks=callbacks,
+                skills=SkillsConfig.enabled_builtin(),
+                sandbox=SandboxConfig(app_name="custom-aiq"),
             )
 
             assert agent.max_loops == 5
             assert agent.verbose is False
             assert agent.callbacks == callbacks
+            assert agent.deepagents_runtime.skill_sources == [BUILTIN_SKILL_SOURCE]
+            assert agent.deepagents_runtime.sandbox is not None
+            assert agent.deepagents_runtime.sandbox.provider == "modal"
+            assert agent.deepagents_runtime.sandbox.app_name == "custom-aiq"
+            assert agent.deepagents_runtime.sandbox.python_packages == ()
+            assert agent.deepagents_runtime.sandbox.block_network is True
+
+    def test_sandbox_config_rejects_unsupported_provider(self):
+        """Unsupported sandbox providers fail early with a clear error."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
+
+        with pytest.raises(ValueError, match="Unsupported sandbox provider"):
+            SandboxConfig(provider="not-modal")
+
+    def test_register_uses_runtime_config_models(self):
+        """NAT config uses the same skills and sandbox models as runtime."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+
+        config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            skills=SkillsConfig(enabled=True),
+            sandbox=SandboxConfig(app_name="custom-aiq", python_packages=["matplotlib", "pillow"]),
+        )
+
+        assert config.skills.enabled is True
+        assert config.skills.sources == (BUILTIN_SKILL_SOURCE,)
+        assert config.sandbox is not None
+        assert config.sandbox.provider == "modal"
+        assert config.sandbox.app_name == "custom-aiq"
+        assert config.sandbox.python_packages == ("matplotlib", "pillow")
+
+    def test_modal_sandbox_name_is_job_id(self):
+        """Modal sandbox names use the resolved job ID directly."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
+
+        assert _validate_modal_sandbox_name("job-123") == "job-123"
+
+    def test_modal_sandbox_name_rejects_invalid_job_id(self):
+        """Invalid custom job IDs fail before creating a Modal sandbox."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
+
+        with pytest.raises(ValueError, match="valid Modal sandbox name"):
+            _validate_modal_sandbox_name("bad/job/id")
 
     def test_init_without_tools(self, mock_llm_provider, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization without tools."""
@@ -135,6 +188,193 @@ class TestDeepResearcherAgent:
             assert "planner" in agent._prompts
             assert "researcher" in agent._prompts
             assert "orchestrator" in agent._prompts
+
+    def test_prepare_state_preloads_builtin_skill_files(self, mock_llm_provider, real_tool):
+        """Built-in skills are added to state so StateBackend can discover them."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+
+        agent = DeepResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[real_tool],
+            skills=SkillsConfig.enabled_builtin(),
+        )
+        state = DeepResearchAgentState(
+            messages=[],
+            files={"/existing.txt": {"content": "keep", "encoding": "utf-8"}},
+        )
+        mock_skill_files = {
+            "/mock-skill/SKILL.md": {
+                "content": "name: mock-skill\n",
+                "encoding": "utf-8",
+                "created_at": "2026-01-01T00:00:00",
+                "modified_at": "2026-01-01T00:00:00",
+            }
+        }
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._builtin_skill_state_files",
+            return_value=mock_skill_files,
+        ):
+            prepared = agent.deepagents_runtime.prepare_state(state)
+
+        assert prepared.files["/existing.txt"]["content"] == "keep"
+        for path, file_data in mock_skill_files.items():
+            assert prepared.files[path] == file_data
+
+    def test_build_orchestrator_passes_skills_to_top_level_agent(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Skills are exposed to the orchestrator, not added as a separate subagent."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=mock_create_deep_agent,
+        ) as create:
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+            from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
+            from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                skills=SkillsConfig.enabled_builtin(),
+            )
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Compare revenue growth")])
+
+            agent._build_orchestrator_agent(state)
+
+            kwargs = create.call_args.kwargs
+            assert kwargs["skills"] == [BUILTIN_SKILL_SOURCE]
+            assert not callable(kwargs["backend"])
+            assert "Available Skills:" in kwargs["system_prompt"]
+            assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" in kwargs["system_prompt"]
+            assert 'execute("python /workspace/[name].py")' in kwargs["system_prompt"]
+            assert "Tell the planner to account for available skills" in kwargs["system_prompt"]
+            assert "Include any applicable skill-use requirements from the plan" in kwargs["system_prompt"]
+            assert "data-table-analysis" not in kwargs["system_prompt"]
+            subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
+            assert subagents["planner-agent"]["skills"] == [BUILTIN_SKILL_SOURCE]
+            assert subagents["researcher-agent"]["skills"] == [BUILTIN_SKILL_SOURCE]
+            assert "Skill-aware planning" in subagents["planner-agent"]["system_prompt"]
+            assert "Use applicable skills before specialized work" in subagents["researcher-agent"]["system_prompt"]
+            assert "data-table-analysis" not in subagents["planner-agent"]["system_prompt"]
+            assert "data-table-analysis" not in subagents["researcher-agent"]["system_prompt"]
+
+    def test_build_orchestrator_omits_skills_when_disabled(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Default deep research runs do not add SkillsMiddleware."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=mock_create_deep_agent,
+        ) as create:
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
+
+            agent._build_orchestrator_agent(state)
+
+            assert "skills" not in create.call_args.kwargs
+            assert (
+                "When available skills apply during planning, research, or synthesis"
+                not in (create.call_args.kwargs["system_prompt"])
+            )
+
+    def test_modal_backend_is_concrete_cached_and_routes_skills_locally(self, mock_llm_provider, real_tool):
+        """Modal backend creation is lazy, cached, and skill reads do not hit Modal."""
+        from deepagents.backends import StateBackend
+
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+
+        agent = DeepResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[real_tool],
+            skills=SkillsConfig.enabled_builtin(),
+            sandbox=SandboxConfig(),
+            job_id="job-123",
+        )
+        fake_modal_backend = MagicMock()
+
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+                return_value=fake_modal_backend,
+            ) as create_backend,
+        ):
+            backend_one = agent.deepagents_runtime.backend
+            backend_two = agent.deepagents_runtime.backend
+
+        assert backend_one is backend_two
+        assert backend_one.default is fake_modal_backend
+        create_backend.assert_called_once_with(
+            agent.deepagents_runtime.sandbox,
+            "job-123",
+        )
+        assert isinstance(backend_one.routes[BUILTIN_SKILL_SOURCE], StateBackend)
+        fake_modal_backend.ls.assert_not_called()
+        fake_modal_backend.read.assert_not_called()
+
+    def test_modal_backend_creates_sandbox_lazily(self):
+        """Modal sandbox lifetime starts on first sandbox operation, not agent construction."""
+        from deepagents.backends.protocol import ExecuteResponse
+
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
+
+        fake_modal_backend = MagicMock()
+        fake_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_modal_backend_now",
+            return_value=fake_modal_backend,
+        ) as create_modal:
+            backend = _create_sandbox_backend(SandboxConfig(), "job-123")
+
+            create_modal.assert_not_called()
+            result = backend.execute("echo ok", timeout=5)
+
+        assert result.output == "ok"
+        create_modal.assert_called_once()
+        fake_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
+
+    def test_modal_backend_recreates_and_retries_once_on_not_found(self):
+        """A disappeared Modal container is recreated once for the same job-scoped name."""
+        import modal
+        from deepagents.backends.protocol import ExecuteResponse
+
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
+
+        first_modal_backend = MagicMock()
+        first_modal_backend.execute.side_effect = modal.exception.NotFoundError("gone")
+        second_modal_backend = MagicMock()
+        second_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
+        config = SandboxConfig()
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_modal_backend_now",
+            side_effect=[first_modal_backend, second_modal_backend],
+        ) as create_modal:
+            backend = _create_sandbox_backend(config, "job-123")
+            result = backend.execute("echo ok", timeout=5)
+
+        assert result.output == "ok"
+        assert create_modal.call_args_list[0].args == (config, "job-123")
+        assert create_modal.call_args_list[0].kwargs == {}
+        assert create_modal.call_args_list[1].args == (config, "job-123")
+        assert create_modal.call_args_list[1].kwargs == {"force_new": True}
+        first_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
+        second_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
 
     def test_load_prompts_fallback(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test _load_prompts uses inline defaults when files not found."""

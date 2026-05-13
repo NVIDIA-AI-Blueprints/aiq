@@ -21,20 +21,23 @@ const mockDataSources = [
 ]
 
 vi.mock('../store', () => ({
-  useLayoutStore: vi.fn(() => ({
-    rightPanel: 'data-sources',
-    closeRightPanel: mockCloseRightPanel,
-    openRightPanel: mockOpenRightPanel,
-    dataSourcesPanelTab: 'connections',
-    setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-    enabledDataSourceIds: ['web_search', 'knowledge_base'],
-    toggleDataSource: mockToggleDataSource,
-    setEnabledDataSources: mockSetEnabledDataSources,
-    availableDataSources: mockDataSources,
-    dataSourcesLoading: false,
-    dataSourcesError: null,
-    fetchDataSources: mockFetchDataSources,
-  })),
+  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
+    const state = {
+      rightPanel: 'data-sources',
+      closeRightPanel: mockCloseRightPanel,
+      openRightPanel: mockOpenRightPanel,
+      dataSourcesPanelTab: 'connections',
+      setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+      enabledDataSourceIds: ['web_search', 'knowledge_base'],
+      toggleDataSource: mockToggleDataSource,
+      setEnabledDataSources: mockSetEnabledDataSources,
+      availableDataSources: mockDataSources,
+      dataSourcesLoading: false,
+      dataSourcesError: null,
+      fetchDataSources: mockFetchDataSources,
+    }
+    return selector ? selector(state) : state
+  }),
 }))
 
 // Mock useAuth hook
@@ -78,20 +81,23 @@ describe('DataSourcesPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Reset mock to default open state with authenticated user
-    vi.mocked(useLayoutStore).mockReturnValue({
-      rightPanel: 'data-sources',
-      closeRightPanel: mockCloseRightPanel,
-      openRightPanel: mockOpenRightPanel,
-      dataSourcesPanelTab: 'connections',
-      setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-      enabledDataSourceIds: ['web_search', 'knowledge_base'],
-      toggleDataSource: mockToggleDataSource,
-      setEnabledDataSources: mockSetEnabledDataSources,
-      availableDataSources: mockDataSources,
-      dataSourcesLoading: false,
-      dataSourcesError: null,
-      fetchDataSources: mockFetchDataSources,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        rightPanel: 'data-sources',
+        closeRightPanel: mockCloseRightPanel,
+        openRightPanel: mockOpenRightPanel,
+        dataSourcesPanelTab: 'connections',
+        setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+        enabledDataSourceIds: ['web_search', 'knowledge_base'],
+        toggleDataSource: mockToggleDataSource,
+        setEnabledDataSources: mockSetEnabledDataSources,
+        availableDataSources: mockDataSources,
+        dataSourcesLoading: false,
+        dataSourcesError: null,
+        fetchDataSources: mockFetchDataSources,
+      }
+      return selector ? selector(state) : state
+    })
 
     vi.mocked(useAuth).mockReturnValue({
       idToken: 'valid-token',
@@ -131,20 +137,23 @@ describe('DataSourcesPanel', () => {
   })
 
   test('renders files tab content', () => {
-    vi.mocked(useLayoutStore).mockReturnValue({
-      rightPanel: 'data-sources',
-      closeRightPanel: mockCloseRightPanel,
-      openRightPanel: mockOpenRightPanel,
-      dataSourcesPanelTab: 'files',
-      setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-      enabledDataSourceIds: ['web_search', 'knowledge_base'],
-      toggleDataSource: mockToggleDataSource,
-      setEnabledDataSources: mockSetEnabledDataSources,
-      availableDataSources: mockDataSources,
-      dataSourcesLoading: false,
-      dataSourcesError: null,
-      fetchDataSources: mockFetchDataSources,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        rightPanel: 'data-sources',
+        closeRightPanel: mockCloseRightPanel,
+        openRightPanel: mockOpenRightPanel,
+        dataSourcesPanelTab: 'files',
+        setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+        enabledDataSourceIds: ['web_search', 'knowledge_base'],
+        toggleDataSource: mockToggleDataSource,
+        setEnabledDataSources: mockSetEnabledDataSources,
+        availableDataSources: mockDataSources,
+        dataSourcesLoading: false,
+        dataSourcesError: null,
+        fetchDataSources: mockFetchDataSources,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<DataSourcesPanel />)
 
@@ -158,20 +167,23 @@ describe('DataSourcesPanel', () => {
   })
 
   test('shows file upload message in footer for files tab', () => {
-    vi.mocked(useLayoutStore).mockReturnValue({
-      rightPanel: 'data-sources',
-      closeRightPanel: mockCloseRightPanel,
-      openRightPanel: mockOpenRightPanel,
-      dataSourcesPanelTab: 'files',
-      setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-      enabledDataSourceIds: ['web_search', 'knowledge_base'],
-      toggleDataSource: mockToggleDataSource,
-      setEnabledDataSources: mockSetEnabledDataSources,
-      availableDataSources: mockDataSources,
-      dataSourcesLoading: false,
-      dataSourcesError: null,
-      fetchDataSources: mockFetchDataSources,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        rightPanel: 'data-sources',
+        closeRightPanel: mockCloseRightPanel,
+        openRightPanel: mockOpenRightPanel,
+        dataSourcesPanelTab: 'files',
+        setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+        enabledDataSourceIds: ['web_search', 'knowledge_base'],
+        toggleDataSource: mockToggleDataSource,
+        setEnabledDataSources: mockSetEnabledDataSources,
+        availableDataSources: mockDataSources,
+        dataSourcesLoading: false,
+        dataSourcesError: null,
+        fetchDataSources: mockFetchDataSources,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<DataSourcesPanel />)
 
@@ -179,20 +191,23 @@ describe('DataSourcesPanel', () => {
   })
 
   test('does not render content when panel is closed', () => {
-    vi.mocked(useLayoutStore).mockReturnValue({
-      rightPanel: null,
-      closeRightPanel: mockCloseRightPanel,
-      openRightPanel: mockOpenRightPanel,
-      dataSourcesPanelTab: 'connections',
-      setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-      enabledDataSourceIds: ['web_search', 'knowledge_base'],
-      toggleDataSource: mockToggleDataSource,
-      setEnabledDataSources: mockSetEnabledDataSources,
-      availableDataSources: mockDataSources,
-      dataSourcesLoading: false,
-      dataSourcesError: null,
-      fetchDataSources: mockFetchDataSources,
-    } as unknown as ReturnType<typeof useLayoutStore>)
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        rightPanel: null,
+        closeRightPanel: mockCloseRightPanel,
+        openRightPanel: mockOpenRightPanel,
+        dataSourcesPanelTab: 'connections',
+        setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+        enabledDataSourceIds: ['web_search', 'knowledge_base'],
+        toggleDataSource: mockToggleDataSource,
+        setEnabledDataSources: mockSetEnabledDataSources,
+        availableDataSources: mockDataSources,
+        dataSourcesLoading: false,
+        dataSourcesError: null,
+        fetchDataSources: mockFetchDataSources,
+      }
+      return selector ? selector(state) : state
+    })
 
     render(<DataSourcesPanel />)
 
@@ -229,20 +244,23 @@ describe('DataSourcesPanel', () => {
 
   describe('error state', () => {
     test('renders error message when API fails', () => {
-      vi.mocked(useLayoutStore).mockReturnValue({
-        rightPanel: 'data-sources',
-        closeRightPanel: mockCloseRightPanel,
-        openRightPanel: mockOpenRightPanel,
-        dataSourcesPanelTab: 'connections',
-        setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-        enabledDataSourceIds: [],
-        toggleDataSource: mockToggleDataSource,
-        setEnabledDataSources: mockSetEnabledDataSources,
-        availableDataSources: null,
-        dataSourcesLoading: false,
-        dataSourcesError: 'Failed to connect to server',
-        fetchDataSources: mockFetchDataSources,
-      } as unknown as ReturnType<typeof useLayoutStore>)
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          rightPanel: 'data-sources',
+          closeRightPanel: mockCloseRightPanel,
+          openRightPanel: mockOpenRightPanel,
+          dataSourcesPanelTab: 'connections',
+          setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+          enabledDataSourceIds: [],
+          toggleDataSource: mockToggleDataSource,
+          setEnabledDataSources: mockSetEnabledDataSources,
+          availableDataSources: null,
+          dataSourcesLoading: false,
+          dataSourcesError: 'Failed to connect to server',
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
 
       render(<DataSourcesPanel />)
 
@@ -251,20 +269,23 @@ describe('DataSourcesPanel', () => {
     })
 
     test('renders retry button on error', () => {
-      vi.mocked(useLayoutStore).mockReturnValue({
-        rightPanel: 'data-sources',
-        closeRightPanel: mockCloseRightPanel,
-        openRightPanel: mockOpenRightPanel,
-        dataSourcesPanelTab: 'connections',
-        setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-        enabledDataSourceIds: [],
-        toggleDataSource: mockToggleDataSource,
-        setEnabledDataSources: mockSetEnabledDataSources,
-        availableDataSources: null,
-        dataSourcesLoading: false,
-        dataSourcesError: 'Network error',
-        fetchDataSources: mockFetchDataSources,
-      } as unknown as ReturnType<typeof useLayoutStore>)
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          rightPanel: 'data-sources',
+          closeRightPanel: mockCloseRightPanel,
+          openRightPanel: mockOpenRightPanel,
+          dataSourcesPanelTab: 'connections',
+          setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+          enabledDataSourceIds: [],
+          toggleDataSource: mockToggleDataSource,
+          setEnabledDataSources: mockSetEnabledDataSources,
+          availableDataSources: null,
+          dataSourcesLoading: false,
+          dataSourcesError: 'Network error',
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
 
       render(<DataSourcesPanel />)
 
@@ -296,20 +317,23 @@ describe('DataSourcesPanel', () => {
     })
 
     test('does not show auth warning when only web_search is available', () => {
-      vi.mocked(useLayoutStore).mockReturnValue({
-        rightPanel: 'data-sources',
-        closeRightPanel: mockCloseRightPanel,
-        openRightPanel: mockOpenRightPanel,
-        dataSourcesPanelTab: 'connections',
-        setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
-        enabledDataSourceIds: ['web_search'],
-        toggleDataSource: mockToggleDataSource,
-        setEnabledDataSources: mockSetEnabledDataSources,
-        availableDataSources: [{ id: 'web_search', name: 'Web Search', description: 'Search' }],
-        dataSourcesLoading: false,
-        dataSourcesError: null,
-        fetchDataSources: mockFetchDataSources,
-      } as unknown as ReturnType<typeof useLayoutStore>)
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          rightPanel: 'data-sources',
+          closeRightPanel: mockCloseRightPanel,
+          openRightPanel: mockOpenRightPanel,
+          dataSourcesPanelTab: 'connections',
+          setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+          enabledDataSourceIds: ['web_search'],
+          toggleDataSource: mockToggleDataSource,
+          setEnabledDataSources: mockSetEnabledDataSources,
+          availableDataSources: [{ id: 'web_search', name: 'Web Search', description: 'Search' }],
+          dataSourcesLoading: false,
+          dataSourcesError: null,
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
 
       vi.mocked(useAuth).mockReturnValue({
         idToken: undefined,

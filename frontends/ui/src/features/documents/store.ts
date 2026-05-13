@@ -53,9 +53,10 @@ export const useDocumentsStore = create<DocumentsStore>()(
 
       addTrackedFile: (file) => {
         set(
-          (state) => ({
-            trackedFiles: [...state.trackedFiles, file],
-          }),
+          (state) => {
+            const next = [...state.trackedFiles, file]
+            return { trackedFiles: next }
+          },
           false,
           'addTrackedFile'
         )
@@ -79,7 +80,6 @@ export const useDocumentsStore = create<DocumentsStore>()(
             if (file) {
               nextDeleted.add(file.id)
               if (file.serverFileId) nextDeleted.add(file.serverFileId)
-              nextDeleted.add(file.fileName)
             }
             return {
               trackedFiles: state.trackedFiles.filter((f) => f.id !== id),
@@ -97,11 +97,27 @@ export const useDocumentsStore = create<DocumentsStore>()(
             const nextDeleted = new Set(state.recentlyDeletedIds)
             nextDeleted.delete(file.id)
             if (file.serverFileId) nextDeleted.delete(file.serverFileId)
-            nextDeleted.delete(file.fileName)
             return { recentlyDeletedIds: nextDeleted }
           },
           false,
           'unmarkRecentlyDeleted'
+        )
+      },
+
+      removeRecentlyDeletedIds: (ids: string[]) => {
+        set(
+          (state) => {
+            if (ids.length === 0) return state
+            const nextDeleted = new Set(state.recentlyDeletedIds)
+            let changed = false
+            for (const id of ids) {
+              if (id && nextDeleted.delete(id)) changed = true
+            }
+            if (!changed) return state
+            return { recentlyDeletedIds: nextDeleted }
+          },
+          false,
+          'removeRecentlyDeletedIds'
         )
       },
 
@@ -208,51 +224,72 @@ export const useDocumentsStore = create<DocumentsStore>()(
             // about yet. These must survive the replace so the UI keeps showing
             // upload progress cards and pending deletes.
             const serverFileIds = new Set(files.map((f) => f.file_id))
+            const serverFileNames = new Set(files.map((f) => f.file_name))
+            const tombstoneIds = state.recentlyDeletedIds
             const transientStatuses = new Set(['uploading', 'ingesting', 'deleting'])
-            const preservedFiles = state.trackedFiles.filter(
+            const preservedTransient = state.trackedFiles.filter(
               (f) =>
                 f.collectionName === collectionName &&
                 transientStatuses.has(f.status) &&
                 !serverFileIds.has(f.serverFileId ?? '') &&
                 !serverFileIds.has(f.id)
             )
+            // Preserve success files we got from polling (have serverFileId) but missing from server
+            // response — e.g. right after job complete, backend may return [] or stale list.
+            const preservedSuccessNotOnServer = state.trackedFiles.filter(
+              (f) =>
+                f.collectionName === collectionName &&
+                f.status === 'success' &&
+                (f.serverFileId ?? '') !== '' &&
+                !serverFileIds.has(f.serverFileId ?? '') &&
+                !serverFileNames.has(f.fileName) &&
+                !tombstoneIds.has(f.serverFileId ?? '') &&
+                !tombstoneIds.has(f.id)
+            )
+            const preservedFiles = [...preservedTransient, ...preservedSuccessNotOnServer]
 
             // Remove existing files for this collection (except transient ones kept above)
             const otherFiles = state.trackedFiles.filter((f) => f.collectionName !== collectionName)
 
-            // Build set of file IDs to exclude from server data: transient files
-            // (e.g. actively deleting) and recently deleted files whose stale
-            // entries may still appear in the server response.
-            const excludedIds = new Set([
-              ...preservedFiles.flatMap((f) => [f.serverFileId ?? '', f.id, f.fileName]),
-              ...state.recentlyDeletedIds,
-            ])
+            // Dedupe against preserved rows (transient + polled success not yet on server).
+            const excludedIds = new Set(
+              preservedFiles.flatMap((f) => [f.serverFileId ?? '', f.id, f.fileName])
+            )
+
+            // Drop server rows whose file_id is tombstoned (stale list after optimistic delete).
+            // Tombstones are client id + serverFileId only, not fileName, so same-name re-upload works.
 
             // Convert FileInfo to TrackedFile, preserving jobId from existing files
             // Use the collectionName parameter (sessionId) for consistency with sessionFiles filtering
-            const serverFiles: TrackedFile[] = files.filter(
-              (f) => !excludedIds.has(f.file_id) && !excludedIds.has(f.file_name)
-            ).map((file) => {
-              const existingFile = existingFilesMap.get(file.file_id)
-              return {
-                id: file.file_id, // Use server ID as local ID
-                fileName: file.file_name,
-                fileSize: file.file_size || 0,
-                status: file.status,
-                progress: file.status === 'success' ? 100 : 0,
-                errorMessage: file.error_message,
-                serverFileId: file.file_id,
-                collectionName, // Use parameter, not file.collection_name, for consistent filtering
-                // Preserve jobId and uploadedAt from existing tracked file if available.
-                // The client sets uploadedAt with full time precision on upload;
-                // the server may return a date-only string (midnight) from ChromaDB metadata.
-                jobId: existingFile?.jobId,
-                uploadedAt: existingFile?.uploadedAt || file.uploaded_at,
-              }
-            })
+            const serverFiles: TrackedFile[] = files
+              .filter(
+                (f) =>
+                  !tombstoneIds.has(f.file_id) &&
+                  !excludedIds.has(f.file_id) &&
+                  !excludedIds.has(f.file_name)
+              )
+              .map((file) => {
+                const existingFile = existingFilesMap.get(file.file_id)
+                return {
+                  id: file.file_id, // Use server ID as local ID
+                  fileName: file.file_name,
+                  fileSize: file.file_size || 0,
+                  status: file.status,
+                  progress: file.status === 'success' ? 100 : 0,
+                  errorMessage: file.error_message,
+                  serverFileId: file.file_id,
+                  collectionName, // Use parameter, not file.collection_name, for consistent filtering
+                  // Preserve jobId and uploadedAt from existing tracked file if available.
+                  // The client sets uploadedAt with full time precision on upload;
+                  // the server may return a date-only string (midnight) from ChromaDB metadata.
+                  jobId: existingFile?.jobId,
+                  uploadedAt: existingFile?.uploadedAt || file.uploaded_at,
+                }
+              })
 
+            const resultTrackedFiles = [...otherFiles, ...serverFiles, ...preservedFiles]
             return {
-              trackedFiles: [...otherFiles, ...serverFiles, ...preservedFiles],
+              trackedFiles: resultTrackedFiles,
               loadedSessionId: collectionName,
             }
           },
@@ -309,9 +346,3 @@ export const selectCompletedFiles = (state: DocumentsState): TrackedFile[] =>
  */
 export const selectFailedFiles = (state: DocumentsState): TrackedFile[] =>
   state.trackedFiles.filter((f) => f.status === 'failed')
-
-/**
- * Check if any upload/ingestion is in progress
- */
-export const selectIsProcessing = (state: DocumentsState): boolean =>
-  state.isUploading || state.isPolling

@@ -419,6 +419,7 @@ f'<Document href="{url}">\n<title>\n{title}\n</title>\n{content}\n</Document>'
 | Tool | `_type` | Package | API Key |
 |---|---|---|---|
 | Tavily Web Search | `tavily_web_search` | `sources/tavily_web_search` | `TAVILY_API_KEY` |
+| Exa Web Search | `exa_web_search` | `sources/exa_web_search` | `EXA_API_KEY` |
 | Google Scholar | `paper_search` | `sources/google_scholar_paper_search` | `SERPER_API_KEY` |
 | Knowledge Layer | `knowledge_retrieval` | `sources/knowledge_layer` | (varies by backend) |
 

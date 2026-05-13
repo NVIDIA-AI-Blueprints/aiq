@@ -203,6 +203,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
     from .agent import ChatResearcherAgent
 
+    workflow_id = config.name or config.type
     intent_classifier_fn = await builder.get_function("intent_classifier")
     shallow_research_fn = await builder.get_function("shallow_research_agent")
     deep_research_fn = await builder.get_function("deep_research_agent")
@@ -254,13 +255,12 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         # Check if Dask scheduler is available
         scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
         if scheduler_address:
-            from aiq_api.jobs import submit_agent_job
-
-            from aiq_agent.auth import get_current_user_info
+            from aiq_agent.auth import get_current_principal
+            from aiq_api.jobs.submit import submit_agent_job
 
             async def _submit_deep_job(state: ChatResearcherState) -> str:
-                user_info = get_current_user_info()
-                owner = user_info.email if user_info and user_info.email else "anonymous"
+                principal = get_current_principal()
+                owner = principal.email if principal and principal.email else "anonymous"
                 query = state.original_query
                 if not query:
                     if not state.messages:
@@ -343,16 +343,31 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             else:
                 logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
 
-        from aiq_agent.auth import get_current_user_info
+        from aiq_agent.auth import get_current_principal
 
-        user_info = get_current_user_info()
+        principal = get_current_principal()
         user_info_dict = None
-        if user_info:
+        if principal:
             logger.debug("User authenticated")
             user_info_dict = {
-                "name": user_info.name,
-                "email": user_info.email,
+                "name": principal.name,
+                "email": principal.email,
             }
+
+        # Decide whether to skip the clarifier for this request.
+        # 1. Config (enable_clarifier=false) — operator disabled it entirely.
+        # 2. aiq_api.auth.middleware ContextVar — covers X-AIQ-Mode: headless,
+        #    anonymous callers, and unauthenticated internal callers.
+        skip_clarifier = not config.enable_clarifier
+        if not skip_clarifier:
+            try:
+                from aiq_api.auth.middleware import get_current_user as _get_mw_user
+
+                if _get_mw_user().get("skip_clarifier"):
+                    skip_clarifier = True
+            except (ImportError, Exception):
+                pass
+        logger.info("skip_clarifier=%s", skip_clarifier)
 
         query_text, data_sources = _extract_query_and_sources(query)
         logger.info("ChatDeepResearcherAgent: %s", query_text)
@@ -394,6 +409,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 user_info=user_info_dict,
                 data_sources=data_sources,
                 available_documents=available_documents,
+                skip_clarifier=skip_clarifier,
             )
             result = await agent.run(state, thread_id=nat_context_conversation_id)
         finally:
@@ -421,6 +437,6 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
             threading.Thread(target=exit_after_response, daemon=False).start()
 
-        return _create_chat_response(response_content, response_id="research_response")
+        return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
 
     yield FunctionInfo.from_fn(_run, description="Chat deep researcher with intent routing and escalation.")

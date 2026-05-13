@@ -20,12 +20,16 @@ Module under test: src/aiq_agent/auth/utils.py
 
 import base64
 import json
+from unittest.mock import patch
 
 import pytest
 
 from aiq_agent.auth import clear_token_fetchers
+from aiq_agent.auth import decode_unverified_jwt_payload
 from aiq_agent.auth import get_auth_token
+from aiq_agent.auth import get_current_principal
 from aiq_agent.auth import get_current_user_info
+from aiq_agent.auth import get_user_info_from_unverified_token
 from aiq_agent.auth import register_token_fetcher
 
 
@@ -89,15 +93,51 @@ def test_clear_token_fetchers():
     assert get_auth_token() is None
 
 
-def test_get_current_user_info_uses_registered_fetcher():
-    """get_current_user_info delegates to get_auth_token, which uses registered fetchers."""
+def test_decode_unverified_jwt_payload_extracts_claims():
     jwt = _make_jwt({"email": "alice@nvidia.com", "name": "Alice"})
-    register_token_fetcher(lambda: jwt)
+    payload = decode_unverified_jwt_payload(jwt)
+    assert payload["email"] == "alice@nvidia.com"
+    assert payload["name"] == "Alice"
 
-    user_info = get_current_user_info()
+
+def test_get_user_info_from_unverified_token_extracts_display_fields():
+    jwt = _make_jwt({"email": "alice@nvidia.com", "name": "Alice"})
+    user_info = get_user_info_from_unverified_token(jwt)
+    assert user_info.email == "alice@nvidia.com"
+    assert user_info.name == "Alice"
+
+
+def test_get_current_principal_uses_verified_middleware_context():
+    with patch("aiq_api.auth.middleware.get_current_user", return_value={"type": "jwt", "sub": "user-1"}):
+        principal = get_current_principal()
+
+    assert principal is not None
+    assert principal.type == "jwt"
+    assert principal.sub == "user-1"
+
+
+def test_get_current_principal_rejects_unverified_token_context():
+    with patch("aiq_api.auth.middleware.get_current_user", return_value={"type": "unverified_jwt", "token": "x.y.z"}):
+        assert get_current_principal() is None
+
+
+def test_get_current_user_info_uses_verified_middleware_context():
+    with patch(
+        "aiq_api.auth.middleware.get_current_user",
+        return_value={"type": "jwt", "sub": "user-1", "email": "alice@nvidia.com", "name": "Alice"},
+    ):
+        user_info = get_current_user_info()
+
     assert user_info is not None
     assert user_info.email == "alice@nvidia.com"
     assert user_info.name == "Alice"
+
+
+def test_get_current_user_info_ignores_registered_unverified_token_fetcher():
+    jwt = _make_jwt({"email": "alice@nvidia.com", "name": "Alice"})
+    register_token_fetcher(lambda: jwt)
+    with patch("aiq_api.auth.middleware.get_current_user", return_value={"type": "internal", "skip_clarifier": False}):
+        assert get_current_user_info() is None
 
 
 def test_register_token_fetcher_deduplication():

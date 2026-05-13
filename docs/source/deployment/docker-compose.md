@@ -42,7 +42,8 @@ The sections below explain each group of variables.
 | Variable | Required | Description |
 |----------|----------|-------------|
 | `NVIDIA_API_KEY` | Yes | NVIDIA API key for NIM model access. |
-| `TAVILY_API_KEY` | Yes | Web search provider key. |
+| `TAVILY_API_KEY` | Conditional | Web search provider key (required if using `tavily_web_search`). |
+| `EXA_API_KEY` | Conditional | Web search provider key (required if using `exa_web_search`). |
 | `SERPER_API_KEY` | No | Google Scholar paper search key (optional). |
 
 ### API keys (optional)

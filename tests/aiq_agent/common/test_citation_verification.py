@@ -396,6 +396,39 @@ class TestGenericUrlExtractor:
         assert len(entries) == 1
         assert entries[0].title == "Correct Title"
 
+    def test_url_with_commas_in_path(self):
+        """Commas inside URL paths (e.g., lat/lon coordinates) must not truncate the URL.
+
+        Regression: the generic URL regex previously excluded ``,`` from the
+        character class, so an FAA cam URL like
+        ``https://weathercams.faa.gov/map/-122.31167,47.22287,10/...`` was
+        registered as ``https://weathercams.faa.gov/map/-122.31167``. The LLM
+        would then cite the full URL, the verifier would compare full vs.
+        truncated, and the citation would be silently removed as
+        ``url_not_in_registry``.
+        """
+        full_url = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
+        content = f'<Document href="{full_url}">\n<title>\nFAA Cam\n</title>\nObservation.\n</Document>'
+        entries = extract_sources_from_tool_result("tavily_web_search", content)
+        assert len(entries) == 1
+        assert entries[0].url == full_url
+
+    def test_trailing_comma_still_trimmed(self):
+        """A comma immediately followed by whitespace is still treated as
+        sentence punctuation and stripped from the captured URL."""
+        content = "See https://example.com/page, then continue reading."
+        entries = extract_sources_from_tool_result("any_tool", content)
+        assert len(entries) == 1
+        assert entries[0].url == "https://example.com/page"
+
+    def test_markdown_bracket_still_terminates(self):
+        """``]`` continues to terminate a URL match so markdown links don't
+        leak the closing bracket into the captured URL."""
+        content = "[See here](https://example.com/page) for details."
+        entries = extract_sources_from_tool_result("any_tool", content)
+        assert len(entries) == 1
+        assert entries[0].url == "https://example.com/page"
+
 
 class TestKnowledgeLayerParser:
     """Tests for knowledge layer output parser."""
@@ -502,6 +535,23 @@ class TestVerifyCitations:
         assert "[1]" in result.verified_report
         assert "[2]" in result.verified_report
         assert len(result.valid_citations) == 2
+        assert len(result.removed_citations) == 0
+
+    def test_url_in_markdown_brackets_still_verifies(self, registry):
+        """Regression: when the LLM wraps a citation URL in markdown brackets
+        (``[https://valid.com/article1]``), the verifier captured the trailing
+        ``]`` as part of the URL and then failed to resolve it against the
+        registry, silently removing an otherwise-valid citation."""
+        report = "Finding [1].\n\n## Sources\n[1] Article 1: [https://valid.com/article1]"
+        result = verify_citations(report, registry)
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 0
+
+    def test_url_in_angle_brackets_still_verifies(self, registry):
+        """Same idea as above for ``<https://...>`` Markdown-style autolinks."""
+        report = "Finding [1].\n\n## Sources\n[1] Article 1: <https://valid.com/article1>"
+        result = verify_citations(report, registry)
+        assert len(result.valid_citations) == 1
         assert len(result.removed_citations) == 0
 
     def test_invalid_citation_removed(self, registry):
@@ -655,6 +705,19 @@ class TestSanitizeReport:
         assert "https://nvidia.com/article" in result.sanitized_report
         assert result.body_urls_removed == 1
         assert result.body_urls_replaced == 0
+
+    def test_body_url_with_commas_matched_to_reference(self):
+        """Regression: ``_BODY_URL_RE`` previously stopped at the first comma,
+        so a bare body URL with commas in its path was truncated, only the
+        prefix got replaced with ``[N]``, and the rest of the URL was left as
+        dangling text in the sanitized report."""
+        full_url = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
+        report = f"Live cam at {full_url} confirms it [1].\n\n## Sources\n[1] FAA cam: {full_url}"
+        result = sanitize_report(report)
+        assert "Live cam at [1] confirms it [1]" in result.sanitized_report
+        # No fragment of the URL should be left dangling in the body
+        assert ",47.22287" not in result.sanitized_report.split("## Sources", 1)[0]
+        assert result.body_urls_replaced == 1
 
     def test_body_url_matching_ref_replaced_with_citation(self):
         """Bare body URL matching a reference is replaced with [N]."""

@@ -29,7 +29,9 @@ const mockChatStore = {
 }
 
 vi.mock('@/features/chat', () => ({
-  useChatStore: () => mockChatStore,
+  useChatStore: vi.fn((selector?: (s: any) => any) =>
+    selector ? selector(mockChatStore) : mockChatStore
+  ),
 }))
 
 describe('useSessionUrl', () => {

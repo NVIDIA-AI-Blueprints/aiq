@@ -7,4 +7,5 @@ SPDX-License-Identifier: Apache-2.0
 
 Connect AI-Q to external systems and services.
 
+- **[Agent Skills](./agent-skills.md)** — Install the AI-Q research skill in Claude Code, OpenCode, Codex, or another Agent Skills-compatible coding harness
 - **[REST API](./rest-api.md)** — Async jobs API endpoints, SSE events, request/response models

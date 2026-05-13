@@ -47,6 +47,7 @@ The builder stage handles all compilation and package installation:
    - Root workspace package (`aiq-agent`) using `uv pip install --no-deps -e .`
    - `sources/google_scholar_paper_search` -- Google Scholar search
    - `sources/tavily_web_search` -- Tavily web search
+   - `sources/exa_web_search` -- Exa web search
    - `sources/knowledge_layer[all]` -- Knowledge layer with all extras
    - `frontends/aiq_api` -- [FastAPI](https://fastapi.tiangolo.com/) frontend
    - `psycopg[binary]>=3.0.0` -- PostgreSQL driver (psycopg v3, installed non-editable)

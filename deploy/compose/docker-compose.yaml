@@ -57,6 +57,12 @@ services:
       # Dask worker config
       - DASK_NWORKERS=${DASK_NWORKERS:-1}
       - DASK_NTHREADS=${DASK_NTHREADS:-4}
+      # Optional: bound per-worker memory (Dask spills/restarts above this)
+      # - DASK_MEMORY_LIMIT=${DASK_MEMORY_LIMIT:-}
+      # Optional: recycle workers after this many seconds to drop accumulated state
+      # - DASK_LIFETIME=${DASK_LIFETIME:-}
+      # Optional (default true): set to "false" to let workers exit gracefully without respawning
+      # - DASK_LIFETIME_RESTART=${DASK_LIFETIME_RESTART:-}
     ports:
       - "${PORT:-8000}:8000"
     volumes:

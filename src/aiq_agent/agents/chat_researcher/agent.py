@@ -46,6 +46,11 @@ from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 
+try:
+    from aiq_api.auth.errors import AuthError as _AuthError
+except ImportError:
+    _AuthError = None  # type: ignore[assignment,misc]
+
 from .models import ChatResearcherState
 from .models import ShallowResult
 from .utils import trim_message_history
@@ -137,7 +142,7 @@ class ChatResearcherAgent:
                         },
                     )
 
-            if self.enable_clarifier:
+            if self.enable_clarifier and not state.skip_clarifier:
                 if self.clarifier_fn is None:
                     raise ValueError(
                         "enable_clarifier is True but clarifier_agent is not defined in config. "
@@ -197,13 +202,22 @@ class ChatResearcherAgent:
                     available_documents=state.available_documents,
                 )
                 result = await self.shallow_research_fn(shallow_state)
-            except EmptySourceRegistryError:
+            except EmptySourceRegistryError as exc:
                 logger.warning("Shallow research produced no verifiable sources")
-                err_msg = (
-                    "The search tools did not return any results for this question. "
-                    "This may be due to a temporary issue or the question may need to be rephrased. "
-                    "Please try again."
-                )
+                if exc.unavailable_tools:
+                    from aiq_agent.common.tool_validation import format_user_facing_tool_error
+
+                    err_msg = format_user_facing_tool_error(
+                        "shallow research",
+                        exc.unavailable_tools,
+                        exc.available_count,
+                    )
+                else:
+                    err_msg = (
+                        "The search tools did not return any results for this question. "
+                        "This may be due to a temporary issue or the question may need to be rephrased. "
+                        "Please try again."
+                    )
                 # confidence="high" reflects certainty that an error occurred and that the error
                 # message is the correct response — not uncertainty about the answer quality.
                 # escalate_to_deep=False because retrying deep research will not resolve a
@@ -217,6 +231,17 @@ class ChatResearcherAgent:
                     ),
                 }
             except Exception as e:
+                if _AuthError and isinstance(e, _AuthError):
+                    logger.warning("Auth error in shallow research: %s", e)
+                    err_msg = str(e)
+                    return {
+                        "messages": [AIMessage(content=err_msg)],
+                        "shallow_result": ShallowResult(
+                            answer=err_msg,
+                            confidence="high",
+                            escalate_to_deep=False,
+                        ),
+                    }
                 logger.exception("Error in shallow research: %s", e)
                 err_msg = "An error occurred while researching your question. Please try again."
                 # Same rationale as EmptySourceRegistryError: the system is certain an error
@@ -264,17 +289,32 @@ class ChatResearcherAgent:
                 data_sources=state.data_sources,
                 clarifier_result=state.clarifier_result,
                 available_documents=state.available_documents,
+                user_info=state.user_info,
             )
             try:
                 result = await self.deep_research_fn(deep_state)
-            except EmptySourceRegistryError:
+            except EmptySourceRegistryError as exc:
                 logger.warning("Deep research produced no verifiable sources")
-                err_msg = (
-                    "The search tools did not return any results for this question. "
-                    "This may be due to a temporary issue or the question may need to be rephrased. "
-                    "Please try again."
-                )
+                if exc.unavailable_tools:
+                    from aiq_agent.common.tool_validation import format_user_facing_tool_error
+
+                    err_msg = format_user_facing_tool_error(
+                        "deep research",
+                        exc.unavailable_tools,
+                        exc.available_count,
+                    )
+                else:
+                    err_msg = (
+                        "The search tools did not return any results for this question. "
+                        "This may be due to a temporary issue or the question may need to be rephrased. "
+                        "Please try again."
+                    )
                 return {"messages": [AIMessage(content=err_msg)]}
+            except Exception as e:
+                if _AuthError and isinstance(e, _AuthError):
+                    logger.warning("Auth error in deep research: %s", e)
+                    return {"messages": [AIMessage(content=str(e))]}
+                raise
             if not result.messages:
                 error_message = "An error occurred during deep research."
                 logger.error(error_message)
@@ -383,6 +423,7 @@ class ChatResearcherAgent:
                 "data_sources": state.data_sources,
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
+                "skip_clarifier": state.skip_clarifier,
             }
             messages = state.messages
 

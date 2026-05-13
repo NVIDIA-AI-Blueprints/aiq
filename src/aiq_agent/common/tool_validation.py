@@ -16,9 +16,36 @@
 """Tool validation utilities for checking tool availability."""
 
 import logging
+import os
 from typing import Any
 
 logger = logging.getLogger(__name__)
+
+# Returned to end users in web/production/e2e deployments.  Detailed
+# diagnostics (specific tool names and missing API keys) are only shown when
+# AIQ_DEV_ENV is "cli" — set automatically by scripts/start_cli.sh.
+# See deploy/.env for guidance.
+_GENERIC_TOOL_ERROR = (
+    "Some search capabilities are currently unavailable. Please contact your administrator or try again later."
+)
+
+
+def _extract_unavailable_reason(description: str) -> str:
+    """Extract the reason from a stub tool's description.
+
+    Stub tools typically have descriptions like:
+        ``"Web search tool (unavailable - missing TAVILY_API_KEY)"``
+    This extracts ``"missing TAVILY_API_KEY"`` from the parenthetical.
+    """
+    import re
+
+    match = re.search(r"\(unavailable\s*[-:]\s*(.+?)\)", description, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    match = re.search(r"(missing\s+\S+)", description, re.IGNORECASE)
+    if match:
+        return match.group(1).strip()
+    return "missing or invalid API key"
 
 
 def validate_tool_availability(
@@ -48,16 +75,16 @@ def validate_tool_availability(
 
     for tool in tools:
         tool_name = getattr(tool, "name", "").lower()
-        tool_desc = getattr(tool, "description", "").lower() or ""
+        tool_desc_original = getattr(tool, "description", "") or ""
+        tool_desc = tool_desc_original.lower()
 
-        # Check if tool is unavailable (stub)
         is_unavailable = "unavailable" in tool_desc or "missing" in tool_desc
 
         if is_unavailable:
-            reason = "missing or invalid API key or config error"
+            reason = _extract_unavailable_reason(tool_desc_original)
             if enable_logging:
                 logger.info("Tool %s is unavailable: %s", tool_name, reason)
-            unavailable_tools.append(f"{tool_name} - {reason}")
+            unavailable_tools.append(f"{tool_name} ({reason})")
         else:
             available_tools_count += 1
             if enable_logging:
@@ -96,3 +123,41 @@ def format_tool_unavailability_error(
         f" At least one tool must be configured and available.{unavailable_info}\n"
     )
     return error_msg
+
+
+def format_user_facing_tool_error(
+    research_type: str,
+    unavailable_tools: list[str],
+    available_count: int = 0,
+) -> str:
+    """Format a tool-unavailability error appropriate for the current deployment mode.
+
+    In CLI mode (``AIQ_DEV_ENV=cli``), the full tool details are returned so
+    developers can diagnose quickly in the terminal.  In all other modes
+    (e2e, web, production, unset) a generic message is returned to avoid
+    leaking infrastructure details to end users in the web UI.
+
+    The detailed message is **always** logged at WARNING level regardless of
+    deployment mode so operators can still diagnose from server logs.
+
+    Args:
+        research_type: Type of research (e.g., "shallow research", "deep research")
+        unavailable_tools: List of unavailable tool names with reasons
+        available_count: Number of tools that passed pre-flight checks
+
+    Returns:
+        User-facing error message string
+    """
+    if available_count == 0:
+        detailed = format_tool_unavailability_error(research_type, unavailable_tools)
+    else:
+        tool_list = ", ".join(unavailable_tools)
+        detailed = f"Research did not return any results. Unavailable tools: {tool_list}.\n"
+
+    logger.warning(detailed.strip())
+
+    dev_env = os.environ.get("AIQ_DEV_ENV", "")
+    if dev_env == "cli":
+        return detailed
+
+    return _GENERIC_TOOL_ERROR

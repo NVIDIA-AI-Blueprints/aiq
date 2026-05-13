@@ -1,6 +1,3 @@
-// SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
-// SPDX-License-Identifier: Apache-2.0
-
 /**
  * Session Hook Adapter
  *
@@ -16,7 +13,8 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useSession as useNextAuthSession, signIn, signOut } from 'next-auth/react'
 import { useAppConfig } from '@/shared/context'
-import { type AuthContext } from './types'
+import { trackRumAction } from '@/shared/utils/rum'
+import type { AuthContext } from './types'
 
 /**
  * Default user returned when authentication is disabled.
@@ -41,7 +39,7 @@ const DEFAULT_USER = {
  * if (isLoading) return <Spinner />
  * if (!isAuthenticated) return <Button onClick={signIn}>Sign In</Button>
  *
- * // Use idToken for backend API calls (not available when !authRequired)
+ * // Use idToken for backend API calls (only available when authRequired)
  * if (idToken) {
  *   await fetch('/api/data', {
  *     headers: { 'Authorization': `Bearer ${idToken}` }
@@ -52,9 +50,9 @@ const DEFAULT_USER = {
  * ```
  */
 export const useAuth = (): AuthContext => {
-  const { authRequired, authProviderId, sessionRefreshIntervalSeconds } = useAppConfig()
+  const { authRequired, authProviderId } = useAppConfig()
   const authRequiredRef = useRef(authRequired)
-  const { data: session, status, update } = useNextAuthSession()
+  const { data: session, status } = useNextAuthSession()
   const hasTriggeredReauth = useRef(false)
 
   if (authRequiredRef.current !== authRequired) {
@@ -77,21 +75,23 @@ export const useAuth = (): AuthContext => {
       if (error === 'RefreshAccessTokenError') {
         hasTriggeredReauth.current = true
         console.warn('[Auth] Token refresh failed, redirecting to sign in')
+        // Emit to RUM before signOut() redirects — the page unload
+        // destroys the JS context, so this must happen first.
+        // Token refresh failure is an expected lifecycle event (action, not error).
+        trackRumAction('Auth: session_refresh_failed', {
+          auth_error_code: 'session_refresh_failed',
+        })
         handleSignOut()
       }
     }
   }, [session?.error, authRequired, handleSignOut])
 
-  useEffect(() => {
-    if (!authRequired) return
-    if (status !== 'authenticated') return
-
-    const interval = setInterval(() => {
-      update()
-    }, sessionRefreshIntervalSeconds * 1000)
-
-    return () => clearInterval(interval)
-  }, [status, update, authRequired, sessionRefreshIntervalSeconds])
+  // Session refresh is handled solely by SessionProvider's refetchInterval
+  // (configured in providers.tsx). Do NOT add a duplicate setInterval here —
+  // concurrent refresh requests cause "invalid_grant" failures with providers
+  // that use rotating refresh tokens (single-use tokens invalidated on
+  // consumption, e.g. NVIDIA Starfleet SSO). Two concurrent refreshes means
+  // the second uses an already-consumed token and kills the session.
 
   if (!authRequired) {
     return {

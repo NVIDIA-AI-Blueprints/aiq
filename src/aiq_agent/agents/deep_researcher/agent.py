@@ -12,8 +12,6 @@ from pathlib import Path
 from typing import Any
 
 from deepagents import create_deep_agent
-from deepagents.backends import CompositeBackend
-from deepagents.backends import StateBackend
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
@@ -34,7 +32,15 @@ from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
 from .custom_middleware import ToolRetryMiddleware
+from .deepagents_runtime import DeepAgentsRuntime
+from .deepagents_runtime import SandboxConfig
+from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
+
+try:
+    from aiq_api.auth.errors import AuthError as _AuthError
+except ImportError:
+    _AuthError = None  # type: ignore[assignment,misc]
 
 logger = logging.getLogger(__name__)
 
@@ -108,6 +114,10 @@ class DeepResearcherAgent:
         max_loops: int = 2,
         verbose: bool = True,
         callbacks: list[Any] | None = None,
+        skills: SkillsConfig | None = None,
+        sandbox: SandboxConfig | None = None,
+        config: Any | None = None,
+        job_id: str | None = None,
     ) -> None:
         """
         Initialize the deep researcher subagent.
@@ -118,6 +128,10 @@ class DeepResearcherAgent:
             max_loops: Maximum number of research loops (default 2).
             verbose: Enable detailed logging.
             callbacks: Optional list of callbacks.
+            skills: Optional DeepAgents skills config.
+            sandbox: Optional DeepAgents sandbox config.
+            config: Optional agent config. Used by async workers to pass function config generically.
+            job_id: Optional async job identifier used to scope sandbox backends.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -127,6 +141,10 @@ class DeepResearcherAgent:
 
         if self.verbose:
             logger.info("Tools configured: %d", len(self.tools))
+        if config is not None:
+            skills = skills or getattr(config, "skills", None)
+            sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
+        self.deepagents_runtime = DeepAgentsRuntime(skills=skills, sandbox=sandbox, job_id=job_id)
 
         self._prompts = self._load_prompts()
         self.tools_info = []
@@ -164,7 +182,7 @@ class DeepResearcherAgent:
             ToolNameSanitizationMiddleware(valid_tool_names=[t.name for t in self.all_tools]),
             ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
             self.source_registry_middleware,
-            ToolResultPruningMiddleware(keep_last_n=3, max_chars=500),
+            ToolResultPruningMiddleware(keep_last_n=10, max_chars=2000),
             ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
         ]
 
@@ -193,72 +211,89 @@ class DeepResearcherAgent:
         }
         return defaults.get(name, f"You are a {name} agent.")
 
+    def _deepagents_prompt_context(self) -> dict[str, Any]:
+        """Return prompt variables for optional DeepAgents skills and sandbox support."""
+        skill_sources = self.deepagents_runtime.skill_sources
+        sandbox = self.deepagents_runtime.sandbox
+        return {
+            "skills_enabled": skill_sources is not None,
+            "skill_sources": skill_sources or [],
+            "sandbox_enabled": sandbox is not None,
+            "sandbox_python_packages": tuple(sandbox.python_packages) if sandbox is not None else (),
+        }
+
     def _get_subagents(self, state: DeepResearchAgentState) -> list[dict[str, Any]]:
         """Build subagent configs with state-dependent prompts (e.g. available_documents)."""
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
-        return [
-            {
-                "name": "planner-agent",
-                "description": (
-                    "Content-driven research planning - iteratively builds evidence-grounded "
-                    "outlines through interleaved search and outline optimization"
-                ),
-                "system_prompt": render_prompt_template(
-                    self._prompts["planner"],
-                    tools=self.tools_info,
-                    available_documents=available_docs,
-                ),
-                "tools": self.all_tools,
-                "model": self.llm_provider.get(LLMRole.PLANNER),
-                "middleware": self.middleware,
-            },
-            {
-                "name": "researcher-agent",
-                "description": (
-                    "Information gathering - executes search queries and synthesizes "
-                    "relevant content from available sources"
-                ),
-                "system_prompt": render_prompt_template(
-                    self._prompts["researcher"],
-                    current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    tools=self.tools_info,
-                    available_documents=available_docs,
-                ),
-                "tools": self.all_tools,
-                "model": self.llm_provider.get(LLMRole.RESEARCHER),
-                "middleware": self.middleware,
-            },
-        ]
+        deepagents_prompt_context = self._deepagents_prompt_context()
+        skill_sources = self.deepagents_runtime.skill_sources
+        planner_agent: dict[str, Any] = {
+            "name": "planner-agent",
+            "description": (
+                "Content-driven research planning - iteratively builds evidence-grounded "
+                "outlines through interleaved search and outline optimization"
+            ),
+            "system_prompt": render_prompt_template(
+                self._prompts["planner"],
+                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                user_info=state.user_info,
+                tools=self.tools_info,
+                available_documents=available_docs,
+                **deepagents_prompt_context,
+            ),
+            "tools": self.all_tools,
+            "model": self.llm_provider.get(LLMRole.PLANNER),
+            "middleware": self.middleware,
+        }
+        researcher_agent: dict[str, Any] = {
+            "name": "researcher-agent",
+            "description": (
+                "Information gathering - executes search queries and synthesizes "
+                "relevant content from available sources"
+            ),
+            "system_prompt": render_prompt_template(
+                self._prompts["researcher"],
+                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                user_info=state.user_info,
+                tools=self.tools_info,
+                available_documents=available_docs,
+                **deepagents_prompt_context,
+            ),
+            "tools": self.all_tools,
+            "model": self.llm_provider.get(LLMRole.RESEARCHER),
+            "middleware": self.middleware,
+        }
+        if skill_sources is not None:
+            planner_agent["skills"] = skill_sources
+            researcher_agent["skills"] = skill_sources
+        return [planner_agent, researcher_agent]
 
     def _build_orchestrator_agent(self, state: DeepResearchAgentState) -> str:
         """Get the orchestrator instructions for the deep research agent."""
 
-        def backend(runtime):
-            return CompositeBackend(
-                default=StateBackend(runtime),
-                routes={
-                    "/shared/": StateBackend(runtime),
-                },
-            )
-
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
+        deepagents_prompt_context = self._deepagents_prompt_context()
         orchestrator_instructions = render_prompt_template(
             self._prompts["orchestrator"],
             current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            user_info=state.user_info,
             clarifier_result=state.clarifier_result,
             available_documents=available_docs,
             tools=self.tools_info,
+            **deepagents_prompt_context,
         )
+
+        deepagents_kwargs = self.deepagents_runtime.create_agent_kwargs
 
         agent = create_deep_agent(
             model=self.llm_provider.get(LLMRole.ORCHESTRATOR),
             tools=self.all_tools,
-            backend=backend,
             system_prompt=orchestrator_instructions,
             subagents=self._get_subagents(state),
             store=InMemoryStore(),
             context_schema=DeepResearchAgentState,
             middleware=self.middleware,
+            **deepagents_kwargs,
         )
         return agent.with_config({"recursion_limit": 1000})
 
@@ -364,7 +399,7 @@ class DeepResearcherAgent:
         """
         Execute deep research with multi-phase workflow.
         """
-
+        state = self.deepagents_runtime.prepare_state(state)
         agent = self._build_orchestrator_agent(state)
 
         messages = state.messages
@@ -390,6 +425,9 @@ class DeepResearcherAgent:
                 except Exception as ex:
                     logger.error("Deep Research attempt %d failed: %s", attempt + 1, ex, exc_info=True)
                     last_error = ex
+                    # Auth errors must propagate immediately — retrying won't fix them.
+                    if _AuthError and isinstance(ex, _AuthError):
+                        raise ex
                     # If we hit the recursion limit or asyncio error, we might want to stop
                     if "recursion" in str(ex).lower() or "reuse already awaited" in str(ex):
                         raise ex
@@ -483,7 +521,18 @@ class DeepResearcherAgent:
                     )
                 final_message = verification.verified_report
             else:
-                raise EmptySourceRegistryError("deep research")
+                from aiq_agent.common.tool_validation import validate_tool_availability
+
+                _, available_count, unavailable = validate_tool_availability(
+                    self.tools,
+                    research_type="deep research",
+                    enable_logging=False,
+                )
+                raise EmptySourceRegistryError(
+                    "deep research",
+                    unavailable_tools=unavailable,
+                    available_count=available_count,
+                )
 
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)

@@ -16,7 +16,8 @@
 
 'use client'
 
-import { type FC, useCallback } from 'react'
+import { type FC, useCallback, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Flex } from '@/adapters/ui'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { AppBar } from './AppBar'
@@ -62,19 +63,30 @@ export const MainLayout: FC<MainLayoutProps> = ({
 }) => {
   const {
     currentConversation,
-    getUserConversations,
-    selectConversation,
-    startNewSessionDraft,
-    deleteConversation,
-    deleteAllConversations,
-    updateConversationTitle,
+    conversations,
     isStreaming,
     pendingInteraction,
     isDeepResearchStreaming,
     deepResearchOwnerConversationId,
-  } = useChatStore()
+    currentUserId,
+  } = useChatStore(useShallow((s) => ({
+    currentConversation: s.currentConversation,
+    conversations: s.conversations,
+    isStreaming: s.isStreaming,
+    pendingInteraction: s.pendingInteraction,
+    isDeepResearchStreaming: s.isDeepResearchStreaming,
+    deepResearchOwnerConversationId: s.deepResearchOwnerConversationId,
+    currentUserId: s.currentUserId,
+  })))
 
-  const { rightPanel, closeRightPanel } = useLayoutStore()
+  const selectConversation = useChatStore((s) => s.selectConversation)
+  const startNewSessionDraft = useChatStore((s) => s.startNewSessionDraft)
+  const deleteConversation = useChatStore((s) => s.deleteConversation)
+  const deleteAllConversations = useChatStore((s) => s.deleteAllConversations)
+  const updateConversationTitle = useChatStore((s) => s.updateConversationTitle)
+
+  const isResearchPanelOpen = useLayoutStore((s) => s.rightPanel === 'research')
+  const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
   const prefersReducedMotion = useReducedMotion()
 
   // Deep research SSE hook - manages connection when deep research starts
@@ -117,24 +129,24 @@ export const MainLayout: FC<MainLayoutProps> = ({
     clearSessionUrl()
   }, [deleteAllConversations, clearSessionUrl])
 
-  // Check if research panel is open (pushes content instead of overlaying)
-  const isResearchPanelOpen = rightPanel === 'research'
   const isNavigationBlocked = isStreaming || pendingInteraction !== null
 
-  // Get only conversations for the current authenticated user
-  const userConversations = getUserConversations()
+  const userConversations = useMemo(
+    () => currentUserId ? conversations.filter((c) => c.userId === currentUserId) : [],
+    [conversations, currentUserId]
+  )
 
-  // Convert conversations to session format for sidebar
-  const sessions = userConversations.map((conv) => {
-    const hasActiveJob = hasActiveDeepResearchJob(conv.messages)
-
-    return {
+  const sessions = useMemo(
+    () => userConversations.map((conv) => ({
       id: conv.id,
       title: conv.title,
       date: conv.updatedAt,
-      hasActiveDeepResearch: hasActiveJob || (isDeepResearchStreaming && deepResearchOwnerConversationId === conv.id),
-    }
-  })
+      hasActiveDeepResearch:
+        hasActiveDeepResearchJob(conv.messages) ||
+        (isDeepResearchStreaming && deepResearchOwnerConversationId === conv.id),
+    })),
+    [userConversations, isDeepResearchStreaming, deepResearchOwnerConversationId]
+  )
 
   return (
     <Flex direction="col" className="h-screen min-w-[768px] overflow-x-auto overflow-y-hidden">

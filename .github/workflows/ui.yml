@@ -4,12 +4,14 @@ on:
   pull_request:
     branches:
       - develop
+      - "release/**"
     paths:
       - "frontends/ui/**"
       - ".github/workflows/ui.yml"
   push:
     branches:
       - develop
+      - "release/**"
     paths:
       - "frontends/ui/**"
       - ".github/workflows/ui.yml"

@@ -37,6 +37,8 @@ from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
 from .agent import DeepResearcherAgent
+from .deepagents_runtime import SandboxConfig
+from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
 
 logger = logging.getLogger(__name__)
@@ -58,6 +60,11 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     )
     max_loops: int = Field(default=2)
     verbose: bool = Field(default=True)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    sandbox: SandboxConfig | None = Field(
+        default=None,
+        description="Optional DeepAgents sandbox backend for execute support.",
+    )
 
 
 @register_function(config_type=DeepResearchAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -75,6 +82,18 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     if config.exclude_tools:
         excluded = set(config.exclude_tools)
         tools = [t for t in tools if getattr(t, "name", "") not in excluded]
+
+    from aiq_agent.common import validate_tool_availability
+
+    is_valid, available_count, unavailable = validate_tool_availability(
+        tools,
+        research_type="deep research",
+    )
+    if not is_valid:
+        logger.warning(
+            "Startup check: no tools available for deep research. "
+            "All queries will fail until at least one tool is properly configured.",
+        )
 
     llm = await builder.get_llm(config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
@@ -98,6 +117,8 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         max_loops=config.max_loops,
         verbose=verbose,
         callbacks=callbacks,
+        skills=config.skills,
+        sandbox=config.sandbox,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -106,13 +127,26 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
             data_sources = state.data_sources
             selected_tools = filter_tools_by_sources(tools, data_sources)
             active_agent = agent
-            if data_sources is not None and selected_tools != tools:
+            if config.sandbox is not None or (data_sources is not None and selected_tools != tools):
+                # Scope the Modal sandbox to the async job_id when one is in
+                # NAT context (set by aiq_api/jobs/runner.py). Falls back to a
+                # per-request uuid in DeepAgentsRuntime when None.
+                job_id: str | None = None
+                try:
+                    from nat.builder.context import Context
+
+                    job_id = Context.get().workflow_run_id
+                except Exception:  # noqa: BLE001 - Context may be unavailable in sync/eval paths
+                    job_id = None
                 active_agent = DeepResearcherAgent(
                     llm_provider=provider,
                     tools=selected_tools,
                     max_loops=config.max_loops,
                     verbose=verbose,
                     callbacks=callbacks,
+                    skills=config.skills,
+                    sandbox=config.sandbox,
+                    job_id=job_id,
                 )
             elif data_sources is not None and not selected_tools:
                 logger.warning("Deep research received data_sources with no matching tools")
@@ -121,14 +155,14 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
             # At least one tool must be available
             # This prevents the agent from trying to reason about unavailable tools
             # Check selected_tools directly - they already reflect data_sources filtering
-            from aiq_agent.common import format_tool_unavailability_error
+            from aiq_agent.common import format_user_facing_tool_error
             from aiq_agent.common import validate_tool_availability
 
             is_valid, _, unavailable_tools = validate_tool_availability(selected_tools, research_type="deep research")
 
             # Fail if no tools are available
             if not is_valid:
-                error_msg = format_tool_unavailability_error("deep research", unavailable_tools)
+                error_msg = format_user_facing_tool_error("deep research", unavailable_tools)
 
                 # Return error state with error message - this prevents the agent from running
                 from langchain_core.messages import AIMessage
@@ -162,12 +196,13 @@ class DeepResearchWorkflowConfig(FunctionBaseConfig, name="deep_research_workflo
 async def deep_research_workflow(config: DeepResearchWorkflowConfig, builder: Builder):
     """Wrapper workflow that accepts string queries for evaluation."""
     deep_research_agent_fn = await builder.get_function("deep_research_agent")
+    workflow_id = config.name or config.type
 
     async def _run(query: str) -> ChatResponse:
         """Run deep research on a query string."""
         state = DeepResearchAgentState(messages=[HumanMessage(content=query)])
         result = await deep_research_agent_fn.ainvoke(state)
         response_content = result.messages[-1].content
-        return _create_chat_response(response_content, response_id="research_response")
+        return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
 
     yield FunctionInfo.from_fn(_run, description="Deep research workflow for evaluation (accepts string query).")

@@ -188,6 +188,121 @@ functions:
 | `NAT_JOB_STORE_DB_URL` | Job store + event store database | `sqlite+aiosqlite:///./jobs.db` (or via front_end.db_url) |
 
 
+## Authentication
+
+Authentication is handled by `AuthMiddleware`, which runs on every request.  It
+is disabled by default and opt-in via the `REQUIRE_AUTH` environment variable.
+
+### Environment variables
+
+| Variable | Purpose | Default |
+|----------|---------|---------|
+| `REQUIRE_AUTH` | Enforce authentication on all non-exempt routes | `false` |
+| `AIQ_TRACE_USER_IDENTITY_MODE` | Control whether verified user identity is attached to NAT spans: `none`, `id`, or `full` | `none` |
+| `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET` | Secret used to pseudonymize verified user IDs in traces when identity tagging is enabled | unset |
+| `AIQ_TRACE_CLIENT_ID_MODE` | Control whether a pseudonymous client identifier is attached to NAT spans: `none` or `ip` | `none` |
+| `AIQ_TRACE_CLIENT_ID_HMAC_SECRET` | Secret used to pseudonymize client IDs when client tagging is enabled; falls back to the user-identity secret | unset |
+| `AIQ_TRACE_CLIENT_IP_HEADERS` | Ordered comma-separated client IP headers to trust before falling back to the ASGI client address | `x-real-ip,x-forwarded-for` |
+
+### Enabling authentication
+
+Set `REQUIRE_AUTH=true` and register at least one validator before the server
+starts.  The server raises a `RuntimeError` at startup if auth is required but
+no validators are registered.
+
+Two registration mechanisms are supported — pick whichever fits your deployment:
+
+### NAT span request tagging
+
+Auth middleware can enrich NAT-exported workflow spans with low-risk request
+tags and optional pseudonymous identity tags. The resolved tags are propagated
+through HTTP requests, WebSocket workflow execution, and async jobs.
+
+Always-on NAT span tags:
+
+- `nat.aiq.caller.type`: resolved caller type from the auth middleware
+- `nat.aiq.auth.transport`: `bearer`, `cookie`, or `none`
+- `nat.aiq.auth.verified`: whether the request resolved to a verified principal
+- `nat.aiq.access.channel`: inferred or explicitly supplied access channel
+
+Optional user identity tags are controlled by `AIQ_TRACE_USER_IDENTITY_MODE`:
+
+- `none`: disable user identity tagging entirely
+- `id`: tag only pseudonymous stable identifiers (`nat.enduser.id`, `nat.aiq.user.id`, `nat.aiq.auth.type`)
+- `full`: tag pseudonymous identifiers plus `nat.aiq.user.email` and `nat.aiq.user.name` when present
+
+Only verified principals are tagged. Anonymous, internal, and unverified JWT
+fallback callers are never attached to traces.
+Set `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET` when using `id` or `full`; otherwise
+identity tagging is skipped.
+
+Optional client correlation is controlled by `AIQ_TRACE_CLIENT_ID_MODE`:
+
+- `none`: disable client correlation
+- `ip`: add `nat.aiq.client.id` as an HMAC-derived pseudonymous identifier from
+  the client IP
+
+Set `AIQ_TRACE_CLIENT_ID_HMAC_SECRET` when using `ip`. If unset, the middleware
+falls back to `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET`. `AIQ_TRACE_CLIENT_IP_HEADERS`
+controls which ingress headers are consulted first.
+
+#### 1. Programmatic (`register_validator`)
+
+Call `register_validator()` in any code that runs before `nat serve`:
+
+```python
+from aiq_api.plugin import register_validator
+from aiq_api.auth.jwt_validator import JWTValidator
+
+register_validator(JWTValidator(issuer_url="https://your-identity-provider.com"))
+```
+
+#### 2. Entry points (recommended for packages / submodule deployments)
+
+Any installed Python package can contribute validators by declaring an
+`aiq_api.validators` entry point.  The function must return a list of validator
+instances.
+
+```toml
+# pyproject.toml of your deployment package
+[project.entry-points."aiq_api.validators"]
+my_provider = "mypackage.auth:get_validators"
+```
+
+```python
+# mypackage/auth.py
+def get_validators() -> list:
+    from aiq_api.auth.jwt_validator import JWTValidator
+    return [JWTValidator(issuer_url="https://your-identity-provider.com")]
+```
+
+After `pip install` / `uv sync`, validators are discovered automatically — no
+code changes to the server are needed.
+
+### Writing a custom validator
+
+A validator is any object with an async `validate(token: str) -> dict | None`
+method.  Return a dict with at minimum `{"type": "<name>"}` on success, or
+`None` if the token is not recognized by this validator.  The first validator
+to return a non-`None` result wins.
+
+```python
+class MyValidator:
+    async def validate(self, token: str) -> dict | None:
+        payload = verify_token(token)   # your verification logic
+        if payload is None:
+            return None
+        return {"type": "my_provider", "sub": payload["sub"], "token": token}
+```
+
+### Caller types and the clarifier
+
+The middleware sets `skip_clarifier=True` for callers that cannot participate in
+interactive back-and-forth (anonymous requests, headless API callers).  Pass the
+`X-AIQ-Mode: headless` request header to force this for any authenticated caller.
+
+---
+
 ## Registering New Agents
 
 Agents are registered by type so the job runner can load them from NAT config. Register at import time (e.g. in your NAT plugin or app startup):

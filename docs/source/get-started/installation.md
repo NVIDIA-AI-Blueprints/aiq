@@ -51,7 +51,7 @@ The script performs the following steps:
 3. Installs the core package with dev dependencies
 4. Installs all frontends (CLI, debug console, API server)
 5. Installs benchmark packages (freshqa, deepsearch_qa)
-6. Installs all data source plugins (Tavily, Google Scholar, knowledge layer)
+6. Installs all data source plugins (Tavily, Exa, Google Scholar, knowledge layer)
 7. Sets up pre-commit hooks
 8. Copies `deploy/.env.example` to `deploy/.env` if no `.env` file exists
 9. Installs UI npm dependencies (if Node.js is available)
@@ -95,6 +95,7 @@ uv pip install -e ./frontends/aiq_api      # Unified API server (includes debug)
 
 # Data sources (pick what you need)
 uv pip install -e ./sources/tavily_web_search
+uv pip install -e ./sources/exa_web_search
 uv pip install -e ./sources/google_scholar_paper_search
 uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 
@@ -129,10 +130,11 @@ Then edit `deploy/.env` and fill in your keys.
 
 | Variable | Provider | Purpose |
 |----------|----------|---------|
-| `TAVILY_API_KEY` | [Tavily](https://tavily.com/) | Web search |
+| `TAVILY_API_KEY` | [Tavily](https://tavily.com/) | Web search (Tavily provider) |
+| `EXA_API_KEY` | [Exa](https://exa.ai/) | Web search (Exa provider) |
 | `SERPER_API_KEY` | [Serper](https://serper.dev/) | Academic paper search (Google Scholar). To enable, uncomment `paper_search_tool` in your config file |
 
-At minimum, you need `NVIDIA_API_KEY` for LLM inference and `TAVILY_API_KEY` for web search. Paper search (`SERPER_API_KEY`) is disabled by default in the shipped configs -- refer to the comments in your config file to enable it.
+At minimum, you need `NVIDIA_API_KEY` for LLM inference and one of `TAVILY_API_KEY` or `EXA_API_KEY` for web search. Paper search (`SERPER_API_KEY`) is disabled by default in the shipped configs -- refer to the comments in your config file to enable it.
 
 ## Verify Installation
 

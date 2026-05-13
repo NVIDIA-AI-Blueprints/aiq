@@ -10,8 +10,9 @@
 
 'use client'
 
-import { type FC, useCallback, useMemo } from 'react'
+import { type FC, memo, useCallback, useMemo } from 'react'
 import { Flex, Text, SidePanel, SegmentedControl, Switch, Button, Banner } from '@/adapters/ui'
+import { useShallow } from 'zustand/react/shallow'
 import { Globe, LoadingSpinner } from '@/adapters/ui/icons'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '../store'
@@ -33,31 +34,36 @@ interface DataSourcesPanelProps {
  * Panel for managing data sources and file uploads.
  * Opens from the right side of the screen.
  */
-export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, onDeleteFile }) => {
+export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSourcesPanel({ onSourceToggle, onDeleteFile }) {
   const { idToken, authRequired } = useAuth()
   const saveDataSourcesToConversation = useChatStore(
     (state) => state.saveDataSourcesToConversation
   )
 
+  const isOpen = useLayoutStore((s) => s.rightPanel === 'data-sources')
   const {
-    rightPanel,
-    closeRightPanel,
-    openRightPanel,
     dataSourcesPanelTab,
-    setDataSourcesPanelTab,
     enabledDataSourceIds,
-    toggleDataSource,
-    setEnabledDataSources,
     availableDataSources,
     dataSourcesLoading,
     dataSourcesError,
-    fetchDataSources,
-  } = useLayoutStore()
+  } = useLayoutStore(useShallow((s) => ({
+    dataSourcesPanelTab: s.dataSourcesPanelTab,
+    enabledDataSourceIds: s.enabledDataSourceIds,
+    availableDataSources: s.availableDataSources,
+    dataSourcesLoading: s.dataSourcesLoading,
+    dataSourcesError: s.dataSourcesError,
+  })))
+
+  const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
+  const toggleDataSource = useLayoutStore((s) => s.toggleDataSource)
+  const setEnabledDataSources = useLayoutStore((s) => s.setEnabledDataSources)
+  const fetchDataSources = useLayoutStore((s) => s.fetchDataSources)
 
   // Check if current session is busy with operations
   const isBusy = useIsCurrentSessionBusy()
-
-  const isOpen = rightPanel === 'data-sources'
 
   // Check if user has valid auth token
   const hasValidToken = !!idToken
@@ -315,4 +321,4 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = ({ onSourceToggle, on
       )}
     </SidePanel>
   )
-}
+})

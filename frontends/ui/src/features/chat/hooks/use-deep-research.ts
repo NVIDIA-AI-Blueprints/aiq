@@ -13,6 +13,7 @@
 'use client'
 
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   createDeepResearchClient,
   cancelJob,
@@ -34,6 +35,15 @@ const TIMEOUT_CHECK_INTERVAL_MS = 10000
  *  job.status "interrupted" within this window, clean up locally so the
  *  UI never stays stuck in a streaming state. */
 const CANCEL_FALLBACK_TIMEOUT_MS = 5000
+const USER_CANCELLED_ERROR_MARKER = 'cancelled by user'
+
+const isUserCancelledStatus = (
+  status: DeepResearchJobStatus,
+  error?: string
+): boolean => (
+  status === 'interrupted' &&
+  error?.toLowerCase().includes(USER_CANCELLED_ERROR_MARKER) === true
+)
 
 interface UseDeepResearchReturn {
   /** Whether deep research is currently streaming */
@@ -78,37 +88,37 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
   // Note: idToken is used for backend auth, not accessToken
   const { idToken, authRequired, error: authError } = useAuth()
 
-  // Chat store state and actions
-  const {
-    deepResearchJobId,
-    isDeepResearchStreaming,
-    deepResearchStatus,
-    updateDeepResearchStatus,
-    completeDeepResearch,
-    addDeepResearchCitation,
-    setReportContent,
-    addThinkingStep,
-    appendToThinkingStep,
-    completeThinkingStep,
-    setCurrentStatus,
-    setStreaming,
-    setDeepResearchTodos,
-    stopAllDeepResearchSpinners,
-    // New dedicated actions for ThinkingTab sub-tabs
-    addDeepResearchLLMStep,
-    appendToDeepResearchLLMStep,
-    completeDeepResearchLLMStep,
-    addDeepResearchAgentWithId,
-    completeDeepResearchAgent,
-    addDeepResearchToolCall,
-    completeDeepResearchToolCall,
-    addDeepResearchFile,
-    // Actions for message patching
-    patchConversationMessage,
-    // Actions for deep research banners
-    addDeepResearchBanner,
-    setStreamLoaded,
-  } = useChatStore()
+  // Chat store — reactive state only
+  const { deepResearchJobId, isDeepResearchStreaming, deepResearchStatus } =
+    useChatStore(useShallow((s) => ({
+      deepResearchJobId: s.deepResearchJobId,
+      isDeepResearchStreaming: s.isDeepResearchStreaming,
+      deepResearchStatus: s.deepResearchStatus,
+    })))
+
+  // Actions — stable references, won't trigger re-renders
+  const updateDeepResearchStatus = useChatStore((s) => s.updateDeepResearchStatus)
+  const completeDeepResearch = useChatStore((s) => s.completeDeepResearch)
+  const addDeepResearchCitation = useChatStore((s) => s.addDeepResearchCitation)
+  const setReportContent = useChatStore((s) => s.setReportContent)
+  const addThinkingStep = useChatStore((s) => s.addThinkingStep)
+  const appendToThinkingStep = useChatStore((s) => s.appendToThinkingStep)
+  const completeThinkingStep = useChatStore((s) => s.completeThinkingStep)
+  const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const setDeepResearchTodos = useChatStore((s) => s.setDeepResearchTodos)
+  const stopAllDeepResearchSpinners = useChatStore((s) => s.stopAllDeepResearchSpinners)
+  const addDeepResearchLLMStep = useChatStore((s) => s.addDeepResearchLLMStep)
+  const appendToDeepResearchLLMStep = useChatStore((s) => s.appendToDeepResearchLLMStep)
+  const completeDeepResearchLLMStep = useChatStore((s) => s.completeDeepResearchLLMStep)
+  const addDeepResearchAgentWithId = useChatStore((s) => s.addDeepResearchAgentWithId)
+  const completeDeepResearchAgent = useChatStore((s) => s.completeDeepResearchAgent)
+  const addDeepResearchToolCall = useChatStore((s) => s.addDeepResearchToolCall)
+  const completeDeepResearchToolCall = useChatStore((s) => s.completeDeepResearchToolCall)
+  const addDeepResearchFile = useChatStore((s) => s.addDeepResearchFile)
+  const patchConversationMessage = useChatStore((s) => s.patchConversationMessage)
+  const addDeepResearchBanner = useChatStore((s) => s.addDeepResearchBanner)
+  const setStreamLoaded = useChatStore((s) => s.setStreamLoaded)
 
   /**
    * Check if the current session owns the active deep research stream.
@@ -124,7 +134,8 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
   }, [])
 
   // Layout store for opening research panel
-  const { openRightPanel, setResearchPanelTab } = useLayoutStore()
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
 
   // Ref to track active thinking step IDs by name
   const activeStepIdsRef = useRef<Map<string, string>>(new Map())
@@ -312,6 +323,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               setCurrentStatus('error')
               stopAllDeepResearchSpinners()
               const hasReport = Boolean(state.reportContent?.trim())
+              const isUserCancelled = isUserCancelledStatus(status, error)
 
               if (ownerConvId && messageId) {
                 patchConversationMessage(ownerConvId, messageId, {
@@ -321,7 +333,6 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
                   showViewReport: hasReport,
                 })
               }
-              const isUserCancelled = status === 'interrupted'
               addDeepResearchBanner(isUserCancelled ? 'cancelled' : 'failure', jobId, ownerConvId || undefined)
               researchStartTimeRef.current = null
               clientRef.current?.disconnect()
@@ -331,6 +342,9 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               if (error && !isUserCancelled) {
                 const { addErrorCard } = useChatStore.getState()
                 addErrorCard('agent.deep_research_failed', error)
+              } else if (status === 'interrupted' && !isUserCancelled) {
+                const { addErrorCard } = useChatStore.getState()
+                addErrorCard('agent.deep_research_failed', 'Research was interrupted before completion.')
               }
             }
           },
