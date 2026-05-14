@@ -17,6 +17,8 @@ An NVIDIA blueprint for AI-powered deep research, built on the NeMo Agent Toolki
 | Run the blueprint quickly | [Quick Start](./get-started/quick-start.md) |
 | Understand how it works | [Architecture Overview](./architecture/overview.md) |
 | Customize models, prompts, or tools | [Customization](./customization/index.md) |
+| Run skill-driven deep research | [Deep Research Skills and Sandbox](./examples/skills-sandbox/index.md) |
+| Install AI-Q in a coding harness | [Agent Skills](./integration/agent-skills.md) |
 | Add new tools or integrations | [Extending](./extending/index.md) |
 | Deploy to production | [Deployment](./deployment/index.md) |
 | Evaluate quality | [Evaluation](./evaluation/index.md) |

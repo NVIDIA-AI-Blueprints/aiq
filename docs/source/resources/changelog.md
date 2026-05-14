@@ -4,18 +4,22 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Change Log
 
-## Unreleased
+## Release v2.1.0
 
-### v2.0.1 (In Development)
+AI-Q 2.1.0 updates the blueprint for production web deployments, extensible authentication, enterprise data-source routing, and skill-driven deep research workflows.
 
-Major architecture update with intelligent research orchestration:
-- Pinned NeMo Agent Toolkit (NAT) dependency to v1.4.0; NAT v1.5 or later is not yet supported
-- Two-tier research architecture with automatic routing between shallow and deep research agents
-- Interactive authentication support for CLI mode with thread-based conversation state isolation
-- Enhanced observability and tracing with Phoenix integration
-- Evaluation-driven development approach with continuous testing throughout the development lifecycle
-- Comprehensive evaluation framework including agent-specific test suites and FreshQA benchmark integration for factual accuracy
-
+- AI-Q REST API with pluggable auth middleware, entry-point-registered token validators, and async job ownership enforcement
+- Auth extensibility hooks (`register_token_fetcher`, provider lifecycle) and auth refactor eliminating the refresh race
+- Data source registry driving UI toggles, per-message filtering, and agent tool inheritance
+- New `exa_web_search` data source with `full_text` and `highlights` controls
+- Deep researcher consumes DeepAgents skills with a job-scoped Modal sandbox; built-in `data-table-analysis` skill and `configs/config_skills.yml` example
+- AI-Q is consumable as a portable Agent Skill (`.agents/skills/aiq-research/`), with `.claude/skills/aiq-research/` retained as a Claude Code compatibility symlink for routed `/chat` and async job lifecycle against a local AI-Q server
+- Cost analysis tool with pricing configs and profiling example
+- Documented MCP client patterns scoped for 2.1: `mcp_client`, `mcp_service_account`, and user-identity tools
+- Prompt restructure across all agents for KV cache prefix reuse
+- Operability: idempotent DB init, tuned Dask/Postgres defaults, request tracing into NAT spans, UI stream-failure hardening
+- New authentication and MCP tools guides; new skills-and-sandbox example
+- Pinned to NeMo Agent Toolkit (NAT) v1.6.0; CVE bumps for Pillow, cryptography, pygments, authlib, pyopenssl, and pytest
 
 ## Released
 

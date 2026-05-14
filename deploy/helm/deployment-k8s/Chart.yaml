@@ -2,8 +2,8 @@ apiVersion: v2
 name: aiq2-web
 description: AI-Q - WEB Profile ()
 type: application
-version: 2.0.0
-appVersion: '1.0'
+version: 2.1.0
+appVersion: '2.1.0'
 dependencies:
 - name: aiq
   version: 0.0.4

@@ -1,6 +1,6 @@
 # Change Log
 
-Release v2.1.0 (Unreleased — target 2026-05-19)
+Release v2.1.0
 
 - AI-Q REST API with pluggable auth middleware, entry-point-registered token validators, and async job ownership enforcement
 - Auth extensibility hooks (`register_token_fetcher`, provider lifecycle) and auth refactor eliminating the refresh race

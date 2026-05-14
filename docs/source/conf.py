@@ -4,7 +4,7 @@
 project = "NVIDIA AI-Q Blueprint"
 copyright = "2025-%Y, NVIDIA Corporation"
 author = "NVIDIA Corporation"
-release = "1.2.1"
+release = "2.1.0"
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration

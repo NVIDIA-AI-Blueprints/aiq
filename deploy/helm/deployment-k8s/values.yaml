@@ -37,7 +37,7 @@ aiq:
         targetMemoryUtilizationPercentage: 80
       image:
         repository: nvcr.io/nvidia/blueprint/aiq-agent
-        tag: "2.0.0"
+        tag: "2.1.0"
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
@@ -206,7 +206,7 @@ aiq:
         targetCPUUtilizationPercentage: 80
       image:
         repository: nvcr.io/nvidia/blueprint/aiq-frontend
-        tag: "2.0.0"
+        tag: "2.1.0"
         pullPolicy: IfNotPresent
       imagePullSecrets: []
       service:
