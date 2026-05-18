@@ -64,12 +64,12 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 - **Workflow configuration** — YAML configs define agents, tools, LLMs, and routing behavior so you can tune workflows without code changes.
 - **Modular workflows** — All agents (orchestration node, shallow researcher, deep researcher, clarifier) are composable; each can run standalone or as part of the full pipeline.
 - **Skills and sandbox execution** — Deep research can load built-in DeepAgents skills, including the `data-table-analysis` workflow, and run code-oriented work in a job-scoped Modal sandbox.
-- **Portable Agent Skill** — AI-Q ships `.agents/skills/aiq-research/` so compatible coding harnesses can call a local AI-Q server for routed chat and async deep research jobs.
+- **Portable agent skill** — AI-Q ships `.agents/skills/aiq-research/` so compatible coding harnesses can call a local AI-Q server for routed chat and async deep research jobs.
 - **Data source registry** — UI toggles and request payloads can select web, paper, enterprise, collaboration, and knowledge-layer sources per message.
 - **Production API and auth** — REST endpoints, async job ownership, token validator entry points, and provider lifecycle hooks support authenticated deployments.
 - **Profiling and cost analysis** — Tokenomics reports combine NAT profiler traces with pricing configuration for cost, latency, and cache analysis.
 - **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
-- **Frontend options** — Run through CLI, web UI, or async jobs; see [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
+- **Frontend options** — Run through CLI, web UI, or async jobs. Refer to [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
 - **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as [helm deployment](deploy/helm/deployment-k8s/).
 
 

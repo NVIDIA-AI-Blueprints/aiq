@@ -6,10 +6,10 @@ SPDX-License-Identifier: Apache-2.0
 
 ## Release v2.1.0
 
-AI-Q 2.1.0 updates the blueprint for production web deployments, extensible authentication, enterprise data-source routing, and skill-driven deep research workflows.
+The following are updates to the AI-Q blueprint for version 2.1.0, including production web deployments, extensible authentication, enterprise data-source routing, and skill-driven deep research workflows.
 
 - AI-Q REST API with pluggable auth middleware, entry-point-registered token validators, and async job ownership enforcement
-- Auth extensibility hooks (`register_token_fetcher`, provider lifecycle) and auth refactor eliminating the refresh race
+- Auth extensibility hooks (`register_token_fetcher`, provider lifecycle) and auth refactor, eliminating the refresh race
 - Data source registry driving UI toggles, per-message filtering, and agent tool inheritance
 - New `exa_web_search` data source with `full_text` and `highlights` controls
 - Deep researcher consumes DeepAgents skills with a job-scoped Modal sandbox; built-in `data-table-analysis` skill and `configs/config_skills.yml` example
