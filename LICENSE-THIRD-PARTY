@@ -1,9 +1,10 @@
 AIQ Third-Party Licenses
 =========================
 
-This file contains third-party license information for software packages used in this project.
-The licenses below apply to one or more packages included in this project. For each license,
-we list the packages that are distributed under it and include the license text.
+This file contains third-party license information for software packages used
+in this project. The licenses below apply to one or more packages included in
+this project. For each license, we list the packages that are distributed under
+it and include or reference the applicable license text.
 
 This inventory is generated from:
 - Python workspace dependencies resolved in `uv.lock`
@@ -14,31 +15,93 @@ MIT License
 ------------------------------------------------------------
 Packages under the MIT License:
 
-   @react-pdf/renderer               4.3.2
-   @tailwindcss/postcss              4.1.18
-   aiosqlite                         0.22.1
-   deepagents                        0.4.2
-   http-proxy                        1.18.1
-   langchain-core                    1.2.12
-   langchain-tavily                  0.2.17
-   marked                            16.4.2
-   mypy                              1.19.1
-   next                              16.1.6
-   pdfplumber                        0.11.9
-   pre-commit                        4.5.1
-   pytest-cov                        7.0.0
-   pytest-env                        1.3.2
-   python-pptx                       1.0.2
-   pytz                              2025.2
-   react                             18.3.1
-   react-dom                         18.3.1
-   react-markdown                    10.1.0
-   remark-gfm                        4.0.1
-   rich                              14.3.2
-   ruff                              0.15.1
-   sqlalchemy                        2.0.46
-   zod                               3.25.76
-   zustand                           5.0.11
+   @next/env                                            16.2.6
+   @next/eslint-plugin-next                             15.5.15
+   @react-pdf/renderer                                 4.3.2
+   @rushstack/eslint-patch                             1.16.1
+   @tailwindcss/oxide-wasm32-wasi > @emnapi/core       1.7.1
+   @tailwindcss/oxide-wasm32-wasi > @emnapi/runtime    1.7.1
+   @tailwindcss/oxide-wasm32-wasi > @emnapi/wasi-threads 1.1.0
+   @tailwindcss/oxide-wasm32-wasi > @napi-rs/wasm-runtime 1.1.0
+   @tailwindcss/oxide-wasm32-wasi > @tybys/wasm-util   0.10.1
+   @tailwindcss/postcss                                4.1.18
+   @typescript-eslint/eslint-plugin                    8.58.2
+   @typescript-eslint/parser                           8.58.2
+   @typescript-eslint/scope-manager                    8.58.2
+   @typescript-eslint/type-utils                       8.58.2
+   @typescript-eslint/types                            8.58.2
+   @typescript-eslint/typescript-estree > balanced-match 4.0.4
+   @typescript-eslint/utils                            8.58.2
+   @typescript-eslint/visitor-keys                     8.58.2
+   acorn                                               8.16.0
+   aiorwlock                                           1.5.1
+   aiosqlite                                           0.22.1
+   ajv                                                 6.14.0
+   anthropic                                           0.97.0
+   banks                                               2.4.2
+   blinker                                             1.9.0
+   brace-expansion                                     1.1.14
+   cbor2                                               6.0.1
+   docopt                                              0.6.2
+   eslint-config-next                                  15.5.15
+   exa-py                                              1.16.1
+   extratools                                          0.8.2.1
+   fastuuid                                            0.14.0
+   follow-redirects                                    1.16.0
+   fonttools                                           4.62.1
+   grpclib                                             0.4.9
+   h2                                                  4.3.0
+   happy-dom                                           20.9.0
+   hpack                                               4.1.0
+   http-proxy                                          1.18.1
+   hyperframe                                          6.1.0
+   jsonschema                                          4.23.0
+   langchain                                           1.2.15
+   langchain-anthropic                                 1.4.2
+   langchain-core                                      1.4.0
+   langchain-exa                                       1.1.0
+   langchain-google-genai                              4.2.2
+   langchain-modal                                     0.0.3
+   langchain-protocol                                  0.0.14
+   langchain-tavily                                    0.2.17
+   langgraph                                           1.1.10
+   langgraph-prebuilt                                  1.0.12
+   langsmith                                           0.8.4
+   litellm                                             1.83.14
+   lodash                                              4.18.1
+   mako                                                1.3.12
+   marked                                              16.4.2
+   mcp                                                 1.27.1
+   mypy                                                1.19.1
+   next                                                16.2.6
+   openevals                                           0.1.3
+   pdfplumber                                          0.11.9
+   picomatch                                           2.3.2
+   pre-commit                                          4.5.1
+   prefixspan                                          0.5.2
+   pyjwt                                               2.12.1
+   pyparsing                                           3.3.2
+   pytest                                              9.0.3
+   pytest-cov                                          7.0.0
+   pytest-env                                          1.3.2
+   python-pptx                                         1.0.2
+   pytz                                                2025.2
+   react                                               18.3.1
+   react-dom                                           18.3.1
+   react-markdown                                      10.1.0
+   remark-gfm                                          4.0.1
+   rich                                                14.3.2
+   rollup                                              4.60.1
+   ruff                                                0.15.1
+   sqlalchemy                                          2.0.46
+   synchronicity                                       0.12.2
+   toml                                                0.10.2
+   ts-api-utils                                        2.5.0
+   tzlocal                                             5.3.1
+   urllib3                                             2.7.0
+   vite                                                7.3.2
+   zod                                                 3.25.76
+   zustand                                             5.0.11
 
 Full MIT License Text:
 --------------------------------------------------
@@ -68,13 +131,21 @@ Apache License, Version 2.0
 ------------------------------------------------------------
 Packages under the Apache License, Version 2.0:
 
-   @nvidia/foundations-react-core    0.600.0
-   chromadb                          1.5.0
-   nvidia-nat                        1.5.0
-   openai                            2.20.0
-   python-multipart                  0.0.22
-   requests                          2.32.5
-   yapf                              0.43.0
+   @nvidia/foundations-react-core                       0.600.0
+   aiohttp                                             3.13.4
+   chromadb                                            1.5.0
+   deepagents                                          0.5.0
+   google-auth                                         2.49.2
+   google-genai                                        1.73.1
+   importlib-metadata                                  8.5.0
+   modal                                               1.4.2
+   nltk                                                3.9.4
+   openai                                              2.24.0
+   python-multipart                                    0.0.28
+   requests                                            2.32.5
+   types-certifi                                       2021.10.8.3
+   types-toml                                          0.10.8.20260408
+   yapf                                                0.43.0
 
 Full Apache License, Version 2.0 Text:
 --------------------------------------------------
@@ -82,13 +153,33 @@ See full Apache-2.0 text in the repository `LICENSE` file.
 --------------------------------------------------
 
 ------------------------------------------------------------
-BSD License (2-Clause / 3-Clause)
+BSD Licenses
 ------------------------------------------------------------
-Packages under BSD licenses:
+Packages under BSD 2-Clause:
 
-   httpx                             0.28.1
-   prompt-toolkit                    3.0.52
-   pygraphviz                        1.14
+   happy-dom > entities                                7.0.1
+   httpx                                               0.28.1
+   prompt-toolkit                                      3.0.52
+   pyasn1                                              0.6.3
+   pygments                                            2.20.0
+
+Packages under BSD 3-Clause:
+
+   authlib                                             1.6.11
+   click                                               8.1.8
+   contourpy                                           1.3.3
+   cycler                                              0.12.1
+   flask                                               3.1.3
+   itsdangerous                                        2.2.0
+   kiwisolver                                          1.5.0
+   lxml                                                6.1.0
+   pygraphviz                                          1.14
+   python-dotenv                                       1.2.2
+   scikit-learn                                        1.8.0
+   scipy                                               1.17.1
+   sse-starlette                                       3.4.4
+   threadpoolctl                                       3.6.0
+   werkzeug                                            3.1.7
 
 Full BSD License Text:
 --------------------------------------------------
@@ -148,7 +239,9 @@ ISC License
 ------------------------------------------------------------
 Packages under ISC:
 
-   next-auth                         4.24.13
+   flatted                                             3.4.2
+   minimatch                                           3.1.5
+   next-auth                                           4.24.13
 
 Full ISC License Text:
 --------------------------------------------------
@@ -162,9 +255,111 @@ THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
 REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
 AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
 INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
+OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+--------------------------------------------------
+
+------------------------------------------------------------
+0BSD License
+------------------------------------------------------------
+Packages under 0BSD:
+
+   @tailwindcss/oxide-wasm32-wasi > tslib              2.8.1
+
+Full 0BSD License Text:
+--------------------------------------------------
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
 LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
 OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
+--------------------------------------------------
+
+------------------------------------------------------------
+MPL-2.0 License
+------------------------------------------------------------
+Packages under MPL-2.0:
+
+   lightningcss                                        1.30.2
+   lightningcss-android-arm64                          1.30.2
+   lightningcss-darwin-arm64                           1.30.2
+   lightningcss-darwin-x64                             1.30.2
+   lightningcss-freebsd-x64                            1.30.2
+   lightningcss-linux-arm-gnueabihf                    1.30.2
+   lightningcss-linux-arm64-gnu                        1.30.2
+   lightningcss-linux-arm64-musl                       1.30.2
+   lightningcss-linux-x64-gnu                          1.30.2
+   lightningcss-linux-x64-musl                         1.30.2
+   lightningcss-win32-arm64-msvc                       1.30.2
+   lightningcss-win32-x64-msvc                         1.30.2
+   pathspec                                            1.0.4
+   tqdm                                                4.67.3
+
+Full MPL-2.0 License Text:
+--------------------------------------------------
+See the Mozilla Public License, Version 2.0 in the corresponding upstream
+package license files.
+--------------------------------------------------
+
+------------------------------------------------------------
+LGPL-3.0 Licenses
+------------------------------------------------------------
+Packages under LGPL-3.0-only:
+
+   psycopg                                             3.3.2
+   psycopg-binary                                      3.3.2
+   psycopg-pool                                        3.3.0
+
+Packages under LGPL-3.0-or-later:
+
+   @img/sharp-libvips-darwin-arm64                     1.2.4
+   @img/sharp-libvips-darwin-x64                       1.2.4
+   @img/sharp-libvips-linux-arm                        1.2.4
+   @img/sharp-libvips-linux-arm64                      1.2.4
+   @img/sharp-libvips-linux-ppc64                      1.2.4
+   @img/sharp-libvips-linux-riscv64                    1.2.4
+   @img/sharp-libvips-linux-s390x                      1.2.4
+   @img/sharp-libvips-linux-x64                        1.2.4
+   @img/sharp-libvips-linuxmusl-arm64                  1.2.4
+   @img/sharp-libvips-linuxmusl-x64                    1.2.4
+
+Full LGPL-3.0 License Text:
+--------------------------------------------------
+See the GNU Lesser General Public License, Version 3 in the corresponding
+upstream package license files.
+--------------------------------------------------
+
+------------------------------------------------------------
+PSF License
+------------------------------------------------------------
+Packages under PSF-2.0:
+
+   matplotlib                                          3.10.9
+   pywin32                                             311
+
+Full PSF-2.0 License Text:
+--------------------------------------------------
+See the Python Software Foundation License, Version 2 in the corresponding
+upstream package license files.
+--------------------------------------------------
+
+------------------------------------------------------------
+HPND License
+------------------------------------------------------------
+Packages under HPND:
+
+   pillow                                              12.2.0
+
+Full HPND License Text:
+--------------------------------------------------
+See the Historical Permission Notice and Disclaimer license text in the
+corresponding upstream package license files.
 --------------------------------------------------
 
 ------------------------------------------------------------
@@ -173,21 +368,15 @@ Mixed / Multi-License Packages
 The following packages declare multiple licenses and should be reviewed using
 their upstream `LICENSE` and `NOTICE` files:
 
-   pypdfium2                         5.4.0      BSD-3-Clause; Apache-2.0
-   @img/sharp-libvips-darwin-arm64  1.2.4      LGPL-3.0-or-later
-   @img/sharp-libvips-darwin-x64    1.2.4      LGPL-3.0-or-later
-   @img/sharp-libvips-linux-arm     1.2.4      LGPL-3.0-or-later
-   @img/sharp-libvips-linux-arm64   1.2.4      LGPL-3.0-or-later
-   @img/sharp-libvips-linux-ppc64   1.2.4      LGPL-3.0-or-later
-   @img/sharp-libvips-linux-riscv64 1.2.4      LGPL-3.0-or-later
-   @img/sharp-libvips-linux-s390x   1.2.4      LGPL-3.0-or-later
-   @img/sharp-libvips-linux-x64     1.2.4      LGPL-3.0-or-later
-   @img/sharp-libvips-linuxmusl-arm64 1.2.4    LGPL-3.0-or-later
-   @img/sharp-libvips-linuxmusl-x64 1.2.4      LGPL-3.0-or-later
-   @img/sharp-wasm32                0.34.5     Apache-2.0 AND LGPL-3.0-or-later AND MIT
-   @img/sharp-win32-arm64           0.34.5     Apache-2.0 AND LGPL-3.0-or-later
-   @img/sharp-win32-ia32            0.34.5     Apache-2.0 AND LGPL-3.0-or-later
-   @img/sharp-win32-x64             0.34.5     Apache-2.0 AND LGPL-3.0-or-later
+   @img/sharp-wasm32                                   0.34.5     Apache-2.0; MIT; LGPL-3.0-or-later
+   @img/sharp-win32-arm64                              0.34.5     Apache-2.0; LGPL-3.0-or-later
+   @img/sharp-win32-ia32                               0.34.5     Apache-2.0; LGPL-3.0-or-later
+   @img/sharp-win32-x64                                0.34.5     Apache-2.0; LGPL-3.0-or-later
+   cryptography                                        46.0.6     Apache-2.0; BSD-3-Clause
+   dompurify                                           3.4.0      Apache-2.0; MPL-2.0
+   pypdfium2                                           5.4.0      BSD-3-Clause; Apache-2.0
+   regex                                               2026.1.15  Apache-2.0; CNRI-Python
+
 
 ------------------------------------------------------------
 Unknown License Metadata (Manual Review Required)
@@ -195,21 +384,16 @@ Unknown License Metadata (Manual Review Required)
 The following packages did not provide clean SPDX metadata in package indexes
 and must be validated from upstream repositories:
 
-   asyncpg                           0.31.0
-   dask                              2026.1.2
-   docx2txt                          0.9
-   fastapi                           0.129.0
-   langgraph-checkpoint-postgres     3.0.4
-   langgraph-checkpoint-sqlite       3.0.3
-   llama-index                       0.14.14
-   llama-index-embeddings-nvidia     0.4.2
-   llama-index-vector-stores-chroma  0.5.5
-   pillow                            12.2.0
-   psycopg                           3.3.2
-   pydantic                          2.12.5
-   pytest                            9.0.2
-   pytest-asyncio                    1.3.0
-   python-dotenv                     1.2.1
-   urllib3                           2.6.3
+   asyncpg                                             0.31.0
+   dask                                                2026.1.2
+   docx2txt                                            0.9
+   fastapi                                             0.129.0
+   langgraph-checkpoint-postgres                       3.0.4
+   langgraph-checkpoint-sqlite                         3.0.3
+   llama-index                                         0.14.14
+   llama-index-embeddings-nvidia                       0.4.2
+   llama-index-vector-stores-chroma                    0.5.5
+   pydantic                                            2.12.5
+   pytest-asyncio                                      1.3.0
 
 END OF THIRD-PARTY LICENSES
