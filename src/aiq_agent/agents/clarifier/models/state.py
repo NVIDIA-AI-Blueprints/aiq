@@ -58,6 +58,9 @@ class ClarifierAgentState(BaseModel):
         max_turns: Maximum number of turns for the clarification dialog.
         clarifier_log: Log of the clarification dialog.
         iteration: Current iteration of the clarification dialog.
+        force_search_used: Whether the agent has already been nudged once to
+            attempt a search before its first clarification question. Used to
+            ensure the nudge fires at most once per run.
         plan_title: Title of the generated research plan (if plan approval enabled).
         plan_sections: List of section titles for the research plan.
         plan_approved: Whether the user approved the plan.
@@ -74,6 +77,7 @@ class ClarifierAgentState(BaseModel):
     max_turns: int = Field(default=3)
     clarifier_log: str = Field(default="")
     iteration: int = Field(default=0)
+    force_search_used: bool = Field(default=False)
     plan_title: str | None = Field(default=None)
     plan_sections: list[str] = Field(default_factory=list)
     plan_approved: bool = Field(default=False)

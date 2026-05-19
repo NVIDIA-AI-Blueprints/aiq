@@ -104,6 +104,15 @@ JSON_REMINDER_AFTER_TOOLS = (
 )
 """Reminder prompt added after tool results to reinforce JSON-only output."""
 
+FORCE_SEARCH_GUIDANCE = (
+    "You attempted to ask the user for clarification before gathering any context. "
+    "Before asking the user a question, you MUST first use the available search tools "
+    "to look up unfamiliar entities, acronyms, products, or terms in their request. "
+    "Issue one focused tool call now with a query derived from the user's request. "
+    "Only after reviewing the tool results should you decide whether clarification is still needed."
+)
+"""Guidance prompt injected when the LLM tries to clarify without having searched first."""
+
 
 class ClarifierAgent:
     """
@@ -484,6 +493,24 @@ class ClarifierAgent:
     SKIP_COMMANDS = {"skip", "done", "exit", "quit", "proceed", "continue", "no", "n", ""}
     """Set of commands that indicate the user wants to skip clarification."""
 
+    @staticmethod
+    def _has_tool_invocations(messages: Sequence[Any]) -> bool:
+        """
+        Check whether any prior assistant message in the conversation issued tool calls.
+
+        Args:
+            messages: The conversation message history.
+
+        Returns:
+            True if any AIMessage in the history carries non-empty tool_calls,
+            False otherwise.
+        """
+        for msg in messages:
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls:
+                return True
+        return False
+
     def _is_skip_command(self, user_reply: str) -> bool:
         """
         Check if the user's reply indicates they want to skip clarification.
@@ -503,16 +530,22 @@ class ClarifierAgent:
         """
         Build the LangGraph StateGraph for the clarification workflow.
 
-        Creates a graph with three nodes:
+        Creates a graph with the following nodes:
         - agent: Generates clarification questions using the LLM
         - tools: Executes tool calls (e.g., web search) for context
         - ask_for_clarification: Prompts user and processes response
+        - force_search: Nudges the LLM to attempt a search before its first
+          clarification question when tools are configured but unused (fires
+          at most once per run)
+        - plan_preview: Optional plan approval flow
 
         The graph flow:
         1. agent generates a response (question, tool call, or completion)
         2. If tool call → tools node → back to agent
-        3. If question → ask_for_clarification → back to agent
-        4. If complete → end
+        3. If complete → end (or plan_preview if enabled)
+        4. If question, tools exist, and no search has happened yet on the
+           first turn → force_search injects guidance and routes back to agent
+        5. Otherwise → ask_for_clarification → back to agent
 
         Returns:
             Compiled LangGraph StateGraph ready for execution.
@@ -546,6 +579,13 @@ class ClarifierAgent:
             if state.messages and isinstance(state.messages[-1], ToolMessage):
                 logger.info("Adding JSON reminder after tool results")
                 messages.append(HumanMessage(content=JSON_REMINDER_AFTER_TOOLS))
+
+            # If the force_search nudge was raised but no tool call has happened
+            # yet, inject the guidance ephemerally — never stored in state.messages,
+            # so it cannot leak into get_latest_user_query and similar lookups.
+            if state.force_search_used and not self._has_tool_invocations(state.messages):
+                logger.info("Injecting force-search guidance for this turn")
+                messages.append(HumanMessage(content=FORCE_SEARCH_GUIDANCE))
 
             response = await bound_llm.ainvoke(messages)
             return {"messages": [response]}
@@ -592,8 +632,12 @@ class ClarifierAgent:
         def decide_route(state: ClarifierAgentState | dict):
             if isinstance(state, dict):
                 messages = state.get("messages", [])
+                iteration = state.get("iteration", 0)
+                force_search_used = state.get("force_search_used", False)
             elif hasattr(state, "messages"):
                 messages = state.messages
+                iteration = state.iteration
+                force_search_used = state.force_search_used
             else:
                 msg = f"No messages found in input state to tool_edge: {state}"
                 raise ValueError(msg)
@@ -610,7 +654,36 @@ class ClarifierAgent:
                 if self.enable_plan_approval:
                     return "plan_preview"
                 return "__end__"
+
+            # Force a search before the first clarification question when tools are
+            # configured but the agent has not yet issued any tool call. This keeps
+            # the behavior model-agnostic: even models that would otherwise skip
+            # tool use must attempt at least one search before falling back to
+            # asking the user for clarification. We only nudge once per run (guarded
+            # by ``force_search_used``) so a stubborn model cannot get stuck in a
+            # loop — after the nudge, normal clarification routing resumes.
+            if (
+                self.tools
+                and iteration == 0
+                and not force_search_used
+                and not self._has_tool_invocations(messages[:-1])
+            ):
+                logger.info("Clarifier: forcing search before first clarification question")
+                return "force_search"
+
             return "ask_for_clarification"
+
+        async def force_search_node(state: ClarifierAgentState):
+            """
+            Flip the force_search_used flag so ``agent_node`` will inject the
+            search-first guidance message ephemerally on the next LLM call.
+
+            The guidance is intentionally NOT appended to ``state.messages`` so
+            it cannot be picked up by helpers like ``get_latest_user_query``
+            (which would otherwise surface internal scaffolding back to the
+            user in fallback text).
+            """
+            return {"force_search_used": True}
 
         async def plan_preview_node(state: ClarifierAgentState):
             """Generate plan preview and handle approval/feedback loop."""
@@ -681,6 +754,7 @@ class ClarifierAgent:
         graph.add_node("agent", agent_node)
         graph.add_node("tools", ToolNode(self.tools))
         graph.add_node("ask_for_clarification", ask_clarification)
+        graph.add_node("force_search", force_search_node)
         graph.add_node("plan_preview", plan_preview_node)
 
         graph.set_entry_point("agent")
@@ -691,6 +765,7 @@ class ClarifierAgent:
             {
                 "tools": "tools",
                 "ask_for_clarification": "ask_for_clarification",
+                "force_search": "force_search",
                 "plan_preview": "plan_preview",
                 "__end__": "__end__",
             },
@@ -698,6 +773,7 @@ class ClarifierAgent:
 
         graph.add_edge("tools", "agent")
         graph.add_edge("ask_for_clarification", "agent")
+        graph.add_edge("force_search", "agent")
         graph.add_edge("plan_preview", "__end__")
 
         return graph.compile()

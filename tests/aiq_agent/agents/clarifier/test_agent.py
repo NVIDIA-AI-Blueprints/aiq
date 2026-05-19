@@ -23,9 +23,11 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from aiq_agent.agents.clarifier.agent import DEFAULT_CLARIFICATION_PROMPT
+from aiq_agent.agents.clarifier.agent import FORCE_SEARCH_GUIDANCE
 from aiq_agent.agents.clarifier.agent import ClarifierAgent
 from aiq_agent.agents.clarifier.models import ClarificationResponse
 from aiq_agent.agents.clarifier.models import ClarifierAgentState
@@ -872,3 +874,250 @@ class TestClarifierAgentPlanApprovalInit:
         )
 
         assert agent.planner_llm == planner_llm
+
+
+class TestHasToolInvocations:
+    """Tests for the _has_tool_invocations helper."""
+
+    def test_empty_messages(self):
+        """No messages -> no invocations."""
+        assert ClarifierAgent._has_tool_invocations([]) is False
+
+    def test_only_human_messages(self):
+        """Human-only history has no invocations."""
+        messages = [HumanMessage(content="hi"), HumanMessage(content="more")]
+        assert ClarifierAgent._has_tool_invocations(messages) is False
+
+    def test_ai_message_without_tool_calls(self):
+        """An AIMessage without tool_calls counts as no invocation."""
+        messages = [HumanMessage(content="hi"), AIMessage(content="hello")]
+        assert ClarifierAgent._has_tool_invocations(messages) is False
+
+    def test_ai_message_with_tool_calls(self):
+        """An AIMessage with tool_calls counts as an invocation."""
+        ai = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_tool", "args": {"query": "x"}, "id": "call_1"}],
+        )
+        assert ClarifierAgent._has_tool_invocations([HumanMessage(content="hi"), ai]) is True
+
+    def test_with_tool_message(self):
+        """A ToolMessage by itself does not count - we look at the assistant turn."""
+        msg = ToolMessage(content="result", tool_call_id="call_1")
+        assert ClarifierAgent._has_tool_invocations([msg]) is False
+
+
+class TestClarifierForceSearch:
+    """Tests for the search-before-clarify behavior (issue #234)."""
+
+    @pytest.fixture
+    def mock_llm(self):
+        """Create a mock LLM."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        return llm
+
+    @pytest.fixture
+    def mock_llm_provider(self, mock_llm):
+        """Create a mock LLM provider."""
+        provider = MagicMock(spec=LLMProvider)
+        provider.get = MagicMock(return_value=mock_llm)
+        return provider
+
+    @pytest.mark.asyncio
+    async def test_force_search_fires_when_llm_skips_tools(self, mock_llm_provider, mock_llm):
+        """When tools are configured and the LLM tries to clarify without searching,
+        the agent must first nudge the LLM with a force-search guidance message,
+        then route to tools when the LLM complies."""
+
+        # 1st LLM call: skip tools, ask for clarification.
+        # 2nd LLM call (after force_search): produce a tool call.
+        # 3rd LLM call (after tool result): return complete.
+        clarif_msg = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        tool_call_msg = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_tool", "args": {"query": "AI"}, "id": "call_1"}],
+        )
+        complete_msg = AIMessage(
+            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif_msg, tool_call_msg, complete_msg])
+
+        user_callback = AsyncMock()
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=user_callback,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research Foo Project XYZ")])
+        result = await agent.run(state)
+
+        assert result is not None
+        assert isinstance(result, ClarifierResult)
+        # The LLM was invoked three times: clarify-attempt, tool-call, finalize.
+        assert mock_llm.ainvoke.call_count == 3
+        # The user was never prompted because the search-then-complete path was taken.
+        user_callback.assert_not_called()
+        # The 2nd LLM call (after force_search guidance) should have received the
+        # guidance string as the latest HumanMessage.
+        second_call_messages = mock_llm.ainvoke.call_args_list[1].args[0]
+        latest_human = next(m for m in reversed(second_call_messages) if isinstance(m, HumanMessage))
+        assert FORCE_SEARCH_GUIDANCE in latest_human.content
+
+    @pytest.mark.asyncio
+    async def test_force_search_skipped_when_no_tools(self, mock_llm_provider, mock_llm):
+        """When no tools are configured, force_search must NOT fire; the agent
+        should fall back to asking the user immediately."""
+        clarif_msg = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        complete_msg = AIMessage(
+            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif_msg, complete_msg])
+
+        user_callback = AsyncMock(return_value="technical deep dive")
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[],  # no tools available
+            user_prompt_callback=user_callback,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research AI")])
+        result = await agent.run(state)
+
+        assert result is not None
+        # User callback is called once for clarification (no force_search detour).
+        user_callback.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_force_search_fires_at_most_once(self, mock_llm_provider, mock_llm):
+        """Even if the LLM stubbornly refuses to call a tool after the force_search
+        nudge, the agent must not loop forever - it should proceed to asking the
+        user after the single nudge attempt."""
+        clarif_msg_1 = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        # After the force_search nudge, the model still refuses to call a tool
+        # and returns another clarification request.
+        clarif_msg_2 = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        # After the user replies, the model completes.
+        complete_msg = AIMessage(
+            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif_msg_1, clarif_msg_2, complete_msg])
+
+        user_callback = AsyncMock(return_value="technical")
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=user_callback,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research AI")])
+        result = await agent.run(state)
+
+        assert result is not None
+        # The LLM was invoked three times max - the nudge fired once, then we
+        # fell through to ask_for_clarification, and the user reply produced
+        # the final completion.
+        assert mock_llm.ainvoke.call_count == 3
+        # The user was prompted exactly once (no infinite loop of nudges).
+        user_callback.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_force_search_not_triggered_when_llm_searches_first(self, mock_llm_provider, mock_llm):
+        """When the LLM voluntarily issues a tool call on the first turn, the
+        force_search path is never entered - normal flow is preserved."""
+        tool_call_msg = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_tool", "args": {"query": "AI"}, "id": "call_1"}],
+        )
+        complete_msg = AIMessage(
+            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_msg, complete_msg])
+
+        user_callback = AsyncMock()
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=user_callback,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research AI")])
+        result = await agent.run(state)
+
+        assert result is not None
+        assert mock_llm.ainvoke.call_count == 2
+        user_callback.assert_not_called()
+        # No HumanMessage with the force_search guidance should have been added.
+        second_call_messages = mock_llm.ainvoke.call_args_list[1].args[0]
+        for m in second_call_messages:
+            if isinstance(m, HumanMessage):
+                assert FORCE_SEARCH_GUIDANCE not in m.content
+
+    @pytest.mark.asyncio
+    async def test_force_search_guidance_not_in_state_messages(self, mock_llm_provider, mock_llm):
+        """The force_search guidance must be injected ephemerally only; it must
+        never end up in state.messages, otherwise helpers like
+        get_latest_user_query would surface internal scaffolding back to the
+        user in fallback text. Regression test for Codex review feedback."""
+        # The LLM ignores the nudge and returns invalid JSON, triggering the
+        # invalid-format fallback path inside ask_clarification.
+        clarif_invalid = AIMessage(content="not valid JSON at all")
+        complete_msg = AIMessage(
+            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
+        )
+        # 1st call: clarify-attempt. 2nd call (after nudge): invalid JSON.
+        # 3rd call: after the user reply, model completes.
+        clarif_msg_1 = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif_msg_1, clarif_invalid, complete_msg])
+
+        # Capture what gets sent to the user.
+        prompts_received: list[str] = []
+
+        async def user_callback(question: str) -> str:
+            prompts_received.append(question)
+            return "skip"
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=user_callback,
+        )
+
+        original_query = "Research Project Foo at Acme"
+        state = ClarifierAgentState(messages=[HumanMessage(content=original_query)])
+        await agent.run(state)
+
+        # The user was prompted exactly once - with a fallback derived from
+        # their actual query, never from the force-search guidance.
+        assert len(prompts_received) == 1
+        prompt_text = prompts_received[0]
+        assert "Project Foo" in prompt_text or "Acme" in prompt_text
+        assert FORCE_SEARCH_GUIDANCE not in prompt_text
+        # The internal force-search guidance must never be visible in any
+        # message the user-facing fallback would draw from.
+        assert "You attempted to ask the user" not in prompt_text

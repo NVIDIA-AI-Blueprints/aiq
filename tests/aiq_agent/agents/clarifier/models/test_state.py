@@ -73,6 +73,16 @@ class TestClarifierAgentState:
         state = ClarifierAgentState(messages=[], iteration=2)
         assert state.iteration == 2
 
+    def test_default_force_search_used(self):
+        """Test default force_search_used is False."""
+        state = ClarifierAgentState(messages=[])
+        assert state.force_search_used is False
+
+    def test_custom_force_search_used(self):
+        """Test custom force_search_used."""
+        state = ClarifierAgentState(messages=[], force_search_used=True)
+        assert state.force_search_used is True
+
     def test_remaining_questions_full(self):
         """Test remaining_questions when iteration is 0."""
         state = ClarifierAgentState(messages=[], max_turns=3, iteration=0)
