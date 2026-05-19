@@ -907,6 +907,95 @@ describe('useChatStore', () => {
       expect(stored.state.conversations).toHaveLength(0)
     })
 
+    test('pruneUnavailableDeepResearchSessions removes current-user sessions whose backend job is gone', async () => {
+      const expiredConversation: Conversation = {
+        id: 'conv-expired',
+        userId: 'user-1',
+        title: 'Expired Report',
+        messages: [
+          {
+            id: 'msg-expired',
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            messageType: 'agent_response',
+            deepResearchJobId: 'job-expired',
+            deepResearchJobStatus: 'success',
+          },
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      const reachableConversation: Conversation = {
+        id: 'conv-reachable',
+        userId: 'user-1',
+        title: 'Reachable Report',
+        messages: [
+          {
+            id: 'msg-reachable',
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            messageType: 'agent_response',
+            deepResearchJobId: 'job-reachable',
+            deepResearchJobStatus: 'success',
+          },
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      const otherUserConversation: Conversation = {
+        id: 'conv-other-user',
+        userId: 'user-2',
+        title: 'Other User Report',
+        messages: [
+          {
+            id: 'msg-other-user',
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            messageType: 'agent_response',
+            deepResearchJobId: 'job-other-user',
+            deepResearchJobStatus: 'success',
+          },
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+
+      mockDeepResearchApi.getJobStatus.mockImplementation(async (jobId: string) => {
+        if (jobId === 'job-expired') {
+          throw new Error('Failed to get job status: 404')
+        }
+        return { job_id: jobId, status: 'success', error: null }
+      })
+
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: expiredConversation,
+        conversations: [expiredConversation, reachableConversation, otherUserConversation],
+        deepResearchJobId: 'job-expired',
+        deepResearchOwnerConversationId: 'conv-expired',
+        activeDeepResearchMessageId: 'msg-expired',
+        reportContent: 'stale report',
+      })
+
+      await useChatStore.getState().pruneUnavailableDeepResearchSessions()
+
+      expect(mockDeepResearchApi.getJobStatus).toHaveBeenCalledTimes(2)
+      expect(mockDeepResearchApi.getJobStatus).toHaveBeenCalledWith('job-expired')
+      expect(mockDeepResearchApi.getJobStatus).toHaveBeenCalledWith('job-reachable')
+      expect(mockDeepResearchApi.getJobStatus).not.toHaveBeenCalledWith('job-other-user')
+
+      const state = useChatStore.getState()
+      expect(state.conversations.map((c) => c.id)).toEqual(['conv-reachable', 'conv-other-user'])
+      expect(state.currentConversation).toBeNull()
+      expect(state.deepResearchJobId).toBeNull()
+      expect(state.deepResearchOwnerConversationId).toBeNull()
+      expect(state.activeDeepResearchMessageId).toBeNull()
+      expect(state.reportContent).toBe('')
+    })
+
     test('updateConversationTitle updates title', () => {
       const conv: Conversation = {
         id: 'conv-1',

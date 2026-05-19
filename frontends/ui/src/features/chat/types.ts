@@ -606,6 +606,8 @@ export interface ChatActions {
   reconnectToActiveJob: () => Promise<void>
   /** Clean up orphaned 'starting' banners by polling job status via REST */
   cleanupOrphanedStartingBanners: () => Promise<void>
+  /** Delete current-user sessions whose persisted deep research job no longer exists in the backend */
+  pruneUnavailableDeepResearchSessions: () => Promise<void>
   /** Add a citation from deep research (isCited=true for citation_use, false for citation_source) */
   addDeepResearchCitation: (url: string, content: string, isCited?: boolean) => void
   /** Set the full todo list from deep research (replaces existing) */

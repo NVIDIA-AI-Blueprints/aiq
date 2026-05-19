@@ -255,6 +255,16 @@ const updateConversationInList = (
   return conversations.map((c) => (c.id === updatedConversation.id ? updatedConversation : c))
 }
 
+const getLatestDeepResearchJobId = (conversation: Conversation): string | null => {
+  for (let i = conversation.messages.length - 1; i >= 0; i--) {
+    const message = conversation.messages[i]
+    if (message.messageType === 'agent_response' && message.deepResearchJobId) {
+      return message.deepResearchJobId
+    }
+  }
+  return null
+}
+
 const getDefaultEnabledDataSourceIds = (): string[] => {
   const layoutStore = useLayoutStore.getState()
   return (
@@ -2367,6 +2377,114 @@ export const useChatStore = create<ChatStore>()(
             } catch {
               // Module import failed — skip REST checks
             }
+          }
+        },
+
+        pruneUnavailableDeepResearchSessions: async () => {
+          const {
+            currentUserId,
+            conversations,
+            isDeepResearchStreaming,
+            deepResearchOwnerConversationId,
+          } = get()
+
+          if (!currentUserId) return
+
+          const candidates = conversations
+            .filter((conversation) => conversation.userId === currentUserId)
+            .map((conversation) => ({
+              conversation,
+              jobId: getLatestDeepResearchJobId(conversation),
+            }))
+            .filter(
+              (candidate): candidate is { conversation: Conversation; jobId: string } =>
+                Boolean(candidate.jobId)
+            )
+            .filter(
+              ({ conversation }) =>
+                !(isDeepResearchStreaming && deepResearchOwnerConversationId === conversation.id)
+            )
+
+          if (candidates.length === 0) return
+
+          let getJobStatus: typeof import('@/adapters/api/deep-research-client').getJobStatus
+          try {
+            const deepResearchClient = await import('@/adapters/api/deep-research-client')
+            getJobStatus = deepResearchClient.getJobStatus
+          } catch {
+            return
+          }
+
+          const unavailableConversationIds = new Set<string>()
+          const unavailableJobIds = new Set<string>()
+          const checkedJobs = new Map<string, boolean>()
+
+          for (const { conversation, jobId } of candidates) {
+            let isUnavailable = checkedJobs.get(jobId)
+
+            if (isUnavailable === undefined) {
+              try {
+                await getJobStatus(jobId)
+                isUnavailable = false
+              } catch (error) {
+                if (!isUnavailableDeepResearchJobError(error)) {
+                  checkedJobs.set(jobId, false)
+                  continue
+                }
+                isUnavailable = true
+              }
+
+              checkedJobs.set(jobId, isUnavailable)
+            }
+
+            if (isUnavailable) {
+              unavailableConversationIds.add(conversation.id)
+              unavailableJobIds.add(jobId)
+            }
+          }
+
+          if (unavailableConversationIds.size === 0) return
+
+          const latestState = get()
+          const updatedConversations = latestState.conversations.filter(
+            (conversation) => !unavailableConversationIds.has(conversation.id)
+          )
+          const shouldClearCurrent =
+            latestState.currentConversation &&
+            unavailableConversationIds.has(latestState.currentConversation.id)
+
+          unavailableJobIds.forEach(clearDeepResearchSession)
+
+          set(
+            {
+              conversations: updatedConversations,
+              currentConversation: shouldClearCurrent ? null : latestState.currentConversation,
+              ...(shouldClearCurrent && {
+                deepResearchJobId: null,
+                deepResearchLastEventId: null,
+                isDeepResearchStreaming: false,
+                deepResearchStatus: null,
+                deepResearchOwnerConversationId: null,
+                activeDeepResearchMessageId: null,
+                deepResearchCitations: [],
+                deepResearchTodos: [],
+                deepResearchLLMSteps: [],
+                deepResearchAgents: [],
+                deepResearchToolCalls: [],
+                deepResearchFiles: [],
+                deepResearchStreamLoaded: false,
+                reportContent: '',
+                reportContentCategory: null,
+                currentStatus: null,
+                pendingInteraction: null,
+              }),
+            },
+            false,
+            'pruneUnavailableDeepResearchSessions'
+          )
+
+          if (shouldClearCurrent) {
+            useLayoutStore.getState().closeRightPanel()
           }
         },
 

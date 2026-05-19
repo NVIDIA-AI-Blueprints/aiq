@@ -56,12 +56,14 @@ const createMockChatState = (overrides: {
   isStreaming?: boolean
   pendingInteraction?: { id: string; type: string; content: string } | null
   pruneExpiredSessions?: () => string[]
+  pruneUnavailableDeepResearchSessions?: () => Promise<void>
 } = {}) => ({
   isSessionBusy: overrides.isSessionBusy ?? (() => false),
   hasAnyBusySession: overrides.hasAnyBusySession ?? (() => false),
   isStreaming: overrides.isStreaming ?? false,
   pendingInteraction: overrides.pendingInteraction ?? null,
   pruneExpiredSessions: overrides.pruneExpiredSessions ?? (() => []),
+  pruneUnavailableDeepResearchSessions: overrides.pruneUnavailableDeepResearchSessions ?? vi.fn(),
 })
 
 const setupChatStoreMock = (overrides: Parameters<typeof createMockChatState>[0] = {}) => {
@@ -172,6 +174,15 @@ describe('SessionsPanel', () => {
     render(<SessionsPanel sessions={mockSessions} />)
 
     expect(screen.getByText(/Sessions and files are saved for a limited time before automatic deletion/i)).toBeInTheDocument()
+  })
+
+  test('checks persisted deep research jobs when the sessions panel opens', () => {
+    const pruneUnavailableDeepResearchSessions = vi.fn().mockResolvedValue(undefined)
+    setupChatStoreMock({ pruneUnavailableDeepResearchSessions })
+
+    render(<SessionsPanel sessions={mockSessions} />)
+
+    expect(pruneUnavailableDeepResearchSessions).toHaveBeenCalledTimes(1)
   })
 
   test('does not show session content when panel is closed', () => {
