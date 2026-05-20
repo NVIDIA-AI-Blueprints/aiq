@@ -9,7 +9,13 @@
  */
 
 import { create } from 'zustand'
-import { devtools, persist, createJSONStorage, type StorageValue, type PersistStorage } from 'zustand/middleware'
+import {
+  devtools,
+  persist,
+  createJSONStorage,
+  type StorageValue,
+  type PersistStorage,
+} from 'zustand/middleware'
 import { v4 as uuidv4 } from 'uuid'
 import type {
   ChatStore,
@@ -52,7 +58,7 @@ import {
   logStoreHydration,
 } from './lib/storage-logger'
 import { pruneMessageForStorage } from './lib/prune-message-for-storage'
-import { ensureStorageCapacity, checkStorageHealth, getExpiredSessionIds } from './lib/storage-manager'
+import { ensureStorageCapacity, checkStorageHealth } from './lib/storage-manager'
 import { useLayoutStore } from '@/features/layout/store'
 
 const isQuotaExceededError = (error: unknown): boolean => {
@@ -140,7 +146,10 @@ const createResilientStorage = (): PersistStorage<PersistedChatState> | undefine
 
       try {
         base.setItem(name, prunedValue)
-        logStorageWrite(prunedValue.state.conversations ?? [], prunedValue.state.currentUserId ?? null)
+        logStorageWrite(
+          prunedValue.state.conversations ?? [],
+          prunedValue.state.currentUserId ?? null
+        )
       } catch (error) {
         if (!isQuotaExceededError(error)) {
           throw error
@@ -148,9 +157,7 @@ const createResilientStorage = (): PersistStorage<PersistedChatState> | undefine
 
         const beforeConversations = prunedValue.state.conversations ?? []
         const beforeCount = beforeConversations.length
-        const beforeSizeKB = Math.round(
-          (JSON.stringify(beforeConversations).length * 2) / 1024
-        )
+        const beforeSizeKB = Math.round((JSON.stringify(beforeConversations).length * 2) / 1024)
 
         logQuotaExceededPruning(beforeCount, beforeCount, beforeSizeKB, beforeSizeKB)
 
@@ -169,11 +176,7 @@ const createResilientStorage = (): PersistStorage<PersistedChatState> | undefine
             },
           })
 
-          logCriticalSessionsClear(
-            value.state.currentUserId ?? null,
-            lostSessionIds,
-            error
-          )
+          logCriticalSessionsClear(value.state.currentUserId ?? null, lostSessionIds, error)
         } catch (finalError) {
           console.error('[SessionsStore] ❌ CATASTROPHIC: Failed to clear sessions', {
             error: finalError instanceof Error ? finalError.message : String(finalError),
@@ -255,14 +258,43 @@ const updateConversationInList = (
   return conversations.map((c) => (c.id === updatedConversation.id ? updatedConversation : c))
 }
 
-const getLatestDeepResearchJobId = (conversation: Conversation): string | null => {
+const getLatestDeepResearchMessage = (conversation: Conversation): ChatMessage | null => {
   for (let i = conversation.messages.length - 1; i >= 0; i--) {
     const message = conversation.messages[i]
     if (message.messageType === 'agent_response' && message.deepResearchJobId) {
-      return message.deepResearchJobId
+      return message
     }
   }
   return null
+}
+
+const isCompletedDeepResearchReportMessage = (message: ChatMessage): boolean =>
+  Boolean(
+    !message.deepResearchReportExpired &&
+    message.deepResearchJobId &&
+    message.deepResearchJobStatus === 'success' &&
+    (message.showViewReport || message.reportContent?.trim())
+  )
+
+const patchLatestDeepResearchJobMessage = (
+  conversation: Conversation,
+  jobId: string,
+  patch: Partial<ChatMessage>
+): Conversation => {
+  const messageIndex = [...conversation.messages]
+    .reverse()
+    .findIndex(
+      (message) => message.messageType === 'agent_response' && message.deepResearchJobId === jobId
+    )
+
+  if (messageIndex < 0) return conversation
+
+  const actualIndex = conversation.messages.length - 1 - messageIndex
+  const messages = conversation.messages.map((message, index) =>
+    index === actualIndex ? { ...message, ...patch } : message
+  )
+
+  return { ...conversation, messages }
 }
 
 const getDefaultEnabledDataSourceIds = (): string[] => {
@@ -307,10 +339,12 @@ const maybeDiscardAbandonedUploadOnlySession = (
   if (!hasNoUserChatMessages(conv.messages)) return
   if (hasActiveDeepResearchJob(conv.messages)) return
 
-  const docsInFlight = useDocumentsStore.getState().trackedFiles.some(
-    (f) =>
-      f.collectionName === sessionId && (f.status === 'uploading' || f.status === 'ingesting')
-  )
+  const docsInFlight = useDocumentsStore
+    .getState()
+    .trackedFiles.some(
+      (f) =>
+        f.collectionName === sessionId && (f.status === 'uploading' || f.status === 'ingesting')
+    )
   if (docsInFlight) return
 
   discardSessionDocumentsResources(sessionId)
@@ -615,7 +649,13 @@ export const useChatStore = create<ChatStore>()(
           }
         },
 
-        addUserMessage: (content: string, metadata?: { enabledDataSources?: string[]; messageFiles?: Array<{ id: string; fileName: string }> }) => {
+        addUserMessage: (
+          content: string,
+          metadata?: {
+            enabledDataSources?: string[]
+            messageFiles?: Array<{ id: string; fileName: string }>
+          }
+        ) => {
           const { currentConversation, conversations, currentUserId } = get()
 
           // Create conversation if none exists
@@ -800,7 +840,8 @@ export const useChatStore = create<ChatStore>()(
         },
 
         deleteConversation: (conversationId: string) => {
-          const { currentConversation, conversations, deepResearchJobId, isDeepResearchStreaming } = get()
+          const { currentConversation, conversations, deepResearchJobId, isDeepResearchStreaming } =
+            get()
 
           // Find the conversation being deleted
           const conversationToDelete = conversations.find((c) => c.id === conversationId)
@@ -810,7 +851,11 @@ export const useChatStore = create<ChatStore>()(
           // or from persisted message data
           let jobIdToCancel: string | null = null
 
-          if (currentConversation?.id === conversationId && isDeepResearchStreaming && deepResearchJobId) {
+          if (
+            currentConversation?.id === conversationId &&
+            isDeepResearchStreaming &&
+            deepResearchJobId
+          ) {
             // Deleting current conversation with active streaming
             jobIdToCancel = deepResearchJobId
           } else if (conversationToDelete) {
@@ -819,10 +864,12 @@ export const useChatStore = create<ChatStore>()(
               .reverse()
               .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId)
 
-            if (lastAgentResponse?.deepResearchJobId &&
-                lastAgentResponse.deepResearchJobStatus !== 'success' &&
-                lastAgentResponse.deepResearchJobStatus !== 'failure' &&
-                lastAgentResponse.deepResearchJobStatus !== 'interrupted') {
+            if (
+              lastAgentResponse?.deepResearchJobId &&
+              lastAgentResponse.deepResearchJobStatus !== 'success' &&
+              lastAgentResponse.deepResearchJobStatus !== 'failure' &&
+              lastAgentResponse.deepResearchJobStatus !== 'interrupted'
+            ) {
               // Job might still be running
               jobIdToCancel = lastAgentResponse.deepResearchJobId
             }
@@ -840,7 +887,8 @@ export const useChatStore = create<ChatStore>()(
           const updatedConversations = conversations.filter((c) => c.id !== conversationId)
 
           // If deleting the current conversation with active streaming, clear deep research state
-          const isCurrentWithActiveResearch = currentConversation?.id === conversationId && isDeepResearchStreaming
+          const isCurrentWithActiveResearch =
+            currentConversation?.id === conversationId && isDeepResearchStreaming
 
           set(
             {
@@ -872,7 +920,13 @@ export const useChatStore = create<ChatStore>()(
         },
 
         deleteAllConversations: () => {
-          const { conversations, currentUserId, currentConversation, isDeepResearchStreaming, deepResearchJobId } = get()
+          const {
+            conversations,
+            currentUserId,
+            currentConversation,
+            isDeepResearchStreaming,
+            deepResearchJobId,
+          } = get()
 
           if (!currentUserId) return
 
@@ -893,11 +947,13 @@ export const useChatStore = create<ChatStore>()(
               .reverse()
               .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId)
 
-            if (lastAgentResponse?.deepResearchJobId &&
-                lastAgentResponse.deepResearchJobStatus !== 'success' &&
-                lastAgentResponse.deepResearchJobStatus !== 'failure' &&
-                lastAgentResponse.deepResearchJobStatus !== 'interrupted' &&
-                !jobIdsToCancel.includes(lastAgentResponse.deepResearchJobId)) {
+            if (
+              lastAgentResponse?.deepResearchJobId &&
+              lastAgentResponse.deepResearchJobStatus !== 'success' &&
+              lastAgentResponse.deepResearchJobStatus !== 'failure' &&
+              lastAgentResponse.deepResearchJobStatus !== 'interrupted' &&
+              !jobIdsToCancel.includes(lastAgentResponse.deepResearchJobId)
+            ) {
               jobIdsToCancel.push(lastAgentResponse.deepResearchJobId)
             }
           }
@@ -905,7 +961,9 @@ export const useChatStore = create<ChatStore>()(
           // Cancel all jobs asynchronously (fire and forget)
           if (jobIdsToCancel.length > 0) {
             import('@/adapters/api/deep-research-client').then(async ({ cancelJob }) => {
-              const results = await Promise.allSettled(jobIdsToCancel.map((jobId) => cancelJob(jobId)))
+              const results = await Promise.allSettled(
+                jobIdsToCancel.map((jobId) => cancelJob(jobId))
+              )
 
               results.forEach((result, index) => {
                 if (result.status === 'fulfilled') return
@@ -925,7 +983,8 @@ export const useChatStore = create<ChatStore>()(
           const remainingConversations = conversations.filter((c) => c.userId !== currentUserId)
 
           // Check if current conversation belongs to user being cleared
-          const shouldClearCurrent = currentConversation && currentConversation.userId === currentUserId
+          const shouldClearCurrent =
+            currentConversation && currentConversation.userId === currentUserId
 
           set(
             {
@@ -957,58 +1016,6 @@ export const useChatStore = create<ChatStore>()(
             false,
             'deleteAllConversations'
           )
-        },
-
-        pruneExpiredSessions: () => {
-          const { conversations, currentConversation } = get()
-          const deletedIds = getExpiredSessionIds(conversations)
-          if (deletedIds.length === 0) return []
-
-          const deletedSet = new Set(deletedIds)
-          const remaining = conversations.filter((c) => !deletedSet.has(c.id))
-          const currentWasDeleted =
-            currentConversation !== null && deletedSet.has(currentConversation.id)
-
-          // If the current session got pruned, mirror the clearState branch
-          // from setCurrentUser to drop dangling ephemeral state. NOTE: unlike
-          // setCurrentUser, we deliberately do NOT auto-select the freshest
-          // surviving session for the same user — pruning is a maintenance
-          // op, not a user action, so we land on a clean draft instead of
-          // teleporting the user into an unrelated conversation.
-          if (currentWasDeleted) {
-            set(
-              {
-                conversations: remaining,
-                currentConversation: null,
-                thinkingSteps: [],
-                activeThinkingStepId: null,
-                reportContent: '',
-                reportContentCategory: null,
-                currentStatus: null,
-                planMessages: [],
-                deepResearchCitations: [],
-                deepResearchTodos: [],
-                deepResearchLLMSteps: [],
-                deepResearchAgents: [],
-                deepResearchToolCalls: [],
-                deepResearchFiles: [],
-                deepResearchStreamLoaded: false,
-                deepResearchJobId: null,
-                deepResearchLastEventId: null,
-                isDeepResearchStreaming: false,
-                deepResearchStatus: null,
-                deepResearchOwnerConversationId: null,
-                activeDeepResearchMessageId: null,
-                pendingInteraction: null,
-              },
-              false,
-              'pruneExpiredSessions:currentWasDeleted'
-            )
-          } else {
-            set({ conversations: remaining }, false, 'pruneExpiredSessions')
-          }
-
-          return deletedIds
         },
 
         updateConversationTitle: (conversationId: string, title: string) => {
@@ -1120,7 +1127,9 @@ export const useChatStore = create<ChatStore>()(
         getThinkingStepsForMessage: (userMessageId: string) => {
           const { thinkingSteps } = get()
           // Filter out deep research steps - they're displayed in the Research Panel, not ChatThinking
-          return thinkingSteps.filter((step) => step.userMessageId === userMessageId && !step.isDeepResearch)
+          return thinkingSteps.filter(
+            (step) => step.userMessageId === userMessageId && !step.isDeepResearch
+          )
         },
 
         appendToThinkingStep: (stepId: string, content: string) => {
@@ -1225,11 +1234,15 @@ export const useChatStore = create<ChatStore>()(
 
           // Update ephemeral store
           const updatedThinkingSteps = thinkingSteps.map((step) =>
-            step.functionName === functionName && step.userMessageId === currentUserMessageId ? { ...step, content, isComplete } : step
+            step.functionName === functionName && step.userMessageId === currentUserMessageId
+              ? { ...step, content, isComplete }
+              : step
           )
 
           // Find the step to get its userMessageId for persistence
-          const step = thinkingSteps.find((s) => s.functionName === functionName && s.userMessageId === currentUserMessageId)
+          const step = thinkingSteps.find(
+            (s) => s.functionName === functionName && s.userMessageId === currentUserMessageId
+          )
           let updatedConversation = currentConversation
           let updatedConversations = conversations
 
@@ -1276,7 +1289,11 @@ export const useChatStore = create<ChatStore>()(
         },
 
         setReportContent: (content: string, category?: 'research_notes' | 'final_report') => {
-          set({ reportContent: content, reportContentCategory: category ?? null }, false, 'setReportContent')
+          set(
+            { reportContent: content, reportContentCategory: category ?? null },
+            false,
+            'setReportContent'
+          )
         },
 
         clearThinkingSteps: () => {
@@ -1445,9 +1462,11 @@ export const useChatStore = create<ChatStore>()(
             // Persist additional ResearchPanel tabs
             planMessages: planMessages.length > 0 ? [...planMessages] : undefined,
             deepResearchTodos: deepResearchTodos.length > 0 ? [...deepResearchTodos] : undefined,
-            deepResearchLLMSteps: deepResearchLLMSteps.length > 0 ? [...deepResearchLLMSteps] : undefined,
+            deepResearchLLMSteps:
+              deepResearchLLMSteps.length > 0 ? [...deepResearchLLMSteps] : undefined,
             deepResearchAgents: deepResearchAgents.length > 0 ? [...deepResearchAgents] : undefined,
-            deepResearchToolCalls: deepResearchToolCalls.length > 0 ? [...deepResearchToolCalls] : undefined,
+            deepResearchToolCalls:
+              deepResearchToolCalls.length > 0 ? [...deepResearchToolCalls] : undefined,
             deepResearchFiles: deepResearchFiles.length > 0 ? [...deepResearchFiles] : undefined,
             // Persist deep research job metadata for session restoration
             deepResearchJobId: deepResearchJobId || undefined,
@@ -1542,9 +1561,7 @@ export const useChatStore = create<ChatStore>()(
           const updatedConversations = updateConversationInList(conversations, updatedConversation)
 
           const updatedCurrent =
-            currentConversation?.id === conversationId
-              ? updatedConversation
-              : currentConversation
+            currentConversation?.id === conversationId ? updatedConversation : currentConversation
 
           set(
             {
@@ -1635,11 +1652,7 @@ export const useChatStore = create<ChatStore>()(
           )
         },
 
-        addErrorCard: (
-          code: ErrorCode,
-          message?: string,
-          details?: string,
-        ) => {
+        addErrorCard: (code: ErrorCode, message?: string, details?: string) => {
           const { currentConversation, conversations } = get()
           if (!currentConversation) return
 
@@ -1707,10 +1720,7 @@ export const useChatStore = create<ChatStore>()(
 
           const updatedMessages = currentConversation.messages.filter(
             (msg) =>
-              !(
-                msg.messageType === 'error' &&
-                msg.errorData?.errorCode?.startsWith('connection.')
-              )
+              !(msg.messageType === 'error' && msg.errorData?.errorCode?.startsWith('connection.'))
           )
 
           if (updatedMessages.length === currentConversation.messages.length) return
@@ -2034,7 +2044,9 @@ export const useChatStore = create<ChatStore>()(
             ...todo,
             status:
               todo.status === 'in_progress' || todo.status === 'pending'
-                ? (isSuccessfulCompletion ? ('completed' as const) : ('stopped' as const))
+                ? isSuccessfulCompletion
+                  ? ('completed' as const)
+                  : ('stopped' as const)
                 : todo.status,
           }))
 
@@ -2047,25 +2059,35 @@ export const useChatStore = create<ChatStore>()(
           // Stop agents (running → complete or error based on job success)
           const stoppedAgents = deepResearchAgents.map((agent) => ({
             ...agent,
-            status: agent.status === 'running'
-              ? (isSuccessfulCompletion ? ('complete' as const) : ('error' as const))
-              : agent.status,
+            status:
+              agent.status === 'running'
+                ? isSuccessfulCompletion
+                  ? ('complete' as const)
+                  : ('error' as const)
+                : agent.status,
           }))
 
           // Stop tool calls (running → complete or error based on job success)
           const stoppedToolCalls = deepResearchToolCalls.map((toolCall) => ({
             ...toolCall,
-            status: toolCall.status === 'running'
-              ? (isSuccessfulCompletion ? ('complete' as const) : ('error' as const))
-              : toolCall.status,
+            status:
+              toolCall.status === 'running'
+                ? isSuccessfulCompletion
+                  ? ('complete' as const)
+                  : ('error' as const)
+                : toolCall.status,
           }))
 
-          set({
-            deepResearchTodos: stoppedTodos,
-            deepResearchLLMSteps: stoppedLLMSteps,
-            deepResearchAgents: stoppedAgents,
-            deepResearchToolCalls: stoppedToolCalls,
-          }, false, 'stopAllDeepResearchSpinners')
+          set(
+            {
+              deepResearchTodos: stoppedTodos,
+              deepResearchLLMSteps: stoppedLLMSteps,
+              deepResearchAgents: stoppedAgents,
+              deepResearchToolCalls: stoppedToolCalls,
+            },
+            false,
+            'stopAllDeepResearchSpinners'
+          )
         },
 
         clearDeepResearch: () => {
@@ -2127,12 +2149,8 @@ export const useChatStore = create<ChatStore>()(
         },
 
         saveDeepResearchProgress: () => {
-          const {
-            currentConversation,
-            isDeepResearchStreaming,
-            deepResearchJobId,
-            reportContent,
-          } = get()
+          const { currentConversation, isDeepResearchStreaming, deepResearchJobId, reportContent } =
+            get()
 
           // Only save if there's an active deep research session
           if (!currentConversation || !isDeepResearchStreaming || !deepResearchJobId) {
@@ -2156,11 +2174,12 @@ export const useChatStore = create<ChatStore>()(
           // Find messages with in-progress jobs (running or submitted)
           const activeJobMessage = [...currentConversation.messages]
             .reverse()
-            .find((m) =>
-              m.messageType === 'agent_response' &&
-              m.deepResearchJobId &&
-              m.isDeepResearchActive &&
-              (m.deepResearchJobStatus === 'running' || m.deepResearchJobStatus === 'submitted')
+            .find(
+              (m) =>
+                m.messageType === 'agent_response' &&
+                m.deepResearchJobId &&
+                m.isDeepResearchActive &&
+                (m.deepResearchJobStatus === 'running' || m.deepResearchJobStatus === 'submitted')
             )
 
           if (!activeJobMessage?.deepResearchJobId) {
@@ -2242,7 +2261,6 @@ export const useChatStore = create<ChatStore>()(
               })
             }
           }
-
         },
 
         cleanupOrphanedStartingBanners: async () => {
@@ -2259,9 +2277,7 @@ export const useChatStore = create<ChatStore>()(
 
             const trackingMessage = [...conversation.messages]
               .reverse()
-              .find(
-                (m) => m.messageType === 'agent_response' && m.deepResearchJobId === jobId
-              )
+              .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId === jobId)
 
             if (!trackingMessage?.id) return
 
@@ -2323,9 +2339,7 @@ export const useChatStore = create<ChatStore>()(
           if (orphanedIds.length > 0) {
             const conv = get().currentConversation
             if (conv && conv.id === conversationId) {
-              const filtered = conv.messages.filter(
-                (m) => !orphanedIds.includes(m.id)
-              )
+              const filtered = conv.messages.filter((m) => !orphanedIds.includes(m.id))
               const updatedConversation: Conversation = {
                 ...conv,
                 messages: filtered,
@@ -2349,9 +2363,7 @@ export const useChatStore = create<ChatStore>()(
           // Poll REST API for remaining starting banners without a terminal counterpart
           if (needsCheck.length > 0) {
             try {
-              const { getJobStatus } = await import(
-                '@/adapters/api/deep-research-client'
-              )
+              const { getJobStatus } = await import('@/adapters/api/deep-research-client')
               for (const { jobId } of needsCheck) {
                 // Bail out if conversation changed during async work
                 if (get().currentConversation?.id !== conversationId) return
@@ -2380,13 +2392,8 @@ export const useChatStore = create<ChatStore>()(
           }
         },
 
-        pruneUnavailableDeepResearchSessions: async () => {
-          const {
-            currentUserId,
-            conversations,
-            isDeepResearchStreaming,
-            deepResearchOwnerConversationId,
-          } = get()
+        refreshDeepResearchSessionStatuses: async () => {
+          const { currentUserId, conversations } = get()
 
           if (!currentUserId) return
 
@@ -2394,15 +2401,11 @@ export const useChatStore = create<ChatStore>()(
             .filter((conversation) => conversation.userId === currentUserId)
             .map((conversation) => ({
               conversation,
-              jobId: getLatestDeepResearchJobId(conversation),
+              message: getLatestDeepResearchMessage(conversation),
             }))
             .filter(
-              (candidate): candidate is { conversation: Conversation; jobId: string } =>
-                Boolean(candidate.jobId)
-            )
-            .filter(
-              ({ conversation }) =>
-                !(isDeepResearchStreaming && deepResearchOwnerConversationId === conversation.id)
+              (candidate): candidate is { conversation: Conversation; message: ChatMessage } =>
+                Boolean(candidate.message?.deepResearchJobId)
             )
 
           if (candidates.length === 0) return
@@ -2415,51 +2418,103 @@ export const useChatStore = create<ChatStore>()(
             return
           }
 
-          const unavailableConversationIds = new Set<string>()
-          const unavailableJobIds = new Set<string>()
-          const checkedJobs = new Map<string, boolean>()
+          type JobRefreshResult =
+            | { kind: 'reachable'; status: DeepResearchJobStatus }
+            | { kind: 'unavailable' }
+            | { kind: 'transient_error' }
 
-          for (const { conversation, jobId } of candidates) {
-            let isUnavailable = checkedJobs.get(jobId)
+          const checkedJobs = new Map<string, JobRefreshResult>()
 
-            if (isUnavailable === undefined) {
+          for (const { message } of candidates) {
+            const jobId = message.deepResearchJobId
+            if (!jobId) continue
+            let result = checkedJobs.get(jobId)
+
+            if (!result) {
               try {
-                await getJobStatus(jobId)
-                isUnavailable = false
+                const response = await getJobStatus(jobId)
+                result = { kind: 'reachable', status: response.status }
               } catch (error) {
                 if (!isUnavailableDeepResearchJobError(error)) {
-                  checkedJobs.set(jobId, false)
+                  result = { kind: 'transient_error' }
+                  checkedJobs.set(jobId, result)
                   continue
                 }
-                isUnavailable = true
+                result = { kind: 'unavailable' }
               }
 
-              checkedJobs.set(jobId, isUnavailable)
-            }
-
-            if (isUnavailable) {
-              unavailableConversationIds.add(conversation.id)
-              unavailableJobIds.add(jobId)
+              checkedJobs.set(jobId, result)
             }
           }
 
-          if (unavailableConversationIds.size === 0) return
+          if ([...checkedJobs.values()].every((result) => result.kind === 'transient_error')) {
+            return
+          }
 
           const latestState = get()
-          const updatedConversations = latestState.conversations.filter(
-            (conversation) => !unavailableConversationIds.has(conversation.id)
-          )
-          const shouldClearCurrent =
-            latestState.currentConversation &&
-            unavailableConversationIds.has(latestState.currentConversation.id)
+          const inactiveJobIds = new Set<string>()
 
-          unavailableJobIds.forEach(clearDeepResearchSession)
+          const updatedConversations = latestState.conversations.map((conversation) => {
+            if (conversation.userId !== currentUserId) return conversation
+
+            const message = getLatestDeepResearchMessage(conversation)
+            const jobId = message?.deepResearchJobId
+            if (!message || !jobId) return conversation
+
+            const result = checkedJobs.get(jobId)
+            if (!result || result.kind === 'transient_error') return conversation
+
+            if (result.kind === 'unavailable') {
+              clearDeepResearchSession(jobId)
+              inactiveJobIds.add(jobId)
+
+              const hadCompletedReport =
+                isCompletedDeepResearchReportMessage(message) ||
+                Boolean(message.deepResearchReportExpired)
+
+              return patchLatestDeepResearchJobMessage(conversation, jobId, {
+                deepResearchJobStatus: 'failure',
+                isDeepResearchActive: false,
+                showViewReport: false,
+                deepResearchReportExpired: hadCompletedReport,
+              })
+            }
+
+            if (result.status === 'submitted' || result.status === 'running') {
+              return patchLatestDeepResearchJobMessage(conversation, jobId, {
+                deepResearchJobStatus: result.status,
+                isDeepResearchActive: true,
+                deepResearchReportExpired: false,
+              })
+            }
+
+            inactiveJobIds.add(jobId)
+            clearDeepResearchSession(jobId)
+
+            return patchLatestDeepResearchJobMessage(conversation, jobId, {
+              deepResearchJobStatus: result.status,
+              isDeepResearchActive: false,
+              showViewReport: result.status === 'success' || Boolean(message.reportContent?.trim()),
+              deepResearchReportExpired: false,
+            })
+          })
+
+          const updatedCurrentConversation =
+            latestState.currentConversation === null
+              ? null
+              : (updatedConversations.find(
+                  (conversation) => conversation.id === latestState.currentConversation?.id
+                ) ?? latestState.currentConversation)
+
+          const shouldClearActiveJob =
+            latestState.deepResearchJobId !== null &&
+            inactiveJobIds.has(latestState.deepResearchJobId)
 
           set(
             {
               conversations: updatedConversations,
-              currentConversation: shouldClearCurrent ? null : latestState.currentConversation,
-              ...(shouldClearCurrent && {
+              currentConversation: updatedCurrentConversation,
+              ...(shouldClearActiveJob && {
                 deepResearchJobId: null,
                 deepResearchLastEventId: null,
                 isDeepResearchStreaming: false,
@@ -2480,12 +2535,8 @@ export const useChatStore = create<ChatStore>()(
               }),
             },
             false,
-            'pruneUnavailableDeepResearchSessions'
+            'refreshDeepResearchSessionStatuses'
           )
-
-          if (shouldClearCurrent) {
-            useLayoutStore.getState().closeRightPanel()
-          }
         },
 
         // ============================================================
@@ -2534,9 +2585,7 @@ export const useChatStore = create<ChatStore>()(
           set(
             (state) => ({
               deepResearchLLMSteps: state.deepResearchLLMSteps.map((step) =>
-                step.id === stepId
-                  ? { ...step, isComplete: true, thinking, usage }
-                  : step
+                step.id === stepId ? { ...step, isComplete: true, thinking, usage } : step
               ),
             }),
             false,
@@ -2544,9 +2593,7 @@ export const useChatStore = create<ChatStore>()(
           )
         },
 
-        addDeepResearchAgent: (
-          agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>
-        ) => {
+        addDeepResearchAgent: (agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>) => {
           const agentId = uuidv4()
           const newAgent: DeepResearchAgent = {
             ...agent,
@@ -2656,9 +2703,7 @@ export const useChatStore = create<ChatStore>()(
           if (existingIndex >= 0) {
             // Update existing file with latest content
             const updatedFiles = deepResearchFiles.map((f, i) =>
-              i === existingIndex
-                ? { ...f, content: file.content, timestamp: new Date() }
-                : f
+              i === existingIndex ? { ...f, content: file.content, timestamp: new Date() } : f
             )
             set({ deepResearchFiles: updatedFiles }, false, 'addDeepResearchFile:update')
             return deepResearchFiles[existingIndex].id
@@ -2741,9 +2786,7 @@ export const useChatStore = create<ChatStore>()(
           if (lastPromptIndex >= 0) {
             const actualIndex = messages.length - 1 - lastPromptIndex
             const updatedMessages = messages.map((msg, idx) =>
-              idx === actualIndex
-                ? { ...msg, planMessages: [...planMessages] }
-                : msg
+              idx === actualIndex ? { ...msg, planMessages: [...planMessages] } : msg
             )
 
             const updatedConversation: Conversation = {
@@ -2752,7 +2795,10 @@ export const useChatStore = create<ChatStore>()(
               updatedAt: new Date(),
             }
 
-            const updatedConversations = updateConversationInList(conversations, updatedConversation)
+            const updatedConversations = updateConversationInList(
+              conversations,
+              updatedConversation
+            )
 
             set(
               {
@@ -2786,7 +2832,11 @@ export const useChatStore = create<ChatStore>()(
             .find((m) => m.messageType === 'prompt' && !m.isPromptResponded)
 
           let restoredPendingInteraction: PendingInteraction | null = null
-          if (unrespondedPrompt?.promptId && unrespondedPrompt?.promptParentId && unrespondedPrompt?.promptInputType) {
+          if (
+            unrespondedPrompt?.promptId &&
+            unrespondedPrompt?.promptParentId &&
+            unrespondedPrompt?.promptInputType
+          ) {
             restoredPendingInteraction = {
               id: unrespondedPrompt.promptId,
               parentId: unrespondedPrompt.promptParentId,
@@ -2797,7 +2847,8 @@ export const useChatStore = create<ChatStore>()(
           }
 
           // Restore planMessages from unresponded prompt (during HITL wait) or last agent response
-          const restoredPlanMessages = unrespondedPrompt?.planMessages || lastAgentResponse?.planMessages || []
+          const restoredPlanMessages =
+            unrespondedPrompt?.planMessages || lastAgentResponse?.planMessages || []
 
           // NOTE: Heavy research data fields are NO LONGER restored from localStorage
           // They were removed by pruneMessageForStorage to save space (~96% reduction)
@@ -2845,7 +2896,13 @@ export const useChatStore = create<ChatStore>()(
           // interrupted by a page refresh or browser close mid-stream.
           // Skip if there's a pending HITL interaction (user is expected to respond).
           if (!restoredPendingInteraction) {
-            const meaningfulTypes = new Set(['user', 'assistant', 'agent_response', 'error', 'prompt'])
+            const meaningfulTypes = new Set([
+              'user',
+              'assistant',
+              'agent_response',
+              'error',
+              'prompt',
+            ])
             const lastMeaningful = [...conversation.messages]
               .reverse()
               .find((m) => meaningfulTypes.has(m.messageType ?? ''))
@@ -2921,13 +2978,12 @@ export const useChatStore = create<ChatStore>()(
           // Persist pending HITL interaction for page refresh recovery
           pendingInteraction: state.pendingInteraction,
         }),
-        // After rehydration, prune sessions that exceed the backend job TTL
-        // (24h). Microtask defers until the rehydrated state is committed so
-        // pruneExpiredSessions sees the freshly hydrated conversations.
+        // After rehydration, refresh persisted job metadata. Missing backend
+        // reports are represented in-session instead of deleting the chat.
         onRehydrateStorage: () => (state) => {
           if (!state || typeof window === 'undefined') return
           queueMicrotask(() => {
-            useChatStore.getState().pruneExpiredSessions()
+            void useChatStore.getState().refreshDeepResearchSessionStatuses()
           })
         },
       }
@@ -2942,9 +2998,7 @@ export const useChatStore = create<ChatStore>()(
 
 export const selectHasConnectionError = (state: ChatStore): boolean =>
   state.currentConversation?.messages.some(
-    (m) =>
-      m.messageType === 'error' &&
-      m.errorData?.errorCode?.startsWith('connection.')
+    (m) => m.messageType === 'error' && m.errorData?.errorCode?.startsWith('connection.')
   ) ?? false
 
 // ============================================================
@@ -2954,11 +3008,7 @@ export const selectHasConnectionError = (state: ChatStore): boolean =>
 if (typeof window !== 'undefined') {
   // Log initial hydration state (dev-only)
   const initialState = useChatStore.getState()
-  logStoreHydration(
-    true,
-    initialState.conversations?.length ?? 0,
-    initialState.currentUserId
-  )
+  logStoreHydration(true, initialState.conversations?.length ?? 0, initialState.currentUserId)
 
   // Monitor storage events from other tabs or browser extensions
   window.addEventListener('storage', (event) => {

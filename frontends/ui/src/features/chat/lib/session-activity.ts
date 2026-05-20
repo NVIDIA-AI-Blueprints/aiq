@@ -20,6 +20,23 @@ import type { ChatMessage, DeepResearchJobStatus } from '../types'
 const ACTIVE_JOB_STATUSES: readonly DeepResearchJobStatus[] = ['submitted', 'running']
 
 /**
+ * True when the user has never sent a typed chat message in this session.
+ * Upload banners (`file_upload_status`) and other non-user types do not count.
+ */
+export const hasNoUserChatMessages = (messages: ChatMessage[]): boolean =>
+  !messages.some((message) => message.messageType === 'user')
+
+const getLatestDeepResearchMessage = (messages: ChatMessage[]): ChatMessage | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i]
+    if (message.messageType === 'agent_response' && message.deepResearchJobId) {
+      return message
+    }
+  }
+  return null
+}
+
+/**
  * Check if a conversation has an in-progress deep research job in its message history.
  *
  * Scans messages in reverse (most recent first) to find the latest agent_response
@@ -30,25 +47,27 @@ const ACTIVE_JOB_STATUSES: readonly DeepResearchJobStatus[] = ['submitted', 'run
  * @param messages - The conversation's message array (from persisted state)
  * @returns true if the most recent deep research job is still running
  */
-/**
- * True when the user has never sent a typed chat message in this session.
- * Upload banners (`file_upload_status`) and other non-user types do not count.
- */
-export const hasNoUserChatMessages = (messages: ChatMessage[]): boolean =>
-  !messages.some((m) => m.messageType === 'user')
-
 export const hasActiveDeepResearchJob = (messages: ChatMessage[]): boolean => {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]
-    if (
-      m.messageType === 'agent_response' &&
-      m.deepResearchJobId &&
-      m.deepResearchJobStatus
-    ) {
-      return (ACTIVE_JOB_STATUSES as readonly string[]).includes(m.deepResearchJobStatus)
-    }
-  }
-  return false
+  const message = getLatestDeepResearchMessage(messages)
+  return Boolean(
+    message?.deepResearchJobStatus &&
+    (ACTIVE_JOB_STATUSES as readonly string[]).includes(message.deepResearchJobStatus)
+  )
+}
+
+export const hasCompletedDeepResearchReport = (messages: ChatMessage[]): boolean => {
+  const message = getLatestDeepResearchMessage(messages)
+  return Boolean(
+    message &&
+    !message.deepResearchReportExpired &&
+    message.deepResearchJobStatus === 'success' &&
+    (message.showViewReport || message.reportContent?.trim())
+  )
+}
+
+export const hasExpiredDeepResearchReport = (messages: ChatMessage[]): boolean => {
+  const message = getLatestDeepResearchMessage(messages)
+  return Boolean(message?.deepResearchReportExpired)
 }
 
 /**

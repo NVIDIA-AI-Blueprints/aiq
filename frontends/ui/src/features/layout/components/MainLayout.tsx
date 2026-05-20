@@ -27,7 +27,11 @@ import { InputArea } from './InputArea'
 import { ResearchPanel } from './ResearchPanel'
 import { DataSourcesPanel } from './DataSourcesPanel'
 import { useChatStore, useDeepResearch, NoSourcesBanner } from '@/features/chat'
-import { hasActiveDeepResearchJob } from '@/features/chat/lib/session-activity'
+import {
+  hasActiveDeepResearchJob,
+  hasCompletedDeepResearchReport,
+  hasExpiredDeepResearchReport,
+} from '@/features/chat/lib/session-activity'
 import { useLayoutStore } from '../store'
 import { useSessionUrl } from '@/hooks/use-session-url'
 
@@ -68,15 +72,17 @@ export const MainLayout: FC<MainLayoutProps> = ({
     isDeepResearchStreaming,
     deepResearchOwnerConversationId,
     currentUserId,
-  } = useChatStore(useShallow((s) => ({
-    currentConversation: s.currentConversation,
-    conversations: s.conversations,
-    isStreaming: s.isStreaming,
-    pendingInteraction: s.pendingInteraction,
-    isDeepResearchStreaming: s.isDeepResearchStreaming,
-    deepResearchOwnerConversationId: s.deepResearchOwnerConversationId,
-    currentUserId: s.currentUserId,
-  })))
+  } = useChatStore(
+    useShallow((s) => ({
+      currentConversation: s.currentConversation,
+      conversations: s.conversations,
+      isStreaming: s.isStreaming,
+      pendingInteraction: s.pendingInteraction,
+      isDeepResearchStreaming: s.isDeepResearchStreaming,
+      deepResearchOwnerConversationId: s.deepResearchOwnerConversationId,
+      currentUserId: s.currentUserId,
+    }))
+  )
 
   const selectConversation = useChatStore((s) => s.selectConversation)
   const startNewSessionDraft = useChatStore((s) => s.startNewSessionDraft)
@@ -132,19 +138,22 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const isNavigationBlocked = isStreaming || pendingInteraction !== null
 
   const userConversations = useMemo(
-    () => currentUserId ? conversations.filter((c) => c.userId === currentUserId) : [],
+    () => (currentUserId ? conversations.filter((c) => c.userId === currentUserId) : []),
     [conversations, currentUserId]
   )
 
   const sessions = useMemo(
-    () => userConversations.map((conv) => ({
-      id: conv.id,
-      title: conv.title,
-      date: conv.updatedAt,
-      hasActiveDeepResearch:
-        hasActiveDeepResearchJob(conv.messages) ||
-        (isDeepResearchStreaming && deepResearchOwnerConversationId === conv.id),
-    })),
+    () =>
+      userConversations.map((conv) => ({
+        id: conv.id,
+        title: conv.title,
+        date: conv.updatedAt,
+        hasActiveDeepResearch:
+          hasActiveDeepResearchJob(conv.messages) ||
+          (isDeepResearchStreaming && deepResearchOwnerConversationId === conv.id),
+        hasCompletedReport: hasCompletedDeepResearchReport(conv.messages),
+        hasExpiredReport: hasExpiredDeepResearchReport(conv.messages),
+      })),
     [userConversations, isDeepResearchStreaming, deepResearchOwnerConversationId]
   )
 
@@ -180,10 +189,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
           {/* Input Area - Fixed at bottom of chat */}
           {/* Using WebSocket mode for full HITL (human-in-the-loop) support */}
-          <InputArea
-            isAuthenticated={isAuthenticated}
-            connectionMode="websocket"
-          />
+          <InputArea isAuthenticated={isAuthenticated} connectionMode="websocket" />
         </div>
 
         {/* Research Panel (Right) - Pushes content, takes 60% width */}

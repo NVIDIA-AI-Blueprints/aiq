@@ -174,6 +174,8 @@ export interface ChatMessage {
   deepResearchLastEventId?: string
   /** Job status at time of save (submitted, running, success, failure, interrupted) */
   deepResearchJobStatus?: DeepResearchJobStatus
+  /** True when a completed report's backend job/report can no longer be loaded. */
+  deepResearchReportExpired?: boolean
   /** Whether this message has active (streaming) deep research - used for UI state */
   isDeepResearchActive?: boolean
   /** Data sources that were enabled when this message was sent (for display in thinking panel) */
@@ -441,7 +443,10 @@ export interface ChatActions {
   /** Add a user message to the current conversation */
   addUserMessage: (
     content: string,
-    metadata?: { enabledDataSources?: string[]; messageFiles?: Array<{ id: string; fileName: string }> }
+    metadata?: {
+      enabledDataSources?: string[]
+      messageFiles?: Array<{ id: string; fileName: string }>
+    }
   ) => ChatMessage
   /** Start streaming an assistant response */
   startAssistantMessage: () => ChatMessage
@@ -457,22 +462,6 @@ export interface ChatActions {
   deleteConversation: (conversationId: string) => void
   /** Delete all conversations for the current user */
   deleteAllConversations: () => void
-  /**
-   * Remove sessions older than 24h to mirror the backend job TTL
-   * (configs use expiry_seconds: 86400). Sessions with an active deep
-   * research job in their message history are protected. If the current
-   * conversation gets removed, related ephemeral state is cleared.
-   *
-   * Not user-scoped: prunes expired sessions across all userIds, since
-   * localStorage is per-browser and stale entries from previously logged-in
-   * users would otherwise also 404 on "View Report".
-   *
-   * Does NOT auto-select a surviving session when the current one is
-   * pruned — the user lands on a clean draft (in contrast to setCurrentUser).
-   *
-   * @returns IDs of removed sessions (empty when nothing was removed).
-   */
-  pruneExpiredSessions: () => string[]
   /** Update conversation title */
   updateConversationTitle: (conversationId: string, title: string) => void
   /** Persist enabled data source IDs to the current conversation for per-session storage */
@@ -606,8 +595,12 @@ export interface ChatActions {
   reconnectToActiveJob: () => Promise<void>
   /** Clean up orphaned 'starting' banners by polling job status via REST */
   cleanupOrphanedStartingBanners: () => Promise<void>
-  /** Delete current-user sessions whose persisted deep research job no longer exists in the backend */
-  pruneUnavailableDeepResearchSessions: () => Promise<void>
+  /**
+   * Refresh persisted deep-research job metadata without deleting the chat
+   * session. Missing backend jobs are represented as expired report state when
+   * the session previously had a completed report.
+   */
+  refreshDeepResearchSessionStatuses: () => Promise<void>
   /** Add a citation from deep research (isCited=true for citation_use, false for citation_source) */
   addDeepResearchCitation: (url: string, content: string, isCited?: boolean) => void
   /** Set the full todo list from deep research (replaces existing) */
@@ -626,7 +619,9 @@ export interface ChatActions {
   // Deep research ThinkingTab actions (LLM steps, agents, tool calls, files)
 
   /** Add a new LLM step (on llm.start) */
-  addDeepResearchLLMStep: (step: Omit<DeepResearchLLMStep, 'id' | 'timestamp' | 'isComplete'>) => string
+  addDeepResearchLLMStep: (
+    step: Omit<DeepResearchLLMStep, 'id' | 'timestamp' | 'isComplete'>
+  ) => string
   /** Append content to an LLM step (on llm.chunk) */
   appendToDeepResearchLLMStep: (stepId: string, content: string) => void
   /** Complete an LLM step with thinking and usage (on llm.end) */
@@ -638,7 +633,10 @@ export interface ChatActions {
   /** Add a new agent (on workflow.start) */
   addDeepResearchAgent: (agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>) => string
   /** Add a new agent with a specific ID (for linking with tool calls) */
-  addDeepResearchAgentWithId: (id: string, agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>) => string
+  addDeepResearchAgentWithId: (
+    id: string,
+    agent: Omit<DeepResearchAgent, 'id' | 'startedAt' | 'status'>
+  ) => string
   /** Complete an agent (on workflow.end) */
   completeDeepResearchAgent: (agentId: string, output?: string) => void
   /** Add a new tool call (on tool.start) */
