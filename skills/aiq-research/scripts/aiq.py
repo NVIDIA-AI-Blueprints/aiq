@@ -45,6 +45,7 @@ _STREAM_TERMINAL_EVENTS = frozenset({"complete", "error", "done"})
 
 
 def _validate_base_url(url: str) -> str:
+    """Validate and normalize the configured AI-Q server base URL."""
     raw = (url or "").strip()
     if not raw:
         raise RuntimeError("AIQ_SERVER_URL is empty")
@@ -59,6 +60,7 @@ def _validate_base_url(url: str) -> str:
 
 
 def _validate_api_path(path: str) -> None:
+    """Reject unsafe or malformed API paths before building a request URL."""
     if not path.startswith("/") or path.startswith("//"):
         raise RuntimeError("Invalid API path")
     if len(path) > 4096 or ".." in path or _CONTROL_CHAR_RE.search(path):
@@ -66,6 +68,7 @@ def _validate_api_path(path: str) -> None:
 
 
 def _validate_job_id(job_id: str) -> str:
+    """Validate an async job identifier and return its normalized value."""
     value = job_id.strip()
     if not _JOB_UUID_RE.fullmatch(value):
         raise RuntimeError("job_id must be a UUID")
@@ -73,6 +76,7 @@ def _validate_job_id(job_id: str) -> str:
 
 
 def _validate_agent_type(agent_type: str) -> str:
+    """Validate an async agent type name accepted by the AI-Q job API."""
     value = agent_type.strip()
     if not _AGENT_TYPE_RE.fullmatch(value):
         raise RuntimeError("Invalid agent_type")
@@ -86,6 +90,7 @@ def _api_request(
     *,
     timeout: int = DEFAULT_API_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
+    """Send a JSON API request to the configured AI-Q backend."""
     if method not in _ALLOWED_METHODS:
         raise RuntimeError(f"Unsupported HTTP method: {method!r}")
     _validate_api_path(path)
@@ -119,6 +124,7 @@ def _api_request(
 
 
 def _stream_request(path: str, *, timeout: int = DEFAULT_LONG_HTTP_TIMEOUT_SECONDS) -> Iterator[str]:
+    """Yield stripped text lines from an AI-Q streaming endpoint."""
     _validate_api_path(path)
     url = f"{_validate_base_url(AIQ_SERVER_URL)}{path}"
     req = urllib.request.Request(url, method="GET")
@@ -137,6 +143,7 @@ def _stream_request(path: str, *, timeout: int = DEFAULT_LONG_HTTP_TIMEOUT_SECON
 
 
 def health() -> dict[str, Any]:
+    """Return the first successful AI-Q health response."""
     for path in ("/health", "/v1/health"):
         try:
             return _api_request("GET", path, timeout=10)
@@ -146,31 +153,38 @@ def health() -> dict[str, Any]:
 
 
 def list_agents() -> dict[str, Any]:
+    """List async agent types registered by the AI-Q backend."""
     return _api_request("GET", "/v1/jobs/async/agents")
 
 
 def submit_job(query: str, agent_type: str = DEFAULT_AGENT_TYPE) -> dict[str, Any]:
+    """Submit an explicit async research job to AI-Q."""
     body = {"agent_type": _validate_agent_type(agent_type), "input": query}
     return _api_request("POST", "/v1/jobs/async/submit", body=body, timeout=DEFAULT_LONG_HTTP_TIMEOUT_SECONDS)
 
 
 def get_job_status(job_id: str) -> dict[str, Any]:
+    """Fetch the top-level status for an async AI-Q job."""
     return _api_request("GET", f"/v1/jobs/async/job/{_validate_job_id(job_id)}")
 
 
 def get_job_state(job_id: str) -> dict[str, Any]:
+    """Fetch event-store artifacts for an async AI-Q job."""
     return _api_request("GET", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/state")
 
 
 def get_report(job_id: str) -> dict[str, Any]:
+    """Fetch the final report for a completed async AI-Q job."""
     return _api_request("GET", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/report")
 
 
 def cancel_job(job_id: str) -> dict[str, Any]:
+    """Request cancellation for a running async AI-Q job."""
     return _api_request("POST", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/cancel")
 
 
 def stream_job(job_id: str) -> None:
+    """Print server-sent event payloads for an async AI-Q job."""
     for line in _stream_request(f"/v1/jobs/async/job/{_validate_job_id(job_id)}/stream"):
         if line.startswith("data:"):
             data = line[5:].strip()
@@ -181,6 +195,7 @@ def stream_job(job_id: str) -> None:
 
 
 def chat_request(query: str) -> dict[str, Any]:
+    """Send a routed chat request that may return a direct answer or job ID."""
     body = {"messages": [{"role": "user", "content": query}]}
     print(f"Sending request to: {_validate_base_url(AIQ_SERVER_URL)}/chat", file=sys.stderr)
     return _api_request("POST", "/chat", body=body, timeout=DEFAULT_LONG_HTTP_TIMEOUT_SECONDS)
@@ -192,6 +207,7 @@ def poll_until_complete(
     timeout: int = DEFAULT_LONG_HTTP_TIMEOUT_SECONDS,
     max_consecutive_errors: int = POLL_MAX_CONSECUTIVE_ERRORS,
 ) -> dict[str, Any]:
+    """Poll a job until it reaches a terminal state or timeout."""
     deadline = time.time() + timeout
     consecutive_errors = 0
     while time.time() < deadline:
@@ -222,6 +238,7 @@ def poll_until_complete(
 
 
 def _poll_until_success_or_exit(job_id: str) -> None:
+    """Poll a job, print its report on success, and exit on failure."""
     try:
         final = poll_until_complete(job_id)
     except KeyboardInterrupt:
@@ -238,6 +255,7 @@ def _poll_until_success_or_exit(job_id: str) -> None:
 
 
 def _print_usage() -> None:
+    """Print CLI usage information."""
     print("Usage: aiq.py <command> [args]")
     print()
     print("Commands:")
@@ -257,6 +275,7 @@ def _print_usage() -> None:
 
 
 def main() -> None:
+    """Dispatch the command-line interface."""
     if len(sys.argv) < 2:
         _print_usage()
         sys.exit(1)

@@ -1,110 +1,71 @@
 # AIQ Research Skill
 
-Portable Agent Skill for interacting with a locally running NVIDIA AI-Q Blueprint server.
+## Overview
 
-## What This Skill Provides
-
-- Routed `/chat` requests against a local AI-Q server.
-- Async deep research job submission and polling.
-- Job status, event-store state, report retrieval, SSE streaming, and cancellation helpers.
-- A self-contained Python helper script at `scripts/aiq.py`.
-
-## Canonical Location
-
-This repository keeps the distributable skill at:
-
-```text
-.agents/skills/aiq-research/
-```
-
-The Claude Code repo-local path is a compatibility symlink:
-
-```text
-.claude/skills/aiq-research -> ../../.agents/skills/aiq-research
-```
+`aiq-research` sends research-shaped user requests to a running NVIDIA AI-Q Blueprint backend. It checks backend health,
+uses routed `/chat`, polls asynchronous deep research jobs, and returns final reports with citations intact.
 
 ## Prerequisites
 
-- Python 3.10 or newer.
-- A local AI-Q Blueprint server, usually at `http://localhost:8000`.
-- Set `AIQ_SERVER_URL` only when using a different local server URL.
+Users need:
 
-## Installing The Skill
+- Python 3.11+ available as `python3`.
+- A reachable local or self-hosted AI-Q Blueprint backend.
+- `AIQ_SERVER_URL` set when the backend is not running at `http://localhost:8000`.
+- A backend configured for this public local helper. Authenticated environments should use an authenticated AI-Q skill
+  or configure authentication outside this helper.
+- Network access from the local machine to the AI-Q backend URL.
 
-This repository stores portable agent skills under:
+The helper script uses only Python standard-library modules.
 
-```text
-.agents/skills/
-```
+## Canonical Location
 
-The AIQ research skill is available at:
-
-```text
-.agents/skills/aiq-research/
-```
-
-Install by copying or symlinking the full `aiq-research` directory into the skill location used by your coding harness. The installed directory must contain `SKILL.md` at its root.
-
-### Claude Code
-
-Claude Code supports repo-local skills under `.claude/skills/`.
-
-For this repository, Claude Code compatibility is provided by a symlink:
+This repository keeps the catalog-bound skill at:
 
 ```text
-.claude/skills/aiq-research -> ../../.agents/skills/aiq-research
+skills/aiq-research/
 ```
 
-To recreate it manually:
+Install by copying or symlinking the full `aiq-research` directory into the skill location used by your coding harness.
+The installed directory must contain `SKILL.md` at its root.
+
+## Quick Start
+
+Check the backend:
 
 ```bash
-mkdir -p .claude/skills
-ln -s ../../.agents/skills/aiq-research .claude/skills/aiq-research
+python3 scripts/aiq.py health
 ```
 
-User-level install:
+Send a routed research request:
 
 ```bash
-mkdir -p ~/.claude/skills
-cp -R .agents/skills/aiq-research ~/.claude/skills/aiq-research
+python3 scripts/aiq.py chat "Compare local AIQ deep research with a standard web search workflow"
 ```
 
-### OpenCode
+Resume polling when AI-Q returns a deep research job ID:
 
-OpenCode loads user skills from:
+```bash
+python3 scripts/aiq.py research_poll <JOB_ID>
+```
+
+Expected result: `health` returns JSON, `chat` returns either a direct JSON response or a job ID, and `research_poll`
+returns the final report JSON when the job completes.
+
+## Structure
 
 ```text
-~/.config/opencode/skills/
+aiq-research/
+|-- SKILL.md
+|-- LICENSE
+|-- README.md
+|-- evals/
+|   `-- evals.json
+`-- scripts/
+    `-- aiq.py
 ```
 
-Install with:
-
-```bash
-mkdir -p ~/.config/opencode/skills
-cp -R .agents/skills/aiq-research ~/.config/opencode/skills/aiq-research
-```
-
-Restart OpenCode or start a new session after installation.
-
-### Codex
-
-For Codex or other Agent Skills-compatible tools, install the skill into the runtime's configured skills directory.
-
-Generic install shape:
-
-```text
-<codex-skills-dir>/aiq-research/SKILL.md
-<codex-skills-dir>/aiq-research/scripts/aiq.py
-```
-
-Example:
-
-```bash
-mkdir -p <codex-skills-dir>
-cp -R .agents/skills/aiq-research <codex-skills-dir>/aiq-research
-```
-
-Replace `<codex-skills-dir>` with the skills directory configured for your Codex environment.
+`SKILL.md` contains the agent-facing workflow. `scripts/aiq.py` is the standard-library Python client used by the skill.
 
 ## Quick Verification
 
@@ -120,6 +81,20 @@ Expected output starts with:
 Usage: aiq.py <command> [args]
 ```
 
+## Version Compatibility
+
+This skill is designed for NVIDIA AI-Q Blueprint version 2.1.0. It follows semantic version compatibility:
+
+- Major versions must match.
+- Blueprint minor version must be equal to or newer than the skill minor version.
+- Patch version differences do not affect compatibility.
+
 ## License
 
-Apache-2.0. See `LICENSE`.
+Copyright (c) 2026 NVIDIA Corporation. All rights reserved.
+
+Licensed under the Apache License, Version 2.0. See [LICENSE](LICENSE) for full license text.
+
+## Copyright
+
+Copyright (c) 2026 NVIDIA Corporation. All rights reserved.
