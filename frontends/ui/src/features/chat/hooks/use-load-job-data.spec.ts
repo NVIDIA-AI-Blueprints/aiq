@@ -4,6 +4,7 @@
 import { renderHook, act } from '@testing-library/react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { useLoadJobData } from './use-load-job-data'
+import type { ChatMessage, Conversation } from '../types'
 
 const mockGetJobStatus = vi.fn()
 const mockGetJobReport = vi.fn()
@@ -25,29 +26,37 @@ const mockAddDeepResearchBanner = vi.fn()
 const mockOpenRightPanel = vi.fn()
 const mockSetResearchPanelTab = vi.fn()
 
-let mockStoreState = {
+type MockConversation = Pick<Conversation, 'id' | 'messages'>
+
+const createDefaultMessages = (): ChatMessage[] => [
+  {
+    id: 'tracking-msg',
+    role: 'assistant',
+    content: '',
+    timestamp: new Date(),
+    messageType: 'agent_response',
+    deepResearchJobId: 'job-404',
+    deepResearchJobStatus: 'running',
+    isDeepResearchActive: true,
+  },
+  {
+    id: 'starting-banner',
+    role: 'assistant',
+    content: '',
+    timestamp: new Date(),
+    messageType: 'deep_research_banner',
+    deepResearchBannerData: { bannerType: 'starting', jobId: 'job-404' },
+  },
+]
+
+let mockStoreState: {
+  currentConversation: MockConversation | null
+  deepResearchJobId: string | null
+  deepResearchStreamLoaded: boolean
+} = {
   currentConversation: {
     id: 'conv-1',
-    messages: [
-      {
-        id: 'tracking-msg',
-        role: 'assistant' as const,
-        content: '',
-        timestamp: new Date(),
-        messageType: 'agent_response' as const,
-        deepResearchJobId: 'job-404',
-        deepResearchJobStatus: 'running' as const,
-        isDeepResearchActive: true,
-      },
-      {
-        id: 'starting-banner',
-        role: 'assistant' as const,
-        content: '',
-        timestamp: new Date(),
-        messageType: 'deep_research_banner' as const,
-        deepResearchBannerData: { bannerType: 'starting' as const, jobId: 'job-404' },
-      },
-    ],
+    messages: createDefaultMessages(),
   },
   deepResearchJobId: null as string | null,
   deepResearchStreamLoaded: false,
@@ -108,39 +117,44 @@ describe('useLoadJobData', () => {
     mockStoreState = {
       currentConversation: {
         id: 'conv-1',
-        messages: [
-          {
-            id: 'tracking-msg',
-            role: 'assistant',
-            content: '',
-            timestamp: new Date(),
-            messageType: 'agent_response',
-            deepResearchJobId: 'job-404',
-            deepResearchJobStatus: 'running',
-            isDeepResearchActive: true,
-          },
-          {
-            id: 'starting-banner',
-            role: 'assistant',
-            content: '',
-            timestamp: new Date(),
-            messageType: 'deep_research_banner',
-            deepResearchBannerData: { bannerType: 'starting', jobId: 'job-404' },
-          },
-        ],
+        messages: createDefaultMessages(),
       },
       deepResearchJobId: null,
       deepResearchStreamLoaded: false,
     }
   })
 
-  test('marks unavailable job as failed when report load hits 404', async () => {
+  test('marks unavailable completed report expired without surfacing a console error', async () => {
     mockGetJobStatus.mockRejectedValue(new Error('Failed to get job status: 404'))
+    mockStoreState.currentConversation = {
+      id: 'conv-1',
+      messages: [
+        {
+          id: 'tracking-msg',
+          role: 'assistant',
+          content: 'Completed report',
+          timestamp: new Date(),
+          messageType: 'agent_response',
+          deepResearchJobId: 'job-404',
+          deepResearchJobStatus: 'success',
+          showViewReport: true,
+        },
+        {
+          id: 'success-banner',
+          role: 'assistant',
+          content: '',
+          timestamp: new Date(),
+          messageType: 'deep_research_banner',
+          deepResearchBannerData: { bannerType: 'success', jobId: 'job-404' },
+        },
+      ],
+    }
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
 
     const { result } = renderHook(() => useLoadJobData())
 
     await act(async () => {
-      await result.current.loadReport('job-404')
+      await result.current.importJobStream('job-404')
     })
 
     expect(mockPatchConversationMessage).toHaveBeenCalledWith(
@@ -149,12 +163,39 @@ describe('useLoadJobData', () => {
       expect.objectContaining({
         deepResearchJobStatus: 'failure',
         isDeepResearchActive: false,
+        showViewReport: false,
+        deepResearchReportExpired: true,
       })
     )
-    expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('failure', 'job-404', 'conv-1')
-    expect(mockAddErrorCard).toHaveBeenCalledWith(
-      'agent.deep_research_load_failed',
-      'Failed to get job status: 404'
+    expect(mockAddDeepResearchBanner).not.toHaveBeenCalled()
+    expect(mockAddErrorCard).not.toHaveBeenCalled()
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    consoleErrorSpy.mockRestore()
+  })
+
+  test('treats proxy failures as backend connectivity without expiring the report', async () => {
+    mockGetJobStatus.mockRejectedValue(
+      new Error('Failed to get job status: 500 - PROXY_ERROR: fetch failed')
     )
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.importJobStream('job-404')
+    })
+
+    expect(mockPatchConversationMessage).not.toHaveBeenCalled()
+    expect(mockAddDeepResearchBanner).not.toHaveBeenCalled()
+    expect(mockStopAllDeepResearchSpinners).not.toHaveBeenCalled()
+    expect(mockCompleteDeepResearch).not.toHaveBeenCalled()
+    expect(mockSetStreaming).not.toHaveBeenCalled()
+    expect(mockAddErrorCard).toHaveBeenCalledWith(
+      'connection.failed',
+      'The backend is not reachable. Start the backend and try again.',
+      'Failed to get job status: 500 - PROXY_ERROR: fetch failed'
+    )
+    expect(consoleErrorSpy).not.toHaveBeenCalled()
+    consoleErrorSpy.mockRestore()
   })
 })

@@ -31,9 +31,15 @@ import {
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
-import { isUnavailableDeepResearchJobError } from '../lib/deep-research-errors'
+import {
+  getDeepResearchJobLoadErrorDetails,
+  getDeepResearchJobLoadFailureKind,
+} from '../lib/deep-research-errors'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
+
+const EXPIRED_REPORT_MESSAGE = 'This research report is no longer available.'
+const BACKEND_UNREACHABLE_MESSAGE = 'The backend is not reachable. Start the backend and try again.'
 
 export interface LoadJobDataOptions {
   /**
@@ -134,13 +140,15 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId === jobId)
 
       if (trackingMessage?.id) {
-        const hasPartialReport = Boolean(
-          trackingMessage.reportContent?.trim() || trackingMessage.showViewReport
-        )
+        const hadCompletedReport =
+          Boolean(trackingMessage.deepResearchReportExpired) ||
+          (trackingMessage.deepResearchJobStatus === 'success' &&
+            Boolean(trackingMessage.showViewReport || trackingMessage.reportContent?.trim()))
         patchConversationMessage(conversation.id, trackingMessage.id, {
           deepResearchJobStatus: 'failure',
           isDeepResearchActive: false,
-          showViewReport: hasPartialReport,
+          showViewReport: false,
+          deepResearchReportExpired: hadCompletedReport,
         })
       }
 
@@ -534,16 +542,31 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         setResearchPanelTab('report')
         openRightPanel('research')
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Failed to load job data'
+        const failureKind = getDeepResearchJobLoadFailureKind(err)
+        const errorDetails = getDeepResearchJobLoadErrorDetails(err)
+        const errorMessage =
+          failureKind === 'unavailable'
+            ? EXPIRED_REPORT_MESSAGE
+            : failureKind === 'backend_unreachable'
+              ? BACKEND_UNREACHABLE_MESSAGE
+              : err instanceof Error
+                ? err.message
+                : 'Failed to load job data'
         setError(errorMessage)
-        console.error('Failed to load job data:', err)
-        if (isUnavailableDeepResearchJobError(err)) {
+        if (failureKind === 'unavailable') {
           syncMissingJobToFailureState(jobId)
+          stopAllDeepResearchSpinners()
+          completeDeepResearch()
+          setStreaming(false)
+        } else if (failureKind === 'backend_unreachable') {
+          addErrorCard('connection.failed', errorMessage, errorDetails)
+        } else {
+          console.error('Failed to load job data:', err)
+          addErrorCard('agent.deep_research_load_failed', errorMessage)
+          stopAllDeepResearchSpinners()
+          completeDeepResearch()
+          setStreaming(false)
         }
-        addErrorCard('agent.deep_research_load_failed', errorMessage)
-        stopAllDeepResearchSpinners()
-        completeDeepResearch()
-        setStreaming(false)
       } finally {
         setIsLoading(false)
       }
@@ -631,16 +654,31 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         setStreamLoaded(true)
         setLoadedJobId(jobId)
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Failed to load stream data'
+        const failureKind = getDeepResearchJobLoadFailureKind(err)
+        const errorDetails = getDeepResearchJobLoadErrorDetails(err)
+        const errorMessage =
+          failureKind === 'unavailable'
+            ? EXPIRED_REPORT_MESSAGE
+            : failureKind === 'backend_unreachable'
+              ? BACKEND_UNREACHABLE_MESSAGE
+              : err instanceof Error
+                ? err.message
+                : 'Failed to load stream data'
         setError(errorMessage)
-        console.error('Failed to load stream data:', err)
-        if (isUnavailableDeepResearchJobError(err)) {
+        if (failureKind === 'unavailable') {
           syncMissingJobToFailureState(jobId)
+          stopAllDeepResearchSpinners()
+          completeDeepResearch()
+          setStreaming(false)
+        } else if (failureKind === 'backend_unreachable') {
+          addErrorCard('connection.failed', errorMessage, errorDetails)
+        } else {
+          console.error('Failed to load stream data:', err)
+          addErrorCard('agent.deep_research_load_failed', errorMessage)
+          stopAllDeepResearchSpinners()
+          completeDeepResearch()
+          setStreaming(false)
         }
-        addErrorCard('agent.deep_research_load_failed', errorMessage)
-        stopAllDeepResearchSpinners()
-        completeDeepResearch()
-        setStreaming(false)
       } finally {
         setIsLoading(false)
       }
