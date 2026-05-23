@@ -17,6 +17,7 @@ import { Flex, Text } from '@/adapters/ui'
 import { Document } from '@/adapters/ui/icons'
 import { useChatStore } from '@/features/chat/store'
 import { FileCard } from './FileCard'
+import { EMPTY_RESEARCH_DETAILS_HELP_TEXT } from './research-empty-state-copy'
 
 /**
  * Files sub-tab content showing file artifacts from deep research.
@@ -48,22 +49,17 @@ export const FilesTab: FC = () => {
 
       {/* Content */}
       {isEmpty ? (
-        <Flex
-          direction="col"
-          align="center"
-          justify="center"
-          className="flex-1 text-center py-8"
-        >
+        <Flex direction="col" align="center" justify="center" className="flex-1 py-8 text-center">
           <Document className="text-subtle mb-3 h-8 w-8" />
           <Text kind="body/regular/md" className="text-subtle">
-            Generated files will appear here during research.
+            No generated files available.
           </Text>
           <Text kind="body/regular/sm" className="text-subtle mt-2">
-            Shows drafts, reports, and other file artifacts.
+            {EMPTY_RESEARCH_DETAILS_HELP_TEXT}
           </Text>
         </Flex>
       ) : (
-        <Flex direction="col" gap="2" className="flex-1 min-h-0 overflow-y-auto">
+        <Flex direction="col" gap="2" className="min-h-0 flex-1 overflow-y-auto">
           {files.map((file) => (
             <div key={file.id} className="shrink-0">
               <FileCard file={file} />

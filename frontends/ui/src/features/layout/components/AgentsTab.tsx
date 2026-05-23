@@ -18,16 +18,19 @@ import { useShallow } from 'zustand/react/shallow'
 import { Wand } from '@/adapters/ui/icons'
 import { useChatStore } from '@/features/chat'
 import { AgentCard, type AgentInfo } from './AgentCard'
+import { EMPTY_RESEARCH_DETAILS_HELP_TEXT } from './research-empty-state-copy'
 
 /**
  * Agents sub-tab content showing active workflows with their tool calls.
  * Groups tool calls under their parent agents using agent_id.
  */
 export const AgentsTab: FC = () => {
-  const { deepResearchAgents, deepResearchToolCalls } = useChatStore(useShallow((s) => ({
-    deepResearchAgents: s.deepResearchAgents,
-    deepResearchToolCalls: s.deepResearchToolCalls,
-  })))
+  const { deepResearchAgents, deepResearchToolCalls } = useChatStore(
+    useShallow((s) => ({
+      deepResearchAgents: s.deepResearchAgents,
+      deepResearchToolCalls: s.deepResearchToolCalls,
+    }))
+  )
 
   const agentsWithToolCalls = useMemo((): AgentInfo[] => {
     return deepResearchAgents.map((agent) => {
@@ -61,7 +64,8 @@ export const AgentsTab: FC = () => {
           {agentsWithToolCalls.length > 0 && (
             <Text kind="body/regular/xs" className="text-subtle">
               {runningCount > 0 ? `${runningCount} running` : `${agentsWithToolCalls.length}`}
-              {agentToolCalls.length > 0 && ` • ${completedToolCalls}/${agentToolCalls.length} queries`}
+              {agentToolCalls.length > 0 &&
+                ` • ${completedToolCalls}/${agentToolCalls.length} queries`}
             </Text>
           )}
         </Flex>
@@ -72,22 +76,17 @@ export const AgentsTab: FC = () => {
 
       {/* Content */}
       {isEmpty ? (
-        <Flex
-          direction="col"
-          align="center"
-          justify="center"
-          className="flex-1 text-center py-8"
-        >
+        <Flex direction="col" align="center" justify="center" className="flex-1 py-8 text-center">
           <Wand className="text-subtle mb-3 h-8 w-8" />
           <Text kind="body/regular/md" className="text-subtle">
-            Active agents will appear here during research.
+            No agent activity available.
           </Text>
           <Text kind="body/regular/sm" className="text-subtle mt-2">
-            Shows planner, researcher, and writer agents as they execute.
+            {EMPTY_RESEARCH_DETAILS_HELP_TEXT}
           </Text>
         </Flex>
       ) : (
-        <Flex direction="col" gap="2" className="flex-1 min-h-0 overflow-y-auto">
+        <Flex direction="col" gap="2" className="min-h-0 flex-1 overflow-y-auto">
           {agentsWithToolCalls.map((agent) => (
             <div key={agent.id} className="shrink-0">
               <AgentCard agent={agent} defaultExpanded />

@@ -179,4 +179,28 @@ describe('ThinkingTab', () => {
     expect(screen.getByText('https://referenced.example')).toBeInTheDocument()
     expect(screen.queryByText('https://read.example')).not.toBeInTheDocument()
   })
+
+  test('shows neutral empty text for read and referenced citation views', async () => {
+    const user = userEvent.setup()
+
+    render(<ThinkingTab />)
+
+    await user.click(screen.getByRole('radio', { name: /^Read$/i }))
+
+    expect(screen.getByText('No read sources available.')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'These details appear during active research and may not be available for completed reports.'
+      )
+    ).toBeInTheDocument()
+
+    await user.click(screen.getByRole('radio', { name: /Referenced/i }))
+
+    expect(screen.getByText('No referenced sources available.')).toBeInTheDocument()
+    expect(
+      screen.getByText(
+        'These details appear during active research and may not be available for completed reports.'
+      )
+    ).toBeInTheDocument()
+  })
 })

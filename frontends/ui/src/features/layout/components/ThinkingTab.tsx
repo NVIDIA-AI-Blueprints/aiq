@@ -33,6 +33,7 @@ import { AgentsTab } from './AgentsTab'
 import { ToolCallsTab } from './ToolCallsTab'
 import { FilesTab } from './FilesTab'
 import { CitationCard } from './CitationCard'
+import { EMPTY_RESEARCH_DETAILS_HELP_TEXT } from './research-empty-state-copy'
 import type { ThoughtInfo } from './ThoughtCard'
 import type { ToolCallInfo } from './ToolCallCard'
 import type {
@@ -133,8 +134,11 @@ const CitationListView: FC<CitationListViewProps> = ({ filter, citations }) => {
           <Book className="text-subtle mb-3 h-8 w-8" />
           <Text kind="body/regular/md" className="text-subtle">
             {filter === 'referenced'
-              ? 'No referenced sources yet. Sources used for the report will appear here.'
-              : 'No sources read yet. Sources discovered during research will appear here.'}
+              ? 'No referenced sources available.'
+              : 'No read sources available.'}
+          </Text>
+          <Text kind="body/regular/sm" className="text-subtle mt-2">
+            {EMPTY_RESEARCH_DETAILS_HELP_TEXT}
           </Text>
         </Flex>
       ) : (

@@ -29,14 +29,18 @@ describe('ToolCallsTab', () => {
     test('shows empty state when no tool calls', () => {
       render(<ToolCallsTab toolCalls={[]} />)
 
-      expect(screen.getByText('Tool calls will appear here during research.')).toBeInTheDocument()
-      expect(screen.getByText(/Shows web searches, file writes/)).toBeInTheDocument()
+      expect(screen.getByText('No tool calls available.')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'These details appear during active research and may not be available for completed reports.'
+        )
+      ).toBeInTheDocument()
     })
 
     test('shows empty state when toolCalls prop is undefined', () => {
       render(<ToolCallsTab />)
 
-      expect(screen.getByText('Tool calls will appear here during research.')).toBeInTheDocument()
+      expect(screen.getByText('No tool calls available.')).toBeInTheDocument()
     })
 
     test('shows wrench icon in empty state', () => {
