@@ -784,6 +784,7 @@ export interface JobStateResponse {
     outputs: Array<{
       type: string
       content: string
+      output_category?: string
       timestamp?: string
     }>
   } | null

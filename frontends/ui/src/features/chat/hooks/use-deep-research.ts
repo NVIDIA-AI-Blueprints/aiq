@@ -241,7 +241,10 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         const todos = buf.todos?.map((t, i) => ({ id: `todo-${i}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`, content: t.content, status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped' }))
 
         useChatStore.setState((state) => ({
-          ...(buf.reportContent !== null && { reportContent: buf.reportContent }),
+          ...(buf.reportContent !== null && {
+            reportContent: buf.reportContent,
+            reportContentCategory: 'final_report' as const,
+          }),
           ...(todos && todos.length > 0 && { deepResearchTodos: todos }),
           ...(agents.length > 0 && { deepResearchAgents: agents }),
           ...(llmSteps.length > 0 && { deepResearchLLMSteps: llmSteps }),
@@ -492,20 +495,17 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
           },
 
           onOutputUpdate: (content, outputCategory, _workflow) => {
-            if (outputCategory === 'intermediate') return
+            // Only the explicit final_report artifact belongs in the Report tab.
+            // Draft, research_notes, and uncategorized output can be partial JSON
+            // from failed or cancelled workflow paths.
+            if (outputCategory !== 'final_report') return
             if (buf.active) {
-              if (outputCategory === 'final_report' || !outputCategory) { buf.reportContent = content }
-              // research_notes are already captured via write_file artifacts — skip to avoid duplicates
+              buf.reportContent = content
               return
             }
             if (!isActiveJob()) return
-            if (outputCategory === 'research_notes') {
-              // Skip — research notes are already tracked via write_file tool artifacts
-              void 0
-            } else if (outputCategory === 'final_report' || !outputCategory) {
-              setReportContent(content)
-              setCurrentStatus('writing')
-            }
+            setReportContent(content, 'final_report')
+            setCurrentStatus('writing')
           },
 
           onComplete: () => {

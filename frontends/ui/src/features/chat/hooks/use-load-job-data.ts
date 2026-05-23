@@ -242,7 +242,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       const response = await getJobReport(jobId, idToken || undefined)
 
       if (response.has_report && response.report) {
-        setReportContent(response.report)
+        setReportContent(response.report, 'final_report')
         return true
       }
 
@@ -278,9 +278,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             }
           )
 
-          outputs?.forEach((output: { type: string; content: string }) => {
-            if (output.type === 'report' || output.type === 'output') {
-              setReportContent(output.content)
+          outputs?.forEach((output: { type: string; content: string; output_category?: string }) => {
+            if (output.type === 'report' || output.output_category === 'final_report') {
+              setReportContent(output.content, 'final_report')
             }
           })
         }
@@ -309,7 +309,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         reportResult.value.has_report &&
         reportResult.value.report
       ) {
-        setReportContent(reportResult.value.report)
+        setReportContent(reportResult.value.report, 'final_report')
       }
     },
     [idToken, loadJobState, setReportContent]
@@ -425,7 +425,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             : undefined
 
           useChatStore.setState((state) => ({
-            ...(buffer.reportContent !== null && { reportContent: buffer.reportContent }),
+            ...(buffer.reportContent !== null && {
+              reportContent: buffer.reportContent,
+              reportContentCategory: 'final_report' as const,
+            }),
             ...(todos && { deepResearchTodos: todos }),
             ...(agents.length > 0 && { deepResearchAgents: agents }),
             ...(llmSteps.length > 0 && { deepResearchLLMSteps: llmSteps }),
@@ -564,11 +567,8 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             },
 
             onOutputUpdate: (content, outputCategory) => {
-              if (outputCategory === 'intermediate') return
-              // research_notes are already captured via write_file artifacts — skip to avoid duplicates
-              if (outputCategory === 'final_report' || !outputCategory) {
-                buffer.reportContent = content
-              }
+              if (outputCategory !== 'final_report') return
+              buffer.reportContent = content
             },
 
             onComplete: () => {

@@ -174,7 +174,7 @@ describe('useLoadJobData', () => {
     expect(mockSetResearchPanelTab).toHaveBeenCalledWith('report')
     expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
     expect(mockGetJobReport).toHaveBeenCalledWith('job-123', 'token-123')
-    expect(mockSetReportContent).toHaveBeenCalledWith('Loaded report')
+    expect(mockSetReportContent).toHaveBeenCalledWith('Loaded report', 'final_report')
     expect(mockCreateDeepResearchClient).not.toHaveBeenCalled()
   })
 
@@ -350,5 +350,46 @@ describe('useLoadJobData', () => {
     expect(mockSetLoadedJobId).not.toHaveBeenCalled()
     expect(mockSetStreamLoaded).not.toHaveBeenCalled()
     expect(mockOpenRightPanel).not.toHaveBeenCalled()
+  })
+
+  test('does not promote uncategorized replay output into report content', async () => {
+    let streamCallbacks: {
+      onOutputUpdate: (content: string, outputCategory?: string) => void
+      onJobStatus: (status: 'success' | 'failure' | 'interrupted', error?: string) => void
+    } | null = null
+
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-123', status: 'interrupted', error: null })
+    mockCreateDeepResearchClient.mockImplementation(({ callbacks }) => {
+      streamCallbacks = callbacks
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        isConnected: vi.fn(() => false),
+        getLastEventId: vi.fn(() => null),
+      }
+    })
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      const replay = result.current.importJobStream('job-123')
+      await Promise.resolve()
+
+      expect(streamCallbacks).not.toBeNull()
+      streamCallbacks!.onOutputUpdate('{"status":"interrupted","reason":"cancelled"}')
+      streamCallbacks!.onJobStatus('interrupted', 'cancelled by user')
+
+      await replay
+    })
+
+    const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+    expect(replayCommit).toEqual(expect.any(Function))
+
+    const updates = (replayCommit as (state: { currentStatus: string }) => object)({
+      currentStatus: 'researching',
+    })
+    expect(updates).not.toHaveProperty('reportContent')
+    expect(updates).not.toHaveProperty('reportContentCategory')
+    expect(mockSetReportContent).not.toHaveBeenCalled()
   })
 })

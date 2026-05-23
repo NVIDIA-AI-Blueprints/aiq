@@ -922,15 +922,37 @@ describe('useDeepResearch', () => {
       expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
     })
 
-    test('onOutputUpdate sets report content', async () => {
+    test('onOutputUpdate sets report content for final_report output', async () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onOutputUpdate?.('Report content here')
+        mockClient?.callbacks.onOutputUpdate?.('Report content here', 'final_report')
       })
 
-      expect(mockSetReportContent).toHaveBeenCalledWith('Report content here')
+      expect(mockSetReportContent).toHaveBeenCalledWith('Report content here', 'final_report')
       expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
+    })
+
+    test('onOutputUpdate ignores uncategorized output so failed jobs do not fill the report tab with JSON', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onOutputUpdate?.('{"status":"failure","error":"worker failed"}')
+      })
+
+      expect(mockSetReportContent).not.toHaveBeenCalled()
+      expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
+    })
+
+    test('onOutputUpdate ignores research notes because the report tab only shows final reports', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onOutputUpdate?.('Draft research notes', 'research_notes')
+      })
+
+      expect(mockSetReportContent).not.toHaveBeenCalled()
+      expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
     })
 
     test('onComplete does not throw in live mode', async () => {
