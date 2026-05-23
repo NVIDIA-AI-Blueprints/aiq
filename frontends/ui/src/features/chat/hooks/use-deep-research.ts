@@ -26,6 +26,7 @@ import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 import { checkBackendHealthCached } from '@/shared/hooks/use-backend-health'
 import { isLikelyAuthRelatedTransportError, isDeepResearchReplayCompleteMode } from '../lib/transport-auth-signals'
+import { normalizeDeepResearchTodos } from '../lib/deep-research-todos'
 
 /** Timeout in milliseconds before showing a warning (60 seconds) */
 const TIMEOUT_WARNING_MS = 60000
@@ -238,7 +239,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         const toolCalls = Array.from(buf.toolCalls.entries()).map(([id, t]) => ({ id, name: t.name, input: t.input, output: t.output, workflow: t.workflow, agentId: t.agentId, status: 'complete' as const, timestamp: now }))
         const citations = buf.citations.map((c, i) => ({ id: `citation-${i}`, url: c.url, content: c.content, isCited: c.isCited, timestamp: now }))
         const files = Array.from(buf.files.entries()).map(([filename, content], i) => ({ id: `file-${i}`, filename, content, timestamp: now }))
-        const todos = buf.todos?.map((t, i) => ({ id: `todo-${i}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`, content: t.content, status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped' }))
+        const todos = buf.todos ? normalizeDeepResearchTodos(buf.todos) : undefined
 
         useChatStore.setState((state) => ({
           ...(buf.reportContent !== null && {
@@ -470,6 +471,8 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
           },
 
           onTodoUpdate: (todos: TodoItem[], workflow?: string) => {
+            // Workflow-scoped todo artifacts belong to sub-agent-local plans.
+            // The Tasks tab shows only the top-level research todo list.
             if (workflow) return
             if (buf.active) { buf.todos = todos; return }
             if (!isActiveJob()) return

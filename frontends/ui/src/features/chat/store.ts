@@ -58,6 +58,7 @@ import {
   logStoreHydration,
 } from './lib/storage-logger'
 import { pruneMessageForStorage } from './lib/prune-message-for-storage'
+import { normalizeDeepResearchTodos } from './lib/deep-research-todos'
 import { ensureStorageCapacity, checkStorageHealth } from './lib/storage-manager'
 import { useLayoutStore } from '@/features/layout/store'
 
@@ -291,6 +292,21 @@ const patchLatestDeepResearchJobMessage = (
   )
 
   return { ...conversation, messages }
+}
+
+const patchConversationMessageById = (
+  conversation: Conversation,
+  messageId: string,
+  patch: Partial<ChatMessage>
+): Conversation => {
+  let didPatch = false
+  const messages = conversation.messages.map((message) => {
+    if (message.id !== messageId) return message
+    didPatch = true
+    return { ...message, ...patch }
+  })
+
+  return didPatch ? { ...conversation, messages, updatedAt: new Date() } : conversation
 }
 
 const getDefaultEnabledDataSourceIds = (): string[] => {
@@ -2007,18 +2023,58 @@ export const useChatStore = create<ChatStore>()(
         },
 
         setDeepResearchTodos: (todos: Array<{ content: string; status: string }>) => {
-          // Convert raw todos to typed DeepResearchTodo items with generated IDs
-          const typedTodos = todos.map((todo, index) => ({
-            id: `todo-${index}-${todo.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`,
-            content: todo.content,
-            status: todo.status as 'pending' | 'in_progress' | 'completed' | 'stopped',
-          }))
+          const typedTodos = normalizeDeepResearchTodos(todos)
+          const {
+            currentConversation,
+            conversations,
+            deepResearchOwnerConversationId,
+            activeDeepResearchMessageId,
+          } = get()
 
-          set({ deepResearchTodos: typedTodos }, false, 'setDeepResearchTodos')
+          if (!deepResearchOwnerConversationId || !activeDeepResearchMessageId) {
+            set({ deepResearchTodos: typedTodos }, false, 'setDeepResearchTodos')
+            return
+          }
+
+          const targetConversation = conversations.find(
+            (conversation) => conversation.id === deepResearchOwnerConversationId
+          )
+
+          if (!targetConversation) {
+            set({ deepResearchTodos: typedTodos }, false, 'setDeepResearchTodos')
+            return
+          }
+
+          // Keep the lightweight last-known task list on the tracking message so
+          // a page refresh can restore useful progress before SSE replay catches up.
+          const updatedConversation = patchConversationMessageById(
+            targetConversation,
+            activeDeepResearchMessageId,
+            { deepResearchTodos: typedTodos }
+          )
+          const updatedConversations = updateConversationInList(conversations, updatedConversation)
+          const updatedCurrent =
+            currentConversation?.id === updatedConversation.id ? updatedConversation : currentConversation
+
+          set(
+            {
+              deepResearchTodos: typedTodos,
+              conversations: updatedConversations,
+              currentConversation: updatedCurrent,
+            },
+            false,
+            'setDeepResearchTodos'
+          )
         },
 
         stopDeepResearchTodos: () => {
-          const { deepResearchTodos } = get()
+          const {
+            currentConversation,
+            conversations,
+            deepResearchTodos,
+            deepResearchOwnerConversationId,
+            activeDeepResearchMessageId,
+          } = get()
           const stoppedTodos = deepResearchTodos.map((todo) => ({
             ...todo,
             status:
@@ -2026,15 +2082,51 @@ export const useChatStore = create<ChatStore>()(
                 ? ('stopped' as const)
                 : todo.status,
           }))
-          set({ deepResearchTodos: stoppedTodos }, false, 'stopDeepResearchTodos')
+
+          if (!deepResearchOwnerConversationId || !activeDeepResearchMessageId) {
+            set({ deepResearchTodos: stoppedTodos }, false, 'stopDeepResearchTodos')
+            return
+          }
+
+          const targetConversation = conversations.find(
+            (conversation) => conversation.id === deepResearchOwnerConversationId
+          )
+
+          if (!targetConversation) {
+            set({ deepResearchTodos: stoppedTodos }, false, 'stopDeepResearchTodos')
+            return
+          }
+
+          const updatedConversation = patchConversationMessageById(
+            targetConversation,
+            activeDeepResearchMessageId,
+            { deepResearchTodos: stoppedTodos }
+          )
+          const updatedConversations = updateConversationInList(conversations, updatedConversation)
+          const updatedCurrent =
+            currentConversation?.id === updatedConversation.id ? updatedConversation : currentConversation
+
+          set(
+            {
+              deepResearchTodos: stoppedTodos,
+              conversations: updatedConversations,
+              currentConversation: updatedCurrent,
+            },
+            false,
+            'stopDeepResearchTodos'
+          )
         },
 
         stopAllDeepResearchSpinners: (isSuccessfulCompletion = false) => {
           const {
+            currentConversation,
+            conversations,
             deepResearchTodos,
             deepResearchLLMSteps,
             deepResearchAgents,
             deepResearchToolCalls,
+            deepResearchOwnerConversationId,
+            activeDeepResearchMessageId,
           } = get()
 
           // Stop todos (pending/in_progress → stopped or completed)
@@ -2076,12 +2168,41 @@ export const useChatStore = create<ChatStore>()(
                 : toolCall.status,
           }))
 
+          const update = {
+            deepResearchTodos: stoppedTodos,
+            deepResearchLLMSteps: stoppedLLMSteps,
+            deepResearchAgents: stoppedAgents,
+            deepResearchToolCalls: stoppedToolCalls,
+          }
+
+          if (!deepResearchOwnerConversationId || !activeDeepResearchMessageId) {
+            set(update, false, 'stopAllDeepResearchSpinners')
+            return
+          }
+
+          const targetConversation = conversations.find(
+            (conversation) => conversation.id === deepResearchOwnerConversationId
+          )
+
+          if (!targetConversation) {
+            set(update, false, 'stopAllDeepResearchSpinners')
+            return
+          }
+
+          const updatedConversation = patchConversationMessageById(
+            targetConversation,
+            activeDeepResearchMessageId,
+            { deepResearchTodos: stoppedTodos }
+          )
+          const updatedConversations = updateConversationInList(conversations, updatedConversation)
+          const updatedCurrent =
+            currentConversation?.id === updatedConversation.id ? updatedConversation : currentConversation
+
           set(
             {
-              deepResearchTodos: stoppedTodos,
-              deepResearchLLMSteps: stoppedLLMSteps,
-              deepResearchAgents: stoppedAgents,
-              deepResearchToolCalls: stoppedToolCalls,
+              ...update,
+              conversations: updatedConversations,
+              currentConversation: updatedCurrent,
             },
             false,
             'stopAllDeepResearchSpinners'

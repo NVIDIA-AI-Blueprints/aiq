@@ -1801,6 +1801,80 @@ describe('useChatStore', () => {
       expect(state.deepResearchJobId).toBe('job-123')
     })
 
+    test('persists latest deep research todos onto the active tracking message', () => {
+      const conv = createConversation([
+        {
+          id: 'tracking-msg',
+          role: 'assistant',
+          messageType: 'agent_response',
+          content: '',
+          deepResearchJobId: 'job-123',
+          deepResearchJobStatus: 'running',
+          isDeepResearchActive: true,
+        },
+      ])
+
+      useChatStore.setState({
+        currentConversation: conv,
+        conversations: [conv],
+        deepResearchOwnerConversationId: conv.id,
+        activeDeepResearchMessageId: 'tracking-msg',
+      })
+
+      useChatStore.getState().setDeepResearchTodos([
+        { content: 'Search current sources', status: 'in_progress' },
+      ])
+
+      const trackingMessage = useChatStore
+        .getState()
+        .currentConversation?.messages.find((m) => m.id === 'tracking-msg')
+
+      expect(trackingMessage?.deepResearchTodos).toEqual([
+        {
+          id: 'todo-0-search-current-sourc',
+          content: 'Search current sources',
+          status: 'in_progress',
+        },
+      ])
+    })
+
+    test('persists stopped deep research todos onto the active tracking message', () => {
+      const conv = createConversation([
+        {
+          id: 'tracking-msg',
+          role: 'assistant',
+          messageType: 'agent_response',
+          content: '',
+          deepResearchJobId: 'job-123',
+          deepResearchJobStatus: 'running',
+          isDeepResearchActive: true,
+          deepResearchTodos: [
+            { id: 'todo-1', content: 'Running task', status: 'in_progress' },
+          ],
+        },
+      ])
+
+      useChatStore.setState({
+        currentConversation: conv,
+        conversations: [conv],
+        deepResearchOwnerConversationId: conv.id,
+        activeDeepResearchMessageId: 'tracking-msg',
+        deepResearchTodos: [
+          { id: 'todo-1', content: 'Running task', status: 'in_progress' },
+        ],
+      })
+
+      useChatStore.getState().stopAllDeepResearchSpinners(false)
+
+      const trackingMessage = useChatStore
+        .getState()
+        .currentConversation?.messages.find((m) => m.id === 'tracking-msg')
+
+      expect(trackingMessage?.deepResearchTodos).toEqual([
+        { id: 'todo-1', content: 'Running task', status: 'stopped' },
+      ])
+    })
+
     test('does NOT add error card when user message has no thinking steps', () => {
       const conv = createConversation([{ role: 'user', messageType: 'user', content: 'Hello' }])
 

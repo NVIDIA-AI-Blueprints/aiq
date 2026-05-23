@@ -861,6 +861,64 @@ describe('useDeepResearch', () => {
       expect(mockSetDeepResearchTodos).toHaveBeenCalledWith(todos)
     })
 
+    test('onTodoUpdate ignores workflow-scoped sub-agent todos', async () => {
+      await setupConnectedHook()
+
+      const todos = [
+        { id: '1', content: 'Review sources', status: 'in_progress' as const },
+      ]
+
+      act(() => {
+        mockClient?.callbacks.onTodoUpdate?.(todos, 'deep_research_agent')
+      })
+
+      expect(mockSetDeepResearchTodos).not.toHaveBeenCalled()
+    })
+
+    test('replay buffer restores root-level todos after refresh', async () => {
+      await setupBufferedHook()
+
+      const todos = [
+        { id: '1', content: 'Replay task', status: 'pending' as const },
+      ]
+
+      act(() => {
+        mockClient?.callbacks.onTodoUpdate?.(todos)
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      expect(replayCommit).toEqual(expect.any(Function))
+
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      expect(updates.deepResearchTodos).toEqual([
+        { id: 'todo-0-replay-task', content: 'Replay task', status: 'pending' },
+      ])
+    })
+
+    test('replay buffer ignores workflow-scoped sub-agent todos after refresh', async () => {
+      await setupBufferedHook()
+
+      const todos = [
+        { id: '1', content: 'Sub-agent task', status: 'pending' as const },
+      ]
+
+      act(() => {
+        mockClient?.callbacks.onTodoUpdate?.(todos, 'researcher-agent')
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      expect(replayCommit).toEqual(expect.any(Function))
+
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      expect(updates).not.toHaveProperty('deepResearchTodos')
+    })
+
     test('onCitationUpdate adds citation to store', async () => {
       await setupConnectedHook()
 

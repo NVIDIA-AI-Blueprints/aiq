@@ -392,4 +392,89 @@ describe('useLoadJobData', () => {
     expect(updates).not.toHaveProperty('reportContentCategory')
     expect(mockSetReportContent).not.toHaveBeenCalled()
   })
+
+  test('imports root-level todos from full stream replay', async () => {
+    let streamCallbacks: {
+      onTodoUpdate: (todos: Array<{ id: string; content: string; status: 'pending' }>, workflow?: string) => void
+      onComplete: () => void
+    } | null = null
+
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-123', status: 'success', error: null })
+    mockCreateDeepResearchClient.mockImplementation(({ callbacks }) => {
+      streamCallbacks = callbacks
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        isConnected: vi.fn(() => false),
+        getLastEventId: vi.fn(() => null),
+      }
+    })
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      const replay = result.current.importJobStream('job-123')
+      await Promise.resolve()
+
+      expect(streamCallbacks).not.toBeNull()
+      streamCallbacks!.onTodoUpdate(
+        [{ id: '1', content: 'Replay task', status: 'pending' }]
+      )
+      streamCallbacks!.onComplete()
+
+      await replay
+    })
+
+    const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+    expect(replayCommit).toEqual(expect.any(Function))
+
+    const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+      currentStatus: 'researching',
+    })
+    expect(updates.deepResearchTodos).toEqual([
+      { id: 'todo-0-replay-task', content: 'Replay task', status: 'pending' },
+    ])
+  })
+
+  test('does not import workflow-scoped sub-agent todos from full stream replay', async () => {
+    let streamCallbacks: {
+      onTodoUpdate: (todos: Array<{ id: string; content: string; status: 'pending' }>, workflow?: string) => void
+      onComplete: () => void
+    } | null = null
+
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-123', status: 'success', error: null })
+    mockCreateDeepResearchClient.mockImplementation(({ callbacks }) => {
+      streamCallbacks = callbacks
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        isConnected: vi.fn(() => false),
+        getLastEventId: vi.fn(() => null),
+      }
+    })
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      const replay = result.current.importJobStream('job-123')
+      await Promise.resolve()
+
+      expect(streamCallbacks).not.toBeNull()
+      streamCallbacks!.onTodoUpdate(
+        [{ id: '1', content: 'Sub-agent task', status: 'pending' }],
+        'researcher-agent'
+      )
+      streamCallbacks!.onComplete()
+
+      await replay
+    })
+
+    const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+    expect(replayCommit).toEqual(expect.any(Function))
+
+    const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+      currentStatus: 'researching',
+    })
+    expect(updates).not.toHaveProperty('deepResearchTodos')
+  })
 })

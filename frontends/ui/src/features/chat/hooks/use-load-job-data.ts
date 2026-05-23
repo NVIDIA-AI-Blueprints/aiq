@@ -38,6 +38,7 @@ import {
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 import type { ResearchPanelTab } from '@/features/layout/types'
+import { normalizeDeepResearchTodos } from '../lib/deep-research-todos'
 
 const EXPIRED_REPORT_MESSAGE = 'This research report is no longer available.'
 const BACKEND_UNREACHABLE_MESSAGE = 'The backend is not reachable. Start the backend and try again.'
@@ -416,13 +417,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             timestamp: now,
           }))
 
-          const todos = buffer.todos
-            ? buffer.todos.map((t, idx) => ({
-                id: `todo-${idx}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`,
-                content: t.content,
-                status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped',
-              }))
-            : undefined
+          const todos = buffer.todos ? normalizeDeepResearchTodos(buffer.todos) : undefined
 
           useChatStore.setState((state) => ({
             ...(buffer.reportContent !== null && {
