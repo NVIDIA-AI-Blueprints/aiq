@@ -62,9 +62,11 @@ const mockLayoutState = () => ({
   rightPanel: null as string | null,
 })
 
+type MockLayoutState = ReturnType<typeof mockLayoutState>
+
 vi.mock('../store', () => ({
   useLayoutStore: Object.assign(
-    vi.fn((selector?: (s: any) => any) => {
+    vi.fn((selector?: (s: MockLayoutState) => unknown) => {
       const state = mockLayoutState()
       return selector ? selector(state) : state
     }),
@@ -149,7 +151,9 @@ describe('InputArea', () => {
   test('renders text area with default placeholder', () => {
     render(<InputArea isAuthenticated={true} />)
 
-    expect(screen.getByPlaceholderText('Check data sources and ask a research question...')).toBeInTheDocument()
+    expect(
+      screen.getByPlaceholderText('Check data sources and ask a research question...')
+    ).toBeInTheDocument()
   })
 
   test('renders with custom placeholder', () => {
@@ -176,15 +180,17 @@ describe('InputArea', () => {
     expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled()
   })
 
-  test('makes the prompt input and send button the first keyboard tab stops', async () => {
+  test('tabs from the prompt input directly to the send button', async () => {
     const user = userEvent.setup()
     render(<InputArea isAuthenticated={true} />)
 
     const input = screen.getByRole('textbox')
-    await user.type(input, 'Hello')
+    await user.tab()
+    expect(input).toHaveFocus()
 
-    expect(input).toHaveAttribute('tabindex', '1')
-    expect(screen.getByRole('button', { name: /send message/i })).toHaveAttribute('tabindex', '2')
+    await user.type(input, 'Hello')
+    await user.tab()
+    expect(screen.getByRole('button', { name: /send message/i })).toHaveFocus()
   })
 
   test('enables send button when message is typed', async () => {
@@ -476,7 +482,7 @@ describe('InputArea', () => {
     expect(screen.getByRole('button', { name: /send response/i })).toBeInTheDocument()
   })
 
-  test('moves the response input after the plan approval button in tab order', () => {
+  test('does not assign positive tab indexes in response mode', () => {
     vi.mocked(useIsCurrentSessionBusy).mockReturnValue(true)
     vi.mocked(useWebSocketChat).mockReturnValue({
       sendMessage: mockSendMessage,
@@ -493,8 +499,8 @@ describe('InputArea', () => {
 
     render(<InputArea isAuthenticated={true} connectionMode="websocket" />)
 
-    expect(screen.getByRole('textbox')).toHaveAttribute('tabindex', '2')
-    expect(screen.getByRole('button', { name: /send response/i })).toHaveAttribute('tabindex', '3')
+    expect(screen.getByRole('textbox')).not.toHaveAttribute('tabindex')
+    expect(screen.getByRole('button', { name: /send response/i })).not.toHaveAttribute('tabindex')
   })
 
   test('input enabled during HITL even when deep research is in progress', async () => {

@@ -74,7 +74,9 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
   // Deep research completion state - disables new submissions after research completes
   const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
-  const deepResearchOwnerConversationId = useChatStore((state) => state.deepResearchOwnerConversationId)
+  const deepResearchOwnerConversationId = useChatStore(
+    (state) => state.deepResearchOwnerConversationId
+  )
 
   // Check for active deep research in conversation messages (persisted state)
   // This handles the case where ephemeral state has been reset (page refresh, session switch)
@@ -191,11 +193,6 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
 
   // Check if we're in response mode (responding to a HITL prompt)
   const isResponseMode = !!pendingInteraction
-  const isPlanApprovalResponse = pendingInteraction?.inputType === 'approval'
-  // Positive tab stops are intentionally limited to the primary chat path so
-  // keyboard users land on the prompt first, unless an approval action is due.
-  const promptInputTabIndex = isPlanApprovalResponse ? 2 : 1
-  const submitButtonTabIndex = isPlanApprovalResponse ? 3 : 2
 
   // DISABLE LOGIC
   // Disable input when:
@@ -389,7 +386,6 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
             resizeable="auto"
             size="medium"
             aria-label={isResponseMode ? 'Response input' : 'Chat message input'}
-            attributes={{ TextAreaElement: { tabIndex: promptInputTabIndex } }}
           />
         </div>
 
@@ -417,6 +413,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 }
               }}
               disabled={isDisabledByAuth}
+              tabIndex={-1}
               aria-label="Toggle data sources connections"
               title="Selected data connections"
             >
@@ -441,14 +438,13 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 }
               }}
               disabled={isDisabledByAuth || !knowledgeLayerAvailable}
+              tabIndex={-1}
               aria-label="Open uploaded files"
-              title={knowledgeLayerAvailable ? "Available files" : "File upload not available"}
+              title={knowledgeLayerAvailable ? 'Available files' : 'File upload not available'}
             >
               <Flex align="center" gap="1">
                 <Document className="h-3 w-3" />
-                <Text kind="label/bold/sm">
-                  {attachedFilesCount}
-                </Text>
+                <Text kind="label/bold/sm">{attachedFilesCount}</Text>
               </Flex>
             </Button>
 
@@ -459,6 +455,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
               multiple
               accept={fileUploadConfig.acceptedTypes}
               className="hidden"
+              tabIndex={-1}
               onChange={handleFileChange}
             />
 
@@ -468,6 +465,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
               size="small"
               onClick={handleAttachClick}
               disabled={isDisabledByAuth || isUploading || isBusy || !knowledgeLayerAvailable}
+              tabIndex={-1}
               aria-label="Attach files"
               title={
                 isBusy
@@ -489,7 +487,8 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 align="end"
                 slotContent={
                   <Text kind="body/regular/sm" className="max-w-xs p-3">
-                    Research completed. For further questions or reports, please create a new session.
+                    Research completed. For further questions or reports, please create a new
+                    session.
                   </Text>
                 }
               >
@@ -508,8 +507,8 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 align="end"
                 slotContent={
                   <Text kind="body/regular/sm" className="max-w-xs p-3">
-                    Research is currently in progress. Chat is paused to prevent generating multiple reports at
-                    the same time.
+                    Research is currently in progress. Chat is paused to prevent generating multiple
+                    reports at the same time.
                   </Text>
                 }
               >
@@ -531,9 +530,12 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 disabled={!message.trim() || disabled}
                 aria-label={isResponseMode ? 'Send response' : 'Send message'}
                 title="Send query"
-                tabIndex={submitButtonTabIndex}
               >
-                {isLoading ? <span className="animate-pulse">...</span> : <Paperplane className="h-4 w-4" />}
+                {isLoading ? (
+                  <span className="animate-pulse">...</span>
+                ) : (
+                  <Paperplane className="h-4 w-4" />
+                )}
               </Button>
             )}
           </Flex>

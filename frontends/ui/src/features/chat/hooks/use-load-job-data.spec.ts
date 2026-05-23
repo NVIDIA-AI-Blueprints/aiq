@@ -4,6 +4,7 @@
 import { renderHook, act } from '@testing-library/react'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import { useLoadJobData } from './use-load-job-data'
+import { useChatStore } from '../store'
 import type { ChatMessage, Conversation } from '../types'
 
 const mockGetJobStatus = vi.fn()
@@ -51,6 +52,7 @@ const createDefaultMessages = (): ChatMessage[] => [
 
 let mockStoreState: {
   currentConversation: MockConversation | null
+  conversations: MockConversation[]
   deepResearchJobId: string | null
   deepResearchStreamLoaded: boolean
   reportContent: string
@@ -60,10 +62,32 @@ let mockStoreState: {
     id: 'conv-1',
     messages: createDefaultMessages(),
   },
+  conversations: [],
   deepResearchJobId: null as string | null,
   deepResearchStreamLoaded: false,
   reportContent: '',
   isDeepResearchStreaming: false,
+}
+
+type MockChatSelectorState = {
+  setReportContent: typeof mockSetReportContent
+  addDeepResearchToolCall: typeof mockAddDeepResearchToolCall
+  completeDeepResearchToolCall: typeof mockCompleteDeepResearchToolCall
+  clearDeepResearch: typeof mockClearDeepResearch
+  setCurrentStatus: typeof mockSetCurrentStatus
+  setLoadedJobId: typeof mockSetLoadedJobId
+  setStreamLoaded: typeof mockSetStreamLoaded
+  stopAllDeepResearchSpinners: typeof mockStopAllDeepResearchSpinners
+  addErrorCard: typeof mockAddErrorCard
+  completeDeepResearch: typeof mockCompleteDeepResearch
+  setStreaming: typeof mockSetStreaming
+  patchConversationMessage: typeof mockPatchConversationMessage
+  addDeepResearchBanner: typeof mockAddDeepResearchBanner
+}
+
+type MockLayoutSelectorState = {
+  openRightPanel: typeof mockOpenRightPanel
+  setResearchPanelTab: typeof mockSetResearchPanelTab
 }
 
 vi.mock('@/adapters/api', () => ({
@@ -75,8 +99,8 @@ vi.mock('@/adapters/api', () => ({
 
 vi.mock('../store', () => ({
   useChatStore: Object.assign(
-    vi.fn((selector?: (s: any) => any) => {
-      const state = {
+    vi.fn((selector?: (s: MockChatSelectorState) => unknown) => {
+      const state: MockChatSelectorState = {
         setReportContent: mockSetReportContent,
         addDeepResearchToolCall: mockAddDeepResearchToolCall,
         completeDeepResearchToolCall: mockCompleteDeepResearchToolCall,
@@ -107,8 +131,8 @@ vi.mock('@/adapters/auth', () => ({
 }))
 
 vi.mock('@/features/layout/store', () => ({
-  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
-    const state = {
+  useLayoutStore: vi.fn((selector?: (s: MockLayoutSelectorState) => unknown) => {
+    const state: MockLayoutSelectorState = {
       openRightPanel: mockOpenRightPanel,
       setResearchPanelTab: mockSetResearchPanelTab,
     }
@@ -124,6 +148,7 @@ describe('useLoadJobData', () => {
         id: 'conv-1',
         messages: createDefaultMessages(),
       },
+      conversations: [],
       deepResearchJobId: null,
       deepResearchStreamLoaded: false,
       reportContent: '',
@@ -283,5 +308,61 @@ describe('useLoadJobData', () => {
     )
     expect(consoleErrorSpy).not.toHaveBeenCalled()
     consoleErrorSpy.mockRestore()
+  })
+
+  test('does not commit full stream replay data after the user switches sessions', async () => {
+    let streamCallbacks: {
+      onOutputUpdate: (content: string, outputCategory?: string) => void
+      onComplete: () => void
+    } | null = null
+
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-123', status: 'success', error: null })
+    mockCreateDeepResearchClient.mockImplementation(({ callbacks }) => {
+      streamCallbacks = callbacks
+      return {
+        connect: vi.fn(),
+        disconnect: vi.fn(),
+        isConnected: vi.fn(() => false),
+        getLastEventId: vi.fn(() => null),
+      }
+    })
+
+    mockStoreState.currentConversation = {
+      id: 'conv-1',
+      messages: [
+        {
+          id: 'tracking-msg',
+          role: 'assistant',
+          content: 'Completed report',
+          timestamp: new Date(),
+          messageType: 'agent_response',
+          deepResearchJobId: 'job-123',
+          deepResearchJobStatus: 'success',
+          showViewReport: true,
+        },
+      ],
+    }
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      const replay = result.current.importJobStream('job-123')
+      await Promise.resolve()
+
+      mockStoreState.currentConversation = {
+        id: 'conv-2',
+        messages: [],
+      }
+      expect(streamCallbacks).not.toBeNull()
+      streamCallbacks!.onOutputUpdate('Report from the previous session', 'final_report')
+      streamCallbacks!.onComplete()
+
+      await replay
+    })
+
+    expect(useChatStore.setState).not.toHaveBeenCalled()
+    expect(mockSetLoadedJobId).not.toHaveBeenCalled()
+    expect(mockSetStreamLoaded).not.toHaveBeenCalled()
+    expect(mockOpenRightPanel).not.toHaveBeenCalled()
   })
 })

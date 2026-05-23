@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { render, screen } from '@/test-utils'
+import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { AgentPrompt } from './AgentPrompt'
 import { useChatStore } from '../store'
@@ -112,7 +113,8 @@ describe('AgentPrompt', () => {
     expect(screen.getByText(/\d{1,2}:\d{2}/)).toBeInTheDocument()
   })
 
-  test('makes plan approval the first keyboard tab stop when actions are available', () => {
+  test('tabs through plan approval actions in DOM order', async () => {
+    const user = userEvent.setup()
     useChatStore.setState({ respondToInteractionFn: vi.fn() })
 
     render(
@@ -123,6 +125,15 @@ describe('AgentPrompt', () => {
       />
     )
 
-    expect(screen.getByRole('button', { name: /approve plan/i })).toHaveAttribute('tabindex', '1')
+    const approveButton = screen.getByRole('button', { name: /approve plan/i })
+    const rejectButton = screen.getByRole('button', { name: /reject plan/i })
+
+    expect(approveButton).not.toHaveAttribute('tabindex')
+    expect(rejectButton).not.toHaveAttribute('tabindex')
+
+    await user.tab()
+    expect(approveButton).toHaveFocus()
+    await user.tab()
+    expect(rejectButton).toHaveFocus()
   })
 })

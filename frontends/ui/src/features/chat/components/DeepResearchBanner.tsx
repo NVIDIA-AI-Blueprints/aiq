@@ -137,25 +137,34 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
     setResearchPanelTab(config.buttonTab)
     openRightPanel('research')
     // For incomplete jobs (starting), the live SSE connection is already populating data
-  }, [config.buttonTab, openRightPanel, setResearchPanelTab, jobId, loadResearchPanelTab, isJobComplete])
+  }, [
+    config.buttonTab,
+    openRightPanel,
+    setResearchPanelTab,
+    jobId,
+    loadResearchPanelTab,
+    isJobComplete,
+  ])
 
-  // Render action button (same for all banner types)
-  const renderActions = () => (
-    <Button
-      kind="secondary"
-      size="small"
-      onClick={handleButtonClick}
-      aria-label={config.buttonText}
-    >
-      {config.buttonText}
-    </Button>
-  )
+  // Keep archived/error-state banners informational. The report CTA is the
+  // only banner action we keep visible to avoid competing recovery paths.
+  const actions =
+    bannerType === 'success' ? (
+      <Button
+        kind="secondary"
+        size="small"
+        onClick={handleButtonClick}
+        aria-label={config.buttonText}
+      >
+        {config.buttonText}
+      </Button>
+    ) : undefined
 
   return (
     <Flex direction="col" gap="1" className="w-full">
       <Banner
         slotSubheading={config.subheading}
-        slotActions={renderActions()}
+        slotActions={actions}
         kind="header"
         status={config.status}
         actionsPosition="right"
