@@ -833,20 +833,22 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
   /**
    * Initialize WebSocket client when conversation changes
    */
+  const currentConversationId = currentConversation?.id
+
   useEffect(() => {
-    if (!currentConversation || !autoConnect) return
+    if (!currentConversationId || !autoConnect) return
 
     // Create new client if needed
     if (!wsClientRef.current) {
       wsClientRef.current = createNATWebSocketClient({
-        conversationId: currentConversation.id,
+        conversationId: currentConversationId,
         callbacks: createCallbacks(),
         onBeforeReconnect: refreshAuthBeforeReconnect,
       })
       wsClientRef.current.connect()
     } else {
       // Update conversation ID on existing client
-      wsClientRef.current.updateConversationId(currentConversation.id)
+      wsClientRef.current.updateConversationId(currentConversationId)
     }
 
     // Cleanup on unmount or conversation switch.
@@ -867,6 +869,13 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         wsClientRef.current.disconnect()
         wsClientRef.current = null
       }
+      const { isStreaming: wasStreaming, isLoading: wasLoading, currentStatus: status } =
+        useChatStore.getState()
+      if (wasStreaming || wasLoading || status !== null) {
+        setStreaming(false)
+        setLoading(false)
+        setCurrentStatus(null)
+      }
       pendingOutgoingRef.current = null
       lastSentOutgoingRef.current = null
       consecutiveAuthExpiredRef.current = 0
@@ -874,7 +883,15 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       currentThinkingStepIdRef.current = null
       currentStatusRef.current = null
     }
-  }, [currentConversation?.id, autoConnect, createCallbacks, refreshAuthBeforeReconnect])
+  }, [
+    currentConversationId,
+    autoConnect,
+    createCallbacks,
+    refreshAuthBeforeReconnect,
+    setStreaming,
+    setLoading,
+    setCurrentStatus,
+  ])
 
   /**
    * Send a message via WebSocket

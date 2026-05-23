@@ -485,6 +485,12 @@ export const useChatStore = create<ChatStore>()(
           set(
             {
               currentConversation: null,
+              // Clear shallow WebSocket state for draft sessions. A dev
+              // reload or abandoned socket can otherwise leave the global
+              // streaming flag true and make a fresh session look busy.
+              isStreaming: false,
+              isLoading: false,
+              currentUserMessageId: null,
               // Clear all ResearchPanel content for draft session
               thinkingSteps: [],
               activeThinkingStepId: null,

@@ -795,6 +795,26 @@ describe('useWebSocketChat', () => {
     expect(mockSetLoading).toHaveBeenCalledWith(false)
   })
 
+  test('cleanup clears shallow streaming state when the socket unmounts mid-request', () => {
+    mockStoreState.isStreaming = true
+    mockStoreState.isLoading = true
+    mockStoreState.currentStatus = 'thinking'
+
+    const { unmount } = renderWebSocketHook()
+    mockSetStreaming.mockClear()
+    mockSetLoading.mockClear()
+    mockSetCurrentStatus.mockClear()
+
+    act(() => {
+      unmount()
+    })
+
+    expect(mockWsClient.disconnect).toHaveBeenCalled()
+    expect(mockSetStreaming).toHaveBeenCalledWith(false)
+    expect(mockSetLoading).toHaveBeenCalledWith(false)
+    expect(mockSetCurrentStatus).toHaveBeenCalledWith(null)
+  })
+
   test('maps human prompt types correctly', () => {
     renderWebSocketHook()
 

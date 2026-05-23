@@ -367,6 +367,37 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().conversations.some((c) => c.id === 'with-user')).toBe(true)
     })
 
+    test('startNewSessionDraft clears stale shallow streaming state', () => {
+      const conv: Conversation = {
+        ...uploadOnlyConv('stale-thinking'),
+        messages: [
+          {
+            id: 'u1',
+            role: 'user',
+            content: 'hello',
+            timestamp: new Date(),
+            messageType: 'user',
+          },
+        ],
+      }
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: conv,
+        conversations: [conv],
+        isStreaming: true,
+        isLoading: true,
+        currentUserMessageId: 'u1',
+        currentStatus: 'thinking',
+      })
+
+      useChatStore.getState().startNewSessionDraft()
+
+      expect(useChatStore.getState().isStreaming).toBe(false)
+      expect(useChatStore.getState().isLoading).toBe(false)
+      expect(useChatStore.getState().currentUserMessageId).toBeNull()
+      expect(useChatStore.getState().currentStatus).toBeNull()
+    })
+
     test('selectConversation removes prior upload-only session when switching away', () => {
       const uploadOnly = uploadOnlyConv('u-only')
       const other: Conversation = {
