@@ -70,13 +70,14 @@ export const prunePlanMessages = (
  * - thinkingSteps (stripped: content removed, deep research steps dropped)
  * - planMessages (capped: text 10k, userResponse 2k — cannot be refetched)
  * - enabledDataSources, messageFiles (for "Selected Data Sources")
+ * - deepResearchTodos (lightweight last-known task state)
  * - Deep research job metadata (for restoration)
  * - HITL/prompt fields (for interaction state)
  * - Other message type data (status, file, error, banner data)
  *
  * REMOVES (Can fetch from backend via importStreamOnly):
- * - reportContent, citations, deepResearchTodos, deepResearchLLMSteps,
- *   deepResearchAgents, deepResearchToolCalls, deepResearchFiles
+ * - reportContent, citations, deepResearchLLMSteps, deepResearchAgents,
+ *   deepResearchToolCalls, deepResearchFiles
  * - intermediateSteps (legacy, unused)
  * - thinkingStep content/rawPayload (never displayed in ChatThinking)
  * - Deep research thinking steps (refetched from async API)
@@ -85,7 +86,6 @@ export const pruneMessageForStorage = (message: ChatMessage): ChatMessage => {
   const {
     reportContent: _reportContent,
     citations: _citations,
-    deepResearchTodos: _deepResearchTodos,
     deepResearchLLMSteps: _deepResearchLLMSteps,
     deepResearchAgents: _deepResearchAgents,
     deepResearchToolCalls: _deepResearchToolCalls,

@@ -13,9 +13,17 @@ const mockSetResearchPanelTab = vi.fn()
 let mockRightPanel: string | null = 'research'
 let mockResearchPanelTab = 'tasks'
 
+interface MockLayoutSelectorState {
+  rightPanel: string | null
+  researchPanelTab: string
+  setResearchPanelTab: typeof mockSetResearchPanelTab
+  closeRightPanel: typeof mockCloseRightPanel
+  openRightPanel: typeof mockOpenRightPanel
+}
+
 vi.mock('../store', () => ({
-  useLayoutStore: vi.fn((selector?: (s: any) => any) => {
-    const state = {
+  useLayoutStore: vi.fn((selector?: (s: MockLayoutSelectorState) => unknown) => {
+    const state: MockLayoutSelectorState = {
       rightPanel: mockRightPanel,
       researchPanelTab: mockResearchPanelTab,
       setResearchPanelTab: mockSetResearchPanelTab,
@@ -43,11 +51,13 @@ const mockLoadResearchPanelTab = vi.fn()
 const mockCancelCurrentJob = vi.fn()
 
 vi.mock('@/features/chat', () => ({
-  useChatStore: (selector: (state: {
-    isDeepResearchStreaming: boolean
-    deepResearchJobId: string | null
-    deepResearchStreamLoaded: boolean
-  }) => unknown) =>
+  useChatStore: (
+    selector: (state: {
+      isDeepResearchStreaming: boolean
+      deepResearchJobId: string | null
+      deepResearchStreamLoaded: boolean
+    }) => unknown
+  ) =>
     selector({
       isDeepResearchStreaming: mockIsDeepResearchStreaming,
       deepResearchJobId: mockDeepResearchJobId,
@@ -63,21 +73,12 @@ vi.mock('@/features/chat', () => ({
   }),
 }))
 
-// Mock the tab components
-vi.mock('./PlanTab', () => ({
-  PlanTab: () => <div data-testid="plan-tab">Plan Tab Content</div>,
-}))
-
 vi.mock('./TasksTab', () => ({
   TasksTab: () => <div data-testid="tasks-tab">Tasks Tab Content</div>,
 }))
 
 vi.mock('./ThinkingTab', () => ({
   ThinkingTab: () => <div data-testid="thinking-tab">Thinking Tab Content</div>,
-}))
-
-vi.mock('./CitationsTab', () => ({
-  CitationsTab: () => <div data-testid="citations-tab">Citations Tab Content</div>,
 }))
 
 vi.mock('./ReportTab', () => ({
@@ -124,11 +125,11 @@ describe('ResearchPanel', () => {
     test('renders all tab options', () => {
       render(<ResearchPanel isAuthenticated={true} />)
 
-      expect(screen.getByText('Plan')).toBeInTheDocument()
       expect(screen.getByText('Tasks')).toBeInTheDocument()
       expect(screen.getByText('Thinking')).toBeInTheDocument()
-      expect(screen.getByText('Citations')).toBeInTheDocument()
       expect(screen.getByText('Report')).toBeInTheDocument()
+      expect(screen.queryByText('Plan')).not.toBeInTheDocument()
+      expect(screen.queryByText('Citations')).not.toBeInTheDocument()
     })
 
     test('calls setResearchPanelTab when tab is clicked', async () => {
@@ -136,14 +137,11 @@ describe('ResearchPanel', () => {
 
       render(<ResearchPanel isAuthenticated={true} />)
 
-      await user.click(screen.getByText('Plan'))
-      expect(mockSetResearchPanelTab).toHaveBeenCalledWith('plan')
-
       await user.click(screen.getByText('Thinking'))
       expect(mockSetResearchPanelTab).toHaveBeenCalledWith('thinking')
 
-      await user.click(screen.getByText('Citations'))
-      expect(mockSetResearchPanelTab).toHaveBeenCalledWith('citations')
+      await user.click(screen.getByText('Report'))
+      expect(mockSetResearchPanelTab).toHaveBeenCalledWith('report')
     })
 
     test('delegates report tab loading to the shared research panel loader', async () => {
@@ -158,7 +156,7 @@ describe('ResearchPanel', () => {
     })
 
     test('displays correct tab content based on researchPanelTab', () => {
-      const tabs = ['tasks', 'plan', 'thinking', 'citations', 'report'] as const
+      const tabs = ['tasks', 'thinking', 'report'] as const
       for (const tab of tabs) {
         mockResearchPanelTab = tab
         const { unmount } = render(<ResearchPanel isAuthenticated={true} />)
@@ -250,11 +248,11 @@ describe('ResearchPanel', () => {
     test('has all tab options', () => {
       render(<ResearchPanel isAuthenticated={true} />)
 
-      expect(screen.getByText('Plan')).toBeInTheDocument()
       expect(screen.getByText('Tasks')).toBeInTheDocument()
       expect(screen.getByText('Thinking')).toBeInTheDocument()
-      expect(screen.getByText('Citations')).toBeInTheDocument()
       expect(screen.getByText('Report')).toBeInTheDocument()
+      expect(screen.queryByText('Plan')).not.toBeInTheDocument()
+      expect(screen.queryByText('Citations')).not.toBeInTheDocument()
     })
   })
 

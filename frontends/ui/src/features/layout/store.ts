@@ -23,7 +23,7 @@ import { createDataSourcesClient, type DataSourceFromAPI } from '@/adapters/api'
 const initialState: LayoutState = {
   isSessionsPanelOpen: false,
   rightPanel: 'data-sources',
-  researchPanelTab: 'plan',
+  researchPanelTab: 'tasks',
   dataSourcesPanelTab: 'connections',
   enabledDataSourceIds: [], // Start empty, populated when data sources are fetched
   theme: 'system',

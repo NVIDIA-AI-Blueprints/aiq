@@ -1762,6 +1762,45 @@ describe('useChatStore', () => {
       expect(messages.every((m) => m.messageType !== 'error')).toBe(true)
     })
 
+    test('restores last known deep research todos from the stored agent response', () => {
+      const storedTodos = [
+        { id: 'todo-1', content: 'Search current sources', status: 'completed' as const },
+        { id: 'todo-2', content: 'Draft report', status: 'in_progress' as const },
+      ]
+      const conv = createConversation([
+        {
+          role: 'assistant',
+          messageType: 'agent_response',
+          content: 'Report is still loading',
+          deepResearchJobId: 'job-123',
+          deepResearchTodos: storedTodos,
+          deepResearchLLMSteps: [
+            {
+              id: 'llm-1',
+              name: 'model',
+              content: 'heavy content',
+              timestamp: new Date(),
+              isComplete: true,
+            },
+          ],
+        },
+      ])
+
+      useChatStore.setState({
+        currentConversation: conv,
+        conversations: [conv],
+        deepResearchTodos: [],
+        deepResearchLLMSteps: [],
+      })
+
+      useChatStore.getState().restoreSessionState(conv)
+
+      const state = useChatStore.getState()
+      expect(state.deepResearchTodos).toEqual(storedTodos)
+      expect(state.deepResearchLLMSteps).toEqual([])
+      expect(state.deepResearchJobId).toBe('job-123')
+    })
+
     test('does NOT add error card when user message has no thinking steps', () => {
       const conv = createConversation([{ role: 'user', messageType: 'user', content: 'Hello' }])
 

@@ -19,7 +19,7 @@ describe('useLayoutStore', () => {
     useLayoutStore.setState({
       isSessionsPanelOpen: false,
       rightPanel: 'data-sources',
-      researchPanelTab: 'plan',
+      researchPanelTab: 'tasks',
       dataSourcesPanelTab: 'connections',
       enabledDataSourceIds: [],
       theme: 'system',
@@ -36,7 +36,7 @@ describe('useLayoutStore', () => {
 
       expect(state.isSessionsPanelOpen).toBe(false)
       expect(state.rightPanel).toBe('data-sources')
-      expect(state.researchPanelTab).toBe('plan')
+      expect(state.researchPanelTab).toBe('tasks')
       expect(state.dataSourcesPanelTab).toBe('connections')
     })
   })
@@ -137,12 +137,6 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setResearchPanelTab('thinking')
 
       expect(useLayoutStore.getState().researchPanelTab).toBe('thinking')
-    })
-
-    test('sets citations tab', () => {
-      useLayoutStore.getState().setResearchPanelTab('citations')
-
-      expect(useLayoutStore.getState().researchPanelTab).toBe('citations')
     })
 
     test('sets report tab', () => {

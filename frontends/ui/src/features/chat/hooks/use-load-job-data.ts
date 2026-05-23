@@ -41,7 +41,7 @@ import type { ResearchPanelTab } from '@/features/layout/types'
 
 const EXPIRED_REPORT_MESSAGE = 'This research report is no longer available.'
 const BACKEND_UNREACHABLE_MESSAGE = 'The backend is not reachable. Start the backend and try again.'
-const STREAM_BACKED_RESEARCH_TABS = new Set<ResearchPanelTab>(['tasks', 'thinking', 'citations'])
+const STREAM_BACKED_RESEARCH_TABS = new Set<ResearchPanelTab>(['tasks', 'thinking'])
 
 interface JobLoadScope {
   jobId: string
@@ -821,8 +821,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
    *
    * This keeps "View Report", banner actions, and direct tab clicks aligned:
    * - Report tab fetches the final report quickly via /report.
-   * - Tasks/Thinking/Citations hydrate rich details by replaying /stream.
-   * - Plan is local session state only and has no backend replay endpoint.
+   * - Tasks/Thinking hydrate rich details by replaying /stream.
    */
   const loadResearchPanelTab = useCallback(
     async (jobId: string, tab: ResearchPanelTab): Promise<void> => {

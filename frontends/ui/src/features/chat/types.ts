@@ -153,7 +153,7 @@ export interface ChatMessage {
 
   // ResearchPanel persistence fields (for agent_response messages)
 
-  /** Plan messages shown in PlanTab */
+  /** Plan messages shown in chat/HITL restore flows */
   planMessages?: PlanMessage[]
   /** Task todos shown in TasksTab */
   deepResearchTodos?: DeepResearchTodo[]
@@ -264,7 +264,7 @@ export interface CitationSource {
   isCited?: boolean
 }
 
-/** Plan message for PlanTab display */
+/** Plan message for chat/HITL display and restore flows */
 export interface PlanMessage {
   id: string
   /** The text content (clarification question, plan preview, etc.) */
@@ -421,8 +421,8 @@ export interface ChatState {
   /** Whether the full stream data (artifacts, tool calls, etc.) has been loaded for current job */
   deepResearchStreamLoaded: boolean
 
-  // Plan state (for PlanTab in ResearchPanel)
-  /** Messages for the PlanTab (clarification questions, plan preview, etc.) */
+  // Plan state (for chat/HITL restore flows)
+  /** Messages for clarification questions, plan previews, and approvals. */
   planMessages: PlanMessage[]
 }
 
@@ -650,7 +650,7 @@ export interface ChatActions {
   /** Add a file artifact (on artifact.update type: "file") */
   addDeepResearchFile: (file: Omit<DeepResearchFile, 'id' | 'timestamp'>) => string
 
-  // Plan actions (for PlanTab)
+  // Plan actions (for chat/HITL restore flows)
 
   /** Add a plan message (clarification, plan preview, etc.) */
   addPlanMessage: (message: Omit<PlanMessage, 'id' | 'timestamp'>) => string

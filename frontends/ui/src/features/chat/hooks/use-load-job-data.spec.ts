@@ -195,7 +195,7 @@ describe('useLoadJobData', () => {
     expect(mockCreateDeepResearchClient).not.toHaveBeenCalled()
   })
 
-  test('loads citations tab data by replaying the full stream', async () => {
+  test('loads thinking tab data by replaying the full stream', async () => {
     mockGetJobStatus.mockResolvedValue({ job_id: 'job-123', status: 'success', error: null })
     mockCreateDeepResearchClient.mockImplementation(({ callbacks }) => ({
       connect: vi.fn(() => callbacks.onComplete?.()),
@@ -207,10 +207,10 @@ describe('useLoadJobData', () => {
     const { result } = renderHook(() => useLoadJobData())
 
     await act(async () => {
-      await result.current.loadResearchPanelTab('job-123', 'citations')
+      await result.current.loadResearchPanelTab('job-123', 'thinking')
     })
 
-    expect(mockSetResearchPanelTab).toHaveBeenCalledWith('citations')
+    expect(mockSetResearchPanelTab).toHaveBeenCalledWith('thinking')
     expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
     expect(mockGetJobReport).not.toHaveBeenCalled()
     expect(mockCreateDeepResearchClient).toHaveBeenCalledWith(
@@ -219,20 +219,6 @@ describe('useLoadJobData', () => {
         authToken: 'token-123',
       })
     )
-  })
-
-  test('does not load backend data for plan tab', async () => {
-    const { result } = renderHook(() => useLoadJobData())
-
-    await act(async () => {
-      await result.current.loadResearchPanelTab('job-123', 'plan')
-    })
-
-    expect(mockSetResearchPanelTab).toHaveBeenCalledWith('plan')
-    expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
-    expect(mockGetJobStatus).not.toHaveBeenCalled()
-    expect(mockGetJobReport).not.toHaveBeenCalled()
-    expect(mockCreateDeepResearchClient).not.toHaveBeenCalled()
   })
 
   test('marks unavailable completed report expired without surfacing a console error', async () => {

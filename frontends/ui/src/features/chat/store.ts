@@ -119,11 +119,7 @@ const createResilientStorage = (): PersistStorage<PersistedChatState> | undefine
         conversations.map((c) => ({
           ...c,
           messages: c.messages.filter(
-            (m) =>
-              !(
-                m.messageType === 'error' &&
-                m.errorData?.errorCode?.startsWith('connection.')
-              )
+            (m) => !(m.messageType === 'error' && m.errorData?.errorCode?.startsWith('connection.'))
           ),
         }))
 
@@ -219,7 +215,7 @@ const initialState: ChatState = {
   deepResearchToolCalls: [],
   deepResearchFiles: [],
   deepResearchStreamLoaded: false,
-  // State for PlanTab
+  // State for HITL plan/chat messages
   planMessages: [],
 }
 
@@ -2730,7 +2726,7 @@ export const useChatStore = create<ChatStore>()(
         },
 
         // ============================================================
-        // Actions for PlanTab messages
+        // Actions for plan/HITL messages
         // ============================================================
 
         addPlanMessage: (message: Omit<PlanMessage, 'id' | 'timestamp'>) => {
@@ -2852,10 +2848,10 @@ export const useChatStore = create<ChatStore>()(
           const restoredPlanMessages =
             unrespondedPrompt?.planMessages || lastAgentResponse?.planMessages || []
 
-          // NOTE: Heavy research data fields are NO LONGER restored from localStorage
-          // They were removed by pruneMessageForStorage to save space (~96% reduction)
-          // Research data will be fetched from backend on-demand via importStreamOnly()
-          // when user opens ResearchPanel tabs or clicks "View Report"
+          // Restore only lightweight local research state. Heavy stream details
+          // are removed by pruneMessageForStorage and fetched on demand via
+          // importStreamOnly() when the user opens ResearchPanel tabs.
+          const restoredDeepResearchTodos = lastAgentResponse?.deepResearchTodos || []
 
           set(
             {
@@ -2865,7 +2861,7 @@ export const useChatStore = create<ChatStore>()(
               reportContent: '',
               reportContentCategory: null,
               deepResearchCitations: [],
-              deepResearchTodos: [],
+              deepResearchTodos: restoredDeepResearchTodos,
               deepResearchLLMSteps: [],
               deepResearchAgents: [],
               deepResearchToolCalls: [],

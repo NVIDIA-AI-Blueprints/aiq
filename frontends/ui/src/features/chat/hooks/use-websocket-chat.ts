@@ -629,7 +629,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         }
         setPendingInteraction(interaction)
 
-        // Add to PlanTab FIRST so it's captured when the prompt message is
+        // Add to local plan state FIRST so it's captured when the prompt message is
         // saved (addAgentPrompt below snapshots planMessages for session
         // restoration).
         addPlanMessage({
