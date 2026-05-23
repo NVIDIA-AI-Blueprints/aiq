@@ -19,12 +19,14 @@ members = [
     "aiq-api",
     "aiq-debug",
     "aiq-research-cli",
+    "brave-web-search",
     "deepsearch-qa-evaluator",
     "exa-web-search",
     "freshqa-eval",
     "google-scholar-paper-search",
     "knowledge-layer",
     "tavily-web-search",
+    "tinyfish-web-search",
 ]
 overrides = [
     { name = "authlib", specifier = ">=1.6.11,<2" },
@@ -271,6 +273,7 @@ dev = [
     { name = "aiq-api" },
     { name = "aiq-debug" },
     { name = "aiq-research-cli" },
+    { name = "brave-web-search" },
     { name = "dask", extra = ["distributed"] },
     { name = "exa-web-search" },
     { name = "google-scholar-paper-search" },
@@ -283,6 +286,7 @@ dev = [
     { name = "pytest-env" },
     { name = "ruff" },
     { name = "tavily-web-search" },
+    { name = "tinyfish-web-search" },
     { name = "yapf" },
 ]
 
@@ -331,6 +335,7 @@ dev = [
     { name = "aiq-api", editable = "frontends/aiq_api" },
     { name = "aiq-debug", editable = "frontends/debug" },
     { name = "aiq-research-cli", editable = "frontends/cli" },
+    { name = "brave-web-search", editable = "sources/brave_web_search" },
     { name = "dask", extras = ["distributed"], specifier = ">=2024.1.0" },
     { name = "exa-web-search", editable = "sources/exa_web_search" },
     { name = "google-scholar-paper-search", editable = "sources/google_scholar_paper_search" },
@@ -343,6 +348,7 @@ dev = [
     { name = "pytest-env", specifier = ">=1.1.0" },
     { name = "ruff", specifier = "~=0.15.1" },
     { name = "tavily-web-search", editable = "sources/tavily_web_search" },
+    { name = "tinyfish-web-search", editable = "sources/tinyfish_web_search" },
     { name = "yapf", specifier = ">=0.40.0" },
 ]
 
@@ -728,6 +734,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/63/9a/fec38644694abfaae
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9d/2a/9186535ce58db529927f6cf5990a849aa9e052eea3e2cfefe20b9e1802da/bracex-2.6-py3-none-any.whl", hash = "sha256:0b0049264e7340b3ec782b5cb99beb325f36c3782a32e36e876452fd49a09952", size = 11508, upload-time = "2025-06-22T19:12:29.781Z" },
 ]
+
+[[package]]
+name = "brave-web-search"
+version = "1.0.0"
+source = { editable = "sources/brave_web_search" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.0.0" }]
 
 [[package]]
 name = "build"
@@ -6013,6 +6030,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/78/a7/f8ead382fce0243cb625c4f266e66c27f65ae65ee9e77f59ea1653b6d730/tiktoken-0.12.0-cp313-cp313t-musllinux_1_2_x86_64.whl", hash = "sha256:0ee8f9ae00c41770b5f9b0bb1235474768884ae157de3beb5439ca0fd70f3e25", size = 1253794, upload-time = "2025-10-06T20:22:16.624Z" },
     { url = "https://files.pythonhosted.org/packages/93/e0/6cc82a562bc6365785a3ff0af27a2a092d57c47d7a81d9e2295d8c36f011/tiktoken-0.12.0-cp313-cp313t-win_amd64.whl", hash = "sha256:dc2dd125a62cb2b3d858484d6c614d136b5b848976794edfb63688d539b8b93f", size = 878777, upload-time = "2025-10-06T20:22:18.036Z" },
 ]
+
+[[package]]
+name = "tinyfish-web-search"
+version = "1.0.0"
+source = { editable = "sources/tinyfish_web_search" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.0.0" }]
 
 [[package]]
 name = "tokenizers"

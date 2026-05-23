@@ -420,6 +420,8 @@ f'<Document href="{url}">\n<title>\n{title}\n</title>\n{content}\n</Document>'
 |---|---|---|---|
 | Tavily Web Search | `tavily_web_search` | `sources/tavily_web_search` | `TAVILY_API_KEY` |
 | Exa Web Search | `exa_web_search` | `sources/exa_web_search` | `EXA_API_KEY` |
+| Brave Web Search | `brave_web_search` | `sources/brave_web_search` | `BRAVE_API_KEY` |
+| TinyFish Web Search | `tinyfish_web_search` | `sources/tinyfish_web_search` | `TINYFISH_API_KEY` |
 | Google Scholar | `paper_search` | `sources/google_scholar_paper_search` | `SERPER_API_KEY` |
 | Knowledge Layer | `knowledge_retrieval` | `sources/knowledge_layer` | (varies by backend) |
 

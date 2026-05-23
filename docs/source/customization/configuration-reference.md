@@ -197,6 +197,55 @@ functions:
 - **`fast`** -- Optimized for low latency. Returns results quickly at the cost of recall and semantic depth. Use for interactive UIs, high-volume calls, or when the query is narrow and keyword-like.
 - **`deep`** -- Optimized for thoroughness. Runs a more expensive semantic search with broader retrieval. Use for research-quality queries where completeness matters more than speed.
 
+### `brave_web_search`
+
+Web search powered by the [Brave Search API](https://api.search.brave.com/).
+
+```yaml
+functions:
+  web_search_tool:
+    _type: brave_web_search
+    max_results: 5
+    country: US
+    search_lang: en
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_results` | `int` | `5` | Maximum number of web results to return. Brave supports up to 20 web results per request. |
+| `api_key` | `str` | `None` | Brave Search API subscription token. Falls back to `BRAVE_API_KEY` environment variable. |
+| `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
+| `country` | `str` | `"US"` | Two-character country code for search results. |
+| `search_lang` | `str` | `"en"` | Language code for search results. |
+| `safesearch` | `str` | `"moderate"` | Adult-content filtering mode: `off`, `moderate`, or `strict`. |
+| `freshness` | `str` | `None` | Optional page-age filter such as `pd`, `pw`, `pm`, `py`, or `YYYY-MM-DDtoYYYY-MM-DD`. |
+| `timeout` | `float` | `20.0` | HTTP request timeout in seconds. |
+| `max_content_length` | `int` | `10000` | Truncate each result's snippet text to this many characters. Set to `None` to disable truncation. |
+
+### `tinyfish_web_search`
+
+Web search powered by the [TinyFish Search API](https://docs.tinyfish.ai/search-api).
+
+```yaml
+functions:
+  web_search_tool:
+    _type: tinyfish_web_search
+    max_results: 5
+    location: US
+    language: en
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_results` | `int` | `5` | Maximum number of search results to return from the response. |
+| `api_key` | `str` | `None` | TinyFish API key. Falls back to `TINYFISH_API_KEY` environment variable. |
+| `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
+| `location` | `str` | `"US"` | Country code for geo-targeted results. |
+| `language` | `str` | `"en"` | Language code for result language. |
+| `page` | `int` | `0` | Search result page number, starting from `0`. |
+| `timeout` | `float` | `20.0` | HTTP request timeout in seconds. |
+| `max_content_length` | `int` | `10000` | Truncate each result's snippet text to this many characters. Set to `None` to disable truncation. |
+
 ### `paper_search`
 
 Academic paper search through Google Scholar (using the [Serper API](https://serper.dev/)).

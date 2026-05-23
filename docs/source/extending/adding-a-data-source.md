@@ -460,6 +460,8 @@ async def search(self, query: str) -> str:
 |---|---|---|---|
 | Tavily Web Search | `tavily_web_search` | `sources/tavily_web_search` | General web search through Tavily API |
 | Exa Web Search | `exa_web_search` | `sources/exa_web_search` | General web search through Exa API |
+| Brave Web Search | `brave_web_search` | `sources/brave_web_search` | General web search through Brave Search API |
+| TinyFish Web Search | `tinyfish_web_search` | `sources/tinyfish_web_search` | General web search through TinyFish Search API |
 | Google Scholar | `paper_search` | `sources/google_scholar_paper_search` | Academic papers through Serper/Google Scholar |
 | Knowledge Layer | `knowledge_retrieval` | `sources/knowledge_layer` | Document retrieval through pluggable backends |
 

@@ -44,7 +44,7 @@ Tools not listed in any data source entry (e.g., utility tools like "think") are
 | `name` | string | *required* | Display name shown in the UI |
 | `description` | string | `""` | Human-readable description shown in the UI |
 | `tools` | list[string] | `[]` | NAT function names or function group names belonging to this source |
-| `requires_auth` | bool | `false` | If `true`, the UI greys out this source until the user signs in. Use for sources that need user-level OAuth tokens (e.g., enterprise SSO). Sources that use backend API keys (Tavily, Serper) should leave this `false`. |
+| `requires_auth` | bool | `false` | If `true`, the UI greys out this source until the user signs in. Use for sources that need user-level OAuth tokens (e.g., enterprise SSO). Sources that use backend API keys (Tavily, Exa, Brave, TinyFish, Serper) should leave this `false`. |
 | `default_enabled` | bool | `true` | Whether the source is enabled by default when a user first loads the UI |
 
 ## Auto-Inherit: Agents Get All Registry Tools by Default

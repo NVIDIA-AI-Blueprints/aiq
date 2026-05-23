@@ -263,6 +263,8 @@ For complete examples with NGC-specific flags, see `deploy/helm/README.md` in th
 | Key | Description |
 |-----|-------------|
 | `EXA_API_KEY` | Exa API key for web search |
+| `BRAVE_API_KEY` | Brave Search API key for web search |
+| `TINYFISH_API_KEY` | TinyFish API key for web search |
 | `SERPER_API_KEY` | Serper API key for Google search |
 | `JINA_API_KEY` | Jina API key |
 | `WANDB_API_KEY` | Weights & Biases API key |

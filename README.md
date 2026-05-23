@@ -100,10 +100,10 @@ This project is for:
 
 
 **Optional requirements:**
-- Tavily API key (for web search functionality)
+- Tavily, Exa, Brave, or TinyFish API key (for web search functionality)
 - Serper API key (for academic paper search functionality)
 
-> **Note:** Configure at least one data source (Tavily web search, Serper search tool, or knowledge layer) to enable research functionality.
+> **Note:** Configure at least one data source (web search, Serper search tool, or knowledge layer) to enable research functionality.
 
 If these optional API keys are not provided, the agent continues to operate without the corresponding search capabilities. Refer to [Obtain API Keys](#obtain-api-keys) for details.
 
@@ -176,6 +176,9 @@ uv pip install -e ./frontends/benchmarks/freshqa
 
 # Install data sources (pick what you need)
 uv pip install -e ./sources/tavily_web_search
+uv pip install -e ./sources/exa_web_search
+uv pip install -e ./sources/brave_web_search
+uv pip install -e ./sources/tinyfish_web_search
 uv pip install -e ./sources/google_scholar_paper_search
 uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 ```
@@ -187,6 +190,9 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 | ---------- | -------------------- | ------------------------- | ----------------------------------------------------------- |
 | NVIDIA API | `NVIDIA_API_KEY`     | LLM inference through NIM | Yes                                                         |
 | Tavily     | `TAVILY_API_KEY`     | Web search                | No (if not specified, agent continues without web search)   |
+| Exa        | `EXA_API_KEY`        | Web search                | No (if not specified, agent continues without Exa search)   |
+| Brave      | `BRAVE_API_KEY`      | Web search                | No (if not specified, agent continues without Brave search) |
+| TinyFish   | `TINYFISH_API_KEY`   | Web search                | No (if not specified, agent continues without TinyFish search) |
 | Serper     | `SERPER_API_KEY`     | Academic paper search     | No (if not specified, agent continues without paper search) |
 
 
@@ -200,6 +206,21 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 1. Sign in to [Tavily](https://tavily.com/)
 2. Navigate to your dashboard
 3. Generate an API key
+
+#### Obtain an Exa API Key
+
+1. Sign in to [Exa](https://exa.ai/)
+2. Generate an API key from your dashboard
+
+#### Obtain a Brave Search API Key
+
+1. Sign in to [Brave Search API](https://api.search.brave.com/)
+2. Subscribe to a search plan and generate a subscription token
+
+#### Obtain a TinyFish API Key
+
+1. Sign in to [TinyFish](https://agent.tinyfish.ai/api-keys)
+2. Generate an API key from your dashboard
 
 #### Obtain a Serper API Key
 
