@@ -950,6 +950,12 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       setStreaming(true)
       setLoading(true)
 
+      const outgoingPayload: PendingOutgoing = {
+        kind: 'message',
+        content,
+        dataSources: dataSourcesForMessage,
+      }
+
       // Helper to actually send the message
       const doSend = () => {
         if (wsClientRef.current?.isConnected()) {
@@ -957,11 +963,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           // Remember the payload so a mid-workflow `auth_expired` can
           // transparently re-issue it after the reconnect. Cleared on
           // isFinal or any non-auth error.
-          lastSentOutgoingRef.current = {
-            kind: 'message',
-            content,
-            dataSources: dataSourcesForMessage,
-          }
+          lastSentOutgoingRef.current = outgoingPayload
           setLoading(false)
         } else {
           addErrorCard('connection.failed', 'WebSocket connection failed')
@@ -980,11 +982,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       }
 
       if (wsClientRef.current?.isConnected() && tokenIsStale()) {
-        pendingOutgoingRef.current = {
-          kind: 'message',
-          content,
-          dataSources: dataSourcesForMessage,
-        }
+        pendingOutgoingRef.current = outgoingPayload
         rotateSocket('preflight')
         return
       }
@@ -992,24 +990,19 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       if (wsClientRef.current?.isConnected()) {
         doSend()
       } else if (conversationId) {
-        // No client yet: initialize synchronously and chain doSend to the
-        // 'connected' transition so the message goes out on first handshake.
-        const callbacks = createCallbacks()
-        const originalOnConnectionChange = callbacks.onConnectionChange
-        callbacks.onConnectionChange = (status, ctx) => {
-          originalOnConnectionChange?.(status, ctx)
-          if (status === 'connected') {
-            doSend()
-          }
-        }
+        // A client can exist but still be handshaking or reconnecting.
+        // Queue this outbound payload for the normal 'connected' drain
+        // instead of replacing the client and creating a parallel socket.
+        pendingOutgoingRef.current = outgoingPayload
 
-        // Create and connect the WebSocket client
-        wsClientRef.current = createNATWebSocketClient({
-          conversationId,
-          callbacks,
-          onBeforeReconnect: refreshAuthBeforeReconnect,
-        })
-        wsClientRef.current.connect()
+        if (!wsClientRef.current) {
+          wsClientRef.current = createNATWebSocketClient({
+            conversationId,
+            callbacks: createCallbacks(),
+            onBeforeReconnect: refreshAuthBeforeReconnect,
+          })
+        }
+        void wsClientRef.current.connect()
       } else {
         // Defensive: shouldn't happen because addUserMessage creates a
         // conversation if one is missing.
@@ -1020,7 +1013,6 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     },
     [
       addUserMessage,
-      addThinkingStep,
       addErrorCard,
       clearReportContent,
       clearPendingInteraction,

@@ -5,6 +5,7 @@ import { renderHook, act, waitFor } from '@testing-library/react'
 import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
 import { useWebSocketChat } from './use-websocket-chat'
 import { useAuth } from '@/adapters/auth'
+import { createNATWebSocketClient } from '@/adapters/api/websocket-client'
 
 // Mock store actions
 const mockAddUserMessage = vi.fn()
@@ -198,11 +199,11 @@ const mockWsClient = {
 }
 
 let capturedCallbacks: {
-  onResponse?: (content: string, status: string, isFinal: boolean) => void
-  onIntermediateStep?: (content: unknown, status: string) => void
+  onResponse?: (content: string, status: string, isFinal: boolean, parentId?: string) => void
+  onIntermediateStep?: (content: unknown, status: string, parentId?: string) => void
   onHumanPrompt?: (promptId: string, parentId: string, prompt: unknown) => void
   onError?: (error: { code: string; message: string; details?: string }) => void
-  onConnectionChange?: (status: string) => void
+  onConnectionChange?: (status: string, context?: { intentional?: boolean }) => void
 } = {}
 
 // Captured separately so token-rotation tests can drive it directly without
@@ -340,6 +341,32 @@ describe('useWebSocketChat', () => {
     // sendMessage is called with content and enabled data sources
     expect(mockWsClient.sendMessage).toHaveBeenCalledWith('Hello', expect.any(Array))
     expect(mockSetLoading).toHaveBeenCalledWith(false)
+  })
+
+  test('sendMessage while the existing socket is connecting buffers instead of creating a parallel client', () => {
+    mockWsClient.isConnected.mockReturnValue(false)
+    const { result } = renderWebSocketHook()
+    vi.mocked(createNATWebSocketClient).mockClear()
+    mockWsClient.connect.mockClear()
+    mockWsClient.sendMessage.mockClear()
+
+    act(() => {
+      result.current.sendMessage('Send during handshake')
+    })
+
+    expect(createNATWebSocketClient).not.toHaveBeenCalled()
+    expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
+    expect(mockWsClient.connect).toHaveBeenCalledTimes(1)
+
+    mockWsClient.isConnected.mockReturnValue(true)
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('connected')
+    })
+
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith(
+      'Send during handshake',
+      expect.any(Array),
+    )
   })
 
   test('sendMessage does not add knowledge_layer when no files uploaded', async () => {

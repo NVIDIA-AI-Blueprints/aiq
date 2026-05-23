@@ -116,7 +116,7 @@ export class NATWebSocketClient {
    * Connect to the WebSocket server
    */
   connect = async (): Promise<void> => {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return
     }
 

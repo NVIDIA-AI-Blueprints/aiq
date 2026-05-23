@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { NATMessageType, NATWebSocketClient } from './websocket-client'
 
 class MockWebSocket {
+  static readonly CONNECTING = 0
   static readonly OPEN = 1
   static readonly CLOSED = 3
   static instances: MockWebSocket[] = []
@@ -181,6 +182,22 @@ describe('NATWebSocketClient auth observability', () => {
     // the original A, the B opened by the first rotate(), and a third
     // C opened by the second rotate() after it tore B's handlers off.
     expect(MockWebSocket.instances).toHaveLength(2)
+  })
+
+  test('connect() does not open a second socket while the first is still connecting', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv-1',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    await client.connect()
+    const socketA = MockWebSocket.instances[0]
+    socketA.readyState = MockWebSocket.CONNECTING
+
+    await client.connect()
+
+    expect(MockWebSocket.instances).toHaveLength(1)
   })
 
   test('does not emit RUM error for non-auth websocket errors', async () => {

@@ -548,6 +548,23 @@ describe('useDeepResearch', () => {
     return hook
   }
 
+  /**
+   * Helper: render hook, advance timers to connect in replay-buffer mode.
+   *
+   * Sets deepResearchStatus to 'running' so the hook treats the connection
+   * as a restored job and buffers historical events until stream.mode="live".
+   */
+  const setupBufferedHook = async (overrides?: Partial<typeof mockStoreState>) => {
+    if (overrides) Object.assign(mockStoreState, overrides)
+    mockStoreState.deepResearchJobId = mockStoreState.deepResearchJobId || 'job-456'
+    mockStoreState.isDeepResearchStreaming = true
+    mockStoreState.deepResearchStatus = mockStoreState.deepResearchStatus || 'running'
+    const hook = renderHook(() => useDeepResearch())
+    await act(async () => { await advanceAndFlush(60) })
+    vi.clearAllMocks()
+    return hook
+  }
+
   describe('SSE callbacks', () => {
     test('onStreamStart sets status to researching', async () => {
       await setupConnectedHook()
@@ -557,6 +574,27 @@ describe('useDeepResearch', () => {
       })
 
       expect(mockSetCurrentStatus).toHaveBeenCalledWith('researching')
+    })
+
+    test('does not flush a replay buffer after the active job changes', async () => {
+      await setupBufferedHook({
+        deepResearchJobId: 'job-old',
+        deepResearchStatus: 'running',
+      })
+
+      act(() => {
+        mockClient?.callbacks.onOutputUpdate?.('Old job report', 'final_report')
+        mockClient?.callbacks.onCitationUpdate?.('https://old.example', 'Old citation', true)
+      })
+
+      mockStoreState.deepResearchJobId = 'job-new'
+
+      act(() => {
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      expect(useChatStore.setState).not.toHaveBeenCalled()
+      expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('researching')
     })
 
     test('onJobStatus success completes research and patches message', async () => {
