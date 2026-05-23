@@ -53,6 +53,8 @@ let mockStoreState: {
   currentConversation: MockConversation | null
   deepResearchJobId: string | null
   deepResearchStreamLoaded: boolean
+  reportContent: string
+  isDeepResearchStreaming: boolean
 } = {
   currentConversation: {
     id: 'conv-1',
@@ -60,6 +62,8 @@ let mockStoreState: {
   },
   deepResearchJobId: null as string | null,
   deepResearchStreamLoaded: false,
+  reportContent: '',
+  isDeepResearchStreaming: false,
 }
 
 vi.mock('@/adapters/api', () => ({
@@ -91,6 +95,7 @@ vi.mock('../store', () => ({
     }),
     {
       getState: vi.fn(() => mockStoreState),
+      setState: vi.fn(),
     }
   ),
 }))
@@ -121,7 +126,88 @@ describe('useLoadJobData', () => {
       },
       deepResearchJobId: null,
       deepResearchStreamLoaded: false,
+      reportContent: '',
+      isDeepResearchStreaming: false,
     }
+  })
+
+  test('loads report tab data through the report endpoint without replaying the full stream', async () => {
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-123', status: 'success', error: null })
+    mockGetJobReport.mockResolvedValue({
+      job_id: 'job-123',
+      has_report: true,
+      report: 'Loaded report',
+    })
+    mockGetJobState.mockResolvedValue({ job_id: 'job-123', has_state: false, artifacts: null })
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.loadResearchPanelTab('job-123', 'report')
+    })
+
+    expect(mockSetResearchPanelTab).toHaveBeenCalledWith('report')
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
+    expect(mockGetJobReport).toHaveBeenCalledWith('job-123', 'token-123')
+    expect(mockSetReportContent).toHaveBeenCalledWith('Loaded report')
+    expect(mockCreateDeepResearchClient).not.toHaveBeenCalled()
+  })
+
+  test('does not reload report tab data when the current job already has report content', async () => {
+    mockStoreState.deepResearchJobId = 'job-123'
+    mockStoreState.reportContent = 'Cached report'
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.loadResearchPanelTab('job-123', 'report')
+    })
+
+    expect(mockSetResearchPanelTab).toHaveBeenCalledWith('report')
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
+    expect(mockGetJobStatus).not.toHaveBeenCalled()
+    expect(mockGetJobReport).not.toHaveBeenCalled()
+    expect(mockCreateDeepResearchClient).not.toHaveBeenCalled()
+  })
+
+  test('loads citations tab data by replaying the full stream', async () => {
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-123', status: 'success', error: null })
+    mockCreateDeepResearchClient.mockImplementation(({ callbacks }) => ({
+      connect: vi.fn(() => callbacks.onComplete?.()),
+      disconnect: vi.fn(),
+      isConnected: vi.fn(() => false),
+      getLastEventId: vi.fn(() => null),
+    }))
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.loadResearchPanelTab('job-123', 'citations')
+    })
+
+    expect(mockSetResearchPanelTab).toHaveBeenCalledWith('citations')
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
+    expect(mockGetJobReport).not.toHaveBeenCalled()
+    expect(mockCreateDeepResearchClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        jobId: 'job-123',
+        authToken: 'token-123',
+      })
+    )
+  })
+
+  test('does not load backend data for plan tab', async () => {
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.loadResearchPanelTab('job-123', 'plan')
+    })
+
+    expect(mockSetResearchPanelTab).toHaveBeenCalledWith('plan')
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('research')
+    expect(mockGetJobStatus).not.toHaveBeenCalled()
+    expect(mockGetJobReport).not.toHaveBeenCalled()
+    expect(mockCreateDeepResearchClient).not.toHaveBeenCalled()
   })
 
   test('marks unavailable completed report expired without surfacing a console error', async () => {

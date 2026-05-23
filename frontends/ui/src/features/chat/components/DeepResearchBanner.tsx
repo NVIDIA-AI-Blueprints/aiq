@@ -17,7 +17,6 @@ import { type FC, useCallback } from 'react'
 import { Banner, Button, Flex, Text } from '@/adapters/ui'
 import { formatTime } from '@/shared/utils/format-time'
 import { useLayoutStore } from '@/features/layout/store'
-import { useChatStore } from '../store'
 import { useLoadJobData } from '../hooks/use-load-job-data'
 import type { DeepResearchBannerType } from '../types'
 
@@ -122,35 +121,23 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
 }) => {
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
-  const reportContent = useChatStore((state) => state.reportContent)
-  const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
-  const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
-  const { loadReport, importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
+  const { loadResearchPanelTab } = useLoadJobData()
   const config = getBannerConfig(bannerType, jobId, { totalTokens, toolCallCount })
-
-  // Tabs that require full stream data (tasks, thinking, citations)
-  const tabRequiresStream = ['tasks', 'thinking', 'citations'].includes(config.buttonTab)
 
   // Job is complete if banner type indicates completion (success, failure, cancelled)
   // 'starting' banner means job is still in progress - don't try to load archived data
   const isJobComplete = bannerType !== 'starting'
 
   const handleButtonClick = useCallback(async () => {
+    if (isJobComplete) {
+      await loadResearchPanelTab(jobId, config.buttonTab)
+      return
+    }
+
     setResearchPanelTab(config.buttonTab)
     openRightPanel('research')
-
-    // Only load data for completed jobs
-    if (isJobComplete) {
-      if (config.buttonTab === 'report' && !reportContent.trim()) {
-        // Report tab: load just the report content via REST API
-        await loadReport(jobId)
-      } else if (tabRequiresStream && !deepResearchStreamLoaded && !isDeepResearchStreaming && !isStreamLoading) {
-        // Tasks/Thinking/Citations tabs: load full stream data
-        await importStreamOnly(jobId)
-      }
-    }
     // For incomplete jobs (starting), the live SSE connection is already populating data
-  }, [config.buttonTab, openRightPanel, setResearchPanelTab, reportContent, loadReport, jobId, tabRequiresStream, deepResearchStreamLoaded, isDeepResearchStreaming, isStreamLoading, importStreamOnly, isJobComplete])
+  }, [config.buttonTab, openRightPanel, setResearchPanelTab, jobId, loadResearchPanelTab, isJobComplete])
 
   // Render action button (same for all banner types)
   const renderActions = () => (

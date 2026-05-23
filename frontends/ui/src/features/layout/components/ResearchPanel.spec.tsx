@@ -38,6 +38,7 @@ let mockIsDeepResearchStreaming = false
 let mockDeepResearchJobId: string | null = null
 let mockDeepResearchStreamLoaded = false
 const mockImportJobStream = vi.fn()
+const mockLoadResearchPanelTab = vi.fn()
 
 const mockCancelCurrentJob = vi.fn()
 
@@ -54,6 +55,7 @@ vi.mock('@/features/chat', () => ({
     }),
   useLoadJobData: () => ({
     importStreamOnly: mockImportJobStream,
+    loadResearchPanelTab: mockLoadResearchPanelTab,
     isLoading: false,
   }),
   useDeepResearch: () => ({
@@ -93,6 +95,7 @@ describe('ResearchPanel', () => {
     mockDeepResearchJobId = null
     mockDeepResearchStreamLoaded = false
     mockImportJobStream.mockClear()
+    mockLoadResearchPanelTab.mockClear()
   })
 
   describe('panel visibility', () => {
@@ -141,6 +144,17 @@ describe('ResearchPanel', () => {
 
       await user.click(screen.getByText('Citations'))
       expect(mockSetResearchPanelTab).toHaveBeenCalledWith('citations')
+    })
+
+    test('delegates report tab loading to the shared research panel loader', async () => {
+      mockDeepResearchJobId = 'job-123'
+      const user = userEvent.setup()
+
+      render(<ResearchPanel isAuthenticated={true} />)
+
+      await user.click(screen.getByText('Report'))
+
+      expect(mockLoadResearchPanelTab).toHaveBeenCalledWith('job-123', 'report')
     })
 
     test('displays correct tab content based on researchPanelTab', () => {

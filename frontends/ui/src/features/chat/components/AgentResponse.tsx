@@ -59,9 +59,9 @@ export const AgentResponse: FC<AgentResponseProps> = ({
       deepResearchJobId: s.deepResearchJobId,
       isDeepResearchStreaming: s.isDeepResearchStreaming,
       deepResearchStreamLoaded: s.deepResearchStreamLoaded,
-    })))
+  })))
   const reconnectToActiveJob = useChatStore((s) => s.reconnectToActiveJob)
-  const { importJobStream, isLoading, error } = useLoadJobData()
+  const { loadResearchPanelTab, isLoading, error } = useLoadJobData()
 
   // Determine if we should show the action button
   // Show "View Progress" for active jobs, "View Report" for completed jobs
@@ -108,15 +108,13 @@ export const AgentResponse: FC<AgentResponseProps> = ({
       return
     }
 
-    // Fetch ALL research data from backend (report + citations + tasks + tool calls + agents + files)
-    // This is necessary because localStorage no longer stores heavy research data
     if (jobId) {
-      await importJobStream(jobId)
+      await loadResearchPanelTab(jobId, 'report')
     } else {
       setResearchPanelTab('report')
       openRightPanel('research')
     }
-  }, [jobId, deepResearchJobId, reportContent, deepResearchStreamLoaded, isJobActive, isAnotherJobStreaming, isDeepResearchStreaming, importJobStream, reconnectToActiveJob, setResearchPanelTab, openRightPanel])
+  }, [jobId, deepResearchJobId, reportContent, deepResearchStreamLoaded, isJobActive, isAnotherJobStreaming, isDeepResearchStreaming, loadResearchPanelTab, reconnectToActiveJob, setResearchPanelTab, openRightPanel])
 
   // Guard against null, undefined, empty, or literal "null" string content
   // This includes deep research tracking messages which have empty content

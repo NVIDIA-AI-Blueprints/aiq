@@ -37,9 +37,11 @@ import {
 } from '../lib/deep-research-errors'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
+import type { ResearchPanelTab } from '@/features/layout/types'
 
 const EXPIRED_REPORT_MESSAGE = 'This research report is no longer available.'
 const BACKEND_UNREACHABLE_MESSAGE = 'The backend is not reachable. Start the backend and try again.'
+const STREAM_BACKED_RESEARCH_TABS = new Set<ResearchPanelTab>(['tasks', 'thinking', 'citations'])
 
 export interface LoadJobDataOptions {
   /**
@@ -84,6 +86,12 @@ export interface UseLoadJobDataReturn {
    * @deprecated Use loadReport or importJobStream directly for clarity
    */
   loadJobData: (jobId: string, options?: LoadJobDataOptions) => Promise<void>
+
+  /**
+   * Open a research panel tab and ensure the minimum data required for that tab is loaded.
+   * Report uses the cheap report endpoint; detail tabs use full stream replay.
+   */
+  loadResearchPanelTab: (jobId: string, tab: ResearchPanelTab) => Promise<void>
 
   /** Whether data is currently being loaded */
   isLoading: boolean
@@ -686,11 +694,61 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
     [idToken, clearDeepResearch, streamFullJob, stopAllDeepResearchSpinners, setStreamLoaded, setLoadedJobId, syncMissingJobToFailureState, addErrorCard, completeDeepResearch, setStreaming]
   )
 
+  /**
+   * Shared tab-loading policy for all ResearchPanel entry points.
+   *
+   * This keeps "View Report", banner actions, and direct tab clicks aligned:
+   * - Report tab fetches the final report quickly via /report.
+   * - Tasks/Thinking/Citations hydrate rich details by replaying /stream.
+   * - Plan is local session state only and has no backend replay endpoint.
+   */
+  const loadResearchPanelTab = useCallback(
+    async (jobId: string, tab: ResearchPanelTab): Promise<void> => {
+      setResearchPanelTab(tab)
+      openRightPanel('research')
+
+      const currentState = useChatStore.getState()
+
+      if (tab === 'report') {
+        const hasReportForJob =
+          currentState.deepResearchJobId === jobId &&
+          currentState.reportContent.trim().length > 0
+        const isLiveReportForJob =
+          currentState.deepResearchJobId === jobId &&
+          currentState.isDeepResearchStreaming
+
+        if (hasReportForJob || isLiveReportForJob) {
+          return
+        }
+
+        await loadJobData(jobId, { streamFullJob: false })
+        return
+      }
+
+      if (STREAM_BACKED_RESEARCH_TABS.has(tab)) {
+        const hasStreamForJob =
+          currentState.deepResearchJobId === jobId &&
+          currentState.deepResearchStreamLoaded
+        const isLiveStreamForJob =
+          currentState.deepResearchJobId === jobId &&
+          currentState.isDeepResearchStreaming
+
+        if (hasStreamForJob || isLiveStreamForJob) {
+          return
+        }
+
+        await importStreamOnly(jobId)
+      }
+    },
+    [loadJobData, importStreamOnly, setResearchPanelTab, openRightPanel]
+  )
+
   return {
     loadReport,
     importJobStream,
     importStreamOnly,
     loadJobData,
+    loadResearchPanelTab,
     isLoading,
     error,
     clearError,

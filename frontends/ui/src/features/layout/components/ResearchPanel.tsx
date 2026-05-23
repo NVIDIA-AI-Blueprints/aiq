@@ -54,7 +54,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const deepResearchJobId = useChatStore((state) => state.deepResearchJobId)
   const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
-  const { importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
+  const { loadResearchPanelTab, isLoading: isStreamLoading } = useLoadJobData()
   const { idToken } = useAuth()
 
   const prefersReducedMotion = useReducedMotion()
@@ -123,37 +123,24 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
     } else {
       openRightPanel('research')
 
-      // Trigger stream import when opening panel if current tab requires it and data not loaded
-      if (
-        TABS_REQUIRING_STREAM.includes(researchPanelTab) &&
-        deepResearchJobId &&
-        !deepResearchStreamLoaded &&
-        !isDeepResearchStreaming &&
-        !isStreamLoading
-      ) {
-        void importStreamOnly(deepResearchJobId)
+      if (deepResearchJobId && !isStreamLoading) {
+        void loadResearchPanelTab(deepResearchJobId, researchPanelTab)
       }
     }
-  }, [isAuthenticated, isOpen, closeRightPanel, openRightPanel, researchPanelTab, deepResearchJobId, deepResearchStreamLoaded, isDeepResearchStreaming, isStreamLoading, importStreamOnly])
+  }, [isAuthenticated, isOpen, closeRightPanel, openRightPanel, researchPanelTab, deepResearchJobId, isStreamLoading, loadResearchPanelTab])
 
   const handleTabChange = useCallback(
     (value: string) => {
       const tab = value as ResearchPanelTab
-      setResearchPanelTab(tab)
 
-      // Trigger stream import when clicking Tasks/Thinking/Citations for a loaded (non-streaming) job
-      if (
-        TABS_REQUIRING_STREAM.includes(tab) &&
-        deepResearchJobId &&
-        !deepResearchStreamLoaded &&
-        !isDeepResearchStreaming &&
-        !isStreamLoading
-      ) {
-        // Fire and forget - don't block the tab change
-        void importStreamOnly(deepResearchJobId)
+      if (deepResearchJobId && !isStreamLoading) {
+        void loadResearchPanelTab(deepResearchJobId, tab)
+        return
       }
+
+      setResearchPanelTab(tab)
     },
-    [setResearchPanelTab, deepResearchJobId, deepResearchStreamLoaded, isDeepResearchStreaming, isStreamLoading, importStreamOnly]
+    [setResearchPanelTab, deepResearchJobId, isStreamLoading, loadResearchPanelTab]
   )
 
   return (
