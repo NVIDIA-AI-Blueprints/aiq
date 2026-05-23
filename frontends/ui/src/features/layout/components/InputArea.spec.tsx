@@ -176,6 +176,17 @@ describe('InputArea', () => {
     expect(screen.getByRole('button', { name: /send message/i })).toBeDisabled()
   })
 
+  test('makes the prompt input and send button the first keyboard tab stops', async () => {
+    const user = userEvent.setup()
+    render(<InputArea isAuthenticated={true} />)
+
+    const input = screen.getByRole('textbox')
+    await user.type(input, 'Hello')
+
+    expect(input).toHaveAttribute('tabindex', '1')
+    expect(screen.getByRole('button', { name: /send message/i })).toHaveAttribute('tabindex', '2')
+  })
+
   test('enables send button when message is typed', async () => {
     const user = userEvent.setup()
     render(<InputArea isAuthenticated={true} />)
@@ -463,6 +474,27 @@ describe('InputArea', () => {
     expect(screen.getByPlaceholderText('Type your response to the agent...')).toBeInTheDocument()
     // Send button should be the normal send button, not a research-in-progress popover
     expect(screen.getByRole('button', { name: /send response/i })).toBeInTheDocument()
+  })
+
+  test('moves the response input after the plan approval button in tab order', () => {
+    vi.mocked(useIsCurrentSessionBusy).mockReturnValue(true)
+    vi.mocked(useWebSocketChat).mockReturnValue({
+      sendMessage: mockSendMessage,
+      isStreaming: false,
+      isLoading: false,
+      respondToInteraction: mockRespondToInteraction,
+      pendingInteraction: {
+        id: 'prompt-1',
+        parentId: 'agent-1',
+        inputType: 'approval',
+        text: 'Approve plan?',
+      },
+    } as unknown as ReturnType<typeof useWebSocketChat>)
+
+    render(<InputArea isAuthenticated={true} connectionMode="websocket" />)
+
+    expect(screen.getByRole('textbox')).toHaveAttribute('tabindex', '2')
+    expect(screen.getByRole('button', { name: /send response/i })).toHaveAttribute('tabindex', '3')
   })
 
   test('input enabled during HITL even when deep research is in progress', async () => {

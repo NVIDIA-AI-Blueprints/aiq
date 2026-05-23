@@ -4,6 +4,7 @@
 import { render, screen } from '@/test-utils'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { AgentPrompt } from './AgentPrompt'
+import { useChatStore } from '../store'
 
 // Mock MarkdownRenderer
 vi.mock('@/shared/components/MarkdownRenderer', () => ({
@@ -15,6 +16,7 @@ vi.mock('@/shared/components/MarkdownRenderer', () => ({
 describe('AgentPrompt', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useChatStore.setState({ respondToInteractionFn: null })
   })
 
   test('renders prompt content', () => {
@@ -108,5 +110,19 @@ describe('AgentPrompt', () => {
     )
 
     expect(screen.getByText(/\d{1,2}:\d{2}/)).toBeInTheDocument()
+  })
+
+  test('makes plan approval the first keyboard tab stop when actions are available', () => {
+    useChatStore.setState({ respondToInteractionFn: vi.fn() })
+
+    render(
+      <AgentPrompt
+        id="prompt-1"
+        type="approval"
+        content="Reply **approve** to proceed, **reject** to cancel"
+      />
+    )
+
+    expect(screen.getByRole('button', { name: /approve plan/i })).toHaveAttribute('tabindex', '1')
   })
 })

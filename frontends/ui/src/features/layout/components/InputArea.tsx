@@ -191,6 +191,11 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
 
   // Check if we're in response mode (responding to a HITL prompt)
   const isResponseMode = !!pendingInteraction
+  const isPlanApprovalResponse = pendingInteraction?.inputType === 'approval'
+  // Positive tab stops are intentionally limited to the primary chat path so
+  // keyboard users land on the prompt first, unless an approval action is due.
+  const promptInputTabIndex = isPlanApprovalResponse ? 2 : 1
+  const submitButtonTabIndex = isPlanApprovalResponse ? 3 : 2
 
   // DISABLE LOGIC
   // Disable input when:
@@ -384,6 +389,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
             resizeable="auto"
             size="medium"
             aria-label={isResponseMode ? 'Response input' : 'Chat message input'}
+            attributes={{ TextAreaElement: { tabIndex: promptInputTabIndex } }}
           />
         </div>
 
@@ -525,6 +531,7 @@ export const InputArea: FC<InputAreaProps> = memo(function InputArea({
                 disabled={!message.trim() || disabled}
                 aria-label={isResponseMode ? 'Send response' : 'Send message'}
                 title="Send query"
+                tabIndex={submitButtonTabIndex}
               >
                 {isLoading ? <span className="animate-pulse">...</span> : <Paperplane className="h-4 w-4" />}
               </Button>

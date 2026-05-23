@@ -152,7 +152,10 @@ describe('useChatStore', () => {
       useChatStore.getState().setCurrentUser('user-2')
 
       expect(useChatStore.getState().currentConversation).toEqual(conv2)
-      expect(mockLayoutState.setEnabledDataSources).toHaveBeenCalledWith(['web_search'])
+      expect(mockLayoutState.setEnabledDataSources).toHaveBeenCalledWith([
+        'web_search',
+        'knowledge_base',
+      ])
     })
 
     test('clears current conversation when logging out', () => {
@@ -237,6 +240,18 @@ describe('useChatStore', () => {
       expect(conv.messages).toEqual([])
       expect(useChatStore.getState().currentConversation).toEqual(conv)
       expect(useChatStore.getState().conversations).toContainEqual(conv)
+    })
+
+    test('enables all available data sources for new conversations by default', () => {
+      useChatStore.setState({ currentUserId: 'user-1' })
+
+      const conv = useChatStore.getState().createConversation()
+
+      expect(conv.enabledDataSourceIds).toEqual(['web_search', 'knowledge_base'])
+      expect(mockLayoutState.setEnabledDataSources).toHaveBeenCalledWith([
+        'web_search',
+        'knowledge_base',
+      ])
     })
 
     test('throws when no user is authenticated', () => {

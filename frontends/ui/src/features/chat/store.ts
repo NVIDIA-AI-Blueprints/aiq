@@ -299,11 +299,7 @@ const patchLatestDeepResearchJobMessage = (
 
 const getDefaultEnabledDataSourceIds = (): string[] => {
   const layoutStore = useLayoutStore.getState()
-  return (
-    layoutStore.availableDataSources
-      ?.filter((source) => !source.requires_auth)
-      .map((source) => source.id) ?? []
-  )
+  return layoutStore.availableDataSources?.map((source) => source.id) ?? []
 }
 
 const restoreConversationDataSources = (conversation: Conversation): void => {

@@ -115,6 +115,7 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
                 size="small"
                 onClick={handleApprove}
                 aria-label="Approve plan"
+                tabIndex={1}
               >
                 Approve
               </Button>
