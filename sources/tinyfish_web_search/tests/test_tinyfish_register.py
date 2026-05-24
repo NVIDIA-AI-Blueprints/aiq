@@ -19,7 +19,9 @@ import os
 import urllib.parse
 from unittest.mock import MagicMock
 
+import pytest
 from pydantic import SecretStr
+from pydantic import ValidationError
 from tinyfish_web_search.register import TINYFISH_SEARCH_URL
 from tinyfish_web_search.register import TinyfishWebSearchToolConfig
 from tinyfish_web_search.register import tinyfish_web_search
@@ -74,6 +76,10 @@ class TestTinyfishWebSearchToolConfig:
         assert config.page == 2
         assert config.timeout == 5.0
         assert config.max_content_length == 50
+
+    def test_max_results_has_upper_bound(self):
+        with pytest.raises(ValidationError):
+            TinyfishWebSearchToolConfig(max_results=21)
 
     def test_inherits_from_function_base_config(self):
         from nat.data_models.function import FunctionBaseConfig
@@ -200,6 +206,48 @@ class TestTinyfishWebSearchLive:
         assert "abcde..." in out
         assert "abcdefghi" not in out
 
+    async def test_small_content_limit_does_not_exceed_requested_length(self, monkeypatch):
+        fake_request = MagicMock(
+            return_value=_search_payload([{"url": "u", "title": "t", "snippet": "abcdefghijklmnop"}])
+        )
+        monkeypatch.setenv("TINYFISH_API_KEY", "tinyfish-env")
+        monkeypatch.setattr("tinyfish_web_search.register._http_get_json", fake_request)
+
+        config = TinyfishWebSearchToolConfig(max_content_length=2)
+        builder = MagicMock()
+        async with tinyfish_web_search(config, builder) as info:
+            out = await info.single_fn("q")
+
+        assert "\n..\n</Document>" in out
+        assert "abc" not in out
+
+    async def test_escapes_document_fields(self, monkeypatch):
+        fake_request = MagicMock(
+            return_value=_search_payload(
+                [
+                    {
+                        "url": 'https://a.example/?q="x"&n=1',
+                        "title": "<Title & One>",
+                        "snippet": "Body <tag> & value",
+                        "site_name": "a.example & docs",
+                    }
+                ]
+            )
+        )
+        monkeypatch.setenv("TINYFISH_API_KEY", "tinyfish-env")
+        monkeypatch.setattr("tinyfish_web_search.register._http_get_json", fake_request)
+
+        config = TinyfishWebSearchToolConfig()
+        builder = MagicMock()
+        async with tinyfish_web_search(config, builder) as info:
+            out = await info.single_fn("q")
+
+        assert 'href="https://a.example/?q=&quot;x&quot;&amp;n=1"' in out
+        assert "&lt;Title &amp; One&gt;" in out
+        assert "a.example &amp; docs" in out
+        assert "Body &lt;tag&gt; &amp; value" in out
+        assert "<Title & One>" not in out
+
     async def test_empty_results_returns_error(self, monkeypatch):
         fake_request = MagicMock(return_value=_search_payload([]))
         monkeypatch.setenv("TINYFISH_API_KEY", "tinyfish-env")
@@ -244,3 +292,17 @@ class TestTinyfishWebSearchLive:
 
         assert "401" in out
         assert "TINYFISH_API_KEY" in out
+
+    async def test_429_returns_rate_limit_message(self, monkeypatch):
+        fake_request = MagicMock(side_effect=RuntimeError("429 Too Many Requests"))
+        monkeypatch.setenv("TINYFISH_API_KEY", "tinyfish-env")
+        monkeypatch.setattr("tinyfish_web_search.register._http_get_json", fake_request)
+        monkeypatch.setattr("tinyfish_web_search.register.asyncio.sleep", _no_sleep)
+
+        config = TinyfishWebSearchToolConfig(max_retries=2)
+        builder = MagicMock()
+        async with tinyfish_web_search(config, builder) as info:
+            out = await info.single_fn("q")
+
+        assert "rate limit" in out.lower()
+        assert "TinyFish" in out

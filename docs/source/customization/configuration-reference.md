@@ -237,7 +237,7 @@ functions:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `max_results` | `int` | `5` | Maximum number of search results to return from the response. |
+| `max_results` | `int` | `5` | Maximum number of search results to return from the response, up to `20`. |
 | `api_key` | `str` | `None` | TinyFish API key. Falls back to `TINYFISH_API_KEY` environment variable. |
 | `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
 | `location` | `str` | `"US"` | Country code for geo-targeted results. |

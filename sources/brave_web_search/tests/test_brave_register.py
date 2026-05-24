@@ -198,6 +198,46 @@ class TestBraveWebSearchLive:
         assert "abcde..." in out
         assert "abcdefghi" not in out
 
+    async def test_small_content_limit_does_not_exceed_requested_length(self, monkeypatch):
+        fake_request = MagicMock(
+            return_value=_search_payload([{"url": "u", "title": "t", "description": "abcdefghijklmnop"}])
+        )
+        monkeypatch.setenv("BRAVE_API_KEY", "brave-env")
+        monkeypatch.setattr("brave_web_search.register._http_get_json", fake_request)
+
+        config = BraveWebSearchToolConfig(max_content_length=2)
+        builder = MagicMock()
+        async with brave_web_search(config, builder) as info:
+            out = await info.single_fn("q")
+
+        assert "\n..\n</Document>" in out
+        assert "abc" not in out
+
+    async def test_escapes_document_fields(self, monkeypatch):
+        fake_request = MagicMock(
+            return_value=_search_payload(
+                [
+                    {
+                        "url": 'https://a.example/?q="x"&n=1',
+                        "title": "<Title & One>",
+                        "description": "Body <tag> & value",
+                    }
+                ]
+            )
+        )
+        monkeypatch.setenv("BRAVE_API_KEY", "brave-env")
+        monkeypatch.setattr("brave_web_search.register._http_get_json", fake_request)
+
+        config = BraveWebSearchToolConfig()
+        builder = MagicMock()
+        async with brave_web_search(config, builder) as info:
+            out = await info.single_fn("q")
+
+        assert 'href="https://a.example/?q=&quot;x&quot;&amp;n=1"' in out
+        assert "&lt;Title &amp; One&gt;" in out
+        assert "Body &lt;tag&gt; &amp; value" in out
+        assert "<Title & One>" not in out
+
     async def test_empty_results_returns_error(self, monkeypatch):
         fake_request = MagicMock(return_value=_search_payload([]))
         monkeypatch.setenv("BRAVE_API_KEY", "brave-env")
@@ -242,3 +282,17 @@ class TestBraveWebSearchLive:
 
         assert "401" in out
         assert "BRAVE_API_KEY" in out
+
+    async def test_429_returns_rate_limit_message(self, monkeypatch):
+        fake_request = MagicMock(side_effect=RuntimeError("429 Too Many Requests"))
+        monkeypatch.setenv("BRAVE_API_KEY", "brave-env")
+        monkeypatch.setattr("brave_web_search.register._http_get_json", fake_request)
+        monkeypatch.setattr("brave_web_search.register.asyncio.sleep", _no_sleep)
+
+        config = BraveWebSearchToolConfig(max_retries=2)
+        builder = MagicMock()
+        async with brave_web_search(config, builder) as info:
+            out = await info.single_fn("q")
+
+        assert "rate limit" in out.lower()
+        assert "Brave" in out

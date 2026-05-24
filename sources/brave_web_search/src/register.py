@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -60,6 +61,7 @@ class BraveWebSearchToolConfig(FunctionBaseConfig, name="brave_web_search"):
     timeout: float = Field(default=20.0, gt=0, description="HTTP request timeout in seconds")
     max_content_length: int | None = Field(
         default=10000,
+        ge=1,
         description="Max characters per result snippet. If set, truncates each result to reduce token usage.",
     )
 
@@ -86,14 +88,16 @@ def _http_get_json(url: str, headers: dict[str, str], timeout: float) -> dict:
 
 
 def _truncate_content(content: str, max_content_length: int | None) -> str:
-    if max_content_length and len(content) > max_content_length:
-        return content[: max_content_length - 3] + "..."
-    return content
+    if max_content_length is None or len(content) <= max_content_length:
+        return content
+    if max_content_length <= 3:
+        return "." * max_content_length
+    return content[: max_content_length - 3] + "..."
 
 
 def _render_document(result: dict, max_content_length: int | None) -> str:
-    url = result.get("url", "") or ""
-    title = result.get("title", "") or ""
+    url = html.escape(str(result.get("url", "") or ""), quote=True)
+    title = html.escape(str(result.get("title", "") or ""))
     snippets: list[str] = []
     description = result.get("description") or result.get("snippet") or ""
     if description:
@@ -101,7 +105,7 @@ def _render_document(result: dict, max_content_length: int | None) -> str:
     extra_snippets = result.get("extra_snippets") or []
     if isinstance(extra_snippets, list):
         snippets.extend(str(snippet) for snippet in extra_snippets if snippet)
-    body = _truncate_content("\n".join(snippets), max_content_length)
+    body = html.escape(_truncate_content("\n".join(snippets), max_content_length))
     return f'<Document href="{url}">\n<title>\n{title}\n</title>\n{body}\n</Document>'
 
 

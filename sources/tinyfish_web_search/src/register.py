@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -43,7 +44,7 @@ class TinyfishWebSearchToolConfig(FunctionBaseConfig, name="tinyfish_web_search"
     Requires a TINYFISH_API_KEY environment variable or api_key config.
     """
 
-    max_results: int = Field(default=5, ge=1, description="Maximum number of search results to return")
+    max_results: int = Field(default=5, ge=1, le=20, description="Maximum number of search results to return")
     api_key: SecretStr | None = Field(default=None, description="The API key for the TinyFish service")
     max_retries: int = Field(default=3, ge=1, description="Maximum number of retries for the search request")
     location: str = Field(default="US", description="Country code for geo-targeted results")
@@ -52,6 +53,7 @@ class TinyfishWebSearchToolConfig(FunctionBaseConfig, name="tinyfish_web_search"
     timeout: float = Field(default=20.0, gt=0, description="HTTP request timeout in seconds")
     max_content_length: int | None = Field(
         default=10000,
+        ge=1,
         description="Max characters per result snippet. If set, truncates each result to reduce token usage.",
     )
 
@@ -78,18 +80,20 @@ def _http_get_json(url: str, headers: dict[str, str], timeout: float) -> dict:
 
 
 def _truncate_content(content: str, max_content_length: int | None) -> str:
-    if max_content_length and len(content) > max_content_length:
-        return content[: max_content_length - 3] + "..."
-    return content
+    if max_content_length is None or len(content) <= max_content_length:
+        return content
+    if max_content_length <= 3:
+        return "." * max_content_length
+    return content[: max_content_length - 3] + "..."
 
 
 def _render_document(result: dict, max_content_length: int | None) -> str:
-    url = result.get("url", "") or ""
-    title = result.get("title", "") or ""
+    url = html.escape(str(result.get("url", "") or ""), quote=True)
+    title = html.escape(str(result.get("title", "") or ""))
     site_name = result.get("site_name") or ""
     snippet = result.get("snippet") or result.get("description") or ""
     body_parts = [str(part) for part in (site_name, snippet) if part]
-    body = _truncate_content("\n".join(body_parts), max_content_length)
+    body = html.escape(_truncate_content("\n".join(body_parts), max_content_length))
     return f'<Document href="{url}">\n<title>\n{title}\n</title>\n{body}\n</Document>'
 
 
@@ -145,6 +149,8 @@ async def tinyfish_web_search(
             "page": str(tool_config.page),
         }
 
+        # TinyFish documents pagination but not a per-request result-count parameter.
+        # Apply max_results when rendering below.
         url = f"{TINYFISH_SEARCH_URL}?{urllib.parse.urlencode(params)}"
         headers = {
             "Accept": "application/json",
