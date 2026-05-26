@@ -37,6 +37,7 @@ import type {
   DeepResearchToolCall,
   DeepResearchFile,
   DeepResearchBannerType,
+  DeepResearchTodo,
 } from './types'
 import { getErrorMeta } from './lib/error-registry'
 import {
@@ -76,6 +77,23 @@ type PersistedChatState = {
 }
 
 type PersistedChatStorageValue = StorageValue<PersistedChatState>
+
+const DEEP_RESEARCH_TODO_PERSIST_DEBOUNCE_MS = 1000
+let deepResearchTodoPersistTimer: ReturnType<typeof setTimeout> | null = null
+
+const areDeepResearchTodosEqual = (
+  left: DeepResearchTodo[] | undefined,
+  right: DeepResearchTodo[] | undefined
+): boolean => {
+  const leftTodos = left ?? []
+  const rightTodos = right ?? []
+  if (leftTodos.length !== rightTodos.length) return false
+
+  return leftTodos.every((todo, index) => {
+    const other = rightTodos[index]
+    return todo.id === other.id && todo.content === other.content && todo.status === other.status
+  })
+}
 
 const prunePersistedChatState = (value: PersistedChatStorageValue): PersistedChatStorageValue => {
   const state = value.state
@@ -140,9 +158,12 @@ const createResilientStorage = (): PersistStorage<PersistedChatState> | undefine
     removeItem: base.removeItem,
     setItem: (name: string, value: PersistedChatStorageValue) => {
       const prunedValue = prunePersistedChatState(value)
+      const serializedValue = JSON.stringify(prunedValue)
 
       try {
-        base.setItem(name, prunedValue)
+        if (localStorage.getItem(name) === serializedValue) return
+
+        localStorage.setItem(name, serializedValue)
         logStorageWrite(
           prunedValue.state.conversations ?? [],
           prunedValue.state.currentUserId ?? null
@@ -2025,7 +2046,6 @@ export const useChatStore = create<ChatStore>()(
         setDeepResearchTodos: (todos: Array<{ content: string; status: string }>) => {
           const typedTodos = normalizeDeepResearchTodos(todos)
           const {
-            currentConversation,
             conversations,
             deepResearchOwnerConversationId,
             activeDeepResearchMessageId,
@@ -2045,29 +2065,70 @@ export const useChatStore = create<ChatStore>()(
             return
           }
 
-          // Keep the lightweight last-known task list on the tracking message so
-          // a page refresh can restore useful progress before SSE replay catches up.
-          const updatedConversation = patchConversationMessageById(
-            targetConversation,
-            activeDeepResearchMessageId,
-            { deepResearchTodos: typedTodos }
-          )
-          const updatedConversations = updateConversationInList(conversations, updatedConversation)
-          const updatedCurrent =
-            currentConversation?.id === updatedConversation.id ? updatedConversation : currentConversation
+          set({ deepResearchTodos: typedTodos }, false, 'setDeepResearchTodos')
 
-          set(
-            {
-              deepResearchTodos: typedTodos,
-              conversations: updatedConversations,
-              currentConversation: updatedCurrent,
-            },
-            false,
-            'setDeepResearchTodos'
-          )
+          if (deepResearchTodoPersistTimer) {
+            clearTimeout(deepResearchTodoPersistTimer)
+          }
+
+          const scheduledOwnerConversationId = deepResearchOwnerConversationId
+          const scheduledMessageId = activeDeepResearchMessageId
+
+          // Keep the live UI responsive while coalescing persisted task snapshots.
+          // SSE can emit several todo events in quick succession; only the latest
+          // snapshot needs to survive a page refresh.
+          deepResearchTodoPersistTimer = setTimeout(() => {
+            deepResearchTodoPersistTimer = null
+
+            const latestState = get()
+            if (
+              latestState.deepResearchOwnerConversationId !== scheduledOwnerConversationId ||
+              latestState.activeDeepResearchMessageId !== scheduledMessageId
+            ) {
+              return
+            }
+
+            const latestConversation = latestState.conversations.find(
+              (conversation) => conversation.id === scheduledOwnerConversationId
+            )
+            if (!latestConversation) return
+
+            const latestMessage = latestConversation.messages.find(
+              (message) => message.id === scheduledMessageId
+            )
+            if (areDeepResearchTodosEqual(latestMessage?.deepResearchTodos, typedTodos)) return
+
+            const updatedConversation = patchConversationMessageById(
+              latestConversation,
+              scheduledMessageId,
+              { deepResearchTodos: typedTodos }
+            )
+            const updatedConversations = updateConversationInList(
+              latestState.conversations,
+              updatedConversation
+            )
+            const updatedCurrent =
+              latestState.currentConversation?.id === updatedConversation.id
+                ? updatedConversation
+                : latestState.currentConversation
+
+            set(
+              {
+                conversations: updatedConversations,
+                currentConversation: updatedCurrent,
+              },
+              false,
+              'setDeepResearchTodos:persist'
+            )
+          }, DEEP_RESEARCH_TODO_PERSIST_DEBOUNCE_MS)
         },
 
         stopDeepResearchTodos: () => {
+          if (deepResearchTodoPersistTimer) {
+            clearTimeout(deepResearchTodoPersistTimer)
+            deepResearchTodoPersistTimer = null
+          }
+
           const {
             currentConversation,
             conversations,

@@ -66,6 +66,7 @@ describe('useChatStore', () => {
   })
 
   afterEach(() => {
+    vi.useRealTimers()
     // Clean up localStorage after each test
     localStorage.removeItem(STORAGE_KEY)
   })
@@ -1801,7 +1802,8 @@ describe('useChatStore', () => {
       expect(state.deepResearchJobId).toBe('job-123')
     })
 
-    test('persists latest deep research todos onto the active tracking message', () => {
+    test('persists latest deep research todos onto the active tracking message', async () => {
+      vi.useFakeTimers()
       const conv = createConversation([
         {
           id: 'tracking-msg',
@@ -1825,11 +1827,62 @@ describe('useChatStore', () => {
         { content: 'Search current sources', status: 'in_progress' },
       ])
 
+      await vi.advanceTimersByTimeAsync(1000)
+
       const trackingMessage = useChatStore
         .getState()
         .currentConversation?.messages.find((m) => m.id === 'tracking-msg')
 
       expect(trackingMessage?.deepResearchTodos).toEqual([
+        {
+          id: 'todo-0-search-current-sourc',
+          content: 'Search current sources',
+          status: 'in_progress',
+        },
+      ])
+    })
+
+    test('debounces persisted deep research todo snapshots during active streams', async () => {
+      vi.useFakeTimers()
+      const conv = createConversation([
+        {
+          id: 'tracking-msg',
+          role: 'assistant',
+          messageType: 'agent_response',
+          content: '',
+          deepResearchJobId: 'job-123',
+          deepResearchJobStatus: 'running',
+          isDeepResearchActive: true,
+        },
+      ])
+
+      useChatStore.setState({
+        currentConversation: conv,
+        conversations: [conv],
+        deepResearchOwnerConversationId: conv.id,
+        activeDeepResearchMessageId: 'tracking-msg',
+      })
+
+      useChatStore.getState().setDeepResearchTodos([
+        { content: 'Search current sources', status: 'pending' },
+      ])
+      useChatStore.getState().setDeepResearchTodos([
+        { content: 'Search current sources', status: 'in_progress' },
+      ])
+
+      expect(
+        useChatStore.getState().currentConversation?.messages[0].deepResearchTodos
+      ).toBeUndefined()
+
+      await vi.advanceTimersByTimeAsync(999)
+
+      expect(
+        useChatStore.getState().currentConversation?.messages[0].deepResearchTodos
+      ).toBeUndefined()
+
+      await vi.advanceTimersByTimeAsync(1)
+
+      expect(useChatStore.getState().currentConversation?.messages[0].deepResearchTodos).toEqual([
         {
           id: 'todo-0-search-current-sourc',
           content: 'Search current sources',

@@ -185,6 +185,51 @@ describe('SessionsPanel', () => {
     expect(refreshDeepResearchSessionStatuses).toHaveBeenCalledTimes(1)
   })
 
+  test('does not start overlapping deep research status refreshes', async () => {
+    let isPanelOpen = true
+    let resolveRefresh: () => void = () => {}
+    const refreshDeepResearchSessionStatuses = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve
+        })
+    )
+    setupChatStoreMock({ refreshDeepResearchSessionStatuses })
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        isSessionsPanelOpen: isPanelOpen,
+        setSessionsPanelOpen: mockSetSessionsPanelOpen,
+      }
+      return selector ? selector(state) : state
+    })
+
+    const { rerender } = render(<SessionsPanel sessions={mockSessions} />)
+
+    expect(refreshDeepResearchSessionStatuses).toHaveBeenCalledTimes(1)
+
+    isPanelOpen = false
+    rerender(<SessionsPanel sessions={[...mockSessions]} />)
+    isPanelOpen = true
+    rerender(<SessionsPanel sessions={[...mockSessions]} />)
+
+    expect(refreshDeepResearchSessionStatuses).toHaveBeenCalledTimes(1)
+
+    resolveRefresh()
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
+
+    isPanelOpen = false
+    rerender(<SessionsPanel sessions={[...mockSessions]} />)
+    await Promise.resolve()
+    isPanelOpen = true
+    rerender(<SessionsPanel sessions={[...mockSessions]} />)
+
+    await vi.waitFor(() => {
+      expect(refreshDeepResearchSessionStatuses).toHaveBeenCalledTimes(2)
+    })
+  })
+
   test('does not show session content when panel is closed', () => {
     vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
       const state = {

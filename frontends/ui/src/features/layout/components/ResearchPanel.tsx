@@ -59,6 +59,7 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
 
   const prefersReducedMotion = useReducedMotion()
   const cancelFallbackRef = useRef<NodeJS.Timeout | null>(null)
+  const pendingTabLoadRef = useRef<{ jobId: string; tab: ResearchPanelTab } | null>(null)
 
   // Clean up cancel fallback timer on unmount
   useEffect(() => {
@@ -69,6 +70,18 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
       }
     }
   }, [])
+
+  useEffect(() => {
+    if (isStreamLoading) return
+
+    const pendingLoad = pendingTabLoadRef.current
+    if (!pendingLoad) return
+
+    pendingTabLoadRef.current = null
+    if (pendingLoad.jobId !== deepResearchJobId) return
+
+    void loadResearchPanelTab(pendingLoad.jobId, pendingLoad.tab)
+  }, [deepResearchJobId, isStreamLoading, loadResearchPanelTab])
 
   const handleClose = useCallback(() => {
     closeRightPanel()
@@ -145,6 +158,13 @@ export const ResearchPanel: FC<ResearchPanelProps> = memo(function ResearchPanel
       if (deepResearchJobId && !isStreamLoading) {
         void loadResearchPanelTab(deepResearchJobId, tab)
         return
+      }
+
+      if (deepResearchJobId && isStreamLoading) {
+        // Preserve the selected tab immediately, then load its required data
+        // once the current replay/fetch finishes. Without this, a mid-load
+        // tab switch can appear selected but never trigger its own fetch.
+        pendingTabLoadRef.current = { jobId: deepResearchJobId, tab }
       }
 
       setResearchPanelTab(tab)

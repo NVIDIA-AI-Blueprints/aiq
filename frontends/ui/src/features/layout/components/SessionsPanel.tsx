@@ -100,6 +100,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false)
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null)
+  const refreshStatusesInFlightRef = useRef(false)
 
   // Storage usage percentage — refreshes only when the panel opens
   const [storagePercent, setStoragePercent] = useState<number>(0)
@@ -107,7 +108,12 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
     if (isSessionsPanelOpen) {
       const { percentUsed } = checkStorageHealth()
       setStoragePercent(Math.round(percentUsed))
-      void refreshDeepResearchSessionStatuses()
+      if (!refreshStatusesInFlightRef.current) {
+        refreshStatusesInFlightRef.current = true
+        void Promise.resolve(refreshDeepResearchSessionStatuses()).finally(() => {
+          refreshStatusesInFlightRef.current = false
+        })
+      }
     }
   }, [isSessionsPanelOpen, refreshDeepResearchSessionStatuses])
 

@@ -45,6 +45,7 @@ vi.mock('@/adapters/api', () => ({
 let mockIsDeepResearchStreaming = false
 let mockDeepResearchJobId: string | null = null
 let mockDeepResearchStreamLoaded = false
+let mockIsLoadJobDataLoading = false
 const mockImportJobStream = vi.fn()
 const mockLoadResearchPanelTab = vi.fn()
 
@@ -66,7 +67,7 @@ vi.mock('@/features/chat', () => ({
   useLoadJobData: () => ({
     importStreamOnly: mockImportJobStream,
     loadResearchPanelTab: mockLoadResearchPanelTab,
-    isLoading: false,
+    isLoading: mockIsLoadJobDataLoading,
   }),
   useDeepResearch: () => ({
     cancelCurrentJob: mockCancelCurrentJob,
@@ -95,6 +96,7 @@ describe('ResearchPanel', () => {
     mockIsDeepResearchStreaming = false
     mockDeepResearchJobId = null
     mockDeepResearchStreamLoaded = false
+    mockIsLoadJobDataLoading = false
     mockImportJobStream.mockClear()
     mockLoadResearchPanelTab.mockClear()
   })
@@ -153,6 +155,26 @@ describe('ResearchPanel', () => {
       await user.click(screen.getByText('Report'))
 
       expect(mockLoadResearchPanelTab).toHaveBeenCalledWith('job-123', 'report')
+    })
+
+    test('queues tab loading while another research panel load is active', async () => {
+      mockDeepResearchJobId = 'job-123'
+      mockIsLoadJobDataLoading = true
+      const user = userEvent.setup()
+
+      const { rerender } = render(<ResearchPanel isAuthenticated={true} />)
+
+      await user.click(screen.getByText('Report'))
+
+      expect(mockSetResearchPanelTab).toHaveBeenCalledWith('report')
+      expect(mockLoadResearchPanelTab).not.toHaveBeenCalled()
+
+      mockIsLoadJobDataLoading = false
+      rerender(<ResearchPanel isAuthenticated={true}>Reloaded</ResearchPanel>)
+
+      await vi.waitFor(() => {
+        expect(mockLoadResearchPanelTab).toHaveBeenCalledWith('job-123', 'report')
+      })
     })
 
     test('displays correct tab content based on researchPanelTab', () => {
