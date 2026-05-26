@@ -112,8 +112,8 @@ describe('MainLayout', () => {
     vi.clearAllMocks()
   })
 
-  test('renders all main sections', () => {
-    render(<MainLayout />)
+  test('renders authenticated main sections', () => {
+    render(<MainLayout isAuthenticated={true} />)
 
     expect(screen.getByTestId('app-bar')).toBeInTheDocument()
     expect(screen.getByTestId('sessions-panel')).toBeInTheDocument()
@@ -121,6 +121,17 @@ describe('MainLayout', () => {
     expect(screen.getByTestId('input-area')).toBeInTheDocument()
     expect(screen.getByTestId('research-panel')).toBeInTheDocument()
     expect(screen.getByTestId('data-sources-panel')).toBeInTheDocument()
+  })
+
+  test('hides the data sources panel when unauthenticated', () => {
+    render(<MainLayout />)
+
+    expect(screen.getByTestId('app-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('sessions-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('chat-area')).toBeInTheDocument()
+    expect(screen.getByTestId('input-area')).toBeInTheDocument()
+    expect(screen.getByTestId('research-panel')).toBeInTheDocument()
+    expect(screen.queryByTestId('data-sources-panel')).not.toBeInTheDocument()
   })
 
   test('passes session title to AppBar', () => {
@@ -170,13 +181,25 @@ describe('MainLayout', () => {
   test('wires the AppBar new session action to draft session flow', async () => {
     const user = userEvent.setup()
 
-    render(<MainLayout />)
+    render(<MainLayout isAuthenticated={true} />)
 
     await user.click(screen.getByRole('button', { name: /header new session/i }))
 
     expect(mockStartNewSessionDraft).toHaveBeenCalledOnce()
     expect(mockClearSessionUrl).toHaveBeenCalledOnce()
     expect(mockOpenRightPanel).toHaveBeenCalledWith('data-sources')
+  })
+
+  test('does not open data sources from new session while unauthenticated', async () => {
+    const user = userEvent.setup()
+
+    render(<MainLayout />)
+
+    await user.click(screen.getByRole('button', { name: /header new session/i }))
+
+    expect(mockStartNewSessionDraft).toHaveBeenCalledOnce()
+    expect(mockClearSessionUrl).toHaveBeenCalledOnce()
+    expect(mockOpenRightPanel).not.toHaveBeenCalled()
   })
 
   test('disables new session action while shallow streaming is active', () => {

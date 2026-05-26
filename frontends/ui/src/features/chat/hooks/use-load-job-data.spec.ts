@@ -264,7 +264,12 @@ describe('useLoadJobData', () => {
         deepResearchReportExpired: true,
       })
     )
-    expect(mockAddDeepResearchBanner).not.toHaveBeenCalled()
+    expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('expired', 'job-404', 'conv-1')
+    expect(mockAddDeepResearchBanner).not.toHaveBeenCalledWith(
+      'failure',
+      expect.anything(),
+      expect.anything()
+    )
     expect(mockAddErrorCard).not.toHaveBeenCalled()
     expect(consoleErrorSpy).not.toHaveBeenCalled()
     consoleErrorSpy.mockRestore()

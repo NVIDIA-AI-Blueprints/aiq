@@ -972,6 +972,14 @@ describe('useChatStore', () => {
             deepResearchJobStatus: 'success',
             showViewReport: true,
           },
+          {
+            id: 'success-banner',
+            role: 'assistant',
+            content: '',
+            timestamp: new Date(),
+            messageType: 'deep_research_banner',
+            deepResearchBannerData: { bannerType: 'success', jobId: 'job-expired' },
+          },
         ],
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -1056,6 +1064,16 @@ describe('useChatStore', () => {
       expect(expiredMessage?.isDeepResearchActive).toBe(false)
       expect(expiredMessage?.showViewReport).toBe(false)
       expect(expiredMessage?.deepResearchReportExpired).toBe(true)
+
+      const expiredConversationAfter = state.conversations.find((c) => c.id === 'conv-expired')
+      const reportBanners =
+        expiredConversationAfter?.messages.filter(
+          (m) =>
+            m.messageType === 'deep_research_banner' &&
+            m.deepResearchBannerData?.jobId === 'job-expired'
+        ) ?? []
+      expect(reportBanners).toHaveLength(1)
+      expect(reportBanners[0].deepResearchBannerData?.bannerType).toBe('expired')
     })
 
     test('refreshDeepResearchSessionStatuses keeps old chat-only sessions without backend checks', async () => {

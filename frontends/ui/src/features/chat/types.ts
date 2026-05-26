@@ -23,7 +23,7 @@ export type MessageType =
   | 'deep_research_banner'
 
 /** Deep research banner types for status notifications */
-export type DeepResearchBannerType = 'starting' | 'success' | 'failure' | 'cancelled'
+export type DeepResearchBannerType = 'starting' | 'success' | 'failure' | 'cancelled' | 'expired'
 
 /** File upload status types for banner messages */
 export type FileUploadStatusType = 'uploaded' | 'pending_warning'
@@ -91,7 +91,7 @@ export interface FileUploadStatusData {
 
 /** Deep research banner data for status notifications */
 export interface DeepResearchBannerData {
-  /** Type of banner: starting, success, or failure */
+  /** Type of banner: starting, success, failure, cancellation, or expiry */
   bannerType: DeepResearchBannerType
   /** Job ID for identification */
   jobId: string

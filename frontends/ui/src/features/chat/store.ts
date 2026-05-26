@@ -315,6 +315,54 @@ const patchLatestDeepResearchJobMessage = (
   return { ...conversation, messages }
 }
 
+const createDeepResearchBannerMessage = (
+  bannerType: DeepResearchBannerType,
+  jobId: string,
+  stats?: { totalTokens?: number; toolCallCount?: number }
+): ChatMessage => ({
+  id: uuidv4(),
+  role: 'assistant',
+  content: '',
+  timestamp: new Date(),
+  messageType: 'deep_research_banner',
+  deepResearchBannerData: {
+    bannerType,
+    jobId,
+    totalTokens: stats?.totalTokens,
+    toolCallCount: stats?.toolCallCount,
+  },
+  // Starting banners carry job metadata so restored sessions can reconnect or cancel correctly.
+  ...(bannerType === 'starting' && {
+    deepResearchJobId: jobId,
+    deepResearchJobStatus: 'submitted' as const,
+    isDeepResearchActive: true,
+  }),
+})
+
+const withDeepResearchBanner = (
+  conversation: Conversation,
+  bannerType: DeepResearchBannerType,
+  jobId: string,
+  stats?: { totalTokens?: number; toolCallCount?: number }
+): Conversation => {
+  const isTerminalBanner = bannerType !== 'starting'
+  const filteredMessages = isTerminalBanner
+    ? conversation.messages.filter(
+        (message) =>
+          !(
+            message.messageType === 'deep_research_banner' &&
+            message.deepResearchBannerData?.jobId === jobId
+          )
+      )
+    : conversation.messages
+
+  return {
+    ...conversation,
+    messages: [...filteredMessages, createDeepResearchBannerMessage(bannerType, jobId, stats)],
+    updatedAt: new Date(),
+  }
+}
+
 const patchConversationMessageById = (
   conversation: Conversation,
   messageId: string,
@@ -1887,47 +1935,12 @@ export const useChatStore = create<ChatStore>()(
 
           if (!targetConversation) return
 
-          // When adding a terminal banner, remove the 'starting' banner for the same job
-          // to prevent stale "View Progress" buttons from persisting after completion
-          const isTerminalBanner = bannerType !== 'starting'
-          const filteredMessages = isTerminalBanner
-            ? targetConversation.messages.filter(
-                (m) =>
-                  !(
-                    m.messageType === 'deep_research_banner' &&
-                    m.deepResearchBannerData?.bannerType === 'starting' &&
-                    m.deepResearchBannerData?.jobId === jobId
-                  )
-              )
-            : targetConversation.messages
-
-          // Build banner message with job metadata for 'starting' banners
-          // This supports session restoration and proper Cancel functionality
-          const bannerMessage: ChatMessage = {
-            id: uuidv4(),
-            role: 'assistant',
-            content: '',
-            timestamp: new Date(),
-            messageType: 'deep_research_banner',
-            deepResearchBannerData: {
-              bannerType,
-              jobId,
-              totalTokens: stats?.totalTokens,
-              toolCallCount: stats?.toolCallCount,
-            },
-            // For 'starting' banners, include job metadata for session restoration
-            ...(bannerType === 'starting' && {
-              deepResearchJobId: jobId,
-              deepResearchJobStatus: 'submitted' as const,
-              isDeepResearchActive: true,
-            }),
-          }
-
-          const updatedConversation: Conversation = {
-            ...targetConversation,
-            messages: [...filteredMessages, bannerMessage],
-            updatedAt: new Date(),
-          }
+          const updatedConversation = withDeepResearchBanner(
+            targetConversation,
+            bannerType,
+            jobId,
+            stats
+          )
 
           const updatedConversations = updateConversationInList(conversations, updatedConversation)
 
@@ -2499,7 +2512,7 @@ export const useChatStore = create<ChatStore>()(
                 m.messageType === 'deep_research_banner' &&
                 m.deepResearchBannerData?.jobId === bannerJobId &&
                 m.id !== banner.id &&
-                ['success', 'failure', 'cancelled'].includes(
+                ['success', 'failure', 'cancelled', 'expired'].includes(
                   m.deepResearchBannerData?.bannerType || ''
                 )
             )
@@ -2652,12 +2665,16 @@ export const useChatStore = create<ChatStore>()(
                 isCompletedDeepResearchReportMessage(message) ||
                 Boolean(message.deepResearchReportExpired)
 
-              return patchLatestDeepResearchJobMessage(conversation, jobId, {
+              const patchedConversation = patchLatestDeepResearchJobMessage(conversation, jobId, {
                 deepResearchJobStatus: 'failure',
                 isDeepResearchActive: false,
                 showViewReport: false,
                 deepResearchReportExpired: hadCompletedReport,
               })
+
+              return hadCompletedReport
+                ? withDeepResearchBanner(patchedConversation, 'expired', jobId)
+                : patchedConversation
             }
 
             if (result.status === 'submitted' || result.status === 'running') {

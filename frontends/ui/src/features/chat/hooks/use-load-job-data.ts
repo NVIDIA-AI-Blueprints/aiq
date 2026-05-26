@@ -208,11 +208,23 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         .reverse()
         .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId === jobId)
 
+      let hadCompletedReport =
+        Boolean(trackingMessage?.deepResearchReportExpired) ||
+        Boolean(
+          trackingMessage?.deepResearchJobStatus === 'success' &&
+          (trackingMessage.showViewReport || trackingMessage.reportContent?.trim())
+        )
+
+      if (!hadCompletedReport) {
+        hadCompletedReport = conversation.messages.some(
+          (m) =>
+            m.messageType === 'deep_research_banner' &&
+            m.deepResearchBannerData?.jobId === jobId &&
+            m.deepResearchBannerData?.bannerType === 'success'
+        )
+      }
+
       if (trackingMessage?.id) {
-        const hadCompletedReport =
-          Boolean(trackingMessage.deepResearchReportExpired) ||
-          (trackingMessage.deepResearchJobStatus === 'success' &&
-            Boolean(trackingMessage.showViewReport || trackingMessage.reportContent?.trim()))
         patchConversationMessage(conversation.id, trackingMessage.id, {
           deepResearchJobStatus: 'failure',
           isDeepResearchActive: false,
@@ -225,11 +237,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         (m) =>
           m.messageType === 'deep_research_banner' &&
           m.deepResearchBannerData?.jobId === jobId &&
-          ['success', 'failure', 'cancelled'].includes(m.deepResearchBannerData?.bannerType || '')
+          ['success', 'failure', 'cancelled', 'expired'].includes(
+            m.deepResearchBannerData?.bannerType || ''
+          )
       )
 
-      if (!hasTerminalBanner) {
-        addDeepResearchBanner('failure', jobId, conversation.id)
+      if (hadCompletedReport || !hasTerminalBanner) {
+        addDeepResearchBanner(hadCompletedReport ? 'expired' : 'failure', jobId, conversation.id)
       }
     },
     [patchConversationMessage, addDeepResearchBanner]

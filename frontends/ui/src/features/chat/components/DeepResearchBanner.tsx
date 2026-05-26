@@ -9,6 +9,7 @@
  * - "starting": Research in progress, with View Progress action
  * - "success": Research completed, report is ready
  * - "failure": Research failed or was interrupted
+ * - "expired": Research report was deleted or expired server-side
  */
 
 'use client'
@@ -21,7 +22,7 @@ import { useLoadJobData } from '../hooks/use-load-job-data'
 import type { DeepResearchBannerType } from '../types'
 
 export interface DeepResearchBannerProps {
-  /** Type of banner: success or failure */
+  /** Type of banner: starting, success, failure, cancelled, or expired */
   bannerType: DeepResearchBannerType
   /** Job ID for identification */
   jobId: string
@@ -39,8 +40,8 @@ type BannerStatus = 'success' | 'info' | 'warning' | 'error'
 interface BannerConfig {
   heading: string
   subheading: string
-  buttonText: string
-  buttonTab: 'report' | 'tasks' | 'thinking'
+  buttonText?: string
+  buttonTab?: 'report' | 'tasks' | 'thinking'
   status: BannerStatus
 }
 
@@ -98,6 +99,12 @@ const getBannerConfig = (
         buttonTab: 'tasks',
         status: 'warning',
       }
+    case 'expired':
+      return {
+        heading: 'Report Expired',
+        subheading: `The report has expired and is no longer available. (${jobIdLine})`,
+        status: 'warning',
+      }
     case 'starting':
       return {
         heading: 'Starting Deep Research',
@@ -124,17 +131,20 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   const { loadResearchPanelTab } = useLoadJobData()
   const config = getBannerConfig(bannerType, jobId, { totalTokens, toolCallCount })
 
-  // Job is complete if banner type indicates completion (success, failure, cancelled)
+  // Job is complete if banner type indicates completion (success, failure, cancelled, expired)
   // 'starting' banner means job is still in progress - don't try to load archived data
   const isJobComplete = bannerType !== 'starting'
 
   const handleButtonClick = useCallback(async () => {
+    const buttonTab = config.buttonTab
+    if (!buttonTab) return
+
     if (isJobComplete) {
-      await loadResearchPanelTab(jobId, config.buttonTab)
+      await loadResearchPanelTab(jobId, buttonTab)
       return
     }
 
-    setResearchPanelTab(config.buttonTab)
+    setResearchPanelTab(buttonTab)
     openRightPanel('research')
     // For incomplete jobs (starting), the live SSE connection is already populating data
   }, [
@@ -149,7 +159,7 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
   // Keep archived/error-state banners informational. The report CTA is the
   // only banner action we keep visible to avoid competing recovery paths.
   const actions =
-    bannerType === 'success' ? (
+    bannerType === 'success' && config.buttonText ? (
       <Button
         kind="secondary"
         size="small"

@@ -114,8 +114,10 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const handleNewSession = useCallback(() => {
     startNewSessionDraft()
     clearSessionUrl()
-    openRightPanel('data-sources')
-  }, [startNewSessionDraft, clearSessionUrl, openRightPanel])
+    if (isAuthenticated) {
+      openRightPanel('data-sources')
+    }
+  }, [startNewSessionDraft, clearSessionUrl, openRightPanel, isAuthenticated])
 
   // Wrap deleteConversation to clear URL if deleting current session
   const handleDeleteSession = useCallback(
@@ -210,7 +212,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
       />
 
       {/* Data Sources Panel (Right) - Overlay */}
-      <DataSourcesPanel />
+      {isAuthenticated && <DataSourcesPanel />}
     </Flex>
   )
 }

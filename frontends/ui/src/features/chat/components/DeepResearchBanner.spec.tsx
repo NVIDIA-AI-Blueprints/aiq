@@ -48,4 +48,14 @@ describe('DeepResearchBanner', () => {
 
     expect(screen.queryByRole('button', { name: actionLabel })).not.toBeInTheDocument()
   })
+
+  test('renders an expired report warning without an action', () => {
+    render(<DeepResearchBanner bannerType="expired" jobId="job-1" />)
+
+    expect(screen.getByText('Report Expired')).toBeInTheDocument()
+    expect(
+      screen.getByText(/The report has expired and is no longer available/i)
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button')).not.toBeInTheDocument()
+  })
 })
