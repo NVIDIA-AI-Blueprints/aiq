@@ -7,16 +7,9 @@ uses routed `/chat`, polls asynchronous deep research jobs, and returns final re
 
 ## Prerequisites
 
-Users need:
-
-- Python 3.11+ available as `python3`.
-- A reachable local or self-hosted AI-Q Blueprint backend.
-- `AIQ_SERVER_URL` set when the backend is not running at `http://localhost:8000`.
-- A backend configured for this public local helper. Authenticated environments should use an authenticated AI-Q skill
-  or configure authentication outside this helper.
-- Network access from the local machine to the AI-Q backend URL.
-
-The helper script uses only Python standard-library modules.
+This skill requires Python 3.11+, network access to a reachable local or self-hosted AI-Q backend, and `AIQ_SERVER_URL`
+when the backend is not running at `http://localhost:8000`. The helper script uses only Python standard-library modules.
+See `SKILL.md` for the canonical prerequisite checklist and authentication boundary.
 
 ## Canonical Location
 

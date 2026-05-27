@@ -7,17 +7,9 @@ AI-Q Blueprint deployment. It prepares an AI-Q backend that can be handed to `ai
 
 ## Prerequisites
 
-Users need:
-
-- Git access to `https://github.com/NVIDIA-AI-Blueprints/aiq`.
-- Docker Engine with Docker Compose v2 for the default local deployment.
-- Python 3.11+ and `uv` for local process or CLI mode.
-- Node.js 20+ and `npm` for browser UI development mode.
-- `kubectl` 1.28+, Helm 3.12+, and Kubernetes cluster access for Helm mode.
-- `NVIDIA_API_KEY` for hosted-model usage.
-- At least one supported search provider key, such as `TAVILY_API_KEY`, `SERPER_API_KEY`, or `EXA_API_KEY`, for web
-  research workflows.
-- Network access to GitHub, NVIDIA-hosted model endpoints, and selected search providers.
+This skill requires Git access, network access, AI-Q runtime credentials, and one selected deployment runtime such as
+Docker Compose, local Python/`uv`, local Node.js/`npm`, or Kubernetes with Helm. See `SKILL.md` for the canonical
+prerequisite checklist and secret-handling requirements.
 
 ## Quick Start
 
