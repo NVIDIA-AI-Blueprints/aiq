@@ -32,6 +32,10 @@ AIQ_SERVER_URL = os.environ.get("AIQ_SERVER_URL", DEFAULT_SERVER_URL)
 _HEADLESS_HEADERS = {"Content-Type": "application/json", "X-AIQ-Mode": "headless"}
 DEFAULT_AGENT_TYPE = "shallow_researcher"
 
+URL_MAX_LENGTH = 2048
+API_PATH_MAX_LENGTH = 4096
+ERROR_BODY_PREVIEW_CHARS = 1000
+HEALTH_TIMEOUT_SECONDS = 10
 DEFAULT_API_TIMEOUT_SECONDS = 120
 DEFAULT_LONG_HTTP_TIMEOUT_SECONDS = 3600
 JOB_POLL_INTERVAL_SECONDS = 15
@@ -49,7 +53,7 @@ def _validate_base_url(url: str) -> str:
     raw = (url or "").strip()
     if not raw:
         raise RuntimeError("AIQ_SERVER_URL is empty")
-    if len(raw) > 2048 or _CONTROL_CHAR_RE.search(raw):
+    if len(raw) > URL_MAX_LENGTH or _CONTROL_CHAR_RE.search(raw):
         raise RuntimeError("AIQ_SERVER_URL is invalid")
     parsed = urllib.parse.urlparse(raw)
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
@@ -63,7 +67,7 @@ def _validate_api_path(path: str) -> None:
     """Reject unsafe or malformed API paths before building a request URL."""
     if not path.startswith("/") or path.startswith("//"):
         raise RuntimeError("Invalid API path")
-    if len(path) > 4096 or ".." in path or _CONTROL_CHAR_RE.search(path):
+    if len(path) > API_PATH_MAX_LENGTH or ".." in path or _CONTROL_CHAR_RE.search(path):
         raise RuntimeError("Invalid API path")
 
 
@@ -108,7 +112,7 @@ def _api_request(
             payload = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
-        print(f"HTTP {exc.code}: {error_body[:1000]}", file=sys.stderr)
+        print(f"HTTP {exc.code}: {error_body[:ERROR_BODY_PREVIEW_CHARS]}", file=sys.stderr)
         raise RuntimeError(f"HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         print(f"Connection failed for {url}: {exc.reason}", file=sys.stderr)
@@ -135,7 +139,7 @@ def _stream_request(path: str, *, timeout: int = DEFAULT_LONG_HTTP_TIMEOUT_SECON
                 yield raw_line.decode("utf-8", errors="replace").strip()
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
-        print(f"HTTP {exc.code}: {error_body[:1000]}", file=sys.stderr)
+        print(f"HTTP {exc.code}: {error_body[:ERROR_BODY_PREVIEW_CHARS]}", file=sys.stderr)
         raise RuntimeError(f"HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
         print(f"Connection failed for {url}: {exc.reason}", file=sys.stderr)
@@ -146,10 +150,10 @@ def health() -> dict[str, Any]:
     """Return the first successful AI-Q health response."""
     for path in ("/health", "/v1/health"):
         try:
-            return _api_request("GET", path, timeout=10)
+            return _api_request("GET", path, timeout=HEALTH_TIMEOUT_SECONDS)
         except RuntimeError:
             continue
-    return _api_request("GET", "/", timeout=10)
+    return _api_request("GET", "/", timeout=HEALTH_TIMEOUT_SECONDS)
 
 
 def list_agents() -> dict[str, Any]:
@@ -274,6 +278,125 @@ def _print_usage() -> None:
     print(f"Environment: AIQ_SERVER_URL defaults to {DEFAULT_SERVER_URL}")
 
 
+def _require_arg(args: list[str], usage: str, *, position: int = 0) -> str:
+    """Return a required command argument or exit with usage."""
+    if len(args) <= position:
+        print(usage, file=sys.stderr)
+        sys.exit(1)
+    return args[position]
+
+
+def _command_health(_args: list[str]) -> None:
+    print(json.dumps(health(), indent=2))
+
+
+def _command_chat(args: list[str]) -> None:
+    query = _require_arg(args, "Usage: aiq.py chat <query>")
+    result = chat_request(query)
+    content = _extract_chat_content(result)
+    match = re.search(r"Job ID:\s*([0-9a-f-]{36})", content, re.IGNORECASE)
+    if match:
+        print(json.dumps({"status": "deep_research_running", "job_id": match.group(1)}))
+        return
+    print(json.dumps(result, indent=2))
+
+
+def _extract_chat_content(result: dict[str, Any]) -> str:
+    """Return chat content from an OpenAI-style response if present."""
+    try:
+        content = result["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        return ""
+    return content if isinstance(content, str) else ""
+
+
+def _command_agents(_args: list[str]) -> None:
+    print(json.dumps(list_agents(), indent=2))
+
+
+def _command_submit(args: list[str]) -> None:
+    query = _require_arg(args, "Usage: aiq.py submit <query> [agent_type]")
+    agent_type = args[1] if len(args) > 1 else DEFAULT_AGENT_TYPE
+    print(json.dumps(submit_job(query, agent_type=agent_type), indent=2))
+
+
+def _command_status(args: list[str]) -> None:
+    job_id = _require_arg(args, "Usage: aiq.py status <job_id>")
+    job_status = get_job_status(job_id)
+    try:
+        job_state = get_job_state(job_id)
+    except RuntimeError as exc:
+        job_state = {"_fetch_error": str(exc)}
+    print(json.dumps({"job_status": job_status, "job_state": job_state}, indent=2))
+
+
+def _command_state(args: list[str]) -> None:
+    job_id = _require_arg(args, "Usage: aiq.py state <job_id>")
+    print(json.dumps(get_job_state(job_id), indent=2))
+
+
+def _command_stream(args: list[str]) -> None:
+    job_id = _require_arg(args, "Usage: aiq.py stream <job_id>")
+    stream_job(job_id)
+
+
+def _command_report(args: list[str]) -> None:
+    job_id = _require_arg(args, "Usage: aiq.py report <job_id>")
+    print(json.dumps(get_report(job_id), indent=2))
+
+
+def _command_research(args: list[str]) -> None:
+    query = _require_arg(args, "Usage: aiq.py research <query> [agent_type]")
+    agent_type = args[1] if len(args) > 1 else DEFAULT_AGENT_TYPE
+    print(f"Submitting {agent_type} job...", file=sys.stderr)
+    result = submit_job(query, agent_type=agent_type)
+    job_id = result.get("job_id")
+    if not job_id:
+        print(f"ERROR: No job_id in response: {result}", file=sys.stderr)
+        sys.exit(1)
+    print(f"Job submitted: {job_id}", file=sys.stderr)
+    _poll_until_success_or_exit(job_id)
+
+
+def _command_research_poll(args: list[str]) -> None:
+    job_id = _require_arg(args, "Usage: aiq.py research_poll <job_id>")
+    status = _checked_job_status(job_id)
+    state = status.get("status", "UNKNOWN").lower()
+    print(f"Current status: {state}", file=sys.stderr)
+    if state in _SUCCESS_JOB_STATES:
+        print(json.dumps(get_report(job_id), indent=2))
+    elif state in _FAILED_JOB_STATES:
+        print(f"Job {job_id} ended with status: {state}", file=sys.stderr)
+        print(json.dumps(status, indent=2))
+        sys.exit(1)
+    else:
+        print("Job still running, polling...", file=sys.stderr)
+        _poll_until_success_or_exit(job_id)
+
+
+def _checked_job_status(job_id: str) -> dict[str, Any]:
+    """Fetch job status with bounded retries."""
+    for attempt in range(1, STATUS_CHECK_MAX_ATTEMPTS + 1):
+        try:
+            return get_job_status(job_id)
+        except RuntimeError as exc:
+            if attempt == STATUS_CHECK_MAX_ATTEMPTS:
+                print(f"Status check failed after {STATUS_CHECK_MAX_ATTEMPTS} attempts: {exc}", file=sys.stderr)
+                sys.exit(1)
+            print(
+                f"Status check failed ({exc}), retrying in {JOB_POLL_INTERVAL_SECONDS}s... "
+                f"({attempt}/{STATUS_CHECK_MAX_ATTEMPTS})",
+                file=sys.stderr,
+            )
+            time.sleep(JOB_POLL_INTERVAL_SECONDS)
+    raise RuntimeError("unreachable")
+
+
+def _command_cancel(args: list[str]) -> None:
+    job_id = _require_arg(args, "Usage: aiq.py cancel <job_id>")
+    print(json.dumps(cancel_job(job_id), indent=2))
+
+
 def main() -> None:
     """Dispatch the command-line interface."""
     if len(sys.argv) < 2:
@@ -281,126 +404,25 @@ def main() -> None:
         sys.exit(1)
 
     cmd = sys.argv[1]
-
-    if cmd == "health":
-        print(json.dumps(health(), indent=2))
-
-    elif cmd == "chat":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py chat <query>", file=sys.stderr)
-            sys.exit(1)
-        result = chat_request(sys.argv[2])
-
-        content = ""
-        try:
-            content = result["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        match = re.search(r"Job ID:\s*([0-9a-f-]{36})", content, re.IGNORECASE)
-        if match:
-            print(json.dumps({"status": "deep_research_running", "job_id": match.group(1)}))
-        else:
-            print(json.dumps(result, indent=2))
-
-    elif cmd == "agents":
-        print(json.dumps(list_agents(), indent=2))
-
-    elif cmd == "submit":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py submit <query> [agent_type]", file=sys.stderr)
-            sys.exit(1)
-        agent_type = sys.argv[3] if len(sys.argv) > 3 else DEFAULT_AGENT_TYPE
-        print(json.dumps(submit_job(sys.argv[2], agent_type=agent_type), indent=2))
-
-    elif cmd == "status":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py status <job_id>", file=sys.stderr)
-            sys.exit(1)
-        job_id = sys.argv[2]
-        job_status = get_job_status(job_id)
-        try:
-            job_state = get_job_state(job_id)
-        except RuntimeError as exc:
-            job_state = {"_fetch_error": str(exc)}
-        print(json.dumps({"job_status": job_status, "job_state": job_state}, indent=2))
-
-    elif cmd == "state":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py state <job_id>", file=sys.stderr)
-            sys.exit(1)
-        print(json.dumps(get_job_state(sys.argv[2]), indent=2))
-
-    elif cmd == "stream":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py stream <job_id>", file=sys.stderr)
-            sys.exit(1)
-        stream_job(sys.argv[2])
-
-    elif cmd == "report":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py report <job_id>", file=sys.stderr)
-            sys.exit(1)
-        print(json.dumps(get_report(sys.argv[2]), indent=2))
-
-    elif cmd == "research":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py research <query> [agent_type]", file=sys.stderr)
-            sys.exit(1)
-        agent_type = sys.argv[3] if len(sys.argv) > 3 else DEFAULT_AGENT_TYPE
-        print(f"Submitting {agent_type} job...", file=sys.stderr)
-        result = submit_job(sys.argv[2], agent_type=agent_type)
-        job_id = result.get("job_id")
-        if not job_id:
-            print(f"ERROR: No job_id in response: {result}", file=sys.stderr)
-            sys.exit(1)
-        print(f"Job submitted: {job_id}", file=sys.stderr)
-        _poll_until_success_or_exit(job_id)
-
-    elif cmd == "research_poll":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py research_poll <job_id>", file=sys.stderr)
-            sys.exit(1)
-        job_id = sys.argv[2]
-        state = "UNKNOWN"
-        status: dict[str, Any] = {}
-        for attempt in range(1, STATUS_CHECK_MAX_ATTEMPTS + 1):
-            try:
-                status = get_job_status(job_id)
-                state = status.get("status", "UNKNOWN").lower()
-                break
-            except RuntimeError as exc:
-                if attempt == STATUS_CHECK_MAX_ATTEMPTS:
-                    print(f"Status check failed after {STATUS_CHECK_MAX_ATTEMPTS} attempts: {exc}", file=sys.stderr)
-                    sys.exit(1)
-                print(
-                    f"Status check failed ({exc}), retrying in {JOB_POLL_INTERVAL_SECONDS}s... "
-                    f"({attempt}/{STATUS_CHECK_MAX_ATTEMPTS})",
-                    file=sys.stderr,
-                )
-                time.sleep(JOB_POLL_INTERVAL_SECONDS)
-
-        print(f"Current status: {state}", file=sys.stderr)
-        if state in _SUCCESS_JOB_STATES:
-            print(json.dumps(get_report(job_id), indent=2))
-        elif state in _FAILED_JOB_STATES:
-            print(f"Job {job_id} ended with status: {state}", file=sys.stderr)
-            print(json.dumps(status, indent=2))
-            sys.exit(1)
-        else:
-            print("Job still running, polling...", file=sys.stderr)
-            _poll_until_success_or_exit(job_id)
-
-    elif cmd == "cancel":
-        if len(sys.argv) < 3:
-            print("Usage: aiq.py cancel <job_id>", file=sys.stderr)
-            sys.exit(1)
-        print(json.dumps(cancel_job(sys.argv[2]), indent=2))
-
-    else:
+    commands = {
+        "health": _command_health,
+        "chat": _command_chat,
+        "agents": _command_agents,
+        "submit": _command_submit,
+        "status": _command_status,
+        "state": _command_state,
+        "stream": _command_stream,
+        "report": _command_report,
+        "research": _command_research,
+        "research_poll": _command_research_poll,
+        "cancel": _command_cancel,
+    }
+    handler = commands.get(cmd)
+    if handler is None:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         _print_usage()
         sys.exit(1)
+    handler(sys.argv[2:])
 
 
 if __name__ == "__main__":

@@ -1,10 +1,7 @@
 ---
 name: aiq-deploy
 description: |
-  Deploy and operate NVIDIA AI-Q Blueprint for local or self-hosted use. Use when asked to install AIQ,
-  deploy AIQ, install deep research, clone AIQ, start or stop AI-Q infrastructure, run the UI/backend,
-  deploy with Docker Compose or Helm, choose an AI-Q workflow config, check health, inspect logs, rebuild,
-  or prepare a local or self-hosted AI-Q server for aiq-research.
+  Use when asked to install, deploy, run, validate, troubleshoot, or stop NVIDIA AI-Q Blueprint infrastructure.
 license: Apache-2.0
 compatibility: |
   Designed for Claude Code, OpenCode, Codex, and Agent Skills-compatible tools. Requires Git, network
@@ -13,7 +10,7 @@ compatibility: |
   kubectl 1.28+ and Helm 3.12+ for Kubernetes and Helm mode.
 metadata:
   version: "2.1.0"
-  author: "NVIDIA AI-Q Blueprint Team"
+  author: "NVIDIA AI-Q Blueprint Team <aiq-blueprint@nvidia.com>"
   github-url: "https://github.com/NVIDIA-AI-Blueprints/aiq"
   tags:
     - nvidia
@@ -133,7 +130,7 @@ Match the user request, then read the referenced file before acting:
 | Configure environment, check API keys, inspect `.env` | `references/env-and-secrets.md` |
 | Choose an AI-Q workflow config, understand config files, set `BACKEND_CONFIG` or `CONFIG_FILE` | `references/configs.md` |
 | Backend-only local server for `aiq-research`, AIQ as an Agent Skill | `references/skill-backend.md` |
-| Terminal assistant, CLI-only run, no web UI | `references/cli.md` |
+| Terminal assistant, CLI-only run, no web UI | `references/terminal-cli.md` |
 | Quick local development run, start UI/backend without containers | `references/local-web.md` |
 | Default durable local deployment, Docker Compose, containers, PostgreSQL | `references/docker-compose.md` |
 | Kubernetes, Helm, cluster deployment | `references/kubernetes-helm.md` |
@@ -213,7 +210,14 @@ If your Blueprint version is not compatible:
 - Do not claim FRAG is ready unless both `RAG_SERVER_URL` and `RAG_INGEST_URL` are configured and reachable.
 - Run verification commands yourself when possible.
 
-## Working Examples
+## Limitations
+
+- This skill prepares and validates AI-Q infrastructure; it does not judge deep research report quality.
+- It cannot provide or inspect secret values. Users must configure credentials outside chat.
+- Helm, FRAG, custom config, and self-hosted model paths depend on infrastructure the user controls.
+- Destructive cleanup, such as deleting Docker volumes, requires explicit user approval.
+
+## Examples
 
 ### Example 1: Deploy a backend-only Skill server with Docker Compose
 
@@ -254,7 +258,7 @@ Expected output: a successful health response. Then tell the user to keep `AIQ_S
 | Environment and secrets | `references/env-and-secrets.md` |
 | Workflow configs | `references/configs.md` |
 | Agent Skill backend | `references/skill-backend.md` |
-| CLI deployment | `references/cli.md` |
+| CLI deployment | `references/terminal-cli.md` |
 | Local web deployment | `references/local-web.md` |
 | Docker Compose deployment | `references/docker-compose.md` |
 | Kubernetes and Helm deployment | `references/kubernetes-helm.md` |

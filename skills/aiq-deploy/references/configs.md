@@ -29,6 +29,9 @@ Use these repository docs as the source of truth:
 | `configs/config_frontier_models.yml` | Hybrid model experiments | Advanced. May require additional provider keys or model access beyond the default NIM-backed path. |
 | `configs/config_skills.yml` | AI-Q runtime DeepAgents skills and sandbox behavior | Advanced. This is not the external Agent Skill packaging mechanism and should not be selected only because the user says "AI-Q as a skill." |
 
+Default to `config_web_default_llamaindex.yml` unless the user explicitly chooses CLI, FRAG, or an advanced example.
+If no existing config matches the request, stop and explain the customization gap instead of inventing a config.
+
 ## Deployment Mapping
 
 Docker Compose mounts `configs/` into the backend container at `/app/configs`. Use container paths in `deploy/.env`:
@@ -45,11 +48,3 @@ For local process modes, pass repository-relative paths to the start script:
 ```
 
 For Helm, the chart values use `CONFIG_FILE` to select an in-image config path. Do not claim arbitrary external config-file mounting is supported unless the chart values and templates have been inspected for the target release. If the user needs a custom Helm config file, explain that this is the gap tracked by `https://github.com/NVIDIA-AI-Blueprints/aiq/issues/243` and use documented ConfigMap and volume-mount behavior only when it is explicitly available.
-
-## Selection Rules
-
-1. Use `config_web_default_llamaindex.yml` for the default external-user Skill backend and UI paths.
-2. Use `config_web_frag.yml` only when the user explicitly wants FRAG and both RAG endpoints are configured and reachable.
-3. Use `config_cli_default.yml` only when the user wants terminal CLI mode.
-4. Treat `config_frontier_models.yml` and `config_skills.yml` as advanced examples, not default deployment choices.
-5. If no existing config matches the request, stop and explain the customization gap instead of inventing a config.

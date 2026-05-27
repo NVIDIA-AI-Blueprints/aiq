@@ -1,17 +1,21 @@
 ---
 name: aiq-research
 description: |
-  Run research requests through a locally running NVIDIA AI-Q Blueprint server. Use when the user asks for deep
-  research, AIQ research, research with AI-Q, or to use AI-Q on a question, unless they are asking to install,
-  deploy, start, stop, or troubleshoot AI-Q infrastructure.
+  Use when asked to run deep research or AI-Q research through a reachable NVIDIA AI-Q Blueprint backend.
 license: Apache-2.0
+permissions:
+  env:
+    - AIQ_SERVER_URL
+  network:
+    - http://localhost:8000
+    - https://*
 compatibility: |
   Designed for Claude Code, OpenCode, Codex, and Agent Skills-compatible tools. Requires Python 3.11+, network
   access to a running local or self-hosted AI-Q Blueprint server, and an AI-Q backend that exposes `/health`,
   `/chat`, and asynchronous job endpoints.
 metadata:
   version: "2.1.0"
-  author: "NVIDIA AI-Q Blueprint Team"
+  author: "NVIDIA AI-Q Blueprint Team <aiq-blueprint@nvidia.com>"
   github-url: "https://github.com/NVIDIA-AI-Blueprints/aiq"
   tags:
     - nvidia
@@ -65,7 +69,7 @@ The helper script has no third-party Python package dependencies; it uses Python
 1. Resolve the target backend URL.
 2. Run `health` before sending research requests.
 3. If no backend is reachable, ask for a backend URL or hand off to `aiq-deploy`.
-4. Send the user's exact query through routed `/chat`.
+4. Tell the user the query will be sent to the configured AI-Q backend before sending it.
 5. Poll asynchronous deep research jobs when AI-Q returns a job ID.
 6. Present returned reports with citations and source URLs intact.
 7. Stop on failed jobs and show the returned error; do not retry automatically.
@@ -94,6 +98,14 @@ I do not see a reachable local AI-Q backend. Do you already have an AI-Q backend
   compatible with this public research flow, then offer to run `aiq-deploy` validation.
 
 ### Step 2 - Send the routed research request
+
+Before sending the request, state the resolved endpoint:
+
+```text
+I will send this query to <AIQ_SERVER_URL>. Make sure this endpoint is trusted before sending sensitive information.
+```
+
+Do not send credentials, cookies, bearer tokens, or secret values through the query text.
 
 Run:
 
@@ -173,21 +185,24 @@ If your Blueprint version is not compatible:
 3. Proceed with caution only when the user accepts the compatibility risk; API routes or response shapes may have
    changed.
 
-## Available Script Commands
+## Available Scripts
 
-| Command | Purpose |
-|---|---|
-| `python3 scripts/aiq.py health` | Check whether the local server responds |
-| `python3 scripts/aiq.py chat "<query>"` | POST `/chat`; may return inline output or a deep-research job ID |
-| `python3 scripts/aiq.py agents` | List available async agent types |
-| `python3 scripts/aiq.py submit "<query>" [agent_type]` | Submit an explicit async job |
-| `python3 scripts/aiq.py research "<query>" [agent_type]` | Submit an async job, poll, and print the final report JSON |
-| `python3 scripts/aiq.py research_poll <job_id>` | Resume polling an existing async job |
-| `python3 scripts/aiq.py status <job_id>` | Fetch job status plus `/state` artifacts |
-| `python3 scripts/aiq.py state <job_id>` | Fetch event-store artifacts only |
-| `python3 scripts/aiq.py report <job_id>` | Fetch the final report for a completed job |
-| `python3 scripts/aiq.py stream <job_id>` | Stream SSE events from a job |
-| `python3 scripts/aiq.py cancel <job_id>` | Cancel a running job |
+| Script | Purpose | Arguments |
+|---|---|---|
+| `scripts/aiq.py health` | Check whether the configured server responds | none |
+| `scripts/aiq.py chat` | POST `/chat`; may return inline output or a deep-research job ID | `<query>` |
+| `scripts/aiq.py agents` | List available async agent types | none |
+| `scripts/aiq.py submit` | Submit an explicit async job | `<query> [agent_type]` |
+| `scripts/aiq.py research` | Submit an async job, poll, and print the final report JSON | `<query> [agent_type]` |
+| `scripts/aiq.py research_poll` | Resume polling an existing async job | `<job_id>` |
+| `scripts/aiq.py status` | Fetch job status plus `/state` artifacts | `<job_id>` |
+| `scripts/aiq.py state` | Fetch event-store artifacts only | `<job_id>` |
+| `scripts/aiq.py report` | Fetch the final report for a completed job | `<job_id>` |
+| `scripts/aiq.py stream` | Stream SSE events from a job | `<job_id>` |
+| `scripts/aiq.py cancel` | Cancel a running job | `<job_id>` |
+
+When the host supports a `run_script()` helper, call it with `scripts/aiq.py` and the arguments above. Otherwise, run
+the equivalent shell command, such as `python3 $SKILL_DIR/scripts/aiq.py health`.
 
 ## Environment Variables
 
@@ -199,10 +214,19 @@ If your Blueprint version is not compatible:
 
 - Do not put API keys, bearer tokens, cookies, or basic-auth credentials in `AIQ_SERVER_URL`.
 - Store backend credentials in the AI-Q deployment environment, not in this skill or command examples.
+- User query text is transmitted to the configured `AIQ_SERVER_URL`. Confirm the endpoint is trusted before sending
+  sensitive or confidential information.
 - Treat returned reports as potentially sensitive if the backend uses private data sources.
 - Do not truncate citations or source URLs from returned reports.
 
-## Working Examples
+## Limitations
+
+- This skill requires a running AI-Q backend; it does not deploy one.
+- The public helper does not manage authentication tokens or cookies.
+- Remote `AIQ_SERVER_URL` endpoints may log prompts, responses, and metadata.
+- If the backend returns HTTP 500 or lacks async agents, report the failure instead of fabricating a research answer.
+
+## Examples
 
 ### Example 1: Run a routed chat or research request
 
@@ -236,7 +260,6 @@ job completes. If the job failed, show the returned status and do not retry auto
 |---|---|
 | Helper script | `scripts/aiq.py` |
 | Deployment and backend validation | `../aiq-deploy/SKILL.md` |
-| Skill metadata and examples | `README.md` |
 
 ## Common Issues
 
