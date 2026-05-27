@@ -135,7 +135,7 @@ Then edit `deploy/.env` and fill in your keys.
 | `TAVILY_API_KEY` | [Tavily](https://tavily.com/) | Web search (Tavily provider) |
 | `EXA_API_KEY` | [Exa](https://exa.ai/) | Web search (Exa provider) |
 | `BRAVE_API_KEY` | [Brave Search API](https://api.search.brave.com/) | Web search (Brave provider) |
-| `TINYFISH_API_KEY` | [TinyFish](https://agent.tinyfish.ai/api-keys) | Web search (TinyFish provider) |
+| `TINYFISH_API_KEY` | [TinyFish](https://docs.tinyfish.ai/search-api) | Web search (TinyFish provider) |
 | `SERPER_API_KEY` | [Serper](https://serper.dev/) | Academic paper search (Google Scholar). To enable, uncomment `paper_search_tool` in your config file |
 
 At minimum, you need `NVIDIA_API_KEY` for LLM inference and one configured web-search provider key (`TAVILY_API_KEY`, `EXA_API_KEY`, `BRAVE_API_KEY`, or `TINYFISH_API_KEY`) for web search. Paper search (`SERPER_API_KEY`) is disabled by default in the shipped configs -- refer to the comments in your config file to enable it.

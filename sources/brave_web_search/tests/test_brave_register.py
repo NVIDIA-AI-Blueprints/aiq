@@ -19,10 +19,12 @@ import os
 import urllib.parse
 from unittest.mock import MagicMock
 
+import pytest
 from brave_web_search.register import BRAVE_SEARCH_URL
 from brave_web_search.register import BraveWebSearchToolConfig
 from brave_web_search.register import brave_web_search
 from pydantic import SecretStr
+from pydantic import ValidationError
 
 
 def _search_payload(results=None):
@@ -76,6 +78,10 @@ class TestBraveWebSearchToolConfig:
         assert config.freshness == "pw"
         assert config.timeout == 5.0
         assert config.max_content_length == 50
+
+    def test_max_results_has_upper_bound(self):
+        with pytest.raises(ValidationError):
+            BraveWebSearchToolConfig(max_results=21)
 
     def test_inherits_from_function_base_config(self):
         from nat.data_models.function import FunctionBaseConfig

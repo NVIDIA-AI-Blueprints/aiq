@@ -26,7 +26,7 @@ Common issues and solutions for the AI-Q blueprint.
 | Tavily search returns empty | Invalid `TAVILY_API_KEY` | Verify key at [tavily.com](https://tavily.com) |
 | Exa search returns empty or 401 | Invalid or missing `EXA_API_KEY` | Verify key at [exa.ai](https://exa.ai) |
 | Brave search returns empty or 401 | Invalid or missing `BRAVE_API_KEY` | Verify key at [api.search.brave.com](https://api.search.brave.com/) |
-| TinyFish search returns empty or 401 | Invalid or missing `TINYFISH_API_KEY` | Verify key at [agent.tinyfish.ai](https://agent.tinyfish.ai/api-keys) |
+| TinyFish search returns empty or 401 | Invalid or missing `TINYFISH_API_KEY` | Verify key using the [TinyFish Search API docs](https://docs.tinyfish.ai/search-api) |
 | Serper search fails | Missing `SERPER_API_KEY` | Set key or remove `paper_search_tool` from config |
 
 ## Runtime Issues

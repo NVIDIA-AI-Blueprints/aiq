@@ -19,7 +19,7 @@ limitations under the License.
 
 > **🏆 BENCHMARK NOTE 🏆**
 >
-> To obtain results consistent with the **nvidia-aiq** [DeepResearch Bench](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) and [DeepResearch Bench II](https://agentresearchlab.com/benchmarks/deepresearch-bench-ii/index.html#leaderboard) leaderboard results, please use the [`drb1`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb1) and [`drb2`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb2) branches, respectively.
+> To obtain results consistent with the **nvidia-aiq** [DeepResearch Bench](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) leaderboard and [DeepResearch Bench II](https://github.com/imlrz/DeepResearch-Bench-II) benchmark repository results, please use the [`drb1`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb1) and [`drb2`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb2) branches, respectively.
 
 
 ## Table of Contents
@@ -219,8 +219,8 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 
 #### Obtain a TinyFish API Key
 
-1. Sign in to [TinyFish](https://agent.tinyfish.ai/api-keys)
-2. Generate an API key from your dashboard
+1. Review the [TinyFish Search API docs](https://docs.tinyfish.ai/search-api)
+2. Generate an API key from your TinyFish dashboard
 
 #### Obtain a Serper API Key
 
