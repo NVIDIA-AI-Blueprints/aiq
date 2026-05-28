@@ -1081,19 +1081,16 @@ class TestClarifierForceSearch:
         get_latest_user_query would surface internal scaffolding back to the
         user in fallback text. Regression test for Codex review feedback."""
         # The LLM ignores the nudge and returns invalid JSON, triggering the
-        # invalid-format fallback path inside ask_clarification.
-        clarif_invalid = AIMessage(content="not valid JSON at all")
-        complete_msg = AIMessage(
-            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
-        )
-        # 1st call: clarify-attempt. 2nd call (after nudge): invalid JSON.
-        # 3rd call: after the user reply, model completes.
+        # invalid-format fallback path inside ask_clarification. The user then
+        # replies "skip", which forces completion - so only two LLM calls
+        # actually happen in this run.
         clarif_msg_1 = AIMessage(
             content=ClarificationResponse(
                 needs_clarification=True, clarification_question="What aspect?"
             ).model_dump_json()
         )
-        mock_llm.ainvoke = AsyncMock(side_effect=[clarif_msg_1, clarif_invalid, complete_msg])
+        clarif_invalid = AIMessage(content="not valid JSON at all")
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif_msg_1, clarif_invalid])
 
         # Capture what gets sent to the user.
         prompts_received: list[str] = []
@@ -1121,3 +1118,49 @@ class TestClarifierForceSearch:
         # The internal force-search guidance must never be visible in any
         # message the user-facing fallback would draw from.
         assert "You attempted to ask the user" not in prompt_text
+
+    @pytest.mark.asyncio
+    async def test_force_search_guidance_not_injected_after_user_reply(self, mock_llm_provider, mock_llm):
+        """After the user has actually replied (iteration > 0), the agent must
+        NOT re-inject the search-first nudge on the next LLM call. Otherwise
+        the model would receive 'issue a tool call now' immediately after the
+        user provided clarifying answer, causing a gratuitous search instead
+        of synthesizing the answer. Regression test for Greptile P1 finding."""
+        clarif_msg_1 = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        # After the nudge, the model still refuses to call a tool.
+        clarif_msg_2 = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="Which area?"
+            ).model_dump_json()
+        )
+        # After the user replies, the model completes.
+        complete_msg = AIMessage(
+            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif_msg_1, clarif_msg_2, complete_msg])
+
+        user_callback = AsyncMock(return_value="technical deep dive")
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=user_callback,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research AI")])
+        await agent.run(state)
+
+        # The 3rd LLM call happens AFTER the user reply (iteration moves from
+        # 0 to 1). The nudge must NOT appear in that call's message list, even
+        # though force_search_used is still True.
+        assert mock_llm.ainvoke.call_count == 3
+        third_call_messages = mock_llm.ainvoke.call_args_list[2].args[0]
+        for m in third_call_messages:
+            if isinstance(m, HumanMessage):
+                assert FORCE_SEARCH_GUIDANCE not in m.content, (
+                    "force_search guidance must not be re-injected after the user replies"
+                )

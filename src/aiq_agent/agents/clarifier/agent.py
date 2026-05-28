@@ -583,7 +583,11 @@ class ClarifierAgent:
             # If the force_search nudge was raised but no tool call has happened
             # yet, inject the guidance ephemerally — never stored in state.messages,
             # so it cannot leak into get_latest_user_query and similar lookups.
-            if state.force_search_used and not self._has_tool_invocations(state.messages):
+            # The iteration==0 guard mirrors the one in decide_route: once the
+            # user has actually replied (iteration > 0), the nudge no longer
+            # applies and would otherwise force a gratuitous search on the
+            # user's clarifying answer.
+            if state.force_search_used and state.iteration == 0 and not self._has_tool_invocations(state.messages):
                 logger.info("Injecting force-search guidance for this turn")
                 messages.append(HumanMessage(content=FORCE_SEARCH_GUIDANCE))
 

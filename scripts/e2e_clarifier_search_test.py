@@ -121,10 +121,13 @@ async def main() -> int:
     print(f"  total ToolMessages (results)     : {tool_results}")
     print(f"  force_search guidance injected   : {forced}")
 
-    if tool_calls_made >= 1:
+    if tool_calls_made >= 1 and len(user_prompts) == 0:
         print("\nPASS: the LLM issued at least one search before any user prompt.")
         return 0
-    print("\nFAIL: the LLM never issued a search.")
+    if tool_calls_made == 0:
+        print("\nFAIL: the LLM never issued a search.")
+    else:
+        print("\nFAIL: the LLM issued a search, but the user was also prompted.")
     return 1
 
 
