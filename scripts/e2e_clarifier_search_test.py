@@ -32,7 +32,8 @@ if not os.environ.get("TAVILY_API_KEY"):
     sys.exit("TAVILY_API_KEY not set (paste it into deploy/.env)")
 
 from langchain_community.tools.tavily_search import TavilySearchResults  # noqa: E402
-from langchain_core.messages import HumanMessage, ToolMessage  # noqa: E402
+from langchain_core.messages import HumanMessage  # noqa: E402
+from langchain_core.messages import ToolMessage  # noqa: E402
 from langchain_nvidia_ai_endpoints import ChatNVIDIA  # noqa: E402
 
 from aiq_agent.agents.clarifier.agent import ClarifierAgent  # noqa: E402
@@ -96,9 +97,7 @@ async def main() -> int:
         messages = final_state.messages
         force_search_used = getattr(final_state, "force_search_used", False)
 
-    tool_calls_made = sum(
-        len(getattr(m, "tool_calls", None) or []) for m in messages
-    )
+    tool_calls_made = sum(len(getattr(m, "tool_calls", None) or []) for m in messages)
     tool_results = sum(1 for m in messages if isinstance(m, ToolMessage))
     forced = bool(force_search_used)
 
