@@ -48,7 +48,7 @@ llamaindex = [
 ]
 foundational_rag = [
     "requests>=2.28.0",
-    "urllib3>=2.0.0",
+    "urllib3>=2.7.0,<3",
     "docx2txt>=0.8",
     "python-pptx>=0.6.21",
 ]

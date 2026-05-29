@@ -13,7 +13,7 @@ const mockStartNewSessionDraft = vi.fn()
 const mockDeleteConversation = vi.fn()
 const mockDeleteAllConversations = vi.fn()
 const mockUpdateConversationTitle = vi.fn()
-const mockCloseRightPanel = vi.fn()
+const mockOpenRightPanel = vi.fn()
 
 // Mock the useSessionUrl hook (uses Next.js App Router hooks)
 vi.mock('@/hooks/use-session-url', () => ({
@@ -58,7 +58,7 @@ vi.mock('../store', () => ({
       isSessionsPanelOpen: false,
       setSessionsPanelOpen: vi.fn(),
       enabledDataSourceIds: ['source-1', 'source-2'],
-      closeRightPanel: mockCloseRightPanel,
+      openRightPanel: mockOpenRightPanel,
     }
     return selector ? selector(state) : state
   }),
@@ -104,10 +104,6 @@ vi.mock('./DataSourcesPanel', () => ({
   DataSourcesPanel: () => <div data-testid="data-sources-panel">Data Sources Panel</div>,
 }))
 
-vi.mock('./SettingsPanel', () => ({
-  SettingsPanel: () => <div data-testid="settings-panel">Settings Panel</div>,
-}))
-
 import { useChatStore } from '@/features/chat'
 import { useLayoutStore } from '../store'
 
@@ -116,8 +112,8 @@ describe('MainLayout', () => {
     vi.clearAllMocks()
   })
 
-  test('renders all main sections', () => {
-    render(<MainLayout />)
+  test('renders authenticated main sections', () => {
+    render(<MainLayout isAuthenticated={true} />)
 
     expect(screen.getByTestId('app-bar')).toBeInTheDocument()
     expect(screen.getByTestId('sessions-panel')).toBeInTheDocument()
@@ -125,7 +121,17 @@ describe('MainLayout', () => {
     expect(screen.getByTestId('input-area')).toBeInTheDocument()
     expect(screen.getByTestId('research-panel')).toBeInTheDocument()
     expect(screen.getByTestId('data-sources-panel')).toBeInTheDocument()
-    expect(screen.getByTestId('settings-panel')).toBeInTheDocument()
+  })
+
+  test('hides the data sources panel when unauthenticated', () => {
+    render(<MainLayout />)
+
+    expect(screen.getByTestId('app-bar')).toBeInTheDocument()
+    expect(screen.getByTestId('sessions-panel')).toBeInTheDocument()
+    expect(screen.getByTestId('chat-area')).toBeInTheDocument()
+    expect(screen.getByTestId('input-area')).toBeInTheDocument()
+    expect(screen.getByTestId('research-panel')).toBeInTheDocument()
+    expect(screen.queryByTestId('data-sources-panel')).not.toBeInTheDocument()
   })
 
   test('passes session title to AppBar', () => {
@@ -134,7 +140,7 @@ describe('MainLayout', () => {
     expect(screen.getByTestId('app-bar')).toHaveTextContent('Test Session')
   })
 
-  test('shows "New Session" when no current conversation', () => {
+  test('shows no session title when no current conversation', () => {
     vi.mocked(useChatStore).mockImplementationOnce((selector?: (s: any) => any) => {
       const state = {
         currentConversation: null,
@@ -154,13 +160,13 @@ describe('MainLayout', () => {
 
     render(<MainLayout />)
 
-    expect(screen.getByTestId('app-bar')).toHaveTextContent('New Session')
+    expect(screen.getByTestId('app-bar')).toHaveTextContent('')
   })
 
   test('passes auth state to components', () => {
     const onSignIn = vi.fn()
     const onSignOut = vi.fn()
-    const user = { name: 'Test User', email: 'test@example.com' }
+    const user = { name: 'Test User', email: 'test@nvidia.com' }
 
     render(
       <MainLayout isAuthenticated={true} user={user} onSignIn={onSignIn} onSignOut={onSignOut} />
@@ -175,13 +181,25 @@ describe('MainLayout', () => {
   test('wires the AppBar new session action to draft session flow', async () => {
     const user = userEvent.setup()
 
+    render(<MainLayout isAuthenticated={true} />)
+
+    await user.click(screen.getByRole('button', { name: /header new session/i }))
+
+    expect(mockStartNewSessionDraft).toHaveBeenCalledOnce()
+    expect(mockClearSessionUrl).toHaveBeenCalledOnce()
+    expect(mockOpenRightPanel).toHaveBeenCalledWith('data-sources')
+  })
+
+  test('does not open data sources from new session while unauthenticated', async () => {
+    const user = userEvent.setup()
+
     render(<MainLayout />)
 
     await user.click(screen.getByRole('button', { name: /header new session/i }))
 
     expect(mockStartNewSessionDraft).toHaveBeenCalledOnce()
     expect(mockClearSessionUrl).toHaveBeenCalledOnce()
-    expect(mockCloseRightPanel).toHaveBeenCalledOnce()
+    expect(mockOpenRightPanel).not.toHaveBeenCalled()
   })
 
   test('disables new session action while shallow streaming is active', () => {

@@ -19,7 +19,7 @@ limitations under the License.
 
 > **🏆 BENCHMARK NOTE 🏆**
 >
-> To obtain results consistent with the **nvidia-aiq** [DeepResearch Bench](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) and [DeepResearch Bench II](https://agentresearchlab.com/benchmarks/deepresearch-bench-ii/index.html#leaderboard) leaderboard results, please use the [`drb1`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb1) and [`drb2`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb2) branches, respectively.
+> To obtain results consistent with the **nvidia-aiq** [DeepResearch Bench](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) leaderboard and [DeepResearch Bench II](https://github.com/imlrz/DeepResearch-Bench-II) benchmark repository results, please use the [`drb1`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb1) and [`drb2`](https://github.com/NVIDIA-AI-Blueprints/aiq/tree/drb2) branches, respectively.
 
 
 ## Table of Contents
@@ -63,8 +63,13 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 - **Deep research** — Long-running multi-step planning and research to generate a long-form citation-backed report.
 - **Workflow configuration** — YAML configs define agents, tools, LLMs, and routing behavior so you can tune workflows without code changes.
 - **Modular workflows** — All agents (orchestration node, shallow researcher, deep researcher, clarifier) are composable; each can run standalone or as part of the full pipeline.
+- **Skills and sandbox execution** — Deep research can load built-in DeepAgents skills, including the `data-table-analysis` workflow, and run code-oriented work in a job-scoped Modal sandbox.
+- **Portable agent skill** — AI-Q ships `skills/aiq-research/` so compatible coding harnesses can call a local AI-Q server for routed chat and async deep research jobs.
+- **Data source registry** — UI toggles and request payloads can select web, paper, enterprise, collaboration, and knowledge-layer sources per message.
+- **Production API and auth** — REST endpoints, async job ownership, token validator entry points, and provider lifecycle hooks support authenticated deployments.
+- **Profiling and cost analysis** — Tokenomics reports combine NAT profiler traces with pricing configuration for cost, latency, and cache analysis.
 - **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
-- **Frontend options** — Run through CLI, web UI, or async jobs; the [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
+- **Frontend options** — Run through CLI, web UI, or async jobs. Refer to [Getting started](#getting-started) and [Ways to run the agents](#ways-to-run-the-agents).
 - **Deployment options** - Deployment assets for a [docker compose](deploy/compose/) as well as [helm deployment](deploy/helm/deployment-k8s/).
 
 
@@ -365,6 +370,9 @@ For development, contribution, and documentation, refer to:
 - **[Architecture](docs/source/architecture/overview.md)**: Component details and data flow
 - **[Customization](docs/source/customization/index.md)**: Configuration and customization options
 - **[Knowledge Layer Setup](sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md)**: RAG backends and document ingestion
+- **[Agent Skills](docs/source/integration/agent-skills.md)**: Install the portable AI-Q research skill in compatible coding harnesses
+- **[Skills and Sandbox Example](docs/source/examples/skills-sandbox/index.md)**: Run deep research with built-in skills and Modal sandbox execution
+- **[Profiling and Cost Analysis](docs/source/profiling/index.md)**: Generate tokenomics and latency reports from NAT profiler traces
 - **[Docs index](docs/README.md)**: Full documentation list and component docs
 - **[Changelog](docs/source/resources/changelog.md)**: Version history and changes
 
@@ -373,7 +381,8 @@ For development, contribution, and documentation, refer to:
 - [ ] **[NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) Integration:** Enhance safety and security guardrails.
 - [ ] **[NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) Integration:** Reduce latency via priority scheduling at scale.
 - [ ] **MCP Authentication:** Implement secure login/auth for MCP connections.
-- [ ] **Skills & Sandboxing:** Support custom skills within isolated environments.
+- [x] **Skills & Sandboxing:** Support built-in deep research skills with job-scoped sandbox execution.
+- [ ] **Custom Skill Management:** Add UI and lifecycle controls for user-provided skill bundles.
 - [ ] **Dynamic Model Routing:** Allow sub-agents to automatically select the optimal model per task.
 - [ ] **Resource Management:** Implement configurable token caps and tool-call budgets.
 - [ ] **Expanded Web Search:** Additional integration examples including Perplexity and You.com.
@@ -387,7 +396,7 @@ For development, contribution, and documentation, refer to:
 - A robust frontend that handles AuthN & AuthZ is highly recommended. Missing AuthN & AuthZ will result in ungated access to customer models if directly exposed e.g. the internet, resulting in either cost to the customer, resource exhaustion, or denial of service.
 - End users are encouraged to add [NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) and additional prompt content filtering to the blueprint. Guardrails will be native in upcoming release.
 - The AI-Q Blueprint doesn't require any privileged access to the system.
-- The AI-Q Blueprint doesn't currently generate any code that may require sandboxing. Future roadmap features (such as custom skills) will introduce sandboxed execution environments.
+- Deep research skills can invoke sandboxed code execution for analysis workflows. Keep sandbox credentials, quotas, lifecycle cleanup, and network policy aligned with your deployment's trust boundaries.
 - End users are responsible for ensuring the availability of their deployment.
 - End users are responsible for building, and patching, the container images to keep them up to date.
 - The end users are responsible for ensuring that OSS packages used by the developer blueprint are current.

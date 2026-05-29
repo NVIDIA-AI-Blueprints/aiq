@@ -12,6 +12,33 @@
   --header-height: 3.5rem;
 }
 
+/*
+ * KUI sets on .nv-side-panel-content:
+ *   --heading-padding-block: spacing-density-xl + spacing*3  (~28px per block side)
+ * and .nv-side-panel-heading uses padding-block: var(--heading-padding-block),
+ * which makes the title row ~77px. Override the token on docked panels so padding
+ * matches the main header height. The bordered heading has a 1px bottom border;
+ * spacing*6 matches KUI’s default heading icon size used in the row height math.
+ * .nv-side-panel-close uses the same token for vertical position (inherits).
+ */
+.nv-side-panel-content.side-panel-dock-under-header {
+  --heading-padding-block: calc(
+    (var(--header-height) - 1px - calc(var(--spacing) * 6)) / 2
+  );
+}
+
+.nv-side-panel-content.side-panel-dock-under-header .nv-side-panel-heading {
+  box-sizing: border-box;
+  min-height: var(--header-height);
+}
+
+/* Bordered panels add border-top on .nv-side-panel-footer; remove for docked app panels. */
+.nv-side-panel-content.side-panel-dock-under-header.nv-side-panel-content--bordered
+  .nv-side-panel-footer {
+  border-top-width: 0;
+  border-top-style: none;
+}
+
 /* =============================================================================
    NVIDIA brand color overrides (unlayered — highest cascade priority)
 

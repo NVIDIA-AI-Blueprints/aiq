@@ -111,6 +111,7 @@ export const Copy = createIcon('copy-generic')
 export const Download = createIcon('download')
 export const Upload = createIcon('upload')
 export const Share = createIcon('share')
+export const OpenExternal = createIcon('open-external')
 export const Refresh = createIcon('refresh')
 
 // ---------------------------------------------------------------------------
@@ -172,6 +173,7 @@ export const Wand = createIcon('wand')
 // ---------------------------------------------------------------------------
 
 export const Document = createIcon('document')
+export const DocumentCheckmark = createIcon('document-checkmark')
 export const Link = createIcon('link')
 export const Trash = createIcon('trash')
 export const Globe = createIcon('world')
@@ -180,6 +182,8 @@ export const Help = createIcon('help-circle')
 export const Lock = createIcon('lock-closed')
 export const Plug = createIcon('plug-recepticle')
 export const Wrench = createIcon('wrench')
+export const ChatMessage = createIcon('chat-message')
+export const SelectEllipse = createIcon('select-ellipse')
 export const Retry = createIcon('retry')
 export const Cancel = createIcon('cancel')
 
@@ -204,7 +208,8 @@ export const ChartFlow = createIcon('chart-flow')
 export const Generate: FC<IconProps> = ({ className }) => {
   const [mounted, setMounted] = useState(false)
   useEffect(() => setMounted(true), [])
-  if (!mounted) return <span style={{ display: 'inline-block', width: 24, height: 24 }} aria-hidden="true" />
+  if (!mounted)
+    return <span style={{ display: 'inline-block', width: 24, height: 24 }} aria-hidden="true" />
   return (
     <svg
       data-src={`${CDN_BASE}/line/generate.svg`}

@@ -74,7 +74,7 @@
 # =============================================================================
 # Stage 1: Base with Node.js
 # =============================================================================
-FROM nvcr.io/nvidia/base/ubuntu:jammy-20251013 AS base
+FROM nvcr.io/nvidia/base/ubuntu:jammy-20260217 AS base
 
 RUN apt-get update && apt-get install -y \
     curl \
@@ -129,7 +129,8 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
 RUN groupadd --system --gid 1001 nodejs \
-    && useradd --system --uid 1001 --gid nodejs nextjs
+    && useradd --system --uid 1001 --gid nodejs nextjs \
+    && rm -rf /usr/lib/node_modules/npm /usr/bin/npm /usr/bin/npx
 
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 COPY --from=builder --chown=nextjs:nodejs /app/.next ./.next
@@ -145,4 +146,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:3000/ || exit 1
 
-CMD ["npm", "start"]
+CMD ["node", "server.js"]

@@ -9,7 +9,7 @@
  * - SessionsPanel (left, overlay)
  * - ChatArea + InputArea (center, responsive width)
  * - ResearchPanel (right, pushes content - takes 60% when open)
- * - DataSourcesPanel / SettingsPanel (right, overlay)
+ * - DataSourcesPanel (right, overlay)
  *
  * Handles auth state to show different UI for logged-in vs logged-out users.
  */
@@ -26,9 +26,12 @@ import { ChatArea } from './ChatArea'
 import { InputArea } from './InputArea'
 import { ResearchPanel } from './ResearchPanel'
 import { DataSourcesPanel } from './DataSourcesPanel'
-import { SettingsPanel } from './SettingsPanel'
 import { useChatStore, useDeepResearch, NoSourcesBanner } from '@/features/chat'
-import { hasActiveDeepResearchJob } from '@/features/chat/lib/session-activity'
+import {
+  hasActiveDeepResearchJob,
+  hasCompletedDeepResearchReport,
+  hasExpiredDeepResearchReport,
+} from '@/features/chat/lib/session-activity'
 import { useLayoutStore } from '../store'
 import { useSessionUrl } from '@/hooks/use-session-url'
 
@@ -69,15 +72,17 @@ export const MainLayout: FC<MainLayoutProps> = ({
     isDeepResearchStreaming,
     deepResearchOwnerConversationId,
     currentUserId,
-  } = useChatStore(useShallow((s) => ({
-    currentConversation: s.currentConversation,
-    conversations: s.conversations,
-    isStreaming: s.isStreaming,
-    pendingInteraction: s.pendingInteraction,
-    isDeepResearchStreaming: s.isDeepResearchStreaming,
-    deepResearchOwnerConversationId: s.deepResearchOwnerConversationId,
-    currentUserId: s.currentUserId,
-  })))
+  } = useChatStore(
+    useShallow((s) => ({
+      currentConversation: s.currentConversation,
+      conversations: s.conversations,
+      isStreaming: s.isStreaming,
+      pendingInteraction: s.pendingInteraction,
+      isDeepResearchStreaming: s.isDeepResearchStreaming,
+      deepResearchOwnerConversationId: s.deepResearchOwnerConversationId,
+      currentUserId: s.currentUserId,
+    }))
+  )
 
   const selectConversation = useChatStore((s) => s.selectConversation)
   const startNewSessionDraft = useChatStore((s) => s.startNewSessionDraft)
@@ -86,7 +91,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const updateConversationTitle = useChatStore((s) => s.updateConversationTitle)
 
   const isResearchPanelOpen = useLayoutStore((s) => s.rightPanel === 'research')
-  const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const prefersReducedMotion = useReducedMotion()
 
   // Deep research SSE hook - manages connection when deep research starts
@@ -105,11 +110,14 @@ export const MainLayout: FC<MainLayoutProps> = ({
   )
 
   // Start a new unsaved draft session and clear URL until first interaction.
+  // Open Data Sources panel so it stays visible (default panel for new sessions).
   const handleNewSession = useCallback(() => {
     startNewSessionDraft()
     clearSessionUrl()
-    closeRightPanel()
-  }, [startNewSessionDraft, clearSessionUrl, closeRightPanel])
+    if (isAuthenticated) {
+      openRightPanel('data-sources')
+    }
+  }, [startNewSessionDraft, clearSessionUrl, openRightPanel, isAuthenticated])
 
   // Wrap deleteConversation to clear URL if deleting current session
   const handleDeleteSession = useCallback(
@@ -132,19 +140,22 @@ export const MainLayout: FC<MainLayoutProps> = ({
   const isNavigationBlocked = isStreaming || pendingInteraction !== null
 
   const userConversations = useMemo(
-    () => currentUserId ? conversations.filter((c) => c.userId === currentUserId) : [],
+    () => (currentUserId ? conversations.filter((c) => c.userId === currentUserId) : []),
     [conversations, currentUserId]
   )
 
   const sessions = useMemo(
-    () => userConversations.map((conv) => ({
-      id: conv.id,
-      title: conv.title,
-      date: conv.updatedAt,
-      hasActiveDeepResearch:
-        hasActiveDeepResearchJob(conv.messages) ||
-        (isDeepResearchStreaming && deepResearchOwnerConversationId === conv.id),
-    })),
+    () =>
+      userConversations.map((conv) => ({
+        id: conv.id,
+        title: conv.title,
+        date: conv.updatedAt,
+        hasActiveDeepResearch:
+          hasActiveDeepResearchJob(conv.messages) ||
+          (isDeepResearchStreaming && deepResearchOwnerConversationId === conv.id),
+        hasCompletedReport: hasCompletedDeepResearchReport(conv.messages),
+        hasExpiredReport: hasExpiredDeepResearchReport(conv.messages),
+      })),
     [userConversations, isDeepResearchStreaming, deepResearchOwnerConversationId]
   )
 
@@ -152,7 +163,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
     <Flex direction="col" className="h-screen min-w-[768px] overflow-x-auto overflow-y-hidden">
       {/* AppBar - Fixed at top */}
       <AppBar
-        sessionTitle={currentConversation?.title || 'New Session'}
+        sessionTitle={currentConversation?.title}
         isAuthenticated={isAuthenticated}
         authRequired={authRequired}
         user={user}
@@ -180,10 +191,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
           {/* Input Area - Fixed at bottom of chat */}
           {/* Using WebSocket mode for full HITL (human-in-the-loop) support */}
-          <InputArea
-            isAuthenticated={isAuthenticated}
-            connectionMode="websocket"
-          />
+          <InputArea isAuthenticated={isAuthenticated} connectionMode="websocket" />
         </div>
 
         {/* Research Panel (Right) - Pushes content, takes 60% width */}
@@ -204,10 +212,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
       />
 
       {/* Data Sources Panel (Right) - Overlay */}
-      <DataSourcesPanel />
-
-      {/* Settings Panel (Right) - Overlay */}
-      <SettingsPanel />
+      {isAuthenticated && <DataSourcesPanel />}
     </Flex>
   )
 }

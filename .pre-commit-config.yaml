@@ -36,6 +36,7 @@ repos:
       - id: check-yaml
         exclude: ^deploy/helm/helm-charts-k8s/.*/templates/.*\.ya?ml$
       - id: end-of-file-fixer
+        exclude: ^skills/[^/]+/skill\.oms\.sig$
       - id: trailing-whitespace
 
   - repo: https://github.com/Yelp/detect-secrets
@@ -43,6 +44,7 @@ repos:
     hooks:
       - id: detect-secrets
         args: [--baseline, .secrets.baseline]
+        exclude: ^skills/[^/]+/skill\.oms\.sig$
 
   - repo: local
     hooks:
@@ -69,6 +71,7 @@ repos:
     hooks:
       - id: markdown-link-check
         args: ["-q", "--config", "ci/markdown-link-check-config.json"]
+        exclude: ^skills/[^/]+/skill-card\.md$
 
 default_language_version:
   python: python3

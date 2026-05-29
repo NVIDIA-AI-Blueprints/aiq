@@ -116,7 +116,7 @@ to `create_deep_agent` rather than being routed through middleware.
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
 | `messages` | `Annotated[list[AnyMessage], add_messages]` | required | Conversation history with LangGraph message reducer |
-| `data_sources` | `list[str]` or `None` | `None` | User-selected data source IDs for tool filtering |
+| `data_sources` | `list[str]` or `None` | `None` | User-selected data source IDs for tool filtering. `None` uses all configured tools; `[]` keeps only unmapped utility tools; a populated list scopes to the named sources plus unmapped utility tools. |
 | `user_info` | `dict` or `None` | `None` | User information |
 | `tools_info` | `list[dict]` or `None` | `None` | Available tools information |
 | `todos` | `list[dict]` | `[]` | Todo list for research task tracking |

@@ -5,42 +5,103 @@ SPDX-License-Identifier: Apache-2.0
 
 # Agent Skills for Coding Harnesses
 
-AI-Q includes a portable Agent Skill for coding harnesses that support skill-style instructions and helper scripts. The skill lets an assistant call a locally running AI-Q Blueprint server for routed `/chat` requests and async deep research job lifecycle operations.
+AI-Q includes portable Agent Skills for coding harnesses that support skill-style instructions and helper scripts.
 
-The packaged skill lives at:
+- `aiq-deploy` helps an assistant clone or locate AI-Q, choose an existing workflow config, deploy locally or in self-hosted environments, verify basic system health, optionally run deep research completion validation, troubleshoot, rebuild, and stop services.
+- `aiq-research` lets an assistant call a running local or self-hosted AI-Q Blueprint server for routed `/chat` requests and async deep research job lifecycle operations.
+
+The canonical packaged skills live at:
 
 ```text
-.agents/skills/aiq-research/
+skills/aiq-deploy/
+skills/aiq-research/
 ```
 
-The installed `aiq-research` directory must contain `SKILL.md` at its root. For package-local details, see `.agents/skills/aiq-research/README.md`.
+Each installed skill directory must contain `SKILL.md` at its root. The deploy skill keeps detailed guidance under `references/` so agents only load the path-specific material they need.
+
+For harnesses that expect repository-local Agent Skills under `.agents/skills`, this repository keeps a compatibility symlink:
+
+```text
+.agents/skills -> ../skills
+```
+
+## Recommended Flow
+
+Use the skills together rather than blending their responsibilities:
+
+1. Use `aiq-research` for research-shaped requests such as "deep research", "AIQ research", "research", or "use AI-Q to answer". It checks `AIQ_SERVER_URL` first, then the default local backend.
+2. If no backend is reachable, let `aiq-research` ask whether the user already has an AI-Q backend URL or wants `aiq-deploy` to start and validate a local Skill backend.
+3. Use `aiq-deploy` directly for install/deploy/setup requests such as "install AIQ", "deploy AIQ", or "install deep research".
+4. If the user asks which workflow config to use, let `aiq-deploy` read `references/configs.md` and choose an existing repository config before deployment.
+5. Use `aiq-deploy` validation checks to confirm the backend and async-agent API are reachable. Confirm the UI only when that deployment mode intentionally starts it.
+6. Hand the verified `AIQ_SERVER_URL` to `aiq-research`.
+7. Use `aiq-research` for routed chat, async research, polling, report retrieval, streaming, and cancellation.
+8. After deployment validation, ask whether the user wants to run optional deep research completion validation now or skip validation and try AI-Q themselves.
+9. Use `aiq-deploy` deep research completion validation only when the user confirms, asks for release signoff, or wants proof that deep research can complete after deployment.
+
+For local non-container use, the deploy skill should prefer the backend-only Agent Skill entry point:
+
+```bash
+./scripts/start_as_skill.sh --config_file configs/config_web_default_llamaindex.yml --port 8000
+```
+
+This starts the AI-Q API backend required by `aiq-research` without starting the browser UI.
+
+## Example Invocations
+
+After the skills are installed, users can ask their coding harness for AI-Q actions in natural language. Research-shaped prompts route to `aiq-research`; install, deploy, run, stop, UI, CLI, Docker, Helm, and troubleshooting prompts route to `aiq-deploy`:
+
+| User Prompt | Expected Route |
+|---|---|
+| "deep research on the Blackwell launch" | `aiq-research` checks `AIQ_SERVER_URL` or the default local Skill backend, then uses routed `/chat` and async polling as needed. |
+| "AIQ research this topic" | `aiq-research` treats the request as research intent, not install intent. |
+| "deploy AI-Q" | `aiq-deploy` asks which deployment mode the user wants, then validates the selected path and returns `AIQ_SERVER_URL`. |
+| "install deep research" | `aiq-deploy` asks which AI-Q deployment mode the user wants before starting services. |
+| "clone AIQ and run it" | `aiq-deploy` locates or clones `NVIDIA-AI-Blueprints/aiq`, checks required environment values, then starts the selected default deployment. |
+| "start the AI-Q UI" | `aiq-deploy` starts a deployment mode that includes the browser UI, such as local E2E or full Docker Compose. |
+| "run AI-Q with Docker Compose" | `aiq-deploy` follows the Docker Compose path. For Agent Skill backend use, it should start `aiq-agent` and dependencies without the frontend unless the user asks for UI. |
+| "deploy AI-Q with Helm" | `aiq-deploy` follows the Kubernetes/Helm path and requires the user to provide or confirm cluster, namespace, registry, secret, ingress, and storage choices. |
+| "which AI-Q config should I use?" | `aiq-deploy` reads `references/configs.md`, explains the existing configs, and selects a documented config path before deployment. |
+| "check why AI-Q is unhealthy" | `aiq-deploy` runs health checks, inspects logs/status, and uses the troubleshooting reference for the active deployment mode. |
+| "stop AI-Q" | `aiq-deploy` follows the shutdown path and asks before destructive cleanup such as deleting Docker volumes. |
 
 ## Prerequisites
 
 - Python 3.10 or newer.
-- A local AI-Q Blueprint server, usually at `http://localhost:8000`.
-- Set `AIQ_SERVER_URL` only when using a different local server URL.
+- For `aiq-deploy`: access to this repository or permission to clone `https://github.com/NVIDIA-AI-Blueprints/aiq`, plus the selected runtime such as Docker Compose, Node/npm for local web mode, or kubectl/Helm for Kubernetes mode.
+- For `aiq-research`: a local or self-hosted AI-Q Blueprint server, usually at `http://localhost:8000`. Set `AIQ_SERVER_URL` only when using a different local or self-hosted server URL.
+
+## Install From the NVIDIA Skills Catalog
+
+The AI-Q repository is the source location for these skills. If you only want to use AI-Q as Agent Skills and do not need the full AI-Q source checkout, install the AI-Q skill set from the [NVIDIA Agent Skills catalog](https://github.com/NVIDIA/skills).
+
+Install the AI-Q skills together so deployment and research handoffs are available in the same harness session.
+
+Use the repo-local instructions below when developing AI-Q itself, validating changes before publication, or using a harness that does not support the catalog install path.
 
 ## Claude Code
 
-Claude Code supports repo-local skills under `.claude/skills/`. This repository keeps that path as a compatibility symlink:
+Claude Code supports repo-local skills under `.claude/skills/`. This repository keeps those paths as compatibility symlinks:
 
 ```text
-.claude/skills/aiq-research -> ../../.agents/skills/aiq-research
+.claude/skills/aiq-deploy -> ../../skills/aiq-deploy
+.claude/skills/aiq-research -> ../../skills/aiq-research
 ```
 
 To recreate the repo-local install manually:
 
 ```bash
 mkdir -p .claude/skills
-ln -s ../../.agents/skills/aiq-research .claude/skills/aiq-research
+ln -s ../../skills/aiq-deploy .claude/skills/aiq-deploy
+ln -s ../../skills/aiq-research .claude/skills/aiq-research
 ```
 
 For a user-level install:
 
 ```bash
 mkdir -p ~/.claude/skills
-cp -R .agents/skills/aiq-research ~/.claude/skills/aiq-research
+cp -R skills/aiq-deploy ~/.claude/skills/aiq-deploy
+cp -R skills/aiq-research ~/.claude/skills/aiq-research
 ```
 
 ## Codex
@@ -50,6 +111,8 @@ For Codex or another Agent Skills-compatible tool, install the skill into the ru
 Generic install shape:
 
 ```text
+<codex-skills-dir>/aiq-deploy/SKILL.md
+<codex-skills-dir>/aiq-deploy/references/
 <codex-skills-dir>/aiq-research/SKILL.md
 <codex-skills-dir>/aiq-research/scripts/aiq.py
 ```
@@ -58,11 +121,11 @@ Example:
 
 ```bash
 mkdir -p <codex-skills-dir>
-cp -R .agents/skills/aiq-research <codex-skills-dir>/aiq-research
+cp -R skills/aiq-deploy <codex-skills-dir>/aiq-deploy
+cp -R skills/aiq-research <codex-skills-dir>/aiq-research
 ```
 
 Replace `<codex-skills-dir>` with the skills directory configured for your Codex environment.
-
 
 ## OpenCode
 
@@ -72,21 +135,23 @@ Install with:
 
 ```bash
 mkdir -p ~/.config/opencode/skills
-cp -R .agents/skills/aiq-research ~/.config/opencode/skills/aiq-research
+cp -R skills/aiq-deploy ~/.config/opencode/skills/aiq-deploy
+cp -R skills/aiq-research ~/.config/opencode/skills/aiq-research
 ```
 
 Restart OpenCode or start a new session after installation.
 
-
 ## Verify Installation
 
-From the installed skill directory, run:
+From the parent directory containing the installed skills, run:
 
 ```bash
-python3 scripts/aiq.py
+test -f aiq-deploy/SKILL.md
+test -d aiq-deploy/references
+python3 aiq-research/scripts/aiq.py
 ```
 
-Expected output starts with:
+Expected `aiq-research/scripts/aiq.py` output starts with:
 
 ```text
 Usage: aiq.py <command> [args]

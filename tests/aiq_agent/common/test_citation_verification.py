@@ -435,9 +435,19 @@ class TestGenericUrlExtractor:
             entries = extract_sources_from_tool_result(name, content)
             assert len(entries) == 1, f"Failed for tool name: {name}"
 
-    def test_empty_content_returns_empty(self):
+    def test_non_url_content_without_source_id_registers_tool_result_source(self):
+        """Non-URL content always registers a tool_result source — eligibility is enforced by callers."""
         entries = extract_sources_from_tool_result("any_tool", "Search returned no results")
-        assert len(entries) == 0
+        assert len(entries) == 1
+        assert entries[0].citation_key == "any_tool"
+        assert entries[0].source_type == "tool_result"
+
+    def test_non_url_content_with_source_id_registers_tool_result_source(self):
+        """source_id is accepted but does not affect whether a fallback entry is produced."""
+        entries = extract_sources_from_tool_result("any_tool", "Search returned no results", source_id="some_source")
+        assert len(entries) == 1
+        assert entries[0].citation_key == "any_tool"
+        assert entries[0].source_type == "tool_result"
 
     def test_duplicate_urls_deduplicated(self):
         content = "See https://example.com/page and also https://example.com/page for reference."
@@ -544,9 +554,21 @@ class TestKnowledgeLayerParser:
 class TestParserDispatcher:
     """Tests for parser dispatcher and fallback behavior."""
 
-    def test_unknown_tool_no_urls_returns_empty(self):
-        entries = extract_sources_from_tool_result("totally_unknown_tool", "some content without links")
+    def test_tool_without_content_returns_empty(self):
+        entries = extract_sources_from_tool_result("weather_observation_tool", "   ", source_id="weather")
+
         assert entries == []
+
+    def test_data_source_tool_without_urls_registers_tool_result_source(self):
+        entries = extract_sources_from_tool_result(
+            "weather_observation_tool", "Visibility: 10 miles", source_id="weather"
+        )
+
+        assert len(entries) == 1
+        assert entries[0].url is None
+        assert entries[0].citation_key == "weather_observation_tool"
+        assert entries[0].source_type == "tool_result"
+        assert entries[0].tool_name == "weather_observation_tool"
 
     def test_unknown_tool_with_urls_extracts_them(self):
         """Generic fallback extracts URLs from any unknown tool."""
@@ -753,6 +775,102 @@ class TestVerifyCitations:
         result = verify_citations(report, reg)
         assert len(result.valid_citations) == 1
         assert "https://arxiv.org/abs/1706.03762" in result.verified_report
+
+    def test_duplicate_tool_result_refs_collapse_to_single_citation(self):
+        """Two [N] lines that resolve to the same non-URL tool_result source are merged.
+
+        The model often makes the same tool call twice (e.g. for two
+        timezones) and emits two separate ``[N] mcp_time__get_current_time``
+        reference lines. Both lines resolve to the single registered
+        SourceEntry for that tool, so verify_citations should keep one and
+        rewrite the body's ``[2]`` to ``[1]`` so the prose still cites the
+        source.
+        """
+        reg = SourceRegistry()
+        reg.add(
+            SourceEntry(
+                citation_key="mcp_time__get_current_time",
+                source_type="tool_result",
+                tool_name="mcp_time__get_current_time",
+            )
+        )
+        report = (
+            "Time in Mumbai [1].\n"
+            "Time in Tokyo [2].\n\n"
+            "**References**\n"
+            "- [1] mcp_time__get_current_time\n"
+            "- [2] mcp_time__get_current_time"
+        )
+
+        result = verify_citations(report, reg)
+
+        assert len(result.valid_citations) == 1
+        # The duplicate is recorded as removed for audit, with a clear reason.
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["reason"].startswith("duplicate_of_citation_")
+        # Body keeps a citation for both sentences — the second [2] is
+        # rewritten to [1] rather than stripped, since the source is real.
+        assert "Time in Mumbai [1]." in result.verified_report
+        assert "Time in Tokyo [1]." in result.verified_report
+        # Reference section keeps exactly one entry for the source.
+        ref_section = result.verified_report.split("**References**", 1)[1]
+        assert ref_section.count("mcp_time__get_current_time") == 1
+        assert "[2]" not in ref_section
+
+    def test_duplicate_url_refs_collapse_to_single_citation(self):
+        """Two [N] lines pointing at the same URL are merged.
+
+        Latent variant of the tool_result case: even URL-based citations
+        should collapse when the model emits the same source twice.
+        """
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url="https://valid.com/article1", title="Article 1", source_type="tavily"))
+        report = (
+            "Finding A [1]. Finding B [2].\n\n"
+            "## Sources\n"
+            "[1] Article 1: https://valid.com/article1\n"
+            "[2] Article 1: https://valid.com/article1"
+        )
+
+        result = verify_citations(report, reg)
+
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["reason"].startswith("duplicate_of_citation_")
+        assert "Finding A [1]." in result.verified_report
+        assert "Finding B [1]." in result.verified_report
+        ref_section = result.verified_report.split("## Sources", 1)[1]
+        assert ref_section.count("[1]") == 1
+        assert "[2]" not in ref_section
+
+    def test_dedup_keeps_lowest_number_when_duplicates_appear_after_unique(self):
+        """Mixed: [1] valid URL A, [2] dup of [1], [3] valid URL B.
+
+        After verify_citations, [2] should be merged into [1] and [3] should
+        survive. Renumbering happens later in sanitize_report.
+        """
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url="https://valid.com/article1", title="Article 1", source_type="tavily"))
+        reg.add(SourceEntry(url="https://valid.com/article2", title="Article 2", source_type="tavily"))
+        report = (
+            "A [1]. B [2]. C [3].\n\n"
+            "## Sources\n"
+            "[1] Article 1: https://valid.com/article1\n"
+            "[2] Article 1: https://valid.com/article1\n"
+            "[3] Article 2: https://valid.com/article2"
+        )
+
+        result = verify_citations(report, reg)
+
+        assert len(result.valid_citations) == 2
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["number"] == 2
+        # Body: B's [2] becomes [1]; A and C unchanged.
+        assert "A [1]. B [1]. C [3]." in result.verified_report
+        ref_section = result.verified_report.split("## Sources", 1)[1]
+        assert ref_section.count("[1]") == 1
+        assert "[2]" not in ref_section
+        assert ref_section.count("[3]") == 1
 
 
 # ---------------------------------------------------------------------------

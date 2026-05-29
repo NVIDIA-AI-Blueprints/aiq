@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from typing import Any
 
@@ -205,6 +206,56 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
         self._user_interaction_response: asyncio.Future[TextContent] | None = None
         self._authenticated_user: dict[str, Any] | None = None
 
+    def _is_handshake_token_expired(self) -> bool:
+        """Return True if the JWT used at handshake has since passed its ``exp``.
+
+        Backend stores verified JWT claims in ``_authenticated_user`` after the
+        handshake (see ``JWTValidator.validate``). The ``exp`` claim is seconds
+        since epoch. We re-check it on every inbound message so a long-lived
+        socket cannot keep accepting work indefinitely under a dead token --
+        WebSocket browsers do NOT replay HTTP cookies on subsequent frames, so
+        the only way to refresh credentials is to close + reopen the socket.
+
+        Internal/anonymous callers do not carry an ``exp`` claim; for them
+        this returns ``False`` (no re-auth required).
+        """
+        user = self._authenticated_user
+        if not user:
+            return False
+        exp = user.get("exp")
+        if not isinstance(exp, (int, float)):
+            return False
+        return time.time() >= exp
+
+    async def _send_auth_expired_error(self, conversation_id: str | None) -> None:
+        """Notify the client that its handshake token has expired.
+
+        The client (frontend) listens for ``message == "auth_expired"`` on the
+        ERROR channel and reacts by refreshing the NextAuth session, closing
+        the socket, and reconnecting. The fresh handshake carries an updated
+        idToken cookie. After the new socket is open, the client drains any
+        buffered outgoing message it had queued during the rotation.
+        """
+        error = Error(
+            code=ErrorTypes.USER_AUTH_ERROR,
+            message="auth_expired",
+            details="Handshake token has expired; reconnect to refresh credentials.",
+        )
+        try:
+            error_message = await self._message_validator.create_system_response_token_message(
+                message_type=WebSocketMessageType.ERROR_MESSAGE,
+                conversation_id=conversation_id,
+                content=error,
+            )
+        except Exception:  # pragma: no cover - validator never fails on this contract
+            logger.exception("Failed to build auth_expired error message")
+            return
+
+        try:
+            await self._socket.send_json(error_message.model_dump())
+        except Exception as exc:  # pragma: no cover - socket may already be closed
+            logger.warning("Failed to send auth_expired: %s", exc)
+
     async def run(self) -> None:
         """Process websocket messages and allow reconnect HITL responses."""
         if self._authenticated_user is None:
@@ -219,6 +270,17 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
                 validated_message: BaseModel = await self._message_validator.validate_message(message)
 
                 if isinstance(validated_message, WebSocketUserMessage):
+                    # Per-message re-auth: the handshake-time JWT may have
+                    # expired since the socket was opened. Reject the work
+                    # and ask the client to reconnect with a fresh token.
+                    if self._is_handshake_token_expired():
+                        logger.info(
+                            "Rejecting user_message: handshake token expired (conversation %s)",
+                            validated_message.conversation_id,
+                        )
+                        await self._send_auth_expired_error(validated_message.conversation_id)
+                        continue
+
                     await self.process_workflow_request(validated_message)
                     await _registry.set_socket(validated_message.conversation_id, self._socket)
 
@@ -231,6 +293,17 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
                     pass
 
                 elif isinstance(validated_message, WebSocketUserInteractionResponseMessage):
+                    # Same re-auth gate for HITL interaction responses --
+                    # otherwise an idle clarification prompt could be
+                    # answered hours later under an expired token.
+                    if self._is_handshake_token_expired():
+                        logger.info(
+                            "Rejecting user_interaction: handshake token expired (conversation %s)",
+                            validated_message.conversation_id,
+                        )
+                        await self._send_auth_expired_error(validated_message.conversation_id)
+                        continue
+
                     user_content = await self._process_websocket_user_interaction_response_message(validated_message)
                     await _registry.set_socket(validated_message.conversation_id, self._socket)
                     if self._user_interaction_response is not None:

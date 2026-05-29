@@ -6,20 +6,42 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { hasActiveDeepResearchJob, getPersistedActivityFlags } from './session-activity'
+import {
+  hasActiveDeepResearchJob,
+  hasCompletedDeepResearchReport,
+  hasExpiredDeepResearchReport,
+  getPersistedActivityFlags,
+  hasNoUserChatMessages,
+} from './session-activity'
 import type { ChatMessage } from '../types'
 
 /**
  * Helper to create a minimal ChatMessage for testing
  */
-const makeMessage = (
-  overrides: Partial<ChatMessage> = {}
-): ChatMessage => ({
+const makeMessage = (overrides: Partial<ChatMessage> = {}): ChatMessage => ({
   id: 'msg-1',
   role: 'assistant',
   content: '',
   timestamp: new Date(),
   ...overrides,
+})
+
+describe('hasNoUserChatMessages', () => {
+  it('returns true when there are no user messages', () => {
+    expect(hasNoUserChatMessages([])).toBe(true)
+    expect(
+      hasNoUserChatMessages([
+        makeMessage({
+          messageType: 'file_upload_status',
+          fileUploadStatusData: { type: 'uploaded', fileCount: 1, jobId: 'j1' },
+        }),
+      ])
+    ).toBe(true)
+  })
+
+  it('returns false when a user message exists', () => {
+    expect(hasNoUserChatMessages([makeMessage({ messageType: 'user', content: 'hi' })])).toBe(false)
+  })
 })
 
 describe('hasActiveDeepResearchJob', () => {
@@ -145,6 +167,59 @@ describe('hasActiveDeepResearchJob', () => {
     ]
     // The latest agent_response with a job ID is job-1 (running)
     expect(hasActiveDeepResearchJob(messages)).toBe(true)
+  })
+})
+
+describe('report status helpers', () => {
+  it('returns true for completed report sessions with a visible report action', () => {
+    const messages = [
+      makeMessage({
+        messageType: 'agent_response',
+        deepResearchJobId: 'job-1',
+        deepResearchJobStatus: 'success',
+        showViewReport: true,
+      }),
+    ]
+
+    expect(hasCompletedDeepResearchReport(messages)).toBe(true)
+    expect(hasExpiredDeepResearchReport(messages)).toBe(false)
+  })
+
+  it('returns true for expired reports and does not also count them as completed', () => {
+    const messages = [
+      makeMessage({
+        messageType: 'agent_response',
+        deepResearchJobId: 'job-1',
+        deepResearchJobStatus: 'failure',
+        deepResearchReportExpired: true,
+        showViewReport: false,
+      }),
+    ]
+
+    expect(hasExpiredDeepResearchReport(messages)).toBe(true)
+    expect(hasCompletedDeepResearchReport(messages)).toBe(false)
+  })
+
+  it('uses the latest deep research job message for report state', () => {
+    const messages = [
+      makeMessage({
+        id: 'old-job',
+        messageType: 'agent_response',
+        deepResearchJobId: 'job-1',
+        deepResearchJobStatus: 'success',
+        showViewReport: true,
+      }),
+      makeMessage({
+        id: 'latest-job',
+        messageType: 'agent_response',
+        deepResearchJobId: 'job-2',
+        deepResearchJobStatus: 'failure',
+        deepResearchReportExpired: true,
+      }),
+    ]
+
+    expect(hasCompletedDeepResearchReport(messages)).toBe(false)
+    expect(hasExpiredDeepResearchReport(messages)).toBe(true)
   })
 })
 

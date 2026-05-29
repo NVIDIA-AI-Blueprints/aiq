@@ -24,6 +24,8 @@ from langchain_core.messages import ToolMessage
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
+from aiq_agent.common.data_source_registry import populate_from_config
+from aiq_agent.common.data_source_registry import reset_registry
 
 
 class TestToolNameSanitizationMiddleware:
@@ -126,8 +128,46 @@ class TestSourceRegistryMiddleware:
     def source_tools(self):
         return {"advanced_web_search_tool", "knowledge_search", "paper_search_tool"}
 
+    @pytest.fixture(autouse=True)
+    def _reset_data_source_registry(self):
+        """Keep the global data_source_registry clean across tests.
+
+        Tests that need a populated registry either depend on
+        ``_default_data_sources`` (via the ``middleware`` fixture) or
+        populate their own registry explicitly in the test body.
+        """
+        reset_registry()
+        yield
+        reset_registry()
+
     @pytest.fixture
-    def middleware(self, source_tools):
+    def _default_data_sources(self):
+        """Populate the three default data sources used by the shared tests."""
+        populate_from_config(
+            [
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "description": "Search the web for real-time information.",
+                    "tools": ["advanced_web_search_tool"],
+                },
+                {
+                    "id": "knowledge_layer",
+                    "name": "Knowledge Base",
+                    "description": "Search uploaded documents and files.",
+                    "tools": ["knowledge_search"],
+                },
+                {
+                    "id": "paper_search",
+                    "name": "Academic Papers",
+                    "description": "Search academic papers.",
+                    "tools": ["paper_search_tool"],
+                },
+            ]
+        )
+
+    @pytest.fixture
+    def middleware(self, source_tools, _default_data_sources):
         return SourceRegistryMiddleware(source_tool_names=source_tools)
 
     def _make_request(self, tool_name: str):
@@ -208,6 +248,79 @@ class TestSourceRegistryMiddleware:
         await middleware.awrap_tool_call(request, handler)
 
         assert len(middleware.registry.all_sources()) == 0
+
+    @pytest.mark.asyncio
+    async def test_allowlisted_tool_not_in_data_source_registry_is_still_captured(self):
+        """Agent-loaded tools are captured even when not declared under data_sources.
+
+        Tools may be passed directly to the agent (programmatically or via
+        `tools:` in YAML) without being declared under `data_sources:`. Their
+        outputs are still real, citable evidence and must contribute to the
+        citation registry.
+        """
+        # Autouse fixture already reset the registry; leave it empty.
+        mw = SourceRegistryMiddleware(source_tool_names={"mcp_time__get_current_time"})
+        content = "2026-05-11T14:30:00+09:00"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("mcp_time__get_current_time")
+
+        await mw.awrap_tool_call(request, handler)
+
+        sources = mw.registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].citation_key == "mcp_time__get_current_time"
+        assert sources[0].source_type == "tool_result"
+
+    @pytest.mark.asyncio
+    async def test_registered_group_tool_without_urls_captured(self):
+        """Registered group child tools without URLs can be non-URL citation sources."""
+        populate_from_config(
+            [
+                {
+                    "id": "mcp_time",
+                    "name": "MCP Time",
+                    "description": "Get current time and timezone information through MCP.",
+                    "tools": ["mcp_time"],
+                }
+            ],
+            group_names={"mcp_time"},
+        )
+        mw = SourceRegistryMiddleware(source_tool_names={"mcp_time__get_current_time"})
+        content = "2026-05-11T14:30:00+09:00"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("mcp_time__get_current_time")
+
+        await mw.awrap_tool_call(request, handler)
+
+        sources = mw.registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].citation_key == "mcp_time__get_current_time"
+        assert sources[0].source_type == "tool_result"
+
+    @pytest.mark.asyncio
+    async def test_registered_exact_data_source_tool_without_urls_captured(self):
+        """Any exact tool declared under data_sources can be a non-URL citation source."""
+        populate_from_config(
+            [
+                {
+                    "id": "weather_observations",
+                    "name": "Weather Observations",
+                    "description": "Current observed weather conditions.",
+                    "tools": ["weather_observation_tool"],
+                }
+            ]
+        )
+        mw = SourceRegistryMiddleware(source_tool_names={"weather_observation_tool"})
+        content = "Current conditions for San Francisco: clear, 68F"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("weather_observation_tool")
+
+        await mw.awrap_tool_call(request, handler)
+
+        sources = mw.registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].citation_key == "weather_observation_tool"
+        assert sources[0].source_type == "tool_result"
 
     @pytest.mark.asyncio
     async def test_mixed_source_tools(self, middleware):

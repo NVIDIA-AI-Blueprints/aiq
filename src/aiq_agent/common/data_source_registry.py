@@ -78,7 +78,13 @@ class DataSourceMeta:
 _registry: dict[str, DataSourceMeta] = {}
 _tool_source_map: dict[str, str] = {}  # exact tool name → source ID
 _group_source_map: dict[str, str] = {}  # group prefix → source ID
-_sorted_group_names: list[str] = []  # pre-sorted longest-first for prefix matching
+# Combined (group refs + exact refs) pre-sorted longest-first for prefix
+# matching. Exact refs participate in prefix matching too so that MCP-style
+# child tools (``foo__bar``) resolve to their parent source even when the
+# ref was declared without being marked as a function group — matches the
+# behavior the NAT auto-detection would give in production but is robust
+# to tests and configs that forget to pass ``group_names``.
+_sorted_prefix_refs: list[tuple[str, str]] = []
 
 
 # ── Config models ──
@@ -199,33 +205,47 @@ def get_source(source_id: str) -> DataSourceMeta | None:
 def get_source_id_for_tool(tool_name: str) -> str | None:
     """Look up source ID for a tool.
 
-    Tries exact match first (individual functions), then group prefix
-    match using NAT's function group separators (``__`` and legacy ``.``).
-    Group names are matched longest-first for deterministic results
-    with overlapping prefixes.
+    Tries exact match first (individual functions), then prefix match
+    against any registered ref (group or exact) using NAT's function
+    group separators (``__`` and legacy ``.``). Prefix candidates are
+    matched longest-first for deterministic results with overlapping
+    refs.
     """
     source_id = _tool_source_map.get(tool_name)
     if source_id is not None:
         return source_id
 
-    for group_name in _sorted_group_names:
-        if any(tool_name.startswith(group_name + sep) for sep in _GROUP_SEPARATORS):
-            return _group_source_map[group_name]
+    for ref_name, source_id in _sorted_prefix_refs:
+        if any(tool_name.startswith(ref_name + sep) for sep in _GROUP_SEPARATORS):
+            return source_id
 
     return None
+
+
+def _rebuild_prefix_index() -> None:
+    """Rebuild the combined prefix-match index from the tool/group maps.
+
+    Group refs win over exact refs with the same name (they were explicitly
+    declared as groups); otherwise longer refs win over shorter ones.
+    """
+    global _sorted_prefix_refs
+    combined: dict[str, str] = dict(_tool_source_map)
+    combined.update(_group_source_map)  # group refs take precedence on tie
+    _sorted_prefix_refs = sorted(combined.items(), key=lambda item: len(item[0]), reverse=True)
 
 
 def set_tool_source_map(mapping: dict[str, str]) -> None:
     """Set the exact tool→source mapping."""
     global _tool_source_map
     _tool_source_map = mapping
+    _rebuild_prefix_index()
 
 
 def set_group_source_map(mapping: dict[str, str]) -> None:
-    """Set the group prefix→source mapping. Pre-sorts by length for lookup."""
-    global _group_source_map, _sorted_group_names
+    """Set the group prefix→source mapping."""
+    global _group_source_map
     _group_source_map = mapping
-    _sorted_group_names = sorted(mapping, key=len, reverse=True)
+    _rebuild_prefix_index()
 
 
 # ── Test helpers ──
@@ -243,7 +263,7 @@ def populate_from_config(sources: list[dict], group_names: set[str] | None = Non
 def reset_registry() -> None:
     """Reset for testing."""
     _registry.clear()
-    global _tool_source_map, _group_source_map, _sorted_group_names
+    global _tool_source_map, _group_source_map, _sorted_prefix_refs
     _tool_source_map = {}
     _group_source_map = {}
-    _sorted_group_names = []
+    _sorted_prefix_refs = []

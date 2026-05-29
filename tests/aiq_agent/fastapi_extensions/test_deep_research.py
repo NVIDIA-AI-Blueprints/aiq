@@ -73,6 +73,25 @@ class TestJobSubmitRequest:
         assert req.agent_type == "deep_researcher"
         assert req.job_id is None
         assert req.expiry_seconds is None
+        assert req.data_sources is None
+
+    def test_with_data_sources(self):
+        """Test submit request with selected data sources."""
+        req = JobSubmitRequest(agent_type="deep_researcher", input="query", data_sources=["web_search"])
+
+        assert req.data_sources == ["web_search"]
+
+    def test_null_data_sources_defaults_to_all_sources(self):
+        """Test null data_sources preserves all-source behavior."""
+        req = JobSubmitRequest(agent_type="deep_researcher", input="query", data_sources=None)
+
+        assert req.data_sources is None
+
+    def test_empty_data_sources_accepted(self):
+        """Test that empty data_sources is accepted as a deliberate 'no data-source tools' signal."""
+        req = JobSubmitRequest(agent_type="deep_researcher", input="query", data_sources=[])
+
+        assert req.data_sources == []
 
     def test_with_custom_job_id(self):
         """Test submit request with custom job ID."""

@@ -73,6 +73,10 @@ vi.mock('./FileSourcesTab', () => ({
 import { useLayoutStore } from '../store'
 import { useAuth } from '@/adapters/auth'
 
+/** Either auth banner string from DataSourcesPanel (depends on authRequired). */
+const AUTH_DATA_SOURCES_BANNER_TEXT =
+  /enable authentication to access additional data sources|sign in to access additional data sources/i
+
 describe('DataSourcesPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -298,7 +302,7 @@ describe('DataSourcesPanel', () => {
 
       render(<DataSourcesPanel />)
 
-      expect(screen.getByText(/access additional data sources/i)).toBeInTheDocument()
+      expect(screen.getByText(AUTH_DATA_SOURCES_BANNER_TEXT)).toBeInTheDocument()
     })
 
     test('does not show auth warning when user has valid token', () => {
@@ -309,7 +313,7 @@ describe('DataSourcesPanel', () => {
 
       render(<DataSourcesPanel />)
 
-      expect(screen.queryByText(/access additional data sources/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(AUTH_DATA_SOURCES_BANNER_TEXT)).not.toBeInTheDocument()
     })
 
     test('does not show auth warning when only web_search is available', () => {
@@ -338,21 +342,19 @@ describe('DataSourcesPanel', () => {
 
       render(<DataSourcesPanel />)
 
-      expect(screen.queryByText(/access additional data sources/i)).not.toBeInTheDocument()
+      expect(screen.queryByText(AUTH_DATA_SOURCES_BANNER_TEXT)).not.toBeInTheDocument()
     })
 
-    test('renders sign in button in warning banner when no token', () => {
+    test('shows sign-in banner copy when authRequired and no token', () => {
       vi.mocked(useAuth).mockReturnValue({
         idToken: undefined,
         signIn: mockSignIn,
+        authRequired: true,
       } as unknown as ReturnType<typeof useAuth>)
 
       render(<DataSourcesPanel />)
 
-      // The warning banner should be present with sign in prompt
-      expect(screen.getByText(/access additional data sources/i)).toBeInTheDocument()
-      // KUI Banner renders the action slot - verify the button exists
-      // Note: The exact rendering depends on KUI Banner implementation
+      expect(screen.getByText(AUTH_DATA_SOURCES_BANNER_TEXT)).toBeInTheDocument()
     })
 
     test('marks authenticated sources as unavailable when no token', () => {

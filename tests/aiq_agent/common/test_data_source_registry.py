@@ -128,6 +128,14 @@ class TestPopulateFromConfig:
         assert get_source_id_for_tool("my_group__tool_b") == "my_group"
         assert get_source_id_for_tool("web_search_tool") is None
 
+    def test_child_tool_matches_data_source_ref_when_group_detection_misses_it(self):
+        """MCP-style child tools still match refs declared under data_sources."""
+        populate_from_config(
+            [{"id": "mcp_time", "name": "MCP Time", "description": "Get current time.", "tools": ["mcp_time"]}]
+        )
+
+        assert get_source_id_for_tool("mcp_time__get_current_time") == "mcp_time"
+
 
 class TestGetAllSources:
     def test_empty_registry(self):

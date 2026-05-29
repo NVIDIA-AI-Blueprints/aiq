@@ -9,6 +9,7 @@
  * - "starting": Research in progress, with View Progress action
  * - "success": Research completed, report is ready
  * - "failure": Research failed or was interrupted
+ * - "expired": Research report was deleted or expired server-side
  */
 
 'use client'
@@ -17,12 +18,11 @@ import { type FC, useCallback } from 'react'
 import { Banner, Button, Flex, Text } from '@/adapters/ui'
 import { formatTime } from '@/shared/utils/format-time'
 import { useLayoutStore } from '@/features/layout/store'
-import { useChatStore } from '../store'
 import { useLoadJobData } from '../hooks/use-load-job-data'
 import type { DeepResearchBannerType } from '../types'
 
 export interface DeepResearchBannerProps {
-  /** Type of banner: success or failure */
+  /** Type of banner: starting, success, failure, cancelled, or expired */
   bannerType: DeepResearchBannerType
   /** Job ID for identification */
   jobId: string
@@ -40,8 +40,8 @@ type BannerStatus = 'success' | 'info' | 'warning' | 'error'
 interface BannerConfig {
   heading: string
   subheading: string
-  buttonText: string
-  buttonTab: 'report' | 'tasks' | 'thinking'
+  buttonText?: string
+  buttonTab?: 'report' | 'tasks' | 'thinking'
   status: BannerStatus
 }
 
@@ -99,6 +99,12 @@ const getBannerConfig = (
         buttonTab: 'tasks',
         status: 'warning',
       }
+    case 'expired':
+      return {
+        heading: 'Report Expired',
+        subheading: `The report has expired and is no longer available. (${jobIdLine})`,
+        status: 'warning',
+      }
     case 'starting':
       return {
         heading: 'Starting Deep Research',
@@ -122,53 +128,53 @@ export const DeepResearchBanner: FC<DeepResearchBannerProps> = ({
 }) => {
   const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
-  const reportContent = useChatStore((state) => state.reportContent)
-  const deepResearchStreamLoaded = useChatStore((state) => state.deepResearchStreamLoaded)
-  const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
-  const { loadReport, importStreamOnly, isLoading: isStreamLoading } = useLoadJobData()
+  const { loadResearchPanelTab } = useLoadJobData()
   const config = getBannerConfig(bannerType, jobId, { totalTokens, toolCallCount })
 
-  // Tabs that require full stream data (tasks, thinking, citations)
-  const tabRequiresStream = ['tasks', 'thinking', 'citations'].includes(config.buttonTab)
-
-  // Job is complete if banner type indicates completion (success, failure, cancelled)
+  // Job is complete if banner type indicates completion (success, failure, cancelled, expired)
   // 'starting' banner means job is still in progress - don't try to load archived data
   const isJobComplete = bannerType !== 'starting'
 
   const handleButtonClick = useCallback(async () => {
-    setResearchPanelTab(config.buttonTab)
-    openRightPanel('research')
+    const buttonTab = config.buttonTab
+    if (!buttonTab) return
 
-    // Only load data for completed jobs
     if (isJobComplete) {
-      if (config.buttonTab === 'report' && !reportContent.trim()) {
-        // Report tab: load just the report content via REST API
-        await loadReport(jobId)
-      } else if (tabRequiresStream && !deepResearchStreamLoaded && !isDeepResearchStreaming && !isStreamLoading) {
-        // Tasks/Thinking/Citations tabs: load full stream data
-        await importStreamOnly(jobId)
-      }
+      await loadResearchPanelTab(jobId, buttonTab)
+      return
     }
-    // For incomplete jobs (starting), the live SSE connection is already populating data
-  }, [config.buttonTab, openRightPanel, setResearchPanelTab, reportContent, loadReport, jobId, tabRequiresStream, deepResearchStreamLoaded, isDeepResearchStreaming, isStreamLoading, importStreamOnly, isJobComplete])
 
-  // Render action button (same for all banner types)
-  const renderActions = () => (
-    <Button
-      kind="secondary"
-      size="small"
-      onClick={handleButtonClick}
-      aria-label={config.buttonText}
-    >
-      {config.buttonText}
-    </Button>
-  )
+    setResearchPanelTab(buttonTab)
+    openRightPanel('research')
+    // For incomplete jobs (starting), the live SSE connection is already populating data
+  }, [
+    config.buttonTab,
+    openRightPanel,
+    setResearchPanelTab,
+    jobId,
+    loadResearchPanelTab,
+    isJobComplete,
+  ])
+
+  // Keep archived/error-state banners informational. The report CTA is the
+  // only banner action we keep visible to avoid competing recovery paths.
+  const actions =
+    bannerType === 'success' && config.buttonText ? (
+      <Button
+        kind="secondary"
+        size="small"
+        onClick={handleButtonClick}
+        aria-label={config.buttonText}
+      >
+        {config.buttonText}
+      </Button>
+    ) : undefined
 
   return (
     <Flex direction="col" gap="1" className="w-full">
       <Banner
         slotSubheading={config.subheading}
-        slotActions={renderActions()}
+        slotActions={actions}
         kind="header"
         status={config.status}
         actionsPosition="right"

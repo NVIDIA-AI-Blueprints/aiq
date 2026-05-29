@@ -1429,6 +1429,45 @@ class TestAsyncJobRunnerAgentFactory:
         assert "data-table-analysis" not in kwargs["system_prompt"]
         assert agent.deepagents_runtime.job_id == "async-job-123"
 
+    def test_async_deep_researcher_empty_data_sources_keeps_internal_tools(self):
+        """Explicit empty data_sources disables source tools but keeps DeepResearcher helpers."""
+        from langchain_core.messages import HumanMessage
+
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMProvider
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        mock_llm = MagicMock()
+        provider = LLMProvider()
+        provider.set_default(mock_llm)
+        provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
+        provider.configure(LLMRole.PLANNER, mock_llm)
+        provider.configure(LLMRole.RESEARCHER, mock_llm)
+        mock_deep_agent = MagicMock()
+        mock_deep_agent.with_config.return_value = mock_deep_agent
+
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_deep_agent) as create:
+            agent = _create_agent_instance(
+                agent_cls=DeepResearcherAgent,
+                llm_provider=provider,
+                llm=mock_llm,
+                tools=[],
+                fn_config=DeepResearchAgentConfig(orchestrator_llm="llm"),
+                verbose=False,
+                callbacks=[],
+                job_id="async-job-123",
+            )
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Research without tools")])
+            agent._build_orchestrator_agent(state)
+
+        tool_names = [tool.name for tool in create.call_args.kwargs["tools"]]
+        assert tool_names == ["think", "get_verified_sources"]
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == tool_names
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == tool_names
+
     def test_create_agent_instance_does_not_drop_config_on_internal_type_error(self):
         """Constructor bugs must not silently fall back to no-config construction."""
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig

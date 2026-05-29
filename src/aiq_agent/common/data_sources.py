@@ -37,7 +37,7 @@ def parse_data_sources(raw: Any) -> list[str] | None:
 
     Returns:
         - None if input is None (not specified, use all tools)
-        - Empty list [] if input was explicitly empty (no tools)
+        - Empty list [] if input was explicitly empty (no data-source tools)
         - List of data source IDs if specified
     """
     if raw is None:
@@ -63,15 +63,14 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
 
     Args:
         tools: List of LangChain tools.
-        data_sources: List of selected data source IDs, None for all, or [] for none.
+        data_sources: List of selected data source IDs, None for all data-source
+            tools, or [] for no data-source tools.
 
     Returns:
         Filtered list of tools matching the selected data sources.
     """
     if data_sources is None:
         return tools
-    if len(data_sources) == 0:
-        return []
 
     selected = {s.lower() for s in data_sources}
     filtered = []
@@ -79,11 +78,43 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
         name = getattr(tool, "name", "")
         source_id = get_source_id_for_tool(name)
         if source_id is None:
-            # Not a data source tool (e.g., "think", calculator) -> always include
+            # Not a data source tool (e.g., "think", calculator) -> always include.
             filtered.append(tool)
         elif source_id.lower() in selected:
             filtered.append(tool)
     return filtered
+
+
+def all_mapped_tools_filtered_out(
+    tools: list[Any],
+    selected_tools: list[Any],
+    data_sources: list[str] | None,
+) -> bool:
+    """Return True when filtering dropped every data-source-mapped tool.
+
+    Useful for emitting a diagnostic when a caller passed ``data_sources`` but
+    the filter produced no mapped tools (e.g. ``data_sources=[]`` with mapped
+    tools configured, or ``data_sources=["unknown"]`` that matched nothing).
+    Returns False when ``data_sources is None`` (no filtering requested) or
+    when the original tool list had no mapped tools to filter in the first
+    place.
+
+    Args:
+        tools: Full tool list before filtering.
+        selected_tools: Tool list after ``filter_tools_by_sources``.
+        data_sources: The ``data_sources`` argument passed to the filter.
+
+    Returns:
+        True if ``data_sources`` was specified, ``tools`` contained at least
+        one mapped tool, and zero mapped tools survived the filter.
+    """
+    if data_sources is None:
+        return False
+    had_mapped = any(get_source_id_for_tool(getattr(t, "name", "")) is not None for t in tools)
+    if not had_mapped:
+        return False
+    still_has_mapped = any(get_source_id_for_tool(getattr(t, "name", "")) is not None for t in selected_tools)
+    return not still_has_mapped
 
 
 def extract_messages_and_sources(payload: Any) -> tuple[list[BaseMessage], list[str] | None]:

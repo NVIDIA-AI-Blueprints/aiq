@@ -80,7 +80,7 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
         <Flex
           direction="col"
           gap="3"
-          className="bg-surface-sunken-opaque border-base rounded-br-xl rounded-tl-xl rounded-tr-xl border p-4 break-words overflow-hidden"
+          className="bg-surface-sunken-opaque border-base overflow-hidden break-words rounded-br-xl rounded-tl-xl rounded-tr-xl border p-4"
         >
           {/* Agent icon and label */}
           <Flex align="center" gap="2" className={isResponded ? 'opacity-75' : ''}>
@@ -104,19 +104,19 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
               <Button
                 kind="secondary"
                 size="small"
+                onClick={handleApprove}
+                aria-label="Approve plan"
+              >
+                Approve
+              </Button>
+              <Button
+                kind="secondary"
+                size="small"
                 color="danger"
                 onClick={handleReject}
                 aria-label="Reject plan"
               >
                 Reject
-              </Button>
-              <Button
-                kind="secondary"
-                size="small"
-                onClick={handleApprove}
-                aria-label="Approve plan"
-              >
-                Approve
               </Button>
             </Flex>
           )}
@@ -127,7 +127,7 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
 
         {/* Timestamp outside bubble, right-aligned */}
         {timestamp && (
-          <Text kind="body/regular/xs" className="text-subtle mt-1 mr-3 self-end">
+          <Text kind="body/regular/xs" className="text-subtle mr-3 mt-1 self-end">
             {formatTime(timestamp)}
           </Text>
         )}

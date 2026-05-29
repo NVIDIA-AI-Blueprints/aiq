@@ -31,14 +31,18 @@ describe('ThoughtTracesTab', () => {
     test('shows empty state when no thought traces', () => {
       render(<ThoughtTracesTab thoughtTraces={[]} />)
 
-      expect(screen.getByText('Thought traces will appear here during research.')).toBeInTheDocument()
-      expect(screen.getByText(/Shows LLM chain-of-thought/)).toBeInTheDocument()
+      expect(screen.getByText('No thought traces available.')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'These details appear during active research and may not be available for completed reports.'
+        )
+      ).toBeInTheDocument()
     })
 
     test('shows empty state when thoughtTraces prop is undefined', () => {
       render(<ThoughtTracesTab />)
 
-      expect(screen.getByText('Thought traces will appear here during research.')).toBeInTheDocument()
+      expect(screen.getByText('No thought traces available.')).toBeInTheDocument()
     })
   })
 

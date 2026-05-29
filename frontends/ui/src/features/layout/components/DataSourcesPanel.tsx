@@ -152,7 +152,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
 
   return (
     <SidePanel
-      className="bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px] rounded-l-2xl"
+      className="side-panel-dock-under-header bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px]"
       open={isOpen}
       onOpenChange={handleOpenChange}
       side="right"

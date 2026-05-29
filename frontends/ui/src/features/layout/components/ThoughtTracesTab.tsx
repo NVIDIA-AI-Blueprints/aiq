@@ -15,6 +15,7 @@ import { type FC } from 'react'
 import { Flex, Text } from '@/adapters/ui'
 import { ThinkingReasoning } from '@/adapters/ui/icons'
 import { ThoughtCard, type ThoughtInfo } from './ThoughtCard'
+import { EMPTY_RESEARCH_DETAILS_HELP_TEXT } from './research-empty-state-copy'
 
 interface ThoughtTracesTabProps {
   /** Array of thought traces from SSE events */
@@ -51,22 +52,17 @@ export const ThoughtTracesTab: FC<ThoughtTracesTabProps> = ({ thoughtTraces = []
 
       {/* Content */}
       {isEmpty ? (
-        <Flex
-          direction="col"
-          align="center"
-          justify="center"
-          className="flex-1 text-center py-8"
-        >
+        <Flex direction="col" align="center" justify="center" className="flex-1 py-8 text-center">
           <ThinkingReasoning className="text-subtle mb-3 h-8 w-8" />
           <Text kind="body/regular/md" className="text-subtle">
-            Thought traces will appear here during research.
+            No thought traces available.
           </Text>
           <Text kind="body/regular/sm" className="text-subtle mt-2">
-            Shows LLM chain-of-thought and inference activity.
+            {EMPTY_RESEARCH_DETAILS_HELP_TEXT}
           </Text>
         </Flex>
       ) : (
-        <Flex direction="col" gap="2" className="flex-1 min-h-0 overflow-y-auto">
+        <Flex direction="col" gap="2" className="min-h-0 flex-1 overflow-y-auto">
           {thoughtTraces.map((thought) => (
             <div key={thought.id} className="shrink-0">
               <ThoughtCard thought={thought} />

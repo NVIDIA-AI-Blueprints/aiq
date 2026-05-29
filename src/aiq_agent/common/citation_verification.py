@@ -550,7 +550,11 @@ def register_source_parser(
     _PARSER_REGISTRY.append((match_fn, parser_fn))
 
 
-def extract_sources_from_tool_result(tool_name: str, content: str) -> list[SourceEntry]:
+def extract_sources_from_tool_result(
+    tool_name: str,
+    content: str,
+    source_id: str | None = None,
+) -> list[SourceEntry]:
     """Extract sources from a tool's output.
 
     Strategy:
@@ -558,9 +562,20 @@ def extract_sources_from_tool_result(tool_name: str, content: str) -> list[Sourc
        formats like knowledge layer citation keys).
     2. Otherwise, fall back to the generic URL extractor which finds all
        URLs in any tool output regardless of format.
+    3. If neither produces entries, register the tool result itself as a
+       non-URL citation source.
 
     This means new sources (Bing, Perplexity, etc.) work automatically
     without any parser registration — as long as their output contains URLs.
+
+    The non-URL fallback is permissive on purpose: callers (the shallow and
+    deep researchers) are responsible for deciding which tool calls are
+    eligible to contribute sources, typically by limiting capture to the
+    agent's loaded tool set. The optional ``source_id`` is stored on the
+    returned entries when callers have resolved this tool to a configured
+    data source via
+    :func:`aiq_agent.common.data_source_registry.get_source_id_for_tool`,
+    but it does not gate the fallback.
     """
     name_lower = tool_name.lower()
     for match_fn, parser_fn in _PARSER_REGISTRY:
@@ -571,7 +586,18 @@ def extract_sources_from_tool_result(tool_name: str, content: str) -> list[Sourc
                 logger.warning("Parser failed for tool %s, falling back to generic", tool_name, exc_info=True)
                 break
     # Generic fallback: extract all URLs from content
-    return _parse_generic_urls(content, tool_name)
+    entries = _parse_generic_urls(content, tool_name)
+    if entries:
+        return entries
+
+    # Non-URL fallback: register the tool result itself as a source whenever
+    # the tool produced non-empty output. The caller has already decided
+    # this tool is eligible to contribute sources (typically by limiting
+    # capture to the agent's loaded tool set).
+    if content.strip():
+        return [SourceEntry(citation_key=tool_name, source_type="tool_result", tool_name=tool_name)]
+
+    return []
 
 
 # ---------------------------------------------------------------------------
@@ -979,11 +1005,6 @@ def verify_citations(
         )
         _emit_citation_metric(v.match_kind, v.verified, v.resolved)
 
-    # Apply URL replacements (garbled -> canonical) in the references section
-    if url_replacements:
-        for garbled, canonical in url_replacements.items():
-            ref_section = ref_section.replace(garbled, canonical)
-
     # The report keeps every citation that resolved, even with low confidence.
     # Only genuinely unresolved (unmatched / ambiguous / unverifiable) entries
     # get stripped — those are likely fabrications. ``verified`` is reported
@@ -991,6 +1012,49 @@ def verify_citations(
     valid_citations = [_citation_to_dict(v) for v in verifications if v.resolved]
     removed_records = [v for v in verifications if not v.resolved]
     removed_citations = [_citation_to_dict(v, include_reason=True) for v in removed_records]
+
+    # Dedup: collapse multiple [N] reference lines that resolve to the same
+    # registry source. The model often makes the same tool call twice (e.g.
+    # ``mcp_time__get_current_time`` for two timezones) and emits a separate
+    # ``[N] tool_name`` line for each call; without this pass both lines
+    # survive verification because each is independently valid. We keep the
+    # lowest-numbered occurrence and rewrite later inline citations to that
+    # number so the prose still cites the source.
+    seen_keys: dict[str, int] = {}  # canonical_key -> kept citation number
+    duplicate_rewrites: dict[int, int] = {}  # duplicate_num -> canonical_num
+    deduped_valid: list[dict] = []
+    for c in valid_citations:
+        key = c["url"] or c["citation_key"]
+        if key is None:
+            # Defensive: a valid citation must have one of url/citation_key.
+            # If neither is set we cannot dedup, so keep the entry.
+            deduped_valid.append(c)
+            continue
+        canonical_num = seen_keys.get(key)
+        if canonical_num is None:
+            seen_keys[key] = c["number"]
+            deduped_valid.append(c)
+            continue
+        duplicate_rewrites[c["number"]] = canonical_num
+        removed_citations.append(
+            {
+                "number": c["number"],
+                "line": c["line"],
+                "reason": f"duplicate_of_citation_{canonical_num}",
+            }
+        )
+        logger.debug(
+            "[CitationVerify]   [%d] REMOVE — duplicate of [%d]: %s",
+            c["number"],
+            canonical_num,
+            key,
+        )
+    valid_citations = deduped_valid
+
+    # Apply URL replacements (garbled -> canonical) in the references section
+    if url_replacements:
+        for garbled, canonical in url_replacements.items():
+            ref_section = ref_section.replace(garbled, canonical)
 
     # Aggregate counters for telemetry. Cardinality is bounded (10 match_kinds),
     # safe to ship to a metrics backend keyed by these tags.
@@ -1016,7 +1080,10 @@ def verify_citations(
         extra=summary_extra,
     )
 
-    if not removed_records:
+    # Nothing to strip or rewrite: no unresolved citations *and* no duplicates.
+    # ``removed_citations`` is the superset (unresolved records + dedup dups),
+    # so an empty list means the report body/references need no changes.
+    if not removed_citations:
         verified_report = body + ref_section if url_replacements else report_text
         return CitationVerificationResult(
             verified_report=verified_report,
@@ -1024,9 +1091,10 @@ def verify_citations(
             verifications=verifications,
         )
 
-    removed_numbers = {v.number for v in removed_records}
+    # Strip both genuinely-removed (unresolved) and duplicate reference lines.
+    removed_numbers = {c["number"] for c in removed_citations}
 
-    # Remove invalid reference lines from the references section
+    # Remove invalid (and duplicate) reference lines from the references section.
     cleaned_ref_lines = []
     for line in ref_section.split("\n"):
         line_match = _CITATION_LINE_RE.match(line)
@@ -1035,9 +1103,16 @@ def verify_citations(
         cleaned_ref_lines.append(line)
     cleaned_ref_section = "\n".join(cleaned_ref_lines)
 
-    # Remove orphaned inline citations from body
+    # Body fixups:
+    #  * Duplicate citations get rewritten to the canonical number — the
+    #    cited source is real, only the [N] label is wrong.
+    #  * Genuinely invalid citations get stripped — the source is fabricated
+    #    or unverifiable.
     cleaned_body = body
-    for num in removed_numbers:
+    for old_num, canonical_num in duplicate_rewrites.items():
+        cleaned_body = re.sub(rf"\[{old_num}\]", f"[{canonical_num}]", cleaned_body)
+    invalid_numbers = removed_numbers - set(duplicate_rewrites)
+    for num in invalid_numbers:
         cleaned_body = re.sub(rf"\[{num}\]", "", cleaned_body)
 
     # Note: renumbering is deferred to sanitize_report() which always runs after

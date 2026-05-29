@@ -47,7 +47,7 @@ export const SettingsPanel: FC = memo(function SettingsPanel() {
 
   return (
     <SidePanel
-      className="bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[400px] rounded-l-2xl"
+      className="side-panel-dock-under-header bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[400px]"
       open={isOpen}
       onOpenChange={handleOpenChange}
       side="right"

@@ -140,14 +140,16 @@ class TestFilterToolsBySourcesBasic:
         result = filter_tools_by_sources(tools, None)
         assert result == tools
 
-    def test_filter_empty_sources_returns_empty(self):
-        """Test that empty data_sources excludes web and knowledge tools (only 'other' tools included)."""
+    def test_filter_empty_sources_keeps_unmapped_tools(self):
+        """Test that empty data_sources disables source tools but keeps unmapped tools."""
         web_tool = MagicMock()
         web_tool.name = "web_search_tool"
         knowledge_tool = MagicMock()
         knowledge_tool.name = "knowledge_search"
-        result = filter_tools_by_sources([web_tool, knowledge_tool], [])
-        assert result == []
+        calculator = MagicMock()
+        calculator.name = "calculator"
+        result = filter_tools_by_sources([web_tool, knowledge_tool, calculator], [])
+        assert result == [calculator]
 
 
 class TestFilterToolsBySourcesWebSearch:
@@ -379,3 +381,51 @@ class TestDefaultDataSources:
     def test_default_is_list(self):
         """Test that default is a list."""
         assert isinstance(DEFAULT_DATA_SOURCES, list)
+
+
+class TestAllMappedToolsFilteredOut:
+    """Tests for all_mapped_tools_filtered_out predicate."""
+
+    def test_none_data_sources_returns_false(self):
+        """None means no filtering; nothing was filtered out."""
+        from aiq_agent.common.data_sources import all_mapped_tools_filtered_out
+
+        web_tool = MagicMock()
+        web_tool.name = "web_search_tool"
+        assert all_mapped_tools_filtered_out([web_tool], [web_tool], None) is False
+
+    def test_no_mapped_tools_in_input_returns_false(self):
+        """If the tools list had no mapped tools to begin with, nothing was lost."""
+        from aiq_agent.common.data_sources import all_mapped_tools_filtered_out
+
+        calculator = MagicMock()
+        calculator.name = "calculator"
+        assert all_mapped_tools_filtered_out([calculator], [calculator], ["web_search"]) is False
+
+    def test_empty_sources_drops_all_mapped_returns_true(self):
+        """data_sources=[] drops every mapped tool -> predicate fires."""
+        from aiq_agent.common.data_sources import all_mapped_tools_filtered_out
+
+        web_tool = MagicMock()
+        web_tool.name = "web_search_tool"
+        calculator = MagicMock()
+        calculator.name = "calculator"
+        assert all_mapped_tools_filtered_out([web_tool, calculator], [calculator], []) is True
+
+    def test_unknown_source_drops_all_mapped_returns_true(self):
+        """User requested a source that matches zero configured tools."""
+        from aiq_agent.common.data_sources import all_mapped_tools_filtered_out
+
+        web_tool = MagicMock()
+        web_tool.name = "web_search_tool"
+        assert all_mapped_tools_filtered_out([web_tool], [], ["nonexistent_source"]) is True
+
+    def test_some_mapped_tools_survive_returns_false(self):
+        """At least one mapped tool survived -> predicate does not fire."""
+        from aiq_agent.common.data_sources import all_mapped_tools_filtered_out
+
+        web_tool = MagicMock()
+        web_tool.name = "web_search_tool"
+        knowledge_tool = MagicMock()
+        knowledge_tool.name = "knowledge_search"
+        assert all_mapped_tools_filtered_out([web_tool, knowledge_tool], [web_tool], ["web_search"]) is False

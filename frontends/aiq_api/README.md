@@ -101,7 +101,7 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
   -d '{"agent_type": "deep_researcher", "input": "Research quantum computing trends in 2026"}'
 ```
 
-Optional body fields: `job_id` (custom ID), `expiry_seconds` (600–604800).
+Optional body fields: `job_id` (custom ID), `expiry_seconds` (600–604800), `data_sources` (subset of IDs from `/v1/data_sources`; `[]` disables data-source tools while leaving unmapped utility tools available; unknown IDs return 422).
 
 Response:
 

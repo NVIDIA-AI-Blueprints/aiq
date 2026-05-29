@@ -5,7 +5,7 @@
  * SourceCard Component
  *
  * Card displaying a single source URL with optional metadata (title, snippet, discovery time).
- * Used in CitationsTab to show cited and referenced sources.
+ * Used by source/citation views to show cited and referenced sources.
  *
  * SSE Events:
  * - artifact.update where data.type === 'citation_source': Discovered URL

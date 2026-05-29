@@ -10,10 +10,29 @@
 
 'use client'
 
-import { type FC, type KeyboardEvent, memo, useCallback, useMemo, useState, useRef, useEffect } from 'react'
+import {
+  type FC,
+  type KeyboardEvent,
+  memo,
+  useCallback,
+  useMemo,
+  useState,
+  useRef,
+  useEffect,
+} from 'react'
 import { Flex, Text, Button, SidePanel } from '@/adapters/ui'
 import { useShallow } from 'zustand/react/shallow'
-import { Chat, Edit, Trash, Plus, Search, LoadingSpinner } from '@/adapters/ui/icons'
+import {
+  Chat,
+  ChatMessage,
+  DocumentCheckmark,
+  Edit,
+  LoadingSpinner,
+  Plus,
+  Search,
+  SelectEllipse,
+  Trash,
+} from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 import { useChatStore } from '@/features/chat'
 import { checkStorageHealth } from '@/features/chat/lib/storage-manager'
@@ -25,6 +44,8 @@ interface Session {
   title: string
   date: Date
   hasActiveDeepResearch?: boolean
+  hasCompletedReport?: boolean
+  hasExpiredReport?: boolean
 }
 
 interface SessionsPanelProps {
@@ -62,31 +83,39 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
 
   const isSessionBusy = useChatStore((s) => s.isSessionBusy)
   const anySessionBusy = useChatStore((s) => s.hasAnyBusySession())
-  const pruneExpiredSessions = useChatStore((s) => s.pruneExpiredSessions)
+  const refreshDeepResearchSessionStatuses = useChatStore(
+    (s) => s.refreshDeepResearchSessionStatuses
+  )
   // Navigation-specific busy check: only shallow thinking (WebSocket) and HITL prompts
   // block session switching. Deep research runs server-side and can be reconnected,
   // so it should NOT prevent navigation.
-  const { isStreaming, hasPendingInteraction } = useChatStore(useShallow((s) => ({
-    isStreaming: s.isStreaming,
-    hasPendingInteraction: s.pendingInteraction !== null,
-  })))
+  const { isStreaming, hasPendingInteraction } = useChatStore(
+    useShallow((s) => ({
+      isStreaming: s.isStreaming,
+      hasPendingInteraction: s.pendingInteraction !== null,
+    }))
+  )
   const isNavigationBlocked = isStreaming || hasPendingInteraction
   const [searchQuery, setSearchQuery] = useState('')
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false)
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null)
+  const refreshStatusesInFlightRef = useRef(false)
 
   // Storage usage percentage — refreshes only when the panel opens
   const [storagePercent, setStoragePercent] = useState<number>(0)
   useEffect(() => {
     if (isSessionsPanelOpen) {
-      // Drop sessions older than the backend job TTL (24h) so the list
-      // never shows ghost entries whose reports are gone server-side.
-      pruneExpiredSessions()
       const { percentUsed } = checkStorageHealth()
       setStoragePercent(Math.round(percentUsed))
+      if (!refreshStatusesInFlightRef.current) {
+        refreshStatusesInFlightRef.current = true
+        void Promise.resolve(refreshDeepResearchSessionStatuses()).finally(() => {
+          refreshStatusesInFlightRef.current = false
+        })
+      }
     }
-  }, [isSessionsPanelOpen, pruneExpiredSessions])
+  }, [isSessionsPanelOpen, refreshDeepResearchSessionStatuses])
 
   const handleDeleteClick = useCallback((sessionId: string) => {
     setSessionToDelete(sessionId)
@@ -133,16 +162,16 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
   )
 
   const filteredSessions = useMemo(() => {
-    if (!searchQuery.trim()) return sessions
+    if (!searchQuery.trim()) return sessions.filter((s) => s.title.trim() !== '')
     const query = searchQuery.toLowerCase()
-    return sessions.filter((s) => s.title.toLowerCase().includes(query))
+    return sessions.filter((s) => s.title.toLowerCase().includes(query) && s.title.trim() !== '')
   }, [sessions, searchQuery])
 
   const groupedSessions = useMemo(() => groupSessionsByDate(filteredSessions), [filteredSessions])
-
+  const isEmptyState = filteredSessions.length === 0
   return (
     <SidePanel
-      className="bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px] rounded-r-2xl"
+      className="side-panel-dock-under-header bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px]"
       open={isSessionsPanelOpen}
       onOpenChange={handleOpenChange}
       side="left"
@@ -151,8 +180,8 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
       forceMount
       slotHeading={
         <Flex align="center" gap="2">
-          <Chat />
-          Sessions
+          <ChatMessage />
+          <Text kind="label/semibold/md">Sessions</Text>
         </Flex>
       }
       slotFooter={
@@ -161,50 +190,56 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
             Using {storagePercent}% of browser storage quota
           </Text>
           <Text kind="body/regular/xs" className="text-subtle">
-            Note: Sessions and files are saved for a limited time before automatic deletion.
+            Note: Chat sessions are saved in this browser. Research reports may expire on the
+            server.
           </Text>
         </Flex>
       }
     >
       {/* Delete All + New Session */}
-      <Flex align="center" justify="between" gap="2" className="mb-4">
-        <Button
-          kind="tertiary"
-          size="small"
-          color="danger"
-          onClick={handleDeleteAllClick}
-          disabled={anySessionBusy}
-          aria-label={anySessionBusy ? "Delete all sessions (disabled)" : "Delete all sessions"}
-          title={anySessionBusy ? "Cannot delete while operations are in progress" : "Delete all sessions"}
-        >
-          <Flex align="center" gap="1">
-            <Trash className="h-4 w-4" />
-            <Text kind="label/regular/sm">Delete All</Text>
-          </Flex>
-        </Button>
-        <Button
-          kind="tertiary"
-          size="small"
-          onClick={handleNewSession}
-          disabled={isNavigationBlocked}
-          aria-label={
-            isNavigationBlocked
-              ? 'Start new session (disabled during active operations)'
-              : 'Start new session'
-          }
-          title={
-            isNavigationBlocked
-              ? 'Cannot create new session while current session is active'
-              : 'Start new session'
-          }
-        >
-          <Flex align="center" gap="1">
-            <Plus className="h-4 w-4" />
-            <Text kind="label/regular/sm">New Session</Text>
-          </Flex>
-        </Button>
-      </Flex>
-
+      {!isEmptyState && searchQuery.trim() === '' && (
+        <Flex align="center" justify="between" gap="2" className="mb-4">
+          <Button
+            kind="tertiary"
+            size="small"
+            color="danger"
+            onClick={handleDeleteAllClick}
+            disabled={anySessionBusy}
+            aria-label={anySessionBusy ? 'Delete all sessions (disabled)' : 'Delete all sessions'}
+            title={
+              anySessionBusy
+                ? 'Cannot delete while operations are in progress'
+                : 'Delete all sessions'
+            }
+          >
+            <Flex align="center" gap="1">
+              <Trash className="h-4 w-4" />
+              <Text kind="label/regular/sm">Delete All</Text>
+            </Flex>
+          </Button>
+          <Button
+            kind="tertiary"
+            size="small"
+            onClick={handleNewSession}
+            disabled={isNavigationBlocked}
+            aria-label={
+              isNavigationBlocked
+                ? 'Start new session (disabled during active operations)'
+                : 'Start new session'
+            }
+            title={
+              isNavigationBlocked
+                ? 'Cannot create new session while current session is active'
+                : 'Start new session'
+            }
+          >
+            <Flex align="center" gap="1">
+              <Plus className="h-4 w-4" />
+              <Text kind="label/bold/sm">New Session</Text>
+            </Flex>
+          </Button>
+        </Flex>
+      )}
       {/* Search */}
       <div className="relative mb-4">
         <Search className="text-subtle pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2" />
@@ -213,7 +248,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search sessions..."
-          className="bg-surface-base border-base text-primary placeholder:text-subtle h-9 w-full rounded-md border pl-8 pr-3 text-sm outline-none focus:border-accent-primary"
+          className="bg-surface-base border-base text-primary placeholder:text-subtle focus:border-accent-primary h-9 w-full rounded-md border pl-8 pr-3 text-sm outline-none"
           aria-label="Search sessions"
         />
       </div>
@@ -240,7 +275,7 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
           </Flex>
         ))}
 
-        {filteredSessions.length === 0 && (
+        {isEmptyState && (
           <Flex direction="col" align="center" justify="center" className="flex-1 py-8">
             <Text kind="body/regular/sm" className="text-subtle">
               {searchQuery.trim() ? 'No matching sessions' : 'No sessions yet'}
@@ -334,7 +369,12 @@ const SessionItem: FC<SessionItemProps> = ({
 
   const handleSaveRename = useCallback(() => {
     const trimmedValue = editValue.trim()
-    if (trimmedValue && trimmedValue !== session.title) {
+    if (!trimmedValue) {
+      setEditValue(session.title)
+      setIsEditing(false)
+      return
+    }
+    if (trimmedValue !== session.title) {
       onRename?.(session.id, trimmedValue)
     }
     setIsEditing(false)
@@ -375,17 +415,19 @@ const SessionItem: FC<SessionItemProps> = ({
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
       className={`
-        group flex h-10 w-full items-center gap-2 rounded-md
-        border p-2 text-left transition-colors
-        outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-brand
+        focus-visible:ring-brand group flex h-10 w-full items-center gap-2
+        rounded-md border p-2 text-left
+        outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset
         ${isBusy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
         ${
           isSelected
-            ? 'bg-surface-raised border border-accent-primary'
+            ? 'bg-surface-raised border-accent-primary border'
             : 'border-base hover:bg-surface-raised-50 bg-transparent'
         }
       `}
-      aria-label={isBusy ? `Session: ${session.title} (processing in progress)` : `Session: ${session.title}`}
+      aria-label={
+        isBusy ? `Session: ${session.title} (processing in progress)` : `Session: ${session.title}`
+      }
       aria-disabled={isBusy}
     >
       {isEditing ? (
@@ -405,13 +447,7 @@ const SessionItem: FC<SessionItemProps> = ({
         />
       ) : (
         <>
-          {/* Loading indicator for active deep research */}
-          {session.hasActiveDeepResearch && (
-            <LoadingSpinner
-              className="shrink-0 text-accent-primary"
-              aria-label="Deep research in progress"
-            />
-          )}
+          <SessionStatusIcon session={session} isSessionActive={isSessionActive} />
 
           <Text kind="body/regular/sm" className="text-primary min-w-0 flex-1 truncate">
             {session.title}
@@ -425,8 +461,14 @@ const SessionItem: FC<SessionItemProps> = ({
                 size="tiny"
                 onClick={handleEditClick}
                 disabled={isBusy || isSessionActive}
-                aria-label={isBusy || isSessionActive ? "Rename session (disabled)" : "Rename session"}
-                title={isBusy || isSessionActive ? "Cannot rename while operations are in progress" : "Rename session"}
+                aria-label={
+                  isBusy || isSessionActive ? 'Rename session (disabled)' : 'Rename session'
+                }
+                title={
+                  isBusy || isSessionActive
+                    ? 'Cannot rename while operations are in progress'
+                    : 'Rename session'
+                }
               >
                 <Edit height={16} width={16} />
               </Button>
@@ -436,8 +478,14 @@ const SessionItem: FC<SessionItemProps> = ({
                 color="danger"
                 onClick={handleDeleteClick}
                 disabled={isBusy || isSessionActive}
-                aria-label={isBusy || isSessionActive ? "Delete session (disabled)" : "Delete session"}
-                title={isBusy || isSessionActive ? "Cannot delete while operations are in progress" : "Delete session"}
+                aria-label={
+                  isBusy || isSessionActive ? 'Delete session (disabled)' : 'Delete session'
+                }
+                title={
+                  isBusy || isSessionActive
+                    ? 'Cannot delete while operations are in progress'
+                    : 'Delete session'
+                }
               >
                 <Trash height={16} width={16} />
               </Button>
@@ -447,6 +495,29 @@ const SessionItem: FC<SessionItemProps> = ({
       )}
     </div>
   )
+}
+
+const SessionStatusIcon: FC<{ session: Session; isSessionActive: boolean }> = ({
+  session,
+  isSessionActive,
+}) => {
+  const isActive = isSessionActive || session.hasActiveDeepResearch
+
+  if (isActive) {
+    return <LoadingSpinner className="text-accent-primary shrink-0" aria-label="Session active" />
+  }
+
+  if (session.hasExpiredReport) {
+    return <SelectEllipse className="text-subtle h-4 w-4 shrink-0" aria-label="Report expired" />
+  }
+
+  if (session.hasCompletedReport) {
+    return (
+      <DocumentCheckmark className="text-success h-4 w-4 shrink-0" aria-label="Report completed" />
+    )
+  }
+
+  return <Chat className="text-subtle h-4 w-4 shrink-0" aria-label="Chat session" />
 }
 
 /**
@@ -462,7 +533,7 @@ const groupSessionsByDate = (sessions: Session[]): Record<string, Session[]> => 
     const sessionDate = new Date(session.date)
     let label: string
 
-    if (isSameDay(sessionDate, today)) {
+    if (isSameDay(sessionDate, today) && session.title.trim()) {
       label = 'Today'
     } else if (isSameDay(sessionDate, yesterday)) {
       label = 'Yesterday'

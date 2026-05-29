@@ -105,6 +105,31 @@ class MutationObserver {
 Object.defineProperty(global, 'localStorage', { value: localStorageMock, configurable: true })
 Object.defineProperty(global, 'sessionStorage', { value: sessionStorageMock, configurable: true })
 global.ResizeObserver = ResizeObserver
+
+// Node can expose a partial `localStorage` (e.g. missing `removeItem`) when a path
+// triggers web storage before happy-dom is ready. Chat/documents tests need full Storage.
+if (typeof globalThis.localStorage?.removeItem !== 'function') {
+  const mem: Record<string, string> = {}
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => (key in mem ? mem[key] : null),
+      setItem: (key: string, value: string) => {
+        mem[key] = value
+      },
+      removeItem: (key: string) => {
+        delete mem[key]
+      },
+      clear: () => {
+        for (const k of Object.keys(mem)) delete mem[k]
+      },
+      key: (index: number) => Object.keys(mem)[index] ?? null,
+      get length() {
+        return Object.keys(mem).length
+      },
+    } as Storage,
+    configurable: true,
+  })
+}
 // @ts-expect-error - Partial mock
 global.IntersectionObserver = IntersectionObserver
 // @ts-expect-error - Partial mock

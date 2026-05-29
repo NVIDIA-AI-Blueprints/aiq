@@ -129,7 +129,7 @@ Use `think` tool to verify constraints after each researcher call and before fin
 - Methodology sections or meta-commentary about the report
 - Statements like "the user requested" or "this report satisfies"
 - Word counts or length statements
-- Internal tool names (e.g., get_verified_sources, advanced_web_search_tool, write_file, think, task) — these are implementation details invisible to the reader
+- Internal workflow tool names (e.g., get_verified_sources, write_file, think, task) — these are implementation details invisible to the reader. The exception is the References section, where a verified data-source tool name (e.g. `mcp_time__get_current_time`) MAY appear as a citation entry when the source has no URL.
 - Descriptions of how sources were gathered, verified, or validated — the reader sees only the final citations, not the process
 
 The report must read as if written by a professional human researcher.
@@ -143,6 +143,7 @@ The report must read as if written by a professional human researcher.
 - Assign each unique URL a single citation number across ALL sub-agent findings
 - Number sources sequentially without gaps (1,2,3,4...)
 - For internal documents(from knowledge_search): `- [N] filename.pdf, p.X` - use the Citation field verbatim, include page numbers
+- For tools that return structured data without URLs (e.g. MCP tools, weather APIs, time services): cite the raw tool name exactly as shown by `get_verified_sources`. Do NOT invent friendly titles for these — preserve names like `mcp_time__get_current_time` verbatim.
 - Do NOT invent or recall URLs from memory — use only URLs from `get_verified_sources` or researcher findings
 - Citations are automatically verified and renumbered by the system
 

@@ -50,11 +50,13 @@ vi.mock('@/adapters/auth', () => ({
 
 // Mock the useLoadJobData hook
 const mockImportJobStream = vi.fn()
+const mockLoadResearchPanelTab = vi.fn()
 
 vi.mock('../hooks', () => ({
   useLoadJobData: () => ({
     loadReport: vi.fn(),
     importJobStream: mockImportJobStream,
+    loadResearchPanelTab: mockLoadResearchPanelTab,
     isLoading: false,
     error: null,
     clearError: vi.fn(),
@@ -70,6 +72,7 @@ describe('AgentResponse', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mockImportJobStream.mockClear()
+    mockLoadResearchPanelTab.mockClear()
   })
 
   test('renders response content', () => {
@@ -146,13 +149,14 @@ describe('AgentResponse', () => {
     expect(container.textContent).toContain('This is a very long response.')
   })
 
-  test('calls importJobStream when clicking "View Report" with jobId and no existing report', async () => {
+  test('uses shared research panel loader when clicking "View Report" with jobId', async () => {
     const user = userEvent.setup()
 
     render(<AgentResponse content="Response" showViewReport={true} jobId="test-job-123" />)
 
     await user.click(screen.getByRole('button', { name: 'View Report' }))
 
-    expect(mockImportJobStream).toHaveBeenCalledWith('test-job-123')
+    expect(mockLoadResearchPanelTab).toHaveBeenCalledWith('test-job-123', 'report')
+    expect(mockImportJobStream).not.toHaveBeenCalled()
   })
 })
