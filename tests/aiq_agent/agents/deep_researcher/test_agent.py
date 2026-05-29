@@ -26,6 +26,8 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
+from aiq_agent.agents.deep_researcher.models import ResearchNotes
+from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common.citation_verification import SourceEntry
@@ -256,6 +258,8 @@ class TestDeepResearcherAgent:
             assert "Include any applicable skill-use requirements from the plan" in kwargs["system_prompt"]
             assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
+            assert subagents["planner-agent"]["response_format"] is ResearchPlan
+            assert subagents["researcher-agent"]["response_format"] is ResearchNotes
             assert subagents["planner-agent"]["skills"] == [BUILTIN_SKILL_SOURCE]
             assert subagents["researcher-agent"]["skills"] == [BUILTIN_SKILL_SOURCE]
             assert "Skill-aware planning" in subagents["planner-agent"]["system_prompt"]
@@ -282,6 +286,9 @@ class TestDeepResearcherAgent:
             agent._build_orchestrator_agent(state)
 
             assert "skills" not in create.call_args.kwargs
+            subagents = {subagent["name"]: subagent for subagent in create.call_args.kwargs["subagents"]}
+            assert subagents["planner-agent"]["response_format"] is ResearchPlan
+            assert subagents["researcher-agent"]["response_format"] is ResearchNotes
             assert (
                 "When available skills apply during planning, research, or synthesis"
                 not in (create.call_args.kwargs["system_prompt"])

@@ -36,6 +36,8 @@ from .deepagents_runtime import DeepAgentsRuntime
 from .deepagents_runtime import SandboxConfig
 from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
+from .models import ResearchNotes
+from .models import ResearchPlan
 
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
@@ -244,6 +246,7 @@ class DeepResearcherAgent:
             "tools": self.all_tools,
             "model": self.llm_provider.get(LLMRole.PLANNER),
             "middleware": self.middleware,
+            "response_format": ResearchPlan,
         }
         researcher_agent: dict[str, Any] = {
             "name": "researcher-agent",
@@ -262,6 +265,7 @@ class DeepResearcherAgent:
             "tools": self.all_tools,
             "model": self.llm_provider.get(LLMRole.RESEARCHER),
             "middleware": self.middleware,
+            "response_format": ResearchNotes,
         }
         if skill_sources is not None:
             planner_agent["skills"] = skill_sources
@@ -291,7 +295,7 @@ class DeepResearcherAgent:
             system_prompt=orchestrator_instructions,
             subagents=self._get_subagents(state),
             store=InMemoryStore(),
-            context_schema=DeepResearchAgentState,
+            state_schema=DeepResearchAgentState,
             middleware=self.middleware,
             **deepagents_kwargs,
         )

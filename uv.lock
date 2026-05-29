@@ -292,7 +292,7 @@ requires-dist = [
     { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "cryptography", specifier = ">=46.0.6,<47" },
-    { name = "deepagents", specifier = "==0.5.0" },
+    { name = "deepagents", specifier = "==0.5.3" },
     { name = "knowledge-layer", extras = ["all"], editable = "sources/knowledge_layer" },
     { name = "langchain-modal", specifier = "==0.0.3" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.0" },
@@ -1215,7 +1215,7 @@ wheels = [
 
 [[package]]
 name = "deepagents"
-version = "0.5.0"
+version = "0.5.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "langchain" },
@@ -1225,9 +1225,9 @@ dependencies = [
     { name = "langsmith" },
     { name = "wcmatch" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/58/3b/7a942931e4b6189c25eb9bcce0e9bc0cd5925371991f32e19885a5def32d/deepagents-0.5.0.tar.gz", hash = "sha256:b4fc4b6aa8677b319618d5474df6927f03e7cfed5116606ea510067288624d03", size = 109679, upload-time = "2026-04-07T16:08:27.591Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/bd/c5/fbf36ff707f7ad4ff2d1590ba8c3b44622370955c74f0c84e4bb1b101d7d/deepagents-0.5.3.tar.gz", hash = "sha256:cbe63bd482c37d3aef883326f5dde70effcd489e67fc91834ffe7a8769796a5f", size = 122654, upload-time = "2026-04-15T13:06:34.875Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/be/87/1f709f4d6d77bc3286cf595713c3e380e59203acce1f34fd896cc7d99477/deepagents-0.5.0-py3-none-any.whl", hash = "sha256:ae6eefad4d04f078328a31479cf2568c352f957a351856dec8b9d0ca8619f8fb", size = 123057, upload-time = "2026-04-07T16:08:26.18Z" },
+    { url = "https://files.pythonhosted.org/packages/30/8f/40c91a29e4f094e5a1375e33309a3d0ca2e5204816d1dcdcd41ac38410d8/deepagents-0.5.3-py3-none-any.whl", hash = "sha256:f1f1c968f17a5bfb0a6d588d00c2e83264cdac0faa91f7b522892d5a2bd303cb", size = 138475, upload-time = "2026-04-15T13:06:33.593Z" },
 ]
 
 [[package]]
