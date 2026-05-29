@@ -1,14 +1,14 @@
 name: AIQ CI
 
+# Trigger: push-only. All PRs (internal and external) are mirrored to
+# pull-request/<N> branches by copy-pr-bot after `/ok to test` approval.
+# Direct pushes to develop or release branches also trigger CI.
 on:
-  pull_request:
-    branches:
-      - develop
-      - "release/**"
   push:
     branches:
       - develop
       - "release/**"
+      - "pull-request/[0-9]+"
 
 permissions:
   contents: read
