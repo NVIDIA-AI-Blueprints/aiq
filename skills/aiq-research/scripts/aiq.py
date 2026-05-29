@@ -40,6 +40,7 @@ AIQ_SERVER_URL = os.environ.get("AIQ_SERVER_URL", DEFAULT_SERVER_URL)
 
 _HEADLESS_HEADERS = {"Content-Type": "application/json", "X-AIQ-Mode": "headless"}
 DEFAULT_AGENT_TYPE = "shallow_researcher"
+_LOCAL_BACKEND_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
 
 URL_MAX_LENGTH = _int_const("2048")
 API_PATH_MAX_LENGTH = _int_const("4096")
@@ -85,7 +86,17 @@ def _validate_base_url(url: str) -> str:
         raise RuntimeError("AIQ_SERVER_URL must be an http or https URL with a host")
     if parsed.username is not None or parsed.password is not None:
         raise RuntimeError("AIQ_SERVER_URL must not include user:password@")
+    if parsed.scheme == "http" and parsed.hostname not in _LOCAL_BACKEND_HOSTS:
+        raise RuntimeError("Non-local AIQ_SERVER_URL values must use https")
     return raw.rstrip("/")
+
+
+def _show_query_target(api_path: str) -> None:
+    """Disclose the destination before transmitting user-provided query text."""
+    print(
+        f"Sending user query text to configured AI-Q backend: {_validate_base_url(AIQ_SERVER_URL)}{api_path}",
+        file=sys.stderr,
+    )
 
 
 def _validate_api_path(path: str) -> None:
@@ -189,6 +200,7 @@ def list_agents() -> dict[str, Any]:
 def submit_job(query: str, agent_type: str = DEFAULT_AGENT_TYPE) -> dict[str, Any]:
     """Submit an explicit async research job to AI-Q."""
     body = {"agent_type": _validate_agent_type(agent_type), "input": query}
+    _show_query_target("/v1/jobs/async/submit")
     return _api_request("POST", "/v1/jobs/async/submit", body=body, timeout=DEFAULT_LONG_HTTP_TIMEOUT_SECONDS)
 
 
@@ -226,7 +238,7 @@ def stream_job(job_id: str) -> None:
 def chat_request(query: str) -> dict[str, Any]:
     """Send a routed chat request that may return a direct answer or job ID."""
     body = {"messages": [{"role": "user", "content": query}]}
-    print(f"Sending request to: {_validate_base_url(AIQ_SERVER_URL)}/chat", file=sys.stderr)
+    _show_query_target("/chat")
     return _api_request("POST", "/chat", body=body, timeout=DEFAULT_LONG_HTTP_TIMEOUT_SECONDS)
 
 
@@ -447,7 +459,11 @@ def main() -> None:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         _print_usage()
         sys.exit(EXIT_FAILURE)
-    handler(sys.argv[COMMAND_ARGS_START_POSITION:])
+    try:
+        handler(sys.argv[COMMAND_ARGS_START_POSITION:])
+    except RuntimeError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        sys.exit(EXIT_FAILURE)
 
 
 if __name__ == "__main__":
