@@ -82,6 +82,7 @@ class TestNimbleWebSearchToolConfig:
         assert config.api_key is None
         assert config.max_retries == 3
         assert config.search_depth == "lite"
+        assert config.focus == "general"
         assert config.country == "US"
         assert config.locale == "en"
         assert config.max_content_length == 10000
@@ -92,6 +93,7 @@ class TestNimbleWebSearchToolConfig:
             api_key=SecretStr("sk-test"),
             max_retries=1,
             search_depth="deep",
+            focus="news",
             country="UK",
             locale="fr",
             max_content_length=50,
@@ -100,6 +102,7 @@ class TestNimbleWebSearchToolConfig:
         assert config.api_key.get_secret_value() == "sk-test"
         assert config.max_retries == 1
         assert config.search_depth == "deep"
+        assert config.focus == "news"
         assert config.country == "UK"
         assert config.locale == "fr"
         assert config.max_content_length == 50
@@ -109,6 +112,18 @@ class TestNimbleWebSearchToolConfig:
 
         with pytest.raises(ValidationError):
             NimbleWebSearchToolConfig(search_depth="ultra")
+
+    def test_invalid_focus_rejected(self):
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            NimbleWebSearchToolConfig(focus="newsy")
+
+    def test_no_include_answer_field(self):
+        # include_answer is intentionally not exposed as AI-Q-facing config in this
+        # initial integration (see register.py / README).
+        assert "include_answer" not in NimbleWebSearchToolConfig.model_fields
+        assert "include_answers" not in NimbleWebSearchToolConfig.model_fields
 
     @pytest.mark.parametrize(
         "field,value",
@@ -223,11 +238,43 @@ class TestNimbleWebSearchLive:
         kwargs = ctor.call_args.kwargs
         assert kwargs["search_depth"] == "deep"
         assert kwargs["max_results"] == 5
+        assert kwargs["focus"] == "general"  # default is general, passed explicitly
         assert kwargs["country"] == "US"
         assert kwargs["locale"] == "en"
         # include_answer is intentionally omitted in v1 — the upstream retriever
         # surfaces it as a 403 enterprise gate for non-enterprise accounts.
         assert "include_answer" not in kwargs
+
+    async def test_focus_defaults_to_general(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: with no focus configured, the retriever is built with focus='general' —
+        so general research queries never silently use a news/other focus.
+        """
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+
+        config = NimbleWebSearchToolConfig()
+        builder = MagicMock()
+        async with nimble_web_search(config, builder):
+            pass
+
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["focus"] == "general"
+
+    async def test_focus_news_passes_through_when_configured(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: an operator can deliberately configure focus='news'; it reaches the SDK.
+        (The LLM never chooses focus — it's not a tool parameter — so general queries can't
+        drift to news on their own.)
+        """
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+
+        config = NimbleWebSearchToolConfig(focus="news")
+        builder = MagicMock()
+        async with nimble_web_search(config, builder):
+            pass
+
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["focus"] == "news"
 
     async def test_truncates_long_query(self, fake_langchain_nimble, monkeypatch):
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")

@@ -86,13 +86,14 @@ The provider exposes the following Nimble-specific surface. Defaults are tuned f
 |---|---|---|---|
 | Result count | `max_results` | `5` | Range `1-100` (Nimble's documented cap). Soft cap (Nimble may return up to N+2; see Known limitations). |
 | Search depth | `search_depth` | `lite` | See the dedicated [Search depth](#search-depth) section below. |
+| Search focus | `focus` | `general` | Nimble focus mode: `general` (default, broad web/research), `news` (current events), or domain-specific `location` / `shopping` / `geo` / `social`. Leave `general` for normal research; the LLM never selects focus, so general queries can't drift to `news`. |
 | Localization — country | `country` | `US` | Two-letter country code (e.g. `FR`, `JP`, `UK`). Reaches the SDK constructor verbatim. |
 | Localization — language | `locale` | `en` | ISO 639-1 language code (e.g. `fr`, `ja`). |
 | Per-result content size | `max_content_length` | `10000` chars | Truncates each result's body to N chars (3-char ellipsis included). Minimum `1`; set to `null` to disable truncation; omit to use default. |
 | Retries | `max_retries` | `3` | Exponential backoff on transient errors. Final failure surfaces a friendly per-status message (401, 403, generic). |
 | Auth | `api_key` / `NIMBLE_API_KEY` | env or config | `pydantic.SecretStr`; never logged. Config-side `api_key` hydrates the env var so the underlying SDK can read it. |
 
-Each `<Document>` block in the rendered output carries an `entity_type` (`"OrganicResult"` for SERP results). The `include_answer=True` capability — which would produce an `entity_type="answer"` block first — is intentionally **not exposed** in v1; the SDK surfaces it as a 403 entitlement gate for non-enterprise accounts. See [Known limitations](#known-limitations).
+Each `<Document>` block in the rendered output carries an `entity_type` (`"OrganicResult"` for SERP results). The `include_answer=True` capability — which would produce an `entity_type="answer"` block first — is intentionally **not exposed** in this initial integration. See [Known limitations](#known-limitations).
 
 ## Search depth
 
@@ -108,7 +109,7 @@ If you do not know your tier, leave `search_depth: lite` and let the description
 
 - `max_results` is a **soft cap**. The Nimble API may return up to N+2 documents when asked for N. The provider returns them all; AI-Q's downstream consumers can slice if they need a hard cap.
 - `lite` mode returns `page_content == ""` per result. The provider falls back to `description` (~150 chars per result, organic-result quality).
-- `include_answer` is **not exposed** in v1 because the langchain-nimble retriever surfaces it as a 403 enterprise gate for non-enterprise accounts. It can be added in a follow-up once a non-gated path is available.
+- `include_answer` is **not exposed** in this initial integration. It can be added in a follow-up.
 
 ## Security
 

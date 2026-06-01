@@ -55,6 +55,18 @@ class NimbleWebSearchToolConfig(FunctionBaseConfig, name="nimble_web_search"):
             "non-enterprise accounts. 'deep' returns full page content."
         ),
     )
+    # Mirrors langchain-nimble's SearchFocus modes (general, news, location,
+    # shopping, geo, social). Declared locally because the SDK does not export
+    # the enum publicly; swap for a direct import if it becomes public.
+    focus: Literal["general", "news", "location", "shopping", "geo", "social"] = Field(
+        default="general",
+        description=(
+            "Nimble search focus mode. 'general' (default) covers broad web/research "
+            "queries and is the right choice for almost all agent use. 'news' targets "
+            "current events; the rest are domain-specific (location, shopping, geo, "
+            "social). Leave as 'general' unless the tool is dedicated to one of those."
+        ),
+    )
     country: str = Field(
         default="US",
         description="ISO country code passed to Nimble (e.g. 'US', 'UK', 'FR').",
@@ -125,24 +137,32 @@ async def nimble_web_search(
         )
         return
 
-    # The constructor kwargs below (max_results / search_depth / country / locale)
-    # match langchain-nimble>=3.0.0,<4.0.0; this signature contract is exercised by
-    # the live smoke (see PR description), since the unit tests mock the retriever.
+    # The constructor kwargs below (max_results / search_depth / focus / country /
+    # locale) match langchain-nimble>=3.0.0,<4.0.0; this signature contract is
+    # exercised by the live smoke (see PR description), since the unit tests mock
+    # the retriever. `focus` is passed explicitly so the default is provably
+    # "general" rather than relying on the SDK's (unvalidated) field default.
+    # `include_answer` is intentionally not exposed in this initial integration.
     retriever = NimbleSearchRetriever(
         max_results=tool_config.max_results,
         search_depth=tool_config.search_depth,
+        focus=tool_config.focus,
         country=tool_config.country,
         locale=tool_config.locale,
     )
 
     async def _nimble_web_search(question: str) -> str:
-        """Retrieves relevant contexts from web search (using Nimble) for the given question.
+        """Search the web with Nimble and return relevant sources for a question.
+
+        General-purpose web/research search: pass a natural-language question and
+        get back the most relevant pages with their URLs and content. Use it for
+        broad informational and technical research queries.
 
         Args:
-            question (str): The question to be answered. Will be truncated to 400 characters if longer.
+            question (str): The question to answer. Truncated to 400 characters if longer.
 
         Returns:
-            str: The web search results containing relevant documents and their URLs.
+            str: Relevant documents and their URLs, rendered as XML <Document> blocks.
         """
         if len(question) > 400:
             question = question[:397] + "..."

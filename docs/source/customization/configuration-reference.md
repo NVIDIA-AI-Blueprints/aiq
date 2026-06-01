@@ -220,6 +220,7 @@ functions:
 | `api_key` | `str` | `None` | Nimble API key. Falls back to `NIMBLE_API_KEY` environment variable. |
 | `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
 | `search_depth` | `str` | `"lite"` | Nimble search depth. See options below. |
+| `focus` | `str` | `"general"` | Nimble focus mode. See options below. |
 | `country` | `str` | `"US"` | ISO country code passed to Nimble (e.g. `US`, `UK`, `FR`). |
 | `locale` | `str` | `"en"` | Language/locale passed to Nimble (e.g. `en`, `fr`, `es`). |
 | `max_content_length` | `int` | `10000` | Max characters per result's page content. Set to `None` to disable truncation. |
@@ -229,6 +230,14 @@ functions:
 - **`lite`** (default) -- Returns metadata only (title, URL, description). Fastest, lowest token cost, safe default for general lookups.
 - **`fast`** -- Returns rich content at low latency. **Enterprise-tier only**; non-enterprise accounts receive a 403 with a clear entitlement message.
 - **`deep`** -- Returns full page content for each result. Use for research workflows that need the body text, not just URLs.
+
+**`focus` options:**
+
+- **`general`** (default) -- Broad web/research queries. The right choice for almost all agent use.
+- **`news`** -- Current events. Use only for a tool dedicated to news/recency.
+- **`location`**, **`shopping`**, **`geo`**, **`social`** -- Domain-specific routing; set only when the tool targets that domain.
+
+`focus` is a workflow-config setting, not an agent-chosen parameter -- the model only passes a query, so general research queries cannot silently switch to `news`. Answer generation (`include_answer`) is **not exposed** in this initial integration.
 
 ### `paper_search`
 
