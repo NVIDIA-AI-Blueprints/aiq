@@ -29,6 +29,8 @@ from aiq_agent.common.citation_verification import verify_citations
 
 from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import SourceRegistryMiddleware
+from .custom_middleware import SourceToolConcurrencyLimiter
+from .custom_middleware import ToolConcurrencyMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
 from .custom_middleware import ToolRetryMiddleware
@@ -36,8 +38,10 @@ from .deepagents_runtime import DeepAgentsRuntime
 from .deepagents_runtime import SandboxConfig
 from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
-from .models import ResearchNotes
 from .models import ResearchPlan
+from .tools.research import build_research_batch_tool as build_research_batch_tool_impl
+from .tools.research import build_researcher_runnable as build_researcher_runnable_impl
+from .tools.source_tool_batching import build_batch_source_tools
 
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
@@ -50,6 +54,11 @@ logger = logging.getLogger(__name__)
 # Used by both _extract_report_content (to decide if write_file fallback is needed)
 # and _is_report_complete (to reject too-short reports).
 _MIN_REPORT_LENGTH = 1500
+DEFAULT_MAX_BATCH_RESEARCH_QUERIES = 6
+DEFAULT_MAX_RESEARCH_CONCURRENCY = 3
+DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS = 120.0
+DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS = 5
+DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE = 5
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
@@ -82,7 +91,7 @@ class DeepResearcherAgent:
 
     1. **Planning Phase**: Generate a structured research plan with queries and report
        organization (planner subagent)
-    2. **Research Loops**: Execute queries via web search (researcher subagent), then
+    2. **Research Loops**: Execute queries through the batch research tool, then
        synthesize drafts directly in the orchestrator
     3. **Iteration**: Repeat research and synthesis loops to fill gaps
     4. **Citation Management**: Catalog and number sources in the orchestrator
@@ -120,9 +129,14 @@ class DeepResearcherAgent:
         sandbox: SandboxConfig | None = None,
         config: Any | None = None,
         job_id: str | None = None,
+        max_batch_research_queries: int = DEFAULT_MAX_BATCH_RESEARCH_QUERIES,
+        max_research_concurrency: int = DEFAULT_MAX_RESEARCH_CONCURRENCY,
+        research_query_timeout_seconds: float = DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS,
+        max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
+        max_source_tool_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
     ) -> None:
         """
-        Initialize the deep researcher subagent.
+        Initialize the deep researcher agent.
 
         Args:
             llm_provider: LLMProvider for role-based LLM access.
@@ -134,6 +148,11 @@ class DeepResearcherAgent:
             sandbox: Optional DeepAgents sandbox config.
             config: Optional agent config. Used by async workers to pass function config generically.
             job_id: Optional async job identifier used to scope sandbox backends.
+            max_batch_research_queries: Maximum curated ResearchQuery items per run_research_batch call.
+            max_research_concurrency: Maximum concurrent researcher workers per run_research_batch call.
+            research_query_timeout_seconds: Per-ResearchQuery timeout for researcher workers.
+            max_concurrent_source_tool_calls: Shared source-tool concurrency limit across researcher workers.
+            max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -141,11 +160,16 @@ class DeepResearcherAgent:
         self.verbose = verbose
         self.callbacks = callbacks or []
 
-        if self.verbose:
-            logger.info("Tools configured: %d", len(self.tools))
         if config is not None:
             skills = skills or getattr(config, "skills", None)
             sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
+
+        self.max_batch_research_queries = max_batch_research_queries
+        self.max_research_concurrency = max_research_concurrency
+        self.research_query_timeout_seconds = research_query_timeout_seconds
+        self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
+        self.max_source_tool_batch_size = max_source_tool_batch_size
+
         self.deepagents_runtime = DeepAgentsRuntime(skills=skills, sandbox=sandbox, job_id=job_id)
 
         self._prompts = self._load_prompts()
@@ -153,9 +177,17 @@ class DeepResearcherAgent:
         for t in self.tools:
             self.tools_info.append({"name": t.name, "description": t.description})
 
-        self.source_registry_middleware = SourceRegistryMiddleware(
-            source_tool_names={t.name for t in self.tools},
+        self.source_tool_names = {t.name for t in self.tools}
+        self.source_registry_middleware = SourceRegistryMiddleware(source_tool_names=self.source_tool_names)
+        self.source_tool_limiter = SourceToolConcurrencyLimiter(self.max_concurrent_source_tool_calls)
+        batch_source_tools = build_batch_source_tools(
+            self.tools,
+            source_tool_names=self.source_tool_names,
+            limiter=self.source_tool_limiter,
+            max_batch_size=self.max_source_tool_batch_size,
         )
+        self.research_source_tools = batch_source_tools.tools
+        self.batched_source_tool_names = batch_source_tools.wrapped_tool_names
 
         # Create a tool that gives the orchestrator access to verified sources
         registry_middleware = self.source_registry_middleware
@@ -178,15 +210,13 @@ class DeepResearcherAgent:
             return "No sources captured yet. Run research queries first."
 
         self.all_tools = [think, get_verified_sources, *self.tools]
-
-        self.middleware = [
-            EmptyContentFixMiddleware(),
-            ToolNameSanitizationMiddleware(valid_tool_names=[t.name for t in self.all_tools]),
-            ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
-            self.source_registry_middleware,
-            ToolResultPruningMiddleware(keep_last_n=10, max_chars=2000),
-            ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
-        ]
+        self.researcher_tools = [think, get_verified_sources, *self.research_source_tools]
+        self.planner_tools = self.researcher_tools
+        self.researcher_middleware = self._build_middleware(
+            exclude_source_throttle_tool_names=self.batched_source_tool_names
+        )
+        self.orchestrator_middleware = self._build_middleware(extra_valid_tool_names=["run_research_batch"])
+        self.middleware = self.researcher_middleware
 
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""
@@ -194,24 +224,33 @@ class DeepResearcherAgent:
         prompt_names = ["planner", "researcher", "orchestrator"]
 
         for name in prompt_names:
-            try:
-                prompts[name] = load_prompt(AGENT_DIR / "prompts", name)
-            except Exception as e:
-                logger.warning("Failed to load prompt %s: %s, using inline default", name, e)
-                prompts[name] = self._get_inline_default(name)
+            prompts[name] = load_prompt(AGENT_DIR / "prompts", name)
 
         return prompts
 
-    def _get_inline_default(self, name: str) -> str:
-        """Get inline default prompt for fallback."""
-        defaults = {
-            "planner": "You are a research planning strategist. Create a structured research plan.",
-            "researcher": "You are a research investigator. Gather information from available sources.",
-            "orchestrator": (
-                "You are a research orchestrator. Coordinate the research process and produce a polished report."
+    def _build_middleware(
+        self,
+        *,
+        extra_valid_tool_names: Sequence[str] = (),
+        exclude_source_throttle_tool_names: Sequence[str] = (),
+    ) -> list[Any]:
+        """Build the common middleware stack with agent-specific tool-name sanitization."""
+        return [
+            EmptyContentFixMiddleware(),
+            ToolNameSanitizationMiddleware(
+                valid_tool_names=list({t.name for t in [*self.all_tools, *self.researcher_tools]})
+                + list(extra_valid_tool_names)
             ),
-        }
-        return defaults.get(name, f"You are a {name} agent.")
+            ToolConcurrencyMiddleware(
+                tool_names=self.source_tool_names,
+                limiter=self.source_tool_limiter,
+                excluded_tool_names=set(exclude_source_throttle_tool_names),
+            ),
+            ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
+            self.source_registry_middleware,
+            ToolResultPruningMiddleware(keep_last_n=10, max_chars=2000),
+            ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
+        ]
 
     def _deepagents_prompt_context(self) -> dict[str, Any]:
         """Return prompt variables for optional DeepAgents skills and sandbox support."""
@@ -243,34 +282,14 @@ class DeepResearcherAgent:
                 available_documents=available_docs,
                 **deepagents_prompt_context,
             ),
-            "tools": self.all_tools,
+            "tools": self.planner_tools,
             "model": self.llm_provider.get(LLMRole.PLANNER),
-            "middleware": self.middleware,
+            "middleware": self.researcher_middleware,
             "response_format": ResearchPlan,
-        }
-        researcher_agent: dict[str, Any] = {
-            "name": "researcher-agent",
-            "description": (
-                "Information gathering - executes search queries and synthesizes "
-                "relevant content from available sources"
-            ),
-            "system_prompt": render_prompt_template(
-                self._prompts["researcher"],
-                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                user_info=state.user_info,
-                tools=self.tools_info,
-                available_documents=available_docs,
-                **deepagents_prompt_context,
-            ),
-            "tools": self.all_tools,
-            "model": self.llm_provider.get(LLMRole.RESEARCHER),
-            "middleware": self.middleware,
-            "response_format": ResearchNotes,
         }
         if skill_sources is not None:
             planner_agent["skills"] = skill_sources
-            researcher_agent["skills"] = skill_sources
-        return [planner_agent, researcher_agent]
+        return [planner_agent]
 
     def _build_orchestrator_agent(self, state: DeepResearchAgentState) -> str:
         """Get the orchestrator instructions for the deep research agent."""
@@ -288,15 +307,35 @@ class DeepResearcherAgent:
         )
 
         deepagents_kwargs = self.deepagents_runtime.create_agent_kwargs
+        researcher_runnable = build_researcher_runnable_impl(
+            llm_provider=self.llm_provider,
+            state=state,
+            prompt_template=self._prompts["researcher"],
+            tools_info=self.tools_info,
+            prompt_context=deepagents_prompt_context,
+            current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            researcher_tools=self.researcher_tools,
+            researcher_middleware=self.researcher_middleware,
+            skill_sources=self.deepagents_runtime.skill_sources,
+            backend=self.deepagents_runtime.backend,
+        )
+        research_batch_tool = build_research_batch_tool_impl(
+            researcher_runnable=researcher_runnable,
+            callbacks=self.callbacks,
+            backend=self.deepagents_runtime.backend,
+            max_batch_research_queries=self.max_batch_research_queries,
+            max_research_concurrency=self.max_research_concurrency,
+            research_query_timeout_seconds=self.research_query_timeout_seconds,
+        )
+        orchestrator_tools = [*self.all_tools, research_batch_tool]
 
         agent = create_deep_agent(
             model=self.llm_provider.get(LLMRole.ORCHESTRATOR),
-            tools=self.all_tools,
+            tools=orchestrator_tools,
             system_prompt=orchestrator_instructions,
             subagents=self._get_subagents(state),
             store=InMemoryStore(),
-            state_schema=DeepResearchAgentState,
-            middleware=self.middleware,
+            middleware=self.orchestrator_middleware,
             **deepagents_kwargs,
         )
         return agent.with_config({"recursion_limit": 1000})

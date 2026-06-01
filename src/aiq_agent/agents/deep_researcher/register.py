@@ -37,6 +37,11 @@ from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
+from .agent import DEFAULT_MAX_BATCH_RESEARCH_QUERIES
+from .agent import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
+from .agent import DEFAULT_MAX_RESEARCH_CONCURRENCY
+from .agent import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
+from .agent import DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS
 from .agent import DeepResearcherAgent
 from .deepagents_runtime import SandboxConfig
 from .deepagents_runtime import SkillsConfig
@@ -65,6 +70,31 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     sandbox: SandboxConfig | None = Field(
         default=None,
         description="Optional DeepAgents sandbox backend for execute support.",
+    )
+    max_batch_research_queries: int = Field(
+        default=DEFAULT_MAX_BATCH_RESEARCH_QUERIES,
+        ge=1,
+        description="Maximum curated ResearchQuery items accepted by run_research_batch.",
+    )
+    max_research_concurrency: int = Field(
+        default=DEFAULT_MAX_RESEARCH_CONCURRENCY,
+        ge=1,
+        description="Maximum concurrent researcher workers per run_research_batch call.",
+    )
+    research_query_timeout_seconds: float = Field(
+        default=DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS,
+        gt=0,
+        description="Per-ResearchQuery timeout for researcher workers.",
+    )
+    max_concurrent_source_tool_calls: int = Field(
+        default=DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
+        ge=1,
+        description="Shared maximum concurrent source-tool calls across researcher workers.",
+    )
+    max_source_tool_batch_size: int = Field(
+        default=DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
+        ge=1,
+        description="Maximum concrete inputs accepted by batch-capable source tool wrappers.",
     )
 
 
@@ -120,6 +150,11 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         callbacks=callbacks,
         skills=config.skills,
         sandbox=config.sandbox,
+        max_batch_research_queries=config.max_batch_research_queries,
+        max_research_concurrency=config.max_research_concurrency,
+        research_query_timeout_seconds=config.research_query_timeout_seconds,
+        max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
+        max_source_tool_batch_size=config.max_source_tool_batch_size,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -148,6 +183,11 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     skills=config.skills,
                     sandbox=config.sandbox,
                     job_id=job_id,
+                    max_batch_research_queries=config.max_batch_research_queries,
+                    max_research_concurrency=config.max_research_concurrency,
+                    research_query_timeout_seconds=config.research_query_timeout_seconds,
+                    max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
+                    max_source_tool_batch_size=config.max_source_tool_batch_size,
                 )
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):

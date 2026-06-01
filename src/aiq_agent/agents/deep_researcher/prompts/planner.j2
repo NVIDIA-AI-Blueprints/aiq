@@ -54,13 +54,16 @@ Generate that the final report must satisfy. Constraints are acceptance criteria
 5. **Language**: If user input is non-English, add a constraint for response language.
 
 ## Queries
-After you have finished your own search tool calls and refined the plan, list the final queries in the JSON below. A **researcher agent** will later execute these queries and synthesize findings. Base this list on what you discovered during your planning searches — do not invent queries you did not ground in your tool use.
-The researcher has no additional context, so each query must be **self-contained and specific**.
+After you have finished your own search tool calls and refined the plan, list the final queries in the ResearchPlan schema. The orchestrator will pass these ResearchQuery objects to `run_research_batch`; each ResearchQuery becomes one researcher worker that can cover multiple concrete search angles. Base this list on what you discovered during your planning searches — do not invent queries you did not ground in your tool use.
+The researcher worker has no additional context, so each query must be **self-contained and specific**.
 Generate as many queries as you need to enable comprehensive coverage of all TOC sections.
 
 Query Guidelines:
 - Be specific and searchable - include key terms needed to find relevant sources
-- Each query should focus on one clear information need and map to specific TOC sections
+- Each ResearchQuery should focus on one clear information need and map to specific TOC sections
+- Use the `subqueries` field for concrete search angles that belong under one higher-level ResearchQuery and can be handled by the same researcher worker.
+- Prefer a higher-level `query` plus several `subqueries` when multiple searches support the same report section or evidence need.
+- Leave `subqueries` empty only when a ResearchQuery has a single obvious search angle.
 - No duplicate or overlapping queries - each should cover distinct ground
 - For topics you identified as internal: in the query rationale, state "Internal: use knowledge_search only" so the researcher does not use web/paper search for that query
 

@@ -51,8 +51,7 @@ class DeepResearchAgentState(BaseModel):
         tools_info: Information about available tools.
         todos: Todo list managed by TodoListMiddleware.
         files: Virtual filesystem managed by FilesystemMiddleware.
-        subagents: Status of subagents (planner, researcher) managed by
-            SubAgentMiddleware.
+        subagents: Status of configured DeepAgents subagents, currently planner-agent.
         clarifier_result: Log from clarifier agent dialog.
         available_documents: User-uploaded documents with summaries for context.
     """

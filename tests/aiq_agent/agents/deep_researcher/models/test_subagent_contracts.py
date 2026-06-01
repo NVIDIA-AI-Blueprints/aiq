@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for deep researcher subagent structured response contracts."""
+"""Tests for deep researcher structured response contracts."""
 
 import pytest
 from pydantic import ValidationError
@@ -51,6 +51,7 @@ def test_research_plan_contract_validates_expected_shape():
             "queries": [
                 {
                     "query": "CUDA OpenCL portability performance ecosystem comparison",
+                    "subqueries": ["CUDA OpenCL portability", "CUDA OpenCL benchmark comparison"],
                     "tool": "web_search_tool",
                     "target_sections": ["Programming Model Differences"],
                     "rationale": "Supports the comparison section.",
@@ -61,6 +62,7 @@ def test_research_plan_contract_validates_expected_shape():
 
     assert plan.report_toc[0].subsections[0].id == "1.1"
     assert plan.constraints[0].category == "content"
+    assert plan.queries[0].subqueries == ["CUDA OpenCL portability", "CUDA OpenCL benchmark comparison"]
 
 
 def test_research_notes_contract_validates_expected_shape():

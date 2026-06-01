@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Structured response contracts for deep researcher subagents."""
+"""Structured response contracts for deep researcher planning and research."""
 
 from typing import ClassVar
 from typing import Literal
@@ -24,7 +24,7 @@ from pydantic import Field
 
 
 class _StrictContract(BaseModel):
-    """Base model for subagent response schemas."""
+    """Base model for structured response schemas."""
 
     model_config: ClassVar[ConfigDict] = {"extra": "forbid"}
 
@@ -66,9 +66,16 @@ class Constraint(_StrictContract):
 
 
 class ResearchQuery(_StrictContract):
-    """Self-contained research query for a researcher subagent."""
+    """Self-contained research query for a researcher worker."""
 
     query: str = Field(description="Specific, self-contained search or document query.")
+    subqueries: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Concrete search angles or subqueries the researcher should cover under this higher-level query. "
+            "Use this to group related searches that support the same target sections."
+        ),
+    )
     tool: str = Field(description="Tool name to use for the query.")
     target_sections: list[str] = Field(description="Report sections this query is intended to support.")
     rationale: str = Field(description="Why this query is needed.")
@@ -81,11 +88,11 @@ class ResearchPlan(_StrictContract):
     report_title: str = Field(description="Concise, descriptive title for the final report.")
     report_toc: list[TocSection] = Field(description="Hierarchical report table of contents.")
     constraints: list[Constraint] = Field(description="Acceptance criteria for the final report.")
-    queries: list[ResearchQuery] = Field(description="Queries for researcher subagents to execute.")
+    queries: list[ResearchQuery] = Field(description="Queries for researcher workers to execute.")
 
 
 class ResearchSource(_StrictContract):
-    """Source used by a researcher subagent."""
+    """Source used by a researcher worker."""
 
     id: int = Field(description="Integer source identifier used by findings in this note.")
     title: str = Field(description="Source title or document name.")
@@ -119,7 +126,7 @@ class ResearchGap(_StrictContract):
 
 
 class ResearchNotes(_StrictContract):
-    """Structured notes produced by a researcher subagent."""
+    """Structured notes produced by a researcher worker."""
 
     query_topic: str = Field(description="Short topic label for this research note.")
     target_sections: list[str] = Field(description="Report sections these notes support.")
@@ -129,3 +136,32 @@ class ResearchNotes(_StrictContract):
     sources: list[ResearchSource] = Field(description="Every source used by these notes.")
     narrative_notes: str = Field(description="Long-form synthesis preserving nuance for report writing.")
     language: str = Field(description="Language used in these research notes.")
+
+
+class ResearchBatchItemResult(_StrictContract):
+    """Result for one researcher worker in a batched research call."""
+
+    query: ResearchQuery = Field(description="ResearchQuery assigned to this worker.")
+    status: Literal["succeeded", "failed", "timed_out", "rejected"] = Field(
+        description="Outcome for this individual researcher worker."
+    )
+    file_path: str | None = Field(default=None, description="Persisted /shared path for successful notes.")
+    note: ResearchNotes | None = Field(
+        default=None,
+        description="Structured notes returned by the researcher before persistence; compact summaries omit this.",
+    )
+    error: str | None = Field(default=None, description="Error text for failed, timed out, or rejected items.")
+    elapsed_seconds: float = Field(description="Elapsed wall-clock seconds for this item.")
+
+
+class ResearchBatchResult(_StrictContract):
+    """Structured result returned by run_research_batch."""
+
+    status: Literal["succeeded", "partial", "failed", "rejected"] = Field(description="Overall batch outcome.")
+    total: int = Field(description="Total number of input queries.")
+    succeeded: int = Field(description="Number of successful researcher workers.")
+    failed: int = Field(description="Number of failed researcher workers.")
+    timed_out: int = Field(description="Number of timed-out researcher workers.")
+    files: list[str] = Field(description="Persisted /shared paths for successful notes.")
+    results: list[ResearchBatchItemResult] = Field(description="Per-query batch results.")
+    error: str | None = Field(default=None, description="Batch-level error, if any.")

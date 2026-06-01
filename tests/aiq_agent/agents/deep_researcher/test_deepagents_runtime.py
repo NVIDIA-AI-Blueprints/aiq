@@ -18,7 +18,7 @@
 Background: deepagents' CompositeBackend strips the route prefix before
 delegating to a routed StateBackend. The success path is restored via
 ``WriteResult.path``, but error messages embed the stripped key, which
-caused the failing trajectory in PR #211: a researcher subagent saw
+caused the failing trajectory in PR #211: a nested research worker saw
 ``Cannot write to /0_weather_data.txt`` instead of ``/shared/0_weather_data.txt``
 and chased the phantom path through the sandbox shell.
 

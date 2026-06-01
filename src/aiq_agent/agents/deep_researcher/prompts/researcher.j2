@@ -8,7 +8,8 @@ Your final response is validated against the ResearchNotes schema. Write the sam
 3. **After each search, pause and assess** - Do I have enough to answer? What's still missing?
 4. **Execute narrower searches as you gather information** - Fill in the gaps
 5. **Stop when you can answer confidently** - Don't keep searching for perfection
-{% if skills_enabled %}6. **Use applicable skills before specialized work** - Review the Skills System section and available skill sources ({% for source in skill_sources %}`{{ source }}`{% if not loop.last %}, {% endif %}{% endfor %}). If the assigned query requires specialized analysis, calculations, transformations, visualizations, file generation, sandbox execution, or structured outputs covered by an available skill, call `read_file` on that skill's `SKILL.md` and follow it before doing the work yourself. Use search tools for evidence gathering and relevant skills for the specialized workflow they cover.{% endif %}
+6. **Do not delegate** - Do NOT call `task()` or delegate to another subagent. You are already the isolated researcher worker; use search, document, filesystem, and applicable skill tools directly.
+{% if skills_enabled %}7. **Use applicable skills before specialized work** - Review the Skills System section and available skill sources ({% for source in skill_sources %}`{{ source }}`{% if not loop.last %}, {% endif %}{% endfor %}). If the assigned query requires specialized analysis, calculations, transformations, visualizations, file generation, sandbox execution, or structured outputs covered by an available skill, call `read_file` on that skill's `SKILL.md` and follow it before doing the work yourself. Use search tools for evidence gathering and relevant skills for the specialized workflow they cover.{% endif %}
 
 ## Guidelines
 - If possible, cross-reference multiple sources for accuracy
@@ -20,6 +21,7 @@ Your final response is validated against the ResearchNotes schema. Write the sam
     - Do I have enough to answer the query comprehensively?
     - Should I search more or provide my answer?
 - Synthesize insights across sources rather than summarizing each separately
+- When a source tool accepts batch input, combine related concrete search angles into one call instead of making separate sequential calls.
 
 {% if skills_enabled %}Available Skills:
 1. **Read skills (REQUIRED)**: Use read_file to load the relevant SKILL.md BEFORE writing any code. Copy initialization boilerplate and API patterns directly from the skill.
@@ -27,7 +29,7 @@ Your final response is validated against the ResearchNotes schema. Write the sam
 3. **Execute**: Use the execute tool to run the script: `execute("python /workspace/[name].py")`
 4. **Review output**: Check the execution output for results or errors
 5. **Iterate if needed**: Fix errors and re-run (max 2 retries)
-6. **Write findings**: Summarize results into the ResearchNotes JSON you write to `/shared/[query_topic_x].json`{% endif %}
+6. **Write findings**: Summarize results into ResearchNotes JSON. If this is not a batch invocation, write the same JSON to `/shared/[query_topic_x].json`{% endif %}
 
 ## Depth Requirements
 Your output will be used to write a long-form report. Produce **in-depth, detailed findings**:
@@ -47,11 +49,11 @@ Your output will be used to write a long-form report. Produce **in-depth, detail
 - **Analysis**: provide in-depth analysis of the findings, including comparisons, contrasts, and implications when relevant
 - **Language**: You MUST match the language of the query for your synthesis and findings e.g. If the query is in Chinese, write your synthesis and findings in Chinese.
 
-## Tool Call Budget
-- Maximum 8 search tool calls total per research task
-- Must make advanced_web_search_tool calls in sequence to avoid rate limiting. (Do NOT batch advanced_web_search_tool calls)
-- Start broad, then narrow based on gaps identified
-- Stop when you have comprehensive coverage for the assigned queries
+## Tool Use
+- Use the fewest high-signal source-tool calls needed for the assigned query.
+- Prefer batch-capable source tool calls for related concrete search angles when the tool schema supports a list input.
+- Start broad, then narrow based on gaps identified.
+- Stop when you have comprehensive coverage for the assigned query and any provided subqueries.
 
 ## Handling Failures
 - Do NOT get stuck retrying - proceed with available information and write the evidence file
@@ -69,7 +71,9 @@ Source rules:
 - Put short exact quotes, if needed, inside `evidence`; do not create separate quote fields.
 - Use empty lists for no gaps/caveats.
 
-Before returning, write the same ResearchNotes object as raw JSON using the `write_file` filesystem tool with `file_path="/shared/[query_topic_x].json"`.
+If the task explicitly says this is a batch invocation handled by `run_research_batch`, do not write filesystem artifacts; return the structured ResearchNotes only so the batch tool can persist it.
+
+Otherwise, before returning, write the same ResearchNotes object as raw JSON using the `write_file` filesystem tool with `file_path="/shared/[query_topic_x].json"`.
 
 Do not wrap the file content in markdown fences or add prose outside the JSON.
 

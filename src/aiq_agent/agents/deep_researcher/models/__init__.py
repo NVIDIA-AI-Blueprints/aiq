@@ -15,6 +15,8 @@
 
 from .state import DeepResearchAgentState
 from .subagent_contracts import Constraint
+from .subagent_contracts import ResearchBatchItemResult
+from .subagent_contracts import ResearchBatchResult
 from .subagent_contracts import ResearchFinding
 from .subagent_contracts import ResearchGap
 from .subagent_contracts import ResearchNotes
@@ -28,6 +30,8 @@ from .subagent_contracts import TocSubsection
 __all__ = [
     "Constraint",
     "DeepResearchAgentState",
+    "ResearchBatchItemResult",
+    "ResearchBatchResult",
     "ResearchFinding",
     "ResearchGap",
     "ResearchNotes",
