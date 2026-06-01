@@ -24,6 +24,7 @@ members = [
     "freshqa-eval",
     "google-scholar-paper-search",
     "knowledge-layer",
+    "nimble-web-search",
     "tavily-web-search",
 ]
 overrides = [
@@ -276,6 +277,7 @@ dev = [
     { name = "google-scholar-paper-search" },
     { name = "knowledge-layer", extra = ["all"] },
     { name = "mypy" },
+    { name = "nimble-web-search" },
     { name = "pre-commit" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -336,6 +338,7 @@ dev = [
     { name = "google-scholar-paper-search", editable = "sources/google_scholar_paper_search" },
     { name = "knowledge-layer", extras = ["all"], editable = "sources/knowledge_layer" },
     { name = "mypy", specifier = ">=1.5.0" },
+    { name = "nimble-web-search", editable = "sources/nimble_web_search" },
     { name = "pre-commit", specifier = ">=3.5.0" },
     { name = "pytest", specifier = ">=7.4.0" },
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
@@ -2547,6 +2550,19 @@ wheels = [
 ]
 
 [[package]]
+name = "langchain-nimble"
+version = "3.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "nimble-python" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/2f/e7/a457a7fd1291ec4f2009316255f3367788fe46aa7877ceaae37c0d3801ff/langchain_nimble-3.0.0.tar.gz", hash = "sha256:59c98ac6def2930aa2cb7dfd2db3a7e5549ca4dc5204aa9fd5b44c4781054507", size = 195257, upload-time = "2026-03-23T07:30:59.834Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/28/ad/417dea0df11bc8081808a48c11a8d7e0837a6acb412e0a34e8233aeb3ab2/langchain_nimble-3.0.0-py3-none-any.whl", hash = "sha256:2e53e965716aa3af6af609312a0aa08889355ba9527e04dff914f408286fe852", size = 23901, upload-time = "2026-03-23T07:30:58.759Z" },
+]
+
+[[package]]
 name = "langchain-nvidia-ai-endpoints"
 version = "1.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -3588,6 +3604,38 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/6a/51/63fe664f3908c97be9d2e4f1158eb633317598cfa6e1fc14af5383f17512/networkx-3.6.1.tar.gz", hash = "sha256:26b7c357accc0c8cde558ad486283728b65b6a95d85ee1cd66bafab4c8168509", size = 2517025, upload-time = "2025-12-08T17:02:39.908Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/9e/c9/b2622292ea83fbb4ec318f5b9ab867d0a28ab43c5717bb85b0a5f6b3b0a4/networkx-3.6.1-py3-none-any.whl", hash = "sha256:d47fbf302e7d9cbbb9e2555a0d267983d2aa476bac30e90dfbe5669bd57f3762", size = 2068504, upload-time = "2025-12-08T17:02:38.159Z" },
+]
+
+[[package]]
+name = "nimble-python"
+version = "0.18.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "anyio" },
+    { name = "distro" },
+    { name = "httpx" },
+    { name = "pydantic" },
+    { name = "sniffio" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/a8/7e6a131b181376e6c1acc69de86a7af9dbeab0653e7350234a12baf56c09/nimble_python-0.18.0.tar.gz", hash = "sha256:0e291944463f9fea85d70b8a5037f36aaa21a0d02ffbcaf9fc05fa67e9d7ce6c", size = 291230, upload-time = "2026-05-10T13:40:09.461Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/59/2a/4342e5eae52c926c56431a5024f3b472cf4e3cef2c6796293824cf9c13df/nimble_python-0.18.0-py3-none-any.whl", hash = "sha256:f27249d5c93a3d403468e04c074777da46300cbd76b872cc9312ef753206b781", size = 193584, upload-time = "2026-05-10T13:40:10.787Z" },
+]
+
+[[package]]
+name = "nimble-web-search"
+version = "1.0.0"
+source = { editable = "sources/nimble_web_search" }
+dependencies = [
+    { name = "langchain-nimble" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "langchain-nimble", specifier = ">=3.0.0,<4.0.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
 [[package]]

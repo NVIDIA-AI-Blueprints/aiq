@@ -197,6 +197,39 @@ functions:
 - **`fast`** -- Optimized for low latency. Returns results quickly at the cost of recall and semantic depth. Use for interactive UIs, high-volume calls, or when the query is narrow and keyword-like.
 - **`deep`** -- Optimized for thoroughness. Runs a more expensive semantic search with broader retrieval. Use for research-quality queries where completeness matters more than speed.
 
+### `nimble_web_search`
+
+Web search powered by the [Nimble API](https://nimbleway.com/) via `langchain-nimble`.
+
+```yaml
+functions:
+  web_search_tool:
+    _type: nimble_web_search
+    max_results: 5
+    max_content_length: 10000
+
+  deep_web_search_tool:
+    _type: nimble_web_search
+    max_results: 5
+    search_depth: deep
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_results` | `int` | `5` | Maximum number of search results to return. |
+| `api_key` | `str` | `None` | Nimble API key. Falls back to `NIMBLE_API_KEY` environment variable. |
+| `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
+| `search_depth` | `str` | `"lite"` | Nimble search depth. See options below. |
+| `country` | `str` | `"US"` | ISO country code passed to Nimble (e.g. `US`, `UK`, `FR`). |
+| `locale` | `str` | `"en"` | Language/locale passed to Nimble (e.g. `en`, `fr`, `es`). |
+| `max_content_length` | `int` | `10000` | Max characters per result's page content. Set to `None` to disable truncation. |
+
+**`search_depth` options:**
+
+- **`lite`** (default) -- Returns metadata only (title, URL, description). Fastest, lowest token cost, safe default for general lookups.
+- **`fast`** -- Returns rich content at low latency. **Enterprise-tier only**; non-enterprise accounts receive a 403 with a clear entitlement message.
+- **`deep`** -- Returns full page content for each result. Use for research workflows that need the body text, not just URLs.
+
 ### `paper_search`
 
 Academic paper search through Google Scholar (using the [Serper API](https://serper.dev/)).

@@ -190,6 +190,7 @@ dev = [
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
+    "nimble-web-search",
     "knowledge-layer[all]",
     "aiq-api",
     "aiq-research-cli",
@@ -231,6 +232,7 @@ aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }
+nimble-web-search = { workspace = true }
 knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }

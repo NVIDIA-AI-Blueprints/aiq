@@ -66,6 +66,7 @@ echo ""
 echo "Installing data sources..."
 "${UV_BIN}" pip install -e ./sources/tavily_web_search
 "${UV_BIN}" pip install -e ./sources/exa_web_search
+"${UV_BIN}" pip install -e ./sources/nimble_web_search
 "${UV_BIN}" pip install -e ./sources/google_scholar_paper_search
 "${UV_BIN}" pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 echo "Data Sources installed"

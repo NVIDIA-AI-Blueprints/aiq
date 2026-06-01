@@ -25,6 +25,8 @@ Common issues and solutions for the AI-Q blueprint.
 | `Gateway timeout (504)` | Model endpoint overloaded or unavailable | Retry, or switch to a different model in config |
 | Tavily search returns empty | Invalid `TAVILY_API_KEY` | Verify key at [tavily.com](https://tavily.com) |
 | Exa search returns empty or 401 | Invalid or missing `EXA_API_KEY` | Verify key at [exa.ai](https://exa.ai) |
+| Nimble search returns empty or 401 | Invalid or missing `NIMBLE_API_KEY` | Verify key at [nimbleway.com](https://nimbleway.com) |
+| Nimble search returns 403 with "enterprise" | `search_depth: fast` requires an Enterprise plan | Switch to `search_depth: lite` (default) or `deep`, or upgrade your Nimble plan |
 | Serper search fails | Missing `SERPER_API_KEY` | Set key or remove `paper_search_tool` from config |
 
 ## Runtime Issues

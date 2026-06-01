@@ -44,6 +44,7 @@ If `enable_escalation: true` in the workflow config, the orchestrator evaluates 
 
 - **Tavily Web Search** — General web search (requires `TAVILY_API_KEY`)
 - **Exa Web Search** — General web search via Exa (requires `EXA_API_KEY`)
+- **Nimble Web Search** — General web search via Nimble (requires `NIMBLE_API_KEY`)
 - **Google Scholar Paper Search** — Academic paper search (requires `SERPER_API_KEY`)
 - **Knowledge Layer** — Document retrieval from local or hosted vector stores
 
