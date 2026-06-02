@@ -26,6 +26,8 @@ from .subagent_contracts import ResearchNotes
 from .subagent_contracts import ResearchPlan
 from .subagent_contracts import ResearchQuery
 from .subagent_contracts import ResearchSource
+from .subagent_contracts import SourceRecommendation
+from .subagent_contracts import SourceRoutingPlan
 from .subagent_contracts import TaskAnalysis
 from .subagent_contracts import WriterOutput
 
@@ -43,6 +45,8 @@ __all__ = [
     "ResearchPlan",
     "ResearchQuery",
     "ResearchSource",
+    "SourceRecommendation",
+    "SourceRoutingPlan",
     "TaskAnalysis",
     "WriterOutput",
 ]

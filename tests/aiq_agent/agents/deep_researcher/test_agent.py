@@ -32,6 +32,7 @@ from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.agents.deep_researcher.models import ResearchQuery
+from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
 from aiq_agent.agents.deep_researcher.models import WriterOutput
 from aiq_agent.agents.deep_researcher.tools.research import build_research_batch_tool
 from aiq_agent.agents.deep_researcher.tools.research import researcher_invoke_state
@@ -167,6 +168,7 @@ class TestDeepResearcherAgent:
                 callbacks=callbacks,
                 skills=SkillsConfig.enabled_builtin(),
                 sandbox=SandboxConfig(app_name="custom-aiq"),
+                domain_catalog_path="configs/deep_research_domain_catalog.yml",
                 max_batch_research_queries=4,
                 max_research_concurrency=2,
                 research_query_timeout_seconds=30.0,
@@ -182,6 +184,7 @@ class TestDeepResearcherAgent:
             assert agent.research_query_timeout_seconds == 30.0
             assert agent.max_concurrent_source_tool_calls == 3
             assert agent.max_source_tool_batch_size == 4
+            assert agent.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
             assert agent.deepagents_runtime.skill_sources_for("orchestrator") == [BUILTIN_SKILL_SOURCE]
 
     def test_sandbox_config_rejects_unsupported_provider(self):
@@ -210,6 +213,7 @@ class TestDeepResearcherAgent:
             max_source_tool_batch_size=4,
             checkpoint_db="./deep-checkpoints.db",
             max_workflow_resume_attempts=2,
+            domain_catalog_path="configs/deep_research_domain_catalog.yml",
         )
 
         assert config.skills.enabled is True
@@ -217,6 +221,7 @@ class TestDeepResearcherAgent:
         assert config.max_workflow_resume_attempts == 2
         assert config.max_batch_research_queries == 4
         assert config.writer_llm == "writer-llm"
+        assert config.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
         assert config.max_research_concurrency == 2
         assert config.research_query_timeout_seconds == 30.0
         assert config.max_concurrent_source_tool_calls == 3
@@ -268,6 +273,7 @@ class TestDeepResearcherAgent:
             assert "researcher" in agent._prompts
             assert "orchestrator" in agent._prompts
             assert "writer" in agent._prompts
+            assert "source_router" in agent._prompts
 
     def test_prepare_state_preloads_builtin_skill_files(self, mock_llm_provider, real_tool):
         """Built-in skills are added to state so StateBackend can discover them."""
@@ -370,7 +376,14 @@ class TestDeepResearcherAgent:
             assert "max_batch_research_queries" not in kwargs["system_prompt"]
             assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
-            assert set(subagents) == {"planner-agent", "writer-agent"}
+            assert set(subagents) == {"source-router-agent", "planner-agent", "writer-agent"}
+            assert subagents["source-router-agent"]["response_format"] is SourceRoutingPlan
+            assert "skills" not in subagents["source-router-agent"]
+            assert {tool.name for tool in subagents["source-router-agent"]["tools"]} == {
+                "lookup_source_catalog",
+                "think",
+            }
+            assert real_tool.name not in {tool.name for tool in subagents["source-router-agent"]["tools"]}
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
             assert "skills" not in subagents["planner-agent"]
             assert "response_format" not in subagents["writer-agent"]
@@ -399,6 +412,7 @@ class TestDeepResearcherAgent:
             assert "data-table-analysis" not in planner_prompt
             assert "answer_strategy" in planner_prompt
             assert "Table of Contents" not in planner_prompt
+            assert "/shared/source_routing.json" in planner_prompt
 
     def test_build_orchestrator_omits_skills_when_disabled(
         self,
@@ -440,7 +454,9 @@ class TestDeepResearcherAgent:
             assert "skills" not in create.call_args.kwargs
             assert any(tool.name == "run_research_batch" for tool in create.call_args.kwargs["tools"])
             subagents = {subagent["name"]: subagent for subagent in create.call_args.kwargs["subagents"]}
-            assert set(subagents) == {"planner-agent", "writer-agent"}
+            assert set(subagents) == {"source-router-agent", "planner-agent", "writer-agent"}
+            assert subagents["source-router-agent"]["response_format"] is SourceRoutingPlan
+            assert "skills" not in subagents["source-router-agent"]
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
             assert "response_format" not in subagents["writer-agent"]
             assert subagents["writer-agent"]["tools"] == agent.writer_tools

@@ -68,6 +68,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     )
     max_loops: int = Field(default=2)
     verbose: bool = Field(default=True)
+    domain_catalog_path: str | None = Field(
+        default=None,
+        description="Optional YAML/JSON domain catalog path for source-router-agent.",
+    )
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     sandbox: SandboxConfig | None = Field(
         default=None,
@@ -162,6 +166,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         max_loops=config.max_loops,
         verbose=verbose,
         callbacks=callbacks,
+        domain_catalog_path=config.domain_catalog_path,
         skills=config.skills,
         sandbox=config.sandbox,
         checkpoint_db=config.checkpoint_db,
@@ -196,6 +201,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     max_loops=config.max_loops,
                     verbose=verbose,
                     callbacks=callbacks,
+                    domain_catalog_path=config.domain_catalog_path,
                     skills=config.skills,
                     sandbox=config.sandbox,
                     checkpoint_db=config.checkpoint_db,

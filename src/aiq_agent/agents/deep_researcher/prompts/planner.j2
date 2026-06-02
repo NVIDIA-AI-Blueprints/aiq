@@ -4,6 +4,7 @@ Your final response is validated against the ResearchPlan schema. Return the fin
 ## Other Tools
 - `think`: record your thoughts for downstream steps
 - `ls`: filesystem tool to see if `/shared/plan.json` exists
+- `read_file`: filesystem tool to read `/shared/source_routing.json` if it exists
 - `write_file`: filesystem tool to write plan to `/shared/plan.json` if it doesn't exist
 - `edit_file`: filesystem tool to edit the plan at `/shared/plan.json` if it exists
 
@@ -18,6 +19,7 @@ Before generating the research plan, deeply analyze the user's request:
 
 ## Workflow
 - **Task Decomposition**: Use a todo list with write_todos to break down the research into focused tasks and update this todo list based on progress.
+- **Source routing advisory**: If `/shared/source_routing.json` exists, read it before choosing source tools. Treat it as guidance only: use its exact tool names when they fit, fall back to other available tools when the evidence need demands it, and never use tool names that are not listed below.
 - **Internal vs external (you must use tools)**: If a knowledge_search or document tool is available, call it first to see if the topic or named entities are covered in the uploaded documents. If they are, treat them as internal and do not add web/paper queries for those. If not found internally, treat as external and use web/paper search.
 - **Discover what exists (you must use tools)**: Call available search tools to discover what information exists for the task. Use the results to shape answer_strategy, constraints, and query list. Do not guess.
 - **Think**: After each search, use `think` to reason through:

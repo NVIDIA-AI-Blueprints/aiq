@@ -2,6 +2,7 @@
 SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 SPDX-License-Identifier: Apache-2.0
 -->
+
 # Authentication
 
 AIQ authentication is disabled by default for local development. When enabled, the web UI signs users

@@ -13,4 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tool helpers for the deep researcher agent."""
+"""DuckDuckGo news search tool for NAT."""
+
+from .register import duckduckgo_news_search
+
+__all__ = [
+    "duckduckgo_news_search",
+]

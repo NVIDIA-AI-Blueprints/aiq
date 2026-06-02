@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.  # noqa: E501
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -96,6 +96,29 @@ class Constraint(_StrictContract):
     constraint: str = Field(description="Specific, actionable constraint text.")
     rationale: str = Field(description="Why this constraint exists.")
     verification: str = Field(description="How to check whether the final report satisfies this constraint.")
+
+
+class SourceRecommendation(_StrictContract):
+    """A source-router recommendation for the planner."""
+
+    source_id: str = Field(description="Configured data source ID to use.")
+    tool_names: list[str] = Field(description="Exact available source tool names under this source.")
+    priority: int = Field(ge=1, le=3, description="Priority rank for this source: 1 is highest, 3 is lowest.")
+    rationale: str = Field(description="Why this source should support the request.")
+
+
+class SourceRoutingPlan(_StrictContract):
+    """Advisory source route produced before planning."""
+
+    domain_id: str = Field(description="Best-fit configured domain route for this request.")
+    domain_name: str = Field(description="Human-readable domain name.")
+    routing_mode: Literal["auto_advisory", "explicit_user_sources"] = Field(
+        description="Whether routing used all configured sources or an explicit user-selected source subset."
+    )
+    routing_reason: str = Field(description="Why this domain/source route fits the user request.")
+    recommendations: list[SourceRecommendation] = Field(description="Primary source recommendations.")
+    fallback_sources: list[SourceRecommendation] = Field(description="Fallback sources if primary sources are weak.")
+    planner_guidance: str = Field(description="Concise instructions the planner should apply when writing queries.")
 
 
 class ResearchQuery(_StrictContract):

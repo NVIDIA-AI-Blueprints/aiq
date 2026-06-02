@@ -40,9 +40,11 @@ from .deepagents_runtime import SandboxConfig
 from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
 from .models import ResearchPlan
+from .models import SourceRoutingPlan
 from .models import WriterOutput
 from .tools.research import build_research_batch_tool as build_research_batch_tool_impl
 from .tools.research import build_researcher_runnable as build_researcher_runnable_impl
+from .tools.source_routing import build_lookup_source_catalog_tool
 from .tools.source_tool_batching import build_batch_source_tools
 
 logger = logging.getLogger(__name__)
@@ -118,6 +120,7 @@ class DeepResearcherAgent:
         max_loops: int = 2,
         verbose: bool = True,
         callbacks: list[Any] | None = None,
+        domain_catalog_path: str | None = None,
         skills: SkillsConfig | None = None,
         sandbox: SandboxConfig | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
@@ -140,6 +143,7 @@ class DeepResearcherAgent:
             max_loops: Maximum number of research loops (default 2).
             verbose: Enable detailed logging.
             callbacks: Optional list of callbacks.
+            domain_catalog_path: Optional YAML/JSON domain catalog path for source-router-agent.
             skills: Optional DeepAgents skills config.
             sandbox: Optional DeepAgents sandbox config.
             checkpointer: Optional LangGraph checkpointer for workflow recovery.
@@ -164,6 +168,7 @@ class DeepResearcherAgent:
             sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
             checkpointer = checkpointer or getattr(config, "checkpointer", None)
             checkpoint_db = checkpoint_db or getattr(config, "checkpoint_db", None)
+            domain_catalog_path = domain_catalog_path or getattr(config, "domain_catalog_path", None)
             max_workflow_resume_attempts = getattr(
                 config,
                 "max_workflow_resume_attempts",
@@ -176,6 +181,7 @@ class DeepResearcherAgent:
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
         self.max_workflow_resume_attempts = max(0, max_workflow_resume_attempts)
+        self.domain_catalog_path = domain_catalog_path
         self.checkpointer = checkpointer
         self.checkpoint_db = checkpoint_db
         self._explicit_job_id = str(job_id) if job_id is not None else None
@@ -234,7 +240,7 @@ class DeepResearcherAgent:
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""
         prompts = {}
-        prompt_names = ["planner", "researcher", "orchestrator", "writer"]
+        prompt_names = ["planner", "researcher", "orchestrator", "writer", "source_router"]
 
         for name in prompt_names:
             prompts[name] = load_prompt(AGENT_DIR / "prompts", name)
@@ -269,9 +275,49 @@ class DeepResearcherAgent:
         """Build writer middleware."""
         return self._build_middleware()
 
+    def _build_source_router_middleware(self, *, extra_valid_tool_names: Sequence[str] = ()) -> list[Any]:
+        """Build minimal middleware for source-router-agent."""
+        builtin_tool_names = {
+            "edit_file",
+            "glob",
+            "ls",
+            "read_file",
+            "write_file",
+        }
+        return [
+            EmptyContentFixMiddleware(),
+            ToolNameSanitizationMiddleware(
+                valid_tool_names=list({think.name, *builtin_tool_names, *extra_valid_tool_names})
+            ),
+            ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
+            ModelRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
+        ]
+
     def _get_subagents(self, state: DeepResearchAgentState) -> list[dict[str, Any]]:
         """Build subagent configs with state-dependent prompts (e.g. available_documents)."""
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
+        source_catalog_tool = build_lookup_source_catalog_tool(
+            self.tools,
+            allowed_source_ids=state.data_sources,
+            domain_catalog_path=self.domain_catalog_path,
+        )
+        source_router_agent: dict[str, Any] = {
+            "name": "source-router-agent",
+            "description": (
+                "Source router - chooses an advisory domain route and configured source set before detailed planning"
+            ),
+            "system_prompt": render_prompt_template(
+                self._prompts["source_router"],
+                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                user_info=state.user_info,
+                clarifier_result=state.clarifier_result,
+                available_documents=available_docs,
+            ),
+            "tools": [think, source_catalog_tool],
+            "model": self.llm_provider.get(LLMRole.ROUTER),
+            "middleware": self._build_source_router_middleware(extra_valid_tool_names=[source_catalog_tool.name]),
+            "response_format": SourceRoutingPlan,
+        }
         writer_skill_sources = self.deepagents_runtime.skill_sources_for("writer-agent")
         planner_agent: dict[str, Any] = {
             "name": "planner-agent",
@@ -311,7 +357,7 @@ class DeepResearcherAgent:
         }
         if writer_skill_sources is not None:
             writer_agent["skills"] = writer_skill_sources
-        return [planner_agent, writer_agent]
+        return [source_router_agent, planner_agent, writer_agent]
 
     def _build_orchestrator_agent(self, state: DeepResearchAgentState) -> str:
         """Get the orchestrator instructions for the deep research agent."""

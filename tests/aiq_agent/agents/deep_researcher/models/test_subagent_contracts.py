@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
+from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
 from aiq_agent.agents.deep_researcher.models import WriterOutput
 
 
@@ -137,6 +138,37 @@ def test_writer_output_contract_validates_expected_shape():
 
     assert writer_output.answer_type == "comparison"
     assert writer_output.citations_used == [1]
+
+
+def test_source_routing_plan_contract_validates_expected_shape():
+    route = SourceRoutingPlan.model_validate(
+        {
+            "domain_id": "current_news",
+            "domain_name": "Current News",
+            "routing_mode": "auto_advisory",
+            "routing_reason": "The user asks for recent developments.",
+            "recommendations": [
+                {
+                    "source_id": "news_search",
+                    "tool_names": ["duckduckgo_news_search_tool"],
+                    "priority": 1,
+                    "rationale": "Best fit for recent news.",
+                }
+            ],
+            "fallback_sources": [
+                {
+                    "source_id": "web_search",
+                    "tool_names": ["web_search_tool"],
+                    "priority": 2,
+                    "rationale": "Broad web fallback.",
+                }
+            ],
+            "planner_guidance": "Use news_search first, then web_search if coverage is weak.",
+        }
+    )
+
+    assert route.domain_id == "current_news"
+    assert route.recommendations[0].tool_names == ["duckduckgo_news_search_tool"]
 
 
 def test_subagent_contracts_reject_extra_fields_and_old_plan_shape():

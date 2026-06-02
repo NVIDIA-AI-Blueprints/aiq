@@ -13,4 +13,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tool helpers for the deep researcher agent."""
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[tool.setuptools]
+packages = ["duckduckgo_news_search"]
+package-dir = {"duckduckgo_news_search" = "src"}
+
+[project]
+name = "duckduckgo-news-search"
+version = "1.0.0"
+description = "NAT-based DuckDuckGo news search tool using ddgs"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "ddgs>=9.14.4,<10",
+    "pydantic>=2.0.0",
+]
+
+[project.entry-points."nat.plugins"]
+duckduckgo_news_search = "duckduckgo_news_search.register"
