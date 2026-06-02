@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 import time
 from typing import Any
@@ -31,6 +32,7 @@ from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents import create_agent
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.tools import ToolRuntime
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool
@@ -44,8 +46,10 @@ from ..models import ResearchBatchItemResult
 from ..models import ResearchBatchResult
 from ..models import ResearchNotes
 from ..models import ResearchQuery
+from .evidence_curator import build_evidence_digest
 
 _NO_TOOL_RUNTIME = cast(ToolRuntime, None)
+logger = logging.getLogger(__name__)
 
 
 def render_researcher_prompt(
@@ -442,6 +446,8 @@ def build_research_batch_tool(
     max_batch_research_queries: int,
     max_research_concurrency: int,
     research_query_timeout_seconds: float,
+    evidence_curator_model: BaseChatModel | None = None,
+    evidence_reranking_enabled: bool = False,
 ) -> BaseTool:
     """Build an orchestrator-only tool that runs researcher tasks concurrently."""
 
@@ -474,6 +480,11 @@ def build_research_batch_tool(
         _persist_successful_notes(item_results, backend)
         batch_result = _compact_batch_result(_build_batch_result(total, item_results))
         _persist_batch_summary(batch_result, backend)
+        if evidence_reranking_enabled and evidence_curator_model is not None:
+            try:
+                await build_evidence_digest(backend=backend, model=evidence_curator_model)
+            except Exception:  # noqa: BLE001 - evidence curation is an attention aid, not a batch failure
+                logger.warning("Evidence digest generation failed after research batch", exc_info=True)
 
         return batch_result.model_dump_json()
 

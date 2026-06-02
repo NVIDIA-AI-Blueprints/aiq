@@ -18,6 +18,9 @@ from .subagent_contracts import AnswerComponent
 from .subagent_contracts import AnswerOption
 from .subagent_contracts import AnswerStrategy
 from .subagent_contracts import Constraint
+from .subagent_contracts import EvidenceComponentDigest
+from .subagent_contracts import EvidenceDigest
+from .subagent_contracts import EvidenceFindingDecision
 from .subagent_contracts import ResearchBatchItemResult
 from .subagent_contracts import ResearchBatchResult
 from .subagent_contracts import ResearchFinding
@@ -37,6 +40,9 @@ __all__ = [
     "AnswerStrategy",
     "Constraint",
     "DeepResearchAgentState",
+    "EvidenceComponentDigest",
+    "EvidenceDigest",
+    "EvidenceFindingDecision",
     "ResearchBatchItemResult",
     "ResearchBatchResult",
     "ResearchFinding",

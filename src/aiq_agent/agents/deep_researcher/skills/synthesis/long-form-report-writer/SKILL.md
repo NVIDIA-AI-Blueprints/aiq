@@ -35,7 +35,9 @@ next-period value, this skill is not the controlling skill. If
 ## Long-Form Planning
 
 Before writing, complete the general cross-synthesis pass from the base writer
-prompt. Then use `think` to turn that synthesis map into a report plan:
+prompt. If `/shared/evidence_digest.json` exists, use it as the first-pass
+evidence map while still checking the underlying research notes. Then use
+`think` to turn that synthesis map into a report plan:
 - Choose the report title, main sections, and subsection flow from the
   `answer_strategy`, the user's request, and the evidence.
 - Decide which components need detailed prose, which need compact summary, and

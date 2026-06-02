@@ -58,6 +58,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
     writer_llm: LLMRef | None = Field(default=None, description="LLM for final writer/synthesis subagent")
+    evidence_curator_llm: LLMRef | None = Field(
+        default=None,
+        description="Small LLM for internal evidence curation before writer synthesis.",
+    )
     tools: list[FunctionRef | FunctionGroupRef] = Field(
         default_factory=list,
         description="Explicit tool list. Empty = inherit all from data_source_registry.",
@@ -111,6 +115,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         ge=0,
         description="Maximum graph-level retries that resume from the latest checkpoint.",
     )
+    evidence_reranking_enabled: bool = Field(
+        default=True,
+        description="Enable the internal post-research evidence curator and /shared/evidence_digest.json.",
+    )
 
 
 @register_function(config_type=DeepResearchAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -156,6 +164,12 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     if config.writer_llm:
         writer_llm = await builder.get_llm(config.writer_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.REPORT_WRITER, writer_llm)
+    if config.evidence_curator_llm:
+        evidence_curator_llm = await builder.get_llm(
+            config.evidence_curator_llm,
+            wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+        )
+        provider.configure(LLMRole.EVIDENCE_CURATOR, evidence_curator_llm)
 
     verbose = is_verbose(config.verbose)
     callbacks = [VerboseTraceCallback()] if verbose else []
@@ -176,6 +190,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
         max_source_tool_batch_size=config.max_source_tool_batch_size,
         max_workflow_resume_attempts=config.max_workflow_resume_attempts,
+        evidence_reranking_enabled=config.evidence_reranking_enabled,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -212,6 +227,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
                     max_workflow_resume_attempts=config.max_workflow_resume_attempts,
+                    evidence_reranking_enabled=config.evidence_reranking_enabled,
                 )
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):

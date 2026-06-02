@@ -36,8 +36,9 @@ a long-form prediction report.
 Before writing, read:
 1. `/shared/plan.json`
 2. `/shared/research_batch_result.json` when present
-3. Every research note JSON file listed in the batch result, plus any other research note JSON files under `/shared/` that support the plan
-4. The result of `get_verified_sources`
+3. `/shared/evidence_digest.json` when present, as an attention map rather than a replacement for research notes
+4. Every research note JSON file listed in the batch result, plus any other research note JSON files under `/shared/` that support the plan
+5. The result of `get_verified_sources`
 
 Use `think` to build a prediction synthesis outline before drafting:
 - Identify the original prediction question.

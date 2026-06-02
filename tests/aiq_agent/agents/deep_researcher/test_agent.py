@@ -99,6 +99,7 @@ class TestDeepResearcherAgent:
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
         provider.configure(LLMRole.REPORT_WRITER, mock_llm)
+        provider.configure(LLMRole.EVIDENCE_CURATOR, mock_llm)
         provider.get = MagicMock(wraps=provider.get)
         return provider
 
@@ -174,6 +175,7 @@ class TestDeepResearcherAgent:
                 research_query_timeout_seconds=30.0,
                 max_concurrent_source_tool_calls=3,
                 max_source_tool_batch_size=4,
+                evidence_reranking_enabled=False,
             )
 
             assert agent.max_loops == 5
@@ -184,6 +186,7 @@ class TestDeepResearcherAgent:
             assert agent.research_query_timeout_seconds == 30.0
             assert agent.max_concurrent_source_tool_calls == 3
             assert agent.max_source_tool_batch_size == 4
+            assert agent.evidence_reranking_enabled is False
             assert agent.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
             assert agent.deepagents_runtime.skill_sources_for("orchestrator") == [BUILTIN_SKILL_SOURCE]
 
@@ -204,6 +207,7 @@ class TestDeepResearcherAgent:
         config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
             writer_llm="writer-llm",
+            evidence_curator_llm="curator-llm",
             skills=SkillsConfig(enabled=True),
             sandbox=SandboxConfig(app_name="custom-aiq", python_packages=["matplotlib", "pillow"]),
             max_batch_research_queries=4,
@@ -221,6 +225,8 @@ class TestDeepResearcherAgent:
         assert config.max_workflow_resume_attempts == 2
         assert config.max_batch_research_queries == 4
         assert config.writer_llm == "writer-llm"
+        assert config.evidence_curator_llm == "curator-llm"
+        assert config.evidence_reranking_enabled is True
         assert config.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
         assert config.max_research_concurrency == 2
         assert config.research_query_timeout_seconds == 30.0
@@ -393,6 +399,9 @@ class TestDeepResearcherAgent:
             assert "/skills/synthesis/" not in subagents["writer-agent"]["system_prompt"]
             assert "read_writer_context" not in subagents["writer-agent"]["system_prompt"]
             assert "/shared/plan.json" in subagents["writer-agent"]["system_prompt"]
+            assert "/shared/evidence_digest.json" in subagents["writer-agent"]["system_prompt"]
+            assert "preferred evidence attention map" in subagents["writer-agent"]["system_prompt"]
+            assert "not a replacement for research notes" in subagents["writer-agent"]["system_prompt"]
             assert "Skill Use" not in subagents["writer-agent"]["system_prompt"]
             assert "Required Skill Use" not in subagents["writer-agent"]["system_prompt"]
             assert "General Cross-Synthesis Guidance" in subagents["writer-agent"]["system_prompt"]
@@ -594,6 +603,88 @@ class TestDeepResearcherAgent:
         assert summary_files[0][0] == "/shared/research_batch_result.json"
         uploaded_summary = json.loads(summary_files[0][1].decode("utf-8"))
         assert uploaded_summary["results"][0]["note"] is None
+
+    @pytest.mark.asyncio
+    async def test_run_research_batch_evidence_curator_failure_is_nonfatal(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Evidence curation is an attention aid and must not fail completed research."""
+        from deepagents.backends.protocol import FileUploadResponse
+
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        class FakeResearcherRunnable:
+            async def ainvoke(self, state, config=None):
+                return {
+                    "structured_response": {
+                        "query_topic": "Good Query",
+                        "target_components": ["a"],
+                        "summary": "A useful note.",
+                        "findings": [
+                            {
+                                "claim": "A fact.",
+                                "evidence": "Evidence from https://example.test/good.",
+                                "source_ids": [1],
+                                "confidence": "high",
+                                "caveats": [],
+                            }
+                        ],
+                        "gaps": [],
+                        "sources": [
+                            {
+                                "id": 1,
+                                "title": "Good",
+                                "source_type": "url",
+                                "locator": "https://example.test/good",
+                            }
+                        ],
+                        "narrative_notes": "Useful narrative notes.",
+                        "language": "English",
+                    }
+                }
+
+        agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+        fake_backend = MagicMock()
+        fake_backend.upload_files.side_effect = [
+            [FileUploadResponse(path="/shared/00_good_query.json", error=None)],
+            [FileUploadResponse(path="/shared/research_batch_result.json", error=None)],
+        ]
+        agent.deepagents_runtime._backend = fake_backend
+        batch_tool = build_research_batch_tool(
+            researcher_runnable=FakeResearcherRunnable(),
+            callbacks=agent.callbacks,
+            backend=agent.deepagents_runtime.backend,
+            source_tool_names=agent.source_tool_names,
+            max_batch_research_queries=agent.max_batch_research_queries,
+            max_research_concurrency=agent.max_research_concurrency,
+            research_query_timeout_seconds=agent.research_query_timeout_seconds,
+            evidence_curator_model=MagicMock(),
+            evidence_reranking_enabled=True,
+        )
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.tools.research.build_evidence_digest",
+            side_effect=RuntimeError("curator unavailable"),
+        ):
+            result = await batch_tool.ainvoke(
+                {
+                    "queries": [
+                        {
+                            "query": "good query",
+                            "tool": "web_search_tool",
+                            "target_components": ["a"],
+                            "rationale": "success",
+                        }
+                    ]
+                }
+            )
+
+        payload = json.loads(result)
+        assert payload["status"] == "succeeded"
+        assert payload["files"] == ["/shared/00_good_query.json"]
+        assert fake_backend.upload_files.call_count == 2
 
     @pytest.mark.asyncio
     async def test_run_research_batch_rejects_unranked_oversized_batches(
@@ -942,6 +1033,7 @@ class TestDeepResearcherAgent:
             mock_llm_provider.get.assert_any_call(LLMRole.PLANNER)
             mock_llm_provider.get.assert_any_call(LLMRole.RESEARCHER)
             mock_llm_provider.get.assert_any_call(LLMRole.REPORT_WRITER)
+            mock_llm_provider.get.assert_any_call(LLMRole.EVIDENCE_CURATOR)
             mock_llm_provider.get.assert_any_call(LLMRole.ORCHESTRATOR)
 
     @pytest.mark.asyncio

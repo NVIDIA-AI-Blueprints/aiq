@@ -213,6 +213,56 @@ class WriterOutput(_StrictContract):
     confidence: Literal["low", "medium", "high"] = Field(description="Overall confidence in the final answer.")
 
 
+class EvidenceFindingDecision(_StrictContract):
+    """Curator decision for one existing ResearchFinding."""
+
+    finding_ref: str = Field(description="Stable reference such as /shared/03_benchmarks.json#finding-2.")
+    note_path: str = Field(description="ResearchNotes file containing the finding.")
+    finding_index: int = Field(ge=0, description="Zero-based index of the finding in the note file.")
+    claim: str = Field(description="Original ResearchFinding claim.")
+    evidence: str = Field(description="Trimmed original ResearchFinding evidence excerpt.")
+    source_ids: list[int] = Field(description="Original ResearchFinding source IDs.")
+    researcher_confidence: Literal["low", "medium", "high"] = Field(
+        description="Original researcher confidence in the finding."
+    )
+    caveats: list[str] = Field(description="Original caveats attached to the finding.")
+    inclusion: Literal["core", "supporting", "caveat", "background", "exclude"] = Field(
+        description="How the writer should prioritize this finding."
+    )
+    relevance: Literal["direct", "indirect", "low"] = Field(
+        description="How directly this finding supports the answer component."
+    )
+    evidence_strength: Literal["strong", "adequate", "weak"] = Field(
+        description="Curator assessment of source support for this component."
+    )
+    reason: str = Field(description="Brief reason for the curator decision.")
+
+
+class EvidenceComponentDigest(_StrictContract):
+    """Curated evidence map for one answer component."""
+
+    component_id: str = Field(description="Answer component identifier from the ResearchPlan.")
+    component_name: str = Field(description="Human-readable component name.")
+    component_description: str = Field(description="Planner description of what this component needs.")
+    candidate_count: int = Field(ge=0, description="Total candidate findings considered for this component.")
+    reviewed_count: int = Field(ge=0, description="Candidate findings sent to the curator model.")
+    decisions: list[EvidenceFindingDecision] = Field(description="Curator decisions in recommended reading order.")
+    coverage_gaps: list[str] = Field(description="Evidence gaps or weak spots for this component.")
+
+
+class EvidenceDigest(_StrictContract):
+    """Internal evidence attention map produced after research."""
+
+    status: Literal["succeeded", "partial", "failed"] = Field(description="Evidence digest generation status.")
+    generated_at: str = Field(description="UTC ISO timestamp for digest generation.")
+    answer_title: str = Field(description="ResearchPlan answer_strategy.title.")
+    answer_type: str = Field(description="ResearchPlan answer_strategy.answer_type.")
+    source_note_paths: list[str] = Field(description="Research note files read successfully.")
+    failed_note_paths: list[str] = Field(description="Research note files that were missing or malformed.")
+    component_rankings: list[EvidenceComponentDigest] = Field(description="Curated evidence by answer component.")
+    error: str | None = Field(default=None, description="Failure or partial-failure detail.")
+
+
 class ResearchBatchItemResult(_StrictContract):
     """Result for one researcher worker in a batched research call."""
 

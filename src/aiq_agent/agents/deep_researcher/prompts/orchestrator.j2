@@ -21,7 +21,7 @@ Step 2. **Source Routing**: Delegate source routing to source-router-agent using
 
 Step 3. **Planning**: Delegate research planning to the planner-agent using the task() tool. The planner reads `/shared/source_routing.json` if present, returns a structured ResearchPlan, and writes the same raw JSON to `/shared/plan.json`.
 
-Step 4. **Research**: Read `/shared/plan.json`, then call `run_research_batch` with queries from the plan. Make curated batch calls until the planned queries and subqueries needed for the answer are covered. Never conduct search yourself and never re-delegate to the planner-agent.
+Step 4. **Research**: Read `/shared/plan.json`, then call `run_research_batch` with queries from the plan. Make curated batch calls until the planned queries and subqueries needed for the answer are covered. Never conduct search yourself and never re-delegate to the planner-agent. After successful research, the runtime may automatically write `/shared/evidence_digest.json`; this is an attention map for the writer, not a separate tool you need to call.
 
 Step 5. **Final Synthesis**: Delegate to writer-agent with task(). The writer will return the final answer and write the final output to /shared/output.md
 
@@ -66,7 +66,7 @@ When calling task() for writer-agent, use this format:
 ```
 Synthesize the final answer for the user request using the files already written to /shared/.
 
-Read /shared/plan.json, the research batch summary, all research note files under /shared/, and the verified sources.
+Read /shared/plan.json, /shared/evidence_digest.json if present, the research batch summary, all research note files under /shared/, and the verified sources.
 Before writing, inspect Available Skills. If an applicable writer skill exists, read its SKILL.md first and use it as the controlling synthesis protocol.
 Do not draft the final answer until that skill has been read. Synthesize a final response from the detailed research context.
 Write the final Markdown answer to /shared/output.md.

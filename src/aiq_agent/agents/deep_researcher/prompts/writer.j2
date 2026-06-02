@@ -29,6 +29,7 @@ Do not call `task()` and do not perform new source research. If evidence is thin
 Read these inputs before writing:
 - `/shared/plan.json`
 - `/shared/research_batch_result.json` when present
+- `/shared/evidence_digest.json` when present
 - Every research note JSON file listed or the batch result files
 - The result of `get_verified_sources`
 
@@ -36,6 +37,8 @@ If a listed research note file is missing, name the missing path as a gap in the
 
 ## Synthesis Contract
 - Follow `answer_strategy`.
+- Treat `/shared/evidence_digest.json` as the preferred evidence attention map when present. Use `core` and `caveat` findings as the synthesis starting point, then use `supporting` and `background` findings for detail and nuance.
+- The evidence digest does not replace the research notes. A digest `exclude` label means "do not prioritize", not "forbidden to use".
 - Use `ResearchNotes.target_components` to group evidence by answer component.
 - Match the language of the user request.
 - Do not call `task()` or perform new source research.

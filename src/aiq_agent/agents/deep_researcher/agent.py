@@ -133,6 +133,7 @@ class DeepResearcherAgent:
         max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
         max_source_tool_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
         max_workflow_resume_attempts: int = DEFAULT_MAX_WORKFLOW_RESUME_ATTEMPTS,
+        evidence_reranking_enabled: bool = True,
     ) -> None:
         """
         Initialize the deep researcher agent.
@@ -156,6 +157,7 @@ class DeepResearcherAgent:
             max_concurrent_source_tool_calls: Shared source-tool concurrency limit across researcher workers.
             max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
             max_workflow_resume_attempts: Maximum graph-level retries from the latest checkpoint.
+            evidence_reranking_enabled: Enable the internal post-research evidence curator.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -174,6 +176,11 @@ class DeepResearcherAgent:
                 "max_workflow_resume_attempts",
                 max_workflow_resume_attempts,
             )
+            evidence_reranking_enabled = getattr(
+                config,
+                "evidence_reranking_enabled",
+                evidence_reranking_enabled,
+            )
 
         self.max_batch_research_queries = max_batch_research_queries
         self.max_research_concurrency = max_research_concurrency
@@ -181,6 +188,7 @@ class DeepResearcherAgent:
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
         self.max_workflow_resume_attempts = max(0, max_workflow_resume_attempts)
+        self.evidence_reranking_enabled = evidence_reranking_enabled
         self.domain_catalog_path = domain_catalog_path
         self.checkpointer = checkpointer
         self.checkpoint_db = checkpoint_db
@@ -392,6 +400,10 @@ class DeepResearcherAgent:
             max_batch_research_queries=self.max_batch_research_queries,
             max_research_concurrency=self.max_research_concurrency,
             research_query_timeout_seconds=self.research_query_timeout_seconds,
+            evidence_curator_model=(
+                self.llm_provider.get(LLMRole.EVIDENCE_CURATOR) if self.evidence_reranking_enabled else None
+            ),
+            evidence_reranking_enabled=self.evidence_reranking_enabled,
         )
         orchestrator_tools = [*self.all_tools, research_batch_tool]
 

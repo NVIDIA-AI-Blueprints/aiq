@@ -18,6 +18,7 @@
 import pytest
 from pydantic import ValidationError
 
+from aiq_agent.agents.deep_researcher.models import EvidenceDigest
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
@@ -169,6 +170,49 @@ def test_source_routing_plan_contract_validates_expected_shape():
 
     assert route.domain_id == "current_news"
     assert route.recommendations[0].tool_names == ["duckduckgo_news_search_tool"]
+
+
+def test_evidence_digest_contract_validates_expected_shape():
+    digest = EvidenceDigest.model_validate(
+        {
+            "status": "succeeded",
+            "generated_at": "2026-06-02T00:00:00+00:00",
+            "answer_title": "CUDA and OpenCL Trade-offs",
+            "answer_type": "comparison",
+            "source_note_paths": ["/shared/00_cuda_opencl.json"],
+            "failed_note_paths": [],
+            "component_rankings": [
+                {
+                    "component_id": "programming_model",
+                    "component_name": "Programming model",
+                    "component_description": "Compare kernel, memory, and execution models.",
+                    "candidate_count": 1,
+                    "reviewed_count": 1,
+                    "coverage_gaps": [],
+                    "decisions": [
+                        {
+                            "finding_ref": "/shared/00_cuda_opencl.json#finding-0",
+                            "note_path": "/shared/00_cuda_opencl.json",
+                            "finding_index": 0,
+                            "claim": "OpenCL is designed for cross-vendor heterogeneous compute.",
+                            "evidence": "The source describes OpenCL as an open standard.",
+                            "source_ids": [1],
+                            "researcher_confidence": "high",
+                            "caveats": [],
+                            "inclusion": "core",
+                            "relevance": "direct",
+                            "evidence_strength": "strong",
+                            "reason": "Directly supports the programming model component.",
+                        }
+                    ],
+                }
+            ],
+            "error": None,
+        }
+    )
+
+    assert digest.component_rankings[0].decisions[0].inclusion == "core"
+    assert digest.component_rankings[0].decisions[0].finding_ref.endswith("#finding-0")
 
 
 def test_subagent_contracts_reject_extra_fields_and_old_plan_shape():
