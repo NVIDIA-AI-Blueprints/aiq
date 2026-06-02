@@ -531,21 +531,20 @@ class ClarifierAgent:
         Build the LangGraph StateGraph for the clarification workflow.
 
         Creates a graph with the following nodes:
-        - agent: Generates clarification questions using the LLM
+        - agent: Generates clarification questions using the LLM. On the first
+          turn it also enforces search-before-clarify (issue #234): if the model
+          asks for clarification without using its bound search tools, it nudges
+          the model once and retries inline.
         - tools: Executes tool calls (e.g., web search) for context
         - ask_for_clarification: Prompts user and processes response
-        - force_search: Nudges the LLM to attempt a search before its first
-          clarification question when tools are configured but unused (fires
-          at most once per run)
         - plan_preview: Optional plan approval flow
 
         The graph flow:
-        1. agent generates a response (question, tool call, or completion)
+        1. agent generates a response (question, tool call, or completion);
+           on turn 0 it may force one search-and-retry before yielding
         2. If tool call → tools node → back to agent
         3. If complete → end (or plan_preview if enabled)
-        4. If question, tools exist, and no search has happened yet on the
-           first turn → force_search injects guidance and routes back to agent
-        5. Otherwise → ask_for_clarification → back to agent
+        4. Otherwise → ask_for_clarification → back to agent
 
         Returns:
             Compiled LangGraph StateGraph ready for execution.
@@ -580,18 +579,35 @@ class ClarifierAgent:
                 logger.info("Adding JSON reminder after tool results")
                 messages.append(HumanMessage(content=JSON_REMINDER_AFTER_TOOLS))
 
-            # If the force_search nudge was raised but no tool call has happened
-            # yet, inject the guidance ephemerally — never stored in state.messages,
-            # so it cannot leak into get_latest_user_query and similar lookups.
-            # The iteration==0 guard mirrors the one in decide_route: once the
-            # user has actually replied (iteration > 0), the nudge no longer
-            # applies and would otherwise force a gratuitous search on the
-            # user's clarifying answer.
-            if state.force_search_used and state.iteration == 0 and not self._has_tool_invocations(state.messages):
-                logger.info("Injecting force-search guidance for this turn")
-                messages.append(HumanMessage(content=FORCE_SEARCH_GUIDANCE))
-
             response = await bound_llm.ainvoke(messages)
+
+            # Search-before-clarify (issue #234): if, on the first turn, the model
+            # asks for clarification without first using its bound search tools,
+            # nudge it once to search and retry inline. This keeps the behavior
+            # model-agnostic without adding graph nodes or extra state — even
+            # models that would otherwise skip tool use must attempt a search
+            # before falling back to asking the user.
+            #
+            # The guard is one-shot by construction:
+            #   * iteration == 0 — only on the first turn; once the user replies,
+            #     iteration advances and this never fires again.
+            #   * not _has_tool_invocations(state.messages) — once any tool call
+            #     is in history (e.g. after a successful forced search, even while
+            #     iteration is still 0), we never re-nudge.
+            # FORCE_SEARCH_GUIDANCE is sent only in the local retry_messages and is
+            # never returned to state, so it cannot leak into get_latest_user_query.
+            if (
+                self.tools
+                and state.iteration == 0
+                and not self._has_tool_invocations(state.messages)
+                and not getattr(response, "tool_calls", None)
+                and self._is_needed(response.content)
+            ):
+                logger.info("Clarifier: model skipped search before clarifying; injecting guidance and retrying once")
+                retry_messages = messages + [response, HumanMessage(content=FORCE_SEARCH_GUIDANCE)]
+                retry_response = await bound_llm.ainvoke(retry_messages)
+                return {"messages": [response, retry_response]}
+
             return {"messages": [response]}
 
         async def ask_clarification(state: ClarifierAgentState):
@@ -636,12 +652,8 @@ class ClarifierAgent:
         def decide_route(state: ClarifierAgentState | dict):
             if isinstance(state, dict):
                 messages = state.get("messages", [])
-                iteration = state.get("iteration", 0)
-                force_search_used = state.get("force_search_used", False)
             elif hasattr(state, "messages"):
                 messages = state.messages
-                iteration = state.iteration
-                force_search_used = state.force_search_used
             else:
                 msg = f"No messages found in input state to tool_edge: {state}"
                 raise ValueError(msg)
@@ -659,35 +671,11 @@ class ClarifierAgent:
                     return "plan_preview"
                 return "__end__"
 
-            # Force a search before the first clarification question when tools are
-            # configured but the agent has not yet issued any tool call. This keeps
-            # the behavior model-agnostic: even models that would otherwise skip
-            # tool use must attempt at least one search before falling back to
-            # asking the user for clarification. We only nudge once per run (guarded
-            # by ``force_search_used``) so a stubborn model cannot get stuck in a
-            # loop — after the nudge, normal clarification routing resumes.
-            if (
-                self.tools
-                and iteration == 0
-                and not force_search_used
-                and not self._has_tool_invocations(messages[:-1])
-            ):
-                logger.info("Clarifier: forcing search before first clarification question")
-                return "force_search"
-
+            # The search-before-clarify nudge (issue #234) is handled inline in
+            # agent_node, not here — see the retry block there. By the time a
+            # clarification response reaches this router, any forced search has
+            # already happened, so we route straight to the user.
             return "ask_for_clarification"
-
-        async def force_search_node(state: ClarifierAgentState):
-            """
-            Flip the force_search_used flag so ``agent_node`` will inject the
-            search-first guidance message ephemerally on the next LLM call.
-
-            The guidance is intentionally NOT appended to ``state.messages`` so
-            it cannot be picked up by helpers like ``get_latest_user_query``
-            (which would otherwise surface internal scaffolding back to the
-            user in fallback text).
-            """
-            return {"force_search_used": True}
 
         async def plan_preview_node(state: ClarifierAgentState):
             """Generate plan preview and handle approval/feedback loop."""
@@ -758,7 +746,6 @@ class ClarifierAgent:
         graph.add_node("agent", agent_node)
         graph.add_node("tools", ToolNode(self.tools))
         graph.add_node("ask_for_clarification", ask_clarification)
-        graph.add_node("force_search", force_search_node)
         graph.add_node("plan_preview", plan_preview_node)
 
         graph.set_entry_point("agent")
@@ -769,7 +756,6 @@ class ClarifierAgent:
             {
                 "tools": "tools",
                 "ask_for_clarification": "ask_for_clarification",
-                "force_search": "force_search",
                 "plan_preview": "plan_preview",
                 "__end__": "__end__",
             },
@@ -777,7 +763,6 @@ class ClarifierAgent:
 
         graph.add_edge("tools", "agent")
         graph.add_edge("ask_for_clarification", "agent")
-        graph.add_edge("force_search", "agent")
         graph.add_edge("plan_preview", "__end__")
 
         return graph.compile()

@@ -1155,8 +1155,9 @@ class TestClarifierForceSearch:
         await agent.run(state)
 
         # The 3rd LLM call happens AFTER the user reply (iteration moves from
-        # 0 to 1). The nudge must NOT appear in that call's message list, even
-        # though force_search_used is still True.
+        # 0 to 1), so the inline search-before-clarify guard (gated on
+        # iteration == 0) must not fire again and the nudge must not appear in
+        # that call's message list.
         assert mock_llm.ainvoke.call_count == 3
         third_call_messages = mock_llm.ainvoke.call_args_list[2].args[0]
         for m in third_call_messages:
