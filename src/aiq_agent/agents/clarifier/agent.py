@@ -558,6 +558,17 @@ class ClarifierAgent:
 
         async def agent_node(state: ClarifierAgentState):
             if state.remaining_questions <= 0:
+                # Clarification budget is exhausted — emit a completion signal,
+                # unless a prior node already did (the skip-command branch in
+                # ask_clarification returns its own AIMessage(complete) and then
+                # this node is re-entered via the unconditional edge). Emitting
+                # another here would place two consecutive assistant messages in
+                # history, which the OpenAI/Anthropic APIs reject. If the last
+                # message is already a completion, leave the state untouched and
+                # let decide_route end the run.
+                last_message = state.messages[-1] if state.messages else None
+                if isinstance(last_message, AIMessage) and self._is_complete(getattr(last_message, "content", "")):
+                    return {}
                 complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
                 return {"messages": [AIMessage(content=complete_response.model_dump_json())]}
             tools_info = [
@@ -645,8 +656,17 @@ class ClarifierAgent:
                 logger.info("Clarifier: User requested to skip clarification")
                 complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
                 clarifier_log = f"{clarifier_log}\n**Turn {iteration + 1} - User:** [Skipped clarification]"
+                # Persist the user's reply as a HumanMessage before the
+                # completion AIMessage. The prior turn already left an
+                # AIMessage(clarification) in history; without an interleaving
+                # human message the two assistant turns would be adjacent, which
+                # the OpenAI/Anthropic APIs reject. (The duplicate completion on
+                # graph re-entry is suppressed by the guard in agent_node.)
                 return {
-                    "messages": [AIMessage(content=complete_response.model_dump_json())],
+                    "messages": [
+                        HumanMessage(content=user_reply),
+                        AIMessage(content=complete_response.model_dump_json()),
+                    ],
                     "iteration": max_turns,  # Force end of clarification
                     "clarifier_log": clarifier_log,
                 }

@@ -1227,3 +1227,120 @@ class TestClarifierForceSearch:
             for i in range(len(third_call_messages) - 1)
         )
         assert ai_then_tool, "expected a tool-call AIMessage immediately followed by its ToolMessage in history"
+
+
+class TestClarifierSkipMessageOrdering:
+    """Skip-command branch must not produce consecutive assistant messages.
+
+    Regression tests for the ordering bug surfaced during the PR #245 audit:
+    the skip branch returned an AIMessage(complete) without persisting the
+    user's reply, leaving it adjacent to the prior clarification AIMessage; the
+    graph then re-entered agent_node and (with the budget exhausted) appended a
+    third AIMessage. Two/three consecutive assistant turns are rejected by the
+    OpenAI/Anthropic APIs and corrupt the planner call when plan approval is on.
+    """
+
+    @pytest.fixture
+    def mock_llm(self):
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        return llm
+
+    @pytest.fixture
+    def mock_llm_provider(self, mock_llm):
+        provider = MagicMock(spec=LLMProvider)
+        provider.get = MagicMock(return_value=mock_llm)
+        return provider
+
+    @staticmethod
+    def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
+        return [
+            (i, i + 1)
+            for i in range(len(messages) - 1)
+            if isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], AIMessage)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_skip_persists_reply_and_no_consecutive_assistants(self, mock_llm_provider, mock_llm):
+        """User skips after one clarification: final history must interleave the
+        skip reply (HumanMessage) and contain no consecutive AIMessages."""
+        clarif = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        # Only one real LLM response is needed; after skip the graph completes
+        # without another model call (the early-complete guard returns {}).
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif])
+
+        captured: dict = {}
+
+        async def user_callback(question: str) -> str:
+            return "skip"
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[],  # no tools → no forced search; isolate the skip path
+            user_prompt_callback=user_callback,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research AI")])
+
+        # Capture the final graph state to inspect persisted message ordering.
+        final = await agent.graph.ainvoke(state, config={"callbacks": []})
+        captured["messages"] = final["messages"] if isinstance(final, dict) else final.messages
+
+        msgs = captured["messages"]
+        offenders = self._adjacent_assistant_pairs(msgs)
+        assert not offenders, f"persisted history has consecutive assistant messages at {offenders}: {msgs}"
+        # The skip reply must be persisted as a HumanMessage.
+        assert any(isinstance(m, HumanMessage) and m.content == "skip" for m in msgs), (
+            "skip reply was not persisted as a HumanMessage"
+        )
+        # Exactly one completion AIMessage should terminate the dialog (no duplicate).
+        completion_ais = [
+            m for m in msgs if isinstance(m, AIMessage) and ClarifierAgent._has_tool_invocations([m]) is False
+        ]
+        assert len(completion_ais) >= 1
+
+    @pytest.mark.asyncio
+    async def test_skip_with_plan_approval_planner_gets_valid_sequence(self, mock_llm_provider, mock_llm):
+        """With plan approval on, the corrupted skip history previously flowed
+        into the planner's ainvoke. Assert the planner never receives two
+        consecutive assistant messages."""
+        clarif = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif])
+
+        planner_llm = MagicMock()
+        plan_json = '{"title": "Plan", "sections": ["Intro", "Analysis"]}'
+        planner_llm.ainvoke = AsyncMock(return_value=AIMessage(content=plan_json))
+
+        replies = iter(["skip", "approve"])
+
+        async def user_callback(question: str) -> str:
+            return next(replies)
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[],
+            user_prompt_callback=user_callback,
+            enable_plan_approval=True,
+            planner_llm=planner_llm,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research AI")])
+        result = await agent.run(state)
+
+        assert result is not None
+        assert result.plan_approved is True
+        # The planner was called; none of its input message lists may contain
+        # consecutive assistant messages.
+        assert planner_llm.ainvoke.call_count >= 1
+        for call_idx, call in enumerate(planner_llm.ainvoke.call_args_list):
+            sent = call.args[0]
+            offenders = self._adjacent_assistant_pairs(sent)
+            assert not offenders, f"planner ainvoke #{call_idx} had consecutive assistant messages at {offenders}"
