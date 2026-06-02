@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.messages import BaseMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
@@ -1165,3 +1166,64 @@ class TestClarifierForceSearch:
                 assert FORCE_SEARCH_GUIDANCE not in m.content, (
                     "force_search guidance must not be re-injected after the user replies"
                 )
+
+    @pytest.mark.asyncio
+    async def test_forced_retry_does_not_emit_consecutive_assistant_messages(self, mock_llm_provider, mock_llm):
+        """After a forced search-retry whose retry produces a tool call, the
+        message list fed to the LLM on the next turn must NOT contain two
+        consecutive assistant (AIMessage) turns. Two adjacent assistant
+        messages with no interleaved user/tool message are rejected with a 400
+        by the OpenAI Chat Completions and Anthropic Messages APIs; mocked LLMs
+        don't enforce this, so we assert the invariant explicitly. Regression
+        test for the Greptile P1 finding on PR #245."""
+        clarif_msg = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        tool_call_msg = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_tool", "args": {"query": "AI"}, "id": "call_1"}],
+        )
+        complete_msg = AIMessage(
+            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif_msg, tool_call_msg, complete_msg])
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=AsyncMock(),
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research Foo Project XYZ")])
+        await agent.run(state)
+
+        # Inspect every message list that was actually sent to the LLM and assert
+        # no two consecutive AIMessages appear (the API-invalid shape).
+        def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
+            pairs = []
+            for i in range(len(messages) - 1):
+                if isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], AIMessage):
+                    pairs.append((i, i + 1))
+            return pairs
+
+        for call_idx, call in enumerate(mock_llm.ainvoke.call_args_list):
+            sent_messages = call.args[0]
+            offenders = _adjacent_assistant_pairs(sent_messages)
+            assert not offenders, (
+                f"LLM call #{call_idx} contained consecutive assistant messages at {offenders}; "
+                "this is rejected by OpenAI/Anthropic APIs"
+            )
+
+        # Specifically: the forced retry must not persist the skipped
+        # clarification, so the post-tool history is [..., AIMessage(tool_call),
+        # ToolMessage, ...] with no stale AIMessage before the tool call.
+        third_call_messages = mock_llm.ainvoke.call_args_list[2].args[0]
+        ai_then_tool = any(
+            isinstance(third_call_messages[i], AIMessage)
+            and getattr(third_call_messages[i], "tool_calls", None)
+            and isinstance(third_call_messages[i + 1], ToolMessage)
+            for i in range(len(third_call_messages) - 1)
+        )
+        assert ai_then_tool, "expected a tool-call AIMessage immediately followed by its ToolMessage in history"

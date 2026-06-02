@@ -596,6 +596,15 @@ class ClarifierAgent:
             #     iteration is still 0), we never re-nudge.
             # FORCE_SEARCH_GUIDANCE is sent only in the local retry_messages and is
             # never returned to state, so it cannot leak into get_latest_user_query.
+            #
+            # We return ONLY retry_response, not the first (search-skipping)
+            # response. The first attempt was already shown to the model inside
+            # retry_messages; persisting it would put two consecutive
+            # assistant-role messages in history once retry_response carries a
+            # tool call (… AIMessage(clarif), AIMessage(tool_call), ToolMessage …),
+            # which the OpenAI Chat Completions and Anthropic Messages APIs reject
+            # with a 400. Keeping only retry_response preserves a valid sequence
+            # regardless of whether it is a tool call or another clarification.
             if (
                 self.tools
                 and state.iteration == 0
@@ -606,7 +615,7 @@ class ClarifierAgent:
                 logger.info("Clarifier: model skipped search before clarifying; injecting guidance and retrying once")
                 retry_messages = messages + [response, HumanMessage(content=FORCE_SEARCH_GUIDANCE)]
                 retry_response = await bound_llm.ainvoke(retry_messages)
-                return {"messages": [response, retry_response]}
+                return {"messages": [retry_response]}
 
             return {"messages": [response]}
 
