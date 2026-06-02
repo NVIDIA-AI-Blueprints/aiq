@@ -1351,12 +1351,13 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.job_id == "job-123"
         assert agent.config is fn_config
         assert agent.config.skills.enabled is True
-        assert agent.config.skills.sources == ("/skills/",)
+        assert agent.config.skills.default_sources == ("/skills/",)
+        assert agent.config.skills.agent_sources == {}
         assert agent.config.sandbox is not None
         assert agent.config.sandbox.app_name == "async-aiq"
 
-    def test_async_deep_researcher_constructor_gets_rendered_skill_instructions(self):
-        """Async job construction preserves skills/sandbox config through orchestrator prompt creation."""
+    def test_async_deep_researcher_constructor_preserves_writer_skills(self):
+        """Async job construction preserves writer-only skills and sandbox job scoping."""
         from langchain_core.messages import HumanMessage
         from langchain_core.tools import tool
 
@@ -1380,9 +1381,16 @@ class TestAsyncJobRunnerAgentFactory:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            skills=SkillsConfig(enabled=True),
+            skills=SkillsConfig(
+                enabled=True,
+                default_sources=(),
+                agent_sources={
+                    "writer-agent": ("/skills/synthesis/",),
+                },
+            ),
             sandbox=SandboxConfig(app_name="async-aiq"),
         )
         mock_deep_agent = MagicMock()
@@ -1392,11 +1400,19 @@ class TestAsyncJobRunnerAgentFactory:
             patch(
                 "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
                 return_value=MagicMock(),
-            ),
+            ) as create_backend,
             patch(
                 "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
                 return_value=mock_deep_agent,
             ) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.tools.research.create_summarization_middleware",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.tools.research.create_agent",
+                return_value=MagicMock(),
+            ),
         ):
             agent = _create_agent_instance(
                 agent_cls=DeepResearcherAgent,
@@ -1420,14 +1436,18 @@ class TestAsyncJobRunnerAgentFactory:
             agent._build_orchestrator_agent(state)
 
         kwargs = create.call_args.kwargs
-        assert kwargs["skills"] == ["/skills/"]
-        assert "Available Skills:" in kwargs["system_prompt"]
-        assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" in kwargs["system_prompt"]
-        assert 'execute("python /workspace/[name].py")' in kwargs["system_prompt"]
-        assert "Tell the planner to account for available skills" in kwargs["system_prompt"]
-        assert "Include any applicable skill-use requirements from the plan" in kwargs["system_prompt"]
+        assert "skills" not in kwargs
+        subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
+        assert "skills" not in subagents["planner-agent"]
+        assert subagents["writer-agent"]["skills"] == ["/skills/synthesis/"]
+        assert "Available Skills:" not in kwargs["system_prompt"]
+        assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" not in kwargs["system_prompt"]
+        assert 'execute("python /workspace/[name].py")' not in kwargs["system_prompt"]
+        assert "Skills System" not in kwargs["system_prompt"]
+        assert "Shell commands cannot see `/shared/`" in kwargs["system_prompt"]
+        assert "writer-agent" in kwargs["system_prompt"]
         assert "data-table-analysis" not in kwargs["system_prompt"]
-        assert agent.deepagents_runtime.job_id == "async-job-123"
+        assert create_backend.call_args.args[1] == "async-job-123"
 
     def test_async_deep_researcher_empty_data_sources_keeps_internal_tools(self):
         """Explicit empty data_sources disables source tools but keeps DeepResearcher helpers."""
@@ -1446,10 +1466,21 @@ class TestAsyncJobRunnerAgentFactory:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         mock_deep_agent = MagicMock()
         mock_deep_agent.with_config.return_value = mock_deep_agent
 
-        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_deep_agent) as create:
+        with (
+            patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_deep_agent) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.tools.research.create_summarization_middleware",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.tools.research.create_agent",
+                return_value=MagicMock(),
+            ),
+        ):
             agent = _create_agent_instance(
                 agent_cls=DeepResearcherAgent,
                 llm_provider=provider,
@@ -1464,9 +1495,10 @@ class TestAsyncJobRunnerAgentFactory:
             agent._build_orchestrator_agent(state)
 
         tool_names = [tool.name for tool in create.call_args.kwargs["tools"]]
-        assert tool_names == ["think", "get_verified_sources"]
-        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == tool_names
-        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == tool_names
+        assert tool_names == ["think", "get_verified_sources", "run_research_batch"]
+        subagent_tool_names = ["think", "get_verified_sources"]
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == subagent_tool_names
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == subagent_tool_names
 
     def test_create_agent_instance_does_not_drop_config_on_internal_type_error(self):
         """Constructor bugs must not silently fall back to no-config construction."""

@@ -546,6 +546,73 @@ class TestVerifyCitations:
         result = verify_citations(report, registry)
         assert result.verified_report == report
 
+    def test_missing_references_section_with_inline_citations_appends_registry_sources(self, registry):
+        report = "Finding one [1]. Finding two [2]."
+        result = verify_citations(report, registry)
+
+        assert result.verified_report.startswith(report)
+        assert "## Sources" in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) >= 2
+        assert not result.removed_citations
+
+    def test_footnote_inline_citations_are_normalized_before_appending_sources(self, registry):
+        report = "Finding one [^1]. Finding two [^2]."
+        result = verify_citations(report, registry)
+
+        assert "Finding one [1]. Finding two [2]." in result.verified_report
+        assert "[^1]" not in result.verified_report
+        assert "## Sources" in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) >= 2
+        assert not result.removed_citations
+
+    def test_footnote_reference_lines_are_normalized(self, registry):
+        report = (
+            "Finding one [^1]. Finding two [^2].\n\n"
+            "## Sources\n"
+            "[^1]: Article 1: https://valid.com/article1\n"
+            "[^2]: Article 2: https://valid.com/article2"
+        )
+        result = verify_citations(report, registry)
+
+        assert "Finding one [1]. Finding two [2]." in result.verified_report
+        assert "[^" not in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_source_location_citations_are_normalized_before_appending_sources(self, registry):
+        report = "Finding one \u30101\u2020L2-L4\u3011. Finding two \u30102\u2020L56-L60\u3011."
+        result = verify_citations(report, registry)
+
+        assert "Finding one [1]. Finding two [2]." in result.verified_report
+        assert "\u2020" not in result.verified_report
+        assert "## Sources" in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) >= 2
+        assert not result.removed_citations
+
+    def test_source_location_reference_lines_are_normalized(self, registry):
+        report = (
+            "Finding one \u30101\u2020L2-L4\u3011. Finding two \u30102\u2020L56-L60\u3011.\n\n"
+            "## Sources\n"
+            "\u30101\u2020L2-L4\u3011 Article 1: https://valid.com/article1\n"
+            "\u30102\u2020L56-L60\u3011 Article 2: https://valid.com/article2"
+        )
+        result = verify_citations(report, registry)
+
+        assert "Finding one [1]. Finding two [2]." in result.verified_report
+        assert "\u2020" not in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
     def test_valid_citations_preserved(self, registry):
         report = (
             "Finding one [1]. Finding two [2].\n\n"

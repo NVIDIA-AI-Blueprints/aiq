@@ -40,7 +40,6 @@ def render_researcher_prompt(
     prompt_template: str,
     state: DeepResearchAgentState,
     tools_info: list[dict[str, str]],
-    prompt_context: dict[str, Any],
     current_datetime: str,
 ) -> str:
     """Render researcher instructions from the current request context."""
@@ -51,7 +50,6 @@ def render_researcher_prompt(
         user_info=state.user_info,
         tools=tools_info,
         available_documents=available_docs,
-        **prompt_context,
     )
 
 
@@ -60,7 +58,6 @@ def build_researcher_runnable(
     state: DeepResearchAgentState,
     prompt_template: str,
     tools_info: list[dict[str, str]],
-    prompt_context: dict[str, Any],
     current_datetime: str,
     researcher_tools: list[BaseTool],
     researcher_middleware: list[Any],
@@ -88,7 +85,6 @@ def build_researcher_runnable(
             prompt_template=prompt_template,
             state=state,
             tools_info=tools_info,
-            prompt_context=prompt_context,
             current_datetime=current_datetime,
         ),
         middleware=middleware,
@@ -101,6 +97,17 @@ def format_research_request(query: ResearchQuery) -> str:
     query_json = json.dumps(query.model_dump(mode="json"), indent=2, ensure_ascii=False)
     return (
         "Execute this planned research query and return a ResearchNotes structured response.\n\n"
+        "Execution order:\n"
+        "1. Use the ResearchQuery.tool value as the source tool name. Do not substitute another source tool.\n"
+        "2. Run the main ResearchQuery.query first to establish broad context.\n"
+        "3. Then run each ResearchQuery.subqueries item in order. Treat every subquery as required coverage.\n"
+        "4. In ResearchNotes.findings and narrative_notes, synthesize across the main query and every subquery. "
+        "If a subquery cannot be answered, record it in ResearchNotes.gaps.\n\n"
+        "Evidence discipline:\n"
+        "- Do not answer from model memory.\n"
+        "- Every ResearchFinding must be grounded in results returned by the required source tool.\n"
+        "- If the source tool does not provide support for a claim, record a ResearchGap instead.\n"
+        "- Do not fill missing facts from prior knowledge.\n\n"
         "Important: do not write filesystem artifacts for this batch invocation. "
         "The run_research_batch tool will persist your structured response to /shared/.\n\n"
         "ResearchQuery JSON:\n"
@@ -140,13 +147,9 @@ def _empty_batch_result() -> ResearchBatchResult:
     )
 
 
-def _rejected_batch_result(queries: list[ResearchQuery], max_batch_research_queries: int) -> ResearchBatchResult:
-    """Return a structured oversized-batch rejection without launching researchers."""
+def _rejected_batch_result(queries: list[ResearchQuery], error: str) -> ResearchBatchResult:
+    """Return a structured batch rejection without launching researchers."""
     total = len(queries)
-    error = (
-        f"run_research_batch accepts at most {max_batch_research_queries} curated queries. "
-        f"Received {total}. Rank, merge, or drop lower-priority queries and call again."
-    )
     return ResearchBatchResult(
         status="rejected",
         total=total,
@@ -165,6 +168,67 @@ def _rejected_batch_result(queries: list[ResearchQuery], max_batch_research_quer
         ],
         error=error,
     )
+
+
+_BROAD_QUERY_TERMS = (
+    "overview",
+    "survey",
+    "landscape",
+    "state of",
+    "comprehensive",
+    "taxonomy",
+    "trends",
+    "applications",
+    "challenges",
+    "risks",
+    "benefits",
+)
+
+
+def _empty_subqueries_need_revision(query: ResearchQuery) -> bool:
+    """Return True when a ResearchQuery is too broad to execute without subqueries."""
+    if query.subqueries:
+        return False
+    if len(query.target_components) > 1:
+        return True
+    query_text = query.query.lower()
+    return any(term in query_text for term in _BROAD_QUERY_TERMS)
+
+
+def _validate_research_batch_queries(
+    queries: list[ResearchQuery],
+    *,
+    max_batch_research_queries: int,
+    source_tool_names: set[str],
+) -> str | None:
+    """Validate that planned ResearchQuery objects are executable."""
+    total = len(queries)
+    if total > max_batch_research_queries:
+        return (
+            f"run_research_batch accepts at most {max_batch_research_queries} curated queries. "
+            f"Received {total}. Rank, merge, or drop lower-priority queries and call again."
+        )
+
+    invalid_tools = sorted({query.tool for query in queries if query.tool not in source_tool_names})
+    if invalid_tools:
+        available = ", ".join(sorted(source_tool_names)) or "(none)"
+        invalid = ", ".join(invalid_tools)
+        return (
+            "run_research_batch received non-executable tool name(s): "
+            f"{invalid}. Use exact available source tool names only: {available}. "
+            "Do not use category labels like 'external', 'internal', 'web', or 'search'."
+        )
+
+    broad_without_subqueries = [query.query for query in queries if _empty_subqueries_need_revision(query)]
+    if broad_without_subqueries:
+        examples = "; ".join(broad_without_subqueries[:3])
+        return (
+            "run_research_batch received broad ResearchQuery item(s) with empty subqueries: "
+            f"{examples}. Add 2-5 concrete ordered subqueries for each broad or multi-component query, "
+            "or narrow the main query so it has one obvious search angle."
+        )
+
+    return None
 
 
 async def _run_research_query(
@@ -361,6 +425,7 @@ def build_research_batch_tool(
     researcher_runnable: Any,
     callbacks: list[Any],
     backend: Any,
+    source_tool_names: set[str],
     max_batch_research_queries: int,
     max_research_concurrency: int,
     research_query_timeout_seconds: float,
@@ -377,8 +442,13 @@ def build_research_batch_tool(
         if not queries:
             return _empty_batch_result().model_dump_json()
 
-        if total > max_batch_research_queries:
-            return _rejected_batch_result(queries, max_batch_research_queries).model_dump_json()
+        rejection_error = _validate_research_batch_queries(
+            queries,
+            max_batch_research_queries=max_batch_research_queries,
+            source_tool_names=source_tool_names,
+        )
+        if rejection_error is not None:
+            return _rejected_batch_result(queries, rejection_error).model_dump_json()
 
         item_results = await _run_research_queries(
             queries=queries,

@@ -37,6 +37,7 @@ class TestLLMRole:
         assert LLMRole.REFLECTION == "reflection"
         assert LLMRole.CLARIFIER == "clarifier"
         assert LLMRole.META_CHATTER == "meta_chatter"
+        assert LLMRole.REPORT_WRITER == "report_writer"
 
     def test_llm_role_is_string_enum(self):
         """Test that LLMRole members are string-like."""

@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Structured response contracts for deep researcher planning and research."""
+"""Structured response contracts for deep researcher planning, research, and synthesis."""
 
 from typing import ClassVar
 from typing import Literal
@@ -39,23 +39,56 @@ class TaskAnalysis(_StrictContract):
     language: str = Field(description="Language to use for the plan, notes, and final report.")
 
 
-class TocSubsection(_StrictContract):
-    """Second-level report TOC entry."""
+class AnswerOption(_StrictContract):
+    """A user-provided option or output choice the final answer may need to select."""
 
-    id: str = Field(description="Stable subsection identifier, such as '1.1'.")
-    title: str = Field(description="Specific subsection title.")
+    id: str = Field(description="Stable option identifier, such as 'A' or 'price_above_100'.")
+    label: str = Field(description="User-facing option text.")
+    description: str = Field(default="", description="Additional option context, if available.")
 
 
-class TocSection(_StrictContract):
-    """Top-level report TOC entry."""
+class AnswerComponent(_StrictContract):
+    """Required evidence or synthesis component for the final answer."""
 
-    id: str = Field(description="Stable section identifier, such as '1'.")
-    title: str = Field(description="Specific top-level section title.")
-    subsections: list[TocSubsection] = Field(description="Second-level subsections for this report section.")
+    id: str = Field(description="Stable component identifier, such as 'latest_price_anchor'.")
+    name: str = Field(description="Short human-readable component name.")
+    description: str = Field(description="What the writer must cover for this component.")
+
+
+class AnswerStrategy(_StrictContract):
+    """Planner guidance for the final answer shape and synthesis logic."""
+
+    answer_type: Literal[
+        "long_form_report",
+        "brief_answer",
+        "table",
+        "comparison",
+        "prediction",
+        "multiple_choice",
+        "data_extraction",
+        "custom",
+    ] = Field(description="The intended final output shape.")
+    title: str = Field(description="Concise human-facing title for the final output.")
+    response_shape: str = Field(description="Concrete description of the expected final Markdown shape.")
+    selection_mode: Literal["none", "single_choice", "top_k", "multi_select", "threshold", "free_text"] = Field(
+        description="Decision rule for final answer selection, if any."
+    )
+    expected_count: int | None = Field(
+        default=None,
+        description="Expected number of selected answers for single_choice/top_k/multi_select, when applicable.",
+    )
+    options: list[AnswerOption] = Field(
+        default_factory=list,
+        description="Candidate options when the user request includes choices or buckets.",
+    )
+    required_components: list[AnswerComponent] = Field(
+        description="Evidence and synthesis components that must be covered in the final answer."
+    )
+    assembly_instruction: str = Field(description="Specific writer-facing instruction for assembling the final answer.")
 
 
 class Constraint(_StrictContract):
-    """Acceptance criterion that the final report should satisfy."""
+    """Acceptance criterion that the final answer should satisfy."""
 
     category: Literal["content", "source", "structure", "depth", "format", "exclusion"] = Field(
         description="Constraint category."
@@ -72,12 +105,13 @@ class ResearchQuery(_StrictContract):
     subqueries: list[str] = Field(
         default_factory=list,
         description=(
-            "Concrete search angles or subqueries the researcher should cover under this higher-level query. "
-            "Use this to group related searches that support the same target sections."
+            "Ordered concrete search angles the researcher must cover after the main query. "
+            "Use 2-5 subqueries for broad, survey, overview, landscape, taxonomy, trend, "
+            "application, challenge, risk, benefit, or multi-component queries."
         ),
     )
-    tool: str = Field(description="Tool name to use for the query.")
-    target_sections: list[str] = Field(description="Report sections this query is intended to support.")
+    tool: str = Field(description="Exact available source tool name to use; not a category label.")
+    target_components: list[str] = Field(description="Answer components this query is intended to support.")
     rationale: str = Field(description="Why this query is needed.")
 
 
@@ -85,9 +119,8 @@ class ResearchPlan(_StrictContract):
     """Structured plan produced by the planner subagent."""
 
     task_analysis: TaskAnalysis = Field(description="Planner analysis of the user's request.")
-    report_title: str = Field(description="Concise, descriptive title for the final report.")
-    report_toc: list[TocSection] = Field(description="Hierarchical report table of contents.")
-    constraints: list[Constraint] = Field(description="Acceptance criteria for the final report.")
+    answer_strategy: AnswerStrategy = Field(description="Final answer shape and synthesis strategy.")
+    constraints: list[Constraint] = Field(description="Acceptance criteria for the final answer.")
     queries: list[ResearchQuery] = Field(description="Queries for researcher workers to execute.")
 
 
@@ -129,13 +162,32 @@ class ResearchNotes(_StrictContract):
     """Structured notes produced by a researcher worker."""
 
     query_topic: str = Field(description="Short topic label for this research note.")
-    target_sections: list[str] = Field(description="Report sections these notes support.")
+    target_components: list[str] = Field(description="Answer components these notes support.")
     summary: str = Field(description="Brief synthesis of the research results.")
     findings: list[ResearchFinding] = Field(description="Detailed findings supported by cited sources.")
     gaps: list[ResearchGap] = Field(description="Open gaps or weak spots discovered during research.")
     sources: list[ResearchSource] = Field(description="Every source used by these notes.")
-    narrative_notes: str = Field(description="Long-form synthesis preserving nuance for report writing.")
+    narrative_notes: str = Field(description="Detailed synthesis preserving nuance for final answer writing.")
     language: str = Field(description="Language used in these research notes.")
+
+
+class WriterOutput(_StrictContract):
+    """Structured output produced by the writer subagent."""
+
+    answer_markdown: str = Field(description="Final user-facing Markdown answer with normal source citations.")
+    answer_type: Literal[
+        "long_form_report",
+        "brief_answer",
+        "table",
+        "comparison",
+        "prediction",
+        "multiple_choice",
+        "data_extraction",
+        "custom",
+    ] = Field(description="The final output shape used.")
+    citations_used: list[int] = Field(description="Citation numbers referenced in answer_markdown.")
+    gaps: list[str] = Field(default_factory=list, description="Material gaps or limitations carried into the answer.")
+    confidence: Literal["low", "medium", "high"] = Field(description="Overall confidence in the final answer.")
 
 
 class ResearchBatchItemResult(_StrictContract):

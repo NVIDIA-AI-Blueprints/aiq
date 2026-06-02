@@ -586,6 +586,10 @@ _REFERENCE_SECTION_RE = re.compile(
 )
 
 _CITATION_LINE_RE = re.compile(r"^\s*[-*]?\s*\[(\d+)\]\s*(.+)$", re.MULTILINE)
+_INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
+_FOOTNOTE_REFERENCE_LINE_RE = re.compile(r"^\s*\[\^(\d+)\]:?\s*", re.MULTILINE)
+_FOOTNOTE_INLINE_CITATION_RE = re.compile(r"\[\^(\d+)\]")
+_SOURCE_LOCATION_CITATION_RE = re.compile(r"\[(\d+)\s*†[^\]]+\]")
 
 _URL_IN_LINE_RE = re.compile(r"https?://\S+")
 
@@ -624,6 +628,24 @@ def _is_knowledge_citation(ref_text: str, registry: SourceRegistry | None = None
                 return True, entry.citation_key
 
     return False, None
+
+
+def _format_registry_reference(num: int, entry: SourceEntry) -> str | None:
+    """Render a registered source as a verifier-readable reference line."""
+    title = entry.title or entry.tool_name or entry.source_type or "Source"
+    if entry.url:
+        return f"[{num}] {title}: {entry.url}"
+    if entry.citation_key:
+        return f"[{num}] {entry.citation_key}"
+    return None
+
+
+def _normalize_citation_syntax(report_text: str) -> str:
+    """Normalize citation bracket variants before verification/sanitization."""
+    report_text = report_text.replace("【", "[").replace("】", "]")
+    report_text = _SOURCE_LOCATION_CITATION_RE.sub(r"[\1]", report_text)
+    report_text = _FOOTNOTE_REFERENCE_LINE_RE.sub(r"[\1] ", report_text)
+    return _FOOTNOTE_INLINE_CITATION_RE.sub(r"[\1]", report_text)
 
 
 def _renumber_citations(body: str, ref_section: str) -> tuple[str, str, dict[int, int]]:
@@ -679,8 +701,8 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
     Returns:
         CitationVerificationResult with cleaned report and audit trail.
     """
-    # Normalize Unicode fullwidth brackets to ASCII (LLMs sometimes use 【N】 instead of [N])
-    report_text = report_text.replace("【", "[").replace("】", "]")
+    # Normalize citation syntax variants before validation.
+    report_text = _normalize_citation_syntax(report_text)
 
     # Early exit: nothing to validate against
     all_sources = registry.all_sources()
@@ -700,8 +722,25 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
     # Find references section
     ref_match = _REFERENCE_SECTION_RE.search(report_text)
     if not ref_match:
-        logger.warning("[CitationVerify] No references section found in report; skipping")
-        return CitationVerificationResult(verified_report=report_text)
+        if not _INLINE_CITATION_RE.search(report_text):
+            logger.warning("[CitationVerify] No references section found in report; skipping")
+            return CitationVerificationResult(verified_report=report_text)
+
+        reference_lines = [
+            line for i, source in enumerate(all_sources, 1) if (line := _format_registry_reference(i, source))
+        ]
+        if not reference_lines:
+            logger.warning("[CitationVerify] No references section found and no renderable registered sources")
+            return CitationVerificationResult(verified_report=report_text)
+
+        logger.warning(
+            "[CitationVerify] No references section found; appending %d registered source(s)",
+            len(reference_lines),
+        )
+        report_text = report_text.rstrip() + "\n\n## Sources\n" + "\n".join(reference_lines)
+        ref_match = _REFERENCE_SECTION_RE.search(report_text)
+        if ref_match is None:
+            return CitationVerificationResult(verified_report=report_text)
 
     ref_start = ref_match.start()
     body = report_text[:ref_start]
@@ -911,6 +950,8 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     Returns:
         ReportSanitizationResult with cleaned report and audit trail.
     """
+    report_text = _normalize_citation_syntax(report_text)
+
     body_urls_removed = 0
     body_urls_replaced = 0
     shortened_urls_removed: list[str] = []

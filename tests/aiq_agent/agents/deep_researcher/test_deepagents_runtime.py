@@ -31,14 +31,22 @@ path-rewriting behavior can be tested without spinning up a graph.
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
+import pytest
 from deepagents.backends import CompositeBackend
 
+from aiq_agent.agents.deep_researcher import deepagents_runtime as runtime_mod
 from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
 from aiq_agent.agents.deep_researcher.deepagents_runtime import SHARED_ROUTE
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepAgentsRuntime
+from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
 from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+from aiq_agent.agents.deep_researcher.deepagents_runtime import _builtin_skill_state_files
 from aiq_agent.agents.deep_researcher.deepagents_runtime import _PrefixedStateBackend
+
+SYNTHESIS_SKILL_SOURCE = f"{BUILTIN_SKILL_SOURCE}synthesis/"
 
 
 def _attach_dict_state(backend: _PrefixedStateBackend, state: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -151,17 +159,221 @@ class TestDeepAgentsRuntimeRouting:
         assert isinstance(routes_by_prefix[SHARED_ROUTE], _PrefixedStateBackend)
         assert isinstance(routes_by_prefix[BUILTIN_SKILL_SOURCE], _PrefixedStateBackend)
 
+    def test_shared_glob_routes_locally_without_touching_sandbox_default(self) -> None:
+        fake_sandbox = MagicMock()
+        fake_sandbox.glob.side_effect = AssertionError("sandbox glob should not be called for /shared patterns")
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=fake_sandbox,
+        ):
+            runtime = DeepAgentsRuntime(sandbox=SandboxConfig())
+            backend = runtime.backend
+
+        shared_backend = backend.routes[SHARED_ROUTE]
+        _attach_dict_state(
+            shared_backend,
+            {
+                "/plan.json": {"content": "{}", "modified_at": "2026-01-01T00:00:00"},
+                "/research_batch_result.json": {"content": "{}", "modified_at": "2026-01-01T00:00:01"},
+                "/notes.txt": {"content": "not json", "modified_at": "2026-01-01T00:00:02"},
+            },
+        )
+
+        result = backend.glob("/shared/*.json")
+
+        assert result.error is None
+        assert sorted(match["path"] for match in result.matches) == [
+            "/shared/plan.json",
+            "/shared/research_batch_result.json",
+        ]
+        fake_sandbox.glob.assert_not_called()
+
+    def test_builtin_skill_state_files_include_nested_synthesis_skills(self) -> None:
+        files = _builtin_skill_state_files()
+        assert "/research-sandbox/data-table-analysis/SKILL.md" in files
+        assert "/synthesis/long-form-report-writer/SKILL.md" in files
+        assert "/synthesis/prediction-report-writer/SKILL.md" in files
+        assert "Data Table Analysis Skill" in files["/research-sandbox/data-table-analysis/SKILL.md"]["content"]
+        assert "Long-Form Report Writer Skill" in files["/synthesis/long-form-report-writer/SKILL.md"]["content"]
+        assert "Prediction Report Writer Skill" in files["/synthesis/prediction-report-writer/SKILL.md"]["content"]
+
+    def test_builtin_skill_state_files_include_helper_files(self, tmp_path, monkeypatch) -> None:
+        skill_dir = tmp_path / "demo-skill"
+        scripts_dir = skill_dir / "scripts"
+        references_dir = skill_dir / "references"
+        scripts_dir.mkdir(parents=True)
+        references_dir.mkdir()
+        (skill_dir / "SKILL.md").write_text("Demo Skill\n", encoding="utf-8")
+        (scripts_dir / "helper.py").write_text("print('demo')\n", encoding="utf-8")
+        (references_dir / "notes.md").write_text("reference notes\n", encoding="utf-8")
+
+        monkeypatch.setattr(runtime_mod, "BUILTIN_SKILLS_DIR", tmp_path)
+
+        files = runtime_mod._builtin_skill_state_files()
+
+        assert "/demo-skill/SKILL.md" in files
+        assert "/demo-skill/scripts/helper.py" in files
+        assert "/demo-skill/references/notes.md" in files
+        assert files["/demo-skill/scripts/helper.py"]["content"] == "print('demo')\n"
+
+    def test_skill_sources_return_none_when_disabled(self) -> None:
+        runtime = DeepAgentsRuntime()
+        assert runtime.skill_sources_for("orchestrator") is None
+
+    def test_skill_sources_use_default_for_any_agent(self) -> None:
+        runtime = DeepAgentsRuntime(skills=SkillsConfig.enabled_builtin())
+        assert runtime.skill_sources_for("orchestrator") == [BUILTIN_SKILL_SOURCE]
+        assert runtime.skill_sources_for("future-agent") == [BUILTIN_SKILL_SOURCE]
+
+    def test_agent_specific_sources_override_defaults(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=SkillsConfig(
+                enabled=True,
+                default_sources=("/skills/default/",),
+                agent_sources={"writer-agent": (SYNTHESIS_SKILL_SOURCE,)},
+            )
+        )
+
+        assert runtime.skill_sources_for("writer-agent") == [SYNTHESIS_SKILL_SOURCE]
+        assert runtime.skill_sources_for("planner-agent") == ["/skills/default/"]
+
+    def test_empty_agent_specific_sources_disable_that_agent(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=SkillsConfig(
+                enabled=True,
+                agent_sources={"writer-agent": ()},
+            )
+        )
+
+        assert runtime.skill_sources_for("writer-agent") is None
+        assert runtime.skill_sources_for("planner-agent") == [BUILTIN_SKILL_SOURCE]
+
+    def test_sandbox_required_source_without_sandbox_raises(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=SkillsConfig(
+                enabled=True,
+                agent_sources={"writer-agent": (SYNTHESIS_SKILL_SOURCE,)},
+                sandbox_required_sources=(BUILTIN_SKILL_SOURCE,),
+            )
+        )
+
+        with pytest.raises(ValueError, match="writer-agent.*require a sandbox backend"):
+            runtime.skill_sources_for("writer-agent")
+
+    def test_sandbox_required_source_with_sandbox_is_allowed(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=SkillsConfig(
+                enabled=True,
+                agent_sources={"writer-agent": (SYNTHESIS_SKILL_SOURCE,)},
+                sandbox_required_sources=(BUILTIN_SKILL_SOURCE,),
+            ),
+            sandbox=SandboxConfig(),
+        )
+
+        assert runtime.skill_sources_for("writer-agent") == [SYNTHESIS_SKILL_SOURCE]
+
+    def test_deepagents_skill_scanner_finds_synthesis_skills_from_nested_source(self) -> None:
+        from deepagents.middleware.skills import _list_skills
+
+        runtime = DeepAgentsRuntime(skills=SkillsConfig.enabled_builtin())
+        backend = runtime.backend
+        files = _builtin_skill_state_files()
+        for _prefix, route_backend in backend.sorted_routes:
+            if isinstance(route_backend, _PrefixedStateBackend):
+                _attach_dict_state(route_backend, files)
+
+        top_level_skills = _list_skills(backend, BUILTIN_SKILL_SOURCE)
+        research_sandbox_skills = _list_skills(backend, f"{BUILTIN_SKILL_SOURCE}research-sandbox/")
+        synthesis_skills = _list_skills(backend, SYNTHESIS_SKILL_SOURCE)
+
+        assert [skill["name"] for skill in top_level_skills] == []
+        assert [skill["name"] for skill in research_sandbox_skills] == ["data-table-analysis"]
+        assert [skill["path"] for skill in research_sandbox_skills] == [
+            "/skills/research-sandbox/data-table-analysis/SKILL.md",
+        ]
+        assert [skill["name"] for skill in synthesis_skills] == [
+            "long-form-report-writer",
+            "prediction-report-writer",
+        ]
+        assert [skill["path"] for skill in synthesis_skills] == [
+            "/skills/synthesis/long-form-report-writer/SKILL.md",
+            "/skills/synthesis/prediction-report-writer/SKILL.md",
+        ]
+
+    def test_deepagents_subagent_skills_key_adds_skills_middleware(self) -> None:
+        from deepagents import create_deep_agent
+        from deepagents.backends import StateBackend
+
+        fake_graph = MagicMock()
+        fake_graph.with_config.return_value = fake_graph
+        create_agent_calls: list[dict[str, Any]] = []
+
+        def fake_create_agent(*_args: Any, **kwargs: Any) -> MagicMock:
+            create_agent_calls.append(kwargs)
+            return fake_graph
+
+        fake_model = MagicMock()
+        profile = MagicMock()
+        profile.tool_description_overrides = {}
+        profile.excluded_tools = []
+        profile.excluded_middleware = []
+        profile.materialize_extra_middleware.return_value = []
+        profile.general_purpose_subagent = MagicMock(enabled=False)
+        profile.base_system_prompt = None
+        profile.system_prompt_suffix = None
+
+        with (
+            patch("deepagents.graph.resolve_model", return_value=fake_model),
+            patch("deepagents._models.resolve_model", return_value=fake_model),
+            patch("deepagents.graph._harness_profile_for_model", return_value=profile),
+            patch("deepagents.graph.create_summarization_middleware", return_value=MagicMock()),
+            patch("deepagents.graph.create_agent", side_effect=fake_create_agent),
+            patch("deepagents.middleware.subagents.create_agent", side_effect=fake_create_agent),
+        ):
+            create_deep_agent(
+                model=fake_model,
+                tools=[],
+                subagents=[
+                    {
+                        "name": "writer-agent",
+                        "description": "Writes the final answer.",
+                        "system_prompt": "Write.",
+                        "skills": [SYNTHESIS_SKILL_SOURCE],
+                    }
+                ],
+                backend=StateBackend(),
+                skills=[BUILTIN_SKILL_SOURCE],
+            )
+
+        writer_middleware = create_agent_calls[0]["middleware"]
+        writer_skills = [m for m in writer_middleware if m.__class__.__name__ == "SkillsMiddleware"]
+        assert len(writer_skills) == 1
+        assert writer_skills[0].sources == [SYNTHESIS_SKILL_SOURCE]
+
 
 class TestDeepAgentsRuntimeJobId:
     """job_id should drive the sandbox name; a missing one falls back to uuid."""
 
     def test_explicit_job_id_is_kept(self) -> None:
-        runtime = DeepAgentsRuntime(job_id="job-abc-123")
-        assert runtime.job_id == "job-abc-123"
+        sandbox = SandboxConfig()
+        with patch("aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend") as create_backend:
+            runtime = DeepAgentsRuntime(sandbox=sandbox, job_id="job-abc-123")
+            _ = runtime.backend
+
+        create_backend.assert_called_once_with(sandbox, "job-abc-123")
 
     def test_missing_job_id_generates_uuid(self) -> None:
-        runtime_a = DeepAgentsRuntime()
-        runtime_b = DeepAgentsRuntime()
+        sandbox_a = SandboxConfig()
+        sandbox_b = SandboxConfig()
+        with patch("aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend") as create_backend:
+            runtime_a = DeepAgentsRuntime(sandbox=sandbox_a)
+            runtime_b = DeepAgentsRuntime(sandbox=sandbox_b)
+            _ = runtime_a.backend
+            _ = runtime_b.backend
+
+        job_id_a = create_backend.call_args_list[0].args[1]
+        job_id_b = create_backend.call_args_list[1].args[1]
         # uuid4 strings are 36 chars, distinct between instances.
-        assert len(runtime_a.job_id) == 36
-        assert runtime_a.job_id != runtime_b.job_id
+        assert len(job_id_a) == 36
+        assert job_id_a != job_id_b

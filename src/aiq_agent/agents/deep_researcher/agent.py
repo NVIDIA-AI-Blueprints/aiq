@@ -10,17 +10,18 @@ from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from deepagents import create_deep_agent
 from langchain.agents.middleware import ModelRetryMiddleware
-from langchain_core.messages import AIMessage
-from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.memory import InMemoryStore
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common import get_checkpointer
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
@@ -39,26 +40,19 @@ from .deepagents_runtime import SandboxConfig
 from .deepagents_runtime import SkillsConfig
 from .models import DeepResearchAgentState
 from .models import ResearchPlan
+from .models import WriterOutput
 from .tools.research import build_research_batch_tool as build_research_batch_tool_impl
 from .tools.research import build_researcher_runnable as build_researcher_runnable_impl
 from .tools.source_tool_batching import build_batch_source_tools
 
-try:
-    from aiq_api.auth.errors import AuthError as _AuthError
-except ImportError:
-    _AuthError = None  # type: ignore[assignment,misc]
-
 logger = logging.getLogger(__name__)
 
-# Minimum character count for a report to be considered substantive.
-# Used by both _extract_report_content (to decide if write_file fallback is needed)
-# and _is_report_complete (to reject too-short reports).
-_MIN_REPORT_LENGTH = 1500
 DEFAULT_MAX_BATCH_RESEARCH_QUERIES = 6
 DEFAULT_MAX_RESEARCH_CONCURRENCY = 3
 DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS = 120.0
 DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS = 5
 DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE = 5
+DEFAULT_MAX_WORKFLOW_RESUME_ATTEMPTS = 4
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
@@ -87,16 +81,15 @@ class DeepResearcherAgent:
     """
     Deep research agent using deepagents library for multi-phase workflow.
 
-    This agent produces publication-ready research reports through an iterative process:
+    This agent produces cited research answers through an iterative process:
 
-    1. **Planning Phase**: Generate a structured research plan with queries and report
-       organization (planner subagent)
+    1. **Planning Phase**: Generate a structured research plan with answer strategy
+       and queries (planner subagent)
     2. **Research Loops**: Execute queries through the batch research tool, then
-       synthesize drafts directly in the orchestrator
+       inspect gaps in the orchestrator
     3. **Iteration**: Repeat research and synthesis loops to fill gaps
     4. **Citation Management**: Catalog and number sources in the orchestrator
-    5. **Finalization**: Produce a polished report with inline citations and references
-       directly in the orchestrator
+    5. **Finalization**: Delegate final Markdown synthesis to the writer subagent
 
     The agent is NAT-independent and receives all dependencies via constructor.
 
@@ -127,6 +120,8 @@ class DeepResearcherAgent:
         callbacks: list[Any] | None = None,
         skills: SkillsConfig | None = None,
         sandbox: SandboxConfig | None = None,
+        checkpointer: BaseCheckpointSaver | None = None,
+        checkpoint_db: str | None = None,
         config: Any | None = None,
         job_id: str | None = None,
         max_batch_research_queries: int = DEFAULT_MAX_BATCH_RESEARCH_QUERIES,
@@ -134,6 +129,7 @@ class DeepResearcherAgent:
         research_query_timeout_seconds: float = DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS,
         max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
         max_source_tool_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
+        max_workflow_resume_attempts: int = DEFAULT_MAX_WORKFLOW_RESUME_ATTEMPTS,
     ) -> None:
         """
         Initialize the deep researcher agent.
@@ -146,6 +142,8 @@ class DeepResearcherAgent:
             callbacks: Optional list of callbacks.
             skills: Optional DeepAgents skills config.
             sandbox: Optional DeepAgents sandbox config.
+            checkpointer: Optional LangGraph checkpointer for workflow recovery.
+            checkpoint_db: Optional SQLite database path or Postgres DSN for lazy checkpointer creation.
             config: Optional agent config. Used by async workers to pass function config generically.
             job_id: Optional async job identifier used to scope sandbox backends.
             max_batch_research_queries: Maximum curated ResearchQuery items per run_research_batch call.
@@ -153,6 +151,7 @@ class DeepResearcherAgent:
             research_query_timeout_seconds: Per-ResearchQuery timeout for researcher workers.
             max_concurrent_source_tool_calls: Shared source-tool concurrency limit across researcher workers.
             max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
+            max_workflow_resume_attempts: Maximum graph-level retries from the latest checkpoint.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -163,14 +162,26 @@ class DeepResearcherAgent:
         if config is not None:
             skills = skills or getattr(config, "skills", None)
             sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
+            checkpointer = checkpointer or getattr(config, "checkpointer", None)
+            checkpoint_db = checkpoint_db or getattr(config, "checkpoint_db", None)
+            max_workflow_resume_attempts = getattr(
+                config,
+                "max_workflow_resume_attempts",
+                max_workflow_resume_attempts,
+            )
 
         self.max_batch_research_queries = max_batch_research_queries
         self.max_research_concurrency = max_research_concurrency
         self.research_query_timeout_seconds = research_query_timeout_seconds
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
+        self.max_workflow_resume_attempts = max(0, max_workflow_resume_attempts)
+        self.checkpointer = checkpointer
+        self.checkpoint_db = checkpoint_db
+        self._explicit_job_id = str(job_id) if job_id is not None else None
+        self.job_id = self._explicit_job_id or str(uuid4())
 
-        self.deepagents_runtime = DeepAgentsRuntime(skills=skills, sandbox=sandbox, job_id=job_id)
+        self.deepagents_runtime = DeepAgentsRuntime(skills=skills, sandbox=sandbox, job_id=self.job_id)
 
         self._prompts = self._load_prompts()
         self.tools_info = []
@@ -196,9 +207,9 @@ class DeepResearcherAgent:
         def get_verified_sources() -> str:
             """Returns the list of all verified source URLs captured from search tool calls.
 
-            Call this tool during the Synthesize step (Step 5) BEFORE writing the
-            final report. It returns every URL and citation key that was returned
-            by search tools during research. Use ONLY these sources in your report
+            Call this tool during synthesis BEFORE writing the final answer. It
+            returns every URL and citation key that was returned by search tools
+            during research. Use ONLY these sources in your final answer
             — any other URL will be automatically removed.
 
             Returns:
@@ -212,16 +223,18 @@ class DeepResearcherAgent:
         self.all_tools = [think, get_verified_sources, *self.tools]
         self.researcher_tools = [think, get_verified_sources, *self.research_source_tools]
         self.planner_tools = self.researcher_tools
+        self.writer_tools = [think, get_verified_sources]
         self.researcher_middleware = self._build_middleware(
             exclude_source_throttle_tool_names=self.batched_source_tool_names
         )
+        self.writer_middleware = self._build_writer_middleware()
         self.orchestrator_middleware = self._build_middleware(extra_valid_tool_names=["run_research_batch"])
         self.middleware = self.researcher_middleware
 
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""
         prompts = {}
-        prompt_names = ["planner", "researcher", "orchestrator"]
+        prompt_names = ["planner", "researcher", "orchestrator", "writer"]
 
         for name in prompt_names:
             prompts[name] = load_prompt(AGENT_DIR / "prompts", name)
@@ -249,30 +262,22 @@ class DeepResearcherAgent:
             ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
             self.source_registry_middleware,
             ToolResultPruningMiddleware(keep_last_n=10, max_chars=2000),
-            ModelRetryMiddleware(max_retries=10, backoff_factor=2.0, initial_delay=1.0),
+            ModelRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
         ]
 
-    def _deepagents_prompt_context(self) -> dict[str, Any]:
-        """Return prompt variables for optional DeepAgents skills and sandbox support."""
-        skill_sources = self.deepagents_runtime.skill_sources
-        sandbox = self.deepagents_runtime.sandbox
-        return {
-            "skills_enabled": skill_sources is not None,
-            "skill_sources": skill_sources or [],
-            "sandbox_enabled": sandbox is not None,
-            "sandbox_python_packages": tuple(sandbox.python_packages) if sandbox is not None else (),
-        }
+    def _build_writer_middleware(self) -> list[Any]:
+        """Build writer middleware."""
+        return self._build_middleware()
 
     def _get_subagents(self, state: DeepResearchAgentState) -> list[dict[str, Any]]:
         """Build subagent configs with state-dependent prompts (e.g. available_documents)."""
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
-        deepagents_prompt_context = self._deepagents_prompt_context()
-        skill_sources = self.deepagents_runtime.skill_sources
+        writer_skill_sources = self.deepagents_runtime.skill_sources_for("writer-agent")
         planner_agent: dict[str, Any] = {
             "name": "planner-agent",
             "description": (
                 "Content-driven research planning - iteratively builds evidence-grounded "
-                "outlines through interleaved search and outline optimization"
+                "answer strategies through interleaved search and planning"
             ),
             "system_prompt": render_prompt_template(
                 self._prompts["planner"],
@@ -280,22 +285,39 @@ class DeepResearcherAgent:
                 user_info=state.user_info,
                 tools=self.tools_info,
                 available_documents=available_docs,
-                **deepagents_prompt_context,
             ),
             "tools": self.planner_tools,
             "model": self.llm_provider.get(LLMRole.PLANNER),
             "middleware": self.researcher_middleware,
             "response_format": ResearchPlan,
         }
-        if skill_sources is not None:
-            planner_agent["skills"] = skill_sources
-        return [planner_agent]
+        writer_tools_info = [{"name": t.name, "description": t.description} for t in self.writer_tools]
+        writer_agent: dict[str, Any] = {
+            "name": "writer-agent",
+            "description": (
+                "Final synthesis writer - reads the plan and research notes, then returns "
+                "a cited Markdown answer in the requested output shape"
+            ),
+            "system_prompt": render_prompt_template(
+                self._prompts["writer"],
+                current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                user_info=state.user_info,
+                tools=writer_tools_info,
+                available_documents=available_docs,
+            ),
+            "tools": self.writer_tools,
+            "model": self.llm_provider.get(LLMRole.REPORT_WRITER),
+            "middleware": self.writer_middleware,
+        }
+        if writer_skill_sources is not None:
+            writer_agent["skills"] = writer_skill_sources
+        return [planner_agent, writer_agent]
 
     def _build_orchestrator_agent(self, state: DeepResearchAgentState) -> str:
         """Get the orchestrator instructions for the deep research agent."""
 
         available_docs = [doc.model_dump() for doc in (state.available_documents or [])]
-        deepagents_prompt_context = self._deepagents_prompt_context()
+        researcher_skill_sources = self.deepagents_runtime.skill_sources_for("researcher")
         orchestrator_instructions = render_prompt_template(
             self._prompts["orchestrator"],
             current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -303,26 +325,24 @@ class DeepResearcherAgent:
             clarifier_result=state.clarifier_result,
             available_documents=available_docs,
             tools=self.tools_info,
-            **deepagents_prompt_context,
         )
 
-        deepagents_kwargs = self.deepagents_runtime.create_agent_kwargs
         researcher_runnable = build_researcher_runnable_impl(
             llm_provider=self.llm_provider,
             state=state,
             prompt_template=self._prompts["researcher"],
             tools_info=self.tools_info,
-            prompt_context=deepagents_prompt_context,
             current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             researcher_tools=self.researcher_tools,
             researcher_middleware=self.researcher_middleware,
-            skill_sources=self.deepagents_runtime.skill_sources,
+            skill_sources=researcher_skill_sources,
             backend=self.deepagents_runtime.backend,
         )
         research_batch_tool = build_research_batch_tool_impl(
             researcher_runnable=researcher_runnable,
             callbacks=self.callbacks,
             backend=self.deepagents_runtime.backend,
+            source_tool_names=self.source_tool_names,
             max_batch_research_queries=self.max_batch_research_queries,
             max_research_concurrency=self.max_research_concurrency,
             research_query_timeout_seconds=self.research_query_timeout_seconds,
@@ -336,113 +356,148 @@ class DeepResearcherAgent:
             subagents=self._get_subagents(state),
             store=InMemoryStore(),
             middleware=self.orchestrator_middleware,
-            **deepagents_kwargs,
+            backend=self.deepagents_runtime.backend,
+            checkpointer=self.checkpointer,
         )
         return agent.with_config({"recursion_limit": 1000})
 
+    def _extract_final_markdown(self, result: dict | Any) -> str | None:
+        """Extract final Markdown from explicit writer output or output files."""
+        messages = result.get("messages") if isinstance(result, dict) else getattr(result, "messages", None)
+        message_texts: list[tuple[str | None, str]] = []
+        for message in messages or []:
+            content = getattr(message, "content", "")
+            text = content if isinstance(content, str) else str(content or "")
+            message_texts.append((getattr(message, "type", None), text.strip()))
+
+        for _, text in reversed(message_texts):
+            try:
+                output = WriterOutput.model_validate_json(text)
+            except ValueError:
+                continue
+            answer = output.answer_markdown.strip()
+            if answer:
+                return answer
+
+        output_paths = ("/shared/output.md", "/output.md")
+        files = result.get("files", {}) if isinstance(result, dict) else getattr(result, "files", {})
+        if isinstance(files, dict):
+            for output_path in output_paths:
+                output_entry = files.get(output_path)
+                if isinstance(output_entry, dict):
+                    output_entry = output_entry.get("content")
+                if isinstance(output_entry, bytes):
+                    output_entry = output_entry.decode("utf-8")
+                if isinstance(output_entry, str) and output_entry.strip():
+                    return output_entry.strip()
+
+        try:
+            downloads = self.deepagents_runtime.backend.download_files(["/shared/output.md"])
+        except Exception:  # noqa: BLE001 - final text can still be returned from messages/files
+            downloads = []
+        for download in downloads:
+            if download.error is None and download.content is not None:
+                output_file = download.content.decode("utf-8").strip()
+                if output_file:
+                    return output_file
+
+        return None
+
     @staticmethod
-    def _extract_report_content(messages: list) -> str:
-        """Extract report content from the last message, falling back to write_file tool calls if text is too short."""
+    def _replace_last_message_content(result: dict | Any, content: str) -> None:
+        """Overwrite the final message content in-place with post-processed Markdown."""
+        messages = result.get("messages") if isinstance(result, dict) else getattr(result, "messages", None)
         if not messages:
-            return ""
+            return
         last_msg = messages[-1]
-        raw = last_msg.content or ""
-        if isinstance(raw, list):
-            content = " ".join(p.get("text", "") for p in raw if isinstance(p, dict) and p.get("type") == "text")
+        if hasattr(last_msg, "model_copy"):
+            messages[-1] = last_msg.model_copy(update={"content": content})
         else:
-            content = raw if isinstance(raw, str) else str(raw)
-        if len(content) >= _MIN_REPORT_LENGTH:
-            return content
-        # If the last message is an AIMessage with a write_file tool call,
-        # the LLM may have written the report via tool instead of text output.
-        if isinstance(last_msg, AIMessage) and getattr(last_msg, "tool_calls", None):
-            for tc in last_msg.tool_calls:
-                if tc.get("name") == "write_file":
-                    file_content = tc.get("args", {}).get("content", "")
-                    if isinstance(file_content, str) and len(file_content) > len(content):
-                        content = file_content
-        return content
+            messages[-1] = type(last_msg)(content=content)
 
-    def _is_report_complete(self, result: dict | Any) -> tuple[bool, str]:
-        """
-        Check if the agent produced a complete report using tool calls or heuristics.
-        """
-        if isinstance(result, dict):
-            messages = result.get("messages", [])
-        else:
-            messages = getattr(result, "messages", [])
-        if not messages:
-            return False, "no_messages"
+    def _log_runtime_intermediates(self, state: DeepResearchAgentState) -> None:
+        """Log runtime file state when verbose debugging is enabled."""
+        if not self.verbose or not logger.isEnabledFor(logging.DEBUG):
+            return
+        logger.debug("DeepAgents runtime prepared files: %s", sorted(state.files))
 
-        content = self._extract_report_content(messages)
+    async def _ensure_checkpointer(self) -> None:
+        """Create the configured checkpointer before compiling the Deep Agents graph."""
+        if self.checkpointer is None and self.checkpoint_db:
+            self.checkpointer = await get_checkpointer(self.checkpoint_db)
 
-        if len(content) < _MIN_REPORT_LENGTH:
-            return False, f"too_short ({len(content)} chars)"
+    def _checkpoint_thread_id(self) -> str:
+        """Return the stable thread ID used for Deep Agents checkpoints."""
+        if self._explicit_job_id:
+            return self._explicit_job_id
+        try:
+            from nat.builder.context import Context
 
-        if content.count("## ") < 2:
-            return False, "missing_section_headers"
+            context = Context.get()
+            return context.workflow_run_id or context.conversation_id or self.job_id
+        except Exception:  # noqa: BLE001 - NAT context is absent in unit tests and direct runs
+            return self.job_id
 
-        source_headers = ("## Sources", "## References", "### Sources", "Reference List")
-        has_sources = any(h in content for h in source_headers)
-        if not has_sources:
-            return False, "missing_sources_section"
+    async def _invoke_with_checkpoint_resume(self, agent: Any, state: DeepResearchAgentState) -> dict | Any:
+        """Invoke the graph, resuming from checkpoints on workflow-level failures."""
+        invoke_config: dict[str, Any] = {"configurable": {"thread_id": self._checkpoint_thread_id()}}
+        if self.callbacks:
+            invoke_config["callbacks"] = self.callbacks
 
-        # Quick citation quality check — only reject if ALL citations are invalid
-        # (full verification with repair/renumbering happens in run() post-processing)
-        registry = self.source_registry_middleware._get_registry()
-        if registry.all_sources():
-            from aiq_agent.common.citation_verification import _CITATION_LINE_RE
-            from aiq_agent.common.citation_verification import _REFERENCE_SECTION_RE
-            from aiq_agent.common.citation_verification import _URL_IN_LINE_RE
-            from aiq_agent.common.citation_verification import _is_knowledge_citation
+        resume_existing = False
+        if self.checkpointer is not None:
+            try:
+                snapshot = await agent.aget_state(invoke_config)
+                tasks = getattr(snapshot, "tasks", ()) or ()
+                resume_existing = bool(tasks)
+            except Exception:
+                logger.debug("Could not inspect existing Deep Research checkpoint; starting fresh", exc_info=True)
+            if resume_existing:
+                logger.info(
+                    "Resuming Deep Research workflow from existing checkpoint (thread_id=%s)",
+                    invoke_config["configurable"]["thread_id"],
+                )
 
-            ref_match = _REFERENCE_SECTION_RE.search(content)
-            if ref_match:
-                ref_section = content[ref_match.start() :]
-                has_any_valid = False
-                for line_match in _CITATION_LINE_RE.finditer(ref_section):
-                    ref_text = line_match.group(2).strip()
-                    # Check URL citations
-                    url_match = _URL_IN_LINE_RE.search(ref_text)
-                    if url_match:
-                        url = url_match.group(0).rstrip(".,;)")
-                        if registry.resolve_url(url):
-                            has_any_valid = True
-                            break
-                        continue
-                    # Check knowledge-layer citation keys (lenient — passes registry for fuzzy match)
-                    is_kl, citation_key = _is_knowledge_citation(ref_text, registry)
-                    if is_kl and citation_key:
-                        has_any_valid = True
-                        break
-                if not has_any_valid:
-                    return False, "no_valid_citations"
+        resume_attempts = self.max_workflow_resume_attempts if self.checkpointer is not None else 0
+        for attempt in range(resume_attempts + 1):
+            graph_input = None if resume_existing or attempt > 0 else state
+            try:
+                return await agent.ainvoke(graph_input, config=invoke_config)
+            except Exception:
+                if attempt >= resume_attempts:
+                    raise
 
-        giving_up_patterns = [
-            "please confirm",
-            "do you want me to",
-            "should i proceed",
-            "choose one",
-            "option (1)",
-            "option (2)",
-            "allow me to",
-            "i need your permission",
-            "i can't produce",
-            "i cannot produce",
-            "what i need from you",
-        ]
-        content_lower = content.lower()
-        for pattern in giving_up_patterns:
-            if pattern in content_lower:
-                return False, f"agent_gave_up (detected: '{pattern}')"
+                try:
+                    snapshot = await agent.aget_state(invoke_config)
+                    tasks = getattr(snapshot, "tasks", ()) or ()
+                except Exception:
+                    logger.warning("Deep Research Subagent failed before a checkpoint could be loaded", exc_info=True)
+                    raise
 
-        return True, "complete_via_heuristic"
+                if not tasks:
+                    logger.warning("Deep Research Subagent failed without resumable checkpoint tasks", exc_info=True)
+                    raise
+
+                task_names = [getattr(task, "name", "<unknown>") for task in tasks]
+                logger.warning(
+                    "Deep Research Subagent failed; resuming from checkpoint "
+                    "(attempt %d/%d, thread_id=%s, pending_tasks=%s)",
+                    attempt + 1,
+                    resume_attempts,
+                    invoke_config["configurable"]["thread_id"],
+                    task_names,
+                    exc_info=True,
+                )
+
+        raise RuntimeError("unreachable workflow resume state")
 
     async def run(self, state: DeepResearchAgentState) -> DeepResearchAgentState:
         """
         Execute deep research with multi-phase workflow.
         """
+        await self._ensure_checkpointer()
         state = self.deepagents_runtime.prepare_state(state)
+        self._log_runtime_intermediates(state)
         agent = self._build_orchestrator_agent(state)
 
         messages = state.messages
@@ -454,99 +509,12 @@ class DeepResearcherAgent:
             logger.info("Query: %s...", query[:100])
             logger.info("=" * 80)
 
-        result = None
-        last_error = None
         try:
-            max_retries = 5
-            for attempt in range(max_retries):
-                try:
-                    result = await agent.ainvoke(
-                        state,
-                        config={"callbacks": self.callbacks} if self.callbacks else None,
-                    )
-                    last_error = None
-                except Exception as ex:
-                    logger.error("Deep Research attempt %d failed: %s", attempt + 1, ex, exc_info=True)
-                    last_error = ex
-                    # Auth errors must propagate immediately — retrying won't fix them.
-                    if _AuthError and isinstance(ex, _AuthError):
-                        raise ex
-                    # If we hit the recursion limit or asyncio error, we might want to stop
-                    if "recursion" in str(ex).lower() or "reuse already awaited" in str(ex):
-                        raise ex
-                    continue
+            result = await self._invoke_with_checkpoint_resume(agent, state)
 
-                is_complete, reason = self._is_report_complete(result)
-                if is_complete:
-                    logger.info(f"Report completed successfully. Reason: {reason}")
-                    break
-
-                logger.warning("Report incomplete (attempt %d/%d): %s", attempt + 1, max_retries, reason)
-
-                feedback_msg = f"Your report is not yet complete. Reason: {reason}. "
-                if "missing_sources_section" in reason:
-                    feedback_msg += "You must include a '## Sources' section listing all URLs."
-                elif "too_short" in reason:
-                    feedback_msg += "The report is too short. Expand your analysis and add more detail."
-                elif "missing_section_headers" in reason:
-                    feedback_msg += "Use markdown headers (##) to structure the report."
-                elif "no_valid_citations" in reason:
-                    feedback_msg += (
-                        "None of your cited sources match actual tool results. "
-                        "Re-check your findings and cite only URLs returned by your search tools."
-                    )
-                    # Include the consolidated source list so the orchestrator
-                    # has an authoritative reference for the retry
-                    source_list = self.source_registry_middleware.get_source_list_text()
-                    if source_list:
-                        feedback_msg += "\n\n" + source_list
-
-                feedback_msg += (
-                    " IMPORTANT: Do NOT restart the research from scratch."
-                    " First check if /report.md already exists using read_file."
-                    " If it does, use that content as your report — just fix the specific issue above"
-                    " and return the corrected report in your final message."
-                )
-
-                if isinstance(result, dict):
-                    next_state = {**result}
-                    messages = result.get("messages", [])
-                else:
-                    next_state = result.model_dump() if hasattr(result, "model_dump") else dict(result)
-                    messages = getattr(result, "messages", next_state.get("messages", []))
-                next_state["messages"] = list(messages) + [HumanMessage(content=feedback_msg)]
-
-                try:
-                    result = await agent.ainvoke(
-                        next_state,
-                        config={"callbacks": self.callbacks} if self.callbacks else None,
-                    )
-                    last_error = None
-                except Exception as ex:
-                    logger.error("Deep Research feedback retry %d failed: %s", attempt + 1, ex, exc_info=True)
-                    last_error = ex
-                    if "recursion" in str(ex).lower() or "reuse already awaited" in str(ex):
-                        raise ex
-                    # Non-fatal: ainvoke raised before producing a result, so
-                    # `result` still holds the previous iteration's value.
-                    # The next loop iteration will rebuild next_state from it.
-                    continue
-
-                # Evaluate the feedback-retry result before the next iteration
-                is_complete, reason = self._is_report_complete(result)
-                if is_complete:
-                    logger.info(f"Report completed after feedback retry. Reason: {reason}")
-                    break
-
-                # Update state so next iteration builds on progress, not the original state
-                state = result
-
-            if result is None and last_error is not None:
-                raise last_error
-
-            final_message = "Research failed to produce a report."
-            if result and result.get("messages"):
-                final_message = self._extract_report_content(result["messages"])
+            final_message = self._extract_final_markdown(result)
+            if final_message is None:
+                raise ValueError("writer-agent did not produce a final Markdown answer")
 
             # Post-process: verify citations against source registry
             if self.source_registry_middleware._get_registry().all_sources():
@@ -565,10 +533,7 @@ class DeepResearcherAgent:
                     )
                 final_message = verification.verified_report
                 if not verification.valid_citations:
-                    logger.warning(
-                        "Deep researcher produced no valid citations after verification; "
-                        "returning sanitized report without fabricating references."
-                    )
+                    raise ValueError("writer-agent output contains no valid citations")
             else:
                 from aiq_agent.common.tool_validation import validate_tool_availability
 
@@ -586,6 +551,15 @@ class DeepResearcherAgent:
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report
+            try:
+                uploads = self.deepagents_runtime.backend.upload_files(
+                    [("/shared/report.md", final_message.encode("utf-8"))]
+                )
+                errors = [f"{upload.path}: {upload.error}" for upload in uploads if upload.error]
+                if errors:
+                    logger.warning("Failed to persist /shared/report.md: %s", "; ".join(errors))
+            except Exception as ex:  # noqa: BLE001 - final message remains the source of truth
+                logger.warning("Failed to persist /shared/report.md: %s", ex)
 
             # Re-emit the verified/sanitized report so the frontend overwrites
             # the raw version that on_llm_end auto-emitted during ainvoke().
@@ -594,16 +568,11 @@ class DeepResearcherAgent:
                     cb.emit_final_report(final_message)
                     break
 
-            if result and result.get("messages"):
-                last_msg = result["messages"][-1]
-                if hasattr(last_msg, "model_copy"):
-                    result["messages"][-1] = last_msg.model_copy(update={"content": final_message})
-                else:
-                    result["messages"][-1] = type(last_msg)(content=final_message)
+            self._replace_last_message_content(result, final_message)
 
             logger.info("=" * 80)
             logger.info("Deep Research Subagent: Workflow complete")
-            logger.info("Final report length: %d characters", len(final_message))
+            logger.info("Final answer length: %d characters", len(final_message))
             logger.info("=" * 80)
             return DeepResearchAgentState.model_validate(result)
 

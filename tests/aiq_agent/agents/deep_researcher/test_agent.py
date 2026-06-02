@@ -32,6 +32,7 @@ from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.agents.deep_researcher.models import ResearchQuery
+from aiq_agent.agents.deep_researcher.models import WriterOutput
 from aiq_agent.agents.deep_researcher.tools.research import build_research_batch_tool
 from aiq_agent.agents.deep_researcher.tools.research import researcher_invoke_state
 from aiq_agent.common import LLMProvider
@@ -43,6 +44,16 @@ from aiq_agent.common.citation_verification import SourceEntry
 def web_search_tool(query: str) -> str:
     """Search the web for information."""
     return f"Results for: {query}"
+
+
+def output_markdown_file(answer_markdown: str | None = None) -> dict:
+    """Return virtual filesystem content for /shared/output.md."""
+    return {
+        "/shared/output.md": {
+            "content": answer_markdown or "Deep research answer [1].\n\n## Sources\n[1] Example: https://example.com",
+            "encoding": "utf-8",
+        }
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -86,6 +97,7 @@ class TestDeepResearcherAgent:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         provider.get = MagicMock(wraps=provider.get)
         return provider
 
@@ -99,6 +111,7 @@ class TestDeepResearcherAgent:
             researcher_runnable=researcher_runnable,
             callbacks=agent.callbacks,
             backend=agent.deepagents_runtime.backend,
+            source_tool_names=agent.source_tool_names,
             max_batch_research_queries=agent.max_batch_research_queries,
             max_research_concurrency=agent.max_research_concurrency,
             research_query_timeout_seconds=agent.research_query_timeout_seconds,
@@ -109,7 +122,12 @@ class TestDeepResearcherAgent:
         """Create a mock for create_deep_agent (deepagents)."""
         mock_agent = MagicMock()
         mock_agent.with_config = MagicMock(return_value=mock_agent)
-        mock_agent.ainvoke = AsyncMock(return_value={"messages": [AIMessage(content="Deep research report")]})
+        mock_agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [AIMessage(content="Deep research answer")],
+                "files": output_markdown_file(),
+            }
+        )
         return mock_agent
 
     def test_init_with_defaults(self, mock_llm_provider, real_tool, mock_create_deep_agent):
@@ -130,8 +148,7 @@ class TestDeepResearcherAgent:
             assert agent.max_loops == 2
             assert agent.verbose is True
             assert agent.callbacks == []
-            assert agent.deepagents_runtime.skill_sources is None
-            assert agent.deepagents_runtime.sandbox is None
+            assert agent.deepagents_runtime.skill_sources_for("orchestrator") is None
 
     def test_init_with_custom_settings(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization with custom settings."""
@@ -165,12 +182,7 @@ class TestDeepResearcherAgent:
             assert agent.research_query_timeout_seconds == 30.0
             assert agent.max_concurrent_source_tool_calls == 3
             assert agent.max_source_tool_batch_size == 4
-            assert agent.deepagents_runtime.skill_sources == [BUILTIN_SKILL_SOURCE]
-            assert agent.deepagents_runtime.sandbox is not None
-            assert agent.deepagents_runtime.sandbox.provider == "modal"
-            assert agent.deepagents_runtime.sandbox.app_name == "custom-aiq"
-            assert agent.deepagents_runtime.sandbox.python_packages == ()
-            assert agent.deepagents_runtime.sandbox.block_network is True
+            assert agent.deepagents_runtime.skill_sources_for("orchestrator") == [BUILTIN_SKILL_SOURCE]
 
     def test_sandbox_config_rejects_unsupported_provider(self):
         """Unsupported sandbox providers fail early with a clear error."""
@@ -188,6 +200,7 @@ class TestDeepResearcherAgent:
 
         config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
+            writer_llm="writer-llm",
             skills=SkillsConfig(enabled=True),
             sandbox=SandboxConfig(app_name="custom-aiq", python_packages=["matplotlib", "pillow"]),
             max_batch_research_queries=4,
@@ -195,15 +208,21 @@ class TestDeepResearcherAgent:
             research_query_timeout_seconds=30.0,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
+            checkpoint_db="./deep-checkpoints.db",
+            max_workflow_resume_attempts=2,
         )
 
         assert config.skills.enabled is True
+        assert config.checkpoint_db == "./deep-checkpoints.db"
+        assert config.max_workflow_resume_attempts == 2
         assert config.max_batch_research_queries == 4
+        assert config.writer_llm == "writer-llm"
         assert config.max_research_concurrency == 2
         assert config.research_query_timeout_seconds == 30.0
         assert config.max_concurrent_source_tool_calls == 3
         assert config.max_source_tool_batch_size == 4
-        assert config.skills.sources == (BUILTIN_SKILL_SOURCE,)
+        assert config.skills.default_sources == (BUILTIN_SKILL_SOURCE,)
+        assert config.skills.agent_sources == {}
         assert config.sandbox is not None
         assert config.sandbox.provider == "modal"
         assert config.sandbox.app_name == "custom-aiq"
@@ -244,10 +263,11 @@ class TestDeepResearcherAgent:
                 tools=[real_tool],
             )
 
-            # Should have planner, researcher, and orchestrator prompts
+            # Should have planner, researcher, orchestrator, and writer prompts
             assert "planner" in agent._prompts
             assert "researcher" in agent._prompts
             assert "orchestrator" in agent._prompts
+            assert "writer" in agent._prompts
 
     def test_prepare_state_preloads_builtin_skill_files(self, mock_llm_provider, real_tool):
         """Built-in skills are added to state so StateBackend can discover them."""
@@ -282,13 +302,13 @@ class TestDeepResearcherAgent:
         for path, file_data in mock_skill_files.items():
             assert prepared.files[path] == file_data
 
-    def test_build_orchestrator_passes_skills_to_top_level_agent(
+    def test_build_orchestrator_passes_skills_to_writer_only(
         self,
         mock_llm_provider,
         real_tool,
         mock_create_deep_agent,
     ):
-        """Skills are exposed to the orchestrator, not added as a separate subagent."""
+        """Only writer-agent receives synthesis skills when configured that way."""
         with (
             patch(
                 "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
@@ -303,10 +323,17 @@ class TestDeepResearcherAgent:
             from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
             from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
 
+            synthesis_skill_source = f"{BUILTIN_SKILL_SOURCE}synthesis/"
             agent = DeepResearcherAgent(
                 llm_provider=mock_llm_provider,
                 tools=[real_tool],
-                skills=SkillsConfig.enabled_builtin(),
+                skills=SkillsConfig(
+                    enabled=True,
+                    default_sources=(),
+                    agent_sources={
+                        "writer-agent": (synthesis_skill_source,),
+                    },
+                ),
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Compare revenue growth")])
 
@@ -320,37 +347,58 @@ class TestDeepResearcherAgent:
             researcher_middleware = researcher_kwargs["middleware"]
             assert researcher_middleware is not agent.researcher_middleware
             assert any(m.__class__.__name__ == "TodoListMiddleware" for m in researcher_middleware)
-            assert any(m.__class__.__name__ == "SkillsMiddleware" for m in researcher_middleware)
+            researcher_skills = [m for m in researcher_middleware if m.__class__.__name__ == "SkillsMiddleware"]
+            assert researcher_skills == []
             assert any(m.__class__.__name__ == "FilesystemMiddleware" for m in researcher_middleware)
             assert any(m.__class__.__name__ == "PatchToolCallsMiddleware" for m in researcher_middleware)
             assert all(m in researcher_middleware for m in agent.researcher_middleware)
             assert "skills" not in researcher_kwargs
             assert "backend" not in researcher_kwargs
             assert kwargs["middleware"] is agent.orchestrator_middleware
-            assert "Use applicable skills before specialized work" in researcher_kwargs["system_prompt"]
+            assert "If a Skills System section is present" not in researcher_kwargs["system_prompt"]
             assert "data-table-analysis" not in researcher_kwargs["system_prompt"]
-            assert kwargs["skills"] == [BUILTIN_SKILL_SOURCE]
+            assert "skills" not in kwargs
             assert not callable(kwargs["backend"])
             assert any(tool.name == "run_research_batch" for tool in kwargs["tools"])
-            assert "Available Skills:" in kwargs["system_prompt"]
-            assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" in kwargs["system_prompt"]
-            assert 'execute("python /workspace/[name].py")' in kwargs["system_prompt"]
-            assert "Tell the planner to account for available skills" in kwargs["system_prompt"]
-            assert "Include any applicable skill-use requirements from the plan" in kwargs["system_prompt"]
-            assert "Do not blindly pass the first queries" in kwargs["system_prompt"]
+            assert "Available Skills:" not in kwargs["system_prompt"]
+            assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" not in kwargs["system_prompt"]
+            assert 'execute("python /workspace/[name].py")' not in kwargs["system_prompt"]
+            assert "read_writer_context" not in kwargs["system_prompt"]
+            assert "Shell commands cannot see `/shared/`" in kwargs["system_prompt"]
+            assert "to /shared/output.md" in kwargs["system_prompt"]
             assert "up to 6" not in kwargs["system_prompt"]
             assert "max_batch_research_queries" not in kwargs["system_prompt"]
             assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
-            assert set(subagents) == {"planner-agent"}
+            assert set(subagents) == {"planner-agent", "writer-agent"}
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
-            assert subagents["planner-agent"]["skills"] == [BUILTIN_SKILL_SOURCE]
+            assert "skills" not in subagents["planner-agent"]
+            assert "response_format" not in subagents["writer-agent"]
+            assert subagents["writer-agent"]["tools"] == agent.writer_tools
+            assert subagents["writer-agent"]["middleware"] is agent.writer_middleware
+            assert subagents["writer-agent"]["skills"] == [synthesis_skill_source]
+            assert "/skills/synthesis/" not in subagents["writer-agent"]["system_prompt"]
+            assert "read_writer_context" not in subagents["writer-agent"]["system_prompt"]
+            assert "/shared/plan.json" in subagents["writer-agent"]["system_prompt"]
+            assert "Skill Use" not in subagents["writer-agent"]["system_prompt"]
+            assert "Required Skill Use" not in subagents["writer-agent"]["system_prompt"]
+            assert "General Cross-Synthesis Guidance" in subagents["writer-agent"]["system_prompt"]
+            assert "Retain useful detail" in subagents["writer-agent"]["system_prompt"]
+            assert "Point out meaningful conflicts" in subagents["writer-agent"]["system_prompt"]
+            assert "Use tables when the evidence has comparable entities" in subagents["writer-agent"]["system_prompt"]
+            assert "Do not use `edit_file` or repeated search-and-replace" in subagents["writer-agent"]["system_prompt"]
+            assert "Final Output Grading Rubric" not in subagents["writer-agent"]["system_prompt"]
+            assert "rubric" not in subagents["writer-agent"]["system_prompt"].lower()
+            assert "long-form-report-writer" not in subagents["writer-agent"]["system_prompt"]
+            assert "prediction-report-writer" not in subagents["writer-agent"]["system_prompt"]
             planner_prompt = subagents["planner-agent"]["system_prompt"]
-            assert "Skill-aware planning" in planner_prompt
+            assert "Skills System" not in planner_prompt
             assert "run_research_batch" in planner_prompt
             assert "subqueries" in planner_prompt
             assert "researcher agent" not in planner_prompt
             assert "data-table-analysis" not in planner_prompt
+            assert "answer_strategy" in planner_prompt
+            assert "Table of Contents" not in planner_prompt
 
     def test_build_orchestrator_omits_skills_when_disabled(
         self,
@@ -392,12 +440,48 @@ class TestDeepResearcherAgent:
             assert "skills" not in create.call_args.kwargs
             assert any(tool.name == "run_research_batch" for tool in create.call_args.kwargs["tools"])
             subagents = {subagent["name"]: subagent for subagent in create.call_args.kwargs["subagents"]}
-            assert set(subagents) == {"planner-agent"}
+            assert set(subagents) == {"planner-agent", "writer-agent"}
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
+            assert "response_format" not in subagents["writer-agent"]
+            assert subagents["writer-agent"]["tools"] == agent.writer_tools
+            assert subagents["writer-agent"]["middleware"] is agent.writer_middleware
             assert (
                 "When available skills apply during planning, research, or synthesis"
                 not in (create.call_args.kwargs["system_prompt"])
             )
+
+    def test_build_orchestrator_passes_checkpointer(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """The Deep Agents graph is compiled with the workflow checkpointer."""
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+                return_value=mock_create_deep_agent,
+            ) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.tools.research.create_agent",
+                return_value=mock_create_deep_agent,
+            ),
+        ):
+            from langgraph.checkpoint.memory import InMemorySaver
+
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            checkpointer = InMemorySaver()
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                checkpointer=checkpointer,
+            )
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
+
+            agent._build_orchestrator_agent(state)
+
+            assert create.call_args.kwargs["checkpointer"] is checkpointer
 
     @pytest.mark.asyncio
     async def test_run_research_batch_writes_structured_notes(
@@ -419,7 +503,7 @@ class TestDeepResearcherAgent:
                 return {
                     "structured_response": {
                         "query_topic": "CUDA / OpenCL portability",
-                        "target_sections": ["Programming Model Differences"],
+                        "target_components": ["programming_model"],
                         "summary": "CUDA is NVIDIA-specific while OpenCL targets portability.",
                         "findings": [
                             {
@@ -466,7 +550,7 @@ class TestDeepResearcherAgent:
                         "query": "CUDA OpenCL portability comparison",
                         "subqueries": ["CUDA OpenCL portability", "OpenCL cross vendor standard"],
                         "tool": "web_search_tool",
-                        "target_sections": ["Programming Model Differences"],
+                        "target_components": ["programming_model"],
                         "rationale": "Supports the comparison section.",
                     }
                 ]
@@ -482,6 +566,8 @@ class TestDeepResearcherAgent:
         call_state, call_config = fake_runnable.calls[0]
         assert "do not write filesystem artifacts" in call_state["messages"][0].content
         assert '"subqueries": [' in call_state["messages"][0].content
+        assert "Run the main ResearchQuery.query first" in call_state["messages"][0].content
+        assert "Treat every subquery as required coverage" in call_state["messages"][0].content
         assert call_config == {"callbacks": agent.callbacks}
         assert fake_backend.upload_files.call_count == 2
         uploaded_files = fake_backend.upload_files.call_args_list[0].args[0]
@@ -513,7 +599,7 @@ class TestDeepResearcherAgent:
                     {
                         "query": f"query {i}",
                         "tool": "web_search_tool",
-                        "target_sections": [f"Section {i}"],
+                        "target_components": [f"component_{i}"],
                         "rationale": "coverage",
                     }
                     for i in range(7)
@@ -528,6 +614,75 @@ class TestDeepResearcherAgent:
         assert payload["failed"] == 7
         assert payload["files"] == []
         assert {item["status"] for item in payload["results"]} == {"rejected"}
+        fake_runnable.ainvoke.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_run_research_batch_rejects_non_executable_tool_names(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Planner category labels like 'external' are rejected before worker launch."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        fake_runnable = MagicMock()
+        fake_runnable.ainvoke = AsyncMock()
+        agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+        batch_tool = self._build_batch_tool(agent, fake_runnable)
+
+        result = await batch_tool.ainvoke(
+            {
+                "queries": [
+                    {
+                        "query": "AI agents overview",
+                        "subqueries": ["AI agents definition 2025", "LLM agents architecture 2025"],
+                        "tool": "external",
+                        "target_components": ["overview"],
+                        "rationale": "External overview.",
+                    }
+                ]
+            }
+        )
+
+        payload = json.loads(result)
+        assert payload["status"] == "rejected"
+        assert "non-executable tool name" in payload["error"]
+        assert "external" in payload["error"]
+        assert "web_search_tool" in payload["error"]
+        fake_runnable.ainvoke.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_run_research_batch_rejects_broad_empty_subqueries(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Broad or multi-component queries need concrete ordered subqueries."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        fake_runnable = MagicMock()
+        fake_runnable.ainvoke = AsyncMock()
+        agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+        batch_tool = self._build_batch_tool(agent, fake_runnable)
+
+        result = await batch_tool.ainvoke(
+            {
+                "queries": [
+                    {
+                        "query": "survey of AI agents 2023-2025",
+                        "subqueries": [],
+                        "tool": "web_search_tool",
+                        "target_components": ["definitions", "architecture", "taxonomy"],
+                        "rationale": "Gather comprehensive survey coverage.",
+                    }
+                ]
+            }
+        )
+
+        payload = json.loads(result)
+        assert payload["status"] == "rejected"
+        assert "empty subqueries" in payload["error"]
+        assert "2-5 concrete ordered subqueries" in payload["error"]
         fake_runnable.ainvoke.assert_not_called()
 
     @pytest.mark.asyncio
@@ -551,7 +706,7 @@ class TestDeepResearcherAgent:
                 return {
                     "structured_response": {
                         "query_topic": "Good Query",
-                        "target_sections": ["A"],
+                        "target_components": ["a"],
                         "summary": "A useful note.",
                         "findings": [
                             {
@@ -596,19 +751,19 @@ class TestDeepResearcherAgent:
                     {
                         "query": "good query",
                         "tool": "web_search_tool",
-                        "target_sections": ["A"],
+                        "target_components": ["a"],
                         "rationale": "success",
                     },
                     {
                         "query": "bad query",
                         "tool": "web_search_tool",
-                        "target_sections": ["B"],
+                        "target_components": ["b"],
                         "rationale": "failure",
                     },
                     {
                         "query": "slow query",
                         "tool": "web_search_tool",
-                        "target_sections": ["C"],
+                        "target_components": ["c"],
                         "rationale": "timeout",
                     },
                 ]
@@ -634,7 +789,7 @@ class TestDeepResearcherAgent:
         query = ResearchQuery(
             query="CUDA OpenCL portability comparison",
             tool="web_search_tool",
-            target_sections=["Programming Model Differences"],
+            target_components=["programming_model"],
             rationale="Supports the comparison section.",
         )
         files = {"/skills/test/SKILL.md": {"content": "skill", "encoding": "utf-8"}}
@@ -654,11 +809,12 @@ class TestDeepResearcherAgent:
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
 
+        sandbox = SandboxConfig()
         agent = DeepResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[real_tool],
             skills=SkillsConfig.enabled_builtin(),
-            sandbox=SandboxConfig(),
+            sandbox=sandbox,
             job_id="job-123",
         )
         fake_modal_backend = MagicMock()
@@ -675,7 +831,7 @@ class TestDeepResearcherAgent:
         assert backend_one is backend_two
         assert backend_one.default is fake_modal_backend
         create_backend.assert_called_once_with(
-            agent.deepagents_runtime.sandbox,
+            sandbox,
             "job-123",
         )
         assert isinstance(backend_one.routes[BUILTIN_SKILL_SOURCE], StateBackend)
@@ -707,14 +863,18 @@ class TestDeepResearcherAgent:
 
     def test_modal_backend_recreates_and_retries_once_on_not_found(self):
         """A disappeared Modal container is recreated once for the same job-scoped name."""
-        import modal
         from deepagents.backends.protocol import ExecuteResponse
 
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
         from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
 
+        class NotFoundError(Exception):
+            pass
+
+        NotFoundError.__module__ = "modal.exception"
+
         first_modal_backend = MagicMock()
-        first_modal_backend.execute.side_effect = modal.exception.NotFoundError("gone")
+        first_modal_backend.execute.side_effect = NotFoundError("gone")
         second_modal_backend = MagicMock()
         second_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
         config = SandboxConfig()
@@ -765,6 +925,7 @@ class TestDeepResearcherAgent:
 
             mock_llm_provider.get.assert_any_call(LLMRole.PLANNER)
             mock_llm_provider.get.assert_any_call(LLMRole.RESEARCHER)
+            mock_llm_provider.get.assert_any_call(LLMRole.REPORT_WRITER)
             mock_llm_provider.get.assert_any_call(LLMRole.ORCHESTRATOR)
 
     @pytest.mark.asyncio
@@ -846,13 +1007,93 @@ class TestDeepResearcherAgent:
 
             with pytest.raises(Exception, match="Agent error"):
                 await agent.run(state)
+            assert mock_agent.ainvoke.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_run_resumes_from_checkpoint_after_workflow_error(self, mock_llm_provider, real_tool):
+        """Workflow retries resume from checkpoint instead of replaying initial state."""
+        deep_result = {
+            "messages": [AIMessage(content="done")],
+            "files": output_markdown_file("Recovered answer [1].\n\n## Sources\n[1] Example: https://example.com"),
+        }
+        empty_snapshot = MagicMock()
+        empty_snapshot.tasks = []
+        pending_snapshot = MagicMock()
+        pending_snapshot.tasks = [MagicMock(name="writer-agent")]
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(side_effect=[RuntimeError("transient graph error"), deep_result])
+        mock_agent.aget_state = AsyncMock(side_effect=[empty_snapshot, pending_snapshot])
+
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_agent):
+            from langgraph.checkpoint.memory import InMemorySaver
+
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                checkpointer=InMemorySaver(),
+                job_id="job-123",
+                max_workflow_resume_attempts=1,
+            )
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Test query")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
+
+            result = await agent.run(state)
+
+        assert result.messages[-1].content == "Recovered answer [1].\n\n## Sources\n[1] Example: https://example.com\n"
+        first_call, second_call = mock_agent.ainvoke.await_args_list
+        assert first_call.args[0] is state
+        assert second_call.args[0] is None
+        assert first_call.kwargs["config"]["configurable"]["thread_id"] == "job-123"
+        assert second_call.kwargs["config"]["configurable"]["thread_id"] == "job-123"
+        assert mock_agent.aget_state.await_count == 2
+        assert mock_agent.aget_state.await_args_list[0].args[0] == first_call.kwargs["config"]
+        assert mock_agent.aget_state.await_args_list[1].args[0] == first_call.kwargs["config"]
+
+    @pytest.mark.asyncio
+    async def test_run_resumes_existing_checkpoint_before_initial_invoke(self, mock_llm_provider, real_tool):
+        """A rerun with pending checkpoint tasks starts with ainvoke(None)."""
+        deep_result = {
+            "messages": [AIMessage(content="done")],
+            "files": output_markdown_file("Resumed answer [1].\n\n## Sources\n[1] Example: https://example.com"),
+        }
+        snapshot = MagicMock()
+        snapshot.tasks = [MagicMock(name="researcher")]
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value=deep_result)
+        mock_agent.aget_state = AsyncMock(return_value=snapshot)
+
+        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_agent):
+            from langgraph.checkpoint.memory import InMemorySaver
+
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                checkpointer=InMemorySaver(),
+                job_id="job-123",
+                max_workflow_resume_attempts=1,
+            )
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Test query")])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
+
+            result = await agent.run(state)
+
+        assert result.messages[-1].content == "Resumed answer [1].\n\n## Sources\n[1] Example: https://example.com\n"
+        first_call = mock_agent.ainvoke.await_args_list[0]
+        assert first_call.args[0] is None
+        assert first_call.kwargs["config"]["configurable"]["thread_id"] == "job-123"
 
     @pytest.mark.asyncio
     async def test_run_empty_result_messages(self, mock_llm_provider, real_tool):
         """Test run() handles empty result messages."""
         mock_agent = MagicMock()
         mock_agent.with_config = MagicMock(return_value=mock_agent)
-        mock_agent.ainvoke = AsyncMock(return_value={"messages": []})
+        mock_agent.ainvoke = AsyncMock(return_value={"messages": [], "files": output_markdown_file()})
 
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
@@ -871,18 +1112,23 @@ class TestDeepResearcherAgent:
             assert result is not None
 
     @pytest.mark.asyncio
-    async def test_run_preserves_valid_message_content(self, mock_llm_provider, real_tool):
-        """Test run() preserves valid message content unchanged."""
+    async def test_run_replaces_final_message_with_writer_markdown(self, mock_llm_provider, real_tool):
+        """The final answer comes from /shared/output.md."""
         result_messages = [
             HumanMessage(content="Original query"),
             AIMessage(content="I'll help with that."),
             ToolMessage(content="Search results here", tool_call_id="123"),
-            AIMessage(content="Here's my final analysis."),
+            AIMessage(content="Raw orchestrator handoff."),
         ]
 
         mock_agent = MagicMock()
         mock_agent.with_config = MagicMock(return_value=mock_agent)
-        mock_agent.ainvoke = AsyncMock(return_value={"messages": result_messages})
+        mock_agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": result_messages,
+                "files": output_markdown_file("Writer markdown [1].\n\n## Sources\n[1] Example: https://example.com"),
+            }
+        )
 
         with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
@@ -897,157 +1143,16 @@ class TestDeepResearcherAgent:
 
             result = await agent.run(state)
 
-            # All valid content should be preserved without synthetic citations.
             assert result.messages[0].content == "Original query"
             assert result.messages[1].content == "I'll help with that."
             assert result.messages[2].content == "Search results here"
-            assert result.messages[3].content == "Here's my final analysis."
-
-
-class TestRunRetryStatePreservation:
-    """Tests that run() retry on incomplete report preserves full state (files, todos)."""
-
-    @pytest.fixture
-    def mock_llm(self):
-        """Create a mock LLM."""
-        llm = MagicMock()
-        llm.ainvoke = AsyncMock()
-        llm.bind_tools = MagicMock(return_value=llm)
-        return llm
-
-    @pytest.fixture
-    def mock_llm_provider(self, mock_llm):
-        """Create a mock LLM provider."""
-        provider = LLMProvider()
-        provider.set_default(mock_llm)
-        provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
-        provider.configure(LLMRole.PLANNER, mock_llm)
-        provider.configure(LLMRole.RESEARCHER, mock_llm)
-        return provider
-
-    @pytest.fixture
-    def real_tool(self):
-        """Create a real LangChain tool."""
-        return web_search_tool
-
-    @pytest.mark.asyncio
-    async def test_run_incomplete_report_retry_passes_full_state(self, mock_llm_provider, real_tool):
-        """Second ainvoke on retry must receive full state (files, todos), not only messages."""
-        incomplete_content = "Short report.\n## Section One\nText."
-        complete_content = "A" * 1600 + "\n## Intro\n\n## Methods\n\n## Results\n\n## Sources\n[1] http://example.com"
-
-        first_result = {
-            "messages": [
-                HumanMessage(content="Compare X and Y"),
-                AIMessage(content=incomplete_content),
-            ],
-            "files": {"research_notes.txt": "Findings from search..."},
-            "todos": [{"id": "1", "status": "completed", "title": "Planning"}],
-        }
-        second_result = {
-            "messages": [
-                HumanMessage(content="Compare X and Y"),
-                AIMessage(content=incomplete_content),
-                HumanMessage(content="Your report is not yet complete..."),
-                AIMessage(content=complete_content),
-            ],
-            "files": first_result["files"],
-            "todos": first_result["todos"],
-        }
-
-        # Return incomplete then complete; repeat complete so any extra ainvoke calls succeed
-        mock_agent = MagicMock()
-        mock_agent.with_config = MagicMock(return_value=mock_agent)
-        mock_agent.ainvoke = AsyncMock(side_effect=[first_result, second_result] + [second_result] * 10)
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=mock_agent,
-        ):
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-            agent = DeepResearcherAgent(
-                llm_provider=mock_llm_provider,
-                tools=[real_tool],
+            assert (
+                result.messages[3].content == "Writer markdown [1].\n\n## Sources\n[1] Example: https://example.com\n"
             )
-            state = DeepResearchAgentState(messages=[HumanMessage(content="Compare X and Y")])
-            agent.source_registry_middleware.registry.add(SourceEntry(url="http://example.com"))
-
-            await agent.run(state)
-
-            # Find the retry call: state has "files" and last message is feedback
-            call_list = mock_agent.ainvoke.call_args_list
-            retry_calls = [
-                c[0][0]
-                for c in call_list
-                if isinstance(c[0][0], dict)
-                and c[0][0].get("files") == {"research_notes.txt": "Findings from search..."}
-                and c[0][0].get("todos")
-                and c[0][0]["messages"]
-                and "not yet complete" in str(c[0][0]["messages"][-1].content)
-            ]
-            assert retry_calls, "At least one retry must pass full state (files, todos) and feedback message"
-            second_call_state = retry_calls[0]
-            assert second_call_state["files"] == {"research_notes.txt": "Findings from search..."}
-            assert second_call_state["todos"] == [{"id": "1", "status": "completed", "title": "Planning"}]
-            assert len(second_call_state["messages"]) == 3
-            assert "not yet complete" in str(second_call_state["messages"][-1].content)
-
-    @pytest.mark.asyncio
-    async def test_run_incomplete_report_retry_appends_feedback_message(self, mock_llm_provider, real_tool):
-        """Retry must append a HumanMessage with feedback; previous messages preserved."""
-        short_content = "Brief."
-        full_content = "X" * 1600 + "\n## A\n\n## B\n\n## Sources\n[1] https://a.com"
-
-        first_result = {"messages": [HumanMessage(content="Q"), AIMessage(content=short_content)]}
-        second_result = {
-            "messages": [
-                first_result["messages"][0],
-                first_result["messages"][1],
-                HumanMessage(content="Your report is not yet complete. Reason: too_short..."),
-                AIMessage(content=full_content),
-            ],
-        }
-
-        mock_agent = MagicMock()
-        mock_agent.with_config = MagicMock(return_value=mock_agent)
-        mock_agent.ainvoke = AsyncMock(side_effect=[first_result, second_result] + [second_result] * 10)
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=mock_agent,
-        ):
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-            agent = DeepResearcherAgent(
-                llm_provider=mock_llm_provider,
-                tools=[real_tool],
-            )
-            state = DeepResearchAgentState(messages=[HumanMessage(content="Q")])
-            agent.source_registry_middleware.registry.add(SourceEntry(url="https://a.com"))
-
-            await agent.run(state)
-
-            # Find the retry call: last message is feedback about too_short
-            call_list = mock_agent.ainvoke.call_args_list
-            retry_calls = [
-                c[0][0]
-                for c in call_list
-                if isinstance(c[0][0], dict)
-                and c[0][0].get("messages")
-                and len(c[0][0]["messages"]) == 3
-                and "too_short" in str(c[0][0]["messages"][-1].content)
-            ]
-            assert retry_calls, "Retry must append feedback message to messages"
-            second_call_state = retry_calls[0]
-            assert second_call_state["messages"][0].content == "Q"
-            assert second_call_state["messages"][1].content == short_content
-            assert "too_short" in str(second_call_state["messages"][2].content)
-            assert "Expand" in str(second_call_state["messages"][2].content)
 
 
-class TestIsReportComplete:
-    """Tests for _is_report_complete heuristic."""
+class TestFinalMarkdownExtraction:
+    """Tests for extracting the writer's final Markdown."""
 
     @pytest.fixture
     def mock_llm(self):
@@ -1063,14 +1168,15 @@ class TestIsReportComplete:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         return provider
 
     @pytest.fixture
     def real_tool(self):
         return web_search_tool
 
-    def test_complete_report_returns_true(self, mock_llm_provider, real_tool):
-        """Report with length, headers, and Sources section is complete."""
+    def test_extract_final_markdown_from_task_tool_message(self, mock_llm_provider, real_tool):
+        """WriterOutput JSON returned by the task tool is accepted."""
         with patch(
             "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
             return_value=MagicMock(),
@@ -1078,76 +1184,116 @@ class TestIsReportComplete:
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-            content = "A" * 1600 + "\n## Introduction\n\n## Methods\n\n## Sources\n[1] http://x.com"
-            result = {"messages": [AIMessage(content=content)]}
-            is_complete, reason = agent._is_report_complete(result)
-            assert is_complete is True
-            assert "complete" in reason.lower()
-
-    def test_too_short_returns_false(self, mock_llm_provider, real_tool):
-        """Report under length threshold is incomplete."""
-        with patch(
-            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=MagicMock(),
-        ):
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-            result = {"messages": [AIMessage(content="Short.")]}
-            is_complete, reason = agent._is_report_complete(result)
-            assert is_complete is False
-            assert "too_short" in reason
-
-    def test_missing_sources_returns_false(self, mock_llm_provider, real_tool):
-        """Report without Sources section is incomplete."""
-        with patch(
-            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=MagicMock(),
-        ):
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-            content = "A" * 1600 + "\n## Intro\n\n## Body\n\nNo sources here."
-            result = {"messages": [AIMessage(content=content)]}
-            is_complete, reason = agent._is_report_complete(result)
-            assert is_complete is False
-            assert "missing_sources" in reason or "sources" in reason.lower()
-
-    def test_empty_messages_returns_false(self, mock_llm_provider, real_tool):
-        """Empty messages is incomplete."""
-        with patch(
-            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=MagicMock(),
-        ):
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-            result = {"messages": []}
-            is_complete, reason = agent._is_report_complete(result)
-            assert is_complete is False
-            assert "no_messages" in reason or "message" in reason.lower()
-
-    def test_write_file_tool_call_extracts_content(self, mock_llm_provider, real_tool):
-        """Report written via write_file tool call should be detected as complete."""
-        with patch(
-            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
-            return_value=MagicMock(),
-        ):
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-            report_content = "A" * 1600 + "\n## Introduction\n\n## Methods\n\n## Sources\n[1] http://x.com"
-            # AIMessage with empty text but report in write_file tool call
-            msg = AIMessage(
-                content="",
-                tool_calls=[
-                    {"name": "write_file", "args": {"file_path": "/report.md", "content": report_content}, "id": "tc1"}
+            expected = WriterOutput(
+                answer_markdown="Task answer [1].",
+                answer_type="brief_answer",
+                citations_used=[1],
+                gaps=[],
+                confidence="high",
+            )
+            result = {
+                "messages": [
+                    AIMessage(content="working"),
+                    ToolMessage(content=expected.model_dump_json(), tool_call_id="writer-task"),
                 ],
+                "files": {},
+            }
+
+            output = agent._extract_final_markdown(result)
+
+            assert output == expected.answer_markdown
+
+    def test_extract_final_markdown_from_shared_output_backend_file(self, mock_llm_provider, real_tool):
+        """Final Markdown can be loaded from /shared/output.md."""
+        from deepagents.backends.protocol import FileDownloadResponse
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            fake_backend = MagicMock()
+            report = "Backend report [1].\n\n## Sources\n[1] Example: https://example.com"
+            fake_backend.download_files.return_value = [
+                FileDownloadResponse(path="/shared/output.md", content=report.encode("utf-8"), error=None)
+            ]
+            agent.deepagents_runtime._backend = fake_backend
+
+            output = agent._extract_final_markdown({"messages": [AIMessage(content="done")], "files": {}})
+
+            assert output == report
+            fake_backend.download_files.assert_called_once_with(["/shared/output.md"])
+
+    def test_extract_final_markdown_from_shared_output_file(self, mock_llm_provider, real_tool):
+        """Final Markdown can be loaded from /shared/output.md if the writer used the shared path."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            report = "Shared report [1].\n\n## Sources\n[1] Example: https://example.com"
+            output = agent._extract_final_markdown(
+                {
+                    "messages": [AIMessage(content="done")],
+                    "files": {"/shared/output.md": {"content": report}},
+                }
             )
-            result = {"messages": [msg]}
-            is_complete, reason = agent._is_report_complete(result)
-            assert is_complete is True
-            assert "complete" in reason.lower()
+
+            assert output == report
+
+    def test_extract_final_markdown_ignores_orchestrator_chatter(self, mock_llm_provider, real_tool):
+        """Plain messages are not accepted as writer output."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            output = agent._extract_final_markdown(
+                {
+                    "messages": [
+                        AIMessage(content="Next distributed constraints file."),
+                        AIMessage(content="Let's call get_verified_sources now."),
+                    ],
+                    "files": {},
+                }
+            )
+
+            assert output is None
+
+    @pytest.mark.asyncio
+    async def test_run_fails_on_missing_writer_output_before_citation_verification(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Missing /shared/output.md is a writer failure, not a citation failure."""
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [AIMessage(content="Let's call get_verified_sources now.")],
+                "files": {},
+            }
+        )
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
+
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Write a report")])
+            with pytest.raises(ValueError, match="writer-agent did not produce a final Markdown answer"):
+                await agent.run(state)
 
 
 class TestDeepResearcherCitationVerification:
@@ -1167,6 +1313,7 @@ class TestDeepResearcherCitationVerification:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         return provider
 
     @pytest.fixture
@@ -1174,19 +1321,15 @@ class TestDeepResearcherCitationVerification:
         return web_search_tool
 
     @pytest.mark.asyncio
-    async def test_run_does_not_fabricate_citation_when_verify_finds_none(self, mock_llm_provider, real_tool):
-        """If verification finds no valid citations, the report is not patched with a source."""
+    async def test_run_fails_when_verify_finds_no_valid_citations(self, mock_llm_provider, real_tool):
+        """If verification finds no valid citations, the run fails instead of fabricating one."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
-        # Report passes _is_report_complete: long enough, has section headers, has Sources header,
-        # and includes one URL that matches the registry so the cheap completeness check accepts it.
-        report = (
-            "A" * 1600
-            + "\n## Introduction\n\nCUDA findings here.\n"
-            + "## Body\n\nMore details.\n"
-            + "## Sources\n[1] https://docs.nvidia.com/cuda/"
-        )
-        deep_result = {"messages": [AIMessage(content=report)]}
+        report = "CUDA findings here [1].\n\n## Sources\n[1] CUDA Docs: https://docs.nvidia.com/cuda/"
+        deep_result = {
+            "messages": [AIMessage(content="done")],
+            "files": output_markdown_file(report),
+        }
 
         mock_agent = MagicMock()
         mock_agent.with_config = MagicMock(return_value=mock_agent)
@@ -1221,7 +1364,51 @@ class TestDeepResearcherCitationVerification:
                 ),
             ):
                 state = DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
+                with pytest.raises(ValueError, match="no valid citations"):
+                    await agent.run(state)
+
+    @pytest.mark.asyncio
+    async def test_run_verifies_and_sanitizes_writer_markdown(self, mock_llm_provider, real_tool):
+        """Final writer Markdown still goes through citation verification and sanitization."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        raw_answer = "CUDA docs are authoritative [1].\n\n## Sources\n[1] CUDA Docs: https://docs.nvidia.com/cuda/"
+        verified_answer = raw_answer.replace("authoritative", "official")
+        sanitized_answer = verified_answer + "\n"
+        deep_result = {
+            "messages": [AIMessage(content="done")],
+            "files": output_markdown_file(raw_answer),
+        }
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value=deep_result)
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            agent.source_registry_middleware.registry.add(
+                SourceEntry(url="https://docs.nvidia.com/cuda/", title="CUDA Docs", tool_name="web_search")
+            )
+
+            with (
+                patch(
+                    "aiq_agent.agents.deep_researcher.agent.verify_citations",
+                    return_value=MagicMock(
+                        verified_report=verified_answer,
+                        removed_citations=[],
+                        valid_citations=[MagicMock()],
+                    ),
+                ) as verify,
+                patch(
+                    "aiq_agent.agents.deep_researcher.agent.sanitize_report",
+                    return_value=MagicMock(sanitized_report=sanitized_answer),
+                ) as sanitize,
+            ):
+                state = DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
                 result = await agent.run(state)
 
-        final_text = result.messages[-1].content
-        assert final_text.rstrip() == report
+        verify.assert_called_once()
+        sanitize.assert_called_once_with(verified_answer)
+        assert result.messages[-1].content == sanitized_answer

@@ -14,6 +14,9 @@
 # limitations under the License.
 
 from .state import DeepResearchAgentState
+from .subagent_contracts import AnswerComponent
+from .subagent_contracts import AnswerOption
+from .subagent_contracts import AnswerStrategy
 from .subagent_contracts import Constraint
 from .subagent_contracts import ResearchBatchItemResult
 from .subagent_contracts import ResearchBatchResult
@@ -24,10 +27,12 @@ from .subagent_contracts import ResearchPlan
 from .subagent_contracts import ResearchQuery
 from .subagent_contracts import ResearchSource
 from .subagent_contracts import TaskAnalysis
-from .subagent_contracts import TocSection
-from .subagent_contracts import TocSubsection
+from .subagent_contracts import WriterOutput
 
 __all__ = [
+    "AnswerComponent",
+    "AnswerOption",
+    "AnswerStrategy",
     "Constraint",
     "DeepResearchAgentState",
     "ResearchBatchItemResult",
@@ -39,6 +44,5 @@ __all__ = [
     "ResearchQuery",
     "ResearchSource",
     "TaskAnalysis",
-    "TocSection",
-    "TocSubsection",
+    "WriterOutput",
 ]

@@ -37,6 +37,7 @@ class LLMRole(StrEnum):
     REFLECTION = "reflection"
     CLARIFIER = "clarifier"
     META_CHATTER = "meta_chatter"
+    REPORT_WRITER = "report_writer"
 
 
 class LLMProvider:
