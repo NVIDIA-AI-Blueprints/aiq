@@ -234,7 +234,7 @@ functions:
 **`focus` options:**
 
 - **`general`** (default) -- Broad web/research queries. The right choice for almost all agent use.
-- **`news`** -- Current events. Use only for a tool dedicated to news/recency.
+- **`news`** -- Restricts results to news-publisher sources, ordered by recency. There is no recency threshold -- older articles still appear; it changes the source mix, not the time window. (Recency windowing is a separate Nimble `time_range` capability that also works with `focus=general`; not exposed in this initial integration.)
 - **`location`**, **`shopping`**, **`geo`**, **`social`** -- Domain-specific routing; set only when the tool targets that domain.
 
 `focus` is a workflow-config setting, not an agent-chosen parameter -- the model only passes a query, so general research queries cannot silently switch to `news`. Answer generation (`include_answer`) is **not exposed** in this initial integration.

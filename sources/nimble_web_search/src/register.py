@@ -62,9 +62,11 @@ class NimbleWebSearchToolConfig(FunctionBaseConfig, name="nimble_web_search"):
         default="general",
         description=(
             "Nimble search focus mode. 'general' (default) covers broad web/research "
-            "queries and is the right choice for almost all agent use. 'news' targets "
-            "current events; the rest are domain-specific (location, shopping, geo, "
-            "social). Leave as 'general' unless the tool is dedicated to one of those."
+            "queries and is the right choice for almost all agent use. 'news' restricts "
+            "results to news-publisher sources ordered by recency (it is not a recency "
+            "filter -- older articles still appear); the rest are domain-specific "
+            "(location, shopping, geo, social). Leave as 'general' unless the tool is "
+            "dedicated to one of those."
         ),
     )
     country: str = Field(
