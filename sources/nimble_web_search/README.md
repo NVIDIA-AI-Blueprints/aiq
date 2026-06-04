@@ -86,7 +86,7 @@ The provider exposes the following Nimble-specific surface. Defaults are tuned f
 |---|---|---|---|
 | Result count | `max_results` | `5` | Range `1-100` (Nimble's documented cap). Soft cap (Nimble may return up to N+2; see Known limitations). |
 | Search depth | `search_depth` | `lite` | See the dedicated [Search depth](#search-depth) section below. |
-| Search focus | `focus` | `general` | Nimble focus mode: `general` (default, broad web/research), `news` (current events), or domain-specific `location` / `shopping` / `geo` / `social`. Leave `general` for normal research; the LLM never selects focus, so general queries can't drift to `news`. |
+| Search focus | `focus` | `general` | Nimble focus mode: `general` (default, broad web/research), `news` (news-publisher sources ordered by recency — not a recency filter; older articles still appear), or domain-specific `location` / `shopping` / `geo` / `social`. Leave `general` for normal research; the LLM never selects focus, so general queries can't drift to `news`. |
 | Localization — country | `country` | `US` | Two-letter country code (e.g. `FR`, `JP`, `UK`). Reaches the SDK constructor verbatim. |
 | Localization — language | `locale` | `en` | ISO 639-1 language code (e.g. `fr`, `ja`). |
 | Per-result content size | `max_content_length` | `10000` chars | Truncates each result's body to N chars (3-char ellipsis included). Minimum `1`; set to `null` to disable truncation; omit to use default. |
