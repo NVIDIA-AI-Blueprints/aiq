@@ -85,6 +85,51 @@ class NimbleWebSearchToolConfig(FunctionBaseConfig, name="nimble_web_search"):
             "token usage. Set to None to disable truncation."
         ),
     )
+    # --- Optional search filters (all default off; backward-compatible) ---------
+    # These map 1:1 to langchain-nimble's NimbleSearchRetriever fields and are
+    # only sent to the API when set. Domain filtering and recency/date filtering
+    # are capabilities the Tavily and Exa AI-Q providers do not expose.
+    include_domains: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Restrict results to these domains (whitelist), e.g. "
+            "['github.com', 'docs.python.org']. Use None (not []) to disable; an "
+            "empty list is rejected to avoid an ambiguous zero-domain filter."
+        ),
+    )
+    exclude_domains: list[str] | None = Field(
+        default=None,
+        min_length=1,
+        description=(
+            "Exclude these domains from results (blacklist), e.g. ['pinterest.com']. "
+            "Use None (not []) to disable; an empty list is rejected."
+        ),
+    )
+    time_range: Literal["hour", "day", "week", "month", "year"] | None = Field(
+        default=None,
+        description=(
+            "Restrict results to a recency window. None = no recency filter. Note: a "
+            "tight window (e.g. 'week') can legitimately return zero results for "
+            "evergreen topics; the tool then returns a clear 'no results' message."
+        ),
+    )
+    start_date: str | None = Field(
+        default=None,
+        description=("Restrict results to those on/after this date (YYYY-MM-DD or YYYY). None = no lower bound."),
+    )
+    end_date: str | None = Field(
+        default=None,
+        description=("Restrict results to those on/before this date (YYYY-MM-DD or YYYY). None = no upper bound."),
+    )
+    output_format: Literal["plain_text", "markdown", "simplified_html"] = Field(
+        default="markdown",
+        description=(
+            "Body content format from Nimble. 'markdown' (default) is recommended for "
+            "LLM context; 'simplified_html' adds HTML noise and is not recommended for "
+            "agent consumption."
+        ),
+    )
 
 
 @register_function(config_type=NimbleWebSearchToolConfig)
@@ -139,11 +184,13 @@ async def nimble_web_search(
         )
         return
 
-    # The constructor kwargs below (max_results / search_depth / focus / country /
-    # locale) match langchain-nimble>=3.0.0,<4.0.0; this signature contract is
-    # exercised by the live smoke (see PR description), since the unit tests mock
-    # the retriever. `focus` is passed explicitly so the default is provably
-    # "general" rather than relying on the SDK's (unvalidated) field default.
+    # The constructor kwargs below match langchain-nimble>=3.0.0,<4.0.0; this
+    # signature contract is exercised by the live smoke (see PR description),
+    # since the unit tests mock the retriever. `focus` and `output_format` are
+    # passed explicitly so the defaults are provably "general"/"markdown" rather
+    # than relying on the SDK's (unvalidated) field defaults. The optional
+    # filters (include_domains / exclude_domains / time_range / start_date /
+    # end_date) are forwarded as-is; langchain-nimble omits any that are None.
     # `include_answer` is intentionally not exposed in this initial integration.
     retriever = NimbleSearchRetriever(
         max_results=tool_config.max_results,
@@ -151,6 +198,12 @@ async def nimble_web_search(
         focus=tool_config.focus,
         country=tool_config.country,
         locale=tool_config.locale,
+        output_format=tool_config.output_format,
+        include_domains=tool_config.include_domains,
+        exclude_domains=tool_config.exclude_domains,
+        time_range=tool_config.time_range,
+        start_date=tool_config.start_date,
+        end_date=tool_config.end_date,
     )
 
     async def _nimble_web_search(question: str) -> str:
@@ -185,6 +238,14 @@ async def nimble_web_search(
 
                 if not docs:
                     raise ValueError("Search returned no results")
+
+                # Nimble's `max_results` is a soft cap (the API may return more
+                # than requested). Enforce it as a hard upper bound so result
+                # breadth is predictable and consistent with the Tavily/Exa
+                # providers. The API may still return *fewer* (a property of any
+                # SERP backend); that is surfaced as-is.
+                if len(docs) > tool_config.max_results:
+                    docs = docs[: tool_config.max_results]
 
                 def _render(doc) -> str:
                     metadata = getattr(doc, "metadata", {}) or {}

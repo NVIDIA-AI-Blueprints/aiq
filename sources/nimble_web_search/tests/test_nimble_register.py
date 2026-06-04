@@ -86,6 +86,13 @@ class TestNimbleWebSearchToolConfig:
         assert config.country == "US"
         assert config.locale == "en"
         assert config.max_content_length == 10000
+        # Enrichment fields default off so existing configs are unaffected.
+        assert config.include_domains is None
+        assert config.exclude_domains is None
+        assert config.time_range is None
+        assert config.start_date is None
+        assert config.end_date is None
+        assert config.output_format == "markdown"
 
     def test_all_fields(self):
         config = NimbleWebSearchToolConfig(
@@ -483,3 +490,160 @@ class TestNimbleWebSearchLive:
         assert "&lt;/Document&gt;" in out
         # The block is still well-formed and terminates correctly
         assert out.endswith("</Document>")
+
+
+class TestEnrichedFilters:
+    """Passthrough + behavior tests for the optional search filters
+    (include_domains / exclude_domains / time_range / start_date / end_date /
+    output_format) and the upper-bound result cap. Each filter is verified
+    against live Nimble behavior in the integration workspace; here we pin that
+    a configured value reaches the SDK constructor and that defaults stay off.
+    """
+
+    async def test_filters_default_to_none_and_markdown(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: with no filters configured, the domain/time/date filters are None
+        and output_format defaults to 'markdown' (so existing configs are unaffected)."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+
+        async with nimble_web_search(NimbleWebSearchToolConfig(), MagicMock()):
+            pass
+
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["include_domains"] is None
+        assert kwargs["exclude_domains"] is None
+        assert kwargs["time_range"] is None
+        assert kwargs["start_date"] is None
+        assert kwargs["end_date"] is None
+        assert kwargs["output_format"] == "markdown"
+
+    async def test_include_domains_passthrough(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: include_domains (a capability Tavily/Exa don't expose in AI-Q) reaches the SDK."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+
+        config = NimbleWebSearchToolConfig(include_domains=["github.com", "docs.python.org"])
+        async with nimble_web_search(config, MagicMock()):
+            pass
+
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["include_domains"] == ["github.com", "docs.python.org"]
+
+    async def test_exclude_domains_passthrough(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: exclude_domains reaches the SDK."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+
+        config = NimbleWebSearchToolConfig(exclude_domains=["pinterest.com"])
+        async with nimble_web_search(config, MagicMock()):
+            pass
+
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["exclude_domains"] == ["pinterest.com"]
+
+    async def test_time_range_passthrough(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: time_range recency filter reaches the SDK."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+
+        config = NimbleWebSearchToolConfig(time_range="week")
+        async with nimble_web_search(config, MagicMock()):
+            pass
+
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["time_range"] == "week"
+
+    async def test_date_range_passthrough(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: start_date + end_date reach the SDK together."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+
+        config = NimbleWebSearchToolConfig(start_date="2026-01-01", end_date="2026-12-31")
+        async with nimble_web_search(config, MagicMock()):
+            pass
+
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["start_date"] == "2026-01-01"
+        assert kwargs["end_date"] == "2026-12-31"
+
+    async def test_output_format_passthrough(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: a non-default output_format reaches the SDK."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+
+        config = NimbleWebSearchToolConfig(output_format="plain_text")
+        async with nimble_web_search(config, MagicMock()):
+            pass
+
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["output_format"] == "plain_text"
+
+    def test_invalid_time_range_rejected(self):
+        """VERIFIES: an out-of-enum time_range is rejected by Pydantic before any network call."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            NimbleWebSearchToolConfig(time_range="fortnight")
+
+    def test_invalid_output_format_rejected(self):
+        """VERIFIES: an out-of-enum output_format is rejected by Pydantic."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            NimbleWebSearchToolConfig(output_format="xml")
+
+    def test_empty_domain_lists_rejected(self):
+        """VERIFIES: an empty include/exclude_domains list is rejected (min_length=1), so the
+        ambiguous 'zero-domain filter' never reaches the API. Use None to disable instead."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            NimbleWebSearchToolConfig(include_domains=[])
+        with pytest.raises(ValidationError):
+            NimbleWebSearchToolConfig(exclude_domains=[])
+
+    async def test_filter_active_with_empty_results_returns_clear_message(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: end-to-end, a filter is configured (e.g. a tight time_range or a domain
+        whitelist) and the API returns zero results — the provider returns the friendly
+        'no results' message rather than crashing or returning an empty render. Closes the
+        full-render-path gap the passthrough tests stop short of."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        monkeypatch.setattr("nimble_web_search.register.asyncio.sleep", _no_sleep)
+        fake_langchain_nimble.ainvoke.return_value = []  # filter yielded nothing
+
+        config = NimbleWebSearchToolConfig(time_range="hour", include_domains=["example.com"], max_retries=1)
+        async with nimble_web_search(config, MagicMock()) as info:
+            out = await info.single_fn("evergreen topic that won't be in the last hour")
+
+        assert "no results" in out.lower()
+        # The filters did reach the SDK on the way to the empty result.
+        kwargs = sys.modules["langchain_nimble"].NimbleSearchRetriever.call_args.kwargs
+        assert kwargs["time_range"] == "hour"
+        assert kwargs["include_domains"] == ["example.com"]
+
+    async def test_upper_bound_result_cap_enforced(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: when the API soft-cap returns MORE than max_results (NF-003), the provider
+        hard-caps to max_results for predictable, Tavily/Exa-consistent breadth."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        # API returns 5 docs though max_results=3 (the soft-cap "too many" case)
+        fake_langchain_nimble.ainvoke.return_value = [
+            _FakeDoc(url=f"https://r{i}.example", title=f"T{i}", page_content=f"B{i}") for i in range(5)
+        ]
+
+        config = NimbleWebSearchToolConfig(max_results=3)
+        async with nimble_web_search(config, MagicMock()) as info:
+            out = await info.single_fn("q")
+
+        assert out.count("<Document href=") == 3, "result count must be hard-capped to max_results"
+
+    async def test_under_cap_returned_as_is(self, fake_langchain_nimble, monkeypatch):
+        """VERIFIES: when the API returns FEWER than max_results (the soft-cap "too few" case,
+        which we cannot fix at L1 — see NF-003), the provider returns them as-is without error."""
+        monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="https://a.example", title="A", page_content="a")]
+
+        config = NimbleWebSearchToolConfig(max_results=5)
+        async with nimble_web_search(config, MagicMock()) as info:
+            out = await info.single_fn("q")
+
+        assert out.count("<Document href=") == 1

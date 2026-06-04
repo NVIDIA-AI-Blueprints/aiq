@@ -30,6 +30,18 @@ functions:
     locale: en
 ```
 
+All filters are optional and default off, so the block above is unchanged from a minimal setup. To use the richer surface (e.g. a recency- and domain-scoped news tool):
+
+```yaml
+functions:
+  recent_news_tool:
+    _type: nimble_web_search
+    focus: news
+    time_range: week
+    include_domains: ["reuters.com", "apnews.com", "bbc.com"]
+    max_results: 5
+```
+
 See [`docs/source/customization/configuration-reference.md`](../../docs/source/customization/configuration-reference.md) for the full parameter table.
 
 ## Environment
@@ -90,8 +102,15 @@ The provider exposes the following Nimble-specific surface. Defaults are tuned f
 | Localization — country | `country` | `US` | Two-letter country code (e.g. `FR`, `JP`, `UK`). Reaches the SDK constructor verbatim. |
 | Localization — language | `locale` | `en` | ISO 639-1 language code (e.g. `fr`, `ja`). |
 | Per-result content size | `max_content_length` | `10000` chars | Truncates each result's body to N chars (3-char ellipsis included). Minimum `1`; set to `null` to disable truncation; omit to use default. |
+| Domain whitelist | `include_domains` | `null` | List of domains to restrict results to, e.g. `["github.com", "docs.python.org"]`. Verified live (whitelist returns only matching domains). **Neither the Tavily nor Exa AI-Q providers expose domain filtering.** |
+| Domain blacklist | `exclude_domains` | `null` | List of domains to exclude, e.g. `["pinterest.com"]`. |
+| Recency window | `time_range` | `null` | One of `hour` / `day` / `week` / `month` / `year`. A tight window can legitimately return **zero** results for evergreen topics (the tool then returns a clear "no results" message — not an error). |
+| Date range | `start_date` / `end_date` | `null` | `YYYY-MM-DD` or `YYYY`. Restrict results to a published-date window. Verified live (date-filtered result set differs from baseline). |
+| Body format | `output_format` | `markdown` | `plain_text` / `markdown` / `simplified_html`. `markdown` is recommended for LLM context; `simplified_html` adds HTML noise and is not recommended for agents. |
 | Retries | `max_retries` | `3` | Exponential backoff on transient errors. Final failure surfaces a friendly per-status message (401, 403, generic). |
 | Auth | `api_key` / `NIMBLE_API_KEY` | env or config | `pydantic.SecretStr`; never logged. Config-side `api_key` hydrates the env var so the underlying SDK can read it. |
+
+> **Result count is an upper bound.** `max_results` is enforced as a hard cap on our side (the API may soft-cap and return *more* than requested; we slice to `max_results` for Tavily/Exa-consistent breadth). The API may still return *fewer* than requested — a property of any SERP backend — which is surfaced as-is.
 
 Each `<Document>` block in the rendered output carries an `entity_type` (`"OrganicResult"` for SERP results). The `include_answer=True` capability — which would produce an `entity_type="answer"` block first — is intentionally **not exposed** in this initial integration. See [Known limitations](#known-limitations).
 
@@ -107,8 +126,9 @@ If you do not know your tier, leave `search_depth: lite` and let the description
 
 ## Known limitations
 
-- `max_results` is a **soft cap**. The Nimble API may return up to N+2 documents when asked for N. The provider returns them all; AI-Q's downstream consumers can slice if they need a hard cap.
+- `max_results` is a **soft cap on the Nimble API side** — it may return more than N when asked for N. The provider enforces it as a **hard upper bound** (slices to `max_results`) so result breadth is predictable and consistent with the other web-search providers. The API may still return *fewer* than requested (a property of any SERP backend), which is surfaced as-is.
 - `lite` mode returns `page_content == ""` per result. The provider falls back to `description` (~150 chars per result, organic-result quality).
+- `time_range` filters by recency; a tight window (e.g. `week`) can legitimately return **zero** results for evergreen topics. The tool then returns a clear "no results" message rather than an error.
 - `include_answer` is **not exposed** in this initial integration. It can be added in a follow-up.
 
 ## Security
