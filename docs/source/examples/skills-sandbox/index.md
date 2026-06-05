@@ -61,6 +61,17 @@ functions:
     _type: deep_research_agent
     skills:
       enabled: true
+      agent_sources:
+        orchestrator:
+          - /skills/
+        planner-agent:
+          - /skills/
+        researcher:
+          - /skills/
+        writer-agent:
+          - /skills/synthesis/
+      sandbox_required_sources:
+        - /skills/
     sandbox:
       provider: modal
       app_name: aiq-deep-research
@@ -73,7 +84,7 @@ functions:
       block_network: true
 ```
 
-When `skills.enabled` is true, AI-Q preloads the built-in skill files into the DeepAgents virtual filesystem and passes `/skills/` as the skill source. When the sandbox block is present, DeepAgents `execute` calls run inside a job-scoped Modal sandbox.
+When `skills.enabled` is true, AI-Q preloads the built-in skill files into the DeepAgents virtual filesystem and passes the configured per-agent skill sources directly to DeepAgents. When the sandbox block is present, DeepAgents `execute` calls run inside a job-scoped Modal sandbox.
 
 ## Run AI-Q
 

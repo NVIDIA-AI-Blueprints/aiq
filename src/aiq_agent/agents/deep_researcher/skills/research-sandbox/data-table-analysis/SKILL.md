@@ -1,17 +1,12 @@
 ---
 name: data-table-analysis
 description: >
-  Use this skill for converting researched facts or user-provided data into structured tables by writing code, then running Python/pandas calculations in the job-scoped sandbox. This skill is for numeric normalization, tabular analysis, rankings, growth rates, summary statistics, CSV/JSON generation, and markdown tables.
-  Triggers: "compute table", "calculate growth", "normalize values", "extract figures",
-  "rank companies", "QoQ", "YoY", "CAGR", "summary statistics", "CSV", "JSON",
-  "markdown table", "standardize quarters", "standardize currencies", "compare over time"
-  Outputs: Markdown tables, CSV text, JSON records, summary statistics, rankings, and data-quality notes.
+  Use this skill for converting researched facts or user-provided data into structured tables by writing code, then running Python/pandas calculations in the job-scoped sandbox. This skill is for numeric normalization, tabular analysis, rankings, growth rates, summary statistics, CSV/JSON generation, and markdown tables. Triggers: "compute table", "calculate growth", "normalize values", "extract figures", "rank companies", "QoQ", "YoY", "CAGR", "summary statistics", "CSV", "JSON", "markdown table", "standardize quarters", "standardize currencies", "compare over time". Outputs: Markdown tables, CSV text, JSON records, summary statistics, rankings, and data-quality notes.
 ---
 
 # Data Table Analysis Skill
 
-Generate accurate, source-grounded tables and computed quantitative summaries using Python/pandas.
-This skill produces text artifacts that can be read and included in the final report.
+Generate accurate, source-grounded tables and computed quantitative summaries using Python/pandas. This skill produces text artifacts that can be read and included in the final report.
 
 ## Required Execution Standard
 

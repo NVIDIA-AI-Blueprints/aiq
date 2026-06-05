@@ -31,6 +31,7 @@ class LLMRole(StrEnum):
     ROUTER = "router"
     PLANNER = "planner"
     RESEARCHER = "researcher"
+    EVIDENCE_JUDGE = "evidence_judge"
     GRADER = "grader"
     SUMMARIZER = "summarizer"
     ORCHESTRATOR = "orchestrator"
@@ -38,7 +39,6 @@ class LLMRole(StrEnum):
     CLARIFIER = "clarifier"
     META_CHATTER = "meta_chatter"
     REPORT_WRITER = "report_writer"
-    EVIDENCE_CURATOR = "evidence_curator"
 
 
 class LLMProvider:

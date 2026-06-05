@@ -13,9 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for source tool batch wrappers."""
+"""Tests for researcher-facing source tool adapters."""
 
 import asyncio
+from contextlib import suppress
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -24,8 +25,8 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
-from aiq_agent.agents.deep_researcher.custom_middleware import SourceToolConcurrencyLimiter
-from aiq_agent.agents.deep_researcher.tools.source_tool_batching import build_batch_source_tools
+from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolConcurrencyLimiter
+from aiq_agent.agents.deep_researcher.tools.source_tool_batching import adapt_source_tools_for_research
 
 
 @pytest.mark.asyncio
@@ -38,18 +39,17 @@ async def test_batch_wrapper_single_string_calls_original_once():
         calls.append(query)
         return f"result for {query}"
 
-    result = build_batch_source_tools(
+    result = adapt_source_tools_for_research(
         [search_tool],
         source_tool_names={"search_tool"},
-        limiter=SourceToolConcurrencyLimiter(2),
+        max_concurrent_source_tool_calls=2,
         max_batch_size=3,
     )
 
-    wrapped = result.tools[0]
+    wrapped = result[0]
     output = await wrapped.ainvoke({"queries": "alpha"})
 
     assert wrapped.name == "search_tool"
-    assert result.wrapped_tool_names == {"search_tool"}
     assert calls == ["alpha"]
     assert "## Query: alpha" in output
     assert "result for alpha" in output
@@ -65,14 +65,14 @@ async def test_batch_wrapper_list_calls_original_once_per_item():
         calls.append(query)
         return f"https://example.test/{query}"
 
-    result = build_batch_source_tools(
+    result = adapt_source_tools_for_research(
         [search_tool],
         source_tool_names={"search_tool"},
-        limiter=SourceToolConcurrencyLimiter(3),
+        max_concurrent_source_tool_calls=3,
         max_batch_size=3,
     )
 
-    output = await result.tools[0].ainvoke({"queries": ["alpha", "beta", "gamma"]})
+    output = await result[0].ainvoke({"queries": ["alpha", "beta", "gamma"]})
 
     assert sorted(calls) == ["alpha", "beta", "gamma"]
     assert "## Query: alpha" in output
@@ -93,14 +93,14 @@ async def test_batch_wrapper_represents_partial_failures_per_item():
             raise RuntimeError("backend unavailable")
         return f"ok {query}"
 
-    result = build_batch_source_tools(
+    result = adapt_source_tools_for_research(
         [search_tool],
         source_tool_names={"search_tool"},
-        limiter=SourceToolConcurrencyLimiter(2),
+        max_concurrent_source_tool_calls=2,
         max_batch_size=3,
     )
 
-    output = await result.tools[0].ainvoke({"queries": ["good", "bad"]})
+    output = await result[0].ainvoke({"queries": ["good", "bad"]})
 
     assert sorted(calls) == ["bad", "good"]
     assert "## Query: good" in output
@@ -119,14 +119,14 @@ async def test_batch_wrapper_rejects_oversized_tool_batches_without_calling_orig
         calls.append(query)
         return query
 
-    result = build_batch_source_tools(
+    result = adapt_source_tools_for_research(
         [search_tool],
         source_tool_names={"search_tool"},
-        limiter=SourceToolConcurrencyLimiter(2),
+        max_concurrent_source_tool_calls=2,
         max_batch_size=1,
     )
 
-    output = await result.tools[0].ainvoke({"queries": ["a", "b"]})
+    output = await result[0].ainvoke({"queries": ["a", "b"]})
 
     assert calls == []
     assert "ERROR: search_tool accepts at most 1 queries per batch" in output
@@ -139,13 +139,13 @@ async def test_source_registry_captures_urls_from_wrapped_tool_output():
         """Search a source."""
         return f"{query}: https://example.test/source"
 
-    result = build_batch_source_tools(
+    result = adapt_source_tools_for_research(
         [search_tool],
         source_tool_names={"search_tool"},
-        limiter=SourceToolConcurrencyLimiter(2),
+        max_concurrent_source_tool_calls=2,
         max_batch_size=2,
     )
-    output = await result.tools[0].ainvoke({"queries": ["alpha"]})
+    output = await result[0].ainvoke({"queries": ["alpha"]})
 
     middleware = SourceRegistryMiddleware(source_tool_names={"search_tool"})
     request = MagicMock()
@@ -159,21 +159,24 @@ async def test_source_registry_captures_urls_from_wrapped_tool_output():
     assert sources[0].url == "https://example.test/source"
 
 
-def test_incompatible_multi_arg_source_tool_is_left_unchanged():
+@pytest.mark.asyncio
+async def test_incompatible_multi_arg_source_tool_keeps_schema_and_is_throttled():
     @tool
     async def search_tool(query: str, limit: int) -> str:
         """Search a source."""
         return f"{query}:{limit}"
 
-    result = build_batch_source_tools(
+    result = adapt_source_tools_for_research(
         [search_tool],
         source_tool_names={"search_tool"},
-        limiter=SourceToolConcurrencyLimiter(2),
+        max_concurrent_source_tool_calls=2,
         max_batch_size=3,
     )
+    wrapped = result[0]
 
-    assert result.tools == [search_tool]
-    assert result.wrapped_tool_names == set()
+    assert wrapped.name == "search_tool"
+    assert wrapped.args == search_tool.args
+    assert await wrapped.ainvoke({"query": "alpha", "limit": 5}) == "alpha:5"
 
 
 @pytest.mark.asyncio
@@ -199,14 +202,13 @@ async def test_shared_limiter_caps_underlying_calls_across_wrapped_tools():
         """Search source B."""
         return await _recorded_result(query)
 
-    limiter = SourceToolConcurrencyLimiter(1)
-    result = build_batch_source_tools(
+    result = adapt_source_tools_for_research(
         [search_a, search_b],
         source_tool_names={"search_a", "search_b"},
-        limiter=limiter,
+        max_concurrent_source_tool_calls=1,
         max_batch_size=3,
     )
-    wrapped_tools = {wrapped.name: wrapped for wrapped in result.tools}
+    wrapped_tools = {wrapped.name: wrapped for wrapped in result}
 
     await asyncio.gather(
         wrapped_tools["search_a"].ainvoke({"queries": ["a1", "a2"]}),
@@ -214,3 +216,84 @@ async def test_shared_limiter_caps_underlying_calls_across_wrapped_tools():
     )
 
     assert max_seen == 1
+
+
+@pytest.mark.asyncio
+async def test_shared_limiter_caps_non_batchable_source_tools():
+    active = 0
+    max_seen = 0
+
+    @tool
+    async def search_tool(query: str, limit: int) -> str:
+        """Search a source."""
+        nonlocal active, max_seen
+        active += 1
+        max_seen = max(max_seen, active)
+        await asyncio.sleep(0.01)
+        active -= 1
+        return f"{query}:{limit}"
+
+    result = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=3,
+    )
+
+    await asyncio.gather(*(result[0].ainvoke({"query": f"q{i}", "limit": i}) for i in range(3)))
+
+    assert max_seen == 1
+
+
+@pytest.mark.asyncio
+async def test_limiter_caps_concurrent_blocks():
+    limiter = SourceToolConcurrencyLimiter(1)
+    active = 0
+    max_seen = 0
+
+    async def hold_slot():
+        nonlocal active, max_seen
+        async with limiter.limit():
+            active += 1
+            max_seen = max(max_seen, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+
+    await asyncio.gather(*(hold_slot() for _ in range(3)))
+
+    assert max_seen == 1
+
+
+@pytest.mark.asyncio
+async def test_limiter_releases_after_exception():
+    limiter = SourceToolConcurrencyLimiter(1)
+
+    async def fail_with_slot():
+        async with limiter.limit():
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await fail_with_slot()
+
+    async with asyncio.timeout(0.1):
+        async with limiter.limit():
+            pass
+
+
+@pytest.mark.asyncio
+async def test_limiter_releases_after_cancellation():
+    limiter = SourceToolConcurrencyLimiter(1)
+
+    async def hold_slot():
+        async with limiter.limit():
+            await asyncio.sleep(1)
+
+    task = asyncio.create_task(hold_slot())
+    await asyncio.sleep(0.01)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+
+    async with asyncio.timeout(0.1):
+        async with limiter.limit():
+            pass

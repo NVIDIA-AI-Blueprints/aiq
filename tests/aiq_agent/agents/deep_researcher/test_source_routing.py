@@ -44,6 +44,12 @@ def duckduckgo_news_search_tool(query: str) -> str:
 
 
 @tool
+def polymarket_search_tool(query: str) -> str:
+    """Search prediction markets."""
+    return query
+
+
+@tool
 def helper_tool(value: str) -> str:
     """Unmapped helper tool."""
     return value
@@ -82,6 +88,15 @@ domains:
       - web_search
     fallback_source_ids:
       - web_search
+  - domain_id: market_forecasting
+    domain_name: Market Forecasting
+    description: Market-implied probabilities and forward-looking outcomes.
+    preferred_source_ids:
+      - prediction_market
+      - news_search
+      - web_search
+    fallback_source_ids:
+      - web_search
 """,
         encoding="utf-8",
     )
@@ -111,6 +126,12 @@ def _registry():
                 "description": "Search recent news.",
                 "tools": ["duckduckgo_news_search_tool"],
             },
+            {
+                "id": "prediction_market",
+                "name": "Prediction Markets",
+                "description": "Search prediction markets.",
+                "tools": ["polymarket_search_tool"],
+            },
         ]
     )
     yield
@@ -123,16 +144,18 @@ def test_source_catalog_groups_runtime_tools_by_configured_source(tmp_path):
             web_search_tool,
             knowledge_search,
             duckduckgo_news_search_tool,
+            polymarket_search_tool,
             helper_tool,
         ],
         domain_catalog_path=_write_domain_catalog(tmp_path),
     )
 
     sources = {entry["source_id"]: entry for entry in payload["available_sources"]}
-    assert set(sources) == {"web_search", "knowledge_layer", "news_search"}
+    assert set(sources) == {"web_search", "knowledge_layer", "news_search", "prediction_market"}
     assert sources["web_search"]["tools"][0]["name"] == "web_search_tool"
     assert sources["knowledge_layer"]["tools"][0]["name"] == "knowledge_search"
     assert sources["news_search"]["tools"][0]["name"] == "duckduckgo_news_search_tool"
+    assert sources["prediction_market"]["tools"][0]["name"] == "polymarket_search_tool"
     assert payload["unmapped_runtime_tools"] == ["helper_tool"]
     assert payload["default_domain_id"] == "general_research"
 
@@ -148,11 +171,39 @@ def test_source_catalog_respects_explicit_source_selection(tmp_path):
         domain_catalog_path=_write_domain_catalog(tmp_path),
     )
 
-    assert payload["routing_mode"] == "explicit_user_sources"
     assert [entry["source_id"] for entry in payload["available_sources"]] == ["news_search"]
     current_news = next(domain for domain in payload["domains"] if domain["domain_id"] == "current_news")
     assert current_news["preferred_source_ids"] == ["news_search"]
     assert current_news["fallback_source_ids"] == []
+
+
+def test_source_catalog_explicit_source_selection_is_case_sensitive(tmp_path):
+    payload = source_catalog_payload(
+        [
+            web_search_tool,
+            knowledge_search,
+            duckduckgo_news_search_tool,
+        ],
+        allowed_source_ids=["NEWS_SEARCH"],
+        domain_catalog_path=_write_domain_catalog(tmp_path),
+    )
+
+    assert payload["available_sources"] == []
+    current_news = next(domain for domain in payload["domains"] if domain["domain_id"] == "current_news")
+    assert current_news["preferred_source_ids"] == []
+    assert current_news["fallback_source_ids"] == []
+
+
+def test_source_catalog_keeps_prediction_market_for_market_domain(tmp_path):
+    payload = source_catalog_payload(
+        [web_search_tool, duckduckgo_news_search_tool, polymarket_search_tool],
+        domain_catalog_path=_write_domain_catalog(tmp_path),
+    )
+
+    market_domain = next(domain for domain in payload["domains"] if domain["domain_id"] == "market_forecasting")
+
+    assert market_domain["preferred_source_ids"] == ["prediction_market", "news_search", "web_search"]
+    assert market_domain["fallback_source_ids"] == ["web_search"]
 
 
 def test_source_catalog_tool_payload_is_json_serializable(tmp_path):
@@ -168,8 +219,33 @@ def test_source_catalog_tool_payload_is_json_serializable(tmp_path):
     assert decoded["default_fallback_source_ids"] == ["web_search"]
 
 
-def test_source_catalog_allows_no_domain_catalog():
-    payload = source_catalog_payload([web_search_tool])
+def test_source_catalog_uses_default_general_research_without_domain_catalog():
+    payload = source_catalog_payload(
+        [
+            web_search_tool,
+            knowledge_search,
+            duckduckgo_news_search_tool,
+            polymarket_search_tool,
+        ]
+    )
 
-    assert payload["domains"] == []
-    assert payload["default_domain_id"] is None
+    sources = {entry["source_id"]: entry for entry in payload["available_sources"]}
+    assert set(sources) == {"knowledge_layer", "web_search"}
+    assert payload["default_domain_id"] == "general_research"
+    assert payload["default_fallback_source_ids"] == ["web_search"]
+
+    assert len(payload["domains"]) == 1
+    [general_research] = payload["domains"]
+    assert general_research["domain_id"] == "general_research"
+    assert general_research["preferred_source_ids"] == ["knowledge_layer", "web_search"]
+    assert general_research["fallback_source_ids"] == ["web_search"]
+
+
+def test_source_catalog_default_general_research_filters_unavailable_sources():
+    payload = source_catalog_payload([web_search_tool, duckduckgo_news_search_tool])
+
+    assert [entry["source_id"] for entry in payload["available_sources"]] == ["web_search"]
+    [general_research] = payload["domains"]
+    assert general_research["preferred_source_ids"] == ["web_search"]
+    assert general_research["fallback_source_ids"] == ["web_search"]
+    assert general_research["unavailable_source_ids"] == ["knowledge_layer"]

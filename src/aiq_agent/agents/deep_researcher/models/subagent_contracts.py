@@ -39,14 +39,6 @@ class TaskAnalysis(_StrictContract):
     language: str = Field(description="Language to use for the plan, notes, and final report.")
 
 
-class AnswerOption(_StrictContract):
-    """A user-provided option or output choice the final answer may need to select."""
-
-    id: str = Field(description="Stable option identifier, such as 'A' or 'price_above_100'.")
-    label: str = Field(description="User-facing option text.")
-    description: str = Field(default="", description="Additional option context, if available.")
-
-
 class AnswerComponent(_StrictContract):
     """Required evidence or synthesis component for the final answer."""
 
@@ -69,33 +61,19 @@ class AnswerStrategy(_StrictContract):
         "custom",
     ] = Field(description="The intended final output shape.")
     title: str = Field(description="Concise human-facing title for the final output.")
-    response_shape: str = Field(description="Concrete description of the expected final Markdown shape.")
-    selection_mode: Literal["none", "single_choice", "top_k", "multi_select", "threshold", "free_text"] = Field(
-        description="Decision rule for final answer selection, if any."
-    )
-    expected_count: int | None = Field(
-        default=None,
-        description="Expected number of selected answers for single_choice/top_k/multi_select, when applicable.",
-    )
-    options: list[AnswerOption] = Field(
-        default_factory=list,
-        description="Candidate options when the user request includes choices or buckets.",
-    )
     required_components: list[AnswerComponent] = Field(
         description="Evidence and synthesis components that must be covered in the final answer."
     )
-    assembly_instruction: str = Field(description="Specific writer-facing instruction for assembling the final answer.")
 
 
 class Constraint(_StrictContract):
-    """Acceptance criterion that the final answer should satisfy."""
+    """Lightweight final-answer requirement."""
 
     category: Literal["content", "source", "structure", "depth", "format", "exclusion"] = Field(
         description="Constraint category."
     )
     constraint: str = Field(description="Specific, actionable constraint text.")
     rationale: str = Field(description="Why this constraint exists.")
-    verification: str = Field(description="How to check whether the final report satisfies this constraint.")
 
 
 class SourceRecommendation(_StrictContract):
@@ -112,9 +90,6 @@ class SourceRoutingPlan(_StrictContract):
 
     domain_id: str = Field(description="Best-fit configured domain route for this request.")
     domain_name: str = Field(description="Human-readable domain name.")
-    routing_mode: Literal["auto_advisory", "explicit_user_sources"] = Field(
-        description="Whether routing used all configured sources or an explicit user-selected source subset."
-    )
     routing_reason: str = Field(description="Why this domain/source route fits the user request.")
     recommendations: list[SourceRecommendation] = Field(description="Primary source recommendations.")
     fallback_sources: list[SourceRecommendation] = Field(description="Fallback sources if primary sources are weak.")
@@ -133,7 +108,17 @@ class ResearchQuery(_StrictContract):
             "application, challenge, risk, benefit, or multi-component queries."
         ),
     )
-    tool: str = Field(description="Exact available source tool name to use; not a category label.")
+    preferred_tools: list[str] = Field(
+        min_length=1,
+        description=(
+            "Ordered exact available source tool names to prioritize for this query. "
+            "The first item is the primary tool the researcher should use first."
+        ),
+    )
+    fallback_tools: list[str] = Field(
+        default_factory=list,
+        description="Ordered exact available source tool names to use for corroboration or gaps.",
+    )
     target_components: list[str] = Field(description="Answer components this query is intended to support.")
     rationale: str = Field(description="Why this query is needed.")
 
@@ -143,7 +128,7 @@ class ResearchPlan(_StrictContract):
 
     task_analysis: TaskAnalysis = Field(description="Planner analysis of the user's request.")
     answer_strategy: AnswerStrategy = Field(description="Final answer shape and synthesis strategy.")
-    constraints: list[Constraint] = Field(description="Acceptance criteria for the final answer.")
+    constraints: list[Constraint] = Field(description="Lightweight requirements for the final answer.")
     queries: list[ResearchQuery] = Field(description="Queries for researcher workers to execute.")
 
 
@@ -181,6 +166,18 @@ class ResearchGap(_StrictContract):
     suggested_follow_up_queries: list[str] = Field(description="Queries that could close the gap.")
 
 
+class EvidenceJudgment(_StrictContract):
+    """Post-research judgment attached to a research note."""
+
+    relevance_score: int = Field(
+        ge=0,
+        le=100,
+        description="How useful this note is for the final answer, from 0 to 100.",
+    )
+    confidence: Literal["low", "medium", "high"] = Field(description="Confidence in this judgment.")
+    rationale: str = Field(description="Concise explanation of the relevance score and confidence.")
+
+
 class ResearchNotes(_StrictContract):
     """Structured notes produced by a researcher worker."""
 
@@ -192,101 +189,7 @@ class ResearchNotes(_StrictContract):
     sources: list[ResearchSource] = Field(description="Every source used by these notes.")
     narrative_notes: str = Field(description="Detailed synthesis preserving nuance for final answer writing.")
     language: str = Field(description="Language used in these research notes.")
-
-
-class WriterOutput(_StrictContract):
-    """Structured output produced by the writer subagent."""
-
-    answer_markdown: str = Field(description="Final user-facing Markdown answer with normal source citations.")
-    answer_type: Literal[
-        "long_form_report",
-        "brief_answer",
-        "table",
-        "comparison",
-        "prediction",
-        "multiple_choice",
-        "data_extraction",
-        "custom",
-    ] = Field(description="The final output shape used.")
-    citations_used: list[int] = Field(description="Citation numbers referenced in answer_markdown.")
-    gaps: list[str] = Field(default_factory=list, description="Material gaps or limitations carried into the answer.")
-    confidence: Literal["low", "medium", "high"] = Field(description="Overall confidence in the final answer.")
-
-
-class EvidenceFindingDecision(_StrictContract):
-    """Curator decision for one existing ResearchFinding."""
-
-    finding_ref: str = Field(description="Stable reference such as /shared/03_benchmarks.json#finding-2.")
-    note_path: str = Field(description="ResearchNotes file containing the finding.")
-    finding_index: int = Field(ge=0, description="Zero-based index of the finding in the note file.")
-    claim: str = Field(description="Original ResearchFinding claim.")
-    evidence: str = Field(description="Trimmed original ResearchFinding evidence excerpt.")
-    source_ids: list[int] = Field(description="Original ResearchFinding source IDs.")
-    researcher_confidence: Literal["low", "medium", "high"] = Field(
-        description="Original researcher confidence in the finding."
-    )
-    caveats: list[str] = Field(description="Original caveats attached to the finding.")
-    inclusion: Literal["core", "supporting", "caveat", "background", "exclude"] = Field(
-        description="How the writer should prioritize this finding."
-    )
-    relevance: Literal["direct", "indirect", "low"] = Field(
-        description="How directly this finding supports the answer component."
-    )
-    evidence_strength: Literal["strong", "adequate", "weak"] = Field(
-        description="Curator assessment of source support for this component."
-    )
-    reason: str = Field(description="Brief reason for the curator decision.")
-
-
-class EvidenceComponentDigest(_StrictContract):
-    """Curated evidence map for one answer component."""
-
-    component_id: str = Field(description="Answer component identifier from the ResearchPlan.")
-    component_name: str = Field(description="Human-readable component name.")
-    component_description: str = Field(description="Planner description of what this component needs.")
-    candidate_count: int = Field(ge=0, description="Total candidate findings considered for this component.")
-    reviewed_count: int = Field(ge=0, description="Candidate findings sent to the curator model.")
-    decisions: list[EvidenceFindingDecision] = Field(description="Curator decisions in recommended reading order.")
-    coverage_gaps: list[str] = Field(description="Evidence gaps or weak spots for this component.")
-
-
-class EvidenceDigest(_StrictContract):
-    """Internal evidence attention map produced after research."""
-
-    status: Literal["succeeded", "partial", "failed"] = Field(description="Evidence digest generation status.")
-    generated_at: str = Field(description="UTC ISO timestamp for digest generation.")
-    answer_title: str = Field(description="ResearchPlan answer_strategy.title.")
-    answer_type: str = Field(description="ResearchPlan answer_strategy.answer_type.")
-    source_note_paths: list[str] = Field(description="Research note files read successfully.")
-    failed_note_paths: list[str] = Field(description="Research note files that were missing or malformed.")
-    component_rankings: list[EvidenceComponentDigest] = Field(description="Curated evidence by answer component.")
-    error: str | None = Field(default=None, description="Failure or partial-failure detail.")
-
-
-class ResearchBatchItemResult(_StrictContract):
-    """Result for one researcher worker in a batched research call."""
-
-    query: ResearchQuery = Field(description="ResearchQuery assigned to this worker.")
-    status: Literal["succeeded", "failed", "timed_out", "rejected"] = Field(
-        description="Outcome for this individual researcher worker."
-    )
-    file_path: str | None = Field(default=None, description="Persisted /shared path for successful notes.")
-    note: ResearchNotes | None = Field(
+    evidence_judgment: EvidenceJudgment | None = Field(
         default=None,
-        description="Structured notes returned by the researcher before persistence; compact summaries omit this.",
+        description="Optional post-research judgment added by the evidence judge.",
     )
-    error: str | None = Field(default=None, description="Error text for failed, timed out, or rejected items.")
-    elapsed_seconds: float = Field(description="Elapsed wall-clock seconds for this item.")
-
-
-class ResearchBatchResult(_StrictContract):
-    """Structured result returned by run_research_batch."""
-
-    status: Literal["succeeded", "partial", "failed", "rejected"] = Field(description="Overall batch outcome.")
-    total: int = Field(description="Total number of input queries.")
-    succeeded: int = Field(description="Number of successful researcher workers.")
-    failed: int = Field(description="Number of failed researcher workers.")
-    timed_out: int = Field(description="Number of timed-out researcher workers.")
-    files: list[str] = Field(description="Persisted /shared paths for successful notes.")
-    results: list[ResearchBatchItemResult] = Field(description="Per-query batch results.")
-    error: str | None = Field(default=None, description="Batch-level error, if any.")

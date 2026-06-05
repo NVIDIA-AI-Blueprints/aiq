@@ -37,11 +37,9 @@ from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
-from .agent import DEFAULT_MAX_BATCH_RESEARCH_QUERIES
 from .agent import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
 from .agent import DEFAULT_MAX_RESEARCH_CONCURRENCY
 from .agent import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
-from .agent import DEFAULT_MAX_WORKFLOW_RESUME_ATTEMPTS
 from .agent import DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS
 from .agent import DeepResearcherAgent
 from .deepagents_runtime import SandboxConfig
@@ -57,11 +55,8 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     orchestrator_llm: LLMRef = Field(..., description="LLM for orchestrator")
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
+    evidence_judge_llm: LLMRef | None = Field(default=None, description="LLM for evidence judge subagent")
     writer_llm: LLMRef | None = Field(default=None, description="LLM for final writer/synthesis subagent")
-    evidence_curator_llm: LLMRef | None = Field(
-        default=None,
-        description="Small LLM for internal evidence curation before writer synthesis.",
-    )
     tools: list[FunctionRef | FunctionGroupRef] = Field(
         default_factory=list,
         description="Explicit tool list. Empty = inherit all from data_source_registry.",
@@ -81,19 +76,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default=None,
         description="Optional DeepAgents sandbox backend for execute support.",
     )
-    checkpoint_db: str | None = Field(
-        default=None,
-        description="Optional SQLite database path or Postgres DSN for DeepAgents workflow checkpoints.",
-    )
-    max_batch_research_queries: int = Field(
-        default=DEFAULT_MAX_BATCH_RESEARCH_QUERIES,
-        ge=1,
-        description="Maximum curated ResearchQuery items accepted by run_research_batch.",
-    )
     max_research_concurrency: int = Field(
         default=DEFAULT_MAX_RESEARCH_CONCURRENCY,
         ge=1,
-        description="Maximum concurrent researcher workers per run_research_batch call.",
+        description="Maximum ResearchQuery items accepted and run concurrently per run_research_batch call.",
     )
     research_query_timeout_seconds: float = Field(
         default=DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS,
@@ -109,15 +95,6 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default=DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
         ge=1,
         description="Maximum concrete inputs accepted by batch-capable source tool wrappers.",
-    )
-    max_workflow_resume_attempts: int = Field(
-        default=DEFAULT_MAX_WORKFLOW_RESUME_ATTEMPTS,
-        ge=0,
-        description="Maximum graph-level retries that resume from the latest checkpoint.",
-    )
-    evidence_reranking_enabled: bool = Field(
-        default=True,
-        description="Enable the internal post-research evidence curator and /shared/evidence_digest.json.",
     )
 
 
@@ -161,15 +138,12 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     if config.planner_llm:
         planner_llm = await builder.get_llm(config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.PLANNER, planner_llm)
+    if config.evidence_judge_llm:
+        evidence_judge_llm = await builder.get_llm(config.evidence_judge_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+        provider.configure(LLMRole.EVIDENCE_JUDGE, evidence_judge_llm)
     if config.writer_llm:
         writer_llm = await builder.get_llm(config.writer_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.REPORT_WRITER, writer_llm)
-    if config.evidence_curator_llm:
-        evidence_curator_llm = await builder.get_llm(
-            config.evidence_curator_llm,
-            wrapper_type=LLMFrameworkEnum.LANGCHAIN,
-        )
-        provider.configure(LLMRole.EVIDENCE_CURATOR, evidence_curator_llm)
 
     verbose = is_verbose(config.verbose)
     callbacks = [VerboseTraceCallback()] if verbose else []
@@ -177,20 +151,15 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     agent = DeepResearcherAgent(
         llm_provider=provider,
         tools=tools,
-        max_loops=config.max_loops,
         verbose=verbose,
         callbacks=callbacks,
         domain_catalog_path=config.domain_catalog_path,
         skills=config.skills,
         sandbox=config.sandbox,
-        checkpoint_db=config.checkpoint_db,
-        max_batch_research_queries=config.max_batch_research_queries,
         max_research_concurrency=config.max_research_concurrency,
         research_query_timeout_seconds=config.research_query_timeout_seconds,
         max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
         max_source_tool_batch_size=config.max_source_tool_batch_size,
-        max_workflow_resume_attempts=config.max_workflow_resume_attempts,
-        evidence_reranking_enabled=config.evidence_reranking_enabled,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -213,21 +182,16 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                 active_agent = DeepResearcherAgent(
                     llm_provider=provider,
                     tools=selected_tools,
-                    max_loops=config.max_loops,
                     verbose=verbose,
                     callbacks=callbacks,
                     domain_catalog_path=config.domain_catalog_path,
                     skills=config.skills,
                     sandbox=config.sandbox,
-                    checkpoint_db=config.checkpoint_db,
                     job_id=job_id,
-                    max_batch_research_queries=config.max_batch_research_queries,
                     max_research_concurrency=config.max_research_concurrency,
                     research_query_timeout_seconds=config.research_query_timeout_seconds,
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
-                    max_workflow_resume_attempts=config.max_workflow_resume_attempts,
-                    evidence_reranking_enabled=config.evidence_reranking_enabled,
                 )
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):

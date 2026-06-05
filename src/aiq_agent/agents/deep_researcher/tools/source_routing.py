@@ -27,6 +27,7 @@ from langchain_core.tools import tool
 from pydantic import BaseModel
 from pydantic import Field
 
+from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common.data_source_registry import get_source
 
@@ -49,18 +50,51 @@ class DomainCatalogConfig(BaseModel):
     default_domain_id: str | None = None
 
 
+DEFAULT_GENERAL_RESEARCH_DOMAIN_ID = "general_research"
+DEFAULT_GENERAL_RESEARCH_SOURCE_IDS = ("knowledge_layer", "web_search")
+
+
+def _default_general_research_config() -> DomainCatalogConfig:
+    """Return the built-in default route used when no catalog path is configured."""
+    return DomainCatalogConfig(
+        default_domain_id=DEFAULT_GENERAL_RESEARCH_DOMAIN_ID,
+        domains=(
+            DomainCatalogEntry(
+                domain_id=DEFAULT_GENERAL_RESEARCH_DOMAIN_ID,
+                domain_name="General Research",
+                description=(
+                    "Default broad research route used when no domain catalog is configured. "
+                    "Only routes to knowledge and web search sources."
+                ),
+                preferred_source_ids=DEFAULT_GENERAL_RESEARCH_SOURCE_IDS,
+                fallback_source_ids=("web_search",),
+                is_default=True,
+            ),
+        ),
+    )
+
+
 class DomainCatalogRegistry:
     """File-backed domain catalog registry."""
 
-    def __init__(self, config: DomainCatalogConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: DomainCatalogConfig | None = None,
+        *,
+        routable_source_ids: Sequence[str] | None = None,
+    ) -> None:
         self.config = config or DomainCatalogConfig()
         self._domains = {entry.domain_id: entry for entry in self.config.domains}
+        self.routable_source_ids = frozenset(routable_source_ids) if routable_source_ids is not None else None
 
     @classmethod
     def from_path(cls, path: str | Path | None) -> DomainCatalogRegistry:
         """Load a domain catalog registry from a YAML or JSON file."""
         if path is None:
-            return cls()
+            return cls(
+                _default_general_research_config(),
+                routable_source_ids=DEFAULT_GENERAL_RESEARCH_SOURCE_IDS,
+            )
 
         catalog_path = Path(path).expanduser()
         if not catalog_path.exists():
@@ -101,13 +135,6 @@ class DomainCatalogRegistry:
         return domains
 
 
-def _selected_source_ids(allowed_source_ids: Sequence[str] | None) -> set[str] | None:
-    """Normalize optional explicit source selection."""
-    if allowed_source_ids is None:
-        return None
-    return {source_id for source_id in allowed_source_ids}
-
-
 def runtime_source_tools(
     tools: Sequence[BaseTool],
     *,
@@ -118,16 +145,17 @@ def runtime_source_tools(
     Only tools that resolve through the data source registry are included.
     Unmapped helper tools are deliberately kept out of source routing.
     """
-    selected = _selected_source_ids(allowed_source_ids)
+    runtime_tools = list(tools)
+    if allowed_source_ids is not None:
+        runtime_tools = filter_tools_by_sources(runtime_tools, list(allowed_source_ids))
+
     source_tools: dict[str, list[dict[str, str]]] = {}
-    for runtime_tool in tools:
+    for runtime_tool in runtime_tools:
         tool_name = getattr(runtime_tool, "name", "")
         if not tool_name:
             continue
         source_id = get_source_id_for_tool(tool_name)
         if source_id is None:
-            continue
-        if selected is not None and source_id not in selected:
             continue
         source_tools.setdefault(source_id, []).append(
             {
@@ -179,6 +207,16 @@ def _default_fallback_source_ids(available_source_ids: set[str]) -> list[str]:
     return sorted(available_source_ids)[:1]
 
 
+def _filter_routable_source_tools(
+    source_tools: dict[str, list[dict[str, str]]],
+    routable_source_ids: frozenset[str] | None,
+) -> dict[str, list[dict[str, str]]]:
+    """Limit router-visible sources when a catalog defines an explicit routable subset."""
+    if routable_source_ids is None:
+        return source_tools
+    return {source_id: tools for source_id, tools in source_tools.items() if source_id in routable_source_ids}
+
+
 def source_catalog_payload(
     tools: Sequence[BaseTool],
     *,
@@ -187,8 +225,9 @@ def source_catalog_payload(
 ) -> dict[str, Any]:
     """Build the complete source/domain catalog shown to source-router-agent."""
     source_tools = runtime_source_tools(tools, allowed_source_ids=allowed_source_ids)
-    available_source_ids = set(source_tools)
     domain_registry = DomainCatalogRegistry.from_path(domain_catalog_path)
+    source_tools = _filter_routable_source_tools(source_tools, domain_registry.routable_source_ids)
+    available_source_ids = set(source_tools)
 
     unmapped_tools = [
         getattr(runtime_tool, "name", "")
@@ -197,7 +236,6 @@ def source_catalog_payload(
     ]
 
     return {
-        "routing_mode": "explicit_user_sources" if allowed_source_ids is not None else "auto_advisory",
         "available_sources": [
             _available_source_payload(source_id, tools_for_source)
             for source_id, tools_for_source in source_tools.items()

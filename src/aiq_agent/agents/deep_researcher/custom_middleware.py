@@ -17,9 +17,6 @@
 
 import asyncio
 import logging
-import weakref
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from pathlib import Path
 
 from langchain.agents.middleware import AgentMiddleware
@@ -37,61 +34,6 @@ logger = logging.getLogger(__name__)
 
 # Path to this agent's prompts directory
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
-
-
-class SourceToolConcurrencyLimiter:
-    """Shared per-event-loop limiter for source tool calls."""
-
-    def __init__(self, max_concurrent: int) -> None:
-        if max_concurrent < 1:
-            raise ValueError("max_concurrent must be >= 1")
-        self.max_concurrent = max_concurrent
-        self._semaphores: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
-            weakref.WeakKeyDictionary()
-        )
-
-    def _get_semaphore(self) -> asyncio.Semaphore:
-        loop = asyncio.get_running_loop()
-        semaphore = self._semaphores.get(loop)
-        if semaphore is None:
-            semaphore = asyncio.Semaphore(self.max_concurrent)
-            self._semaphores[loop] = semaphore
-        return semaphore
-
-    @asynccontextmanager
-    async def limit(self) -> AsyncIterator[None]:
-        """Acquire one source-tool slot and release it on success, failure, or cancellation."""
-        semaphore = self._get_semaphore()
-        await semaphore.acquire()
-        try:
-            yield
-        finally:
-            semaphore.release()
-
-
-class ToolConcurrencyMiddleware(AgentMiddleware):
-    """Throttle non-wrapped source tools through a shared limiter."""
-
-    def __init__(
-        self,
-        *,
-        tool_names: set[str],
-        limiter: SourceToolConcurrencyLimiter,
-        excluded_tool_names: set[str] | None = None,
-    ) -> None:
-        self.tool_names = set(tool_names)
-        self.limiter = limiter
-        self.excluded_tool_names = excluded_tool_names or set()
-
-    async def awrap_tool_call(self, request, handler):
-        tool_name = ""
-        if hasattr(request, "tool_call") and isinstance(request.tool_call, dict):
-            tool_name = request.tool_call.get("name", "")
-
-        if tool_name in self.tool_names and tool_name not in self.excluded_tool_names:
-            async with self.limiter.limit():
-                return await handler(request)
-        return await handler(request)
 
 
 class EmptyContentFixMiddleware(AgentMiddleware):
@@ -285,11 +227,15 @@ class SourceRegistryMiddleware(AgentMiddleware):
         self._source_tool_names = source_tool_names or set()
         self._lock = asyncio.Lock()
 
-    def _get_registry(self) -> SourceRegistry:
+    def active_registry(self) -> SourceRegistry:
         """Return the session-scoped registry if set, otherwise the instance registry."""
         from aiq_agent.common.citation_verification import get_session_registry
 
         return get_session_registry() or self.registry
+
+    def has_sources(self) -> bool:
+        """Return True when the active source registry contains captured sources."""
+        return bool(self.active_registry().all_sources())
 
     async def awrap_tool_call(self, request, handler):
         """Capture sources from tool results after execution.
@@ -316,7 +262,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
             source_id = get_source_id_for_tool(tool_name)
             sources = extract_sources_from_tool_result(tool_name, str(result.content), source_id=source_id)
             async with self._lock:
-                active_registry = self._get_registry()
+                active_registry = self.active_registry()
                 for source in sources:
                     active_registry.add(source)
             if sources:
@@ -339,7 +285,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
 
         from aiq_agent.common.citation_verification import _normalize_url
 
-        sources = self._get_registry().all_sources()
+        sources = self.active_registry().all_sources()
         if not sources:
             return None
 

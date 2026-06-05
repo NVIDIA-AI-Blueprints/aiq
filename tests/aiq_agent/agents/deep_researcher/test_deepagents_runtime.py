@@ -175,7 +175,7 @@ class TestDeepAgentsRuntimeRouting:
             shared_backend,
             {
                 "/plan.json": {"content": "{}", "modified_at": "2026-01-01T00:00:00"},
-                "/research_batch_result.json": {"content": "{}", "modified_at": "2026-01-01T00:00:01"},
+                "/00_research_notes.json": {"content": "{}", "modified_at": "2026-01-01T00:00:01"},
                 "/notes.txt": {"content": "not json", "modified_at": "2026-01-01T00:00:02"},
             },
         )
@@ -184,17 +184,21 @@ class TestDeepAgentsRuntimeRouting:
 
         assert result.error is None
         assert sorted(match["path"] for match in result.matches) == [
+            "/shared/00_research_notes.json",
             "/shared/plan.json",
-            "/shared/research_batch_result.json",
         ]
         fake_sandbox.glob.assert_not_called()
 
     def test_builtin_skill_state_files_include_nested_synthesis_skills(self) -> None:
         files = _builtin_skill_state_files()
         assert "/research-sandbox/data-table-analysis/SKILL.md" in files
+        assert "/research-sandbox/forecast-analysis/SKILL.md" in files
+        assert "/research-sandbox/lightweight-calculation/SKILL.md" in files
         assert "/synthesis/long-form-report-writer/SKILL.md" in files
         assert "/synthesis/prediction-report-writer/SKILL.md" in files
         assert "Data Table Analysis Skill" in files["/research-sandbox/data-table-analysis/SKILL.md"]["content"]
+        assert "Forecast Analysis Skill" in files["/research-sandbox/forecast-analysis/SKILL.md"]["content"]
+        assert "Lightweight Calculation Skill" in files["/research-sandbox/lightweight-calculation/SKILL.md"]["content"]
         assert "Long-Form Report Writer Skill" in files["/synthesis/long-form-report-writer/SKILL.md"]["content"]
         assert "Prediction Report Writer Skill" in files["/synthesis/prediction-report-writer/SKILL.md"]["content"]
 
@@ -288,9 +292,15 @@ class TestDeepAgentsRuntimeRouting:
         synthesis_skills = _list_skills(backend, SYNTHESIS_SKILL_SOURCE)
 
         assert [skill["name"] for skill in top_level_skills] == []
-        assert [skill["name"] for skill in research_sandbox_skills] == ["data-table-analysis"]
+        assert [skill["name"] for skill in research_sandbox_skills] == [
+            "data-table-analysis",
+            "forecast-analysis",
+            "lightweight-calculation",
+        ]
         assert [skill["path"] for skill in research_sandbox_skills] == [
             "/skills/research-sandbox/data-table-analysis/SKILL.md",
+            "/skills/research-sandbox/forecast-analysis/SKILL.md",
+            "/skills/research-sandbox/lightweight-calculation/SKILL.md",
         ]
         assert [skill["name"] for skill in synthesis_skills] == [
             "long-form-report-writer",

@@ -15,8 +15,6 @@
 
 """Tests for custom middleware."""
 
-import asyncio
-from contextlib import suppress
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -25,8 +23,6 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import ToolMessage
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
-from aiq_agent.agents.deep_researcher.custom_middleware import SourceToolConcurrencyLimiter
-from aiq_agent.agents.deep_researcher.custom_middleware import ToolConcurrencyMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
@@ -123,118 +119,6 @@ class TestToolNameSanitizationMiddleware:
 
         assert result.result[0].content == "Just text, no tools"
         assert not result.result[0].tool_calls
-
-
-class TestToolConcurrencyMiddleware:
-    """Tests for shared source-tool throttling middleware."""
-
-    def _make_request(self, tool_name: str):
-        req = MagicMock()
-        req.tool_call = {"name": tool_name}
-        return req
-
-    @pytest.mark.asyncio
-    async def test_source_tools_are_throttled(self):
-        limiter = SourceToolConcurrencyLimiter(1)
-        middleware = ToolConcurrencyMiddleware(tool_names={"search_tool"}, limiter=limiter)
-        active = 0
-        max_seen = 0
-
-        async def handler(request):
-            nonlocal active, max_seen
-            active += 1
-            max_seen = max(max_seen, active)
-            await asyncio.sleep(0.01)
-            active -= 1
-            return ToolMessage(content="ok", tool_call_id="tc1")
-
-        await asyncio.gather(
-            *(middleware.awrap_tool_call(self._make_request("search_tool"), handler) for _ in range(3))
-        )
-
-        assert max_seen == 1
-
-    @pytest.mark.asyncio
-    async def test_non_source_tools_bypass_throttling(self):
-        limiter = SourceToolConcurrencyLimiter(1)
-        middleware = ToolConcurrencyMiddleware(tool_names={"search_tool"}, limiter=limiter)
-        active = 0
-        max_seen = 0
-
-        async def handler(request):
-            nonlocal active, max_seen
-            active += 1
-            max_seen = max(max_seen, active)
-            await asyncio.sleep(0.01)
-            active -= 1
-            return ToolMessage(content="ok", tool_call_id="tc1")
-
-        await asyncio.gather(*(middleware.awrap_tool_call(self._make_request("think"), handler) for _ in range(3)))
-
-        assert max_seen > 1
-
-    @pytest.mark.asyncio
-    async def test_excluded_source_tools_bypass_middleware_throttle(self):
-        limiter = SourceToolConcurrencyLimiter(1)
-        middleware = ToolConcurrencyMiddleware(
-            tool_names={"search_tool"},
-            limiter=limiter,
-            excluded_tool_names={"search_tool"},
-        )
-        active = 0
-        max_seen = 0
-
-        async def handler(request):
-            nonlocal active, max_seen
-            active += 1
-            max_seen = max(max_seen, active)
-            await asyncio.sleep(0.01)
-            active -= 1
-            return ToolMessage(content="ok", tool_call_id="tc1")
-
-        await asyncio.gather(
-            *(middleware.awrap_tool_call(self._make_request("search_tool"), handler) for _ in range(3))
-        )
-
-        assert max_seen > 1
-
-    @pytest.mark.asyncio
-    async def test_limiter_releases_after_exception(self):
-        limiter = SourceToolConcurrencyLimiter(1)
-        middleware = ToolConcurrencyMiddleware(tool_names={"search_tool"}, limiter=limiter)
-
-        async def failing_handler(request):
-            raise RuntimeError("boom")
-
-        async def successful_handler(request):
-            return ToolMessage(content="ok", tool_call_id="tc1")
-
-        with pytest.raises(RuntimeError, match="boom"):
-            await middleware.awrap_tool_call(self._make_request("search_tool"), failing_handler)
-
-        result = await asyncio.wait_for(
-            middleware.awrap_tool_call(self._make_request("search_tool"), successful_handler),
-            timeout=0.1,
-        )
-        assert result.content == "ok"
-
-    @pytest.mark.asyncio
-    async def test_limiter_releases_after_cancellation(self):
-        limiter = SourceToolConcurrencyLimiter(1)
-
-        async def hold_slot():
-            async with limiter.limit():
-                await asyncio.sleep(1)
-
-        task = asyncio.create_task(hold_slot())
-        await asyncio.sleep(0.01)
-        task.cancel()
-        with suppress(asyncio.CancelledError):
-            await task
-
-        async with asyncio.timeout(0.1):
-            async with limiter.limit():
-                pass
 
 
 class TestSourceRegistryMiddleware:

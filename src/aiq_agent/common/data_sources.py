@@ -72,7 +72,7 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
     if data_sources is None:
         return tools
 
-    selected = {s.lower() for s in data_sources}
+    selected = set(data_sources)
     filtered = []
     for tool in tools:
         name = getattr(tool, "name", "")
@@ -80,7 +80,7 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
         if source_id is None:
             # Not a data source tool (e.g., "think", calculator) -> always include.
             filtered.append(tool)
-        elif source_id.lower() in selected:
+        elif source_id in selected:
             filtered.append(tool)
     return filtered
 

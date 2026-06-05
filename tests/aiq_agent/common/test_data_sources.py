@@ -246,12 +246,15 @@ class TestFilterToolsBySourcesMixed:
         assert knowledge_tool in result
         assert other_tool in result
 
-    def test_filter_case_insensitive_sources(self):
-        """Test that source matching is case-insensitive."""
+    def test_filter_source_ids_are_case_sensitive(self):
+        """Test that source matching requires exact source IDs."""
         web_tool = MagicMock()
         web_tool.name = "web_search"
 
         result = filter_tools_by_sources([web_tool], ["WEB_SEARCH"])
+        assert web_tool not in result
+
+        result = filter_tools_by_sources([web_tool], ["web_search"])
         assert web_tool in result
 
     def test_filter_preserves_other_tools(self):

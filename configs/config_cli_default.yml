@@ -144,8 +144,8 @@ functions:
     _type: deep_research_agent
     orchestrator_llm: gpt_oss_llm
     researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
+    evidence_judge_llm: nemotron_nano_llm
     planner_llm: gpt_oss_llm
-    max_loops: 2
     exclude_tools:
       - web_search_tool
 

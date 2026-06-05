@@ -1315,7 +1315,6 @@ class TestAsyncJobRunnerAgentFactory:
                 *,
                 llm_provider,
                 tools,
-                max_loops,
                 verbose,
                 callbacks,
                 config=None,
@@ -1323,7 +1322,6 @@ class TestAsyncJobRunnerAgentFactory:
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
-                self.max_loops = max_loops
                 self.verbose = verbose
                 self.callbacks = callbacks
                 self.config = config
@@ -1331,7 +1329,6 @@ class TestAsyncJobRunnerAgentFactory:
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            max_loops=7,
             skills=SkillsConfig(enabled=True),
             sandbox=SandboxConfig(app_name="async-aiq"),
         )
@@ -1347,7 +1344,6 @@ class TestAsyncJobRunnerAgentFactory:
             job_id="job-123",
         )
 
-        assert agent.max_loops == 7
         assert agent.job_id == "job-123"
         assert agent.config is fn_config
         assert agent.config.skills.enabled is True
@@ -1402,15 +1398,15 @@ class TestAsyncJobRunnerAgentFactory:
                 return_value=MagicMock(),
             ) as create_backend,
             patch(
-                "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
                 return_value=mock_deep_agent,
             ) as create,
             patch(
-                "aiq_agent.agents.deep_researcher.tools.research.create_summarization_middleware",
+                "aiq_agent.agents.deep_researcher.factory.create_summarization_middleware",
                 return_value=MagicMock(),
             ),
             patch(
-                "aiq_agent.agents.deep_researcher.tools.research.create_agent",
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
                 return_value=MagicMock(),
             ),
         ):
@@ -1471,13 +1467,13 @@ class TestAsyncJobRunnerAgentFactory:
         mock_deep_agent.with_config.return_value = mock_deep_agent
 
         with (
-            patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_deep_agent) as create,
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_deep_agent) as create,
             patch(
-                "aiq_agent.agents.deep_researcher.tools.research.create_summarization_middleware",
+                "aiq_agent.agents.deep_researcher.factory.create_summarization_middleware",
                 return_value=MagicMock(),
             ),
             patch(
-                "aiq_agent.agents.deep_researcher.tools.research.create_agent",
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
                 return_value=MagicMock(),
             ),
         ):
@@ -1496,9 +1492,14 @@ class TestAsyncJobRunnerAgentFactory:
 
         tool_names = [tool.name for tool in create.call_args.kwargs["tools"]]
         assert tool_names == ["think", "get_verified_sources", "run_research_batch"]
-        subagent_tool_names = ["think", "get_verified_sources"]
-        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == subagent_tool_names
-        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == subagent_tool_names
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == [
+            "think",
+            "lookup_source_catalog",
+        ]
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == [
+            "think",
+            "get_verified_sources",
+        ]
 
     def test_create_agent_instance_does_not_drop_config_on_internal_type_error(self):
         """Constructor bugs must not silently fall back to no-config construction."""
@@ -1513,7 +1514,6 @@ class TestAsyncJobRunnerAgentFactory:
                 *,
                 llm_provider,
                 tools,
-                max_loops,
                 verbose,
                 callbacks,
                 config=None,

@@ -13,12 +13,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Batch wrappers for researcher-facing source tools."""
+"""Researcher-facing source tool adapters."""
 
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import weakref
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from langchain_core.tools import BaseTool
 from langchain_core.tools import StructuredTool
@@ -26,7 +28,38 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
-from ..custom_middleware import SourceToolConcurrencyLimiter
+DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS = 5
+DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE = 4
+
+
+class SourceToolConcurrencyLimiter:
+    """Shared per-event-loop limiter for source tool calls."""
+
+    def __init__(self, max_concurrent: int) -> None:
+        if max_concurrent < 1:
+            raise ValueError("max_concurrent must be >= 1")
+        self.max_concurrent = max_concurrent
+        self._semaphores: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
+            weakref.WeakKeyDictionary()
+        )
+
+    def _get_semaphore(self) -> asyncio.Semaphore:
+        loop = asyncio.get_running_loop()
+        semaphore = self._semaphores.get(loop)
+        if semaphore is None:
+            semaphore = asyncio.Semaphore(self.max_concurrent)
+            self._semaphores[loop] = semaphore
+        return semaphore
+
+    @asynccontextmanager
+    async def limit(self) -> AsyncIterator[None]:
+        """Acquire one source-tool slot and release it on success, failure, or cancellation."""
+        semaphore = self._get_semaphore()
+        await semaphore.acquire()
+        try:
+            yield
+        finally:
+            semaphore.release()
 
 
 class BatchSourceToolInput(BaseModel):
@@ -35,14 +68,6 @@ class BatchSourceToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     queries: str | list[str] = Field(description="One query/input string, or a list of query/input strings.")
-
-
-@dataclass(frozen=True)
-class BatchToolBuildResult:
-    """Researcher-facing tools plus names of source tools wrapped for batching."""
-
-    tools: list[BaseTool]
-    wrapped_tool_names: set[str]
 
 
 def _single_string_input_field(tool: BaseTool) -> str | None:
@@ -110,27 +135,58 @@ def _make_batch_source_tool(
     )
 
 
-def build_batch_source_tools(
+def _make_throttled_source_tool(
+    original_tool: BaseTool,
+    *,
+    limiter: SourceToolConcurrencyLimiter,
+) -> BaseTool:
+    """Create a same-name wrapper that throttles calls to a non-batchable source tool."""
+
+    async def _run_throttled(**kwargs) -> object:
+        async with limiter.limit():
+            result = await original_tool.ainvoke(kwargs)
+        return result
+
+    args_schema = getattr(original_tool, "args_schema", None)
+    if args_schema is None:
+        return original_tool
+
+    return StructuredTool.from_function(
+        coroutine=_run_throttled,
+        name=original_tool.name,
+        description=original_tool.description,
+        args_schema=args_schema,
+        return_direct=original_tool.return_direct,
+        response_format=original_tool.response_format,
+    )
+
+
+def adapt_source_tools_for_research(
     tools: list[BaseTool],
     *,
     source_tool_names: set[str],
-    limiter: SourceToolConcurrencyLimiter,
-    max_batch_size: int,
-) -> BatchToolBuildResult:
-    """Wrap compatible single-string source tools with same-name batch-capable tools."""
-    wrapped_tools: list[BaseTool] = []
-    wrapped_tool_names: set[str] = set()
+    max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
+    max_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
+) -> list[BaseTool]:
+    """Return researcher-facing tools with source calls internally throttled.
 
+    Compatible single-string source tools are upgraded to same-name batch-capable
+    tools. Other source tools keep their original schema and receive a
+    throttle-only wrapper. Non-source tools are returned unchanged.
+    """
+    adapted_tools: list[BaseTool] = []
+    limiter = SourceToolConcurrencyLimiter(max_concurrent_source_tool_calls)
     for candidate in tools:
-        input_field_name = None
-        if candidate.name in source_tool_names:
-            input_field_name = _single_string_input_field(candidate)
-
-        if input_field_name is None:
-            wrapped_tools.append(candidate)
+        if candidate.name not in source_tool_names:
+            adapted_tools.append(candidate)
             continue
 
-        wrapped_tools.append(
+        input_field_name = _single_string_input_field(candidate)
+        if input_field_name is None:
+            adapted_tools.append(_make_throttled_source_tool(candidate, limiter=limiter))
+            continue
+
+        adapted_tools.append(
             _make_batch_source_tool(
                 candidate,
                 input_field_name=input_field_name,
@@ -138,6 +194,5 @@ def build_batch_source_tools(
                 max_batch_size=max_batch_size,
             )
         )
-        wrapped_tool_names.add(candidate.name)
 
-    return BatchToolBuildResult(tools=wrapped_tools, wrapped_tool_names=wrapped_tool_names)
+    return adapted_tools

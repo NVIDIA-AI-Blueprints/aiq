@@ -21,7 +21,7 @@ Do not call web, academic, news, knowledge, or other source tools. You are routi
 
 ## Routing Principles
 - Do not use deterministic keyword matching. Use judgment from the request, catalog descriptions, and available sources.
-- If the request explicitly names selected sources, respect `routing_mode`.
+- If the request explicitly names selected sources, only recommend configured available sources that match those names.
 - If an ideal source is unavailable, do not recommend it. Explain the fallback in `routing_reason` or `planner_guidance`.
 - If no configured domain fits well, use the catalog's `default_domain_id` when present.
 - If the catalog contains no domains, set `domain_id` to `unconfigured`, `domain_name` to `Unconfigured`, and use default fallback sources.

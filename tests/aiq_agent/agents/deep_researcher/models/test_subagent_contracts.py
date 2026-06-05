@@ -18,21 +18,18 @@
 import pytest
 from pydantic import ValidationError
 
-from aiq_agent.agents.deep_researcher.models import EvidenceDigest
+from aiq_agent.agents.deep_researcher.models import AnswerStrategy
+from aiq_agent.agents.deep_researcher.models import Constraint
+from aiq_agent.agents.deep_researcher.models import EvidenceJudgment
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
-from aiq_agent.agents.deep_researcher.models import WriterOutput
 
 
 def _answer_strategy() -> dict:
     return {
         "answer_type": "comparison",
         "title": "CUDA and OpenCL Trade-offs",
-        "response_shape": "Markdown comparison with concise summary and citations.",
-        "selection_mode": "none",
-        "expected_count": None,
-        "options": [],
         "required_components": [
             {
                 "id": "programming_model",
@@ -40,7 +37,6 @@ def _answer_strategy() -> dict:
                 "description": "Compare kernel, memory, and execution models.",
             }
         ],
-        "assembly_instruction": "Compare practical trade-offs and cite every material claim.",
     }
 
 
@@ -64,14 +60,14 @@ def test_research_plan_contract_validates_expected_shape():
                     "category": "content",
                     "constraint": "Compare portability, performance, and ecosystem maturity.",
                     "rationale": "These dimensions determine practical adoption.",
-                    "verification": "Each dimension appears in the final answer.",
                 }
             ],
             "queries": [
                 {
                     "query": "CUDA OpenCL portability performance ecosystem comparison",
                     "subqueries": ["CUDA OpenCL portability", "CUDA OpenCL benchmark comparison"],
-                    "tool": "web_search_tool",
+                    "preferred_tools": ["web_search_tool"],
+                    "fallback_tools": [],
                     "target_components": ["programming_model"],
                     "rationale": "Supports the comparison component.",
                 }
@@ -83,6 +79,55 @@ def test_research_plan_contract_validates_expected_shape():
     assert plan.constraints[0].category == "content"
     assert plan.queries[0].target_components == ["programming_model"]
     assert plan.queries[0].subqueries == ["CUDA OpenCL portability", "CUDA OpenCL benchmark comparison"]
+    assert plan.queries[0].preferred_tools == ["web_search_tool"]
+    assert plan.queries[0].fallback_tools == []
+
+
+def test_research_plan_contract_accepts_prediction_answer_type():
+    answer_strategy = _answer_strategy()
+    answer_strategy["answer_type"] = "prediction"
+    answer_strategy["title"] = "Election Forecast"
+
+    plan = ResearchPlan.model_validate(
+        {
+            "task_analysis": _task_analysis(),
+            "answer_strategy": answer_strategy,
+            "constraints": [],
+            "queries": [
+                {
+                    "query": "Example election forecast evidence",
+                    "subqueries": [],
+                    "preferred_tools": ["polymarket_search_tool"],
+                    "fallback_tools": [],
+                    "target_components": ["programming_model"],
+                    "rationale": "Supports the forecast evidence component.",
+                }
+            ],
+        }
+    )
+
+    assert plan.answer_strategy.answer_type == "prediction"
+    assert plan.queries[0].preferred_tools == ["polymarket_search_tool"]
+
+
+def test_reduced_answer_strategy_contract_validates():
+    strategy = AnswerStrategy.model_validate(_answer_strategy())
+
+    assert strategy.answer_type == "comparison"
+    assert strategy.title == "CUDA and OpenCL Trade-offs"
+    assert strategy.required_components[0].id == "programming_model"
+
+
+def test_constraint_contract_rejects_verification_field():
+    with pytest.raises(ValidationError):
+        Constraint.model_validate(
+            {
+                "category": "content",
+                "constraint": "Compare portability, performance, and ecosystem maturity.",
+                "rationale": "These dimensions determine practical adoption.",
+                "verification": "Each dimension appears in the final answer.",
+            }
+        )
 
 
 def test_research_notes_contract_validates_expected_shape():
@@ -124,21 +169,42 @@ def test_research_notes_contract_validates_expected_shape():
     assert notes.findings[0].source_ids == [1]
     assert notes.sources[0].source_type == "url"
     assert notes.sources[0].locator == "https://example.test/opencl"
+    assert notes.evidence_judgment is None
 
 
-def test_writer_output_contract_validates_expected_shape():
-    writer_output = WriterOutput.model_validate(
+def test_research_notes_contract_accepts_evidence_judgment():
+    notes = ResearchNotes.model_validate(
         {
-            "answer_markdown": "CUDA is NVIDIA-specific, while OpenCL is cross-vendor [1].\n\n## Sources\n[1] OpenCL: https://example.test/opencl",
-            "answer_type": "comparison",
-            "citations_used": [1],
+            "query_topic": "CUDA vs OpenCL portability",
+            "target_components": ["programming_model"],
+            "summary": "CUDA is NVIDIA-specific while OpenCL targets portability.",
+            "findings": [],
             "gaps": [],
-            "confidence": "high",
+            "sources": [],
+            "narrative_notes": "OpenCL offers broader portability.",
+            "language": "English",
+            "evidence_judgment": {
+                "relevance_score": 85,
+                "confidence": "high",
+                "rationale": "Directly supports the programming model component.",
+            },
         }
     )
 
-    assert writer_output.answer_type == "comparison"
-    assert writer_output.citations_used == [1]
+    assert notes.evidence_judgment is not None
+    assert notes.evidence_judgment.relevance_score == 85
+    assert notes.evidence_judgment.confidence == "high"
+
+
+def test_evidence_judgment_contract_rejects_invalid_score():
+    with pytest.raises(ValidationError):
+        EvidenceJudgment.model_validate(
+            {
+                "relevance_score": 101,
+                "confidence": "high",
+                "rationale": "Score must stay within the configured range.",
+            }
+        )
 
 
 def test_source_routing_plan_contract_validates_expected_shape():
@@ -146,7 +212,6 @@ def test_source_routing_plan_contract_validates_expected_shape():
         {
             "domain_id": "current_news",
             "domain_name": "Current News",
-            "routing_mode": "auto_advisory",
             "routing_reason": "The user asks for recent developments.",
             "recommendations": [
                 {
@@ -170,49 +235,6 @@ def test_source_routing_plan_contract_validates_expected_shape():
 
     assert route.domain_id == "current_news"
     assert route.recommendations[0].tool_names == ["duckduckgo_news_search_tool"]
-
-
-def test_evidence_digest_contract_validates_expected_shape():
-    digest = EvidenceDigest.model_validate(
-        {
-            "status": "succeeded",
-            "generated_at": "2026-06-02T00:00:00+00:00",
-            "answer_title": "CUDA and OpenCL Trade-offs",
-            "answer_type": "comparison",
-            "source_note_paths": ["/shared/00_cuda_opencl.json"],
-            "failed_note_paths": [],
-            "component_rankings": [
-                {
-                    "component_id": "programming_model",
-                    "component_name": "Programming model",
-                    "component_description": "Compare kernel, memory, and execution models.",
-                    "candidate_count": 1,
-                    "reviewed_count": 1,
-                    "coverage_gaps": [],
-                    "decisions": [
-                        {
-                            "finding_ref": "/shared/00_cuda_opencl.json#finding-0",
-                            "note_path": "/shared/00_cuda_opencl.json",
-                            "finding_index": 0,
-                            "claim": "OpenCL is designed for cross-vendor heterogeneous compute.",
-                            "evidence": "The source describes OpenCL as an open standard.",
-                            "source_ids": [1],
-                            "researcher_confidence": "high",
-                            "caveats": [],
-                            "inclusion": "core",
-                            "relevance": "direct",
-                            "evidence_strength": "strong",
-                            "reason": "Directly supports the programming model component.",
-                        }
-                    ],
-                }
-            ],
-            "error": None,
-        }
-    )
-
-    assert digest.component_rankings[0].decisions[0].inclusion == "core"
-    assert digest.component_rankings[0].decisions[0].finding_ref.endswith("#finding-0")
 
 
 def test_subagent_contracts_reject_extra_fields_and_old_plan_shape():
@@ -251,3 +273,14 @@ def test_subagent_contracts_reject_extra_fields_and_old_plan_shape():
                 "language": "English",
             }
         )
+
+    for removed_field, value in (
+        ("assembly_instruction", "Synthesize evidence into a comparison."),
+        ("selection_mode", "none"),
+        ("expected_count", None),
+        ("options", []),
+    ):
+        old_strategy = _answer_strategy()
+        old_strategy[removed_field] = value
+        with pytest.raises(ValidationError):
+            AnswerStrategy.model_validate(old_strategy)
