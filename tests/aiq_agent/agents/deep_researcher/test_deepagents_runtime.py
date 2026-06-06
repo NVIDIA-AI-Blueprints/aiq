@@ -30,14 +30,21 @@ path-rewriting behavior can be tested without spinning up a graph.
 
 from __future__ import annotations
 
+import sys
+import types
 from typing import Any
+from unittest.mock import MagicMock
 
 from deepagents.backends import CompositeBackend
+from deepagents.backends.protocol import ExecuteResponse
 
 from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
 from aiq_agent.agents.deep_researcher.deepagents_runtime import SHARED_ROUTE
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepAgentsRuntime
+from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
 from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
+from aiq_agent.agents.deep_researcher.deepagents_runtime import _normalize_openshell_backend_name
 from aiq_agent.agents.deep_researcher.deepagents_runtime import _PrefixedStateBackend
 
 
@@ -165,3 +172,101 @@ class TestDeepAgentsRuntimeJobId:
         # uuid4 strings are 36 chars, distinct between instances.
         assert len(runtime_a.job_id) == 36
         assert runtime_a.job_id != runtime_b.job_id
+
+
+def _install_fake_openshell_modules(monkeypatch: Any) -> None:
+    monkeypatch.setitem(sys.modules, "openshell", types.ModuleType("openshell"))
+    monkeypatch.setitem(
+        sys.modules,
+        "langchain_nvidia_openshell",
+        types.ModuleType("langchain_nvidia_openshell"),
+    )
+
+
+class TestOpenShellSandboxConfig:
+    """OpenShell provider config should coexist with the existing Modal default."""
+
+    def test_provider_accepts_openshell_case_insensitive(self) -> None:
+        config = SandboxConfig(provider="OpenShell", cluster="local")
+
+        assert config.provider == "openshell"
+        assert config.cluster == "local"
+        assert config.shell == ("bash", "-c")
+
+    def test_unsupported_provider_names_both_supported_values(self) -> None:
+        try:
+            SandboxConfig(provider="not-modal")
+        except ValueError as exc:
+            message = str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("expected unsupported provider to fail")
+
+        assert "modal" in message
+        assert "openshell" in message
+
+    def test_openshell_backend_name_is_job_scoped_and_sanitized(self) -> None:
+        name = _normalize_openshell_backend_name("Async Job/123_ABC", "AIQ Deep")
+
+        assert name == "aiq-deep-async-job-123-abc"
+        assert len(name) <= 63
+
+
+class TestLazyOpenShellSandboxBackend:
+    """OpenShell backend should be lazy, cached, retryable, and closeable."""
+
+    def test_openshell_backend_creates_sandbox_lazily(self, monkeypatch: Any) -> None:
+        _install_fake_openshell_modules(monkeypatch)
+        fake_context = MagicMock()
+        fake_backend = MagicMock()
+        fake_backend.id = "openshell-id-1"
+        fake_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
+
+        create_now = MagicMock(return_value=(fake_context, fake_backend))
+        monkeypatch.setattr(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_openshell_backend_now",
+            create_now,
+        )
+
+        backend = _create_sandbox_backend(SandboxConfig(provider="openshell"), "job-123")
+
+        assert backend.id == "aiq-deep-research-job-123"
+        create_now.assert_not_called()
+
+        result = backend.execute("echo ok", timeout=5)
+
+        assert result.output == "ok"
+        create_now.assert_called_once()
+        fake_backend.execute.assert_called_once_with("echo ok", timeout=5)
+        assert backend.id == "openshell-id-1"
+
+        backend.close()
+        fake_context.__exit__.assert_called_once_with(None, None, None)
+
+    def test_openshell_backend_recreates_and_retries_once_on_not_found(self, monkeypatch: Any) -> None:
+        _install_fake_openshell_modules(monkeypatch)
+        first_context = MagicMock()
+        second_context = MagicMock()
+        first_backend = MagicMock()
+        first_backend.execute.side_effect = RuntimeError("sandbox not found")
+        second_backend = MagicMock()
+        second_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
+
+        create_now = MagicMock(
+            side_effect=[
+                (first_context, first_backend),
+                (second_context, second_backend),
+            ]
+        )
+        monkeypatch.setattr(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_openshell_backend_now",
+            create_now,
+        )
+
+        backend = _create_sandbox_backend(SandboxConfig(provider="openshell"), "job-123")
+        result = backend.execute("echo ok", timeout=5)
+
+        assert result.output == "ok"
+        assert create_now.call_count == 2
+        first_context.__exit__.assert_called_once_with(None, None, None)
+        first_backend.execute.assert_called_once_with("echo ok", timeout=5)
+        second_backend.execute.assert_called_once_with("echo ok", timeout=5)

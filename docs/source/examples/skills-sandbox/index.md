@@ -5,7 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # Example: Deep Research Skills and Sandbox
 
-This example shows how to run AI-Q deep research with DeepAgents skills and a Modal-backed sandbox.
+This example shows how to run AI-Q deep research with DeepAgents skills and a sandbox. The default example uses
+Modal; NVIDIA OpenShell can be selected as an alternative provider for environments with an OpenShell gateway.
 
 Skills let a research agent discover task-specific instructions only when they are relevant. A skill can teach the agent a repeatable workflow, such as extracting numeric facts, normalizing a table, running calculations, and producing reusable text artifacts. The sandbox gives the agent an isolated execution environment for code-based work, such as Python/pandas calculations, without running that code in the AI-Q process.
 
@@ -19,7 +20,7 @@ For more background, see the LangChain DeepAgents docs:
 The example config enables:
 
 - built-in DeepAgents skills from `src/aiq_agent/agents/deep_researcher/skills/`
-- a Modal sandbox for job-scoped Python execution
+- a sandbox for job-scoped Python execution
 - Python packages useful for analysis, including `pandas`, `numpy`, `matplotlib`, and `pillow`
 - virtual `/shared/` files for text artifacts that the orchestrator and subagents can read during the report workflow
 
@@ -36,7 +37,8 @@ export NVIDIA_API_KEY="nvapi-..."              # pragma: allowlist secret
 export TAVILY_API_KEY="tvly-..."               # pragma: allowlist secret
 ```
 
-For sandbox execution, create a Modal account and configure Modal credentials. Modal uses a token ID and token secret:
+For Modal sandbox execution, create a Modal account and configure Modal credentials. Modal uses a token ID and token
+secret:
 
 ```bash
 export MODAL_TOKEN_ID="ak-..."                 # pragma: allowlist secret
@@ -73,7 +75,22 @@ functions:
       block_network: true
 ```
 
-When `skills.enabled` is true, AI-Q preloads the built-in skill files into the DeepAgents virtual filesystem and passes `/skills/` as the skill source. When the sandbox block is present, DeepAgents `execute` calls run inside a job-scoped Modal sandbox.
+When `skills.enabled` is true, AI-Q preloads the built-in skill files into the DeepAgents virtual filesystem and passes `/skills/` as the skill source. When the sandbox block is present, DeepAgents `execute` calls run inside the selected sandbox provider.
+
+To use OpenShell instead of Modal, install OpenShell `0.0.57+`, configure an OpenShell gateway, and install the sibling `langchain-nvidia-openshell` package in the AI-Q environment. Then switch the sandbox block:
+
+```yaml
+functions:
+  deep_research_agent:
+    sandbox:
+      provider: openshell
+      cluster: null
+      sandbox_name_prefix: aiq-deep-research
+      ready_timeout_seconds: 300
+      delete_on_exit: true
+```
+
+OpenShell SDK-created sandboxes are currently anonymous at the gateway layer; AI-Q still scopes one lazy sandbox backend per job and derives a local backend identity from the job ID.
 
 ## Run AI-Q
 

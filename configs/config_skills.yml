@@ -237,6 +237,15 @@ functions:
         - pillow
         - tabulate  # required by pandas.DataFrame.to_markdown(), used by data-table-analysis skill
       block_network: true
+      # OpenShell alternative:
+      # provider: openshell
+      # cluster: null
+      # sandbox_name_prefix: aiq-deep-research
+      # ready_timeout_seconds: 300
+      # delete_on_exit: true
+      # shell:
+      #   - bash
+      #   - -c
 
 workflow:
   _type: chat_deepresearcher_agent

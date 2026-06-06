@@ -113,7 +113,7 @@ class SkillsConfig(BaseModel):
 class SandboxConfig(BaseModel):
     """Configuration for a DeepAgents sandbox backend."""
 
-    provider: str = Field(default="modal", description="Sandbox backend provider. Supported value: modal.")
+    provider: str = Field(default="modal", description="Sandbox backend provider. Supported values: modal, openshell.")
     app_name: str = Field(default="aiq-deep-research", description="Modal app name for deep research sandboxes")
     image: str = Field(default="python:3.12-slim", description="Container image for Modal sandboxes")
     python_packages: tuple[str, ...] = Field(
@@ -124,12 +124,29 @@ class SandboxConfig(BaseModel):
     timeout: int = Field(default=1200, description="Maximum Modal sandbox lifetime in seconds")
     idle_timeout: int = Field(default=1800, description="Modal sandbox idle timeout in seconds")
     block_network: bool = Field(default=True, description="Block outbound network access from Modal sandboxes")
+    cluster: str | None = Field(default=None, description="Optional OpenShell gateway/cluster name")
+    sandbox_name_prefix: str = Field(
+        default="aiq-deep-research",
+        description="Local name prefix for job-scoped OpenShell sandbox backends",
+    )
+    ready_timeout_seconds: float = Field(
+        default=300.0,
+        description="Maximum seconds to wait for an OpenShell sandbox to become ready",
+    )
+    delete_on_exit: bool = Field(
+        default=True,
+        description="Delete OpenShell sandboxes when their Python context is closed",
+    )
+    shell: tuple[str, ...] = Field(
+        default=("bash", "-c"),
+        description="Shell argv prefix used by langchain-nvidia-openshell",
+    )
 
     def __init__(self, **data: Any) -> None:
         super().__init__(**data)
         provider = self.provider.lower()
-        if provider not in {"modal"}:
-            raise ValueError(f"Unsupported sandbox provider: {self.provider}. Supported providers: modal")
+        if provider not in {"modal", "openshell"}:
+            raise ValueError(f"Unsupported sandbox provider: {self.provider}. Supported providers: modal, openshell")
         self.provider = provider
 
 
@@ -253,11 +270,17 @@ def _validate_modal_sandbox_name(job_id: str) -> str:
 def _create_sandbox_backend(config: SandboxConfig, job_id: str) -> Any:
     if config.provider == "modal":
         return _create_modal_backend(config, job_id)
-    raise ValueError(f"Unsupported sandbox provider: {config.provider}. Supported providers: modal")
+    if config.provider == "openshell":
+        return _create_openshell_backend(config, job_id)
+    raise ValueError(f"Unsupported sandbox provider: {config.provider}. Supported providers: modal, openshell")
 
 
 def _create_modal_backend(config: SandboxConfig, job_id: str) -> Any:
     return _LazyModalSandboxBackend(config, job_id)
+
+
+def _create_openshell_backend(config: SandboxConfig, job_id: str) -> Any:
+    return _LazyOpenShellSandboxBackend(config, job_id)
 
 
 class _LazyModalSandboxBackend(BaseSandbox):
@@ -356,6 +379,156 @@ class _LazyModalSandboxBackend(BaseSandbox):
             self._backend = _create_modal_backend_now(self.config, self.sandbox_name, force_new=True)
 
 
+def _normalize_openshell_backend_name(job_id: str, prefix: str) -> str:
+    raw = f"{prefix}-{job_id}" if prefix else job_id
+    normalized = re.sub(r"[^a-z0-9-]+", "-", raw.lower())
+    normalized = re.sub(r"-+", "-", normalized).strip("-")
+    if not normalized:
+        normalized = "aiq-deep-research"
+    return normalized[:63].rstrip("-") or "aiq-deep-research"
+
+
+class _LazyOpenShellSandboxBackend(BaseSandbox):
+    """Job-scoped OpenShell backend that creates the SDK sandbox on demand."""
+
+    def __init__(self, config: SandboxConfig, job_id: str) -> None:
+        self.config = config
+        self.sandbox_name = _normalize_openshell_backend_name(job_id, config.sandbox_name_prefix)
+        self._backend: Any | None = None
+        self._sandbox_context: Any | None = None
+        self._lock = threading.Lock()
+
+        try:
+            import langchain_nvidia_openshell  # noqa: F401
+            import openshell  # noqa: F401
+        except ImportError as exc:
+            raise ImportError(
+                "The OpenShell sandbox backend requires the `openshell>=0.0.57,<0.1` SDK and "
+                "`langchain-nvidia-openshell` adapter package. Install the sibling "
+                "`langchain-nvidia-openshell` project in the AIQ environment and configure an "
+                "OpenShell gateway before enabling an OpenShell sandbox."
+            ) from exc
+
+    @property
+    def id(self) -> str:
+        backend = self._backend
+        if backend is None:
+            return self.sandbox_name
+        return backend.id
+
+    def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        for attempt in range(2):
+            try:
+                return self._get_backend().execute(command, timeout=timeout)
+            except Exception as exc:
+                if attempt == 0 and _is_openshell_not_found_error(exc):
+                    logger.warning(
+                        "OpenShell sandbox %s disappeared during execute; recreating and retrying once",
+                        self.sandbox_name,
+                    )
+                    self._reset_backend()
+                    continue
+                raise
+        raise RuntimeError("unreachable")
+
+    def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        for attempt in range(2):
+            try:
+                return self._get_backend().upload_files(files)
+            except Exception as exc:
+                if attempt == 0 and _is_openshell_not_found_error(exc):
+                    logger.warning(
+                        "OpenShell sandbox %s disappeared during file upload; recreating and retrying once",
+                        self.sandbox_name,
+                    )
+                    self._reset_backend()
+                    continue
+                raise
+        raise RuntimeError("unreachable")
+
+    def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        for attempt in range(2):
+            try:
+                return self._get_backend().download_files(paths)
+            except Exception as exc:
+                if attempt == 0 and _is_openshell_not_found_error(exc):
+                    logger.warning(
+                        "OpenShell sandbox %s disappeared during file download; recreating and retrying once",
+                        self.sandbox_name,
+                    )
+                    self._reset_backend()
+                    continue
+                raise
+        raise RuntimeError("unreachable")
+
+    def close(self) -> None:
+        self._close_sandbox_context()
+
+    def _get_backend(self) -> Any:
+        backend = self._backend
+        if backend is not None:
+            return backend
+
+        with self._lock:
+            if self._backend is None:
+                logger.info(
+                    "OpenShell sandbox backend init: local_name=%s cluster=%s",
+                    self.sandbox_name,
+                    self.config.cluster,
+                )
+                self._sandbox_context, self._backend = _create_openshell_backend_now(self.config)
+            return self._backend
+
+    def _reset_backend(self) -> None:
+        with self._lock:
+            logger.warning(
+                "OpenShell sandbox backend RESET: local_name=%s "
+                "(any uploaded files in the previous sandbox are now lost)",
+                self.sandbox_name,
+            )
+            self._close_sandbox_context()
+            self._sandbox_context, self._backend = _create_openshell_backend_now(self.config)
+
+    def _close_sandbox_context(self) -> None:
+        sandbox_context = self._sandbox_context
+        self._backend = None
+        self._sandbox_context = None
+        if sandbox_context is not None:
+            sandbox_context.__exit__(None, None, None)
+
+
+def _create_openshell_backend_now(config: SandboxConfig) -> tuple[Any, Any]:
+    try:
+        import openshell
+        from langchain_nvidia_openshell import OpenShellSandbox
+    except ImportError as exc:
+        raise ImportError(
+            "The OpenShell sandbox backend requires the `openshell>=0.0.57,<0.1` SDK and "
+            "`langchain-nvidia-openshell` adapter package. Install the sibling "
+            "`langchain-nvidia-openshell` project in the AIQ environment and configure an "
+            "OpenShell gateway before enabling an OpenShell sandbox."
+        ) from exc
+
+    sandbox = openshell.Sandbox(
+        cluster=config.cluster,
+        delete_on_exit=config.delete_on_exit,
+        ready_timeout_seconds=config.ready_timeout_seconds,
+    )
+    sandbox.__enter__()
+    backend = OpenShellSandbox(
+        sandbox=sandbox,
+        timeout=config.timeout,
+        shell=config.shell,
+    )
+    logger.info(
+        "OpenShell sandbox CREATED: id=%s cluster=%s ready_timeout=%ss",
+        backend.id,
+        config.cluster,
+        config.ready_timeout_seconds,
+    )
+    return sandbox, backend
+
+
 def _create_modal_backend_now(config: SandboxConfig, sandbox_name: str, *, force_new: bool = False) -> Any:
     try:
         import modal
@@ -411,3 +584,8 @@ def _is_modal_not_found_error(exc: Exception) -> bool:
         return isinstance(exc, modal.exception.NotFoundError)
     except ImportError:
         return exc.__class__.__name__ == "NotFoundError" and exc.__class__.__module__.startswith("modal")
+
+
+def _is_openshell_not_found_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return "not found" in text and ("sandbox" in text or exc.__class__.__module__.startswith("openshell"))
