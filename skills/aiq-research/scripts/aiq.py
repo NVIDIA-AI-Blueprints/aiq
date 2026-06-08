@@ -40,7 +40,7 @@ AIQ_SERVER_URL = os.environ.get("AIQ_SERVER_URL", DEFAULT_SERVER_URL)
 
 _HEADLESS_HEADERS = {"Content-Type": "application/json", "X-AIQ-Mode": "headless"}
 DEFAULT_AGENT_TYPE = "shallow_researcher"
-_LOCAL_BACKEND_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+_LOCAL_BACKEND_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 
 URL_MAX_LENGTH = _int_const("2048")
 API_PATH_MAX_LENGTH = _int_const("4096")
