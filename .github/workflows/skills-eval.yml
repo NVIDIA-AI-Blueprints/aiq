@@ -1,0 +1,223 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# AI-Q skill eval. Two jobs on the aiq-eval self-hosted runner:
+#   - generate-datasets: spec validation, no credentials.
+#   - harbor-eval:       full Harbor trial; runs only when run_harbor=true.
+# Testing phase: manual dispatch only, gated to the working branch.
+# When ready to enable PR gating, see the commented `pull_request:` block.
+# Credentials and runtime knobs live in a runner-side .env;
+# see README-aiq-runner-bootstrap.md.
+
+name: Skills Eval
+
+on:
+  # Testing phase: manual dispatch only, restricted to the working branch.
+  # When ready to gate PRs, re-enable the `pull_request:` trigger below.
+  # pull_request:
+  #   branches: [develop, "release/**"]
+  #   paths:
+  #     - "skills/**"
+  #     - ".github/skill-eval/**"
+  #     - ".github/workflows/skills-eval.yml"
+  #     - "deploy/**"
+  workflow_dispatch:
+    inputs:
+      run_harbor:
+        description: "Run Harbor trials on the self-hosted aiq-eval runner"
+        required: false
+        default: false
+        type: boolean
+      agent:
+        description: "Harbor agent to run"
+        required: false
+        default: "claude-code"
+        type: choice
+        options:
+          - claude-code
+          - codex
+      model:
+        description: "Override AIQ_SKILL_EVAL_MODEL for this dispatch (blank = use runner .env default)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aiq-skills-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUNNER_ENV_FILE: /home/ubuntu/aiq-eval/.env
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # generate-datasets: spec validation + Harbor task-root materialization.
+  # Cheap. No credentials.
+  # ---------------------------------------------------------------------------
+  generate-datasets:
+    name: Validate skill-eval specs
+    # Testing-phase guard: only run on the working branch.
+    if: github.ref == 'refs/heads/feat/product-evals'
+    runs-on: [self-hosted, aiq-eval]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Generate datasets
+        run: |
+          python3 .github/skill-eval/skills_eval_agent.py --all \
+            --output-dir /tmp/aiq-skill-eval/datasets
+
+      - name: Upload generated datasets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiq-skill-eval-datasets-${{ github.run_id }}
+          path: /tmp/aiq-skill-eval/datasets
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # harbor-eval: bring up AI-Q from PR HEAD, run Harbor trials, tear down.
+  # Gated on workflow_dispatch + inputs.run_harbor=true.
+  # ---------------------------------------------------------------------------
+  harbor-eval:
+    name: Run Harbor skill eval
+    # Testing-phase guard: only run on the working branch, only when the
+    # dispatcher explicitly sets run_harbor=true.
+    if: |
+      github.ref == 'refs/heads/feat/product-evals' &&
+      inputs.run_harbor
+    runs-on: [self-hosted, aiq-eval]
+    timeout-minutes: 60
+    needs: generate-datasets
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Verify runner .env exists
+        run: |
+          if [ ! -r "$RUNNER_ENV_FILE" ]; then
+            echo "::error::Runner credential file missing or unreadable at $RUNNER_ENV_FILE"
+            echo "See README-aiq-runner-bootstrap.md for the one-time setup."
+            exit 1
+          fi
+          # Print only the *names* of keys present, never values.
+          echo "Loaded credential keys (names only):"
+          grep -oE '^[A-Z_][A-Z0-9_]*=' "$RUNNER_ENV_FILE" | sed 's/=$//' | sort
+
+      - name: Materialize deploy/.env from runner credentials
+        run: |
+          # docker-compose.yaml has `env_file: [../.env]` paths that resolve to
+          # aiq/deploy/.env. That file is gitignored. Copy the runner's
+          # canonical .env into place for the duration of this job.
+          install -m 0600 "$RUNNER_ENV_FILE" deploy/.env
+
+      - name: Bring up AI-Q stack from PR HEAD
+        working-directory: deploy/compose
+        run: |
+          set -a
+          # shellcheck disable=SC1090
+          source "$RUNNER_ENV_FILE"
+          set +a
+          # Mirror local recipe: build from source, tag with run id so
+          # concurrent runs (if any) don't collide.
+          export BACKEND_IMAGE="aiq-agent:ci-${{ github.run_id }}"
+          docker compose --env-file ../.env -f docker-compose.yaml up -d --build aiq-agent postgres
+
+      - name: Wait for AI-Q /health
+        run: |
+          # Poll up to 5 minutes. AI-Q cold start on the runner is typically
+          # <2 min; 5 min gives margin for the postgres init + first build.
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+              echo "AI-Q healthy after ${i} x 5s"
+              curl -s http://localhost:8000/health | head -c 400; echo
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::AI-Q did not report healthy within 5 minutes"
+          docker compose --env-file deploy/.env -f deploy/compose/docker-compose.yaml ps || true
+          docker compose --env-file deploy/.env -f deploy/compose/docker-compose.yaml logs --tail 200 aiq-agent || true
+          exit 1
+
+      - name: Run Harbor trials
+        env:
+          # Constant in our architecture. The adapter emits
+          # extra_hosts: host.docker.internal:host-gateway so this resolves
+          # from inside the Harbor task container too (see A0).
+          AIQ_SERVER_URL: http://host.docker.internal:8000
+          # Dispatch-time overrides take precedence over runner .env defaults.
+          AIQ_SKILL_EVAL_AGENT: ${{ inputs.agent }}
+        run: |
+          set -a
+          # shellcheck disable=SC1090
+          source "$RUNNER_ENV_FILE"
+          set +a
+          # Honor dispatch override of model when provided.
+          if [ -n "${{ inputs.model }}" ]; then
+            export AIQ_SKILL_EVAL_MODEL="${{ inputs.model }}"
+          fi
+          # AIQ_SKILL_EVAL_AGENT from job env beats the .env's default, if any.
+          export AIQ_SKILL_EVAL_AGENT="$AIQ_SKILL_EVAL_AGENT"
+          python3 .github/skill-eval/skills_eval_agent.py --all --run-harbor \
+            --output-dir /tmp/aiq-skill-eval/datasets
+
+      - name: Upload Harbor results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiq-skill-eval-results-${{ github.run_id }}
+          path: /tmp/aiq-skill-eval/results
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Tear down AI-Q stack
+        if: always()
+        working-directory: deploy/compose
+        run: |
+          # Conservative cleanup: stop+remove containers, drop volumes so
+          # Postgres doesn't leak state between runs, prune dangling images
+          # so we don't fill the runner disk. Keep the image cache for the
+          # `aiq-agent` build layers (next run is faster).
+          docker compose --env-file ../.env -f docker-compose.yaml down -v --remove-orphans || true
+          docker image prune -f || true
+
+      - name: Remove materialized deploy/.env
+        if: always()
+        run: |
+          # The runner is long-lived; don't leave the copied .env on disk
+          # between job runs even though the source file at $RUNNER_ENV_FILE
+          # is the canonical home.
+          rm -f deploy/.env || true
+
+      - name: Clean ephemeral image
+        if: always()
+        run: |
+          docker image rm "aiq-agent:ci-${{ github.run_id }}" 2>/dev/null || true
