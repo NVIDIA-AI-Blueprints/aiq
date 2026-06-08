@@ -71,7 +71,7 @@ async def reranked_search(config: RerankedSearchConfig, builder: Builder):
 
     Uses `langchain-nvidia-ai-endpoints` (`NVIDIARerank`).  Expects `NVIDIA_API_KEY` in the environment.
     """
-    compressor = NVIDIARerank(model=config.cross_encoder_model)
+    compressor = NVIDIARerank(model=config.cross_encoder_model, top_n=config.top_k)
 
     # Resolve tool callables at registration time.
     tool_fns: dict[str, object] = {}
@@ -88,7 +88,12 @@ async def reranked_search(config: RerankedSearchConfig, builder: Builder):
         """Call a single search tool and parse its output into results."""
         try:
             raw: str = await asyncio.wait_for(fn.ainvoke(query), timeout=config.timeout_seconds)
-            results: list[str] = raw.split(SOURCE_DELIMITER)
+            results_with_answer: list[str] = raw.split(SOURCE_DELIMITER)
+            results: list[str] = []
+            # We don't want an "answer" section in the results, so we filter it out.
+            for result in results_with_answer:
+                if not result.startswith("<Answer>"):
+                    results.append(result)
             if len(results) == 1:
                 logger.warning("SOURCE_DELIMITER not found in tool '%s' output", name)
             return results
@@ -134,9 +139,9 @@ async def reranked_search(config: RerankedSearchConfig, builder: Builder):
         # Rerank. Use the overall_query for reranking purposes.
         documents = [Document(page_content=r) for r in all_results]
         reranked_docs = await compressor.acompress_documents(query=input.overall_query, documents=documents)
-        ranked_contents: list[str] = [doc.page_content for doc in reranked_docs[: config.top_k]]
+        ranked_contents: list[str] = [doc.page_content for doc in reranked_docs]
 
-        return f"Top {config.top_k} results ranked by relevance:\n" + SOURCE_DELIMITER.join(ranked_contents)
+        return f"Top {len(ranked_contents)} results ranked by relevance:\n" + SOURCE_DELIMITER.join(ranked_contents)
 
     yield FunctionInfo.from_fn(
         _reranked_search,

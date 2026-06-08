@@ -38,7 +38,11 @@ class TavilyWebSearchToolConfig(FunctionBaseConfig, name="tavily_web_search"):
     Requires a TAVILY_API_KEY environment variable or api_key config.
     """
 
-    include_answer: str = Field(default="advanced", description="Whether to include answers in the search results")
+    include_answer: str = Field(
+        default="advanced",
+        description="Whether to include answers in the search results. "
+        "Options: 'advanced', 'basic'; any other string disables answer",
+    )
     max_results: int = Field(default=3, description="Maximum number of search results to return")
     api_key: SecretStr | None = Field(default=None, description="The API key for the Tavily service")
     max_retries: int = Field(default=3, description="Maximum number of retries for the search request")
@@ -101,7 +105,7 @@ async def tavily_web_search(tool_config: TavilyWebSearchToolConfig, builder: Bui
         tavily_search = TavilySearch(
             max_results=tool_config.max_results,
             search_depth="advanced" if tool_config.advanced_search else "basic",
-            include_answer=tool_config.include_answer,
+            include_answer=tool_config.include_answer if tool_config.include_answer in ["advanced", "basic"] else None,
         )
 
         def _truncate_content(content: str) -> str:
