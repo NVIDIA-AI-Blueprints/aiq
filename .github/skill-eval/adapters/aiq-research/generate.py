@@ -63,8 +63,10 @@ def _test_script(spec_name: str, step: int) -> str:
         'if [ -d "$LOCAL_SKILLS_DIR" ]; then\n'
         '  export AIQ_EVAL_SKILLS_DIR="${AIQ_EVAL_SKILLS_DIR:-$LOCAL_SKILLS_DIR}"\n'
         "fi\n"
+        "# Exit status propagates from the verifier: 0 means it wrote reward.txt\n"
+        "# (for any reward); non-zero means it crashed, which Harbor must see as\n"
+        "# an error rather than a silent clean exit with no reward.txt.\n"
         f'python3 "$TEST_DIR/aiq_checks.py" --spec "$TEST_DIR/{spec_name}" --step {step}\n'
-        "exit 0\n"
     )
 
 

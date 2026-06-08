@@ -60,8 +60,10 @@ def run_json_command(command: str) -> tuple[bool, str]:
     passed, output = run_shell(command)
     if not passed:
         return False, output
+    if not output:
+        return False, "stdout was empty; expected JSON output"
     try:
-        json.loads(output or "{}")
+        json.loads(output)
     except json.JSONDecodeError as exc:
         return False, f"stdout was not valid JSON: {exc}: {output[:1000]}"
     return True, output[:1000]
