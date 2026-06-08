@@ -53,6 +53,7 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     """Configuration for the deep research agent."""
 
     orchestrator_llm: LLMRef = Field(..., description="LLM for orchestrator")
+    source_router_llm: LLMRef | None = Field(default=None, description="LLM for source-router subagent")
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
     evidence_judge_llm: LLMRef | None = Field(default=None, description="LLM for evidence judge subagent")
@@ -132,6 +133,9 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     provider.set_default(llm)
 
     provider.configure(LLMRole.ORCHESTRATOR, llm)
+    if config.source_router_llm:
+        source_router_llm = await builder.get_llm(config.source_router_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+        provider.configure(LLMRole.ROUTER, source_router_llm)
     if config.researcher_llm:
         researcher_llm = await builder.get_llm(config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.RESEARCHER, researcher_llm)

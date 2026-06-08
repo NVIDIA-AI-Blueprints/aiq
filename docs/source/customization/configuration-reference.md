@@ -348,8 +348,10 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
+    source_router_llm: nemotron_nano_llm
     researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
+    writer_llm: gpt_oss_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool
@@ -361,8 +363,10 @@ functions:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `orchestrator_llm` | `str` | **required** | LLM for the orchestrator that coordinates the research workflow. |
+| `source_router_llm` | `str` | `None` | LLM for the source-router sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `researcher_llm` | `str` | `None` | LLM for the researcher sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `planner_llm` | `str` | `None` | LLM for the planner sub-agent. Falls back to `orchestrator_llm` if not specified. |
+| `writer_llm` | `str` | `None` | LLM for the final writer/synthesis sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `tools` | `list[str]` | `[]` | Search tools available to the researcher sub-agent. |
 | `max_loops` | `int` | `2` | Maximum number of orchestrator planning/research loops. |
 | `verbose` | `bool` | `true` | Enable verbose logging. |
@@ -491,6 +495,8 @@ functions:
   deep_research_agent:                 # Multi-phase deep research
     _type: deep_research_agent
     orchestrator_llm: deep_llm
+    source_router_llm: router_llm
+    writer_llm: writer_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool

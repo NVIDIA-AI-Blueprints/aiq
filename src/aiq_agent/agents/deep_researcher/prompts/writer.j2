@@ -64,13 +64,15 @@ When synthesizing:
 
 ## Citations
 - Citations are mandatory for any sourced final answer. Every material factual claim, number, date, quote, source-specific caveat, or source claim must have an inline citation like `[1]`.
-- Before drafting, call `get_verified_sources` and build a citation map from verified sources plus ResearchNotes source locators.
-- Each citation number must map to exactly one verified URL or one exact verified citation key/source locator. Do not group multiple publishers, tools, URLs, or source names under one citation number.
-- The `## Sources` section must include one line per cited source, using this shape: `[N] Title: https://...` for URL sources, or `[N] exact-document-or-tool-citation-key` for URL-less verified sources.
-- Use only source URLs, titles, and citation keys that appear in ResearchNotes or `get_verified_sources`. Do not invent friendly source names, URLs, citation keys, or aggregated source labels.
-- Do not cite vague source labels without a URL or exact citation key, such as `[1] CNN; Yahoo Finance; Barchart`. That citation is unverifiable and will be removed.
+- Before drafting, call `get_verified_sources`. Treat its output as the authoritative whitelist for final citations and the final `## Sources` section.
+- Build the citation map only from `get_verified_sources` entries. ResearchNotes can tell you which evidence is useful, but ResearchNotes titles, archive names, publisher names, source labels, and note-local citation numbers are not valid final citations unless the exact same URL or citation key appears in `get_verified_sources`.
+- Each citation number must map to exactly one verified URL or one exact verified citation key from `get_verified_sources`. Do not group multiple publishers, tools, URLs, archive names, collections, documents, or source names under one citation number.
+- The `## Sources` section must include one line per cited source, copied from the citation map, using this shape: `[N] Title: https://...` for URL sources, or `[N] exact-document-or-tool-citation-key` for URL-less verified sources.
+- Every `## Sources` line must contain either a full `http://` or `https://` URL copied from `get_verified_sources`, or an exact URL-less citation key copied from `get_verified_sources`. A descriptive label by itself is invalid.
+- Do not invent, paraphrase, shorten, summarize, or "prettify" source locators. Do not invent friendly source names, URLs, citation keys, archive names, collection labels, or aggregated source labels.
+- Do not cite vague source labels without a URL or exact citation key, such as `[1] CNN; Yahoo Finance; Barchart`, `[2] Factory Inspection Reports`, or `[3] National Archives correspondence`. Those citations are unverifiable and will be removed.
 - For claims supported by multiple sources, use adjacent citations like `[1][2]`, with each number pointing to its own source line.
-- If a material claim has no verified supporting source, remove the claim or state it as an evidence gap without a citation.
+- If a material claim cannot be mapped to a `get_verified_sources` entry, remove the claim or state it as an evidence gap without a citation.
 - Do not place bare URLs in the report body; URLs belong only in the `## Sources` section.
 - Deterministic post-processing will verify and sanitize citations after you return. Do not use `edit_file` or repeated search-and-replace calls to repair citation numbering or citation syntax. If citation syntax is wrong before writing, regenerate the Markdown in memory and write `/shared/output.md` once.
 

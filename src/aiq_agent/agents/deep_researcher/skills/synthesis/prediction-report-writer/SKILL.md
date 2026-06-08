@@ -115,14 +115,14 @@ For table-oriented forecast requests, include a table with scenario, forecast, p
 - Every material factual claim must have a normal numeric citation like `[1]`.
 - Cite anchors, latest values, market odds, polls, expert forecasts, official data, and each major supporting/opposing factor.
 - Do not place bare URLs in the report body.
-- Use only ResearchNotes sources and verified sources.
-- Before drafting, build a citation map from ResearchNotes source locators and the result of `get_verified_sources`.
-- Each citation number must map to exactly one verified URL or one exact verified citation key/source locator. Do not group multiple publishers, tools, URLs, or source names under one citation number.
-- Do not write unverifiable aggregate labels such as `[1] CNN; Yahoo Finance; Barchart`.
+- Before drafting, call `get_verified_sources` and build the final citation map only from that output. ResearchNotes can guide what evidence to use, but ResearchNotes titles, archive names, publisher names, source labels, and note-local citation numbers are not valid final citations unless the exact same URL or citation key appears in `get_verified_sources`.
+- Each citation number must map to exactly one verified URL or one exact verified citation key from `get_verified_sources`. Do not group multiple publishers, tools, URLs, archive names, collections, documents, or source names under one citation number.
+- Do not write unverifiable aggregate labels such as `[1] CNN; Yahoo Finance; Barchart`, `[2] Factory Inspection Reports`, or `[3] National Archives correspondence`.
 - For claims supported by multiple sources, use adjacent citations like `[1][2]`, with each number pointing to its own source line.
 - The Sources section must include one line per cited source in the form `[N] Title: https://...` for URL sources, or `[N] exact-document-or-tool-citation-key` for URL-less verified sources.
-- Do not invent URLs, source titles, market data, model outputs, or ensemble probabilities.
-- If a forecast-relevant claim has no verified supporting source, remove it or state it as an uncertainty/gap without a citation.
+- Every Sources line must contain one full URL or exact citation key copied from `get_verified_sources`. A descriptive source label by itself is invalid.
+- Do not invent, recall, paraphrase, shorten, summarize, or "prettify" URLs, citation keys, source titles, market data, model outputs, or ensemble probabilities.
+- If a forecast-relevant claim cannot be mapped to a `get_verified_sources` entry, remove it or state it as an uncertainty/gap without a citation.
 - Do not use edit loops or search-and-replace passes to repair citation numbering. Deterministic post-processing verifies and sanitizes citations after `/shared/output.md` is written.
 
 ## Calibration And Confidence
@@ -145,7 +145,7 @@ Before finishing:
 2. Confirm supporting and opposing evidence are both represented unless no opposing evidence was found; if none was found, say so briefly as a caveat.
 3. Confirm key uncertainties are concrete and actionable.
 4. Confirm every material factual claim has an inline citation.
-5. Confirm the Sources section includes every cited source and that each source line contains one verified URL or one exact citation key.
+5. Confirm the Sources section includes every cited source and that each source line contains one full verified URL or one exact citation key copied from `get_verified_sources`; descriptive source labels alone are invalid.
 6. Confirm no internal files, agents, prompts, or tool names are mentioned.
 7. Confirm internal evidence judge scores and rationales are not exposed unless the user explicitly asked for methodology.
 8. Write the complete Markdown answer to `/shared/output.md`.

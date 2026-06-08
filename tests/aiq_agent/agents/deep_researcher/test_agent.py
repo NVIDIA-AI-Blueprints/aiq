@@ -96,6 +96,7 @@ class TestDeepResearcherAgent:
         provider = LLMProvider()
         provider.set_default(mock_llm)
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
+        provider.configure(LLMRole.ROUTER, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
         provider.configure(LLMRole.EVIDENCE_JUDGE, mock_llm)
@@ -229,6 +230,7 @@ class TestDeepResearcherAgent:
 
         config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
+            source_router_llm="source-router-llm",
             writer_llm="writer-llm",
             skills=SkillsConfig(enabled=True),
             sandbox=SandboxConfig(app_name="custom-aiq", python_packages=["matplotlib", "pillow"]),
@@ -240,6 +242,7 @@ class TestDeepResearcherAgent:
         )
 
         assert config.skills.enabled is True
+        assert config.source_router_llm == "source-router-llm"
         assert config.writer_llm == "writer-llm"
         assert config.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
         assert config.max_research_concurrency == 2
@@ -966,6 +969,7 @@ class TestDeepResearcherAgent:
             await agent.run(state)
 
             mock_llm_provider.get.assert_any_call(LLMRole.PLANNER)
+            mock_llm_provider.get.assert_any_call(LLMRole.ROUTER)
             mock_llm_provider.get.assert_any_call(LLMRole.RESEARCHER)
             mock_llm_provider.get.assert_any_call(LLMRole.EVIDENCE_JUDGE)
             mock_llm_provider.get.assert_any_call(LLMRole.REPORT_WRITER)

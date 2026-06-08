@@ -217,9 +217,11 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: gpt_oss_llm
+    source_router_llm: nemotron_nano_llm
     researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     evidence_judge_llm: nemotron_nano_llm
     planner_llm: gpt_oss_llm
+    writer_llm: gpt_oss_llm
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
       - web_search_tool
