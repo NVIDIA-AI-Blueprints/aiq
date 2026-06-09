@@ -17,13 +17,13 @@ Packages under the MIT License:
    @react-pdf/renderer               4.3.2
    @tailwindcss/postcss              4.1.18
    aiosqlite                         0.22.1
-   deepagents                        0.4.2
+   deepagents                        0.6.8
    http-proxy                        1.18.1
-   langchain-core                    1.2.12
-   langchain-tavily                  0.2.17
+   langchain-core                    1.4.0
+   langchain-tavily                  0.2.18
    marked                            16.4.2
    mypy                              1.19.1
-   next                              16.1.6
+   next                              16.2.6
    pdfplumber                        0.11.9
    pre-commit                        4.5.1
    pytest-cov                        7.0.0
@@ -70,9 +70,10 @@ Packages under the Apache License, Version 2.0:
 
    @nvidia/foundations-react-core    0.600.0
    chromadb                          1.5.0
-   nvidia-nat                        1.5.0
-   openai                            2.20.0
-   python-multipart                  0.0.22
+   nvidia-nat                        1.7.0
+   openai                            2.24.0
+   pyopenssl                         26.2.0
+   python-multipart                  0.0.28
    requests                          2.32.5
    yapf                              0.43.0
 
@@ -207,9 +208,9 @@ and must be validated from upstream repositories:
    pillow                            12.2.0
    psycopg                           3.3.2
    pydantic                          2.12.5
-   pytest                            9.0.2
+   pytest                            9.0.3
    pytest-asyncio                    1.3.0
-   python-dotenv                     1.2.1
-   urllib3                           2.6.3
+   python-dotenv                     1.2.2
+   urllib3                           2.7.0
 
 END OF THIRD-PARTY LICENSES

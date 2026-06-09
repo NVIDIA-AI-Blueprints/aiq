@@ -1,17 +1,14 @@
 name: AIQ UI CI
 
+# Trigger: push-only. All PRs (internal and external) are mirrored to
+# pull-request/<N> branches by copy-pr-bot after `/ok to test` approval.
+# Only runs when UI source or this workflow file changes.
 on:
-  pull_request:
-    branches:
-      - develop
-      - "release/**"
-    paths:
-      - "frontends/ui/**"
-      - ".github/workflows/ui.yml"
   push:
     branches:
       - develop
       - "release/**"
+      - "pull-request/[0-9]+"
     paths:
       - "frontends/ui/**"
       - ".github/workflows/ui.yml"
