@@ -31,14 +31,14 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat-core==1.6.0",
-    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.6.0",
-    "nvidia-nat-eval==1.6.0",
-    "nvidia-nat-profiler==1.6.0",
-    "deepagents==0.5.0",
-    "langchain-modal==0.0.3",
+    "nvidia-nat-core==1.7.0",
+    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.7.0",
+    "nvidia-nat-eval==1.7.0",
+    "nvidia-nat-profiler==1.7.0",
+    "deepagents>=0.6.5",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
+    "langchain-modal==0.0.5",
     "psycopg[binary]>=3.0.0",
     "asyncpg>=0.29.0",
     "aiosqlite>=0.19.0",
