@@ -106,7 +106,6 @@ async def tavily_web_search(tool_config: TavilyWebSearchToolConfig, builder: Bui
 
         if tool_config.api_base_url:
             tavily_kwargs["api_base_url"] = tool_config.api_base_url
-            logger.info(f"Using {tool_config.api_base_url}")
         tavily_search = TavilySearch(**tavily_kwargs)
 
         def _truncate_content(content: str) -> str:
