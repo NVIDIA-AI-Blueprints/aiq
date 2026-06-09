@@ -165,7 +165,6 @@ functions:
     orchestrator_llm: openai_gpt_5_2
     source_router_llm: nemotron_nano_llm
     researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    evidence_judge_llm: nemotron_nano_llm
     planner_llm: openai_gpt_5_2
     writer_llm: openai_gpt_5_2
     verbose: true

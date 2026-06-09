@@ -45,8 +45,7 @@ from .tools.source_tool_batching import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_MAX_RESEARCH_CONCURRENCY = 3
-DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS = 300
+DEFAULT_MAX_RESEARCH_CONCURRENCY = 6
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
@@ -65,12 +64,12 @@ class DeepResearcherAgent:
         verbose: bool = True,
         callbacks: list[Any] | None = None,
         domain_catalog_path: str | None = None,
+        enable_source_router: bool = True,
         skills: SkillsConfig | None = None,
         sandbox: SandboxConfig | None = None,
         config: Any | None = None,
         job_id: str | None = None,
         max_research_concurrency: int = DEFAULT_MAX_RESEARCH_CONCURRENCY,
-        research_query_timeout_seconds: float = DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS,
         max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
         max_source_tool_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
     ) -> None:
@@ -83,13 +82,13 @@ class DeepResearcherAgent:
             verbose: Enable detailed logging.
             callbacks: Optional list of callbacks.
             domain_catalog_path: Optional YAML/JSON domain catalog path for source-router-agent.
+            enable_source_router: Enable the advisory source-router-agent before planning.
             skills: Optional DeepAgents skills config.
             sandbox: Optional DeepAgents sandbox config.
             config: Optional agent config. Used by async workers to pass function config generically.
             job_id: Optional async job identifier used to scope sandbox backends.
             max_research_concurrency: Maximum ResearchQuery items accepted and run concurrently per
                 run_research_batch call.
-            research_query_timeout_seconds: Per-ResearchQuery timeout for researcher workers.
             max_concurrent_source_tool_calls: Shared source-tool concurrency limit across researcher workers.
             max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
         """
@@ -101,12 +100,13 @@ class DeepResearcherAgent:
         if config is not None:
             skills = skills or getattr(config, "skills", None)
             sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
+            enable_source_router = getattr(config, "enable_source_router", enable_source_router)
 
         self.max_research_concurrency = max_research_concurrency
-        self.research_query_timeout_seconds = research_query_timeout_seconds
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
         self.domain_catalog_path = domain_catalog_path
+        self.enable_source_router = enable_source_router
         self.job_id = str(job_id) if job_id is not None else str(uuid4())
 
         self.deepagents_runtime = DeepAgentsRuntime(skills=skills, sandbox=sandbox, job_id=self.job_id)
@@ -133,7 +133,6 @@ class DeepResearcherAgent:
         self.researcher_tools = self.tool_set.researcher_tools
         self.writer_tools = self.tool_set.writer_tools
         self.researcher_middleware = self.middleware_set.researcher
-        self.evidence_judge_middleware = self.middleware_set.evidence_judge
         self.writer_middleware = self.middleware_set.writer
         self.orchestrator_middleware = self.middleware_set.orchestrator
         self.middleware = self.researcher_middleware
@@ -141,7 +140,7 @@ class DeepResearcherAgent:
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""
         prompts = {}
-        prompt_names = ["planner", "researcher", "orchestrator", "writer", "source_router", "evidence_judge"]
+        prompt_names = ["planner", "researcher", "orchestrator", "writer", "source_router"]
 
         for name in prompt_names:
             prompts[name] = load_prompt(AGENT_DIR / "prompts", name)
@@ -158,10 +157,11 @@ class DeepResearcherAgent:
             runtime=self.deepagents_runtime,
             tool_set=self.tool_set,
             middleware_set=self.middleware_set,
+            source_registry_middleware=self.source_registry_middleware,
             callbacks=self.callbacks,
             domain_catalog_path=self.domain_catalog_path,
+            enable_source_router=self.enable_source_router,
             max_research_concurrency=self.max_research_concurrency,
-            research_query_timeout_seconds=self.research_query_timeout_seconds,
         )
 
     def _extract_final_markdown(self, result: dict | Any) -> str | None:
@@ -177,17 +177,6 @@ class DeepResearcherAgent:
                     output_entry = output_entry.decode("utf-8")
                 if isinstance(output_entry, str) and output_entry.strip():
                     return output_entry.strip()
-
-        try:
-            downloads = self.deepagents_runtime.backend.download_files(["/shared/output.md"])
-        except Exception:  # noqa: BLE001 - final text can still be returned from messages/files
-            downloads = []
-        for download in downloads:
-            if download.error is None and download.content is not None:
-                output_file = download.content.decode("utf-8").strip()
-                if output_file:
-                    return output_file
-
         return None
 
     @staticmethod
@@ -260,15 +249,6 @@ class DeepResearcherAgent:
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report
-            try:
-                uploads = self.deepagents_runtime.backend.upload_files(
-                    [("/shared/report.md", final_message.encode("utf-8"))]
-                )
-                errors = [f"{upload.path}: {upload.error}" for upload in uploads if upload.error]
-                if errors:
-                    logger.warning("Failed to persist /shared/report.md: %s", "; ".join(errors))
-            except Exception as ex:  # noqa: BLE001 - final message remains the source of truth
-                logger.warning("Failed to persist /shared/report.md: %s", ex)
 
             # Re-emit the verified/sanitized report so the frontend overwrites
             # the raw version that on_llm_end auto-emitted during ainvoke().

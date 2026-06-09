@@ -33,7 +33,6 @@ from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.agents.deep_researcher.models import ResearchQuery
-from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
 from aiq_agent.agents.deep_researcher.tools.research import build_research_batch_tool
 from aiq_agent.agents.deep_researcher.tools.research import researcher_invoke_state
 from aiq_agent.common import LLMProvider
@@ -99,7 +98,6 @@ class TestDeepResearcherAgent:
         provider.configure(LLMRole.ROUTER, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
-        provider.configure(LLMRole.EVIDENCE_JUDGE, mock_llm)
         provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         provider.get = MagicMock(wraps=provider.get)
         return provider
@@ -116,7 +114,7 @@ class TestDeepResearcherAgent:
             callbacks=agent.callbacks,
             source_tool_names=agent.source_tool_names,
             max_research_concurrency=agent.max_research_concurrency,
-            research_query_timeout_seconds=agent.research_query_timeout_seconds,
+            source_registry_middleware=agent.source_registry_middleware,
         )
 
     def _structured_notes_response(self, query_topic: str = "Research Topic"):
@@ -167,7 +165,6 @@ class TestDeepResearcherAgent:
             "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
             return_value=mock_create_deep_agent,
         ):
-            from aiq_agent.agents.deep_researcher.agent import DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(
@@ -179,8 +176,8 @@ class TestDeepResearcherAgent:
             assert len(agent.tools) == 1
             assert agent.verbose is True
             assert agent.callbacks == []
-            assert agent.research_query_timeout_seconds == DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS
             assert agent.deepagents_runtime.skill_sources_for("orchestrator") is None
+            assert agent.enable_source_router is True
 
     def test_init_with_custom_settings(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization with custom settings."""
@@ -199,8 +196,8 @@ class TestDeepResearcherAgent:
                 skills=SkillsConfig.enabled_builtin(),
                 sandbox=SandboxConfig(app_name="custom-aiq"),
                 domain_catalog_path="configs/deep_research_domain_catalog.yml",
+                enable_source_router=False,
                 max_research_concurrency=2,
-                research_query_timeout_seconds=30.0,
                 max_concurrent_source_tool_calls=3,
                 max_source_tool_batch_size=4,
             )
@@ -208,10 +205,10 @@ class TestDeepResearcherAgent:
             assert agent.verbose is False
             assert agent.callbacks == callbacks
             assert agent.max_research_concurrency == 2
-            assert agent.research_query_timeout_seconds == 30.0
             assert agent.max_concurrent_source_tool_calls == 3
             assert agent.max_source_tool_batch_size == 4
             assert agent.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
+            assert agent.enable_source_router is False
             assert agent.deepagents_runtime.skill_sources_for("orchestrator") == [BUILTIN_SKILL_SOURCE]
 
     def test_sandbox_config_rejects_unsupported_provider(self):
@@ -235,10 +232,10 @@ class TestDeepResearcherAgent:
             skills=SkillsConfig(enabled=True),
             sandbox=SandboxConfig(app_name="custom-aiq", python_packages=["matplotlib", "pillow"]),
             max_research_concurrency=2,
-            research_query_timeout_seconds=30.0,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
             domain_catalog_path="configs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
         )
 
         assert config.skills.enabled is True
@@ -246,9 +243,9 @@ class TestDeepResearcherAgent:
         assert config.writer_llm == "writer-llm"
         assert config.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
         assert config.max_research_concurrency == 2
-        assert config.research_query_timeout_seconds == 30.0
         assert config.max_concurrent_source_tool_calls == 3
         assert config.max_source_tool_batch_size == 4
+        assert config.enable_source_router is False
         assert config.skills.default_sources == (BUILTIN_SKILL_SOURCE,)
         assert config.skills.agent_sources == {}
         assert config.sandbox is not None
@@ -297,7 +294,6 @@ class TestDeepResearcherAgent:
             assert "orchestrator" in agent._prompts
             assert "writer" in agent._prompts
             assert "source_router" in agent._prompts
-            assert "evidence_judge" in agent._prompts
 
     def test_prepare_state_preloads_builtin_skill_files(self, mock_llm_provider, real_tool):
         """Built-in skills are added to state so StateBackend can discover them."""
@@ -376,7 +372,7 @@ class TestDeepResearcherAgent:
             assert researcher_kwargs["response_format"] is ResearchNotes
             researcher_middleware = researcher_kwargs["middleware"]
             assert researcher_middleware is not agent.researcher_middleware
-            assert any(m.__class__.__name__ == "TodoListMiddleware" for m in researcher_middleware)
+            assert not any(m.__class__.__name__ == "TodoListMiddleware" for m in researcher_middleware)
             researcher_skills = [m for m in researcher_middleware if m.__class__.__name__ == "SkillsMiddleware"]
             assert researcher_skills == []
             assert any(m.__class__.__name__ == "FilesystemMiddleware" for m in researcher_middleware)
@@ -391,9 +387,15 @@ class TestDeepResearcherAgent:
             assert "read_file" in researcher_kwargs["system_prompt"]
             assert "SKILL.md" in researcher_kwargs["system_prompt"]
             assert "ResearchQuery.target_components" in researcher_kwargs["system_prompt"]
+            assert "Evidence judgment" in researcher_kwargs["system_prompt"]
             assert "Do not call `write_file` or `edit_file`" in researcher_kwargs["system_prompt"]
             assert "write_file` filesystem tool exactly once" not in researcher_kwargs["system_prompt"]
             assert "After the `write_file` tool returns" not in researcher_kwargs["system_prompt"]
+            assert "Default source budget per ResearchQuery" in researcher_kwargs["system_prompt"]
+            assert "one primary source-tool call" in researcher_kwargs["system_prompt"]
+            assert "at most one fallback or corroboration call" in researcher_kwargs["system_prompt"]
+            assert "at most one extra targeted follow-up" in researcher_kwargs["system_prompt"]
+            assert "Do not run every possible source angle" in researcher_kwargs["system_prompt"]
             assert "skills" not in kwargs
             assert not callable(kwargs["backend"])
             assert [tool.name for tool in kwargs["tools"]] == [
@@ -408,36 +410,32 @@ class TestDeepResearcherAgent:
             assert "read_writer_context" not in kwargs["system_prompt"]
             assert "Shell commands cannot see `/shared/`" in kwargs["system_prompt"]
             assert "to /shared/output.md" in kwargs["system_prompt"]
+            assert "returns only a short completion marker" in kwargs["system_prompt"]
+            assert "do not echo the full Markdown" in kwargs["system_prompt"]
             assert (
                 "Never call `source-router-agent` and `planner-agent` in the same assistant turn"
                 in kwargs["system_prompt"]
             )
             assert "Only after the source-router-agent tool result has returned" in kwargs["system_prompt"]
-            assert "up to 6" not in kwargs["system_prompt"]
+            assert "at most 6 full ResearchQuery objects per call" in kwargs["system_prompt"]
+            assert "all needed queries in one call when there are 6 or fewer" in kwargs["system_prompt"]
+            assert "fewest ordered batches" in kwargs["system_prompt"]
+            assert "do not create smaller curated waves" in kwargs["system_prompt"]
+            assert "Never repeat a covered query" in kwargs["system_prompt"]
+            assert "revise only the invalid, failed, or missing ResearchQuery objects" in kwargs["system_prompt"]
             assert "max_batch_research_queries" not in kwargs["system_prompt"]
             assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
-            assert set(subagents) == {"source-router-agent", "planner-agent", "evidence-judge-agent", "writer-agent"}
-            assert subagents["source-router-agent"]["response_format"] is SourceRoutingPlan
+            assert set(subagents) == {"source-router-agent", "planner-agent", "writer-agent"}
+            assert "response_format" not in subagents["source-router-agent"]
             assert "skills" not in subagents["source-router-agent"]
-            assert {tool.name for tool in subagents["source-router-agent"]["tools"]} == {
-                "lookup_source_catalog",
-                "think",
-            }
+            assert {tool.name for tool in subagents["source-router-agent"]["tools"]} == {"lookup_source_catalog"}
+            assert "write_todos" in subagents["source-router-agent"]["system_prompt"]
+            assert "Use at most two tool calls total" in subagents["source-router-agent"]["system_prompt"]
             assert real_tool.name not in {tool.name for tool in subagents["source-router-agent"]["tools"]}
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
             assert "skills" not in subagents["planner-agent"]
             assert real_tool.name in {tool.name for tool in subagents["planner-agent"]["tools"]}
-            assert "response_format" not in subagents["evidence-judge-agent"]
-            assert subagents["evidence-judge-agent"]["tools"] == agent.writer_tools
-            assert real_tool.name not in {tool.name for tool in subagents["evidence-judge-agent"]["tools"]}
-            assert subagents["evidence-judge-agent"]["middleware"] is agent.evidence_judge_middleware
-            assert "skills" not in subagents["evidence-judge-agent"]
-            assert "/shared/evidence_judgments.json" in subagents["evidence-judge-agent"]["system_prompt"]
-            assert (
-                "Do not call `write_file`, `edit_file`, `ls`, or `glob`"
-                in subagents["evidence-judge-agent"]["system_prompt"]
-            )
             assert "response_format" not in subagents["writer-agent"]
             assert subagents["writer-agent"]["tools"] == agent.writer_tools
             assert real_tool.name not in {tool.name for tool in subagents["writer-agent"]["tools"]}
@@ -452,11 +450,18 @@ class TestDeepResearcherAgent:
             assert "Retain useful detail" in subagents["writer-agent"]["system_prompt"]
             assert "Point out meaningful conflicts" in subagents["writer-agent"]["system_prompt"]
             assert "Use tables when the evidence has comparable entities" in subagents["writer-agent"]["system_prompt"]
-            assert "/shared/evidence_judgments.json" in subagents["writer-agent"]["system_prompt"]
-            assert "ResearchNotes.evidence_judgment" not in subagents["writer-agent"]["system_prompt"]
+            assert "do not mechanically mirror them as final headings" in subagents["writer-agent"]["system_prompt"]
+            assert "coherent analytical narrative" in subagents["writer-agent"]["system_prompt"]
+            assert "Use bullets sparingly" in subagents["writer-agent"]["system_prompt"]
+            assert "/shared/evidence_judgments.json" not in subagents["writer-agent"]["system_prompt"]
+            assert "ResearchNotes.evidence_judgment" in subagents["writer-agent"]["system_prompt"]
             assert (
                 "high-score/high-confidence notes are synthesis anchors" in subagents["writer-agent"]["system_prompt"]
             )
+            assert "default compact mode" in subagents["writer-agent"]["system_prompt"]
+            assert 'get_verified_sources(mode="full")' in subagents["writer-agent"]["system_prompt"]
+            assert "Wrote /shared/output.md" in subagents["writer-agent"]["system_prompt"]
+            assert "Do not return the full Markdown" in subagents["writer-agent"]["system_prompt"]
             assert "Do not use `edit_file` or repeated search-and-replace" in subagents["writer-agent"]["system_prompt"]
             assert "Final Output Grading Rubric" not in subagents["writer-agent"]["system_prompt"]
             assert "rubric" not in subagents["writer-agent"]["system_prompt"].lower()
@@ -474,6 +479,10 @@ class TestDeepResearcherAgent:
             assert "researcher agent" not in planner_prompt
             assert "data-table-analysis" not in planner_prompt
             assert "answer_strategy" in planner_prompt
+            assert "Dynamic Discovery Budget" in planner_prompt
+            assert "Do not turn planning into full evidence gathering" in planner_prompt
+            assert "configured batch concurrency of 6" in planner_prompt
+            assert "Thorough evidence gathering is essential" not in planner_prompt
             assert "Table of Contents" not in planner_prompt
             assert "/shared/source_routing.json" in planner_prompt
             assert "Do not call `ls` and `read_file` for `/shared/source_routing.json` in the same assistant turn" in (
@@ -514,7 +523,7 @@ class TestDeepResearcherAgent:
             assert researcher_kwargs["response_format"] is ResearchNotes
             researcher_middleware = researcher_kwargs["middleware"]
             assert researcher_middleware is not agent.researcher_middleware
-            assert any(m.__class__.__name__ == "TodoListMiddleware" for m in researcher_middleware)
+            assert not any(m.__class__.__name__ == "TodoListMiddleware" for m in researcher_middleware)
             assert not any(m.__class__.__name__ == "SkillsMiddleware" for m in researcher_middleware)
             assert any(m.__class__.__name__ == "FilesystemMiddleware" for m in researcher_middleware)
             assert any(m.__class__.__name__ == "PatchToolCallsMiddleware" for m in researcher_middleware)
@@ -529,13 +538,11 @@ class TestDeepResearcherAgent:
             ]
             assert real_tool.name not in {tool.name for tool in create.call_args.kwargs["tools"]}
             subagents = {subagent["name"]: subagent for subagent in create.call_args.kwargs["subagents"]}
-            assert set(subagents) == {"source-router-agent", "planner-agent", "evidence-judge-agent", "writer-agent"}
-            assert subagents["source-router-agent"]["response_format"] is SourceRoutingPlan
+            assert set(subagents) == {"source-router-agent", "planner-agent", "writer-agent"}
+            assert "response_format" not in subagents["source-router-agent"]
             assert "skills" not in subagents["source-router-agent"]
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
             assert real_tool.name in {tool.name for tool in subagents["planner-agent"]["tools"]}
-            assert "response_format" not in subagents["evidence-judge-agent"]
-            assert subagents["evidence-judge-agent"]["middleware"] is agent.evidence_judge_middleware
             assert "response_format" not in subagents["writer-agent"]
             assert subagents["writer-agent"]["tools"] == agent.writer_tools
             assert real_tool.name not in {tool.name for tool in subagents["writer-agent"]["tools"]}
@@ -544,6 +551,54 @@ class TestDeepResearcherAgent:
                 "When available skills apply during planning, research, or synthesis"
                 not in (create.call_args.kwargs["system_prompt"])
             )
+
+    def test_build_orchestrator_can_disable_source_router(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Source routing can be disabled without disabling planning, research, or writing."""
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+                return_value=mock_create_deep_agent,
+            ) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
+                return_value=mock_create_deep_agent,
+            ),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                enable_source_router=False,
+                max_research_concurrency=2,
+            )
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
+
+            agent._build_orchestrator_agent(state)
+
+            kwargs = create.call_args.kwargs
+            prompt = kwargs["system_prompt"]
+            subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
+            requested_roles = [args[0] for args, _kwargs in mock_llm_provider.get.call_args_list]
+            assert set(subagents) == {"planner-agent", "writer-agent"}
+            assert "source-router-agent" not in prompt
+            assert "/shared/source_routing.json" not in prompt
+            assert "Start with `planner-agent`" in prompt
+            assert "at most 2 full ResearchQuery objects per call" in prompt
+            assert "all needed queries in one call when there are 2 or fewer" in prompt
+            assert "fewest ordered batches" in prompt
+            assert "Never repeat a covered query" in prompt
+            assert subagents["planner-agent"]["response_format"] is ResearchPlan
+            assert "/shared/source_routing.json" not in subagents["planner-agent"]["system_prompt"]
+            assert real_tool.name in {tool.name for tool in subagents["planner-agent"]["tools"]}
+            assert subagents["writer-agent"]["tools"] == agent.writer_tools
+            assert LLMRole.ROUTER not in requested_roles
+            assert LLMRole.EVIDENCE_JUDGE not in requested_roles
 
     @pytest.mark.asyncio
     async def test_run_research_batch_returns_structured_notes(
@@ -598,6 +653,8 @@ class TestDeepResearcherAgent:
         ]
 
         batch_tool = self._build_batch_tool(agent, fake_runnable, backend=fake_backend)
+        agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.test/opencl", title="OpenCL"))
+        agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.test/unused", title="Unused"))
         tool_properties = batch_tool.tool_call_schema.model_json_schema()["properties"]
         assert "runtime" not in tool_properties
         assert "max_concurrency" not in tool_properties
@@ -641,6 +698,10 @@ class TestDeepResearcherAgent:
         persisted_payload = json.loads(persisted_content.decode("utf-8"))
         assert persisted_payload["query_topic"] == "CUDA / OpenCL portability"
         assert persisted_payload["target_components"] == ["programming_model"]
+        compact_sources = agent.source_registry_middleware.get_source_list_text()
+        assert compact_sources is not None
+        assert "https://example.test/opencl" in compact_sources
+        assert "https://example.test/unused" not in compact_sources
 
     @pytest.mark.asyncio
     async def test_run_research_batch_rejects_unranked_oversized_batches(
@@ -656,7 +717,7 @@ class TestDeepResearcherAgent:
         agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
         batch_tool = self._build_batch_tool(agent, fake_runnable)
 
-        with pytest.raises(ValueError, match="run_research_batch accepts at most 3 curated queries"):
+        with pytest.raises(ValueError, match="run_research_batch accepts at most 6 curated queries"):
             await batch_tool.ainvoke(
                 {
                     "queries": [
@@ -667,7 +728,7 @@ class TestDeepResearcherAgent:
                             "target_components": [f"component_{i}"],
                             "rationale": "coverage",
                         }
-                        for i in range(4)
+                        for i in range(7)
                     ]
                 }
             )
@@ -743,19 +804,19 @@ class TestDeepResearcherAgent:
         assert '"subqueries": []' in call_state["messages"][0].content
 
     @pytest.mark.asyncio
-    async def test_run_research_batch_preserves_partial_successes(
+    async def test_run_research_batch_waits_for_slow_workers_and_preserves_errors(
         self,
         mock_llm_provider,
         real_tool,
     ):
-        """Failed and timed-out researchers are surfaced as tool errors."""
+        """Failed researchers are surfaced as tool errors without timing out slow workers."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
         class FakeResearcherRunnable:
             async def ainvoke(self, state, config=None):
                 content = state["messages"][0].content
                 if "slow query" in content:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.02)
                 if "bad query" in content:
                     raise RuntimeError("search backend exploded")
                 return {
@@ -790,7 +851,6 @@ class TestDeepResearcherAgent:
             llm_provider=mock_llm_provider,
             tools=[real_tool],
             max_research_concurrency=3,
-            research_query_timeout_seconds=0.01,
         )
 
         batch_tool = self._build_batch_tool(agent, FakeResearcherRunnable())
@@ -823,9 +883,9 @@ class TestDeepResearcherAgent:
                 }
             )
 
-        assert "run_research_batch failed for 2 of 3 researcher worker" in str(exc_info.value)
+        assert "run_research_batch failed for 1 of 3 researcher worker" in str(exc_info.value)
         assert "search backend exploded" in str(exc_info.value)
-        assert "timed out" in str(exc_info.value)
+        assert "timed out" not in str(exc_info.value)
 
     def test_researcher_invoke_state_carries_parent_files(self):
         """Nested researcher invocations inherit parent files for StateBackend-backed skills."""
@@ -971,9 +1031,10 @@ class TestDeepResearcherAgent:
             mock_llm_provider.get.assert_any_call(LLMRole.PLANNER)
             mock_llm_provider.get.assert_any_call(LLMRole.ROUTER)
             mock_llm_provider.get.assert_any_call(LLMRole.RESEARCHER)
-            mock_llm_provider.get.assert_any_call(LLMRole.EVIDENCE_JUDGE)
             mock_llm_provider.get.assert_any_call(LLMRole.REPORT_WRITER)
             mock_llm_provider.get.assert_any_call(LLMRole.ORCHESTRATOR)
+            requested_roles = [args[0] for args, _kwargs in mock_llm_provider.get.call_args_list]
+            assert LLMRole.EVIDENCE_JUDGE not in requested_roles
 
     @pytest.mark.asyncio
     async def test_run_basic_query(self, mock_llm_provider, real_tool, mock_create_deep_agent):
@@ -1143,10 +1204,8 @@ class TestFinalMarkdownExtraction:
     def real_tool(self):
         return web_search_tool
 
-    def test_extract_final_markdown_from_shared_output_backend_file(self, mock_llm_provider, real_tool):
-        """Final Markdown can be loaded from /shared/output.md."""
-        from deepagents.backends.protocol import FileDownloadResponse
-
+    def test_extract_final_markdown_does_not_download_from_backend(self, mock_llm_provider, real_tool):
+        """Final Markdown extraction only reads files returned by graph state."""
         with patch(
             "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
             return_value=MagicMock(),
@@ -1155,16 +1214,12 @@ class TestFinalMarkdownExtraction:
 
             agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
             fake_backend = MagicMock()
-            report = "Backend report [1].\n\n## Sources\n[1] Example: https://example.com"
-            fake_backend.download_files.return_value = [
-                FileDownloadResponse(path="/shared/output.md", content=report.encode("utf-8"), error=None)
-            ]
             agent.deepagents_runtime._backend = fake_backend
 
             output = agent._extract_final_markdown({"messages": [AIMessage(content="done")], "files": {}})
 
-            assert output == report
-            fake_backend.download_files.assert_called_once_with(["/shared/output.md"])
+            assert output is None
+            fake_backend.download_files.assert_not_called()
 
     def test_extract_final_markdown_from_shared_output_file(self, mock_llm_provider, real_tool):
         """Final Markdown can be loaded from /shared/output.md if the writer used the shared path."""

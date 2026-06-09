@@ -32,7 +32,6 @@ from aiq_agent.agents.deep_researcher.factory import build_researcher_runnable
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
-from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 
@@ -50,7 +49,6 @@ def _llm_provider() -> LLMProvider:
     provider.configure(LLMRole.ROUTER, llm)
     provider.configure(LLMRole.PLANNER, llm)
     provider.configure(LLMRole.RESEARCHER, llm)
-    provider.configure(LLMRole.EVIDENCE_JUDGE, llm)
     provider.configure(LLMRole.REPORT_WRITER, llm)
     provider.configure(LLMRole.ORCHESTRATOR, llm)
     return provider
@@ -62,7 +60,6 @@ def _prompts() -> dict[str, str]:
         "planner": "planner {% for tool in tools %}{{ tool.name }} {% endfor %}",
         "researcher": "researcher",
         "orchestrator": "orchestrator",
-        "evidence_judge": "judge {{ current_datetime }} /shared/evidence_judgments.json",
         "writer": "writer",
     }
 
@@ -106,21 +103,21 @@ def test_middleware_set_adds_orchestrator_batch_tool_name():
     registry, tool_set, middleware_set = _tool_set_and_middleware()
 
     researcher_sanitizer = _sanitizer(middleware_set.researcher)
-    judge_sanitizer = _sanitizer(middleware_set.evidence_judge)
+    writer_sanitizer = _sanitizer(middleware_set.writer)
     orchestrator_sanitizer = _sanitizer(middleware_set.orchestrator)
     assert "web_search_tool" in researcher_sanitizer.valid_tool_names
-    assert "edit_file" in judge_sanitizer.valid_tool_names
+    assert "edit_file" in writer_sanitizer.valid_tool_names
     assert "read_file" in researcher_sanitizer.valid_tool_names
     assert "write_file" in researcher_sanitizer.valid_tool_names
     assert "run_research_batch" not in researcher_sanitizer.valid_tool_names
     assert "run_research_batch" in orchestrator_sanitizer.valid_tool_names
     assert registry in middleware_set.researcher
-    assert registry in middleware_set.evidence_judge
+    assert registry in middleware_set.writer
     assert tool_set.writer_tools != tool_set.researcher_tools
 
 
 def test_subagents_route_tools_and_writer_skills():
-    """Source-router excludes source tools, planner receives them, and writer receives configured skills."""
+    """Source-router excludes source tools, planner receives source tools, and writer receives configured skills."""
     _, tool_set, middleware_set = _tool_set_and_middleware()
     runtime = DeepAgentsRuntime(
         skills=SkillsConfig(
@@ -140,20 +137,48 @@ def test_subagents_route_tools_and_writer_skills():
         middleware_set=middleware_set,
         domain_catalog_path=None,
         current_datetime="2026-06-03 12:00:00",
+        max_research_concurrency=6,
     )
 
     by_name = {subagent["name"]: subagent for subagent in subagents}
-    assert by_name["source-router-agent"]["response_format"] is SourceRoutingPlan
-    assert _tool_names(by_name["source-router-agent"]["tools"]) == ["think", "lookup_source_catalog"]
+    assert set(by_name) == {"source-router-agent", "planner-agent", "writer-agent"}
+    assert "response_format" not in by_name["source-router-agent"]
+    assert _tool_names(by_name["source-router-agent"]["tools"]) == ["lookup_source_catalog"]
     assert "web_search_tool" not in _tool_names(by_name["source-router-agent"]["tools"])
     assert by_name["planner-agent"]["response_format"] is ResearchPlan
     assert "web_search_tool" in _tool_names(by_name["planner-agent"]["tools"])
-    assert "response_format" not in by_name["evidence-judge-agent"]
-    assert _tool_names(by_name["evidence-judge-agent"]["tools"]) == ["think", "get_verified_sources"]
-    assert by_name["evidence-judge-agent"]["middleware"] is middleware_set.evidence_judge
-    assert "/shared/evidence_judgments.json" in by_name["evidence-judge-agent"]["system_prompt"]
     assert _tool_names(by_name["writer-agent"]["tools"]) == ["think", "get_verified_sources"]
     assert by_name["writer-agent"]["skills"] == ["/skills/synthesis/"]
+
+
+def test_subagents_can_disable_source_router():
+    """The source-router subagent can be omitted without changing the rest of the workflow."""
+    _, tool_set, middleware_set = _tool_set_and_middleware()
+    provider = _llm_provider()
+    provider.get = MagicMock(wraps=provider.get)
+
+    subagents = build_deep_research_subagents(
+        llm_provider=provider,
+        state=DeepResearchAgentState(messages=[]),
+        prompts=_prompts(),
+        tools=[web_search_tool],
+        runtime=DeepAgentsRuntime(),
+        tool_set=tool_set,
+        middleware_set=middleware_set,
+        domain_catalog_path=None,
+        current_datetime="2026-06-03 12:00:00",
+        max_research_concurrency=6,
+        enable_source_router=False,
+    )
+
+    by_name = {subagent["name"]: subagent for subagent in subagents}
+    assert set(by_name) == {"planner-agent", "writer-agent"}
+    assert by_name["planner-agent"]["response_format"] is ResearchPlan
+    assert "web_search_tool" in _tool_names(by_name["planner-agent"]["tools"])
+    assert _tool_names(by_name["writer-agent"]["tools"]) == ["think", "get_verified_sources"]
+    requested_roles = [args[0] for args, _kwargs in provider.get.call_args_list]
+    assert LLMRole.ROUTER not in requested_roles
+    assert LLMRole.EVIDENCE_JUDGE not in requested_roles
 
 
 def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
@@ -193,7 +218,7 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     assert kwargs["tools"] == [web_search_tool]
     assert kwargs["system_prompt"] == "rendered researcher prompt"
     assert kwargs["response_format"] is ResearchNotes
-    assert "TodoListMiddleware" in middleware_names
+    assert "TodoListMiddleware" not in middleware_names
     assert "SkillsMiddleware" in middleware_names
     assert "FilesystemMiddleware" in middleware_names
     assert "FakeSummarizationMiddleware" in middleware_names

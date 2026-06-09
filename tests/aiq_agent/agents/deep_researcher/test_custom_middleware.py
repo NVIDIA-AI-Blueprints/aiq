@@ -15,6 +15,7 @@
 
 """Tests for custom middleware."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -24,6 +25,8 @@ from langchain_core.messages import ToolMessage
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
+from aiq_agent.agents.deep_researcher.tools.source_registry import build_get_verified_sources_tool
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
 
@@ -334,6 +337,40 @@ class TestSourceRegistryMiddleware:
         urls = {s.url for s in middleware.registry.all_sources()}
         assert "https://a.com" in urls
         assert "https://b.com" in urls
+
+    def test_get_verified_sources_defaults_to_research_note_compact_subset(self, middleware):
+        """The writer-facing source list prefers sources carried forward by ResearchNotes."""
+        middleware.registry.add(SourceEntry(url="https://used.example/report", title="Used Report"))
+        middleware.registry.add(SourceEntry(url="https://unused.example/report", title="Unused Report"))
+        middleware.register_research_note_sources(
+            [SimpleNamespace(sources=[SimpleNamespace(locator="https://used.example/report")])]
+        )
+        tool = build_get_verified_sources_tool(middleware)
+
+        compact = tool.invoke({})
+        full = tool.invoke({"mode": "full"})
+
+        assert "https://used.example/report" in compact
+        assert "https://unused.example/report" not in compact
+        assert "https://used.example/report" in full
+        assert "https://unused.example/report" in full
+
+    def test_get_verified_sources_compact_matches_internal_citation_keys(self, middleware):
+        """Compact source filtering also works for URL-less internal citation keys."""
+        middleware.registry.add(SourceEntry(citation_key="report.pdf, p.5", title="report.pdf"))
+        middleware.registry.add(SourceEntry(citation_key="other.pdf, p.9", title="other.pdf"))
+        middleware.register_research_note_sources(
+            [SimpleNamespace(sources=[SimpleNamespace(locator="report.pdf, p.5")])]
+        )
+        tool = build_get_verified_sources_tool(middleware)
+
+        compact = tool.invoke({})
+        full = tool.invoke({"mode": "full"})
+
+        assert "report.pdf, p.5" in compact
+        assert "other.pdf, p.9" not in compact
+        assert "report.pdf, p.5" in full
+        assert "other.pdf, p.9" in full
 
     # -- Edge cases --
 

@@ -80,7 +80,6 @@ functions:
     # available_models (langchain_nvidia_ai_endpoints). Use nano for profiling or
     # point nemotron_super_llm at a dedicated NVCF base_url if you need Super.
     researcher_llm: nemotron_nano_llm
-    evidence_judge_llm: nemotron_nano_llm
     planner_llm: nemotron_nano_llm
     writer_llm: gpt_oss_llm
     max_loops: 2

@@ -17,7 +17,7 @@ Use this skill instead of `long-form-report-writer` whenever `answer_strategy.an
 Before writing, read:
 1. `/shared/plan.json`
 2. Every `ResearchNotes` JSON file under `/shared/` that supports the plan
-3. The result of `get_verified_sources`
+3. The compact result of `get_verified_sources`
 
 Use `think` to build a prediction synthesis outline before drafting:
 - Identify the original prediction question.
@@ -25,7 +25,7 @@ Use `think` to build a prediction synthesis outline before drafting:
 - Extract all anchors from the research notes, such as latest known values, base rates, market prices, expert forecasts, recent trend data, and official measurements.
 - Extract directional evidence supporting the prediction.
 - Extract directional evidence opposing the prediction.
-- Use `/shared/evidence_judgments.json` when present to prioritize notes: high-score/high-confidence notes should anchor the forecast, medium notes can support or nuance it, and low-score or low-confidence notes should mainly inform gaps, caveats, conflicts, or weak-evidence warnings.
+- Use each note's `ResearchNotes.evidence_judgment` when present to prioritize notes: high-score/high-confidence notes should anchor the forecast, medium notes can support or nuance it, and low-score or low-confidence notes should mainly inform gaps, caveats, conflicts, or weak-evidence warnings.
 - List major uncertainties that could change the forecast.
 - Decide the final forecast before drafting, then write the report around it.
 
@@ -115,7 +115,8 @@ For table-oriented forecast requests, include a table with scenario, forecast, p
 - Every material factual claim must have a normal numeric citation like `[1]`.
 - Cite anchors, latest values, market odds, polls, expert forecasts, official data, and each major supporting/opposing factor.
 - Do not place bare URLs in the report body.
-- Before drafting, call `get_verified_sources` and build the final citation map only from that output. ResearchNotes can guide what evidence to use, but ResearchNotes titles, archive names, publisher names, source labels, and note-local citation numbers are not valid final citations unless the exact same URL or citation key appears in `get_verified_sources`.
+- Before drafting, call `get_verified_sources` in its default compact mode and build the final citation map only from that output. ResearchNotes can guide what evidence to use, but ResearchNotes titles, archive names, publisher names, source labels, and note-local citation numbers are not valid final citations unless the exact same URL or citation key appears in `get_verified_sources`.
+- Call `get_verified_sources(mode="full")` only if a source locator from ResearchNotes is missing from the compact output and is materially needed.
 - Each citation number must map to exactly one verified URL or one exact verified citation key from `get_verified_sources`. Do not group multiple publishers, tools, URLs, archive names, collections, documents, or source names under one citation number.
 - Do not write unverifiable aggregate labels such as `[1] CNN; Yahoo Finance; Barchart`, `[2] Factory Inspection Reports`, or `[3] National Archives correspondence`.
 - For claims supported by multiple sources, use adjacent citations like `[1][2]`, with each number pointing to its own source line.
@@ -147,5 +148,6 @@ Before finishing:
 4. Confirm every material factual claim has an inline citation.
 5. Confirm the Sources section includes every cited source and that each source line contains one full verified URL or one exact citation key copied from `get_verified_sources`; descriptive source labels alone are invalid.
 6. Confirm no internal files, agents, prompts, or tool names are mentioned.
-7. Confirm internal evidence judge scores and rationales are not exposed unless the user explicitly asked for methodology.
+7. Confirm internal `evidence_judgment` scores and rationales are not exposed unless the user explicitly asked for methodology.
 8. Write the complete Markdown answer to `/shared/output.md`.
+9. Return only the short completion marker `Wrote /shared/output.md`; do not echo the full Markdown.

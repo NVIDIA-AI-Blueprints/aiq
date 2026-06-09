@@ -40,7 +40,6 @@ from nat.data_models.function import FunctionBaseConfig
 from .agent import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
 from .agent import DEFAULT_MAX_RESEARCH_CONCURRENCY
 from .agent import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
-from .agent import DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS
 from .agent import DeepResearcherAgent
 from .deepagents_runtime import SandboxConfig
 from .deepagents_runtime import SkillsConfig
@@ -56,7 +55,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     source_router_llm: LLMRef | None = Field(default=None, description="LLM for source-router subagent")
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
-    evidence_judge_llm: LLMRef | None = Field(default=None, description="LLM for evidence judge subagent")
+    evidence_judge_llm: LLMRef | None = Field(
+        default=None,
+        description="Deprecated no-op. Researcher notes now include self-assessed evidence_judgment.",
+    )
     writer_llm: LLMRef | None = Field(default=None, description="LLM for final writer/synthesis subagent")
     tools: list[FunctionRef | FunctionGroupRef] = Field(
         default_factory=list,
@@ -72,6 +74,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default=None,
         description="Optional YAML/JSON domain catalog path for source-router-agent.",
     )
+    enable_source_router: bool = Field(
+        default=True,
+        description="Enable the advisory source-router-agent before planning.",
+    )
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
     sandbox: SandboxConfig | None = Field(
         default=None,
@@ -81,11 +87,6 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default=DEFAULT_MAX_RESEARCH_CONCURRENCY,
         ge=1,
         description="Maximum ResearchQuery items accepted and run concurrently per run_research_batch call.",
-    )
-    research_query_timeout_seconds: float = Field(
-        default=DEFAULT_RESEARCH_QUERY_TIMEOUT_SECONDS,
-        gt=0,
-        description="Per-ResearchQuery timeout for researcher workers.",
     )
     max_concurrent_source_tool_calls: int = Field(
         default=DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
@@ -142,9 +143,6 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     if config.planner_llm:
         planner_llm = await builder.get_llm(config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.PLANNER, planner_llm)
-    if config.evidence_judge_llm:
-        evidence_judge_llm = await builder.get_llm(config.evidence_judge_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-        provider.configure(LLMRole.EVIDENCE_JUDGE, evidence_judge_llm)
     if config.writer_llm:
         writer_llm = await builder.get_llm(config.writer_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.REPORT_WRITER, writer_llm)
@@ -158,10 +156,10 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         verbose=verbose,
         callbacks=callbacks,
         domain_catalog_path=config.domain_catalog_path,
+        enable_source_router=config.enable_source_router,
         skills=config.skills,
         sandbox=config.sandbox,
         max_research_concurrency=config.max_research_concurrency,
-        research_query_timeout_seconds=config.research_query_timeout_seconds,
         max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
         max_source_tool_batch_size=config.max_source_tool_batch_size,
     )
@@ -189,11 +187,11 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     verbose=verbose,
                     callbacks=callbacks,
                     domain_catalog_path=config.domain_catalog_path,
+                    enable_source_router=config.enable_source_router,
                     skills=config.skills,
                     sandbox=config.sandbox,
                     job_id=job_id,
                     max_research_concurrency=config.max_research_concurrency,
-                    research_query_timeout_seconds=config.research_query_timeout_seconds,
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
                 )

@@ -20,8 +20,9 @@ If `answer_strategy.answer_type` is `prediction`, or the user asks for a forecas
 
 Before writing, complete the general cross-synthesis pass from the base writer prompt. Then use `think` to turn that synthesis map into a report plan:
 - Choose the report title, main sections, and subsection flow from the `answer_strategy`, the user's request, and the evidence.
-- Use `/shared/evidence_judgments.json` when present to prioritize notes: high-score/high-confidence notes should anchor the report, medium notes can support or nuance it, and low-score or low-confidence notes should mainly inform gaps, caveats, conflicts, or weak-evidence warnings.
+- Use each note's `ResearchNotes.evidence_judgment` when present to prioritize notes: high-score/high-confidence notes should anchor the report, medium notes can support or nuance it, and low-score or low-confidence notes should mainly inform gaps, caveats, conflicts, or weak-evidence warnings.
 - Decide which components need detailed prose, which need compact summary, and which need explicit caveat or gap treatment.
+- Treat `required_components` as a coverage checklist, not a mechanical table of contents. Combine, split, or reorder components when that produces a more coherent reader-facing argument.
 - Decide where report-specific elements such as tables, equations, timelines, case-study boxes, or comparison matrices materially improve the reader's understanding.
 - Decide how to order the report so it moves from fundamentals to implications without exposing internal workflow steps.
 
@@ -29,12 +30,15 @@ Before writing, complete the general cross-synthesis pass from the base writer p
 
 Write a comprehensive, in-depth report following the answer strategy and satisfying the constraints. If you need to recall research findings during writing, re-read the relevant research-note JSON files before drafting.
 
-Each section should have detailed paragraphs, not just a few sentences. Ensure all aspects of the user's query are addressed. Provide analytical depth: explain mechanisms and causes, not just surface descriptions. Acknowledge trade-offs, limitations, uncertainty, or open questions where the evidence warrants.
+For broad explanatory reports, target 3000-5000+ words unless the user or plan asks for a shorter answer. Each section should have detailed paragraphs, not just a few sentences. Ensure all aspects of the user's query are addressed. Provide analytical depth: explain mechanisms and causes, not just surface descriptions. Acknowledge trade-offs, limitations, uncertainty, or open questions where the evidence warrants.
+
+Create a coherent narrative that integrates information across sources and sections. Identify core concepts that appear across multiple notes, recognize complementary findings that build a fuller picture, prioritize recent and high-quality evidence, and connect concrete details to the report's larger argument. Do not produce a sequence of short, isolated bullet points or one-fact paragraphs.
 
 ## Report Presentation
 
 - Use clear Markdown headings: `#` for the title, `##` for main sections, and `###` for subsections when useful.
-- Write in paragraphs for readability; avoid excessive bullet points.
+- Write in developed paragraphs for readability; avoid excessive bullet points.
+- Use bullets only for genuinely list-like material such as taxonomies, compact takeaways, risks, or checklists, and surround them with prose that explains their significance.
 - No self-referential language such as "I found" or "I researched".
 - Each paragraph should be substantive and detailed.
 - Structure from fundamentals to complex concepts.
@@ -65,7 +69,8 @@ The report must read as if written by a professional human researcher.
 - Never place bare URLs or hyperlinks in the report body; use only `[N]` citations inline. URLs belong exclusively in the Sources section.
 - For information supported by multiple sources, use adjacent citations like `[1][4][7]`.
 - Include the full source list at the end of the document.
-- Build the final citation map from the `get_verified_sources` output. ResearchNotes can guide what evidence to use, but ResearchNotes titles, archive names, publisher names, source labels, and note-local citation numbers are not valid final citations unless the exact same URL or citation key appears in `get_verified_sources`.
+- Build the final citation map from the default compact `get_verified_sources` output. ResearchNotes can guide what evidence to use, but ResearchNotes titles, archive names, publisher names, source labels, and note-local citation numbers are not valid final citations unless the exact same URL or citation key appears in `get_verified_sources`.
+- Call `get_verified_sources(mode="full")` only if a source locator from ResearchNotes is missing from the compact output and is materially needed.
 - Assign each unique verified URL or verified citation key a single citation number across all findings. Each citation number must map to exactly one verified URL or one exact verified citation key from `get_verified_sources`.
 - Do not group multiple publishers, tools, URLs, archive names, collections, documents, or source names under one citation number. Do not write unverifiable aggregate labels
 - Number sources sequentially without gaps.
@@ -93,6 +98,7 @@ Before finishing:
 3. Confirm every material factual claim has an inline citation.
 4. Confirm the Sources section includes every cited source and no uncited filler. Each source line must contain one full verified URL or one exact citation key copied from `get_verified_sources`; descriptive source labels alone are invalid.
 5. Confirm the report does not mention internal files, agents, prompts, or tools.
-6. Confirm internal evidence judge scores and rationales are not exposed unless the user explicitly asked for methodology.
+6. Confirm internal `evidence_judgment` scores and rationales are not exposed unless the user explicitly asked for methodology.
 7. Write the complete Markdown answer to `/shared/output.md`.
-8. Do not use edit loops or search-and-replace passes to repair citation numbering. Deterministic post-processing verifies and sanitizes citations after `/shared/output.md` is written.
+8. Return only the short completion marker `Wrote /shared/output.md`; do not echo the full Markdown.
+9. Do not use edit loops or search-and-replace passes to repair citation numbering. Deterministic post-processing verifies and sanitizes citations after `/shared/output.md` is written.

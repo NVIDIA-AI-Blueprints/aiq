@@ -30,7 +30,6 @@ from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents import create_agent
 from langchain.agents.middleware import ModelRetryMiddleware
-from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware import ToolRetryMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.tools import BaseTool
@@ -49,7 +48,6 @@ from .deepagents_runtime import DeepAgentsRuntime
 from .models import DeepResearchAgentState
 from .models import ResearchNotes
 from .models import ResearchPlan
-from .models import SourceRoutingPlan
 from .tools.research import build_research_batch_tool
 from .tools.source_registry import build_get_verified_sources_tool
 from .tools.source_routing import build_lookup_source_catalog_tool
@@ -92,7 +90,6 @@ class DeepResearchMiddlewareSet:
 
     researcher: list[Any]
     planner: list[Any]
-    evidence_judge: list[Any]
     writer: list[Any]
     orchestrator: list[Any]
 
@@ -148,9 +145,7 @@ def build_source_router_middleware(*, extra_valid_tool_names: Sequence[str] = ()
     """Build minimal middleware for the source-router-agent."""
     return [
         EmptyContentFixMiddleware(),
-        ToolNameSanitizationMiddleware(
-            valid_tool_names=sorted({think.name, *FILESYSTEM_TOOL_NAMES, *extra_valid_tool_names})
-        ),
+        ToolNameSanitizationMiddleware(valid_tool_names=sorted({"write_file", *extra_valid_tool_names})),
         ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
         ModelRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
     ]
@@ -168,10 +163,6 @@ def build_deep_research_middleware_set(
             source_registry_middleware=source_registry_middleware,
         ),
         planner=build_common_middleware(
-            tool_set=tool_set,
-            source_registry_middleware=source_registry_middleware,
-        ),
-        evidence_judge=build_common_middleware(
             tool_set=tool_set,
             source_registry_middleware=source_registry_middleware,
         ),
@@ -199,7 +190,7 @@ def build_researcher_runtime_middleware(
     backend: Any = None,
 ) -> list[Any]:
     """Build DeepAgents runtime middleware for one isolated researcher worker."""
-    middleware: list[Any] = [TodoListMiddleware()]
+    middleware: list[Any] = []
     if skill_sources:
         middleware.append(SkillsMiddleware(backend=backend, sources=skill_sources))
     middleware.extend(
@@ -248,30 +239,34 @@ def build_deep_research_subagents(
     middleware_set: DeepResearchMiddlewareSet,
     domain_catalog_path: str | None,
     current_datetime: str,
+    max_research_concurrency: int,
+    enable_source_router: bool = True,
 ) -> list[dict[str, Any]]:
     """Build all DeepAgents subagent specs."""
-    source_catalog_tool = build_lookup_source_catalog_tool(
-        tools,
-        allowed_source_ids=state.data_sources,
-        domain_catalog_path=domain_catalog_path,
-    )
-    source_router_subagent: dict[str, Any] = {
-        "name": "source-router-agent",
-        "description": (
-            "Source router - chooses an advisory domain route and configured source set before detailed planning"
-        ),
-        "system_prompt": render_prompt_template(
-            prompts["source_router"],
-            current_datetime=current_datetime,
-            user_info=state.user_info,
-            clarifier_result=state.clarifier_result,
-            available_documents=_available_documents(state),
-        ),
-        "tools": [think, source_catalog_tool],
-        "model": llm_provider.get(LLMRole.ROUTER),
-        "middleware": build_source_router_middleware(extra_valid_tool_names=[source_catalog_tool.name]),
-        "response_format": SourceRoutingPlan,
-    }
+    subagents: list[dict[str, Any]] = []
+    if enable_source_router:
+        source_catalog_tool = build_lookup_source_catalog_tool(
+            tools,
+            allowed_source_ids=state.data_sources,
+            domain_catalog_path=domain_catalog_path,
+        )
+        source_router_subagent: dict[str, Any] = {
+            "name": "source-router-agent",
+            "description": (
+                "Source router - chooses an advisory domain route and configured source set before detailed planning"
+            ),
+            "system_prompt": render_prompt_template(
+                prompts["source_router"],
+                current_datetime=current_datetime,
+                user_info=state.user_info,
+                clarifier_result=state.clarifier_result,
+                available_documents=_available_documents(state),
+            ),
+            "tools": [source_catalog_tool],
+            "model": llm_provider.get(LLMRole.ROUTER),
+            "middleware": build_source_router_middleware(extra_valid_tool_names=[source_catalog_tool.name]),
+        }
+        subagents.append(source_router_subagent)
     writer_agent: dict[str, Any] = {
         "name": "writer-agent",
         "description": (
@@ -288,21 +283,6 @@ def build_deep_research_subagents(
         "model": llm_provider.get(LLMRole.REPORT_WRITER),
         "middleware": middleware_set.writer,
     }
-    evidence_judge_agent: dict[str, Any] = {
-        "name": "evidence-judge-agent",
-        "description": (
-            "Evidence judge - reads research notes and annotates each note with relevance score, "
-            "confidence, and rationale"
-        ),
-        "system_prompt": render_prompt_template(
-            prompts["evidence_judge"],
-            current_datetime=current_datetime,
-            user_info=state.user_info,
-        ),
-        "tools": tool_set.writer_tools,
-        "model": llm_provider.get(LLMRole.EVIDENCE_JUDGE),
-        "middleware": middleware_set.evidence_judge,
-    }
     planner_subagent: dict[str, Any] = {
         "name": "planner-agent",
         "description": (
@@ -315,6 +295,8 @@ def build_deep_research_subagents(
             user_info=state.user_info,
             tools=tool_set.tools_info,
             available_documents=_available_documents(state),
+            enable_source_router=enable_source_router,
+            max_research_concurrency=max_research_concurrency,
         ),
         "tools": tool_set.researcher_tools,
         "model": llm_provider.get(LLMRole.PLANNER),
@@ -324,7 +306,8 @@ def build_deep_research_subagents(
     writer_skill_sources = runtime.skill_sources_for("writer-agent")
     if writer_skill_sources is not None:
         writer_agent["skills"] = writer_skill_sources
-    return [source_router_subagent, planner_subagent, evidence_judge_agent, writer_agent]
+    subagents.extend([planner_subagent, writer_agent])
+    return subagents
 
 
 def build_deep_research_graph(
@@ -336,10 +319,11 @@ def build_deep_research_graph(
     runtime: DeepAgentsRuntime,
     tool_set: DeepResearchToolSet,
     middleware_set: DeepResearchMiddlewareSet,
+    source_registry_middleware: SourceRegistryMiddleware,
     callbacks: list[Any],
     domain_catalog_path: str | None,
     max_research_concurrency: int,
-    research_query_timeout_seconds: float,
+    enable_source_router: bool = True,
 ) -> Any:
     """Build the full DeepAgents graph for one deep research run."""
     current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -365,7 +349,7 @@ def build_deep_research_graph(
         callbacks=callbacks,
         source_tool_names=tool_set.source_tool_names,
         max_research_concurrency=max_research_concurrency,
-        research_query_timeout_seconds=research_query_timeout_seconds,
+        source_registry_middleware=source_registry_middleware,
     )
 
     agent = create_deep_agent(
@@ -378,6 +362,8 @@ def build_deep_research_graph(
             clarifier_result=state.clarifier_result,
             available_documents=_available_documents(state),
             tools=tool_set.tools_info,
+            enable_source_router=enable_source_router,
+            max_research_concurrency=max_research_concurrency,
         ),
         subagents=build_deep_research_subagents(
             llm_provider=llm_provider,
@@ -388,7 +374,9 @@ def build_deep_research_graph(
             tool_set=tool_set,
             middleware_set=middleware_set,
             domain_catalog_path=domain_catalog_path,
+            enable_source_router=enable_source_router,
             current_datetime=current_datetime,
+            max_research_concurrency=max_research_concurrency,
         ),
         store=InMemoryStore(),
         middleware=middleware_set.orchestrator,

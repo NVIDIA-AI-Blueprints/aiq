@@ -67,23 +67,15 @@ async def _run_research_query(
     researcher_runnable: Any,
     runtime: ToolRuntime | None,
     callbacks: list[Any],
-    timeout_seconds: float,
     semaphore: asyncio.Semaphore,
 ) -> ResearchNotes:
     """Run one researcher worker and return its structured notes."""
     async with semaphore:
         try:
-            result = await asyncio.wait_for(
-                researcher_runnable.ainvoke(
-                    researcher_invoke_state(query, runtime),
-                    config={"callbacks": callbacks} if callbacks else None,
-                ),
-                timeout=timeout_seconds,
+            result = await researcher_runnable.ainvoke(
+                researcher_invoke_state(query, runtime),
+                config={"callbacks": callbacks} if callbacks else None,
             )
-        except TimeoutError as exc:
-            raise TimeoutError(
-                f"researcher worker timed out after {timeout_seconds:g} seconds for query: {query.query}"
-            ) from exc
         except Exception as exc:  # noqa: BLE001 - captured as per-item failure
             raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
 
@@ -148,7 +140,6 @@ async def _run_research_queries(
     researcher_runnable: Any,
     runtime: ToolRuntime | None,
     callbacks: list[Any],
-    timeout_seconds: float,
     max_concurrency: int,
 ) -> tuple[list[ResearchNotes], list[str]]:
     """Run researcher workers concurrently and collect notes plus surfaced errors."""
@@ -160,7 +151,6 @@ async def _run_research_queries(
                 researcher_runnable=researcher_runnable,
                 runtime=runtime,
                 callbacks=callbacks,
-                timeout_seconds=timeout_seconds,
                 semaphore=semaphore,
             )
             for query in queries
@@ -185,8 +175,8 @@ def build_research_batch_tool(
     callbacks: list[Any],
     source_tool_names: set[str],
     max_research_concurrency: int,
-    research_query_timeout_seconds: float,
     backend: Any | None = None,
+    source_registry_middleware: Any | None = None,
 ) -> BaseTool:
     """Build an orchestrator-only tool that runs researcher tasks concurrently."""
 
@@ -209,7 +199,6 @@ def build_research_batch_tool(
             researcher_runnable=researcher_runnable,
             runtime=runtime,
             callbacks=callbacks,
-            timeout_seconds=research_query_timeout_seconds,
             max_concurrency=max_research_concurrency,
         )
         if errors:
@@ -217,6 +206,8 @@ def build_research_batch_tool(
                 f"run_research_batch failed for {len(errors)} of {len(queries)} researcher worker(s). "
                 f"Errors: {'; '.join(errors)}"
             )
+        if source_registry_middleware is not None:
+            source_registry_middleware.register_research_note_sources(notes)
         _persist_research_notes(backend=backend, queries=queries, notes=notes)
 
         return json.dumps(

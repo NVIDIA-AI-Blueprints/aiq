@@ -1493,7 +1493,6 @@ class TestAsyncJobRunnerAgentFactory:
         tool_names = [tool.name for tool in create.call_args.kwargs["tools"]]
         assert tool_names == ["think", "get_verified_sources", "run_research_batch"]
         assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == [
-            "think",
             "lookup_source_catalog",
         ]
         assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == [

@@ -200,6 +200,15 @@ class TestDeepAgentsRuntimeRouting:
         assert "Forecast Analysis Skill" in files["/research-sandbox/forecast-analysis/SKILL.md"]["content"]
         assert "Lightweight Calculation Skill" in files["/research-sandbox/lightweight-calculation/SKILL.md"]["content"]
         assert "Long-Form Report Writer Skill" in files["/synthesis/long-form-report-writer/SKILL.md"]["content"]
+        assert (
+            "Treat `required_components` as a coverage checklist"
+            in (files["/synthesis/long-form-report-writer/SKILL.md"]["content"])
+        )
+        assert "target 3000-5000+ words" in files["/synthesis/long-form-report-writer/SKILL.md"]["content"]
+        assert (
+            "Do not produce a sequence of short, isolated bullet points"
+            in (files["/synthesis/long-form-report-writer/SKILL.md"]["content"])
+        )
         assert "Prediction Report Writer Skill" in files["/synthesis/prediction-report-writer/SKILL.md"]["content"]
 
     def test_builtin_skill_state_files_include_helper_files(self, tmp_path, monkeypatch) -> None:

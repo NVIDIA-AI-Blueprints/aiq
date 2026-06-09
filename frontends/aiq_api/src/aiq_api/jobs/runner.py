@@ -313,16 +313,11 @@ async def run_agent_job(
                 )
             planner_llm = None
             researcher_llm = None
-            evidence_judge_llm = None
             if hasattr(fn_config, "planner_llm") and fn_config.planner_llm:
                 planner_llm = await builder.get_llm(fn_config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
             if hasattr(fn_config, "researcher_llm") and fn_config.researcher_llm:
                 researcher_llm = await builder.get_llm(
                     fn_config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-                )
-            if hasattr(fn_config, "evidence_judge_llm") and fn_config.evidence_judge_llm:
-                evidence_judge_llm = await builder.get_llm(
-                    fn_config.evidence_judge_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
                 )
 
             llm = orchestrator_llm
@@ -451,8 +446,6 @@ async def run_agent_job(
                         provider.configure(LLMRole.PLANNER, planner_llm)
                     if researcher_llm:
                         provider.configure(LLMRole.RESEARCHER, researcher_llm)
-                    if evidence_judge_llm:
-                        provider.configure(LLMRole.EVIDENCE_JUDGE, evidence_judge_llm)
 
                     verbose = is_verbose(getattr(fn_config, "verbose", False))
                     callbacks = [VerboseTraceCallback()] if verbose else []

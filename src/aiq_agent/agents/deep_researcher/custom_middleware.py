@@ -27,6 +27,7 @@ from langchain_core.messages import ToolMessage
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 
@@ -225,6 +226,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
     def __init__(self, source_tool_names: set[str] | None = None) -> None:
         self.registry = SourceRegistry()
         self._source_tool_names = source_tool_names or set()
+        self._compact_source_keys: set[str] = set()
         self._lock = asyncio.Lock()
 
     def active_registry(self) -> SourceRegistry:
@@ -236,6 +238,34 @@ class SourceRegistryMiddleware(AgentMiddleware):
     def has_sources(self) -> bool:
         """Return True when the active source registry contains captured sources."""
         return bool(self.active_registry().all_sources())
+
+    @staticmethod
+    def _locator_key(locator: str) -> str:
+        """Return the comparable key used for source locators and registry entries."""
+        locator = locator.strip()
+        if locator.startswith(("http://", "https://")):
+            from aiq_agent.common.citation_verification import _normalize_url
+
+            return _normalize_url(locator)
+        return locator
+
+    @classmethod
+    def _entry_key(cls, entry: SourceEntry) -> str | None:
+        """Return the comparable key for a registered source entry."""
+        if entry.url:
+            return cls._locator_key(entry.url)
+        if entry.citation_key:
+            return entry.citation_key.strip()
+        return None
+
+    def register_research_note_sources(self, notes: list[object]) -> None:
+        """Mark ResearchNotes source locators as the compact writer-facing citation set."""
+        for note in notes:
+            sources = getattr(note, "sources", None) or []
+            for source in sources:
+                locator = getattr(source, "locator", "")
+                if isinstance(locator, str) and locator.strip():
+                    self._compact_source_keys.add(self._locator_key(locator))
 
     async def awrap_tool_call(self, request, handler):
         """Capture sources from tool results after execution.
@@ -274,8 +304,8 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 )
         return result
 
-    def get_source_list_text(self) -> str | None:
-        """Build a consolidated source list for injection into retry feedback.
+    def _render_source_list_text(self, sources: list[SourceEntry]) -> str | None:
+        """Render a consolidated source list from registry entries.
 
         Returns rendered template text, or None if no sources captured.
         Used by agent.run() to include the source list in retry messages
@@ -285,7 +315,6 @@ class SourceRegistryMiddleware(AgentMiddleware):
 
         from aiq_agent.common.citation_verification import _normalize_url
 
-        sources = self.active_registry().all_sources()
         if not sources:
             return None
 
@@ -321,6 +350,20 @@ class SourceRegistryMiddleware(AgentMiddleware):
         except Exception:
             logger.warning("Failed to load source_registry prompt template", exc_info=True)
             return None
+
+    def get_source_list_text(self, mode: str = "compact") -> str | None:
+        """Build a writer-facing verified source list.
+
+        Compact mode returns the subset of registered sources that researcher
+        workers actually carried forward in structured ResearchNotes. Full mode
+        returns the complete registry. Citation verification always uses the
+        full registry directly and does not depend on this rendered list.
+        """
+        sources = self.active_registry().all_sources()
+        if mode == "full" or not self._compact_source_keys:
+            return self._render_source_list_text(sources)
+        compact_sources = [source for source in sources if self._entry_key(source) in self._compact_source_keys]
+        return self._render_source_list_text(compact_sources or sources)
 
 
 class ToolResultPruningMiddleware(AgentMiddleware):

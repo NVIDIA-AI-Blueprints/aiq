@@ -103,9 +103,9 @@ class ResearchQuery(_StrictContract):
     subqueries: list[str] = Field(
         default_factory=list,
         description=(
-            "Ordered concrete search angles the researcher must cover after the main query. "
-            "Use 2-5 subqueries for broad, survey, overview, landscape, taxonomy, trend, "
-            "application, challenge, risk, benefit, or multi-component queries."
+            "Optional ordered concrete search angles for distinct facets unlikely to be covered by the main query. "
+            "Prefer leaving this empty for focused queries and creating separate ResearchQuery items for independent "
+            "evidence needs."
         ),
     )
     preferred_tools: list[str] = Field(
@@ -191,5 +191,5 @@ class ResearchNotes(_StrictContract):
     language: str = Field(description="Language used in these research notes.")
     evidence_judgment: EvidenceJudgment | None = Field(
         default=None,
-        description="Optional post-research judgment added by the evidence judge.",
+        description="Researcher self-assessment of this note's usefulness for final synthesis.",
     )
