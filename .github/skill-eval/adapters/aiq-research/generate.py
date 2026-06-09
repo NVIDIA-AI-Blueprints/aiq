@@ -57,7 +57,7 @@ def _render(value: str, *, platform: str, mode: str, repo_root: Path) -> str:
 def _test_script(spec_name: str, step: int) -> str:
     return (
         "#!/bin/bash\n"
-        "set -uo pipefail\n"
+        "set -euo pipefail\n"
         'TEST_DIR="$(cd "$(dirname "$0")" && pwd)"\n'
         'LOCAL_SKILLS_DIR="$(cd "$TEST_DIR/.." && pwd)/skills"\n'
         'if [ -d "$LOCAL_SKILLS_DIR" ]; then\n'

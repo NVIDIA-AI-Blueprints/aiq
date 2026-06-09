@@ -274,7 +274,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: aiq-skill-eval-results-${{ github.run_id }}
-          path: /tmp/aiq-skill-eval/results
+          # Only this job's results (skills_eval_agent.py isolates output under
+          # <results>/<run_id>-<attempt>/), not the shared root's accumulated history.
+          path: /tmp/aiq-skill-eval/results/${{ github.run_id }}-${{ github.run_attempt }}
           if-no-files-found: ignore
           retention-days: 7
 

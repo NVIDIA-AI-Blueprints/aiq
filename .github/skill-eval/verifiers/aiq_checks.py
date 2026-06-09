@@ -124,7 +124,9 @@ def main() -> int:
     results = [evaluate_check(check, trajectory) for check in checks]
     passed = sum(1 for result in results if result["pass"])
     total = len(results)
-    reward = 1.0 if total == 0 else passed / total
+    # A step with no checks verifies nothing; score it 0.0 rather than a silent
+    # perfect 1.0 (validation also rejects empty `checks`, this is defense-in-depth).
+    reward = 0.0 if total == 0 else passed / total
 
     log_dir = Path(os.environ.get("AIQ_EVAL_VERIFIER_LOG_DIR", "/logs/verifier"))
     log_dir.mkdir(parents=True, exist_ok=True)

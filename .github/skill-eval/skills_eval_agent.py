@@ -14,6 +14,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -121,8 +122,8 @@ def _validate_spec(spec_path: Path) -> dict[str, Any]:
     if not isinstance(spec["expects"], list) or not spec["expects"]:
         raise ValueError(f"{spec_path} must define non-empty expects list")
     for idx, expect in enumerate(spec["expects"], start=1):
-        if "query" not in expect or "checks" not in expect:
-            raise ValueError(f"{spec_path} expects[{idx}] must define query and checks")
+        if "query" not in expect or not expect.get("checks"):
+            raise ValueError(f"{spec_path} expects[{idx}] must define query and non-empty checks")
     return spec
 
 
@@ -141,7 +142,7 @@ def _task_roots(dataset_root: Path) -> list[Path]:
     return sorted(set(roots))
 
 
-def _run_harbor(task_root: Path) -> int:
+def _run_harbor(task_root: Path, out_dir: Path) -> tuple[int, Path | None]:
     agent = os.environ.get("AIQ_SKILL_EVAL_AGENT", "claude-code")
     model = os.environ.get("AIQ_SKILL_EVAL_MODEL") or os.environ.get("ANTHROPIC_MODEL")
     max_retries = os.environ.get("AIQ_SKILL_EVAL_MAX_RETRIES", "1")
@@ -150,7 +151,7 @@ def _run_harbor(task_root: Path) -> int:
             "BLOCKED: AIQ_SKILL_EVAL_MODEL or ANTHROPIC_MODEL is required for Harbor execution",
             file=sys.stderr,
         )
-        return 2
+        return 2, None
 
     cmd = [
         "uvx",
@@ -166,7 +167,7 @@ def _run_harbor(task_root: Path) -> int:
         "1",
         "--yes",
         "-o",
-        os.environ.get("AIQ_SKILL_EVAL_RESULTS_DIR", "/tmp/aiq-skill-eval/results"),
+        str(out_dir),
     ]
     if model:
         cmd.extend(["--model", model])
@@ -183,7 +184,44 @@ def _run_harbor(task_root: Path) -> int:
                 cmd.extend(["--ae", f"{key}={value}"])
     result = _run(cmd)
     print(result.stdout)
-    return result.returncode
+    # harbor writes <out_dir>/<timestamp>/result.json; out_dir is unique per run,
+    # so read the result directly from disk instead of scraping stdout.
+    candidates = sorted(out_dir.glob("*/result.json"))
+    return result.returncode, (candidates[-1] if candidates else None)
+
+
+def _gate(result_paths: list[Path | None], threshold: float) -> tuple[bool, list[str]]:
+    """Aggregate a pass/fail verdict across every trial of every spec/skill in the run.
+
+    Reads each Harbor job-level result.json. A trial that errored (exception)
+    ALWAYS fails the run. A trial whose reward is below `threshold` fails the run
+    unless `threshold <= 0` (report-only: every reward >= 0 passes). Returns
+    (ok, summary_lines) where ok=False means the job should exit non-zero.
+    """
+    ok = True
+    exceptions = 0
+    lines: list[str] = []
+    for path in result_paths:
+        if path is None or not path.exists():
+            ok = False
+            lines.append("  MISSING result.json (harbor produced no parseable result) -> FAIL")
+            continue
+        stats = json.loads(path.read_text()).get("stats", {})
+        exceptions += int(stats.get("n_errored_trials", 0) or 0)
+        for name, ev in (stats.get("evals") or {}).items():
+            buckets = ((ev or {}).get("reward_stats") or {}).get("reward") or {}
+            for reward_str, trials in buckets.items():
+                reward = float(reward_str)
+                for trial in trials:
+                    below = threshold > 0 and reward < threshold
+                    if below:
+                        ok = False
+                    mark = f"BELOW {threshold}" if below else "ok"
+                    lines.append(f"  {name} {trial}: reward {reward} [{mark}]")
+    if exceptions > 0:
+        ok = False
+        lines.append(f"  exceptions: {exceptions} errored trial(s) -> FAIL")
+    return ok, lines
 
 
 def main() -> int:
@@ -239,10 +277,40 @@ def main() -> int:
     print(json.dumps(summary, indent=2))
 
     if args.run_harbor:
-        for task_root in sorted(set(generated_roots)):
-            rc = _run_harbor(task_root)
+        results_root = Path(os.environ.get("AIQ_SKILL_EVAL_RESULTS_DIR", "/tmp/aiq-skill-eval/results"))
+        # Isolate this job's results so the gate can never read a previous job's
+        # output on the long-lived self-hosted runner (the results root persists
+        # between jobs). Keyed by GitHub run id + attempt in CI; random locally.
+        run_id = os.environ.get("GITHUB_RUN_ID", "")
+        attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+        job_key = "-".join(p for p in (run_id, attempt) if p) or f"local-{uuid.uuid4().hex[:12]}"
+        job_results_root = results_root / job_key
+        result_paths: list[Path | None] = []
+        for index, task_root in enumerate(sorted(set(generated_roots))):
+            # Unique output dir per run so the result.json location is deterministic
+            # (harbor writes <out_dir>/<timestamp>/result.json).
+            out_dir = job_results_root / f"run-{index:02d}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            rc, results_path = _run_harbor(task_root, out_dir)
             if rc != 0:
-                return rc
+                return rc  # infrastructure failure (Harbor itself errored)
+            result_paths.append(results_path)
+
+        # Post-Harbor verdict. Harbor exits 0 even at low reward, so gate here so a
+        # green check actually means the eval passed (catches PR regressions).
+        threshold = float(os.environ.get("AIQ_SKILL_EVAL_REWARD_THRESHOLD", "1.0"))
+        ok, summary = _gate(result_paths, threshold)
+        gate_desc = "report-only" if threshold <= 0 else f"threshold {threshold}"
+        print(f"=== Skill-eval verdict ({gate_desc}) ===")
+        for line in summary:
+            print(line)
+        if not ok:
+            print(
+                "EVAL FAILED: a trial errored or scored below threshold "
+                "(set AIQ_SKILL_EVAL_REWARD_THRESHOLD=0 for report-only)"
+            )
+            return 1
+        print("EVAL PASSED")
 
     print(f"DONE: generated {len(set(generated_roots))} AI-Q skill-eval dataset(s)")
     return 0
