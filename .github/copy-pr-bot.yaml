@@ -1,8 +1,8 @@
 # copy-pr-bot configuration for NVIDIA-AI-Blueprints/aiq
 # Docs: https://docs.gha-runners.nvidia.com/platform/apps/copy-pr-bot/
 #
-# additional_trustees: users explicitly trusted even if not org members.
-# Needed when author_association is CONTRIBUTOR (not MEMBER of NVIDIA-AI-Blueprints org).
+# additional_vetters: users explicitly trusted to vet PRs even if not org members.
+# Needed when author_association is CONTRIBUTOR instead of MEMBER of NVIDIA-AI-Blueprints.
 enabled: true
 additional_vetters:
   - AjayThorve
