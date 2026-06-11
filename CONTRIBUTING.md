@@ -46,7 +46,7 @@ For deployment changes, run the relevant Helm or compose validation and describe
 
 AI-Q uses push-triggered GitHub Actions. Pull requests are mirrored by copy-pr-bot to `pull-request/<PR number>` branches after a maintainer or configured vetter comments `/ok to test`, and CI runs on those mirrored branches.
 
-Maintainers can request NVSkills validation by commenting:
+Repository owners, organization members, and collaborators can request NVSkills validation by commenting:
 
 ```text
 /nvskills-ci

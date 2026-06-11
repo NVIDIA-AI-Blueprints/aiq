@@ -38,7 +38,7 @@ npm run test:ci
 npm run build
 ```
 
-Maintainers may request additional validation, including NVSkills validation with `/nvskills-ci`.
+Repository owners, organization members, and collaborators may request additional validation, including NVSkills validation with `/nvskills-ci`.
 
 ## Sign-Off and DCO
 
