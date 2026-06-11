@@ -79,7 +79,14 @@ async def reranked_search(config: RerankedSearchConfig, builder: Builder):
         try:
             tool_fns[name] = await builder.get_function(name)
         except Exception:
-            logger.warning("could not add tool '%s' to reranked_search — skipping", name)
+            try:
+                # Tool might be a function group if the function is not found.
+                tool_group = await builder.get_function_group(name)
+                accessible_functions = await tool_group.get_accessible_functions()
+                for fn_name, fn in accessible_functions.items():
+                    tool_fns[fn_name] = fn
+            except Exception:
+                logger.warning("could not add tool '%s' to reranked_search — skipping", name)
 
     if len(tool_fns) == 0:
         logger.warning("reranked_search: no search tools added; tool will return empty results.")
