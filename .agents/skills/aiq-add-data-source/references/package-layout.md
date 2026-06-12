@@ -60,6 +60,8 @@ In `src/register.py`, define a `FunctionBaseConfig` subclass with a stable
 `FunctionInfo` from an async `@register_function`:
 
 ```python
+import os
+
 from pydantic import Field, SecretStr
 from nat.builder.builder import Builder
 from nat.builder.function_info import FunctionInfo
