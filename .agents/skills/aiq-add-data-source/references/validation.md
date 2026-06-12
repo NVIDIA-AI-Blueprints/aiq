@@ -30,9 +30,10 @@ configured path and the missing-secret stub path.
 
 ```bash
 uv run ruff check sources/my_data_source
+uv run ruff format --check sources/my_data_source
 ```
 
-Expected: no lint failures (Ruff line length 120, target 3.11).
+Expected: no lint or formatting failures (Ruff line length 120, target 3.11).
 
 ## 4. Smoke-check the registration (optional)
 
