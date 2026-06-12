@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 
 Model new sources on `sources/google_scholar_paper_search/`. The layout is:
 
-```
+```text
 sources/my_data_source/
   pyproject.toml
   README.md
