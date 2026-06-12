@@ -51,7 +51,7 @@ MAX_DESCRIPTION_CHARS = 1024
 # are intentionally left to markdown-link-check.
 BUNDLE_DIRS = ("references", "scripts", "templates", "assets")
 
-FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
+FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---(?:\r?\n|$)", re.DOTALL)
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 
 DEFAULT_ROOTS = (".agents/skills",)
