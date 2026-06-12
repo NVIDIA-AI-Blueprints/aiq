@@ -88,7 +88,6 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: frontier_llm    # Frontier model here
-    max_loops: 2
     tools:
       - advanced_web_search_tool
       - knowledge_search

@@ -173,7 +173,6 @@ def build_research_batch_tool(
     *,
     researcher_runnable: Any,
     callbacks: list[Any],
-    source_tool_names: set[str],
     max_research_concurrency: int,
     backend: Any | None = None,
     source_registry_middleware: Any | None = None,

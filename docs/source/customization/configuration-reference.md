@@ -356,7 +356,6 @@ functions:
       - paper_search_tool
       - advanced_web_search_tool
       - knowledge_search
-    max_loops: 2
     verbose: true
 ```
 
@@ -368,7 +367,6 @@ functions:
 | `planner_llm` | `str` | `None` | LLM for the planner sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `writer_llm` | `str` | `None` | LLM for the final writer/synthesis sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `tools` | `list[str]` | `[]` | Search tools available to the researcher sub-agent. |
-| `max_loops` | `int` | `2` | Maximum number of orchestrator planning/research loops. |
 | `verbose` | `bool` | `true` | Enable verbose logging. |
 
 ---
@@ -495,12 +493,12 @@ functions:
   deep_research_agent:                 # Multi-phase deep research
     _type: deep_research_agent
     orchestrator_llm: deep_llm
-    source_router_llm: router_llm
-    writer_llm: writer_llm
+    researcher_llm: research_llm
+    source_router_llm: research_llm
+    writer_llm: deep_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool
-    max_loops: 2
 
 # Top-level orchestrator
 workflow:

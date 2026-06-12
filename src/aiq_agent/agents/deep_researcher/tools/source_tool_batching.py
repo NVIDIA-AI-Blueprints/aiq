@@ -30,15 +30,24 @@ from pydantic import Field
 
 DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS = 5
 DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE = 4
+DEFAULT_SOURCE_TOOL_CONCURRENCY_TIMEOUT = 120.0
 
 
 class SourceToolConcurrencyLimiter:
     """Shared per-event-loop limiter for source tool calls."""
 
-    def __init__(self, max_concurrent: int) -> None:
+    def __init__(
+        self,
+        max_concurrent: int,
+        *,
+        acquire_timeout: float | None = DEFAULT_SOURCE_TOOL_CONCURRENCY_TIMEOUT,
+    ) -> None:
         if max_concurrent < 1:
             raise ValueError("max_concurrent must be >= 1")
+        if acquire_timeout is not None and acquire_timeout <= 0:
+            raise ValueError("acquire_timeout must be > 0 or None")
         self.max_concurrent = max_concurrent
+        self.acquire_timeout = acquire_timeout
         self._semaphores: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = (
             weakref.WeakKeyDictionary()
         )
@@ -55,11 +64,19 @@ class SourceToolConcurrencyLimiter:
     async def limit(self) -> AsyncIterator[None]:
         """Acquire one source-tool slot and release it on success, failure, or cancellation."""
         semaphore = self._get_semaphore()
-        await semaphore.acquire()
+        acquired = False
         try:
+            try:
+                await asyncio.wait_for(semaphore.acquire(), timeout=self.acquire_timeout)
+            except TimeoutError as exc:
+                raise TimeoutError(
+                    f"Timed out waiting for a source-tool concurrency slot after {self.acquire_timeout} seconds"
+                ) from exc
+            acquired = True
             yield
         finally:
-            semaphore.release()
+            if acquired:
+                semaphore.release()
 
 
 class BatchSourceToolInput(BaseModel):

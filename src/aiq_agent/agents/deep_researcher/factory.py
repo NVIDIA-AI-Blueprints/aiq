@@ -57,6 +57,7 @@ logger = logging.getLogger(__name__)
 
 FILESYSTEM_TOOL_NAMES = {
     "edit_file",
+    "grep",
     "glob",
     "ls",
     "read_file",
@@ -67,7 +68,6 @@ FILESYSTEM_TOOL_NAMES = {
 @tool
 def think(thought: str) -> str:
     """Use this tool to reason through decisions, verify constraints, or plan next steps."""
-    logger.info("Thinking: %s", thought)
     return "Thought recorded."
 
 
@@ -347,7 +347,6 @@ def build_deep_research_graph(
         researcher_runnable=researcher_runnable,
         backend=backend,
         callbacks=callbacks,
-        source_tool_names=tool_set.source_tool_names,
         max_research_concurrency=max_research_concurrency,
         source_registry_middleware=source_registry_middleware,
     )
@@ -382,4 +381,4 @@ def build_deep_research_graph(
         middleware=middleware_set.orchestrator,
         backend=backend,
     )
-    return agent.with_config({"recursion_limit": 10000})
+    return agent.with_config({"recursion_limit": 2000})

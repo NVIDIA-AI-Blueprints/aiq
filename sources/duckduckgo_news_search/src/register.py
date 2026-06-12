@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncGenerator
+from html import escape as html_escape
 from typing import Literal
 
 from pydantic import Field
@@ -62,11 +63,11 @@ def _result_value(result: dict, *keys: str) -> str:
 
 def _format_news_result(result: dict) -> str:
     """Render one DDGS news item as a document block."""
-    url = _result_value(result, "url", "href", "link")
-    title = _result_value(result, "title")
-    body = _result_value(result, "body", "snippet", "description")
-    source = _result_value(result, "source")
-    date = _result_value(result, "date", "published", "published_date")
+    url = html_escape(_result_value(result, "url", "href", "link"), quote=True)
+    title = html_escape(_result_value(result, "title"), quote=True)
+    body = html_escape(_result_value(result, "body", "snippet", "description"), quote=True)
+    source = html_escape(_result_value(result, "source"), quote=True)
+    date = html_escape(_result_value(result, "date", "published", "published_date"), quote=True)
     metadata_lines = []
     if source:
         metadata_lines.append(f"<source>{source}</source>")
@@ -138,7 +139,12 @@ async def duckduckgo_news_search(
                 return "News search returned no results"
             except Exception as exc:  # noqa: BLE001 - source APIs can raise transport-specific exceptions
                 if attempt == tool_config.max_retries - 1:
-                    return f"Error: News search failed - {exc}"
+                    logger.exception(
+                        "DuckDuckGo news search failed after %s attempts: %s",
+                        tool_config.max_retries,
+                        exc,
+                    )
+                    return "Error: News search failed"
                 await asyncio.sleep(2**attempt)
 
         return "Error: News search failed after all retries"

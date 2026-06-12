@@ -21,6 +21,7 @@ import logging
 import re
 import shlex
 import threading
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -39,12 +40,14 @@ from deepagents.backends.protocol import WriteResult
 from deepagents.backends.sandbox import BaseSandbox
 from pydantic import BaseModel
 from pydantic import Field
+from pydantic import model_validator
 
 logger = logging.getLogger(__name__)
 
 AGENT_DIR = Path(__file__).parent
 BUILTIN_SKILLS_DIR = AGENT_DIR / "skills"
 BUILTIN_SKILL_SOURCE = "/skills/"
+BUILTIN_SKILL_FILE_PATTERNS = ("**/*.md",)
 SHARED_ROUTE = "/shared/"
 
 
@@ -159,10 +162,6 @@ class SkillsConfig(BaseModel):
     """Configuration for DeepAgents skills."""
 
     enabled: bool = Field(default=False, description="Enable DeepAgents skills")
-    default_sources: tuple[str, ...] = Field(
-        default=(BUILTIN_SKILL_SOURCE,),
-        description="Default DeepAgents skill source paths used by agents without an override.",
-    )
     agent_sources: dict[str, tuple[str, ...]] = Field(
         default_factory=dict,
         description=(
@@ -174,9 +173,34 @@ class SkillsConfig(BaseModel):
         description="Skill source paths that require a sandbox backend when assigned to an agent.",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _drop_deprecated_global_sources(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+
+        migrated = dict(data)
+        for key in ("sources", "default_sources"):
+            if key not in migrated:
+                continue
+            migrated.pop(key)
+            message = (
+                f"SkillsConfig.{key} is deprecated and ignored. Configure explicit "
+                "SkillsConfig.agent_sources entries instead."
+            )
+            warnings.warn(message, DeprecationWarning, stacklevel=2)
+            logger.warning(message)
+        return migrated
+
     @classmethod
     def enabled_builtin(cls) -> SkillsConfig:
-        return cls(enabled=True)
+        return cls(
+            enabled=True,
+            agent_sources={
+                "researcher": (BUILTIN_SKILL_SOURCE,),
+                "writer-agent": (BUILTIN_SKILL_SOURCE,),
+            },
+        )
 
 
 class SandboxConfig(BaseModel):
@@ -221,7 +245,7 @@ class DeepAgentsRuntime:
         """Return skill sources for a DeepAgents agent/subagent name."""
         if not self._skills.enabled:
             return None
-        sources = self._skills.agent_sources.get(agent_name, self._skills.default_sources)
+        sources = self._skills.agent_sources.get(agent_name)
         if not sources:
             return None
         self._validate_sandbox_required_sources(sources, agent_name)
@@ -286,11 +310,15 @@ def _collect_builtin_skill_files() -> list[tuple[str, bytes]]:
     if not BUILTIN_SKILLS_DIR.exists():
         return files
 
-    for file_path in sorted(path for path in BUILTIN_SKILLS_DIR.rglob("*") if path.is_file()):
-        relative_parts = file_path.relative_to(BUILTIN_SKILLS_DIR).parts
+    file_paths = {
+        path for pattern in BUILTIN_SKILL_FILE_PATTERNS for path in BUILTIN_SKILLS_DIR.glob(pattern) if path.is_file()
+    }
+    for file_path in sorted(file_paths):
+        relative_file_path = file_path.relative_to(BUILTIN_SKILLS_DIR)
+        relative_parts = relative_file_path.parts
         if any(part.startswith(".") or part == "__pycache__" for part in relative_parts):
             continue
-        relative_path = file_path.relative_to(BUILTIN_SKILLS_DIR).as_posix()
+        relative_path = relative_file_path.as_posix()
         files.append((f"{BUILTIN_SKILL_SOURCE}{relative_path}", file_path.read_bytes()))
     return files
 

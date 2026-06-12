@@ -51,11 +51,12 @@ class DomainCatalogConfig(BaseModel):
 
 
 DEFAULT_GENERAL_RESEARCH_DOMAIN_ID = "general_research"
-DEFAULT_GENERAL_RESEARCH_SOURCE_IDS = ("knowledge_layer", "web_search")
 
 
-def _default_general_research_config() -> DomainCatalogConfig:
-    """Return the built-in default route used when no catalog path is configured."""
+def _default_general_research_config(source_ids: Sequence[str]) -> DomainCatalogConfig:
+    """Return a default route over the runtime-configured source set."""
+    preferred_source_ids = tuple(sorted(source_ids))
+    fallback_source_ids = ("web_search",) if "web_search" in preferred_source_ids else preferred_source_ids[:1]
     return DomainCatalogConfig(
         default_domain_id=DEFAULT_GENERAL_RESEARCH_DOMAIN_ID,
         domains=(
@@ -64,10 +65,10 @@ def _default_general_research_config() -> DomainCatalogConfig:
                 domain_name="General Research",
                 description=(
                     "Default broad research route used when no domain catalog is configured. "
-                    "Only routes to knowledge and web search sources."
+                    "Routes to all configured runtime sources."
                 ),
-                preferred_source_ids=DEFAULT_GENERAL_RESEARCH_SOURCE_IDS,
-                fallback_source_ids=("web_search",),
+                preferred_source_ids=preferred_source_ids,
+                fallback_source_ids=fallback_source_ids,
                 is_default=True,
             ),
         ),
@@ -77,24 +78,15 @@ def _default_general_research_config() -> DomainCatalogConfig:
 class DomainCatalogRegistry:
     """File-backed domain catalog registry."""
 
-    def __init__(
-        self,
-        config: DomainCatalogConfig | None = None,
-        *,
-        routable_source_ids: Sequence[str] | None = None,
-    ) -> None:
+    def __init__(self, config: DomainCatalogConfig | None = None) -> None:
         self.config = config or DomainCatalogConfig()
         self._domains = {entry.domain_id: entry for entry in self.config.domains}
-        self.routable_source_ids = frozenset(routable_source_ids) if routable_source_ids is not None else None
 
     @classmethod
     def from_path(cls, path: str | Path | None) -> DomainCatalogRegistry:
         """Load a domain catalog registry from a YAML or JSON file."""
         if path is None:
-            return cls(
-                _default_general_research_config(),
-                routable_source_ids=DEFAULT_GENERAL_RESEARCH_SOURCE_IDS,
-            )
+            return cls()
 
         catalog_path = Path(path).expanduser()
         if not catalog_path.exists():
@@ -207,16 +199,6 @@ def _default_fallback_source_ids(available_source_ids: set[str]) -> list[str]:
     return sorted(available_source_ids)[:1]
 
 
-def _filter_routable_source_tools(
-    source_tools: dict[str, list[dict[str, str]]],
-    routable_source_ids: frozenset[str] | None,
-) -> dict[str, list[dict[str, str]]]:
-    """Limit router-visible sources when a catalog defines an explicit routable subset."""
-    if routable_source_ids is None:
-        return source_tools
-    return {source_id: tools for source_id, tools in source_tools.items() if source_id in routable_source_ids}
-
-
 def source_catalog_payload(
     tools: Sequence[BaseTool],
     *,
@@ -225,15 +207,17 @@ def source_catalog_payload(
 ) -> dict[str, Any]:
     """Build the complete source/domain catalog shown to source-router-agent."""
     source_tools = runtime_source_tools(tools, allowed_source_ids=allowed_source_ids)
-    domain_registry = DomainCatalogRegistry.from_path(domain_catalog_path)
-    source_tools = _filter_routable_source_tools(source_tools, domain_registry.routable_source_ids)
+    if domain_catalog_path is None:
+        domain_registry = DomainCatalogRegistry(_default_general_research_config(list(source_tools)))
+    else:
+        domain_registry = DomainCatalogRegistry.from_path(domain_catalog_path)
     available_source_ids = set(source_tools)
 
-    unmapped_tools = [
-        getattr(runtime_tool, "name", "")
-        for runtime_tool in tools
-        if getattr(runtime_tool, "name", "") and get_source_id_for_tool(getattr(runtime_tool, "name", "")) is None
-    ]
+    unmapped_tools = []
+    for runtime_tool in tools:
+        tool_name = getattr(runtime_tool, "name", "")
+        if tool_name and get_source_id_for_tool(tool_name) is None:
+            unmapped_tools.append(tool_name)
 
     return {
         "available_sources": [

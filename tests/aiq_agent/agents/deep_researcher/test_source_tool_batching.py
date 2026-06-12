@@ -281,6 +281,24 @@ async def test_limiter_releases_after_exception():
 
 
 @pytest.mark.asyncio
+async def test_limiter_timeout_does_not_release_unacquired_slot():
+    limiter = SourceToolConcurrencyLimiter(1, acquire_timeout=0.01)
+
+    async with limiter.limit():
+        with pytest.raises(TimeoutError, match="Timed out waiting for a source-tool concurrency slot"):
+            async with limiter.limit():
+                pass
+
+        with pytest.raises(TimeoutError, match="Timed out waiting for a source-tool concurrency slot"):
+            async with limiter.limit():
+                pass
+
+    async with asyncio.timeout(0.1):
+        async with limiter.limit():
+            pass
+
+
+@pytest.mark.asyncio
 async def test_limiter_releases_after_cancellation():
     limiter = SourceToolConcurrencyLimiter(1)
 

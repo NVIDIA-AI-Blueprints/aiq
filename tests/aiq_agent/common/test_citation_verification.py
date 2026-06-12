@@ -554,7 +554,7 @@ class TestVerifyCitations:
         assert "## Sources" in result.verified_report
         assert "[1] Article 1: https://valid.com/article1" in result.verified_report
         assert "[2] Article 2: https://valid.com/article2" in result.verified_report
-        assert len(result.valid_citations) >= 2
+        assert len(result.valid_citations) == 2
         assert not result.removed_citations
 
     def test_footnote_inline_citations_are_normalized_before_appending_sources(self, registry):
@@ -566,7 +566,7 @@ class TestVerifyCitations:
         assert "## Sources" in result.verified_report
         assert "[1] Article 1: https://valid.com/article1" in result.verified_report
         assert "[2] Article 2: https://valid.com/article2" in result.verified_report
-        assert len(result.valid_citations) >= 2
+        assert len(result.valid_citations) == 2
         assert not result.removed_citations
 
     def test_footnote_reference_lines_are_normalized(self, registry):
@@ -594,7 +594,7 @@ class TestVerifyCitations:
         assert "## Sources" in result.verified_report
         assert "[1] Article 1: https://valid.com/article1" in result.verified_report
         assert "[2] Article 2: https://valid.com/article2" in result.verified_report
-        assert len(result.valid_citations) >= 2
+        assert len(result.valid_citations) == 2
         assert not result.removed_citations
 
     def test_source_location_reference_lines_are_normalized(self, registry):

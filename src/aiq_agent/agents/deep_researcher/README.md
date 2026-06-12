@@ -126,7 +126,6 @@ functions:
     planner_llm: nemotron_nano_llm        # optional; replace with nemotron_super_llm if available
     writer_llm: nemotron_nano_llm         # optional final writer model
     enable_source_router: true            # set false to skip advisory source routing
-    max_loops: 2                     # Maximum research iterations
     verbose: true                    # Enable detailed logging
     tools:
       - web_search_tool              # Search tools (e.g. tavily_web_search, paper_search)
@@ -143,7 +142,6 @@ functions:
 | `writer_llm` | LLMRef | optional | LLM for final writer subagent; falls back to default if unset |
 | `enable_source_router` | bool | `true` | Enable advisory source routing before planning |
 | `tools` | list | `[]` | Research tools (web search, paper search, etc.) |
-| `max_loops` | int | `2` | Maximum research iterations |
 | `verbose` | bool | `true` | Enable detailed logging |
 
 ### Workflow: `deep_research_workflow`
@@ -217,7 +215,6 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    max_loops: 2
     tools:
       - web_search_tool
 

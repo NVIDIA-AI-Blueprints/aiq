@@ -107,6 +107,7 @@ def test_middleware_set_adds_orchestrator_batch_tool_name():
     orchestrator_sanitizer = _sanitizer(middleware_set.orchestrator)
     assert "web_search_tool" in researcher_sanitizer.valid_tool_names
     assert "edit_file" in writer_sanitizer.valid_tool_names
+    assert "grep" in researcher_sanitizer.valid_tool_names
     assert "read_file" in researcher_sanitizer.valid_tool_names
     assert "write_file" in researcher_sanitizer.valid_tool_names
     assert "run_research_batch" not in researcher_sanitizer.valid_tool_names
@@ -122,7 +123,6 @@ def test_subagents_route_tools_and_writer_skills():
     runtime = DeepAgentsRuntime(
         skills=SkillsConfig(
             enabled=True,
-            default_sources=(),
             agent_sources={"writer-agent": ("/skills/synthesis/",)},
         )
     )

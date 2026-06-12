@@ -156,7 +156,6 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    max_loops: 2
     tools:
       - paper_search_tool
       - advanced_web_search_tool

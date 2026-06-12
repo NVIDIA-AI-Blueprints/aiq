@@ -112,7 +112,6 @@ class TestDeepResearcherAgent:
             researcher_runnable=researcher_runnable,
             backend=backend,
             callbacks=agent.callbacks,
-            source_tool_names=agent.source_tool_names,
             max_research_concurrency=agent.max_research_concurrency,
             source_registry_middleware=agent.source_registry_middleware,
         )
@@ -183,7 +182,6 @@ class TestDeepResearcherAgent:
         """Test DeepResearcherAgent initialization with custom settings."""
         with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
             from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
             from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
 
@@ -209,7 +207,8 @@ class TestDeepResearcherAgent:
             assert agent.max_source_tool_batch_size == 4
             assert agent.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
             assert agent.enable_source_router is False
-            assert agent.deepagents_runtime.skill_sources_for("orchestrator") == [BUILTIN_SKILL_SOURCE]
+            assert agent.deepagents_runtime.skill_sources_for("orchestrator") is None
+            assert agent.deepagents_runtime.skill_sources_for("researcher") == ["/skills/"]
 
     def test_sandbox_config_rejects_unsupported_provider(self):
         """Unsupported sandbox providers fail early with a clear error."""
@@ -220,7 +219,6 @@ class TestDeepResearcherAgent:
 
     def test_register_uses_runtime_config_models(self):
         """NAT config uses the same skills and sandbox models as runtime."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
@@ -246,7 +244,6 @@ class TestDeepResearcherAgent:
         assert config.max_concurrent_source_tool_calls == 3
         assert config.max_source_tool_batch_size == 4
         assert config.enable_source_router is False
-        assert config.skills.default_sources == (BUILTIN_SKILL_SOURCE,)
         assert config.skills.agent_sources == {}
         assert config.sandbox is not None
         assert config.sandbox.provider == "modal"
@@ -355,7 +352,6 @@ class TestDeepResearcherAgent:
                 tools=[real_tool],
                 skills=SkillsConfig(
                     enabled=True,
-                    default_sources=(),
                     agent_sources={
                         "writer-agent": (synthesis_skill_source,),
                     },

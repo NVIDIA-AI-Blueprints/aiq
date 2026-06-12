@@ -211,45 +211,77 @@ class TestDeepAgentsRuntimeRouting:
         )
         assert "Prediction Report Writer Skill" in files["/synthesis/prediction-report-writer/SKILL.md"]["content"]
 
-    def test_builtin_skill_state_files_include_helper_files(self, tmp_path, monkeypatch) -> None:
+    def test_builtin_skill_state_files_only_include_supported_text_files(self, tmp_path, monkeypatch) -> None:
         skill_dir = tmp_path / "demo-skill"
         scripts_dir = skill_dir / "scripts"
         references_dir = skill_dir / "references"
+        hidden_dir = skill_dir / ".hidden"
+        pycache_dir = skill_dir / "__pycache__"
         scripts_dir.mkdir(parents=True)
         references_dir.mkdir()
+        hidden_dir.mkdir()
+        pycache_dir.mkdir()
         (skill_dir / "SKILL.md").write_text("Demo Skill\n", encoding="utf-8")
         (scripts_dir / "helper.py").write_text("print('demo')\n", encoding="utf-8")
         (references_dir / "notes.md").write_text("reference notes\n", encoding="utf-8")
+        (hidden_dir / "ignored.md").write_text("hidden notes\n", encoding="utf-8")
+        (pycache_dir / "ignored.md").write_text("cached notes\n", encoding="utf-8")
+        (skill_dir / "asset.bin").write_bytes(b"\xff\xfe\x00\x00")
 
         monkeypatch.setattr(runtime_mod, "BUILTIN_SKILLS_DIR", tmp_path)
 
+        collected_paths = [path for path, _ in runtime_mod._collect_builtin_skill_files()]
         files = runtime_mod._builtin_skill_state_files()
 
+        assert collected_paths == [
+            "/skills/demo-skill/SKILL.md",
+            "/skills/demo-skill/references/notes.md",
+        ]
         assert "/demo-skill/SKILL.md" in files
-        assert "/demo-skill/scripts/helper.py" in files
         assert "/demo-skill/references/notes.md" in files
-        assert files["/demo-skill/scripts/helper.py"]["content"] == "print('demo')\n"
+        assert "/demo-skill/scripts/helper.py" not in files
+        assert "/demo-skill/.hidden/ignored.md" not in files
+        assert "/demo-skill/__pycache__/ignored.md" not in files
+        assert "/demo-skill/asset.bin" not in files
+        assert files["/demo-skill/references/notes.md"]["content"] == "reference notes\n"
 
     def test_skill_sources_return_none_when_disabled(self) -> None:
         runtime = DeepAgentsRuntime()
         assert runtime.skill_sources_for("orchestrator") is None
 
-    def test_skill_sources_use_default_for_any_agent(self) -> None:
+    def test_skill_sources_are_explicit_per_agent(self) -> None:
         runtime = DeepAgentsRuntime(skills=SkillsConfig.enabled_builtin())
-        assert runtime.skill_sources_for("orchestrator") == [BUILTIN_SKILL_SOURCE]
-        assert runtime.skill_sources_for("future-agent") == [BUILTIN_SKILL_SOURCE]
+        assert runtime.skill_sources_for("researcher") == [BUILTIN_SKILL_SOURCE]
+        assert runtime.skill_sources_for("writer-agent") == [BUILTIN_SKILL_SOURCE]
+        assert runtime.skill_sources_for("orchestrator") is None
+        assert runtime.skill_sources_for("future-agent") is None
 
-    def test_agent_specific_sources_override_defaults(self) -> None:
+    def test_deprecated_sources_alias_warns_and_is_ignored(self) -> None:
+        with pytest.warns(DeprecationWarning, match="SkillsConfig.sources is deprecated and ignored"):
+            config = SkillsConfig(enabled=True, sources=("/custom-skills/",))
+
+        assert config.agent_sources == {}
+        runtime = DeepAgentsRuntime(skills=config)
+        assert runtime.skill_sources_for("researcher") is None
+
+    def test_deprecated_default_sources_warns_and_is_ignored(self) -> None:
+        with pytest.warns(DeprecationWarning, match="SkillsConfig.default_sources is deprecated and ignored"):
+            config = SkillsConfig(enabled=True, default_sources=("/new-skills/",))
+
+        assert config.agent_sources == {}
+        runtime = DeepAgentsRuntime(skills=config)
+        assert runtime.skill_sources_for("researcher") is None
+
+    def test_agent_specific_sources_are_used_for_matching_agent_only(self) -> None:
         runtime = DeepAgentsRuntime(
             skills=SkillsConfig(
                 enabled=True,
-                default_sources=("/skills/default/",),
                 agent_sources={"writer-agent": (SYNTHESIS_SKILL_SOURCE,)},
             )
         )
 
         assert runtime.skill_sources_for("writer-agent") == [SYNTHESIS_SKILL_SOURCE]
-        assert runtime.skill_sources_for("planner-agent") == ["/skills/default/"]
+        assert runtime.skill_sources_for("planner-agent") is None
 
     def test_empty_agent_specific_sources_disable_that_agent(self) -> None:
         runtime = DeepAgentsRuntime(
@@ -260,7 +292,7 @@ class TestDeepAgentsRuntimeRouting:
         )
 
         assert runtime.skill_sources_for("writer-agent") is None
-        assert runtime.skill_sources_for("planner-agent") == [BUILTIN_SKILL_SOURCE]
+        assert runtime.skill_sources_for("planner-agent") is None
 
     def test_sandbox_required_source_without_sandbox_raises(self) -> None:
         runtime = DeepAgentsRuntime(

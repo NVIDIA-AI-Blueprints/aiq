@@ -177,7 +177,7 @@ def test_source_catalog_respects_explicit_source_selection(tmp_path):
     assert current_news["fallback_source_ids"] == []
 
 
-def test_source_catalog_explicit_source_selection_is_case_sensitive(tmp_path):
+def test_source_catalog_explicit_source_selection_is_case_insensitive(tmp_path):
     payload = source_catalog_payload(
         [
             web_search_tool,
@@ -188,9 +188,9 @@ def test_source_catalog_explicit_source_selection_is_case_sensitive(tmp_path):
         domain_catalog_path=_write_domain_catalog(tmp_path),
     )
 
-    assert payload["available_sources"] == []
+    assert [entry["source_id"] for entry in payload["available_sources"]] == ["news_search"]
     current_news = next(domain for domain in payload["domains"] if domain["domain_id"] == "current_news")
-    assert current_news["preferred_source_ids"] == []
+    assert current_news["preferred_source_ids"] == ["news_search"]
     assert current_news["fallback_source_ids"] == []
 
 
@@ -230,22 +230,27 @@ def test_source_catalog_uses_default_general_research_without_domain_catalog():
     )
 
     sources = {entry["source_id"]: entry for entry in payload["available_sources"]}
-    assert set(sources) == {"knowledge_layer", "web_search"}
+    assert set(sources) == {"knowledge_layer", "news_search", "prediction_market", "web_search"}
     assert payload["default_domain_id"] == "general_research"
     assert payload["default_fallback_source_ids"] == ["web_search"]
 
     assert len(payload["domains"]) == 1
     [general_research] = payload["domains"]
     assert general_research["domain_id"] == "general_research"
-    assert general_research["preferred_source_ids"] == ["knowledge_layer", "web_search"]
+    assert general_research["preferred_source_ids"] == [
+        "knowledge_layer",
+        "news_search",
+        "prediction_market",
+        "web_search",
+    ]
     assert general_research["fallback_source_ids"] == ["web_search"]
 
 
-def test_source_catalog_default_general_research_filters_unavailable_sources():
+def test_source_catalog_default_general_research_uses_available_sources_only():
     payload = source_catalog_payload([web_search_tool, duckduckgo_news_search_tool])
 
-    assert [entry["source_id"] for entry in payload["available_sources"]] == ["web_search"]
+    assert [entry["source_id"] for entry in payload["available_sources"]] == ["news_search", "web_search"]
     [general_research] = payload["domains"]
-    assert general_research["preferred_source_ids"] == ["web_search"]
+    assert general_research["preferred_source_ids"] == ["news_search", "web_search"]
     assert general_research["fallback_source_ids"] == ["web_search"]
-    assert general_research["unavailable_source_ids"] == ["knowledge_layer"]
+    assert general_research["unavailable_source_ids"] == []

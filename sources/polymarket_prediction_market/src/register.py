@@ -22,6 +22,7 @@ import json
 import logging
 from collections.abc import AsyncGenerator
 from collections.abc import Sequence
+from html import escape as html_escape
 from typing import Any
 
 from pydantic import Field
@@ -35,6 +36,7 @@ logger = logging.getLogger(__name__)
 
 GAMMA_API_BASE_URL = "https://gamma-api.polymarket.com"
 POLYMARKET_WEB_BASE_URL = "https://polymarket.com"
+MAX_RETRY_BACKOFF_SECONDS = 30
 
 
 class PolymarketSearchToolConfig(FunctionBaseConfig, name="polymarket_search"):
@@ -115,6 +117,11 @@ def _trim(text: str, limit: int = 900) -> str:
     if len(text) <= limit:
         return text
     return text[: limit - 3].rstrip() + "..."
+
+
+def _escape(text: str) -> str:
+    """Escape text for XML-like document output."""
+    return html_escape(text, quote=True)
 
 
 def _market_title(market: dict[str, Any]) -> str:
@@ -203,7 +210,7 @@ def _market_url(market: dict[str, Any]) -> str:
 
 def _format_market_line(market: dict[str, Any]) -> str:
     """Render a market as one compact bullet."""
-    title = _market_title(market) or "Untitled market"
+    title = _escape(_market_title(market) or "Untitled market")
     outcomes = [_as_text(outcome) for outcome in _as_list(market.get("outcomes"))]
     prices = _as_list(market.get("outcomePrices"))
     if not prices:
@@ -213,9 +220,9 @@ def _format_market_line(market: dict[str, Any]) -> str:
     for index, outcome in enumerate(outcomes):
         price = _format_probability(prices[index]) if index < len(prices) else ""
         if outcome and price:
-            pairs.append(f"{outcome}: {price}")
+            pairs.append(f"{_escape(outcome)}: {price}")
         elif outcome:
-            pairs.append(outcome)
+            pairs.append(_escape(outcome))
 
     metadata = []
     volume = _format_number(market.get("volume") or market.get("volume24hr"))
@@ -228,7 +235,7 @@ def _format_market_line(market: dict[str, Any]) -> str:
     if liquidity:
         metadata.append(f"liquidity {liquidity}")
     if end_date:
-        metadata.append(f"ends {end_date}")
+        metadata.append(f"ends {_escape(end_date)}")
 
     detail = f" ({'; '.join(metadata)})" if metadata else ""
     return f"- {title}{detail}"
@@ -236,9 +243,9 @@ def _format_market_line(market: dict[str, Any]) -> str:
 
 def _format_market_document(market: dict[str, Any]) -> str:
     """Render one market as a citable document block."""
-    url = _market_url(market)
-    title = _market_title(market) or "Polymarket market"
-    description = _trim(_as_text(market.get("description")))
+    url = _escape(_market_url(market))
+    title = _escape(_market_title(market) or "Polymarket market")
+    description = _escape(_trim(_as_text(market.get("description"))))
     metadata_lines = [
         "<source>Polymarket</source>",
         "<source_type>prediction_market</source_type>",
@@ -248,7 +255,7 @@ def _format_market_document(market: dict[str, Any]) -> str:
         metadata_lines.append(f"<active>{str(active).lower()}</active>")
     end_date = _as_text(market.get("endDate") or market.get("end_date"))
     if end_date:
-        metadata_lines.append(f"<end_date>{end_date}</end_date>")
+        metadata_lines.append(f"<end_date>{_escape(end_date)}</end_date>")
     volume = _format_number(market.get("volume") or market.get("volume24hr"))
     if volume:
         metadata_lines.append(f"<volume>{volume}</volume>")
@@ -261,9 +268,9 @@ def _format_market_document(market: dict[str, Any]) -> str:
 def _format_event_document(event: dict[str, Any], max_markets: int) -> str:
     """Render one event with nested markets as a citable document block."""
     slug = _as_text(event.get("slug"))
-    url = _polymarket_event_url(slug)
-    title = _event_title(event) or "Polymarket event"
-    description = _trim(_as_text(event.get("description")))
+    url = _escape(_polymarket_event_url(slug))
+    title = _escape(_event_title(event) or "Polymarket event")
+    description = _escape(_trim(_as_text(event.get("description"))))
     metadata_lines = [
         "<source>Polymarket</source>",
         "<source_type>prediction_market</source_type>",
@@ -273,7 +280,7 @@ def _format_event_document(event: dict[str, Any], max_markets: int) -> str:
         metadata_lines.append(f"<active>{str(active).lower()}</active>")
     end_date = _as_text(event.get("endDate") or event.get("end_date"))
     if end_date:
-        metadata_lines.append(f"<end_date>{end_date}</end_date>")
+        metadata_lines.append(f"<end_date>{_escape(end_date)}</end_date>")
     volume = _format_number(event.get("volume") or event.get("volume24hr"))
     if volume:
         metadata_lines.append(f"<volume>{volume}</volume>")
@@ -403,7 +410,9 @@ async def polymarket_search(
         last_error: Exception | None = None
         for attempt in range(tool_config.max_retries):
             try:
+                # The client timeout caps each individual HTTP request.
                 async with httpx.AsyncClient(timeout=tool_config.timeout) as client:
+                    # wait_for caps the combined event+market search attempt.
                     events, markets = await asyncio.wait_for(
                         asyncio.gather(
                             _search_events(client, tool_config, query),
@@ -432,7 +441,7 @@ async def polymarket_search(
                 if attempt == tool_config.max_retries - 1:
                     logger.warning("Polymarket search failed for query %r: %s", query, exc)
                     return f"Error: Polymarket search failed - {exc}"
-                await asyncio.sleep(2**attempt)
+                await asyncio.sleep(min(2**attempt, MAX_RETRY_BACKOFF_SECONDS))
 
         return f"Error: Polymarket search failed - {last_error}"
 

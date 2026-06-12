@@ -20,6 +20,7 @@ import types
 from unittest.mock import MagicMock
 
 from duckduckgo_news_search.register import DuckDuckGoNewsSearchToolConfig
+from duckduckgo_news_search.register import _format_news_result
 from duckduckgo_news_search.register import duckduckgo_news_search
 
 from nat.data_models.function import FunctionBaseConfig
@@ -63,6 +64,25 @@ class TestDuckDuckGoNewsSearchToolConfig:
 
     def test_inherits_from_function_base_config(self):
         assert issubclass(DuckDuckGoNewsSearchToolConfig, FunctionBaseConfig)
+
+
+class TestFormatNewsResult:
+    def test_escapes_document_fields(self):
+        output = _format_news_result(
+            {
+                "title": 'NVIDIA <agents> & "news"',
+                "url": 'https://example.test/news?q=<ai>&quote="yes"',
+                "body": 'Body with <tag>, & ampersand, and "quotes".',
+                "source": 'Example & "News" <Feed>',
+                "date": '2026-06-01 <today> & "now"',
+            }
+        )
+
+        assert '<Document href="https://example.test/news?q=&lt;ai&gt;&amp;quote=&quot;yes&quot;">' in output
+        assert "NVIDIA &lt;agents&gt; &amp; &quot;news&quot;" in output
+        assert "Body with &lt;tag&gt;, &amp; ampersand, and &quot;quotes&quot;." in output
+        assert "<source>Example &amp; &quot;News&quot; &lt;Feed&gt;</source>" in output
+        assert "<date>2026-06-01 &lt;today&gt; &amp; &quot;now&quot;</date>" in output
 
 
 class TestDuckDuckGoNewsSearchLive:
@@ -124,3 +144,44 @@ class TestDuckDuckGoNewsSearchLive:
             output = await info.single_fn("AI agents")
 
         assert output == "News search returned no results"
+
+    async def test_timeout_triggers_retry(self, monkeypatch):
+        fake = _FakeDDGS(Exception("Timeout"))
+        _install_fake_ddgs(monkeypatch, fake)
+
+        async def _no_sleep(_delay):
+            return None
+
+        monkeypatch.setattr("duckduckgo_news_search.register.asyncio.sleep", _no_sleep)
+
+        config = DuckDuckGoNewsSearchToolConfig(timeout=0.01, max_retries=2)
+        builder = MagicMock()
+        async with duckduckgo_news_search(config, builder) as info:
+            output = await info.single_fn("test")
+
+        assert output == "Error: News search failed"
+        assert "Timeout" not in output
+        assert len(fake.calls) == 2
+
+    async def test_special_characters_in_results_are_escaped(self, monkeypatch):
+        fake = _FakeDDGS(
+            [
+                {
+                    "title": '<script>alert("title")</script> & news',
+                    "url": 'https://example.test/news?q=<script>&quote="yes"',
+                    "body": '<script>alert("body")</script> & details > summary',
+                }
+            ]
+        )
+        _install_fake_ddgs(monkeypatch, fake)
+
+        config = DuckDuckGoNewsSearchToolConfig()
+        builder = MagicMock()
+        async with duckduckgo_news_search(config, builder) as info:
+            output = await info.single_fn("test")
+
+        assert "<script>" not in output
+        assert "</script>" not in output
+        assert 'href="https://example.test/news?q=&lt;script&gt;&amp;quote=&quot;yes&quot;"' in output
+        assert "&lt;script&gt;alert(&quot;title&quot;)&lt;/script&gt; &amp; news" in output
+        assert "&lt;script&gt;alert(&quot;body&quot;)&lt;/script&gt; &amp; details &gt; summary" in output

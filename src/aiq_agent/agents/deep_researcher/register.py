@@ -55,10 +55,6 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     source_router_llm: LLMRef | None = Field(default=None, description="LLM for source-router subagent")
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
-    evidence_judge_llm: LLMRef | None = Field(
-        default=None,
-        description="Deprecated no-op. Researcher notes now include self-assessed evidence_judgment.",
-    )
     writer_llm: LLMRef | None = Field(default=None, description="LLM for final writer/synthesis subagent")
     tools: list[FunctionRef | FunctionGroupRef] = Field(
         default_factory=list,
@@ -68,7 +64,6 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default_factory=list,
         description="Tool names to exclude when inheriting from registry.",
     )
-    max_loops: int = Field(default=2)
     verbose: bool = Field(default=True)
     domain_catalog_path: str | None = Field(
         default=None,

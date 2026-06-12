@@ -141,7 +141,6 @@ Configured through `DeepResearchAgentConfig` (NeMo Agent Toolkit type name: `dee
 | `planner_llm` | `LLMRef` or `None` | `None` | LLM for planner subagent; falls back to `orchestrator_llm` if unset |
 | `writer_llm` | `LLMRef` or `None` | `None` | LLM for writer subagent; falls back to `orchestrator_llm` if unset |
 | `tools` | `list[FunctionRef \| FunctionGroupRef]` | `[]` | Research tools (web search, paper search, etc.) |
-| `max_loops` | `int` | `2` | Maximum research iterations |
 | `verbose` | `bool` | `true` | Enable detailed logging |
 
 **Example YAML:**
@@ -155,7 +154,6 @@ functions:
     researcher_llm: nemotron_llm
     planner_llm: nemotron_llm
     writer_llm: gpt_oss_llm
-    max_loops: 2
     verbose: true
     tools:
       - web_search_tool

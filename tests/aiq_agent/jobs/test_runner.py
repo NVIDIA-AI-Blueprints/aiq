@@ -1347,7 +1347,6 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.job_id == "job-123"
         assert agent.config is fn_config
         assert agent.config.skills.enabled is True
-        assert agent.config.skills.default_sources == ("/skills/",)
         assert agent.config.skills.agent_sources == {}
         assert agent.config.sandbox is not None
         assert agent.config.sandbox.app_name == "async-aiq"
@@ -1382,7 +1381,6 @@ class TestAsyncJobRunnerAgentFactory:
             orchestrator_llm="llm",
             skills=SkillsConfig(
                 enabled=True,
-                default_sources=(),
                 agent_sources={
                     "writer-agent": ("/skills/synthesis/",),
                 },

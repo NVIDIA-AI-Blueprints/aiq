@@ -726,15 +726,19 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
             logger.warning("[CitationVerify] No references section found in report; skipping")
             return CitationVerificationResult(verified_report=report_text)
 
+        cited_numbers = sorted({int(match.group(1)) for match in _INLINE_CITATION_RE.finditer(report_text)})
         reference_lines = [
-            line for i, source in enumerate(all_sources, 1) if (line := _format_registry_reference(i, source))
+            line
+            for i in cited_numbers
+            if 1 <= i <= len(all_sources)
+            if (line := _format_registry_reference(i, all_sources[i - 1]))
         ]
         if not reference_lines:
             logger.warning("[CitationVerify] No references section found and no renderable registered sources")
             return CitationVerificationResult(verified_report=report_text)
 
         logger.warning(
-            "[CitationVerify] No references section found; appending %d registered source(s)",
+            "[CitationVerify] No references section found; appending %d inline-cited registered source(s)",
             len(reference_lines),
         )
         report_text = report_text.rstrip() + "\n\n## Sources\n" + "\n".join(reference_lines)
