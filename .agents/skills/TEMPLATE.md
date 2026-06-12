@@ -74,9 +74,11 @@ boundaries. State the expected result.
 ```bash
 uv run pytest <path/to/scoped/tests>
 uv run ruff check <path/to/changed/code>
+uv run ruff format --check <path/to/changed/code>
 ```
 
-Expected: tests pass and Ruff reports no lint failures for the changed code.
+Expected: tests pass and Ruff reports no lint or format failures for the changed
+code.
 
 ## Common Mistakes
 

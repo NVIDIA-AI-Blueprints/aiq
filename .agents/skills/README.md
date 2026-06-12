@@ -35,7 +35,7 @@ agents through symlinks; do not move maintainer skills there.
 
 Each skill is a directory using the Agent Skills convention:
 
-```
+```text
 .agents/skills/<skill-name>/
   SKILL.md                 # required: frontmatter + concise routed workflow
   references/              # optional: longer procedures, loaded only when needed
@@ -65,10 +65,13 @@ Keep names stable once a skill is published or mirrored externally.
 1. Copy [TEMPLATE.md](TEMPLATE.md) to `.agents/skills/<aiq-skill-name>/SKILL.md`
    and fill in the frontmatter and sections.
 2. Add a coding-agent compatibility symlink so the in-repo agent discovers it:
+
    ```bash
    ln -s ../../.agents/skills/<aiq-skill-name> .claude/skills/<aiq-skill-name>
    ```
+
 3. Validate before committing:
+
    ```bash
    uv run python scripts/validate_skills.py .agents/skills
    ```

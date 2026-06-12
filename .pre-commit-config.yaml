@@ -52,7 +52,7 @@ repos:
         name: Validate agent skills
         entry: python scripts/validate_skills.py .agents/skills
         language: python
-        additional_dependencies: ["pyyaml"]
+        additional_dependencies: ["pyyaml==6.0.3"]
         files: ^\.agents/skills/
         pass_filenames: false
       - id: clear-notebook-output-cells

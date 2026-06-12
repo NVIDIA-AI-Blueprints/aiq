@@ -30,6 +30,10 @@ VALIDATOR = REPO_ROOT / "scripts" / "validate_skills.py"
 def _load_validator():
     """Dynamically import scripts/validate_skills.py and return the module."""
     spec = importlib.util.spec_from_file_location("validate_skills", VALIDATOR)
+    if spec is None:
+        raise RuntimeError(f"failed to create import spec for {VALIDATOR}")
+    if spec.loader is None:
+        raise RuntimeError(f"import spec loader missing for {VALIDATOR}")
     module = importlib.util.module_from_spec(spec)
     # Register before exec so dataclasses can resolve annotations under
     # `from __future__ import annotations` during dynamic import.

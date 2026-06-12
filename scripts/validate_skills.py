@@ -51,7 +51,7 @@ MAX_DESCRIPTION_CHARS = 1024
 # are intentionally left to markdown-link-check.
 BUNDLE_DIRS = ("references", "scripts", "templates", "assets")
 
-FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---", re.DOTALL)
+FRONTMATTER_RE = re.compile(r"^---\r?\n(.*?)\r?\n---", re.DOTALL)
 MD_LINK_RE = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 
 DEFAULT_ROOTS = (".agents/skills",)
@@ -93,7 +93,11 @@ def _check_bundle_links(skill_md: Path, text: str, dir_name: str, report: Report
         first_segment = path_part.split("/", 1)[0]
         if first_segment not in BUNDLE_DIRS:
             continue
-        if not (skill_md.parent / path_part).exists():
+        candidate = (skill_md.parent / path_part).resolve(strict=False)
+        bundle_root = (skill_md.parent / first_segment).resolve(strict=False)
+        if not candidate.is_relative_to(bundle_root):
+            report.fail(dir_name, f"SKILL.md link '{path_part}' escapes the '{first_segment}' bundle directory")
+        elif not candidate.exists():
             report.fail(dir_name, f"SKILL.md links to missing bundle file '{path_part}'")
 
 
@@ -107,7 +111,12 @@ def validate_skill(skill_dir: Path, report: Report) -> None:
         report.fail(dir_name, "missing SKILL.md")
         return
 
-    text = skill_md.read_text(encoding="utf-8")
+    try:
+        text = skill_md.read_text(encoding="utf-8")
+    except (UnicodeDecodeError, OSError) as err:
+        report.fail(dir_name, f"Unable to read SKILL.md: {err}")
+        return
+
     frontmatter = _parse_frontmatter(text)
     if frontmatter is None:
         report.fail(dir_name, "SKILL.md frontmatter is missing or not valid YAML")

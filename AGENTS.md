@@ -134,9 +134,11 @@ change crosses shared boundaries.
 - This repo uses a maintainer-reviewed PR workflow with **DCO sign-off**,
   code-owner review, copy-pr-bot mirroring, and GitHub Actions validation.
 - Every commit must be signed off:
+
   ```bash
   git commit -s -m "Concise, scoped change"
   ```
+
   The commit must contain a `Signed-off-by: Your Name <your@email.com>` trailer.
   Commits without sign-off may be rejected.
 - Keep PRs scoped: no unrelated files, no accidental generated artifacts, no
