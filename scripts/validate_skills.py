@@ -149,6 +149,7 @@ def validate_roots(roots: list[Path]) -> Report:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """CLI entry point: parse root arguments, run validation, and return an exit code."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "roots",

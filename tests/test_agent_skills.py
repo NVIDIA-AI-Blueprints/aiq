@@ -28,6 +28,7 @@ VALIDATOR = REPO_ROOT / "scripts" / "validate_skills.py"
 
 
 def _load_validator():
+    """Dynamically import scripts/validate_skills.py and return the module."""
     spec = importlib.util.spec_from_file_location("validate_skills", VALIDATOR)
     module = importlib.util.module_from_spec(spec)
     # Register before exec so dataclasses can resolve annotations under
@@ -38,6 +39,7 @@ def _load_validator():
 
 
 def test_agent_skills_are_valid():
+    """Assert every skill bundle under .agents/skills passes structural validation."""
     validator = _load_validator()
     report = validator.validate_roots([SKILLS_ROOT])
     assert report.skills_checked >= 1, f"no skills found under {SKILLS_ROOT}"
