@@ -41,6 +41,7 @@ Each skill is a directory using the Agent Skills convention:
   references/              # optional: longer procedures, loaded only when needed
   scripts/                 # optional: deterministic, dependency-light helpers
   templates/               # optional: starter files or snippets
+  assets/                  # optional: images, binaries, or other bundled assets
 ```
 
 Keep `SKILL.md` concise and route long material into `references/`. See
