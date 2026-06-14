@@ -1,0 +1,64 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import pytest
+from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
+
+from aiq_agent.common import LLMProvider
+from aiq_agent.common import LLMRole
+
+
+class FakeWriterLLM:
+    def __init__(self, content: str = "# Revised Report\n\nUpdated body.") -> None:
+        self.content = content
+        self.seen_messages = None
+
+    async def ainvoke(self, messages):
+        self.seen_messages = messages
+        return AIMessage(content=self.content)
+
+
+@pytest.mark.asyncio
+async def test_report_rewriter_uses_parent_report_context_and_emits_output_file():
+    from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
+    from aiq_agent.agents.report_rewriter.models import ReportRewriterAgentState
+
+    writer_llm = FakeWriterLLM()
+    provider = LLMProvider()
+    provider.configure(LLMRole.REPORT_WRITER, writer_llm)
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+
+    state = ReportRewriterAgentState(
+        messages=[HumanMessage(content="Remove the appendix.")],
+        files={
+            "/shared/original_report.md": "# Parent Report\n\nBody.\n\n## Appendix\n\nRemove me.",
+            "/shared/source_summary.md": "- [1] Example: https://example.com",
+            "/shared/edit_instruction.txt": "Remove the appendix.",
+        },
+    )
+
+    result = await agent.run(state)
+
+    assert result.files["/shared/output.md"] == "# Revised Report\n\nUpdated body."
+    assert result.messages[-1].content == "# Revised Report\n\nUpdated body."
+    rendered_prompt = writer_llm.seen_messages[0].content
+    assert "# Parent Report" in rendered_prompt
+    assert "Remove the appendix." in rendered_prompt
+    assert "complete standalone Markdown report" in rendered_prompt
+
+
+@pytest.mark.asyncio
+async def test_report_rewriter_requires_original_report_file():
+    from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
+    from aiq_agent.agents.report_rewriter.models import ReportRewriterAgentState
+
+    writer_llm = FakeWriterLLM()
+    provider = LLMProvider()
+    provider.configure(LLMRole.REPORT_WRITER, writer_llm)
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+
+    with pytest.raises(ValueError, match="/shared/original_report.md"):
+        await agent.run(ReportRewriterAgentState(messages=[HumanMessage(content="Shorten it.")], files={}))

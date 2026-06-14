@@ -1,0 +1,156 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from aiq_agent.auth import Principal
+
+
+@pytest.fixture
+async def report_edit_app(monkeypatch):
+    """Build a minimal async-jobs app with patched storage and submission side effects."""
+    import aiq_agent.auth
+    import aiq_api.routes.jobs as jobs_routes
+    from aiq_api.jobs import access
+    from aiq_api.jobs import event_store
+    from aiq_api.jobs import submit
+
+    principal = Principal(type="jwt", sub="user-1", email="user@example.com")
+    parent_job = SimpleNamespace(
+        status="success",
+        output={
+            "report": "# Parent Report\n\nKeep this.\n\n## Sources\n\n[1] https://example.com/source",
+        },
+        error=None,
+        created_at=None,
+    )
+    job_store = MagicMock()
+    authorize_job_access = AsyncMock(return_value=parent_job)
+    submit_agent_job = AsyncMock(return_value="child-job-1")
+
+    monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
+    monkeypatch.setattr(jobs_routes, "_reap_ghost_jobs", AsyncMock())
+    monkeypatch.setattr(jobs_routes, "require_verified_principal", lambda: principal)
+    monkeypatch.setattr(access, "authorize_job_access", authorize_job_access)
+    monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())
+    monkeypatch.setattr(event_store.EventStore, "_ensure_table_exists", MagicMock())
+    monkeypatch.setattr(event_store.EventStore, "get_events_async", AsyncMock(return_value=[]))
+    monkeypatch.setattr(submit, "submit_agent_job", submit_agent_job)
+    monkeypatch.setattr(aiq_agent.auth, "get_auth_token", lambda: "token-1")
+
+    worker = SimpleNamespace(
+        _dask_available=True,
+        _job_store=job_store,
+        _scheduler_address="tcp://localhost:8786",
+        _db_url="sqlite:///./test.db",
+        _config_file_path="config.yml",
+        _log_level=20,
+        _use_dask_threads=False,
+        _front_end_config=SimpleNamespace(expiry_seconds=86400),
+    )
+    builder = MagicMock()
+
+    app = FastAPI()
+    await jobs_routes.register_job_routes(app, builder, worker)
+    return app, parent_job, authorize_job_access, submit_agent_job, principal, job_store
+
+
+@pytest.mark.asyncio
+async def test_report_edit_authorizes_parent_and_submits_internal_child(report_edit_app):
+    app, parent_job, authorize_job_access, submit_agent_job, principal, job_store = report_edit_app
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Remove the final paragraph."},
+        )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": "child-job-1",
+        "parent_job_id": "parent-job-1",
+        "status": "submitted",
+        "agent_type": "report_rewriter",
+    }
+    authorize_job_access.assert_awaited_once_with(job_store, "sqlite:///./test.db", "parent-job-1", principal)
+    submit_agent_job.assert_awaited_once()
+    kwargs = submit_agent_job.await_args.kwargs
+    assert kwargs["agent_type"] == "report_rewriter"
+    assert kwargs["input_text"] == "Remove the final paragraph."
+    assert kwargs["owner"] == "user@example.com"
+    assert kwargs["principal"] == principal
+    assert kwargs["data_sources"] == []
+    assert kwargs["auth_token"] == "token-1"
+    assert kwargs["initial_files"]["/shared/original_report.md"] == parent_job.output["report"]
+    assert kwargs["initial_files"]["/shared/edit_instruction.txt"] == "Remove the final paragraph."
+    assert json.loads(kwargs["initial_files"]["/shared/parent_report_context.json"])["parent_job_id"] == "parent-job-1"
+    assert kwargs["output_metadata"] == {
+        "parent_job_id": "parent-job-1",
+        "interaction_action": "edit",
+        "result_kind": "report",
+    }
+
+
+@pytest.mark.asyncio
+async def test_report_edit_rejects_incomplete_parent(report_edit_app):
+    app, parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    parent_job.status = "running"
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Remove the final paragraph."},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Parent job is not complete: parent-job-1"
+    submit_agent_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_report_edit_rejects_parent_without_durable_report(report_edit_app):
+    app, parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    parent_job.output = {}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Remove the final paragraph."},
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Parent job has no durable report: parent-job-1"
+    submit_agent_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_job_report_response_includes_report_interaction_metadata(report_edit_app):
+    app, child_job, _authorize_job_access, _submit_agent_job, _principal, _job_store = report_edit_app
+    child_job.output = {
+        "report": "# Revised",
+        "parent_job_id": "parent-job-1",
+        "interaction_action": "edit",
+        "result_kind": "report",
+    }
+
+    with TestClient(app) as client:
+        response = client.get("/v1/jobs/async/job/child-job-1/report")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "job_id": "child-job-1",
+        "has_report": True,
+        "report": "# Revised",
+        "parent_job_id": "parent-job-1",
+        "interaction_action": "edit",
+        "result_kind": "report",
+    }

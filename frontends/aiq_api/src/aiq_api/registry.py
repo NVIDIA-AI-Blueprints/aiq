@@ -116,3 +116,11 @@ register_agent(
     config_name="shallow_research_agent",
     description="Performs quick single-turn research",
 )
+
+register_agent(
+    agent_type="report_rewriter",
+    class_path="aiq_agent.agents.report_rewriter.agent.ReportRewriterAgent",
+    config_name="deep_research_agent",
+    description="Internal child agent for report edit follow-up",
+    public=False,
+)

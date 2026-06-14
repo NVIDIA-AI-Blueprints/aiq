@@ -340,6 +340,36 @@ class JobReportResponse(BaseModel):
     job_id: str = Field(..., description="Unique job identifier")
     has_report: bool = Field(..., description="Whether the final report is available")
     report: str | None = Field(None, description="Final research report from the agent")
+    parent_job_id: str | None = Field(None, description="Parent report job ID for report follow-up outputs")
+    interaction_action: str | None = Field(None, description="Report interaction action that produced this output")
+    result_kind: str | None = Field(None, description="Kind of result returned by the child job")
+
+
+class ReportEditRequest(BaseModel):
+    """Request to create a revised report from an existing completed report job."""
+
+    input: str = Field(..., min_length=1, description="Edit instruction for the parent report")
+    job_id: str | None = Field(
+        None,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        max_length=64,
+        description="Optional custom child job ID (auto-generated if omitted)",
+    )
+    expiry_seconds: int | None = Field(
+        None,
+        ge=600,
+        le=604800,
+        description="Child job expiry in seconds (default from config, max 7 days)",
+    )
+
+
+class ReportEditResponse(BaseModel):
+    """Response for an accepted report edit job."""
+
+    job_id: str = Field(..., description="Child job identifier")
+    parent_job_id: str = Field(..., description="Parent report job identifier")
+    status: str = Field(..., description="Child job status")
+    agent_type: str = Field(..., description="Internal agent type used for the child job")
 
 
 class AgentInfo(BaseModel):
@@ -380,6 +410,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     from ..jobs.access import authorize_job_access
     from ..jobs.access import ensure_job_access_table
     from ..jobs.event_store import EventStore
+    from ..jobs.report_context import resolve_report_context
+    from ..jobs.report_context import to_initial_files
     from ..jobs.submit import submit_agent_job as submit_authorized_job
 
     if not get_all_sources():
@@ -506,6 +538,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             agent_config = get_agent_config(req.agent_type)
         except KeyError as e:
             raise HTTPException(400, str(e))
+        if not agent_config.public:
+            raise HTTPException(400, f"Agent type is internal-only: {req.agent_type}")
 
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
         # Authenticate the caller (raises 401/403 if unverified). The returned principal
@@ -565,6 +599,65 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             job_id=job_id,
             status=JobStatus.SUBMITTED.value,
             agent_type=req.agent_type,
+        )
+
+    @app.post(
+        "/v1/jobs/async/job/{job_id}/report/edit",
+        response_model=ReportEditResponse,
+        tags=["async jobs"],
+        summary="Create a revised report from a completed report job",
+        description=(
+            "Authorize access to a completed parent report, reconstruct durable report context, "
+            "and submit an internal child job that emits a full revised report."
+        ),
+        responses={
+            404: {"description": "Parent job not found"},
+            409: {"description": "Parent job is incomplete or has no durable report"},
+            503: {"description": "Dask scheduler not available"},
+        },
+    )
+    async def edit_job_report(job_id: str, req: ReportEditRequest) -> ReportEditResponse:
+        """Create an internal report-rewrite child job from a completed parent report."""
+        principal = require_verified_principal()
+        parent_job = await authorize_job_access(job_store, db_url, job_id, principal)
+        if getattr(parent_job, "status", None) != JobStatus.SUCCESS.value:
+            raise HTTPException(409, f"Parent job is not complete: {job_id}")
+
+        context = await resolve_report_context(parent_job, db_url, job_id)
+        expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
+
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+        try:
+            child_job_id = await submit_authorized_job(
+                agent_type="report_rewriter",
+                input_text=req.input,
+                owner=principal.email or principal.sub,
+                principal=principal,
+                job_id=req.job_id,
+                expiry_seconds=expiry,
+                data_sources=[],
+                auth_token=auth_token,
+                initial_files=to_initial_files(context, instruction=req.input),
+                output_metadata={
+                    "parent_job_id": job_id,
+                    "interaction_action": "edit",
+                    "result_kind": "report",
+                },
+            )
+        except RuntimeError as e:
+            raise HTTPException(403, str(e))
+        except Exception as e:
+            logger.warning("Failed to submit report edit job for parent %s: %s", job_id, e)
+            raise HTTPException(500, "Failed to submit report edit job")
+
+        logger.info("Submitted report edit child job %s for parent job %s", child_job_id, job_id)
+        return ReportEditResponse(
+            job_id=child_job_id,
+            parent_job_id=job_id,
+            status=JobStatus.SUBMITTED.value,
+            agent_type="report_rewriter",
         )
 
     @app.get(
@@ -764,14 +857,27 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         job = await authorize_job_access(job_store, db_url, job_id, principal)
 
         report = None
+        parent_job_id = None
+        interaction_action = None
+        result_kind = None
         if job.output:
             try:
                 output = json.loads(job.output) if isinstance(job.output, str) else job.output
                 report = output.get("report")
+                parent_job_id = output.get("parent_job_id")
+                interaction_action = output.get("interaction_action")
+                result_kind = output.get("result_kind")
             except (json.JSONDecodeError, AttributeError):
                 pass
 
-        return JobReportResponse(job_id=job_id, has_report=bool(report), report=report)
+        return JobReportResponse(
+            job_id=job_id,
+            has_report=bool(report),
+            report=report,
+            parent_job_id=parent_job_id,
+            interaction_action=interaction_action,
+            result_kind=result_kind,
+        )
 
     logger.info("Registered async job routes at /v1/jobs/async")
 

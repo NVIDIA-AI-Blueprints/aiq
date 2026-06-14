@@ -36,6 +36,16 @@ def test_register_agent_can_mark_internal(monkeypatch):
     assert registry.AGENT_REGISTRY["report_rewriter"].public is False
 
 
+def test_default_registry_contains_internal_report_rewriter():
+    from aiq_api.registry import AGENT_REGISTRY
+
+    assert AGENT_REGISTRY["report_rewriter"].class_path == (
+        "aiq_agent.agents.report_rewriter.agent.ReportRewriterAgent"
+    )
+    assert AGENT_REGISTRY["report_rewriter"].config_name == "deep_research_agent"
+    assert AGENT_REGISTRY["report_rewriter"].public is False
+
+
 @pytest.mark.asyncio
 async def test_list_agents_excludes_internal_agents(monkeypatch):
     import aiq_api.routes.jobs as jobs_routes
