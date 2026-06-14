@@ -443,6 +443,18 @@ class ChatResearcherAgent:
                 return {"messages": [AIMessage(content=revised)], "last_report_markdown": revised}
             return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
 
+        async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
+            if self.report_ask_fn is None:
+                return {"messages": [AIMessage(content="Report follow-up is not available in this workflow.")]}
+            answer = await self.report_ask_fn(state)
+            return {"messages": [AIMessage(content=answer)]}
+
+        async def report_edit_node(state: ChatResearcherState) -> dict[str, Any]:
+            if self.report_edit_job_submitter is None:
+                return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
+            job_id = await self.report_edit_job_submitter(state)
+            return {"messages": [AIMessage(content=f"Report edit job submitted. Job ID: {job_id}")]}
+
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
             if state.user_intent and state.user_intent.intent == "meta":
