@@ -401,6 +401,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         agents = [
             AgentInfo(agent_type=agent_type, description=config.description)
             for agent_type, config in AGENT_REGISTRY.items()
+            if config.public
         ]
         return AgentListResponse(agents=agents)
 
