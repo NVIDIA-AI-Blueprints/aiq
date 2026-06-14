@@ -25,6 +25,25 @@ from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
 
 
+class TestReportFollowUpHelpers:
+    """Tests for report follow-up helper prompt shaping."""
+
+    def test_build_report_ask_prompt_anchors_answer_to_parent_report(self):
+        from aiq_agent.agents.chat_researcher.register import _build_report_ask_prompt
+
+        prompt = _build_report_ask_prompt(
+            question="What is the main risk?",
+            report_markdown="# Report\n\nRisk is rollout complexity.",
+            source_summary_markdown="- [1] https://example.com",
+        )
+
+        assert "What is the main risk?" in prompt
+        assert "# Report" in prompt
+        assert "Risk is rollout complexity." in prompt
+        assert "- [1] https://example.com" in prompt
+        assert "Answer using only the parent report" in prompt
+
+
 class TestExtractTextFromMessageString:
     """Tests for _extract_text_from_message with string inputs."""
 

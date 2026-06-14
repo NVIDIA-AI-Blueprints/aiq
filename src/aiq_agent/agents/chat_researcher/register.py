@@ -52,6 +52,24 @@ logger = logging.getLogger(__name__)
 _ensure_otel_redaction_registered()
 
 
+def _build_report_ask_prompt(
+    *,
+    question: str,
+    report_markdown: str,
+    source_summary_markdown: str,
+) -> str:
+    """Build a bounded QA prompt for questions against an existing report."""
+
+    return (
+        "Answer using only the parent report and source summary below. "
+        "If the answer is not supported by the parent report, say that the report does not contain enough "
+        "information to answer. Keep the answer concise and preserve citations when referencing report claims.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Parent source summary:\n{source_summary_markdown}\n\n"
+        f"Parent report:\n{report_markdown}"
+    )
+
+
 ########################################################
 # Intent Classifier
 ########################################################
@@ -249,12 +267,75 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     callbacks = [VerboseTraceCallback()] if verbose else []
 
     deep_research_job_submitter = None
+
+    async def _resolve_report_context_for_state(state: ChatResearcherState):
+        from aiq_agent.auth import get_current_principal
+        from aiq_api.jobs.report_context import resolve_authorized_report_context
+
+        if not state.active_report_job_id:
+            raise RuntimeError("Report follow-up requires active_report_job_id")
+        principal = get_current_principal()
+        if principal is None:
+            raise RuntimeError("Report follow-up requires an authenticated user")
+        return await resolve_authorized_report_context(state.active_report_job_id, principal)
+
+    async def _answer_report_question(state: ChatResearcherState) -> str:
+        from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
+        from aiq_agent.common import get_latest_user_query
+
+        report_context = await _resolve_report_context_for_state(state)
+        question = get_latest_user_query(state.messages)
+        prompt = _build_report_ask_prompt(
+            question=question,
+            report_markdown=report_context.report_markdown,
+            source_summary_markdown=report_context.source_summary_markdown,
+        )
+        result = await shallow_research_fn.ainvoke(
+            ShallowResearchAgentState(
+                messages=[HumanMessage(content=prompt)],
+                data_sources=state.data_sources,
+                available_documents=state.available_documents,
+            )
+        )
+        if not result.messages:
+            raise RuntimeError("Report QA produced no response")
+        content = result.messages[-1].content
+        return content if isinstance(content, str) else str(content)
+
+    async def _submit_report_edit_job(state: ChatResearcherState) -> str:
+        from aiq_agent.auth import get_auth_token
+        from aiq_agent.auth import get_current_principal
+        from aiq_agent.common import get_latest_user_query
+        from aiq_api.jobs.report_context import to_initial_files
+        from aiq_api.jobs.submit import submit_agent_job
+
+        report_context = await _resolve_report_context_for_state(state)
+        instruction = get_latest_user_query(state.messages)
+        principal = get_current_principal()
+        if principal is None:
+            raise RuntimeError("Report edit requires an authenticated user")
+        return await submit_agent_job(
+            agent_type="report_rewriter",
+            input_text=instruction,
+            owner=principal.email or principal.sub,
+            principal=principal,
+            data_sources=[],
+            auth_token=get_auth_token(),
+            initial_files=to_initial_files(report_context, instruction=instruction),
+            output_metadata={
+                "parent_job_id": report_context.parent_job_id,
+                "interaction_action": "edit",
+                "result_kind": "report",
+            },
+        )
+
     if config.use_async_deep_research:
         import os
 
         # Check if Dask scheduler is available
         scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
         if scheduler_address:
+            from aiq_agent.auth import get_auth_token
             from aiq_agent.auth import get_current_principal
             from aiq_api.jobs.submit import submit_agent_job
 
@@ -279,12 +360,39 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                         len(available_docs),
                     )
 
+                initial_files = None
+                output_metadata = None
+                if (
+                    state.active_report_job_id
+                    and state.user_intent
+                    and state.user_intent.use_parent_report_context
+                ):
+                    from aiq_api.jobs.report_context import to_initial_files
+
+                    report_context = await _resolve_report_context_for_state(state)
+                    initial_files = to_initial_files(report_context)
+                    output_metadata = {
+                        "parent_job_id": report_context.parent_job_id,
+                        "interaction_action": "research",
+                        "result_kind": "report",
+                    }
+                    input_text = (
+                        f"{input_text}\n\n"
+                        "Use the seeded parent report context in /shared/original_report.md and "
+                        "/shared/source_summary.md. Reuse the parent report where sufficient and perform "
+                        "new research only for the requested delta."
+                    )
+
                 return await submit_agent_job(
                     agent_type="deep_researcher",
                     input_text=input_text,
                     owner=owner,
+                    principal=principal,
                     available_documents=available_docs,
                     data_sources=state.data_sources,
+                    auth_token=get_auth_token(),
+                    initial_files=initial_files,
+                    output_metadata=output_metadata,
                 )
 
             deep_research_job_submitter = _submit_deep_job
@@ -306,6 +414,8 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         callbacks=callbacks,
         max_history=config.max_history,
         deep_research_job_submitter=deep_research_job_submitter,
+        report_ask_fn=_answer_report_question,
+        report_edit_job_submitter=_submit_report_edit_job,
         checkpointer=checkpointer,
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )

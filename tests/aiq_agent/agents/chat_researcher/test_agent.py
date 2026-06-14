@@ -244,6 +244,102 @@ class TestChatResearcherAgent:
         assert result is not None
 
     @pytest.mark.asyncio
+    async def test_run_report_ask_routes_to_inline_report_answer(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """Report ask turns use the report ask hook instead of shallow/deep research."""
+        captured_state = {}
+
+        async def report_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research",
+                    target="report",
+                    report_action="ask",
+                    raw=None,
+                )
+            }
+
+        async def report_ask(state):
+            captured_state["active_report_job_id"] = state.active_report_job_id
+            captured_state["query"] = state.messages[-1].content
+            return "The report's main risk is integration complexity."
+
+        async def fail_if_called(_state):
+            raise AssertionError("research path should not run for report ask")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=fail_if_called,
+            deep_research_fn=fail_if_called,
+            clarifier_fn=mock_clarifier,
+            report_ask_fn=report_ask,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="What is the biggest risk in this report?")],
+            active_report_job_id="job-1",
+        )
+        result = await agent.run(state, thread_id="test-thread")
+
+        assert result["messages"][-1].content == "The report's main risk is integration complexity."
+        assert captured_state == {
+            "active_report_job_id": "job-1",
+            "query": "What is the biggest risk in this report?",
+        }
+
+    @pytest.mark.asyncio
+    async def test_run_report_edit_routes_to_child_job_submitter(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """Report edit turns submit a child job instead of running shallow/deep research inline."""
+        captured_state = {}
+
+        async def report_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research",
+                    target="report",
+                    report_action="edit",
+                    raw=None,
+                )
+            }
+
+        async def submit_report_edit(state):
+            captured_state["active_report_job_id"] = state.active_report_job_id
+            captured_state["query"] = state.messages[-1].content
+            return "child-job-1"
+
+        async def fail_if_called(_state):
+            raise AssertionError("research path should not run for report edit")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=fail_if_called,
+            deep_research_fn=fail_if_called,
+            clarifier_fn=mock_clarifier,
+            report_edit_job_submitter=submit_report_edit,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Remove the appendix")],
+            active_report_job_id="job-1",
+        )
+        result = await agent.run(state, thread_id="test-thread")
+
+        assert result["messages"][-1].content == "Report edit job submitted. Job ID: child-job-1"
+        assert captured_state == {
+            "active_report_job_id": "job-1",
+            "query": "Remove the appendix",
+        }
+
+    @pytest.mark.asyncio
     async def test_run_with_empty_messages(
         self,
         mock_intent_classifier,

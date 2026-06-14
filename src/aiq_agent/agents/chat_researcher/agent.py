@@ -88,6 +88,8 @@ class ChatResearcherAgent:
         callbacks: list[BaseCallbackHandler] | None = None,
         max_history: int = 5,
         deep_research_job_submitter: Callable[[Any], Awaitable[str]] | None = None,
+        report_ask_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
+        report_edit_job_submitter: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         validate_deep_research_tools_fn: Callable[[list[str] | None], tuple[bool, str]] | None = None,
     ) -> None:
@@ -104,6 +106,8 @@ class ChatResearcherAgent:
             callbacks: Optional list of callback handlers
             max_history: Maximum number of messages to keep in history
             deep_research_job_submitter: Optional function to submit deep research as async job
+            report_ask_fn: Optional function to answer questions against the active parent report
+            report_edit_job_submitter: Optional function to submit report edit child jobs
             checkpointer: Optional checkpointer for persistent state (defaults to MemorySaver)
         """
         self.intent_classifier_fn = intent_classifier_fn
@@ -115,6 +119,8 @@ class ChatResearcherAgent:
         self.callbacks = callbacks or []
         self.max_history = max_history
         self.deep_research_job_submitter = deep_research_job_submitter
+        self.report_ask_fn = report_ask_fn
+        self.report_edit_job_submitter = report_edit_job_submitter
         self.checkpointer = checkpointer
         self.validate_deep_research_tools_fn = validate_deep_research_tools_fn
 
@@ -323,10 +329,26 @@ class ChatResearcherAgent:
             else:
                 return {"messages": [result.messages[-1]]}
 
+        async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
+            if self.report_ask_fn is None:
+                return {"messages": [AIMessage(content="Report follow-up is not available in this workflow.")]}
+            answer = await self.report_ask_fn(state)
+            return {"messages": [AIMessage(content=answer)]}
+
+        async def report_edit_node(state: ChatResearcherState) -> dict[str, Any]:
+            if self.report_edit_job_submitter is None:
+                return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
+            job_id = await self.report_edit_job_submitter(state)
+            return {"messages": [AIMessage(content=f"Report edit job submitted. Job ID: {job_id}")]}
+
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
             if state.user_intent and state.user_intent.intent == "meta":
                 return "END"
+            if state.active_report_job_id and state.user_intent and state.user_intent.target == "report":
+                if state.user_intent.report_action == "edit":
+                    return "report_edit"
+                return "report_ask"
             if state.depth_decision and state.depth_decision.decision == "deep":
                 return "clarifier"
             return "shallow_research"
@@ -372,6 +394,8 @@ class ChatResearcherAgent:
         graph.add_node("shallow_research", shallow_research_node)
         graph.add_node("clarifier", clarifier_node)
         graph.add_node("deep_research", deep_research_node)
+        graph.add_node("report_ask", report_ask_node)
+        graph.add_node("report_edit", report_edit_node)
 
         graph.set_entry_point("intent_classifier")
 
@@ -382,6 +406,8 @@ class ChatResearcherAgent:
                 "END": END,
                 "clarifier": "clarifier",
                 "shallow_research": "shallow_research",
+                "report_ask": "report_ask",
+                "report_edit": "report_edit",
             },
         )
 
@@ -395,6 +421,8 @@ class ChatResearcherAgent:
         )
 
         graph.add_edge("deep_research", END)
+        graph.add_edge("report_ask", END)
+        graph.add_edge("report_edit", END)
 
         return graph.compile(checkpointer=self.checkpointer)
 

@@ -1526,13 +1526,13 @@ class TestAsyncJobRunnerAgentFactory:
     @pytest.mark.asyncio
     async def test_run_agent_seeds_initial_files_when_state_supports_files(self):
         """Async runner seeds DeepAgents virtual filesystem files into stateful agents."""
+        from typing import Annotated
         from typing import Any
 
         from langchain_core.messages import AnyMessage
         from langgraph.graph.message import add_messages
         from pydantic import BaseModel
         from pydantic import Field
-        from typing_extensions import Annotated
 
         from aiq_api.jobs import runner
 

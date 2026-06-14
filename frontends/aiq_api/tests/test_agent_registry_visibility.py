@@ -22,7 +22,7 @@ def test_agent_config_defaults_to_public():
 
 
 def test_register_agent_can_mark_internal(monkeypatch):
-    import aiq_api.registry as registry
+    from aiq_api import registry
 
     monkeypatch.setattr(registry, "AGENT_REGISTRY", {})
 
