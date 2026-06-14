@@ -74,6 +74,11 @@ def _looks_report_targeted(query: str) -> bool:
     return any(hint in query_lower for hint in _REPORT_TARGET_HINTS)
 
 
+def _looks_report_edit(query: str) -> bool:
+    query_lower = query.lower()
+    return any(hint in query_lower for hint in _REPORT_EDIT_HINTS)
+
+
 class IntentClassifier:
     def __init__(
         self,
