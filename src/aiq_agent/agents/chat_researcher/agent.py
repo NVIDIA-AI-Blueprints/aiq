@@ -424,6 +424,7 @@ class ChatResearcherAgent:
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
                 "skip_clarifier": state.skip_clarifier,
+                "active_report_job_id": state.active_report_job_id,
             }
             messages = state.messages
 

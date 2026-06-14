@@ -20,6 +20,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+RouteTarget = Literal["meta", "report", "new_research"]
+ReportAction = Literal["ask", "edit"]
+
 
 class IntentResult(BaseModel):
     """
@@ -32,4 +35,7 @@ class IntentResult(BaseModel):
     """
 
     intent: Literal["meta", "research"]
+    target: RouteTarget = "new_research"
+    report_action: ReportAction | None = None
+    use_parent_report_context: bool = False
     raw: dict[str, Any] | None = None

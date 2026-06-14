@@ -61,3 +61,4 @@ class ChatResearcherState(BaseModel):
     original_query: str | None = None
     available_documents: list[AvailableDocument] | None = None
     skip_clarifier: bool = False
+    active_report_job_id: str | None = None

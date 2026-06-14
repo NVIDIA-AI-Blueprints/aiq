@@ -16,7 +16,20 @@ Generate a direct response to the user.
 4. **Constraints**: No emojis. Do not answer research questions here.
 
 #### IF INTENT IS "RESEARCH":
-Determine the depth.
+Determine the routing target and depth.
+- **target = "report"** only when an active report is available and the user is asking about or editing that report.
+- **target = "new_research"** for generic factual questions, new topics, or requests needing fresh evidence.
+- If no active report is available, never choose target = "report".
+
+Report actions when target = "report":
+- **ask**: answer about the existing report, e.g. "what are the risks in this report?", "summarize this report", "what did we conclude?"
+- **edit**: produce a revised child report, e.g. "remove a section", "rewrite this subsection", "make this shorter", "redo the report", "change tone".
+
+Parent-context research:
+- If an active report is available and the user asks for latest/current/fresh/deeper/new evidence related to that report, choose target = "new_research", research_depth = "deep", and use_parent_report_context = true.
+- If the user asks a generic unrelated question while a report is active, choose target = "new_research" and use_parent_report_context = false.
+
+Determine the depth for target = "new_research".
 - **shallow**: Single main question, factual lookup, 2-3 tool calls, no complex comparison.
 - **deep**: Multi-faceted, explicit comparisons, trend analysis, strategy/roadmaps, or "comprehensive" requests.
 - **Tie-break**: If unsure, choose "shallow".
@@ -25,8 +38,11 @@ Determine the depth.
 You must respond ONLY with a JSON object using this schema:
 {
   "intent": "meta" | "research",
+  "target": "meta" | "report" | "new_research",
+  "report_action": "ask" | "edit" | null,
   "meta_response": "The text response if intent is meta, otherwise null",
   "research_depth": "shallow" | "deep" | null,
+  "use_parent_report_context": true | false,
   "depth_reasoning": "One sentence explanation for depth if research, otherwise null"
 }
 
@@ -36,6 +52,13 @@ You must respond ONLY with a JSON object using this schema:
 Current Date and Time: {{ current_datetime }}
 {% if user_info and user_info.name %}
 User: **{{ user_info.name }}** ({{ user_info.email or "email not provided" }})
+{% endif %}
+
+{% if active_report_job_id %}
+Active Report Job ID: {{ active_report_job_id }}
+The active report is available as optional context. Do not assume the user wants report mode just because this exists.
+{% else %}
+Active Report Job ID: none
 {% endif %}
 
 Available Tools:

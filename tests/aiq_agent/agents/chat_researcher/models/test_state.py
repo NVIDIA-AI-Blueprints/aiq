@@ -106,6 +106,7 @@ class TestChatResearcherState:
         assert state.final_report is None
         assert state.shallow_result is None
         assert state.data_sources is None
+        assert state.active_report_job_id is None
 
     def test_state_with_data_sources(self):
         """Test state with data_sources."""
@@ -124,6 +125,15 @@ class TestChatResearcherState:
         )
 
         assert state.data_sources == ["sharepoint"]
+
+    def test_state_with_active_report_job_id(self):
+        """Test state can carry an active report job id."""
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="What are the risks in this report?")],
+            active_report_job_id="job-1",
+        )
+
+        assert state.active_report_job_id == "job-1"
 
     def test_state_with_empty_data_sources(self):
         """Test state with empty data sources list."""

@@ -45,7 +45,7 @@ from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
 from .models import ChatResearcherState
-from .utils import _extract_query_and_sources
+from .utils import _extract_query_context
 
 logger = logging.getLogger(__name__)
 
@@ -369,7 +369,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 pass
         logger.info("skip_clarifier=%s", skip_clarifier)
 
-        query_text, data_sources = _extract_query_and_sources(query)
+        request_context = _extract_query_context(query)
+        query_text = request_context.query_text
+        data_sources = request_context.data_sources
         logger.info("ChatDeepResearcherAgent: %s", query_text)
         logger.info("ChatDeepResearcherAgent: Data sources: %s", data_sources)
 
@@ -410,6 +412,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 data_sources=data_sources,
                 available_documents=available_documents,
                 skip_clarifier=skip_clarifier,
+                active_report_job_id=request_context.active_report_job_id,
             )
             result = await agent.run(state, thread_id=nat_context_conversation_id)
         finally:

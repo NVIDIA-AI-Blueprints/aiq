@@ -22,6 +22,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
+from aiq_agent.agents.chat_researcher.utils import _extract_query_context
 from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
 from aiq_agent.agents.chat_researcher.utils import trim_message_history
@@ -196,3 +197,43 @@ class TestExtractQueryAndSources:
         query, sources = _extract_query_and_sources("Plain query string")
         assert query == "Plain query string"
         assert sources is None
+
+
+class TestExtractQueryContext:
+    """Tests for report-aware chat request context extraction."""
+
+    def test_extract_active_report_job_id_from_top_level_payload(self):
+        payload = {
+            "active_report_job_id": "job-1",
+            "content": {
+                "messages": [{"role": "user", "content": "What are the risks?"}],
+                "data_sources": ["web_search"],
+            },
+        }
+
+        context = _extract_query_context(payload)
+
+        assert context.query_text == "What are the risks?"
+        assert context.data_sources == ["web_search"]
+        assert context.active_report_job_id == "job-1"
+
+    def test_extract_active_report_job_id_from_nested_content(self):
+        payload = {
+            "content": {
+                "active_report_job_id": "job-2",
+                "messages": [{"role": "user", "content": "Summarize this report"}],
+            }
+        }
+
+        context = _extract_query_context(payload)
+
+        assert context.query_text == "Summarize this report"
+        assert context.active_report_job_id == "job-2"
+
+    def test_extract_active_report_job_id_from_json_string(self):
+        context = _extract_query_context(
+            '{"query": "Update this with latest data", "active_report_job_id": "job-3"}'
+        )
+
+        assert context.query_text == "Update this with latest data"
+        assert context.active_report_job_id == "job-3"

@@ -105,6 +105,73 @@ class TestIntentClassifier:
         assert result["depth_decision"].raw_reasoning == "Simple query"
 
     @pytest.mark.asyncio
+    async def test_run_parses_report_ask_route_with_active_report(self, mock_llm):
+        """Test report ask routing is preserved when an active report is present."""
+        mock_response = MagicMock()
+        mock_response.content = (
+            '{"intent":"research","target":"report","report_action":"ask",'
+            '"meta_response":null,"research_depth":null,"use_parent_report_context":false,'
+            '"depth_reasoning":"Question refers to the active report."}'
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="What are the risks in this report?")],
+            active_report_job_id="job-1",
+        )
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].intent == "research"
+        assert result["user_intent"].target == "report"
+        assert result["user_intent"].report_action == "ask"
+        assert "depth_decision" not in result
+
+    @pytest.mark.asyncio
+    async def test_run_downgrades_report_route_without_active_report(self, mock_llm):
+        """Test report routing is ignored when no active report id exists."""
+        mock_response = MagicMock()
+        mock_response.content = (
+            '{"intent":"research","target":"report","report_action":"edit",'
+            '"meta_response":null,"research_depth":"shallow","use_parent_report_context":false,'
+            '"depth_reasoning":"Asked to edit a report."}'
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(messages=[HumanMessage(content="Make this shorter")])
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].target == "new_research"
+        assert result["user_intent"].report_action is None
+        assert result["depth_decision"].decision == "shallow"
+
+    @pytest.mark.asyncio
+    async def test_run_parses_parent_context_deep_research_route(self, mock_llm):
+        """Test latest/update requests can route to deep research with parent report context."""
+        mock_response = MagicMock()
+        mock_response.content = (
+            '{"intent":"research","target":"new_research","report_action":null,'
+            '"meta_response":null,"research_depth":"deep","use_parent_report_context":true,'
+            '"depth_reasoning":"Requires fresh evidence against active report."}'
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Update this with latest data")],
+            active_report_job_id="job-1",
+        )
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].target == "new_research"
+        assert result["user_intent"].use_parent_report_context is True
+        assert result["depth_decision"].decision == "deep"
+
+    @pytest.mark.asyncio
     async def test_run_defaults_to_research_on_ambiguous(self, mock_llm):
         """Test run() defaults to research when LLM returns intent that is not meta or research."""
         mock_response = MagicMock()
