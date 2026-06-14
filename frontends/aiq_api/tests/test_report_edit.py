@@ -133,6 +133,24 @@ async def test_report_edit_rejects_parent_without_durable_report(report_edit_app
 
 
 @pytest.mark.asyncio
+async def test_report_edit_denies_cross_user_access_with_404(report_edit_app):
+    """A non-owner is rejected (404 from authorization) before any child job is submitted."""
+    from fastapi import HTTPException
+
+    app, _parent_job, authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    authorize_job_access.side_effect = HTTPException(status_code=404, detail="Job not found: parent-job-1")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Remove the final paragraph."},
+        )
+
+    assert response.status_code == 404
+    submit_agent_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_job_report_response_includes_report_interaction_metadata(report_edit_app):
     app, child_job, _authorize_job_access, _submit_agent_job, _principal, _job_store = report_edit_app
     child_job.output = {

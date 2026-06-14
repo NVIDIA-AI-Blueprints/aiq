@@ -1571,6 +1571,58 @@ class TestAsyncJobRunnerAgentFactory:
         assert result == {"report": "# Parent"}
         assert agent.seen_state.files == initial_files
 
+    @pytest.mark.asyncio
+    async def test_run_agent_skips_data_sources_when_state_lacks_field(self):
+        """Runner must not inject data_sources into states that don't declare the field.
+
+        report_rewriter's state omits data_sources; with Pydantic's default (extra
+        ignored) that is currently harmless, but the runner should not pass fields a
+        state does not model. This uses an extra=forbid state to prove the guard
+        actually prevents the injection (without it, state construction would raise).
+        """
+        from typing import Annotated
+
+        from langchain_core.messages import AnyMessage
+        from langgraph.graph.message import add_messages
+        from pydantic import BaseModel
+        from pydantic import ConfigDict
+
+        from aiq_api.jobs import runner
+
+        class StrictState(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            messages: Annotated[list[AnyMessage], add_messages]
+
+        class FakeAgent:
+            def __init__(self):
+                self.seen_state = None
+
+            async def run(self, state):
+                self.seen_state = state
+                return "ok"
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        agent = FakeAgent()
+
+        with patch("aiq_api.jobs.runner._get_agent_state_class", return_value=StrictState):
+            result = await runner._run_agent(
+                agent=agent,
+                input_text="revise",
+                monitor=FakeMonitor(),
+                data_sources=["web_search"],
+            )
+
+        assert result == "ok"
+        assert not hasattr(agent.seen_state, "data_sources")
+
     def test_async_deep_researcher_constructor_preserves_writer_skills(self):
         """Async job construction preserves writer-only skills and sandbox job scoping."""
         from langchain_core.messages import HumanMessage

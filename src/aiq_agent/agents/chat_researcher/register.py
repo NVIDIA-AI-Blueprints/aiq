@@ -70,6 +70,32 @@ def _build_report_ask_prompt(
     )
 
 
+async def _answer_from_report_context(
+    llm: Any,
+    *,
+    question: str,
+    report_markdown: str,
+    source_summary_markdown: str,
+) -> str:
+    """Answer a question strictly from parent report context with one bounded LLM call.
+
+    This deliberately does NOT use the shallow/deep research agents or any data-source
+    tools: report ask must stay bounded to the parent report and never trigger live
+    research (Core Invariant: "answer from parent report context only").
+    """
+    prompt = _build_report_ask_prompt(
+        question=question,
+        report_markdown=report_markdown,
+        source_summary_markdown=source_summary_markdown,
+    )
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    content = response.content if hasattr(response, "content") else response
+    answer = content if isinstance(content, str) else str(content)
+    if not answer.strip():
+        return "The report does not contain enough information to answer."
+    return answer
+
+
 ########################################################
 # Intent Classifier
 ########################################################
@@ -266,6 +292,14 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     verbose = is_verbose(config.verbose)
     callbacks = [VerboseTraceCallback()] if verbose else []
 
+    # LLM for inline report Q&A: prefer the report writer model, fall back to the
+    # deep researcher's orchestrator LLM (always configured). Report ask is a single
+    # bounded LLM call and must never run the tool-enabled research agents.
+    report_qa_llm = await builder.get_llm(
+        deep_research_config.writer_llm or deep_research_config.orchestrator_llm,
+        wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+    )
+
     deep_research_job_submitter = None
 
     async def _resolve_report_context_for_state(state: ChatResearcherState):
@@ -280,27 +314,16 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         return await resolve_authorized_report_context(state.active_report_job_id, principal)
 
     async def _answer_report_question(state: ChatResearcherState) -> str:
-        from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
         from aiq_agent.common import get_latest_user_query
 
         report_context = await _resolve_report_context_for_state(state)
         question = get_latest_user_query(state.messages)
-        prompt = _build_report_ask_prompt(
+        return await _answer_from_report_context(
+            report_qa_llm,
             question=question,
             report_markdown=report_context.report_markdown,
             source_summary_markdown=report_context.source_summary_markdown,
         )
-        result = await shallow_research_fn.ainvoke(
-            ShallowResearchAgentState(
-                messages=[HumanMessage(content=prompt)],
-                data_sources=state.data_sources,
-                available_documents=state.available_documents,
-            )
-        )
-        if not result.messages:
-            raise RuntimeError("Report QA produced no response")
-        content = result.messages[-1].content
-        return content if isinstance(content, str) else str(content)
 
     async def _submit_report_edit_job(state: ChatResearcherState) -> str:
         from aiq_agent.auth import get_auth_token
@@ -362,11 +385,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
                 initial_files = None
                 output_metadata = None
-                if (
-                    state.active_report_job_id
-                    and state.user_intent
-                    and state.user_intent.use_parent_report_context
-                ):
+                if state.active_report_job_id and state.user_intent and state.user_intent.use_parent_report_context:
                     from aiq_api.jobs.report_context import to_initial_files
 
                     report_context = await _resolve_report_context_for_state(state)

@@ -751,9 +751,12 @@ async def _run_agent(
         if state_cls:
             # Build state with available_documents if the class supports it
             state_kwargs = {"messages": [HumanMessage(content=input_text)]}
-            if data_sources is not None:
+            # Only pass optional fields the state actually declares. data_sources also
+            # flows to non-Pydantic states (legacy behavior); files needs a model field.
+            has_fields = hasattr(state_cls, "model_fields")
+            if data_sources is not None and (not has_fields or "data_sources" in state_cls.model_fields):
                 state_kwargs["data_sources"] = data_sources
-            if initial_files and hasattr(state_cls, "model_fields") and "files" in state_cls.model_fields:
+            if initial_files and has_fields and "files" in state_cls.model_fields:
                 state_kwargs["files"] = initial_files
             if available_documents:
                 # Convert dicts to AvailableDocument if the state class expects them

@@ -106,20 +106,13 @@ def _extract_text_from_message(message: Any) -> str | None:
 
 
 def _extract_query_from_text(text: str) -> tuple[str, list[str] | None]:
-    if not text:
-        return ("", None)
-    trimmed = text.strip()
-    if trimmed.startswith("{") and trimmed.endswith("}"):
-        try:
-            payload = json.loads(trimmed)
-        except json.JSONDecodeError:
-            return (text, None)
-        if isinstance(payload, dict):
-            data_sources = parse_data_sources(payload.get("data_sources"))
-            query_text = payload.get("query") or payload.get("text")
-            if isinstance(query_text, str) and query_text.strip():
-                return (query_text.strip(), data_sources)
-    return (text, None)
+    """Extract query text and data sources from a text payload.
+
+    Thin wrapper over :func:`_extract_context_from_text` (single source of truth) for
+    consumers that only need the (query, data_sources) pair. Currently exercised by tests.
+    """
+    context = _extract_context_from_text(text)
+    return (context.query_text, context.data_sources)
 
 
 def _clean_optional_string(value: Any) -> str | None:

@@ -172,6 +172,50 @@ class TestIntentClassifier:
         assert result["depth_decision"].decision == "deep"
 
     @pytest.mark.asyncio
+    async def test_run_infers_edit_action_for_edit_phrasing_when_action_missing(self, mock_llm):
+        """When the LLM omits report_action, an edit-phrased query routes to edit (not ask)."""
+        mock_response = MagicMock()
+        mock_response.content = (
+            '{"intent":"research","target":"report","report_action":null,'
+            '"meta_response":null,"research_depth":null,"use_parent_report_context":false,'
+            '"depth_reasoning":"Refers to the active report."}'
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Remove the methodology section")],
+            active_report_job_id="job-1",
+        )
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].target == "report"
+        assert result["user_intent"].report_action == "edit"
+
+    @pytest.mark.asyncio
+    async def test_run_infers_ask_action_for_ask_phrasing_when_action_missing(self, mock_llm):
+        """When the LLM omits report_action, an ask-phrased query still routes to ask."""
+        mock_response = MagicMock()
+        mock_response.content = (
+            '{"intent":"research","target":"report","report_action":null,'
+            '"meta_response":null,"research_depth":null,"use_parent_report_context":false,'
+            '"depth_reasoning":"Refers to the active report."}'
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Summarize this report")],
+            active_report_job_id="job-1",
+        )
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].target == "report"
+        assert result["user_intent"].report_action == "ask"
+
+    @pytest.mark.asyncio
     async def test_run_defaults_to_research_on_ambiguous(self, mock_llm):
         """Test run() defaults to research when LLM returns intent that is not meta or research."""
         mock_response = MagicMock()

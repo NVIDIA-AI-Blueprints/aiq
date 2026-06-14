@@ -44,17 +44,24 @@ _LLM_UNAVAILABLE_MESSAGE = (
     "Please check your LLM API key and that the configured model is available for your account."
 )
 _LLM_TIMEOUT_MESSAGE = "The model service took too long to respond and the request timed out. "
-_REPORT_TARGET_HINTS = (
+_REPORT_ASK_HINTS = (
     "this report",
     "the report",
     "based on this",
     "what did we conclude",
     "summarize this",
+)
+_REPORT_EDIT_HINTS = (
     "rewrite",
     "redo",
     "remove",
+    "delete",
     "make this",
+    "shorter",
+    "change tone",
+    "revise",
 )
+_REPORT_TARGET_HINTS = _REPORT_ASK_HINTS + _REPORT_EDIT_HINTS
 
 
 def _is_llm_api_unavailable(err: BaseException) -> bool:
@@ -78,6 +85,11 @@ def _is_timeout_error(err: BaseException) -> bool:
 def _looks_report_targeted(query: str) -> bool:
     query_lower = query.lower()
     return any(hint in query_lower for hint in _REPORT_TARGET_HINTS)
+
+
+def _looks_report_edit(query: str) -> bool:
+    query_lower = query.lower()
+    return any(hint in query_lower for hint in _REPORT_EDIT_HINTS)
 
 
 class IntentClassifier:
@@ -169,7 +181,9 @@ class IntentClassifier:
                     target = "new_research"
                     report_action = None
                 elif report_action is None:
-                    if _looks_report_targeted(query):
+                    if _looks_report_edit(query):
+                        report_action = "edit"
+                    elif _looks_report_targeted(query):
                         report_action = "ask"
                     else:
                         target = "new_research"

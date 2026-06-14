@@ -17,6 +17,7 @@
 
 from unittest.mock import MagicMock
 
+import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 
@@ -42,6 +43,54 @@ class TestReportFollowUpHelpers:
         assert "Risk is rollout complexity." in prompt
         assert "- [1] https://example.com" in prompt
         assert "Answer using only the parent report" in prompt
+
+    @pytest.mark.asyncio
+    async def test_answer_from_report_context_uses_single_bounded_llm_call(self):
+        """Report Q&A answers with one direct LLM call over the bounded prompt.
+
+        It must NOT route through the shallow/deep research agents or any tools —
+        report ask is bounded to parent report context and never triggers live research.
+        """
+        from aiq_agent.agents.chat_researcher.register import _answer_from_report_context
+
+        captured = {}
+
+        class FakeLLM:
+            async def ainvoke(self, messages):
+                captured["messages"] = messages
+                return AIMessage(content="Bounded answer from report.")
+
+        answer = await _answer_from_report_context(
+            FakeLLM(),
+            question="What is the main risk?",
+            report_markdown="# Report\n\nRisk is rollout complexity.",
+            source_summary_markdown="- [1] https://example.com",
+        )
+
+        assert answer == "Bounded answer from report."
+        sent = captured["messages"][0].content
+        assert "What is the main risk?" in sent
+        assert "Risk is rollout complexity." in sent
+        assert "Answer using only the parent report" in sent
+
+    @pytest.mark.asyncio
+    async def test_answer_from_report_context_falls_back_on_empty_response(self):
+        """An empty/whitespace LLM completion yields a bounded fallback, never a blank answer."""
+        from aiq_agent.agents.chat_researcher.register import _answer_from_report_context
+
+        class EmptyLLM:
+            async def ainvoke(self, messages):
+                return AIMessage(content="   ")
+
+        answer = await _answer_from_report_context(
+            EmptyLLM(),
+            question="What is the risk?",
+            report_markdown="# Report",
+            source_summary_markdown="",
+        )
+
+        assert answer.strip()
+        assert "does not contain enough information" in answer.lower()
 
 
 class TestExtractTextFromMessageString:
