@@ -69,8 +69,7 @@ def _event_data(event: dict[str, Any]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
-async def _extract_report_from_events(db_url: str, job_id: str) -> str | None:
-    events = await EventStore.get_events_async(db_url, job_id, 0, _EVENT_SCAN_LIMIT)
+def _report_from_events(events: list[dict[str, Any]]) -> str | None:
     fallback: str | None = None
     final_report: str | None = None
     for event in events:
@@ -86,6 +85,11 @@ async def _extract_report_from_events(db_url: str, job_id: str) -> str | None:
         if data.get("output_category") == "final_report":
             final_report = content.strip()
     return final_report or fallback
+
+
+async def _extract_report_from_events(db_url: str, job_id: str) -> str | None:
+    events = await EventStore.get_events_async(db_url, job_id, 0, _EVENT_SCAN_LIMIT)
+    return _report_from_events(events)
 
 
 def _is_url(value: str | None) -> bool:
@@ -113,8 +117,7 @@ def _dedupe_sources(sources: list[ReportContextSource]) -> list[ReportContextSou
     return deduped
 
 
-async def _extract_sources_from_events(db_url: str, job_id: str) -> list[ReportContextSource]:
-    events = await EventStore.get_events_async(db_url, job_id, 0, _EVENT_SCAN_LIMIT)
+def _sources_from_events(events: list[dict[str, Any]]) -> list[ReportContextSource]:
     sources: list[ReportContextSource] = []
     for event in events:
         if event.get("type") != "artifact.update":
@@ -139,6 +142,11 @@ async def _extract_sources_from_events(db_url: str, job_id: str) -> list[ReportC
             )
         )
     return _dedupe_sources(sources)
+
+
+async def _extract_sources_from_events(db_url: str, job_id: str) -> list[ReportContextSource]:
+    events = await EventStore.get_events_async(db_url, job_id, 0, _EVENT_SCAN_LIMIT)
+    return _sources_from_events(events)
 
 
 def _sources_section(report_markdown: str) -> str:
@@ -185,11 +193,19 @@ def _source_summary_markdown(sources: list[ReportContextSource]) -> str:
 async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> ReportContext:
     """Build report context from a previously authorized parent job."""
 
-    report = _extract_report_from_job_output(job) or await _extract_report_from_events(db_url, parent_job_id)
+    report = _extract_report_from_job_output(job)
+    # Durable events are only needed when the report isn't already in job output,
+    # or to reconstruct sources. Fetch the (potentially large) event log at most once.
+    events: list[dict[str, Any]] | None = None
+    if not report:
+        events = await EventStore.get_events_async(db_url, parent_job_id, 0, _EVENT_SCAN_LIMIT)
+        report = _report_from_events(events)
     if not report:
         raise HTTPException(409, f"Parent job has no durable report: {parent_job_id}")
 
-    event_sources = await _extract_sources_from_events(db_url, parent_job_id)
+    if events is None:
+        events = await EventStore.get_events_async(db_url, parent_job_id, 0, _EVENT_SCAN_LIMIT)
+    event_sources = _sources_from_events(events)
     report_sources = _extract_sources_from_report_markdown(report)
     sources = _dedupe_sources([*event_sources, *report_sources])
     return ReportContext(
@@ -229,3 +245,12 @@ def to_initial_files(context: ReportContext, instruction: str | None = None) -> 
     if instruction is not None:
         files["/shared/edit_instruction.txt"] = instruction
     return files
+
+
+def report_output_metadata(parent_job_id: str, action: str) -> dict[str, str]:
+    """Durable output metadata persisted with a report follow-up child job."""
+    return {
+        "parent_job_id": parent_job_id,
+        "interaction_action": action,
+        "result_kind": "report",
+    }

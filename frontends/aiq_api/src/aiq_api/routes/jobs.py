@@ -410,6 +410,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     from ..jobs.access import authorize_job_access
     from ..jobs.access import ensure_job_access_table
     from ..jobs.event_store import EventStore
+    from ..jobs.report_context import _decode_job_output
+    from ..jobs.report_context import report_output_metadata
     from ..jobs.report_context import resolve_report_context
     from ..jobs.report_context import to_initial_files
     from ..jobs.submit import submit_agent_job as submit_authorized_job
@@ -640,11 +642,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 data_sources=[],
                 auth_token=auth_token,
                 initial_files=to_initial_files(context, instruction=req.input),
-                output_metadata={
-                    "parent_job_id": job_id,
-                    "interaction_action": "edit",
-                    "result_kind": "report",
-                },
+                output_metadata=report_output_metadata(job_id, "edit"),
             )
         except RuntimeError as e:
             raise HTTPException(403, str(e))
@@ -856,27 +854,16 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         principal = require_verified_principal()
         job = await authorize_job_access(job_store, db_url, job_id, principal)
 
-        report = None
-        parent_job_id = None
-        interaction_action = None
-        result_kind = None
-        if job.output:
-            try:
-                output = json.loads(job.output) if isinstance(job.output, str) else job.output
-                report = output.get("report")
-                parent_job_id = output.get("parent_job_id")
-                interaction_action = output.get("interaction_action")
-                result_kind = output.get("result_kind")
-            except (json.JSONDecodeError, AttributeError):
-                pass
+        output = _decode_job_output(job.output)
+        report = output.get("report")
 
         return JobReportResponse(
             job_id=job_id,
             has_report=bool(report),
             report=report,
-            parent_job_id=parent_job_id,
-            interaction_action=interaction_action,
-            result_kind=result_kind,
+            parent_job_id=output.get("parent_job_id"),
+            interaction_action=output.get("interaction_action"),
+            result_kind=output.get("result_kind"),
         )
 
     logger.info("Registered async job routes at /v1/jobs/async")

@@ -329,6 +329,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         from aiq_agent.auth import get_auth_token
         from aiq_agent.auth import get_current_principal
         from aiq_agent.common import get_latest_user_query
+        from aiq_api.jobs.report_context import report_output_metadata
         from aiq_api.jobs.report_context import to_initial_files
         from aiq_api.jobs.submit import submit_agent_job
 
@@ -345,11 +346,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             data_sources=[],
             auth_token=get_auth_token(),
             initial_files=to_initial_files(report_context, instruction=instruction),
-            output_metadata={
-                "parent_job_id": report_context.parent_job_id,
-                "interaction_action": "edit",
-                "result_kind": "report",
-            },
+            output_metadata=report_output_metadata(report_context.parent_job_id, "edit"),
         )
 
     if config.use_async_deep_research:
@@ -386,15 +383,12 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 initial_files = None
                 output_metadata = None
                 if state.active_report_job_id and state.user_intent and state.user_intent.use_parent_report_context:
+                    from aiq_api.jobs.report_context import report_output_metadata
                     from aiq_api.jobs.report_context import to_initial_files
 
                     report_context = await _resolve_report_context_for_state(state)
                     initial_files = to_initial_files(report_context)
-                    output_metadata = {
-                        "parent_job_id": report_context.parent_job_id,
-                        "interaction_action": "research",
-                        "result_kind": "report",
-                    }
+                    output_metadata = report_output_metadata(report_context.parent_job_id, "research")
                     input_text = (
                         f"{input_text}\n\n"
                         "Use the seeded parent report context in /shared/original_report.md and "

@@ -52,12 +52,20 @@ async def test_extract_sources_from_events_dedupes_urls_and_citation_keys(monkey
             {
                 "type": "artifact.update",
                 "name": "internal.pdf",
-                "data": {"type": "citation_source", "content": "internal.pdf, p.3", "citation_key": "internal.pdf, p.3"},
+                "data": {
+                    "type": "citation_source",
+                    "content": "internal.pdf, p.3",
+                    "citation_key": "internal.pdf, p.3",
+                },
             },
             {
                 "type": "artifact.update",
                 "name": "internal.pdf duplicate",
-                "data": {"type": "citation_source", "content": "internal.pdf, p.3", "citation_key": "internal.pdf, p.3"},
+                "data": {
+                    "type": "citation_source",
+                    "content": "internal.pdf, p.3",
+                    "citation_key": "internal.pdf, p.3",
+                },
             },
         ]
 
@@ -100,10 +108,10 @@ Not a source: https://ignored.example
 async def test_resolve_report_context_raises_409_without_report(monkeypatch):
     from aiq_api.jobs import report_context
 
-    async def _no_event_report(_db_url: str, _job_id: str):
-        return None
+    async def _no_events(_db_url: str, _job_id: str, _after_id: int, _limit: int):
+        return []
 
-    monkeypatch.setattr(report_context, "_extract_report_from_events", _no_event_report)
+    monkeypatch.setattr(report_context.EventStore, "get_events_async", _no_events)
 
     job = type("Job", (), {"output": None})()
 
@@ -111,6 +119,37 @@ async def test_resolve_report_context_raises_409_without_report(monkeypatch):
         await report_context.resolve_report_context(job, "sqlite:///unused.db", "job-1")
 
     assert exc.value.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_resolve_report_context_fetches_events_once_in_fallback(monkeypatch):
+    """When the report is reconstructed from events, the event log is fetched once, not twice."""
+    from aiq_api.jobs import report_context
+
+    calls = {"n": 0}
+
+    async def _events(_db_url: str, _job_id: str, _after_id: int, _limit: int):
+        calls["n"] += 1
+        return [
+            {
+                "type": "artifact.update",
+                "data": {"type": "output", "content": "# Final", "output_category": "final_report"},
+            },
+            {
+                "type": "artifact.update",
+                "name": "Ex",
+                "data": {"type": "citation_source", "url": "https://example.com"},
+            },
+        ]
+
+    monkeypatch.setattr(report_context.EventStore, "get_events_async", _events)
+
+    job = type("Job", (), {"output": None})()
+    ctx = await report_context.resolve_report_context(job, "sqlite:///unused.db", "job-1")
+
+    assert ctx.report_markdown == "# Final"
+    assert [s.url for s in ctx.sources] == ["https://example.com"]
+    assert calls["n"] == 1
 
 
 def test_to_initial_files_uses_shared_paths_only():

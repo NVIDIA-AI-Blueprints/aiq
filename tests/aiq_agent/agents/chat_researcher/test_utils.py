@@ -231,9 +231,7 @@ class TestExtractQueryContext:
         assert context.active_report_job_id == "job-2"
 
     def test_extract_active_report_job_id_from_json_string(self):
-        context = _extract_query_context(
-            '{"query": "Update this with latest data", "active_report_job_id": "job-3"}'
-        )
+        context = _extract_query_context('{"query": "Update this with latest data", "active_report_job_id": "job-3"}')
 
         assert context.query_text == "Update this with latest data"
         assert context.active_report_job_id == "job-3"

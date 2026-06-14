@@ -77,8 +77,10 @@ class ReportRewriterAgent:
         if original_report is None:
             raise ValueError(f"Report rewrite requires {ORIGINAL_REPORT_PATH}")
 
-        instruction = self._read_text_file(state.files, EDIT_INSTRUCTION_PATH) or self._latest_user_message(state)
-        if not instruction.strip():
+        instruction = (
+            self._read_text_file(state.files, EDIT_INSTRUCTION_PATH) or self._latest_user_message(state)
+        ).strip()
+        if not instruction:
             raise ValueError("Report rewrite requires a non-empty edit instruction")
 
         source_summary = self._read_text_file(state.files, SOURCE_SUMMARY_PATH) or (
@@ -91,13 +93,13 @@ class ReportRewriterAgent:
             original_report=original_report,
             source_summary=source_summary,
             parent_context=parent_context,
-            edit_instruction=instruction.strip(),
+            edit_instruction=instruction,
         )
 
         response = await self.llm_provider.get(LLMRole.REPORT_WRITER).ainvoke(
             [
                 SystemMessage(content=rendered_prompt),
-                HumanMessage(content=instruction.strip()),
+                HumanMessage(content=instruction),
             ]
         )
         revised_report = response.content if hasattr(response, "content") else str(response)

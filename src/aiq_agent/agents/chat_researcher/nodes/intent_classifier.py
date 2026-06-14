@@ -167,7 +167,7 @@ class IntentClassifier:
             research_depth = (parsed.get("research_depth") or "shallow").strip().lower()
             depth_reasoning = parsed.get("depth_reasoning") or ""
             active_report = bool(state.active_report_job_id)
-            target = _normalize_target(parsed.get("target"), intent)
+            target = _normalize_target(parsed.get("target"))
             report_action = _normalize_report_action(parsed.get("report_action"))
             use_parent_report_context = bool(parsed.get("use_parent_report_context")) and active_report
 
@@ -247,9 +247,7 @@ class IntentClassifier:
             }
 
 
-def _normalize_target(raw_target: Any, intent: str) -> str:
-    if intent == "meta":
-        return "meta"
+def _normalize_target(raw_target: Any) -> str:
     target = raw_target.strip().lower() if isinstance(raw_target, str) else "new_research"
     return target if target in ("report", "new_research") else "new_research"
 
