@@ -68,7 +68,13 @@ const EMPTY_CONVERSATIONS: Conversation[] = []
  * right `NATWebSocketClient` method.
  */
 type PendingOutgoing =
-  | { kind: 'message'; content: string; dataSources: string[]; deliveryRetryCount?: number }
+  | {
+      kind: 'message'
+      content: string
+      dataSources: string[]
+      activeReportJobId?: string
+      deliveryRetryCount?: number
+    }
   | { kind: 'interaction'; interactionId: string; parentId: string; response: string; deliveryRetryCount?: number }
 
 type UnacknowledgedOutgoing = {
@@ -116,6 +122,18 @@ const WS_REFRESH_SOFT_GUARD_SECONDS = 60
  * because a single passing message proves the post-rotation auth is alive.
  */
 const MAX_CONSECUTIVE_AUTH_EXPIRED = 3
+
+export const getActiveReportJobId = (conversation: Conversation | null): string | undefined => {
+  if (!conversation) return undefined
+  const reportMessage = [...conversation.messages].reverse().find(
+    (message) =>
+      message.messageType === 'agent_response' &&
+      Boolean(message.deepResearchJobId) &&
+      !message.deepResearchReportExpired &&
+      (message.showViewReport || Boolean(message.reportContent?.trim()))
+  )
+  return reportMessage?.deepResearchJobId
+}
 
 /**
  * One silent replay is enough to cover the stale-open socket race observed in
@@ -537,13 +555,18 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       const client = wsClientRef.current
       if (!client?.isConnected()) return false
 
-      const outboundId = payload.kind === 'message'
-        ? client.sendMessage(payload.content, payload.dataSources)
-        : client.sendInteractionResponse(
+      let outboundId: string | null
+      if (payload.kind === 'message') {
+        outboundId = payload.activeReportJobId
+          ? client.sendMessage(payload.content, payload.dataSources, payload.activeReportJobId)
+          : client.sendMessage(payload.content, payload.dataSources)
+      } else {
+        outboundId = client.sendInteractionResponse(
           payload.interactionId,
           payload.parentId,
           payload.response,
         )
+      }
 
       if (!outboundId) return false
       trackSentOutgoing(payload, outboundId)
@@ -1158,6 +1181,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         kind: 'message',
         content,
         dataSources: dataSourcesForMessage,
+        activeReportJobId: getActiveReportJobId(storeState.currentConversation),
       }
 
       // Helper to actually send the message

@@ -343,6 +343,37 @@ describe('useWebSocketChat', () => {
     expect(mockSetLoading).toHaveBeenCalledWith(false)
   })
 
+  test('sendMessage includes active report job id from latest completed report message', () => {
+    mockWsClient.isConnected.mockReturnValue(true)
+    mockStoreState.currentConversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      messages: [
+        {
+          id: 'assistant-1',
+          role: 'assistant',
+          content: 'Report ready',
+          messageType: 'agent_response',
+          deepResearchJobId: 'job-123',
+          showViewReport: true,
+          reportContent: '# Report',
+        },
+      ],
+    }
+
+    const { result } = renderWebSocketHook()
+
+    act(() => {
+      result.current.sendMessage('What is the biggest risk?')
+    })
+
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith(
+      'What is the biggest risk?',
+      expect.any(Array),
+      'job-123',
+    )
+  })
+
   test('sendMessage while the existing socket is connecting buffers instead of creating a parallel client', () => {
     mockWsClient.isConnected.mockReturnValue(false)
     const { result } = renderWebSocketHook()
