@@ -24,6 +24,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Any
 
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
@@ -120,6 +121,8 @@ async def submit_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    initial_files: dict[str, Any] | None = None,
+    output_metadata: dict[str, Any] | None = None,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -138,6 +141,8 @@ async def submit_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
+        initial_files: Optional DeepAgents virtual filesystem files to seed into worker state.
+        output_metadata: Optional metadata persisted with the final job output.
 
     Returns:
         The job ID.
@@ -234,6 +239,8 @@ async def submit_agent_job(
                 available_documents,
                 data_sources,
                 auth_token,
+                initial_files,
+                output_metadata,
             ],
         )
         await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)

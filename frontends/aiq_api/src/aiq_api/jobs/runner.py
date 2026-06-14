@@ -256,6 +256,8 @@ async def run_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    initial_files: dict[str, Any] | None = None,
+    output_metadata: dict[str, Any] | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -287,6 +289,8 @@ async def run_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token propagated from the HTTP request for
             data sources that require authentication (requires_auth: true).
+        initial_files: Optional DeepAgents virtual filesystem files to seed into state.
+        output_metadata: Optional metadata to persist alongside the final report.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -512,6 +516,7 @@ async def run_agent_job(
                         available_documents=available_documents,
                         data_sources=data_sources,
                         event_store=event_store,
+                        initial_files=initial_files,
                     )
 
                     # Emit WORKFLOW_END event for Phoenix
@@ -545,7 +550,10 @@ async def run_agent_job(
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
-                    await job_store.update_status(job_id, JobStatus.SUCCESS, output={"report": report})
+                    output = {"report": report}
+                    if output_metadata:
+                        output.update(output_metadata)
+                    await job_store.update_status(job_id, JobStatus.SUCCESS, output=output)
                     logger.info("Job %s completed (report: %d chars)", job_id, len(report))
 
     except asyncio.CancelledError:
@@ -711,6 +719,7 @@ async def _run_agent(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     event_store: EventStore | None = None,
+    initial_files: dict[str, Any] | None = None,
 ) -> Any:
     """
     Run the agent, supporting different run() signatures.
@@ -744,6 +753,8 @@ async def _run_agent(
             state_kwargs = {"messages": [HumanMessage(content=input_text)]}
             if data_sources is not None:
                 state_kwargs["data_sources"] = data_sources
+            if initial_files and hasattr(state_cls, "model_fields") and "files" in state_cls.model_fields:
+                state_kwargs["files"] = initial_files
             if available_documents:
                 # Convert dicts to AvailableDocument if the state class expects them
                 try:
@@ -763,6 +774,8 @@ async def _run_agent(
             state = {"messages": [HumanMessage(content=input_text)]}
             if data_sources is not None:
                 state["data_sources"] = data_sources
+            if initial_files:
+                state["files"] = initial_files
             if available_documents:
                 state["available_documents"] = available_documents
 
