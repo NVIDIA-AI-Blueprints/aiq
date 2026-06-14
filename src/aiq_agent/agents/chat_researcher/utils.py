@@ -148,6 +148,9 @@ def _extract_query_context(payload: Any) -> ChatRequestContext:
         active_report_job_id = _clean_optional_string(payload.get("active_report_job_id")) or _clean_optional_string(
             content.get("active_report_job_id")
         )
+        active_report_job_id = _clean_optional_string(payload.get("active_report_job_id")) or _clean_optional_string(
+            content.get("active_report_job_id")
+        )
         messages = content.get("messages", [])
         query_text = None
         if isinstance(messages, list) and messages:
