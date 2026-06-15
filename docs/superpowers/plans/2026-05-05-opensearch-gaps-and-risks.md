@@ -74,12 +74,14 @@ def test_ingestor_embed_allows_local_nim_without_key(monkeypatch):
     monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
     result = ingestor._embed_texts(["hello"])
     assert result == [[0.0, 0.0, 0.0, 0.0]]
+
 ```
 
 - [ ] **Step 2: Run tests, verify both fail**
 
 ```bash
 uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_adapter.py::test_ingestor_embed_raises_when_hosted_api_and_missing_key tests/knowledge_layer_tests/test_opensearch_adapter.py::test_ingestor_embed_allows_local_nim_without_key -v
+
 ```
 
 Expected: both FAIL — the first because no error is raised, the second because the un-patched OpenAI client tries to make a real HTTP call.
@@ -100,18 +102,21 @@ def _resolve_embedding_api_key(embed_base_url: str) -> str:
             "NVIDIA_API_KEY or override AIQ_EMBED_BASE_URL to a self-hosted NIM endpoint."
         )
     return api_key
+
 ```
 
 Then in both `_embed_texts` methods:
 
 ```python
 client = OpenAI(base_url=self.embed_base_url, api_key=_resolve_embedding_api_key(self.embed_base_url))
+
 ```
 
 - [ ] **Step 4: Run tests, verify both pass**
 
 ```bash
 uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_adapter.py::test_ingestor_embed_raises_when_hosted_api_and_missing_key tests/knowledge_layer_tests/test_opensearch_adapter.py::test_ingestor_embed_allows_local_nim_without_key -v
+
 ```
 
 Expected: both PASS.
@@ -120,6 +125,7 @@ Expected: both PASS.
 
 ```bash
 uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_adapter.py -q
+
 ```
 
 Expected: all green.
@@ -130,6 +136,7 @@ Expected: all green.
 git add sources/knowledge_layer/src/opensearch/adapter.py \
         tests/knowledge_layer_tests/test_opensearch_adapter.py
 git commit -s -m "fix(opensearch): fail fast when NVIDIA_API_KEY is missing for hosted API"
+
 ```
 
 ---
@@ -152,6 +159,7 @@ Find the OpenSearch backend section (the one that begins "**OpenSearch (Self-hos
 > `AIQ_EXTRACT_IMAGES`, or `AIQ_EXTRACT_CHARTS` (those flags are LlamaIndex-only). For multimodal
 > ingestion against OpenSearch, run the LlamaIndex backend instead, or use Foundational RAG which
 > handles multimodal extraction server-side.
+
 ```
 
 - [ ] **Step 2: Add the same note in the AOSS deployment doc**
@@ -163,13 +171,16 @@ In `docs/source/deployment/aws-opensearch-serverless.md`, find the `## Workflow 
 **Text-only ingestion.** The OpenSearch backend extracts plain text from PDFs, DOCX, and PPTX. It does
 not currently support table/image/chart extraction (those flags are LlamaIndex-only). For multimodal,
 use the LlamaIndex backend or Foundational RAG.
+
 ```
+
 ```
 
 - [ ] **Step 3: Render docs and verify**
 
 ```bash
 uv run --extra docs sphinx-build -b html docs/source docs/_build/html
+
 ```
 
 Expected: build succeeds with zero warnings.
@@ -180,6 +191,7 @@ Expected: build succeeds with zero warnings.
 git add sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md \
         docs/source/deployment/aws-opensearch-serverless.md
 git commit -s -m "docs(opensearch): explicit text-only callout for ingestion path"
+
 ```
 
 ---
@@ -198,18 +210,21 @@ Find this block in `docs/source/deployment/aws-opensearch-serverless.md`:
 ```markdown
 Expected: `{"status":"ok"}` (or equivalent — match the health route exposed by the deployed
 `aiq_api` front end).
+
 ```
 
 Replace with:
 
 ```markdown
 Expected: `{"status":"healthy"}` (the `aiq_api` front end exposes a JSON health route at `/health`).
+
 ```
 
 - [ ] **Step 2: Render docs**
 
 ```bash
 uv run --extra docs sphinx-build -b html docs/source docs/_build/html
+
 ```
 
 - [ ] **Step 3: Commit with sign-off**
@@ -217,6 +232,7 @@ uv run --extra docs sphinx-build -b html docs/source docs/_build/html
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -s -m "docs(opensearch): correct health endpoint expected response shape"
+
 ```
 
 ---
@@ -238,13 +254,16 @@ Find `### 4. Confirm the index appears in AOSS` in `docs/source/deployment/aws-o
 after a successful upload may report `0` for ~5–30 seconds before catching up. If the AIQ status says
 `completed` but the AOSS console index browser shows zero docs, wait 30s and refresh — the index will
 populate. This is also why the live-test suite includes a polling visibility wait.
+
 ```
+
 ```
 
 - [ ] **Step 2: Render docs**
 
 ```bash
 uv run --extra docs sphinx-build -b html docs/source docs/_build/html
+
 ```
 
 - [ ] **Step 3: Commit with sign-off**
@@ -252,6 +271,7 @@ uv run --extra docs sphinx-build -b html docs/source docs/_build/html
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -s -m "docs(opensearch): note AOSS visibility delay in verification steps"
+
 ```
 
 ---
@@ -266,6 +286,7 @@ git commit -s -m "docs(opensearch): note AOSS visibility delay in verification s
 
 ```bash
 grep -rn 'chat/completions\|conversation_id' src/aiq_api 2>/dev/null
+
 ```
 
 Find the route registering `POST /v1/chat/completions`. Read it, identify whether `conversation_id` is present in the Pydantic request model and where (or if) it is ever read.
@@ -274,6 +295,7 @@ Find the route registering `POST /v1/chat/completions`. Read it, identify whethe
 
 ```bash
 grep -rn 'Context.*conversation_id\|set.*conversation_id\|context.*conversation' src/ 2>/dev/null | head -20
+
 ```
 
 Determine the actual mechanism the UI uses (likely a header, cookie, or different route).
@@ -290,6 +312,7 @@ async def chat_completions(req: ChatCompletionsRequest, ...):
     if req.conversation_id:
         context.conversation_id = req.conversation_id
     # ... existing handler
+
 ```
 
 Add a unit test if the route has a test harness.
@@ -301,6 +324,7 @@ class ChatCompletionsRequest(BaseModel):
     messages: list[Message]
     stream: bool = False
     # conversation_id removed — see <route> for session control via <header/cookie>
+
 ```
 
 Document the actual session-control mechanism in `KNOWLEDGE-LAYER-SETUP.md` so customers know where to set it.
@@ -309,6 +333,7 @@ Document the actual session-control mechanism in `KNOWLEDGE-LAYER-SETUP.md` so c
 
 ```bash
 uv run python -m pytest tests/ -q -k chat_completions 2>&1 | tail -20
+
 ```
 
 Expected: green.
@@ -320,6 +345,7 @@ git add <files-touched>
 git commit -s -m "fix(api): honor conversation_id on /v1/chat/completions"
 # OR
 git commit -s -m "fix(api): drop unused conversation_id from /v1/chat/completions schema"
+
 ```
 
 If Step 1 reveals this is outside the OpenSearch story (e.g., a long-standing `aiq_api` issue unrelated to v2.0 OpenSearch), STOP and report — it may belong in a separate PR rather than `feat/opensearch-aoss`.
@@ -339,12 +365,14 @@ Find the `## Troubleshooting` table in `docs/source/deployment/aws-opensearch-se
 
 ```markdown
 | Dask worker stdout is empty during local testing | `DASK_DISTRIBUTED__LOGGING__DISTRIBUTED=warning` (default in `deploy/.env`) silences worker logs. Ingestion still succeeds — verify by counting docs in AOSS, not by tailing the worker. | Override locally with `DASK_DISTRIBUTED__LOGGING__DISTRIBUTED=info` if you need worker logs during development. |
+
 ```
 
 - [ ] **Step 2: Render docs**
 
 ```bash
 uv run --extra docs sphinx-build -b html docs/source docs/_build/html
+
 ```
 
 - [ ] **Step 3: Commit with sign-off**
@@ -352,6 +380,7 @@ uv run --extra docs sphinx-build -b html docs/source docs/_build/html
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -s -m "docs(opensearch): note Dask worker logging is silenced by default env"
+
 ```
 
 ---
@@ -370,6 +399,7 @@ git log develop..HEAD --format='%h %s' | while read sha _; do
     echo "MISSING: $sha"
   fi
 done
+
 ```
 
 Note the count and SHAs.
@@ -378,6 +408,7 @@ Note the count and SHAs.
 
 ```bash
 git rebase --signoff develop
+
 ```
 
 This rewrites every commit's SHA but adds `Signed-off-by:` to those missing it.
@@ -390,6 +421,7 @@ Re-run Step 1's verification loop. Expected: no `MISSING:` lines.
 
 ```bash
 git log -1 --format='%B' HEAD~5
+
 ```
 
 Expected: trailer block ends with both `Co-Authored-By: ...` and `Signed-off-by: Felipe Garcia <fdecarvalhop@nvidia.com>`.
@@ -409,6 +441,7 @@ No commit needed — the rebase already wrote the changes.
 ```bash
 cd docs && rm -rf _build
 SPHINXOPTS="-W --keep-going -n" uv run --extra docs sphinx-build -b html source _build/html
+
 ```
 
 Expected: exit 0, zero warnings.
@@ -417,6 +450,7 @@ Expected: exit 0, zero warnings.
 
 ```bash
 uv run python -m pytest tests/knowledge_layer_tests/test_opensearch_adapter.py -q
+
 ```
 
 Expected: all green.
@@ -431,6 +465,7 @@ ks = cfg['functions']['knowledge_search']
 assert ks['_type'] == 'knowledge_retrieval' and ks['backend'] == 'opensearch'
 print('OK')
 "
+
 ```
 
 Expected: prints `OK`.
@@ -439,6 +474,7 @@ Expected: prints `OK`.
 
 ```bash
 uv run python -c "import yaml; yaml.safe_load(open('deploy/helm/examples/aws-opensearch-serverless-values.yaml'))"
+
 ```
 
 Expected: no output.
@@ -449,6 +485,7 @@ Expected: no output.
 git log --oneline develop..HEAD
 echo "---"
 git diff --shortstat develop..HEAD
+
 ```
 
 Expected: a clean ordered list of commits, every one with a sign-off (verified in Task 7), the branch is ready to push to a fork and open a PR per CONTRIBUTING.md.

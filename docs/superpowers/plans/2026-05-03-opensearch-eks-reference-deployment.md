@@ -40,6 +40,7 @@ On v1.0, OpenSearch support shipped through a custom Docker image built from
 OpenSearch is a built-in knowledge backend selected through workflow YAML
 (`backend: opensearch`). You no longer need to fork or rebuild the NVIDIA base images.
 :::
+
 ```
 
 The `:::{note}` syntax is a MyST admonition; this repo's `conf.py` enables `colon_fence` so it renders as a callout box in Sphinx output.
@@ -50,6 +51,7 @@ Run from the repo root:
 
 ```bash
 cd docs && make html
+
 ```
 
 Expected: build completes with no warnings about the new file. Open `docs/_build/html/source/deployment/aws-opensearch-serverless.html` in a browser and confirm the green/blue note box appears under the H1.
@@ -59,6 +61,7 @@ Expected: build completes with no warnings about the new file. Open `docs/_build
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): add v1.0 to v2.0 migration callout to AOSS guide"
+
 ```
 
 ---
@@ -88,12 +91,14 @@ flowchart LR
     iam -.assumed by.-> backend
     iam -.assumed by.-> dask_worker
     aoss_dap[AOSS data access policy] -.grants index ops.-> iam
+
 ```
 
 The backend pod and every Dask worker assume the same IAM role through the EKS Pod Identity
 association on the `aiq-backend` service account. Each Dask worker constructs its own OpenSearch
 client, so SigV4 signing happens in the worker's process — no signer state is serialized across
 the cluster.
+
 ```
 
 (The triple-backtick `{mermaid}` fence is the MyST/Sphinx mermaid directive.)
@@ -104,6 +109,7 @@ Run:
 
 ```bash
 cd docs && make html
+
 ```
 
 Expected: build completes, diagram renders as SVG in the HTML output.
@@ -113,6 +119,7 @@ Expected: build completes, diagram renders as SVG in the HTML output.
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): add architecture diagram showing SigV4 in Dask workers"
+
 ```
 
 ---
@@ -145,6 +152,7 @@ Install the EKS Pod Identity Agent add-on once per cluster:
 aws eks create-addon \
   --cluster-name <cluster-name> \
   --addon-name eks-pod-identity-agent
+
 ```
 
 Confirm it is `ACTIVE` before continuing:
@@ -152,15 +160,18 @@ Confirm it is `ACTIVE` before continuing:
 ```bash
 aws eks describe-addon --cluster-name <cluster-name> --addon-name eks-pod-identity-agent \
   --query 'addon.status' --output text
+
 ```
 
 Expected: `ACTIVE`.
+
 ```
 
 - [ ] **Step 2: Render and confirm**
 
 ```bash
 cd docs && make html
+
 ```
 
 Expected: no Sphinx warnings, the new section renders as a table plus two code blocks.
@@ -170,6 +181,7 @@ Expected: no Sphinx warnings, the new section renders as a table plus two code b
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): list EKS and tooling prerequisites for AOSS deployment"
+
 ```
 
 ---
@@ -201,6 +213,7 @@ aws opensearchserverless create-security-policy \
   --name "${COLLECTION}-enc" \
   --type encryption \
   --policy "{\"Rules\":[{\"ResourceType\":\"collection\",\"Resource\":[\"collection/${COLLECTION}\"]}],\"AWSOwnedKey\":true}"
+
 ```
 
 ### 2. Network policy
@@ -211,6 +224,7 @@ aws opensearchserverless create-security-policy \
   --name "${COLLECTION}-net" \
   --type network \
   --policy "[{\"Rules\":[{\"ResourceType\":\"collection\",\"Resource\":[\"collection/${COLLECTION}\"]},{\"ResourceType\":\"dashboard\",\"Resource\":[\"collection/${COLLECTION}\"]}],\"AllowFromPublic\":true}]"
+
 ```
 
 For private VPC access, replace `AllowFromPublic` with `SourceVPCEs`. See the
@@ -223,6 +237,7 @@ aws opensearchserverless create-collection \
   --region "$REGION" \
   --name "$COLLECTION" \
   --type VECTORSEARCH
+
 ```
 
 Wait until the collection is `ACTIVE` and capture the data endpoint:
@@ -231,16 +246,19 @@ Wait until the collection is `ACTIVE` and capture the data endpoint:
 aws opensearchserverless batch-get-collection \
   --region "$REGION" --names "$COLLECTION" \
   --query 'collectionDetails[0].[status,collectionEndpoint]' --output text
+
 ```
 
 Expected output: `ACTIVE   https://abc123.<region>.aoss.amazonaws.com`. Save the endpoint — it
 is the `OPENSEARCH_URL` value used in Helm values.
+
 ```
 
 - [ ] **Step 2: Render and confirm three numbered subsections appear**
 
 ```bash
 cd docs && make html
+
 ```
 
 Expected: H3 entries 1, 2, 3 in the right-side TOC.
@@ -250,6 +268,7 @@ Expected: H3 entries 1, 2, 3 in the right-side TOC.
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): walk through AOSS encryption, network, and collection creation"
+
 ```
 
 ---
@@ -284,6 +303,7 @@ Save as `aiq-trust-policy.json`:
     }
   ]
 }
+
 ```
 
 ### 2. Permissions policy
@@ -303,6 +323,7 @@ your account ID and collection name:
     }
   ]
 }
+
 ```
 
 The `<collection-id>` is the suffix returned by `batch-get-collection` under `id` (a 26-character
@@ -319,19 +340,23 @@ aws iam put-role-policy \
   --role-name aiq-opensearch-role \
   --policy-name aiq-opensearch-access \
   --policy-document file://aiq-permissions-policy.json
+
 ```
 
 Capture the role ARN — it goes into the Pod Identity association in Task 6.
 
 ```bash
 aws iam get-role --role-name aiq-opensearch-role --query 'Role.Arn' --output text
+
 ```
+
 ```
 
 - [ ] **Step 2: Render and verify both JSON code fences highlight as JSON**
 
 ```bash
 cd docs && make html
+
 ```
 
 - [ ] **Step 3: Commit**
@@ -339,6 +364,7 @@ cd docs && make html
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): document Pod Identity trust policy and AOSS IAM permissions"
+
 ```
 
 ---
@@ -390,6 +416,7 @@ Save as `aiq-data-access-policy.json`. Substitute your role ARN and AIQ index pr
     "Description": "AIQ backend access to AOSS indexes"
   }
 ]
+
 ```
 
 ```bash
@@ -398,6 +425,7 @@ aws opensearchserverless create-access-policy \
   --name "${COLLECTION}-aiq" \
   --type data \
   --policy file://aiq-data-access-policy.json
+
 ```
 
 The index resource pattern `index/<collection>/aiq*` covers every AIQ session collection, since
@@ -415,17 +443,20 @@ aws eks create-pod-identity-association \
   --namespace ns-aiq \
   --service-account aiq-backend \
   --role-arn arn:aws:iam::<account-id>:role/aiq-opensearch-role
+
 ```
 
 The same service account is used by the embedded Dask scheduler and worker, so SigV4
 credentials are available throughout the ingestion pipeline. No service-account annotation is
 required — Pod Identity does not use OIDC trust like IRSA.
+
 ```
 
 - [ ] **Step 2: Render and confirm both new H2 sections appear in the page TOC**
 
 ```bash
 cd docs && make html
+
 ```
 
 Expected: side TOC shows "Grant the role access to AOSS" and "Associate the role with the AIQ service account".
@@ -435,6 +466,7 @@ Expected: side TOC shows "Grant the role access to AOSS" and "Associate the role
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): expand Pod Identity section with AOSS data access policy"
+
 ```
 
 ---
@@ -473,12 +505,14 @@ aiq:
         OPENSEARCH_DASK_FILE_TRANSFER: bytes
         DASK_NWORKERS: "1"
         DASK_NTHREADS: "4"
+
 ```
 
 Verify the file parses:
 
 ```bash
 python -c "import yaml; yaml.safe_load(open('deploy/helm/examples/aws-opensearch-serverless-values.yaml'))"
+
 ```
 
 Expected: no output (valid YAML).
@@ -500,17 +534,20 @@ kubectl -n ns-aiq create secret docker-registry ngc-image-pull-secret \
   --docker-server=nvcr.io \
   --docker-username='$oauthtoken' \
   --docker-password=<your-ngc-api-key>
+
 ```
 
 The secret name `ngc-image-pull-secret` matches the
 [`deploy/helm/examples/aws-opensearch-serverless-values.yaml`](../../../deploy/helm/examples/aws-opensearch-serverless-values.yaml)
 `imagePullSecrets` entry. Change both if you use a different name.
+
 ```
 
 - [ ] **Step 3: Render and confirm both files**
 
 ```bash
 cd docs && make html
+
 ```
 
 Expected: Sphinx build clean. Open the AOSS page and confirm the new `### Pull secret for nvcr.io` subsection appears under `## Helm Values`.
@@ -520,6 +557,7 @@ Expected: Sphinx build clean. Open the AOSS page and confirm the new `### Pull s
 ```bash
 git add deploy/helm/examples/aws-opensearch-serverless-values.yaml docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): add nvcr.io pull secret to example values and AOSS guide"
+
 ```
 
 ---
@@ -541,6 +579,7 @@ Add to the `backend.env` block in `deploy/helm/examples/aws-opensearch-serverles
         - name: nvidia-api-key
           key: NVIDIA_API_KEY
           envVar: NVIDIA_API_KEY
+
 ```
 
 If the chart's existing schema for secret env wiring uses a different key (verify against
@@ -552,6 +591,7 @@ Verify the file still parses:
 
 ```bash
 python -c "import yaml; yaml.safe_load(open('deploy/helm/examples/aws-opensearch-serverless-values.yaml'))"
+
 ```
 
 - [ ] **Step 2: Add the embedding endpoint subsection to the AOSS doc**
@@ -571,6 +611,7 @@ Create the secret once, then the example values mount it:
 ```bash
 kubectl -n ns-aiq create secret generic nvidia-api-key \
   --from-literal=NVIDIA_API_KEY=<your-nvidia-api-key>
+
 ```
 
 **Option B: Self-hosted NIM on the same cluster.** Override `AIQ_EMBED_BASE_URL` to your
@@ -579,17 +620,20 @@ NIM service and leave `NVIDIA_API_KEY` empty. Add to `backend.env`:
 ```yaml
         AIQ_EMBED_BASE_URL: http://nim-embedqa.ns-nim.svc.cluster.local:8000/v1
         AIQ_EMBED_MODEL: nvidia/llama-nemotron-embed-vl-1b-v2
+
 ```
 
 The embedding model dimension must match `OPENSEARCH_EMBEDDING_DIM` in the workflow config
 (default `2048` for `nvidia/llama-nemotron-embed-vl-1b-v2`). Mismatched dimensions surface
 as `mapper_parsing_exception` on the first ingest.
+
 ```
 
 - [ ] **Step 3: Render and verify**
 
 ```bash
 cd docs && make html
+
 ```
 
 - [ ] **Step 4: Commit**
@@ -597,6 +641,7 @@ cd docs && make html
 ```bash
 git add deploy/helm/examples/aws-opensearch-serverless-values.yaml docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): document hosted-API and NIM-on-EKS embedding setups"
+
 ```
 
 ---
@@ -618,6 +663,7 @@ git commit -m "docs(opensearch): document hosted-API and NIM-on-EKS embedding se
 ```bash
 kubectl -n ns-aiq get pods -l app.kubernetes.io/name=aiq-agent
 kubectl -n ns-aiq describe pod -l app.kubernetes.io/name=aiq-agent | grep -A2 'AWS_CONTAINER_CREDENTIALS'
+
 ```
 
 Expected: pod is `Running`, the describe output shows
@@ -630,6 +676,7 @@ and service-account triple in Task 6.
 ```bash
 kubectl -n ns-aiq port-forward svc/aiq-agent 8000:8000 &
 curl -sf http://localhost:8000/health
+
 ```
 
 Expected: `{"status":"ok"}` (or equivalent — match the health route exposed by the deployed
@@ -644,6 +691,7 @@ curl -sf -X POST http://localhost:8000/v1/collections \
 
 curl -sf -X POST http://localhost:8000/v1/collections/smoke/documents \
   -F 'files=@README.md'
+
 ```
 
 Expected: a `job_id` is returned. Poll `GET /v1/documents/{job_id}/status` until `status` is
@@ -651,16 +699,19 @@ Expected: a `job_id` is returned. Poll `GET /v1/documents/{job_id}/status` until
 
 ```bash
 kubectl -n ns-aiq logs -l app.kubernetes.io/name=aiq-agent --tail=200 | grep -i opensearch
+
 ```
 
 ### 4. Confirm the index appears in AOSS
 
 ```bash
 aws opensearchserverless list-collections --region "$REGION"
+
 ```
 
 ```bash
 curl -sf "http://localhost:8000/v1/collections" | jq
+
 ```
 
 Expected: `aiq-smoke` index visible in the AOSS console under the collection's index browser,
@@ -672,15 +723,18 @@ and the `smoke` collection listed by the AIQ API.
 curl -sf -X POST http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"what is in the smoke document"}]}'
+
 ```
 
 Expected: response includes content from `README.md` with citations.
+
 ```
 
 - [ ] **Step 2: Render and verify the H3 anchors render**
 
 ```bash
 cd docs && make html
+
 ```
 
 - [ ] **Step 3: Commit**
@@ -688,6 +742,7 @@ cd docs && make html
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): add end-to-end verification and smoke test for AOSS install"
+
 ```
 
 ---
@@ -719,6 +774,7 @@ aws opensearchserverless delete-access-policy --type data --name "${COLLECTION}-
 aws opensearchserverless delete-collection --id <collection-id>
 aws opensearchserverless delete-security-policy --type network --name "${COLLECTION}-net"
 aws opensearchserverless delete-security-policy --type encryption --name "${COLLECTION}-enc"
+
 ```
 
 Get the Pod Identity `<association-id>` with:
@@ -727,6 +783,7 @@ Get the Pod Identity `<association-id>` with:
 aws eks list-pod-identity-associations \
   --cluster-name <cluster-name> --namespace ns-aiq \
   --query 'associations[?serviceAccount==`aiq-backend`].associationId' --output text
+
 ```
 
 Get the AOSS `<collection-id>` with:
@@ -734,13 +791,16 @@ Get the AOSS `<collection-id>` with:
 ```bash
 aws opensearchserverless batch-get-collection --names "$COLLECTION" \
   --query 'collectionDetails[0].id' --output text
+
 ```
+
 ```
 
 - [ ] **Step 2: Render**
 
 ```bash
 cd docs && make html
+
 ```
 
 - [ ] **Step 3: Commit**
@@ -748,6 +808,7 @@ cd docs && make html
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): add teardown commands for AOSS reference deployment"
+
 ```
 
 ---
@@ -769,6 +830,7 @@ Find the AOSS example block (around line 220 of `sources/knowledge_layer/KNOWLED
 > [Amazon OpenSearch Serverless deployment guide](../../docs/source/deployment/aws-opensearch-serverless.md)
 > for the end-to-end EKS Pod Identity setup, AOSS data access policy, Helm values, and
 > verification commands.
+
 ```
 
 - [ ] **Step 2: Validate the reference YAML still loads cleanly**
@@ -785,6 +847,7 @@ assert ks['_type'] == 'knowledge_retrieval'
 assert ks['backend'] == 'opensearch'
 print('OK')
 "
+
 ```
 
 Expected: prints `OK`.
@@ -794,6 +857,7 @@ Expected: prints `OK`.
 ```bash
 git add sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md
 git commit -m "docs(knowledge): link OpenSearch backend setup to EKS deployment guide"
+
 ```
 
 ---
@@ -810,6 +874,7 @@ git commit -m "docs(knowledge): link OpenSearch backend setup to EKS deployment 
 cd docs
 make clean
 SPHINXOPTS="-W --keep-going -n" make html
+
 ```
 
 Expected: build exits 0 with no warnings. The `-W` turns warnings into errors; `-n` enables nitpicky mode for cross-references; `--keep-going` reports every warning rather than stopping at the first.
@@ -829,6 +894,7 @@ straight line from "I have an AWS account" to "I have a working AIQ + AOSS deplo
 ```bash
 git add docs/source/deployment/aws-opensearch-serverless.md
 git commit -m "docs(opensearch): resolve sphinx -W warnings in AOSS deployment guide"
+
 ```
 
 ---
