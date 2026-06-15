@@ -77,7 +77,11 @@ functions:
 
 When `skills.enabled` is true, AI-Q preloads the built-in skill files into the DeepAgents virtual filesystem and passes `/skills/` as the skill source. When the sandbox block is present, DeepAgents `execute` calls run inside the selected sandbox provider.
 
-To use OpenShell instead of Modal, install OpenShell `0.0.57+`, configure an OpenShell gateway, and install the sibling `langchain-nvidia-openshell` package in the AI-Q environment. Then switch the sandbox block:
+To use OpenShell instead of Modal, run `./scripts/setup_openshell.sh`. The
+script installs the selected OpenShell version, installs the sibling
+`langchain-nvidia-openshell` package, starts/verifies the gateway, generates
+an initial policy, builds the sandbox image, and creates the named sandbox.
+The ready-to-run config is `configs/config_skills_openshell.yml`:
 
 ```yaml
 functions:
@@ -85,18 +89,29 @@ functions:
     sandbox:
       provider: openshell
       cluster: null
-      sandbox_name_prefix: aiq-deep-research
+      sandbox_name: ${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}
+      policy_file: ${AIQ_OPENSHELL_POLICY_FILE:-configs/openshell/aiq-research-policy.yaml}
       ready_timeout_seconds: 300
-      delete_on_exit: true
+      delete_on_exit: false
 ```
 
-OpenShell SDK-created sandboxes are currently anonymous at the gateway layer; AI-Q still scopes one lazy sandbox backend per job and derives a local backend identity from the job ID.
+OpenShell SDK-created sandboxes are currently anonymous at the gateway layer.
+When policy matters, AI-Q attaches to a pre-created named sandbox because
+OpenShell applies filesystem/process policy at sandbox creation time. The
+recommended baseline policy is `configs/openshell/aiq-research-policy.yaml`,
+which denies sandbox network access. Demo policies for proving GitHub allowed,
+PyPI allowed/blocked, and generic outbound blocked behavior also live in
+`configs/openshell/`.
+
+For copy/paste setup commands, see [AI-Q with OpenShell](./openshell-manual.md).
+The normal API/UI config is `configs/config_skills_openshell.yml`; the direct
+CLI smoke-test config is `configs/config_skills_openshell_deep.yml`.
 
 ## Run AI-Q
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat run \
-  --config_file configs/config_skills.yml \
+  --config_file configs/config_skills_openshell.yml \
   --input "Compare the top 10 publicly traded semiconductor companies by 2024 revenue. Build a markdown table with revenue, YoY growth, market cap, and gross margin. Then rank them and compute summary statistics. Use the data analysis tool for all calculations."
 ```
 
@@ -104,7 +119,7 @@ For API or UI testing:
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat serve \
-  --config_file configs/config_skills.yml \
+  --config_file configs/config_skills_openshell.yml \
   --host 0.0.0.0 \
   --port 8000
 ```

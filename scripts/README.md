@@ -40,6 +40,7 @@ Starts the agent in CLI mode with browser-based authentication.
 ```bash
 ./scripts/start_cli.sh
 ./scripts/start_cli.sh --verbose
+./scripts/start_cli.sh --config_file configs/config_skills_openshell_deep.yml --verbose
 ```
 
 **Options:**
@@ -49,6 +50,48 @@ Starts the agent in CLI mode with browser-based authentication.
 | `--verbose` or `-v` | Enable verbose logging |
 | `--config_file <path>` | Use a custom configuration file |
 
+### `setup_openshell.sh` - OpenShell Sandbox Setup
+
+Sets up NVIDIA OpenShell for the AI-Q sandbox path. Run this once before using
+the OpenShell configs with `start_cli.sh` or `start_e2e.sh`.
+
+```bash
+./scripts/setup_openshell.sh
+./scripts/start_cli.sh --config_file configs/config_skills_openshell_deep.yml --verbose
+./scripts/start_e2e.sh --config_file configs/config_skills_openshell.yml
+```
+
+Useful version examples:
+
+```bash
+./scripts/setup_openshell.sh --openshell-version 0.0.57
+./scripts/setup_openshell.sh --openshell-version latest
+./scripts/setup_openshell.sh --list-openshell-versions
+```
+
+In the interactive version prompt, pressing Enter selects `0.0.57`.
+
+By default, the setup script installs the OpenShell adapter with:
+
+```bash
+uv pip install langchain-nvidia-openshell
+```
+
+Set `LANGCHAIN_NVIDIA_REPO` or pass `--langchain-nvidia` to use another
+`uv pip install` spec or a local checkout.
+
+Useful policy examples:
+
+```bash
+./scripts/setup_openshell.sh --policy offline
+./scripts/setup_openshell.sh --policy research
+./scripts/setup_openshell.sh --policy python-packages
+./scripts/setup_openshell.sh --policy custom --allow github,pypi,nvidia,tavily
+```
+
+See
+[`docs/source/examples/skills-sandbox/openshell-manual.md`](../docs/source/examples/skills-sandbox/openshell-manual.md)
+for copy/paste setup and policy check commands.
 
 ### `start_server_in_debug_mode.sh` - Server Mode
 
@@ -112,6 +155,7 @@ Starts both backend and frontend for full WebSocket support and HITL workflows.
 
 ```bash
 ./scripts/start_e2e.sh
+./scripts/start_e2e.sh --config_file configs/config_skills_openshell.yml
 ```
 
 **Services:**
@@ -128,6 +172,8 @@ Starts both backend and frontend for full WebSocket support and HITL workflows.
 | `configs/config_cli_default.yml` | CLI mode with web search (default) |
 | `configs/config_web_frag.yml` | Server/E2E mode with Foundational RAG |
 | `configs/config_web_default_llamaindex.yml` | Server/E2E mode with LlamaIndex |
+| `configs/config_skills_openshell.yml` | Server/E2E mode with LlamaIndex, DeepAgents skills, and OpenShell sandbox execution |
+| `configs/config_skills_openshell_deep.yml` | Direct deep-research smoke-test mode with LlamaIndex, skills, and OpenShell |
 
 ## Development Workflow
 

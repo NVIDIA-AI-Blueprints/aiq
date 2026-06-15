@@ -222,37 +222,20 @@ functions:
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
       - web_search_tool
-    max_loops: 2
+    max_loops: 1
     verbose: true
     skills:
       enabled: true
     sandbox:
-      provider: modal
-      app_name: aiq-deep-research
-      image: python:3.13-slim
-      python_packages:
-        - matplotlib
-        - numpy
-        - pandas
-        - pillow
-        - tabulate  # required by pandas.DataFrame.to_markdown(), used by data-table-analysis skill
-      block_network: true
-      # OpenShell alternative:
-      # provider: openshell
-      # cluster: null
-      # sandbox_name: aiq-openshell-demo  # attach to a CLI-created policy sandbox
-      # policy_file: configs/openshell/aiq-research-policy.yaml
-      # sandbox_name_prefix: aiq-deep-research
-      # ready_timeout_seconds: 300
-      # delete_on_exit: false
-      # shell:
-      #   - bash
-      #   - -c
+      provider: openshell
+      cluster: null
+      sandbox_name: ${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}
+      policy_file: ${AIQ_OPENSHELL_POLICY_FILE:-configs/openshell/aiq-research-policy.yaml}
+      ready_timeout_seconds: 300
+      delete_on_exit: false
+      shell:
+        - bash
+        - -c
 
 workflow:
-  _type: chat_deepresearcher_agent
-  verbose: true
-  enable_escalation: true
-  enable_clarifier: true
-  use_async_deep_research: true
-  checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
+  _type: deep_research_workflow

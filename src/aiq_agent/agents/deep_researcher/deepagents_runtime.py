@@ -125,6 +125,21 @@ class SandboxConfig(BaseModel):
     idle_timeout: int = Field(default=1800, description="Modal sandbox idle timeout in seconds")
     block_network: bool = Field(default=True, description="Block outbound network access from Modal sandboxes")
     cluster: str | None = Field(default=None, description="Optional OpenShell gateway/cluster name")
+    sandbox_name: str | None = Field(
+        default=None,
+        description=(
+            "Optional existing OpenShell sandbox name to attach to. Use this when the sandbox must be "
+            "created by `openshell sandbox create --policy ...` so filesystem/process policy is applied."
+        ),
+    )
+    policy_file: str | None = Field(
+        default=None,
+        description=(
+            "Optional OpenShell policy file used by setup/demo tooling. The OpenShell Python SDK does not "
+            "apply policy files when creating anonymous sandboxes; set `sandbox_name` and create the sandbox "
+            "with the OpenShell CLI when this is configured."
+        ),
+    )
     sandbox_name_prefix: str = Field(
         default="aiq-deep-research",
         description="Local name prefix for job-scoped OpenShell sandbox backends",
@@ -509,10 +524,23 @@ def _create_openshell_backend_now(config: SandboxConfig) -> tuple[Any, Any]:
             "OpenShell gateway before enabling an OpenShell sandbox."
         ) from exc
 
+    if config.policy_file and not config.sandbox_name:
+        raise ValueError(
+            "OpenShell `policy_file` requires `sandbox_name`. The OpenShell Python SDK cannot apply policy files "
+            "when it creates anonymous sandboxes. Create the named sandbox with `openshell sandbox create --policy "
+            "<policy_file>` first, then configure AI-Q with that `sandbox_name`."
+        )
+
+    sandbox_kwargs: dict[str, Any] = {
+        "cluster": config.cluster,
+        "delete_on_exit": config.delete_on_exit,
+        "ready_timeout_seconds": config.ready_timeout_seconds,
+    }
+    if config.sandbox_name:
+        sandbox_kwargs["sandbox"] = config.sandbox_name
+
     sandbox = openshell.Sandbox(
-        cluster=config.cluster,
-        delete_on_exit=config.delete_on_exit,
-        ready_timeout_seconds=config.ready_timeout_seconds,
+        **sandbox_kwargs,
     )
     sandbox.__enter__()
     backend = OpenShellSandbox(
@@ -521,9 +549,11 @@ def _create_openshell_backend_now(config: SandboxConfig) -> tuple[Any, Any]:
         shell=config.shell,
     )
     logger.info(
-        "OpenShell sandbox CREATED: id=%s cluster=%s ready_timeout=%ss",
+        "OpenShell sandbox READY: id=%s cluster=%s sandbox_name=%s policy_file=%s ready_timeout=%ss",
         backend.id,
         config.cluster,
+        config.sandbox_name,
+        config.policy_file,
         config.ready_timeout_seconds,
     )
     return sandbox, backend

@@ -187,10 +187,11 @@ class TestOpenShellSandboxConfig:
     """OpenShell provider config should coexist with the existing Modal default."""
 
     def test_provider_accepts_openshell_case_insensitive(self) -> None:
-        config = SandboxConfig(provider="OpenShell", cluster="local")
+        config = SandboxConfig(provider="OpenShell", cluster="local", sandbox_name="aiq-demo")
 
         assert config.provider == "openshell"
         assert config.cluster == "local"
+        assert config.sandbox_name == "aiq-demo"
         assert config.shell == ("bash", "-c")
 
     def test_unsupported_provider_names_both_supported_values(self) -> None:
@@ -241,6 +242,68 @@ class TestLazyOpenShellSandboxBackend:
 
         backend.close()
         fake_context.__exit__.assert_called_once_with(None, None, None)
+
+    def test_openshell_backend_attaches_named_policy_sandbox(self, monkeypatch: Any) -> None:
+        _install_fake_openshell_modules(monkeypatch)
+        fake_sandbox_class = MagicMock()
+        fake_sandbox = MagicMock()
+        fake_sandbox_class.return_value = fake_sandbox
+
+        fake_backend_class = MagicMock()
+        fake_backend = MagicMock()
+        fake_backend.id = "openshell-id-1"
+        fake_backend_class.return_value = fake_backend
+
+        fake_openshell = sys.modules["openshell"]
+        fake_openshell.Sandbox = fake_sandbox_class
+        fake_adapter = sys.modules["langchain_nvidia_openshell"]
+        fake_adapter.OpenShellSandbox = fake_backend_class
+
+        config = SandboxConfig(
+            provider="openshell",
+            cluster="local",
+            sandbox_name="aiq-openshell-demo",
+            policy_file="configs/openshell/aiq-research-policy-github-only.yaml",
+            delete_on_exit=False,
+        )
+
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_openshell_backend_now
+
+        sandbox_context, backend = _create_openshell_backend_now(config)
+
+        assert sandbox_context is fake_sandbox
+        assert backend is fake_backend
+        fake_sandbox_class.assert_called_once_with(
+            cluster="local",
+            delete_on_exit=False,
+            ready_timeout_seconds=300.0,
+            sandbox="aiq-openshell-demo",
+        )
+        fake_sandbox.__enter__.assert_called_once_with()
+        fake_backend_class.assert_called_once_with(sandbox=fake_sandbox, timeout=1200, shell=("bash", "-c"))
+
+    def test_openshell_policy_file_without_named_sandbox_fails_clearly(self, monkeypatch: Any) -> None:
+        _install_fake_openshell_modules(monkeypatch)
+        fake_sandbox_class = MagicMock()
+        fake_openshell = sys.modules["openshell"]
+        fake_openshell.Sandbox = fake_sandbox_class
+        fake_adapter = sys.modules["langchain_nvidia_openshell"]
+        fake_adapter.OpenShellSandbox = MagicMock()
+
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_openshell_backend_now
+
+        config = SandboxConfig(provider="openshell", policy_file="configs/openshell/aiq-research-policy.yaml")
+        try:
+            _create_openshell_backend_now(config)
+        except ValueError as exc:
+            message = str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("expected policy_file without sandbox_name to fail")
+
+        assert "policy_file" in message
+        assert "sandbox_name" in message
+        assert "openshell sandbox create --policy" in message
+        fake_sandbox_class.assert_not_called()
 
     def test_openshell_backend_recreates_and_retries_once_on_not_found(self, monkeypatch: Any) -> None:
         _install_fake_openshell_modules(monkeypatch)

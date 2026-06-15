@@ -15,3 +15,4 @@ Complete, annotated configuration examples for common use cases.
 | [CLI with Local NIMs](./cli-with-local-nims.md) | Interactive CLI mode with self-hosted NIM models | `config_cli_default.yml` |
 | [Hybrid Frontier Model](./hybrid-frontier-model.md) | NIM for shallow + frontier model for deep research | Custom hybrid |
 | [Deep Research Skills and Sandbox](./skills-sandbox/index.md) | DeepAgents skills with Modal sandbox execution for quantitative research workflows | `config_skills.yml` |
+| [AI-Q with OpenShell](./skills-sandbox/openshell-manual.md) | Copy/paste OpenShell setup, policy checks, and AI-Q start commands | `config_skills_openshell.yml` |

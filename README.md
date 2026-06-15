@@ -233,6 +233,8 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 | `config_web_default_llamaindex.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron Mini 4B | Web default. LlamaIndex knowledge retrieval; web search; optional paper search (requires `SERPER_API_KEY`). Nemotron Super is commented out but can be enabled for higher quality. |
 | `config_web_frag.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B | Web + Foundational RAG (external RAG server). Helm default. See [RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag/tree/main) for an example RAG deployment. Nemotron Super is commented out but can be enabled for higher quality. |
 | `config_frontier_models.yml` | GPT-5.2 (orchestrator/planner), Nemotron 3 Nano 30B, Nemotron Mini 4B | Hybrid: frontier orchestrator/planner, open researcher. LlamaIndex; web search; optional paper search (requires `SERPER_API_KEY`). Requires `OPENAI_API_KEY`. Nemotron Super is commented out but can be enabled for higher quality. |
+| `config_skills_openshell.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron Mini 4B | Web default with LlamaIndex, DeepAgents skills, and NVIDIA OpenShell sandbox execution. Run `./scripts/setup_openshell.sh` first. |
+| `config_skills_openshell_deep.yml` | Nemotron 3 Nano 30B, GPT-OSS 120B, Nemotron Mini 4B | Direct CLI smoke-test config with LlamaIndex, DeepAgents skills, and NVIDIA OpenShell sandbox execution. Run `./scripts/setup_openshell.sh` first. |
 
 ## Ways to Run the Agents
 
@@ -271,6 +273,23 @@ This starts:
 - Frontend UI at `http://localhost:3000`
 
 The web UI source is in `frontends/ui/`. Refer to [frontends/ui/README.md](frontends/ui/README.md) for more details.
+
+### OpenShell Sandbox Mode
+
+To run AI-Q with NVIDIA OpenShell instead of the default Modal sandbox path:
+
+```bash
+./scripts/setup_openshell.sh
+./scripts/start_cli.sh --config_file configs/config_skills_openshell_deep.yml --verbose
+./scripts/start_e2e.sh --config_file configs/config_skills_openshell.yml
+```
+
+The setup script checks available OpenShell releases, installs the selected
+pinned OpenShell Python package, installs the `langchain-nvidia` OpenShell
+adapter, starts/verifies the gateway, creates an initial policy, builds the
+sandbox image, and creates the named sandbox. For policy examples and
+copy/paste proof commands, see
+[AI-Q with OpenShell](docs/source/examples/skills-sandbox/openshell-manual.md).
 
 #### Web UI with Docker Compose
 
