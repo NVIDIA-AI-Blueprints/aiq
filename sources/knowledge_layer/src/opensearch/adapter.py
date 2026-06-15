@@ -100,6 +100,7 @@ SUPPORTED_TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".
 
 
 def _utc_now() -> datetime:
+    """Return the current time as a timezone-aware UTC datetime."""
     return datetime.now(tz=UTC)
 
 
@@ -122,6 +123,7 @@ def _trim_index_name(index_name: str) -> str:
 
 
 def _normalize_endpoint(endpoint: str, default_scheme: str) -> str:
+    """Ensure the endpoint has a URL scheme and no trailing slash."""
     endpoint = str(endpoint).strip()
     if "://" not in endpoint:
         endpoint = f"{default_scheme}://{endpoint}"
@@ -138,6 +140,7 @@ def _score_to_similarity(score: Any) -> float:
 
 
 def _parse_timestamp(value: Any) -> datetime | None:
+    """Parse an ISO-8601 string or datetime into a UTC-aware datetime, or return None."""
     if not value:
         return None
     if isinstance(value, datetime):
@@ -173,11 +176,13 @@ def _generate_document_summary(text_content: str, file_name: str, llm=None) -> s
 
 
 def _read_text_file(file_path: Path) -> list[tuple[str, int | None, dict[str, Any]]]:
+    """Read a plain-text file and return a single (content, None, metadata) segment."""
     content = file_path.read_text(encoding="utf-8", errors="ignore")
     return [(content, None, {"file_type": file_path.suffix.lower().lstrip(".") or "text"})]
 
 
 def _read_pdf_file(file_path: Path) -> list[tuple[str, int | None, dict[str, Any]]]:
+    """Read a PDF file and return one (text, page_number, metadata) segment per page."""
     try:
         from pypdf import PdfReader
     except ImportError as e:
@@ -193,6 +198,7 @@ def _read_pdf_file(file_path: Path) -> list[tuple[str, int | None, dict[str, Any
 
 
 def _read_docx_file(file_path: Path) -> list[tuple[str, int | None, dict[str, Any]]]:
+    """Read a DOCX file and return a single (text, None, metadata) segment."""
     try:
         import docx2txt
     except ImportError as e:
@@ -204,6 +210,7 @@ def _read_docx_file(file_path: Path) -> list[tuple[str, int | None, dict[str, An
 
 
 def _read_pptx_file(file_path: Path) -> list[tuple[str, int | None, dict[str, Any]]]:
+    """Read a PPTX file and return one (text, slide_number, metadata) segment per slide."""
     try:
         from pptx import Presentation
     except ImportError as e:
@@ -225,6 +232,7 @@ def _read_pptx_file(file_path: Path) -> list[tuple[str, int | None, dict[str, An
 
 
 def _read_file_segments(file_path: str) -> list[tuple[str, int | None, dict[str, Any]]]:
+    """Dispatch to the file-type-specific reader and return (text, page, metadata) segments."""
     path = Path(file_path)
     suffix = path.suffix.lower()
     if suffix in SUPPORTED_TEXT_EXTENSIONS or not suffix:
@@ -261,6 +269,7 @@ def _chunk_text(text: str, chunk_size: int, chunk_overlap: int) -> list[str]:
 
 
 def _resolve_embedding_api_key(embed_base_url: str) -> str:
+    """Return the NVIDIA_API_KEY for hosted endpoints, or empty string for self-hosted NIMs."""
     api_key = os.environ.get("NVIDIA_API_KEY", "")
     is_hosted_nvidia = "integrate.api.nvidia.com" in (embed_base_url or "")
     if is_hosted_nvidia and not api_key:
@@ -280,6 +289,7 @@ class _OpenSearchConfigMixin:
     _client_lock: threading.RLock
 
     def _configure_opensearch(self) -> None:
+        """Initialize all OpenSearch connection and indexing settings from config."""
         self.auth_type = str(self.config.get("auth_type", DEFAULT_AUTH_TYPE)).lower()
         raw_endpoint = self.config.get("endpoint") or self.config.get("opensearch_url") or DEFAULT_ENDPOINT
         self.endpoint = _normalize_endpoint(raw_endpoint, "https" if self.auth_type == "sigv4" else "http")
@@ -317,10 +327,12 @@ class _OpenSearchConfigMixin:
         self._client_lock = threading.RLock()
 
     def _index_name_for_collection(self, collection_name: str) -> str:
+        """Return the OpenSearch index name for the given collection."""
         collection_part = _sanitize_index_part(collection_name, "default")
         return _trim_index_name(f"{self.index_prefix}-{collection_part}")
 
     def _create_client(self):
+        """Create and return a new OpenSearch client configured for the selected auth mode."""
         try:
             from opensearchpy import OpenSearch
             from opensearchpy import RequestsHttpConnection
@@ -373,12 +385,14 @@ class _OpenSearchConfigMixin:
         return OpenSearch(hosts=[self.endpoint], **client_kwargs)
 
     def _get_client(self):
+        """Return the shared OpenSearch client, creating it lazily on first access."""
         with self._client_lock:
             if self._client is None:
                 self._client = self._create_client()
             return self._client
 
     def _index_mapping(self, collection_name: str, description: str | None = None) -> dict[str, Any]:
+        """Return the index creation body with kNN settings and field mappings."""
         now = _utc_now().isoformat()
         meta = {
             "backend": "opensearch",
@@ -438,6 +452,7 @@ class _OpenSearchConfigMixin:
         }
 
     def _get_index_meta(self, index_name: str) -> dict[str, Any]:
+        """Read the `_meta` dict from an index's mappings, returning {} on failure."""
         client = self._get_client()
         try:
             info = client.indices.get(index=index_name)
@@ -447,6 +462,7 @@ class _OpenSearchConfigMixin:
             return {}
 
     def _put_index_meta(self, index_name: str, meta: dict[str, Any]) -> None:
+        """Write `_meta` to an index's mappings; logs and swallows errors."""
         client = self._get_client()
         try:
             client.indices.put_mapping(index=index_name, body={"_meta": meta})
@@ -454,6 +470,7 @@ class _OpenSearchConfigMixin:
             logger.debug("Failed to update OpenSearch mapping metadata for %s: %s", index_name, e)
 
     def _ensure_index(self, collection_name: str, description: str | None = None) -> str:
+        """Create the collection index if it does not exist; returns the index name."""
         client = self._get_client()
         index_name = self._index_name_for_collection(collection_name)
         if client.indices.exists(index=index_name):
@@ -469,6 +486,7 @@ class _OpenSearchConfigMixin:
         return index_name
 
     def _update_collection_timestamp(self, collection_name: str) -> None:
+        """Update the `updated_at` field in the collection index's `_meta`."""
         index_name = self._index_name_for_collection(collection_name)
         meta = self._get_index_meta(index_name)
         if not meta:
@@ -477,6 +495,7 @@ class _OpenSearchConfigMixin:
         self._put_index_meta(index_name, meta)
 
     def _health_check_client(self) -> bool:
+        """Ping the cluster and return True if reachable; handles AOSS which lacks the ping endpoint."""
         client = self._get_client()
         if client.ping():
             return True
@@ -495,6 +514,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
     backend_name = "opensearch"
 
     def __init__(self, config: dict[str, Any] | None = None):
+        """Initialize the ingestor, configuring the client and starting background TTL cleanup."""
         super().__init__(config)
         self._configure_opensearch()
 
@@ -518,6 +538,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         logger.info("OpenSearchIngestor initialized: endpoint=%s, auth_type=%s", self.endpoint, self.auth_type)
 
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Encode texts in batches using the configured embedding model; returns a list of float vectors."""
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -624,6 +645,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         return job_id
 
     def _should_use_dask_ingestion(self) -> bool:
+        """Return True if ingestion should be dispatched to the Dask cluster."""
         if self.ingestion_mode == "local":
             return False
         if self.ingestion_mode == "dask":
@@ -639,6 +661,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         collection_name: str,
         job_config: dict[str, Any],
     ) -> None:
+        """Spawn a daemon thread to run ingestion locally on this process."""
         thread = threading.Thread(
             target=self._run_ingestion,
             args=(job_id, file_paths, collection_name, job_config),
@@ -647,6 +670,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         thread.start()
 
     def _create_dask_client(self):
+        """Connect to the configured Dask scheduler and return a distributed Client."""
         if not self.dask_scheduler_address:
             raise RuntimeError(
                 "Dask ingestion requires OPENSEARCH_DASK_SCHEDULER_ADDRESS or NAT_DASK_SCHEDULER_ADDRESS"
@@ -664,6 +688,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         collection_name: str,
         job_config: dict[str, Any],
     ) -> None:
+        """Submit the ingestion task to the Dask cluster and start a monitor thread."""
         from knowledge_layer.opensearch.distributed import run_opensearch_ingestion_task
 
         with self._lock:
@@ -709,6 +734,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         thread.start()
 
     def _worker_config(self, job_config: dict[str, Any]) -> dict[str, Any]:
+        """Return a sanitized copy of job_config safe to serialize and send to Dask workers."""
         worker_config = dict(job_config)
         worker_config.pop("summary_llm", None)
         worker_config["start_ttl_cleanup"] = False
@@ -721,6 +747,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         file_paths: list[str],
         job_config: dict[str, Any],
     ) -> list[dict[str, Any]]:
+        """Build per-file payload dicts (bytes or path) for the Dask worker entry point."""
         with self._lock:
             job = self._jobs[job_id]
             details = list(job.file_details)
@@ -750,6 +777,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         file_paths: list[str],
         job_config: dict[str, Any],
     ) -> None:
+        """Block on the Dask future, apply the result, and close the client in a daemon thread."""
         try:
             result = future.result()
             self._apply_dask_ingestion_result(job_id, result)
@@ -764,6 +792,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                 self._cleanup_paths(file_paths)
 
     def _apply_dask_ingestion_result(self, job_id: str, result: dict[str, Any]) -> None:
+        """Apply the Dask worker result dict to in-memory job and file tracking state."""
         file_results = {item.get("file_id"): item for item in result.get("files", [])}
         with self._lock:
             job = self._jobs[job_id]
@@ -806,6 +835,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         self._update_collection_timestamp(job.collection_name)
 
     def _mark_job_failed(self, job_id: str, error: str) -> None:
+        """Mark the job and all its files as failed with the given error message."""
         with self._lock:
             job = self._jobs[job_id]
             job.status = JobState.FAILED
@@ -816,6 +846,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                 self._mark_file(job, index, FileStatus.FAILED, error=error)
 
     def _cleanup_paths(self, file_paths: list[str]) -> None:
+        """Delete temporary files; silently ignores missing-file errors."""
         for file_path in file_paths:
             try:
                 os.unlink(file_path)
@@ -823,6 +854,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                 pass
 
     def get_job_status(self, job_id: str) -> IngestionJobStatus:
+        """Return a snapshot of the ingestion job status for the given job ID."""
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
@@ -845,6 +877,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         description: str | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> CollectionInfo:
+        """Create a new OpenSearch collection (index) and return its info."""
         index_name = self._ensure_index(name, description)
         meta = self._get_index_meta(index_name)
         if metadata:
@@ -853,6 +886,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         return self._collection_info_from_index(name, index_name, meta)
 
     def delete_collection(self, name: str) -> bool:
+        """Delete the collection index and all its documents; returns False if the index does not exist."""
         client = self._get_client()
         index_name = self._index_name_for_collection(name)
         try:
@@ -870,6 +904,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             return False
 
     def list_collections(self) -> list[CollectionInfo]:
+        """List all AIQ-managed OpenSearch collections visible under the configured index prefix."""
         client = self._get_client()
         pattern = f"{self.index_prefix}-*"
         try:
@@ -888,6 +923,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         return collections
 
     def get_collection(self, name: str) -> CollectionInfo | None:
+        """Return info for a single collection, or None if the index does not exist."""
         client = self._get_client()
         index_name = self._index_name_for_collection(name)
         try:
@@ -904,6 +940,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         collection_name: str,
         metadata: dict[str, Any] | None = None,
     ) -> FileInfo:
+        """Upload and begin ingesting a single file; returns a FileInfo with status INGESTING."""
         path = Path(file_path)
         file_id = str(uuid.uuid4())
         if not path.exists():
@@ -931,6 +968,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             return info.model_copy(deep=True)
 
     def delete_file(self, file_id: str, collection_name: str) -> bool:
+        """Delete all indexed chunks for the given file_id and remove in-memory tracking."""
         client = self._get_client()
         index_name = self._index_name_for_collection(collection_name)
         try:
@@ -1026,6 +1064,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         )
 
     def list_files(self, collection_name: str) -> list[FileInfo]:
+        """List all files in a collection using composite aggregation pagination."""
         client = self._get_client()
         index_name = self._index_name_for_collection(collection_name)
         # Paginate via a composite aggregation. terms+size silently drops buckets past
@@ -1108,6 +1147,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         return files
 
     def get_file_status(self, file_id: str, collection_name: str) -> FileInfo | None:
+        """Return the current FileInfo for a file, checking in-memory state before the index."""
         with self._lock:
             tracked = self._files.get(file_id)
             if tracked:
@@ -1128,11 +1168,13 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         return None
 
     def generate_summary(self, text_content: str, file_name: str) -> str | None:
+        """Generate a one-sentence document summary if the feature is enabled."""
         if not self.generate_summary_enabled:
             return None
         return _generate_document_summary(text_content, file_name, self.summary_llm)
 
     async def health_check(self) -> bool:
+        """Return True if the OpenSearch cluster is reachable."""
         try:
             return self._health_check_client()
         except Exception as e:
@@ -1146,6 +1188,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         collection_name: str,
         config: dict[str, Any],
     ) -> None:
+        """Background-thread body: chunk, embed, and bulk-index all files for a job."""
         try:
             with self._lock:
                 job = self._jobs[job_id]
@@ -1234,6 +1277,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         file_name: str,
         file_metadata: dict[str, Any] | None = None,
     ) -> tuple[list[dict[str, Any]], str]:
+        """Read, chunk, and annotate a file; returns (documents, summary_text) ready for indexing."""
         file_size = os.path.getsize(file_path)
         now = _utc_now().isoformat()
         documents = []
@@ -1277,6 +1321,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         return documents, "\n".join(summary_parts)
 
     def _bulk_index_documents(self, index_name: str, documents: list[dict[str, Any]]) -> None:
+        """Bulk-index documents into the given index in batches; raises on any bulk error."""
         client = self._get_client()
         for start in range(0, len(documents), self.bulk_batch_size):
             batch = documents[start : start + self.bulk_batch_size]
@@ -1299,6 +1344,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         chunks_created: int = 0,
         error: str | None = None,
     ) -> None:
+        """Update per-file status in both the job's file_details and the in-memory file tracking dict."""
         with self._lock:
             if file_index < len(job.file_details):
                 detail = job.file_details[file_index]
@@ -1321,6 +1367,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         index_name: str,
         meta: dict[str, Any],
     ) -> CollectionInfo:
+        """Build a CollectionInfo from an index name and its `_meta` dict."""
         client = self._get_client()
         chunk_count = 0
         try:
@@ -1347,6 +1394,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         )
 
     def _files_from_buckets(self, buckets: list[dict[str, Any]], collection_name: str) -> list[FileInfo]:
+        """Convert composite aggregation bucket dicts into FileInfo objects."""
         files: list[FileInfo] = []
         for bucket in buckets:
             # composite bucket keys are dicts ({"file_name": "..."}); legacy terms keys are scalars.
@@ -1381,6 +1429,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         return files
 
     def _resolve_file_name(self, file_id: str, collection_name: str) -> str:
+        """Look up the display file_name for a file_id; falls back to the file_id itself."""
         with self._lock:
             tracked = self._files.get(file_id)
             if tracked and tracked.collection_name == collection_name:
@@ -1398,6 +1447,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
     backend_name = "opensearch"
 
     def __init__(self, config: dict[str, Any] | None = None):
+        """Initialize the retriever, configuring the OpenSearch client and embedding model."""
         super().__init__(config)
         self._configure_opensearch()
         self.embed_model_name = self.config.get("embed_model", DEFAULT_EMBED_MODEL)
@@ -1407,6 +1457,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
         logger.info("OpenSearchRetriever initialized: endpoint=%s, auth_type=%s", self.endpoint, self.auth_type)
 
     def _embed_texts(self, texts: list[str]) -> list[list[float]]:
+        """Encode query texts using the configured embedding model; uses `input_type=query`."""
         try:
             from openai import OpenAI
         except ImportError as e:
@@ -1429,6 +1480,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
         top_k: int = 10,
         filters: dict[str, Any] | None = None,
     ) -> RetrievalResult:
+        """Embed the query and return the top-k nearest-neighbor chunks from the collection."""
         try:
             client = self._get_client()
             index_name = self._index_name_for_collection(collection_name)
@@ -1471,6 +1523,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
         top_k: int,
         filters: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        """Construct the kNN search request body with optional filter clause."""
         knn_body: dict[str, Any] = {
             "vector": query_embedding,
             "k": top_k,
@@ -1492,6 +1545,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
         }
 
     def _build_filter_query(self, filters: dict[str, Any] | None) -> dict[str, Any] | None:
+        """Convert a filter dict into an OpenSearch bool-filter clause, or None if no filters."""
         if not filters:
             return None
         if "filter" in filters and isinstance(filters["filter"], dict):
@@ -1508,6 +1562,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
         return {"bool": {"filter": clauses}}
 
     def normalize(self, raw_result: Any) -> Chunk | None:
+        """Convert a raw OpenSearch hit dict into a Chunk, returning None for non-dict inputs."""
         if not isinstance(raw_result, dict):
             return None
 
@@ -1538,12 +1593,14 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
         )
 
     async def health_check(self) -> bool:
+        """Return True if the OpenSearch cluster is reachable."""
         try:
             return self._health_check_client()
         except Exception:
             return False
 
     def _content_type_from_source(self, source: dict[str, Any]) -> ContentType:
+        """Map the stored content_type string to the ContentType enum, defaulting to TEXT."""
         raw_type = str(source.get("content_type", "text")).lower()
         if raw_type == ContentType.TABLE.value:
             return ContentType.TABLE
@@ -1554,6 +1611,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
         return ContentType.TEXT
 
     def _display_citation(self, file_name: str, page_number: Any) -> str:
+        """Format a citation string from file_name and optional page_number."""
         if page_number:
             return f"{file_name}, p.{page_number}"
         return file_name
