@@ -1047,7 +1047,16 @@ Configuration values are resolved in the following order (highest to lowest prio
 | `OPENSEARCH_DASK_FILE_TRANSFER` | opensearch | Dask file transfer mode: `bytes` or `paths` |
 | `OPENSEARCH_ALLOW_DOCUMENT_IDS` | opensearch | Override explicit document ID behavior; defaults off for AOSS |
 | `OPENSEARCH_BULK_REFRESH` | opensearch | Override bulk refresh behavior; defaults off for AOSS |
+| `OPENSEARCH_VERIFY_CERTS` | opensearch | Verify OpenSearch TLS certificates (default `true`; set `false` only for trusted dev clusters) |
+| `OPENSEARCH_EMBEDDING_DIM` | opensearch | Embedding vector dimension for knn_vector mappings (default `2048`; must match your embedding model) |
+| `OPENSEARCH_CHUNK_SIZE` | opensearch | Approximate words per text chunk (default `1024`) |
+| `OPENSEARCH_CHUNK_OVERLAP` | opensearch | Overlapping words between chunks (default `128`) |
+| `OPENSEARCH_TIMEOUT` | opensearch | Request timeout in seconds (default `120`) |
+| `OPENSEARCH_BULK_BATCH_SIZE` | opensearch | Documents per bulk index request (default `100`) |
+| `OPENSEARCH_EMBEDDING_BATCH_SIZE` | opensearch | Texts per embedding request (default `16`) |
 | `COLLECTION_NAME` | All | Default collection name |
+
+> **Advanced OpenSearch options:** Additional tuning parameters (kNN index settings `OPENSEARCH_ENGINE`, `OPENSEARCH_SPACE_TYPE`, `OPENSEARCH_M`, `OPENSEARCH_EF_CONSTRUCTION`, `OPENSEARCH_EF_SEARCH`; field name overrides `OPENSEARCH_VECTOR_FIELD`, `OPENSEARCH_TEXT_FIELD`; AOSS delete tuning `OPENSEARCH_AOSS_DELETE_MAX_BATCHES`, `OPENSEARCH_AOSS_DELETE_BACKOFF_SECONDS`; and `OPENSEARCH_MAX_RETRIES`) are available via YAML config or environment variable — see `sources/knowledge_layer/src/register.py` for defaults and descriptions.
 
 ---
 
