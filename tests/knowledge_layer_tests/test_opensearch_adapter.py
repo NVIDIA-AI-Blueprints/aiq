@@ -310,6 +310,7 @@ def test_opensearch_backend_registers_with_factory():
     from aiq_agent.knowledge.factory import get_retriever
 
     factory._INGESTOR_INSTANCES.pop("opensearch", None)
+    factory._RETRIEVER_INSTANCES.pop("opensearch", None)
 
     ingestor = get_ingestor("opensearch", {"endpoint": "localhost:9200"})
     retriever = get_retriever("opensearch", {"endpoint": "localhost:9200"})
