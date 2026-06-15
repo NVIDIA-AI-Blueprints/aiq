@@ -1340,6 +1340,39 @@ class TestAsyncJobRunnerAgentFactory:
         assert provider.get(LLMRole.REPORT_WRITER) is llms["writer"]
         assert builder.get_llm.await_count == 5
 
+    @pytest.mark.asyncio
+    async def test_create_llm_provider_reuses_shared_llm_refs(self):
+        """Shared role/default LLM refs should initialize one wrapper instance."""
+        from types import SimpleNamespace
+
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_llm_provider
+
+        shared_llm = MagicMock(name="shared_llm")
+
+        async def get_llm(llm_ref, wrapper_type):
+            assert llm_ref == "shared"
+            return shared_llm
+
+        builder = MagicMock()
+        builder.get_llm = AsyncMock(side_effect=get_llm)
+        fn_config = SimpleNamespace(
+            source_router_llm="shared",
+            planner_llm="shared",
+            researcher_llm="shared",
+            writer_llm="shared",
+            llm="shared",
+        )
+
+        provider, default_llm = await _create_llm_provider(builder, fn_config)
+
+        assert default_llm is shared_llm
+        assert provider.get(LLMRole.ROUTER) is shared_llm
+        assert provider.get(LLMRole.PLANNER) is shared_llm
+        assert provider.get(LLMRole.RESEARCHER) is shared_llm
+        assert provider.get(LLMRole.REPORT_WRITER) is shared_llm
+        builder.get_llm.assert_awaited_once()
+
     def test_create_agent_instance_passes_config_and_job_id_when_supported(self):
         """Async workers can receive generic function config without runner-specific agent knowledge."""
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig

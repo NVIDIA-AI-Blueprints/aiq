@@ -227,6 +227,7 @@ def test_shipped_domain_catalog_source_ids_match_domain_routing_config():
     catalog_path = repo_root / "configs" / "domain_catalogs" / "deep_research_domain_catalog.yml"
     config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     source_entries = config["functions"]["data_sources"]["sources"]
+    reset_registry()
     populate_from_config(source_entries)
     tools = [
         SimpleNamespace(name=tool_name, description="")

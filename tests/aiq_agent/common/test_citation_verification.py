@@ -573,6 +573,17 @@ class TestVerifyCitations:
         assert len(result.valid_citations) == 2
         assert not result.removed_citations
 
+    def test_missing_references_section_strips_unresolved_inline_citations(self, registry):
+        report = "Finding one [1]. Missing source [3]. Finding two [2]."
+        result = verify_citations(report, registry, reference_sources=registry.all_sources()[:2])
+
+        assert "Missing source ." in result.verified_report
+        assert "[3]" not in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
     def test_missing_references_section_uses_reference_sources_not_registry_order(self):
         reg = SourceRegistry()
         unused = SourceEntry(url="https://valid.com/unused", title="Unused", source_type="tavily")
@@ -730,6 +741,31 @@ class TestVerifyCitations:
         assert "[2]" not in result.verified_report
         # [1] stays as [1]
         assert "[1]" in result.verified_report
+
+    def test_unreferenced_inline_citation_removed(self, registry):
+        report = "Good finding [1]. Missing reference [3].\n\n## Sources\n[1] Article 1: https://valid.com/article1"
+        result = verify_citations(report, registry)
+
+        assert "Missing reference ." in result.verified_report
+        assert "[3]" not in result.verified_report
+        assert len(result.valid_citations) == 1
+        assert not result.removed_citations
+
+    def test_unreferenced_inline_citation_removed_with_invalid_reference(self, registry):
+        report = (
+            "Good finding [1]. Bad finding [2]. Missing reference [3].\n\n"
+            "## Sources\n"
+            "[1] Article 1: https://valid.com/article1\n"
+            "[2] Fake Source: https://fake.com/nonexistent"
+        )
+        result = verify_citations(report, registry)
+
+        assert "Bad finding ." in result.verified_report
+        assert "Missing reference ." in result.verified_report
+        assert "[2]" not in result.verified_report
+        assert "[3]" not in result.verified_report
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 1
 
     def test_removal_leaves_gaps_for_sanitize(self, registry):
         """verify_citations removes invalid refs but does NOT renumber — gaps are left for sanitize_report."""

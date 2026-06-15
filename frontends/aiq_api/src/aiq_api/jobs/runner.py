@@ -202,17 +202,22 @@ async def _create_llm_provider(builder: Any, fn_config: Any) -> tuple[Any, Any]:
         (LLMRole.RESEARCHER, "researcher_llm"),
         (LLMRole.REPORT_WRITER, "writer_llm"),
     )
+    llm_cache: dict[Any, Any] = {}
     role_llms = {}
     for role, config_attr in role_config_attrs:
         llm_ref = getattr(fn_config, config_attr, None)
         if llm_ref:
-            role_llms[role] = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            if llm_ref not in llm_cache:
+                llm_cache[llm_ref] = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            role_llms[role] = llm_cache[llm_ref]
 
     default_llm = role_llms.get(LLMRole.ORCHESTRATOR)
     if default_llm is None:
         llm_ref = getattr(fn_config, "llm", None)
         if llm_ref:
-            default_llm = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            if llm_ref not in llm_cache:
+                llm_cache[llm_ref] = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            default_llm = llm_cache[llm_ref]
 
     provider = LLMProvider()
     provider.set_default(default_llm)
