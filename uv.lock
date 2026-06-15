@@ -1348,6 +1348,14 @@ wheels = [
 ]
 
 [[package]]
+name = "events"
+version = "0.5"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/25/ed/e47dec0626edd468c84c04d97769e7ab4ea6457b7f54dcb3f72b17fcd876/Events-0.5-py3-none-any.whl", hash = "sha256:a7286af378ba3e46640ac9825156c93bdba7502174dd696090fdfcd4d80a1abd", size = 6758, upload-time = "2023-07-31T08:23:13.645Z" },
+]
+
+[[package]]
 name = "exa-py"
 version = "1.16.1"
 source = { registry = "https://pypi.org/simple" }
@@ -2243,14 +2251,18 @@ dependencies = [
 
 [package.optional-dependencies]
 all = [
+    { name = "boto3" },
     { name = "chromadb" },
+    { name = "distributed" },
     { name = "docx2txt" },
     { name = "llama-index" },
     { name = "llama-index-embeddings-nvidia" },
     { name = "llama-index-vector-stores-chroma" },
     { name = "openai" },
+    { name = "opensearch-py" },
     { name = "pdfplumber" },
     { name = "pillow" },
+    { name = "pypdf" },
     { name = "pypdfium2" },
     { name = "python-pptx" },
     { name = "requests" },
@@ -2273,28 +2285,44 @@ llamaindex = [
     { name = "pillow" },
     { name = "pypdfium2" },
 ]
+opensearch = [
+    { name = "boto3" },
+    { name = "distributed" },
+    { name = "docx2txt" },
+    { name = "openai" },
+    { name = "opensearch-py" },
+    { name = "pypdf" },
+    { name = "python-pptx" },
+]
 
 [package.metadata]
 requires-dist = [
+    { name = "boto3", marker = "extra == 'opensearch'", specifier = ">=1.28.0" },
     { name = "chromadb", marker = "extra == 'llamaindex'", specifier = ">=0.4.0" },
+    { name = "distributed", marker = "extra == 'opensearch'", specifier = ">=2024.1.0" },
     { name = "docx2txt", marker = "extra == 'foundational-rag'", specifier = ">=0.8" },
     { name = "docx2txt", marker = "extra == 'llamaindex'", specifier = ">=0.8" },
+    { name = "docx2txt", marker = "extra == 'opensearch'", specifier = ">=0.8" },
     { name = "httpx", specifier = ">=0.24.0" },
-    { name = "knowledge-layer", extras = ["llamaindex", "foundational-rag"], marker = "extra == 'all'", editable = "sources/knowledge_layer" },
+    { name = "knowledge-layer", extras = ["llamaindex", "foundational-rag", "opensearch"], marker = "extra == 'all'", editable = "sources/knowledge_layer" },
     { name = "llama-index", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "llama-index-embeddings-nvidia", marker = "extra == 'llamaindex'", specifier = ">=0.1.0" },
     { name = "llama-index-vector-stores-chroma", marker = "extra == 'llamaindex'", specifier = ">=0.1.0" },
     { name = "openai", marker = "extra == 'llamaindex'", specifier = ">=1.0.0" },
+    { name = "openai", marker = "extra == 'opensearch'", specifier = ">=1.0.0" },
+    { name = "opensearch-py", marker = "extra == 'opensearch'", specifier = ">=2.4.0" },
     { name = "pdfplumber", marker = "extra == 'llamaindex'", specifier = ">=0.10.0" },
     { name = "pillow", marker = "extra == 'llamaindex'", specifier = ">=9.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
+    { name = "pypdf", marker = "extra == 'opensearch'", specifier = ">=4.0.0" },
     { name = "pypdfium2", marker = "extra == 'llamaindex'", specifier = ">=5.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-pptx", marker = "extra == 'foundational-rag'", specifier = ">=0.6.21" },
+    { name = "python-pptx", marker = "extra == 'opensearch'", specifier = ">=0.6.21" },
     { name = "requests", marker = "extra == 'foundational-rag'", specifier = ">=2.28.0" },
     { name = "urllib3", marker = "extra == 'foundational-rag'", specifier = ">=2.7.0,<3" },
 ]
-provides-extras = ["llamaindex", "foundational-rag", "all"]
+provides-extras = ["llamaindex", "foundational-rag", "opensearch", "all"]
 
 [[package]]
 name = "kubernetes"
@@ -3957,6 +3985,35 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/5a/91/f67c1971deaf5b75dea84731393bca2042ff4a46acae9a727dfe267dd568/openinference_semantic_conventions-0.1.26.tar.gz", hash = "sha256:34dae06b40743fb7b846a36fd402810a554b2ec4ee96b9dd8b820663aee4a1f1", size = 12782, upload-time = "2026-02-01T01:09:46.095Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/6b/ca/bb4b9cbd96f72600abec5280cf8ed67bcd849ed19b8bec919aec97adb61c/openinference_semantic_conventions-0.1.26-py3-none-any.whl", hash = "sha256:35b4f487d18ac7d016125c428c0d950dd290e18dafb99787880a9b2e05745f42", size = 10401, upload-time = "2026-02-01T01:09:44.781Z" },
+]
+
+[[package]]
+name = "opensearch-protobufs"
+version = "1.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "grpcio" },
+    { name = "protobuf" },
+]
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d8/2f/e0cc165af7bb7b44cb00023b9fcaa01a28d1755a059ede28d0cd970c3cec/opensearch_protobufs-1.2.0-py3-none-any.whl", hash = "sha256:e806730894d0a0c8cdaa3cdbe07e4b7c46e1823f453777b36caf39e9cba28e2c", size = 54751, upload-time = "2026-01-22T18:51:56.805Z" },
+]
+
+[[package]]
+name = "opensearch-py"
+version = "3.2.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "events" },
+    { name = "opensearch-protobufs" },
+    { name = "python-dateutil" },
+    { name = "requests" },
+    { name = "urllib3" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/82/9e/e77844cb2d625ca32331bfdd28930113b3778399c01dd5f1c350ceb55e65/opensearch_py-3.2.0.tar.gz", hash = "sha256:f40fb3a295275422df2ad6d9459f667af94472d5a9e567072e9ecf163eb22613", size = 259927, upload-time = "2026-04-27T18:17:50.467Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ef/63/7abb96bf2e3619acbd27de99e60619bfacfb7c55b68c4792a258e6d92871/opensearch_py-3.2.0-py3-none-any.whl", hash = "sha256:721a0d3b13fbed9e82278aed748285cf63a1855354ab7e73e3d4992d1b93418b", size = 387286, upload-time = "2026-04-27T18:17:48.658Z" },
 ]
 
 [[package]]
