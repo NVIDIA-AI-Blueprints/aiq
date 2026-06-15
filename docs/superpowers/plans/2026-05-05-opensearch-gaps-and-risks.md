@@ -174,7 +174,7 @@ use the LlamaIndex backend or Foundational RAG.
 
 ```
 
-```
+```markdown
 
 - [ ] **Step 3: Render docs and verify**
 
@@ -257,7 +257,7 @@ populate. This is also why the live-test suite includes a polling visibility wai
 
 ```
 
-```
+```markdown
 
 - [ ] **Step 2: Render docs**
 

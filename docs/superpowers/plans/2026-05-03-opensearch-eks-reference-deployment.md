@@ -99,7 +99,7 @@ association on the `aiq-backend` service account. Each Dask worker constructs it
 client, so SigV4 signing happens in the worker's process — no signer state is serialized across
 the cluster.
 
-```
+```text
 
 (The triple-backtick `{mermaid}` fence is the MyST/Sphinx mermaid directive.)
 
@@ -165,7 +165,7 @@ aws eks describe-addon --cluster-name <cluster-name> --addon-name eks-pod-identi
 
 Expected: `ACTIVE`.
 
-```
+```text
 
 - [ ] **Step 2: Render and confirm**
 
@@ -252,7 +252,7 @@ aws opensearchserverless batch-get-collection \
 Expected output: `ACTIVE   https://abc123.<region>.aoss.amazonaws.com`. Save the endpoint — it
 is the `OPENSEARCH_URL` value used in Helm values.
 
-```
+```text
 
 - [ ] **Step 2: Render and confirm three numbered subsections appear**
 
@@ -350,7 +350,7 @@ aws iam get-role --role-name aiq-opensearch-role --query 'Role.Arn' --output tex
 
 ```
 
-```
+```text
 
 - [ ] **Step 2: Render and verify both JSON code fences highlight as JSON**
 
@@ -450,7 +450,7 @@ The same service account is used by the embedded Dask scheduler and worker, so S
 credentials are available throughout the ingestion pipeline. No service-account annotation is
 required — Pod Identity does not use OIDC trust like IRSA.
 
-```
+```text
 
 - [ ] **Step 2: Render and confirm both new H2 sections appear in the page TOC**
 
@@ -541,7 +541,7 @@ The secret name `ngc-image-pull-secret` matches the
 [`deploy/helm/examples/aws-opensearch-serverless-values.yaml`](../../../deploy/helm/examples/aws-opensearch-serverless-values.yaml)
 `imagePullSecrets` entry. Change both if you use a different name.
 
-```
+```text
 
 - [ ] **Step 3: Render and confirm both files**
 
@@ -627,7 +627,7 @@ The embedding model dimension must match `OPENSEARCH_EMBEDDING_DIM` in the workf
 (default `2048` for `nvidia/llama-nemotron-embed-vl-1b-v2`). Mismatched dimensions surface
 as `mapper_parsing_exception` on the first ingest.
 
-```
+```text
 
 - [ ] **Step 3: Render and verify**
 
@@ -728,7 +728,7 @@ curl -sf -X POST http://localhost:8000/v1/chat/completions \
 
 Expected: response includes content from `README.md` with citations.
 
-```
+```text
 
 - [ ] **Step 2: Render and verify the H3 anchors render**
 
@@ -794,7 +794,7 @@ aws opensearchserverless batch-get-collection --names "$COLLECTION" \
 
 ```
 
-```
+```text
 
 - [ ] **Step 2: Render**
 
