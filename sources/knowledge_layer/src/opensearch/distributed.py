@@ -110,11 +110,12 @@ def run_opensearch_ingestion_task(
 
     ingestor._update_collection_timestamp(collection_name)
     failed_count = sum(1 for item in file_results if item["status"] == "failed")
+    all_failed = bool(file_results) and failed_count == len(file_results)
     return {
-        "status": "failed" if failed_count == len(file_results) else "completed",
+        "status": "failed" if all_failed else "completed",
         "files": file_results,
         "total_chunks": total_chunks,
         "index_name": index_name,
         "embedding_model": ingestor.embed_model_name,
-        "error_message": "All files failed ingestion" if failed_count == len(file_results) else None,
+        "error_message": "All files failed ingestion" if all_failed else None,
     }
