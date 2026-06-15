@@ -102,34 +102,39 @@ class FakeOpenSearchClient:
             docs = self.docs.get(index, {})
             aggs = (body or {}).get("aggs") or {}
             if "by_file" in aggs:
-                # List-files composite aggregation: group by field, paginate via after_key.
+                # List-files composite aggregation: group by (file_id, file_name), paginate via after_key.
                 by_file = aggs["by_file"]
                 composite = by_file.get("composite") or {}
-                source_field = composite["sources"][0]["file_name"]["terms"]["field"]
+                # Extract ordered source aliases and their index fields.
+                sources = composite.get("sources", [])
+                source_aliases = [list(s.keys())[0] for s in sources]
+                source_fields = {alias: list(src.values())[0]["terms"]["field"] for src in sources for alias in src}
                 page_size = int(composite.get("size", 10))
                 after_key = composite.get("after") or {}
-                after_value = after_key.get("file_name")
                 source_filter = by_file["aggs"]["doc"]["top_hits"].get("_source")
-                grouped: dict[str, list[dict[str, Any]]] = {}
+                grouped: dict[tuple, list[dict[str, Any]]] = {}
                 for doc_id, doc in docs.items():
-                    grouped.setdefault(doc.get(source_field, "unknown"), []).append({"_id": doc_id, "_source": doc})
+                    key_tuple = tuple(doc.get(source_fields[a], "unknown") for a in source_aliases)
+                    grouped.setdefault(key_tuple, []).append({"_id": doc_id, "_source": doc})
                 # composite iterates keys in deterministic (sorted) order.
                 ordered_keys = sorted(grouped)
-                if after_value is not None:
-                    ordered_keys = [k for k in ordered_keys if k > after_value]
+                if after_key:
+                    after_tuple = tuple(after_key.get(a, "") for a in source_aliases)
+                    ordered_keys = [k for k in ordered_keys if k > after_tuple]
                 page_keys = ordered_keys[:page_size]
                 buckets = []
-                for key in page_keys:
-                    group_docs = grouped[key]
+                for key_tuple in page_keys:
+                    group_docs = grouped[key_tuple]
                     ct_counts: dict[str, int] = {}
                     for hit in group_docs:
                         ct = hit["_source"].get("content_type")
                         if ct:
                             ct_counts[ct] = ct_counts.get(ct, 0) + 1
                     top_source = self._filter_source(group_docs[0]["_source"], source_filter)
+                    key_dict = {alias: key_tuple[i] for i, alias in enumerate(source_aliases)}
                     buckets.append(
                         {
-                            "key": {"file_name": key},
+                            "key": key_dict,
                             "doc_count": len(group_docs),
                             "doc": {"hits": {"hits": [{"_source": top_source}]}},
                             "content_types": {"buckets": [{"key": k, "doc_count": v} for k, v in ct_counts.items()]},
@@ -138,7 +143,8 @@ class FakeOpenSearchClient:
                 agg_result: dict[str, Any] = {"buckets": buckets}
                 # Emit after_key only when more pages remain — mirrors real OpenSearch.
                 if len(page_keys) == page_size and len(ordered_keys) > page_size:
-                    agg_result["after_key"] = {"file_name": page_keys[-1]}
+                    last = page_keys[-1]
+                    agg_result["after_key"] = {alias: last[i] for i, alias in enumerate(source_aliases)}
                 return {"hits": {"hits": []}, "aggregations": {"by_file": agg_result}}
             hits = []
             for doc_id, source_doc in docs.items():
@@ -154,11 +160,12 @@ class FakeOpenSearchClient:
         conflicts: str = "proceed",
     ) -> dict[str, int]:
         del refresh, conflicts
-        should_terms = body["query"]["bool"]["should"]
+        bool_query = body["query"]["bool"]
+        match_terms = bool_query.get("filter") or bool_query.get("should") or []
         deleted = 0
         with self.lock:
             for doc_id, doc in list(self.docs.get(index, {}).items()):
-                if any(self._matches_term(doc, term.get("term", {})) for term in should_terms):
+                if any(self._matches_term(doc, term.get("term", {})) for term in match_terms):
                     self.docs[index].pop(doc_id, None)
                     deleted += 1
         return {"deleted": deleted}
@@ -976,7 +983,7 @@ def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
                     # No after_key — single page, iteration terminates.
                     "buckets": [
                         {
-                            "key": {"file_name": "huge.pdf"},
+                            "key": {"file_id": "f1", "file_name": "huge.pdf"},
                             "doc_count": 50_000,
                             "doc": {
                                 "hits": {
@@ -997,7 +1004,7 @@ def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
                             "content_types": {"buckets": [{"key": "text", "doc_count": 50_000}]},
                         },
                         {
-                            "key": {"file_name": "small.md"},
+                            "key": {"file_id": "f2", "file_name": "small.md"},
                             "doc_count": 3,
                             "doc": {
                                 "hits": {
@@ -1065,12 +1072,12 @@ def test_list_files_paginates_composite_until_after_key_exhausted(monkeypatch):
         composite = body["aggs"]["by_file"]["composite"]
         after = composite.get("after")
         search_calls.append(after)
-        after_value = (after or {}).get("file_name")
+        after_value = (after or {}).get("file_id")
         remaining = [name for name in all_files if after_value is None or name > after_value]
         page = remaining[:page_size]
         buckets = [
             {
-                "key": {"file_name": name},
+                "key": {"file_id": name, "file_name": name},
                 "doc_count": 1,
                 "doc": {"hits": {"hits": [{"_source": {"file_id": name, "file_name": name}}]}},
                 "content_types": {"buckets": []},
@@ -1079,7 +1086,7 @@ def test_list_files_paginates_composite_until_after_key_exhausted(monkeypatch):
         ]
         agg: dict[str, Any] = {"buckets": buckets}
         if len(page) == page_size and len(remaining) > page_size:
-            agg["after_key"] = {"file_name": page[-1]}
+            agg["after_key"] = {"file_id": page[-1], "file_name": page[-1]}
         return {"hits": {"hits": []}, "aggregations": {"by_file": agg}}
 
     fake_client = type("C", (), {})()
@@ -1094,8 +1101,8 @@ def test_list_files_paginates_composite_until_after_key_exhausted(monkeypatch):
     # First call has no after; subsequent calls carry the cursor; the run that returns
     # < page_size buckets ends the loop without another request.
     assert search_calls[0] is None
-    assert search_calls[1] == {"file_name": "f02.txt"}
-    assert search_calls[2] == {"file_name": "f05.txt"}
+    assert search_calls[1] == {"file_id": "f02.txt", "file_name": "f02.txt"}
+    assert search_calls[2] == {"file_id": "f05.txt", "file_name": "f05.txt"}
     assert len(search_calls) == 3, f"expected 3 paginated requests, got {len(search_calls)}"
 
 

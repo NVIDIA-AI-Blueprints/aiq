@@ -24,6 +24,7 @@ supports three authentication modes:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -549,7 +550,13 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         requested_file_id = job_config.get("file_id")
         file_metadata = job_config.get("metadata") or {}
 
-        validated_paths = [path for path in file_paths if os.path.exists(path)]
+        # Keep original_filenames aligned with file_paths by pairing before filtering.
+        validated = [
+            (path, original_filenames[i] if i < len(original_filenames) else Path(path).name)
+            for i, path in enumerate(file_paths)
+            if os.path.exists(path)
+        ]
+        validated_paths = [p for p, _ in validated]
         if not validated_paths:
             job = IngestionJobStatus(
                 job_id=job_id,
@@ -567,8 +574,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             return job_id
 
         file_details = []
-        for i, path in enumerate(validated_paths):
-            file_name = original_filenames[i] if i < len(original_filenames) else Path(path).name
+        for path, file_name in validated:
             file_id = requested_file_id if requested_file_id and len(validated_paths) == 1 else str(uuid.uuid4())
             file_details.append(
                 FileProgress(
@@ -1426,7 +1432,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
         try:
             client = self._get_client()
             index_name = self._index_name_for_collection(collection_name)
-            if not client.indices.exists(index=index_name):
+            if not await asyncio.to_thread(client.indices.exists, index=index_name):
                 return RetrievalResult(
                     chunks=[],
                     query=query,
@@ -1435,9 +1441,9 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
                     error_message=f"Collection '{collection_name}' not found",
                 )
 
-            query_embedding = self._embed_texts([query])[0]
+            query_embedding = (await asyncio.to_thread(self._embed_texts, [query]))[0]
             body = self._build_search_body(query_embedding, top_k or self.default_top_k, filters)
-            response = client.search(index=index_name, body=body, request_timeout=self.timeout)
+            response = await asyncio.to_thread(client.search, index=index_name, body=body, request_timeout=self.timeout)
             chunks = [
                 chunk for chunk in (self.normalize(hit) for hit in response.get("hits", {}).get("hits", [])) if chunk
             ]
