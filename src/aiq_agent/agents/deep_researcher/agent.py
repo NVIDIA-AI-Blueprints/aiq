@@ -100,7 +100,15 @@ class DeepResearcherAgent:
         if config is not None:
             skills = skills or getattr(config, "skills", None)
             sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
+            domain_catalog_path = getattr(config, "domain_catalog_path", domain_catalog_path)
             enable_source_router = getattr(config, "enable_source_router", enable_source_router)
+            max_research_concurrency = getattr(config, "max_research_concurrency", max_research_concurrency)
+            max_concurrent_source_tool_calls = getattr(
+                config,
+                "max_concurrent_source_tool_calls",
+                max_concurrent_source_tool_calls,
+            )
+            max_source_tool_batch_size = getattr(config, "max_source_tool_batch_size", max_source_tool_batch_size)
 
         self.max_research_concurrency = max_research_concurrency
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
@@ -217,7 +225,11 @@ class DeepResearcherAgent:
             # Post-process: verify citations against source registry
             if self.source_registry_middleware.has_sources():
                 registry = self.source_registry_middleware.active_registry()
-                verification = verify_citations(final_message, registry)
+                verification = verify_citations(
+                    final_message,
+                    registry,
+                    reference_sources=self.source_registry_middleware.get_source_entries(mode="compact"),
+                )
                 if verification.removed_citations:
                     removed_details = []
                     for c in verification.removed_citations:
@@ -231,7 +243,11 @@ class DeepResearcherAgent:
                     )
                 final_message = verification.verified_report
                 if not verification.valid_citations:
-                    raise ValueError("writer-agent output contains no valid citations")
+                    logger.warning(
+                        "Citation verification found no valid citations in writer-agent output; "
+                        "returning the generated report without failing the job. "
+                        "This may indicate unsupported citation formatting or over-aggressive verification."
+                    )
             else:
                 from aiq_agent.common.tool_validation import validate_tool_availability
 

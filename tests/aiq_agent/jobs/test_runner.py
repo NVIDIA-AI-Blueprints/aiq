@@ -1302,6 +1302,44 @@ class TestSQLAlchemyPoolFilter:
 class TestAsyncJobRunnerAgentFactory:
     """Tests for async job agent construction."""
 
+    @pytest.mark.asyncio
+    async def test_create_llm_provider_configures_deep_research_roles(self):
+        """Async workers honor all deep-research role-specific LLM config fields."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_llm_provider
+
+        llms = {
+            "orchestrator": MagicMock(name="orchestrator_llm"),
+            "router": MagicMock(name="source_router_llm"),
+            "planner": MagicMock(name="planner_llm"),
+            "researcher": MagicMock(name="researcher_llm"),
+            "writer": MagicMock(name="writer_llm"),
+        }
+
+        async def get_llm(llm_ref, wrapper_type):
+            return llms[llm_ref]
+
+        builder = MagicMock()
+        builder.get_llm = AsyncMock(side_effect=get_llm)
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="orchestrator",
+            source_router_llm="router",
+            planner_llm="planner",
+            researcher_llm="researcher",
+            writer_llm="writer",
+        )
+
+        provider, default_llm = await _create_llm_provider(builder, fn_config)
+
+        assert default_llm is llms["orchestrator"]
+        assert provider.get(LLMRole.ORCHESTRATOR) is llms["orchestrator"]
+        assert provider.get(LLMRole.ROUTER) is llms["router"]
+        assert provider.get(LLMRole.PLANNER) is llms["planner"]
+        assert provider.get(LLMRole.RESEARCHER) is llms["researcher"]
+        assert provider.get(LLMRole.REPORT_WRITER) is llms["writer"]
+        assert builder.get_llm.await_count == 5
+
     def test_create_agent_instance_passes_config_and_job_id_when_supported(self):
         """Async workers can receive generic function config without runner-specific agent knowledge."""
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
@@ -1350,6 +1388,44 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.config.skills.agent_sources == {}
         assert agent.config.sandbox is not None
         assert agent.config.sandbox.app_name == "async-aiq"
+
+    def test_async_deep_researcher_constructor_applies_config_tuning(self):
+        """Async config= construction preserves catalog and concurrency settings."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMProvider
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        mock_llm = MagicMock()
+        provider = LLMProvider()
+        provider.set_default(mock_llm)
+        provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            max_research_concurrency=2,
+            max_concurrent_source_tool_calls=3,
+            max_source_tool_batch_size=4,
+        )
+
+        agent = _create_agent_instance(
+            agent_cls=DeepResearcherAgent,
+            llm_provider=provider,
+            llm=mock_llm,
+            tools=[],
+            fn_config=fn_config,
+            verbose=False,
+            callbacks=[],
+            job_id="async-job-123",
+        )
+
+        assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
+        assert agent.enable_source_router is False
+        assert agent.max_research_concurrency == 2
+        assert agent.max_concurrent_source_tool_calls == 3
+        assert agent.max_source_tool_batch_size == 4
 
     def test_async_deep_researcher_constructor_preserves_writer_skills(self):
         """Async job construction preserves writer-only skills and sandbox job scoping."""

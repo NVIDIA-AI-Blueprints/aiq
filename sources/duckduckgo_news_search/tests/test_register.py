@@ -19,6 +19,7 @@ import sys
 import types
 from unittest.mock import MagicMock
 
+from ddgs.exceptions import DDGSException
 from duckduckgo_news_search.register import DuckDuckGoNewsSearchToolConfig
 from duckduckgo_news_search.register import _format_news_result
 from duckduckgo_news_search.register import duckduckgo_news_search
@@ -47,7 +48,11 @@ class _FakeDDGS:
 def _install_fake_ddgs(monkeypatch, fake):
     module = types.ModuleType("ddgs")
     module.DDGS = MagicMock(return_value=fake)
+    exceptions_module = types.ModuleType("ddgs.exceptions")
+    exceptions_module.DDGSException = DDGSException
+    module.exceptions = exceptions_module
     monkeypatch.setitem(sys.modules, "ddgs", module)
+    monkeypatch.setitem(sys.modules, "ddgs.exceptions", exceptions_module)
     return module
 
 
@@ -144,6 +149,18 @@ class TestDuckDuckGoNewsSearchLive:
             output = await info.single_fn("AI agents")
 
         assert output == "News search returned no results"
+
+    async def test_ddgs_no_results_exception_returns_clear_message(self, monkeypatch):
+        fake = _FakeDDGS(DDGSException("No results found."))
+        _install_fake_ddgs(monkeypatch, fake)
+
+        config = DuckDuckGoNewsSearchToolConfig(max_retries=1)
+        builder = MagicMock()
+        async with duckduckgo_news_search(config, builder) as info:
+            output = await info.single_fn("AI agents")
+
+        assert output == "News search returned no results"
+        assert len(fake.calls) == 1
 
     async def test_timeout_triggers_retry(self, monkeypatch):
         fake = _FakeDDGS(Exception("Timeout"))

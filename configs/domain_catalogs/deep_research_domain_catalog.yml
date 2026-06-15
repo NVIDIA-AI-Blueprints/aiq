@@ -36,7 +36,6 @@ domains:
     domain_name: Scholarly and Technical Research
     description: Scientific, engineering, medical, benchmark, method, paper, and standards-heavy questions.
     preferred_source_ids:
-      - academic_search
       - paper_search
       - web_search
       - knowledge_layer

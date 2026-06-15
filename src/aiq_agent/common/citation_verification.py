@@ -35,6 +35,7 @@ import re
 import threading
 from collections import OrderedDict
 from collections.abc import Callable
+from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from html import unescape
@@ -449,6 +450,9 @@ def extract_sources_from_tool_result(
     if entries:
         return entries
 
+    if _is_non_citable_status_output(content):
+        return []
+
     # Non-URL fallback: register the tool result itself as a source whenever
     # the tool produced non-empty output. The caller has already decided
     # this tool is eligible to contribute sources (typically by limiting
@@ -457,6 +461,16 @@ def extract_sources_from_tool_result(
         return [SourceEntry(citation_key=tool_name, source_type="tool_result", tool_name=tool_name)]
 
     return []
+
+
+def _is_non_citable_status_output(content: str) -> bool:
+    """Return whether content is a tool status/error message, not evidence."""
+    normalized = re.sub(r"\s+", " ", content.strip()).rstrip(".").lower()
+    if not normalized:
+        return False
+    if normalized.startswith("error:"):
+        return True
+    return normalized == "search returned no results" or normalized.endswith(" search returned no results")
 
 
 # ---------------------------------------------------------------------------
@@ -586,6 +600,7 @@ _REFERENCE_SECTION_RE = re.compile(
 )
 
 _CITATION_LINE_RE = re.compile(r"^\s*[-*]?\s*\[(\d+)\]\s*(.+)$", re.MULTILINE)
+_ORDERED_REFERENCE_LINE_RE = re.compile(r"^(\s*)(\d+)[.)]\s+(.+)$", re.MULTILINE)
 _INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
 _FOOTNOTE_REFERENCE_LINE_RE = re.compile(r"^\s*\[\^(\d+)\]:?\s*", re.MULTILINE)
 _FOOTNOTE_INLINE_CITATION_RE = re.compile(r"\[\^(\d+)\]")
@@ -648,6 +663,11 @@ def _normalize_citation_syntax(report_text: str) -> str:
     return _FOOTNOTE_INLINE_CITATION_RE.sub(r"[\1]", report_text)
 
 
+def _normalize_ordered_reference_lines(ref_section: str) -> str:
+    """Convert ordered-list reference lines to the verifier's canonical [N] form."""
+    return _ORDERED_REFERENCE_LINE_RE.sub(r"\1[\2] \3", ref_section)
+
+
 def _renumber_citations(body: str, ref_section: str) -> tuple[str, str, dict[int, int]]:
     """Renumber [N] citations sequentially, closing any gaps.
 
@@ -682,7 +702,12 @@ def _renumber_citations(body: str, ref_section: str) -> tuple[str, str, dict[int
     return body, ref_section, renumber_map
 
 
-def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVerificationResult:
+def verify_citations(
+    report_text: str,
+    registry: SourceRegistry,
+    *,
+    reference_sources: Sequence[SourceEntry] | None = None,
+) -> CitationVerificationResult:
     """Verify citations in a report against the source registry.
 
     Algorithm:
@@ -697,6 +722,9 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
     Args:
         report_text: The full report text with citations.
         registry: SourceRegistry populated from tool call results.
+        reference_sources: Optional writer-facing source list, in the same
+            numbering order the writer saw. Used only to synthesize a missing
+            references section.
 
     Returns:
         CitationVerificationResult with cleaned report and audit trail.
@@ -726,15 +754,23 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
             logger.warning("[CitationVerify] No references section found in report; skipping")
             return CitationVerificationResult(verified_report=report_text)
 
+        if reference_sources is None:
+            logger.warning(
+                "[CitationVerify] No references section found; cannot safely synthesize references "
+                "without the writer-facing source list"
+            )
+            return CitationVerificationResult(verified_report=report_text)
+
+        writer_sources = list(reference_sources)
         cited_numbers = sorted({int(match.group(1)) for match in _INLINE_CITATION_RE.finditer(report_text)})
         reference_lines = [
             line
             for i in cited_numbers
-            if 1 <= i <= len(all_sources)
-            if (line := _format_registry_reference(i, all_sources[i - 1]))
+            if 1 <= i <= len(writer_sources)
+            if (line := _format_registry_reference(i, writer_sources[i - 1]))
         ]
         if not reference_lines:
-            logger.warning("[CitationVerify] No references section found and no renderable registered sources")
+            logger.warning("[CitationVerify] No references section found and no renderable writer-facing sources")
             return CitationVerificationResult(verified_report=report_text)
 
         logger.warning(
@@ -748,7 +784,8 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
 
     ref_start = ref_match.start()
     body = report_text[:ref_start]
-    ref_section = report_text[ref_start:]
+    original_ref_section = report_text[ref_start:]
+    ref_section = _normalize_ordered_reference_lines(original_ref_section)
 
     # Parse citation lines in the references section
     valid_citations: list[dict] = []
@@ -837,7 +874,7 @@ def verify_citations(report_text: str, registry: SourceRegistry) -> CitationVeri
 
     if not removed_citations:
         logger.debug("[CitationVerify] Result: all %d citation(s) valid — no changes", len(valid_citations))
-        verified = body + ref_section if url_replacements else report_text
+        verified = body + ref_section if url_replacements or ref_section != original_ref_section else report_text
         return CitationVerificationResult(
             verified_report=verified,
             valid_citations=valid_citations,

@@ -16,6 +16,8 @@
 """Tests for deep research source routing helpers."""
 
 import json
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.tools import tool
@@ -74,7 +76,6 @@ domains:
     domain_name: Scholarly and Technical Research
     description: Paper-heavy and technical questions.
     preferred_source_ids:
-      - academic_search
       - paper_search
       - web_search
       - knowledge_layer
@@ -214,9 +215,33 @@ def test_source_catalog_tool_payload_is_json_serializable(tmp_path):
     decoded = json.loads(json.dumps(payload))
 
     scholarly = next(domain for domain in decoded["domains"] if domain["domain_id"] == "scholarly_technical")
-    assert "academic_search" in scholarly["unavailable_source_ids"]
     assert "paper_search" in scholarly["unavailable_source_ids"]
     assert decoded["default_fallback_source_ids"] == ["web_search"]
+
+
+def test_shipped_domain_catalog_source_ids_match_domain_routing_config():
+    import yaml
+
+    repo_root = Path(__file__).resolve().parents[4]
+    config_path = repo_root / "configs" / "config_domain_routing_and_skills.yml"
+    catalog_path = repo_root / "configs" / "domain_catalogs" / "deep_research_domain_catalog.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    source_entries = config["functions"]["data_sources"]["sources"]
+    populate_from_config(source_entries)
+    tools = [
+        SimpleNamespace(name=tool_name, description="")
+        for source in source_entries
+        for tool_name in source.get("tools", [])
+    ]
+
+    payload = source_catalog_payload(tools, domain_catalog_path=catalog_path)
+
+    unavailable_by_domain = {
+        domain["domain_id"]: domain["unavailable_source_ids"]
+        for domain in payload["domains"]
+        if domain["unavailable_source_ids"]
+    }
+    assert unavailable_by_domain == {}
 
 
 def test_source_catalog_uses_default_general_research_without_domain_catalog():

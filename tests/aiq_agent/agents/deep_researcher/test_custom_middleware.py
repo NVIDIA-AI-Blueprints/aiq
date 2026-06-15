@@ -349,11 +349,18 @@ class TestSourceRegistryMiddleware:
 
         compact = tool.invoke({})
         full = tool.invoke({"mode": "full"})
+        compact_entries = middleware.get_source_entries()
+        full_entries = middleware.get_source_entries(mode="full")
 
         assert "https://used.example/report" in compact
         assert "https://unused.example/report" not in compact
+        assert [entry.url for entry in compact_entries] == ["https://used.example/report"]
         assert "https://used.example/report" in full
         assert "https://unused.example/report" in full
+        assert {entry.url for entry in full_entries} == {
+            "https://used.example/report",
+            "https://unused.example/report",
+        }
 
     def test_get_verified_sources_compact_matches_internal_citation_keys(self, middleware):
         """Compact source filtering also works for URL-less internal citation keys."""

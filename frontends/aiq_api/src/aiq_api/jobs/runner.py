@@ -189,6 +189,39 @@ def _load_agent_class(agent_class_path: str) -> type:
     return getattr(module, class_name)
 
 
+async def _create_llm_provider(builder: Any, fn_config: Any) -> tuple[Any, Any]:
+    """Create a role-aware LLM provider from a NAT function config."""
+    from aiq_agent.common import LLMProvider
+    from aiq_agent.common import LLMRole
+    from nat.builder.framework_enum import LLMFrameworkEnum
+
+    role_config_attrs = (
+        (LLMRole.ORCHESTRATOR, "orchestrator_llm"),
+        (LLMRole.ROUTER, "source_router_llm"),
+        (LLMRole.PLANNER, "planner_llm"),
+        (LLMRole.RESEARCHER, "researcher_llm"),
+        (LLMRole.REPORT_WRITER, "writer_llm"),
+    )
+    role_llms = {}
+    for role, config_attr in role_config_attrs:
+        llm_ref = getattr(fn_config, config_attr, None)
+        if llm_ref:
+            role_llms[role] = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+    default_llm = role_llms.get(LLMRole.ORCHESTRATOR)
+    if default_llm is None:
+        llm_ref = getattr(fn_config, "llm", None)
+        if llm_ref:
+            default_llm = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+
+    provider = LLMProvider()
+    provider.set_default(default_llm)
+    for role, llm in role_llms.items():
+        provider.configure(role, llm)
+
+    return provider, default_llm
+
+
 async def run_agent_job(
     configure_logging: bool,
     log_level: int,
@@ -256,8 +289,6 @@ async def run_agent_job(
 
     install_request_trace_span_injection()
 
-    from aiq_agent.common import LLMProvider
-    from aiq_agent.common import LLMRole
     from aiq_agent.common import VerboseTraceCallback
     from aiq_agent.common import is_verbose
     from nat.builder.framework_enum import LLMFrameworkEnum
@@ -305,24 +336,7 @@ async def run_agent_job(
         async with WorkflowBuilder.from_config(config=config) as builder:
             fn_config = builder.get_function_config(agent_config_name)
 
-            # Get LLMs - handle both deep_researcher (orchestrator_llm) and shallow/other agents (llm)
-            orchestrator_llm = None
-            if hasattr(fn_config, "orchestrator_llm") and fn_config.orchestrator_llm:
-                orchestrator_llm = await builder.get_llm(
-                    fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-                )
-            planner_llm = None
-            researcher_llm = None
-            if hasattr(fn_config, "planner_llm") and fn_config.planner_llm:
-                planner_llm = await builder.get_llm(fn_config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-            if hasattr(fn_config, "researcher_llm") and fn_config.researcher_llm:
-                researcher_llm = await builder.get_llm(
-                    fn_config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-                )
-
-            llm = orchestrator_llm
-            if llm is None and hasattr(fn_config, "llm") and fn_config.llm:
-                llm = await builder.get_llm(fn_config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            provider, llm = await _create_llm_provider(builder, fn_config)
 
             # Resolve tools: use explicit list or auto-inherit from data_source_registry
             tool_refs = fn_config.tools
@@ -436,16 +450,6 @@ async def run_agent_job(
 
                     # Create profiler callback AFTER workflow starts (ensures correct parent)
                     nat_profiler_callback = LangchainProfilerHandler()
-
-                    # Set up LLM provider
-                    provider = LLMProvider()
-                    provider.set_default(llm)
-                    if orchestrator_llm:
-                        provider.configure(LLMRole.ORCHESTRATOR, orchestrator_llm)
-                    if planner_llm:
-                        provider.configure(LLMRole.PLANNER, planner_llm)
-                    if researcher_llm:
-                        provider.configure(LLMRole.RESEARCHER, researcher_llm)
 
                     verbose = is_verbose(getattr(fn_config, "verbose", False))
                     callbacks = [VerboseTraceCallback()] if verbose else []

@@ -193,7 +193,7 @@ class TestDeepResearcherAgent:
                 callbacks=callbacks,
                 skills=SkillsConfig.enabled_builtin(),
                 sandbox=SandboxConfig(app_name="custom-aiq"),
-                domain_catalog_path="configs/deep_research_domain_catalog.yml",
+                domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
                 enable_source_router=False,
                 max_research_concurrency=2,
                 max_concurrent_source_tool_calls=3,
@@ -205,7 +205,7 @@ class TestDeepResearcherAgent:
             assert agent.max_research_concurrency == 2
             assert agent.max_concurrent_source_tool_calls == 3
             assert agent.max_source_tool_batch_size == 4
-            assert agent.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
+            assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
             assert agent.enable_source_router is False
             assert agent.deepagents_runtime.skill_sources_for("orchestrator") is None
             assert agent.deepagents_runtime.skill_sources_for("researcher") == ["/skills/"]
@@ -232,14 +232,14 @@ class TestDeepResearcherAgent:
             max_research_concurrency=2,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
-            domain_catalog_path="configs/deep_research_domain_catalog.yml",
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
             enable_source_router=False,
         )
 
         assert config.skills.enabled is True
         assert config.source_router_llm == "source-router-llm"
         assert config.writer_llm == "writer-llm"
-        assert config.domain_catalog_path == "configs/deep_research_domain_catalog.yml"
+        assert config.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
         assert config.max_research_concurrency == 2
         assert config.max_concurrent_source_tool_calls == 3
         assert config.max_source_tool_batch_size == 4
@@ -815,15 +815,25 @@ class TestDeepResearcherAgent:
                     await asyncio.sleep(0.02)
                 if "bad query" in content:
                     raise RuntimeError("search backend exploded")
+                if "slow query" in content:
+                    topic = "Slow Query"
+                    title = "Slow"
+                    locator = "https://example.test/slow"
+                    component = "c"
+                else:
+                    topic = "Good Query"
+                    title = "Good"
+                    locator = "https://example.test/good"
+                    component = "a"
                 return {
                     "structured_response": {
-                        "query_topic": "Good Query",
-                        "target_components": ["a"],
+                        "query_topic": topic,
+                        "target_components": [component],
                         "summary": "A useful note.",
                         "findings": [
                             {
                                 "claim": "A fact.",
-                                "evidence": "Evidence from https://example.test/good.",
+                                "evidence": f"Evidence from {locator}.",
                                 "source_ids": [1],
                                 "confidence": "high",
                                 "caveats": [],
@@ -833,9 +843,9 @@ class TestDeepResearcherAgent:
                         "sources": [
                             {
                                 "id": 1,
-                                "title": "Good",
+                                "title": title,
                                 "source_type": "url",
-                                "locator": "https://example.test/good",
+                                "locator": locator,
                             }
                         ],
                         "narrative_notes": "Useful narrative notes.",
@@ -849,39 +859,62 @@ class TestDeepResearcherAgent:
             max_research_concurrency=3,
         )
 
-        batch_tool = self._build_batch_tool(agent, FakeResearcherRunnable())
+        fake_backend = MagicMock()
+        fake_backend.upload_files.side_effect = lambda files: [
+            FileUploadResponse(path=path, error=None) for path, _content in files
+        ]
+        batch_tool = self._build_batch_tool(agent, FakeResearcherRunnable(), backend=fake_backend)
+        agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.test/good", title="Good"))
+        agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.test/slow", title="Slow"))
+        agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.test/unused", title="Unused"))
+        query_payloads = [
+            {
+                "query": "good query",
+                "preferred_tools": ["web_search_tool"],
+                "fallback_tools": [],
+                "target_components": ["a"],
+                "rationale": "success",
+            },
+            {
+                "query": "bad query",
+                "preferred_tools": ["web_search_tool"],
+                "fallback_tools": [],
+                "target_components": ["b"],
+                "rationale": "failure",
+            },
+            {
+                "query": "slow query",
+                "preferred_tools": ["web_search_tool"],
+                "fallback_tools": [],
+                "target_components": ["c"],
+                "rationale": "timeout",
+            },
+        ]
         with pytest.raises(RuntimeError) as exc_info:
-            await batch_tool.ainvoke(
-                {
-                    "queries": [
-                        {
-                            "query": "good query",
-                            "preferred_tools": ["web_search_tool"],
-                            "fallback_tools": [],
-                            "target_components": ["a"],
-                            "rationale": "success",
-                        },
-                        {
-                            "query": "bad query",
-                            "preferred_tools": ["web_search_tool"],
-                            "fallback_tools": [],
-                            "target_components": ["b"],
-                            "rationale": "failure",
-                        },
-                        {
-                            "query": "slow query",
-                            "preferred_tools": ["web_search_tool"],
-                            "fallback_tools": [],
-                            "target_components": ["c"],
-                            "rationale": "timeout",
-                        },
-                    ]
-                }
-            )
+            await batch_tool.ainvoke({"queries": query_payloads})
 
         assert "run_research_batch failed for 1 of 3 researcher worker" in str(exc_info.value)
         assert "search backend exploded" in str(exc_info.value)
         assert "timed out" not in str(exc_info.value)
+        assert "2 successful researcher worker(s) were registered and persisted under /shared/" in str(exc_info.value)
+        assert "resubmit only the failed queries" in str(exc_info.value)
+        fake_backend.upload_files.assert_called_once()
+        persisted_files = fake_backend.upload_files.call_args.args[0]
+        assert len(persisted_files) == 2
+        from aiq_agent.agents.deep_researcher.tools.research import _research_note_path
+
+        persisted_notes = [
+            ResearchNotes.model_validate(json.loads(content.decode("utf-8"))) for _path, content in persisted_files
+        ]
+        query_models = [ResearchQuery.model_validate(payload) for payload in query_payloads]
+        assert [note.query_topic for note in persisted_notes] == ["Good Query", "Slow Query"]
+        assert persisted_files[0][0] == _research_note_path(query_models[0], persisted_notes[0], 1)
+        assert persisted_files[1][0] == _research_note_path(query_models[2], persisted_notes[1], 2)
+        compact_sources = agent.source_registry_middleware.get_source_list_text()
+        assert compact_sources is not None
+        assert "https://example.test/good" in compact_sources
+        assert "https://example.test/slow" in compact_sources
+        assert "https://example.test/unused" not in compact_sources
 
     def test_researcher_invoke_state_carries_parent_files(self):
         """Nested researcher invocations inherit parent files for StateBackend-backed skills."""
@@ -964,18 +997,14 @@ class TestDeepResearcherAgent:
 
     def test_modal_backend_recreates_and_retries_once_on_not_found(self):
         """A disappeared Modal container is recreated once for the same job-scoped name."""
+        import modal
         from deepagents.backends.protocol import ExecuteResponse
 
         from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
         from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
 
-        class NotFoundError(Exception):
-            pass
-
-        NotFoundError.__module__ = "modal.exception"
-
         first_modal_backend = MagicMock()
-        first_modal_backend.execute.side_effect = NotFoundError("gone")
+        first_modal_backend.execute.side_effect = modal.exception.NotFoundError("gone")
         second_modal_backend = MagicMock()
         second_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
         config = SandboxConfig()
@@ -1312,11 +1341,12 @@ class TestDeepResearcherCitationVerification:
         return web_search_tool
 
     @pytest.mark.asyncio
-    async def test_run_fails_when_verify_finds_no_valid_citations(self, mock_llm_provider, real_tool):
-        """If verification finds no valid citations, the run fails instead of fabricating one."""
+    async def test_run_returns_report_when_verify_finds_no_valid_citations(self, mock_llm_provider, real_tool, caplog):
+        """Verifier false negatives degrade to a warning instead of discarding the report."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
         report = "CUDA findings here [1].\n\n## Sources\n[1] CUDA Docs: https://docs.nvidia.com/cuda/"
+        sanitized_report = f"{report}\n"
         deep_result = {
             "messages": [AIMessage(content="done")],
             "files": output_markdown_file(report),
@@ -1346,17 +1376,26 @@ class TestDeepResearcherCitationVerification:
 
             # Force the verifier to report "no valid citations" while leaving the report unchanged,
             # so we can assert post-processing does not synthesize a citation.
-            with patch(
-                "aiq_agent.agents.deep_researcher.agent.verify_citations",
-                return_value=MagicMock(
-                    verified_report=report,
-                    removed_citations=[],
-                    valid_citations=[],
+            with (
+                patch(
+                    "aiq_agent.agents.deep_researcher.agent.verify_citations",
+                    return_value=MagicMock(
+                        verified_report=report,
+                        removed_citations=[],
+                        valid_citations=[],
+                    ),
                 ),
+                patch(
+                    "aiq_agent.agents.deep_researcher.agent.sanitize_report",
+                    return_value=MagicMock(sanitized_report=sanitized_report),
+                ),
+                caplog.at_level("WARNING", logger="aiq_agent.agents.deep_researcher.agent"),
             ):
                 state = DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
-                with pytest.raises(ValueError, match="no valid citations"):
-                    await agent.run(state)
+                result = await agent.run(state)
+
+        assert result.messages[-1].content == sanitized_report
+        assert "Citation verification found no valid citations" in caplog.text
 
     @pytest.mark.asyncio
     async def test_run_verifies_and_sanitizes_writer_markdown(self, mock_llm_provider, real_tool):

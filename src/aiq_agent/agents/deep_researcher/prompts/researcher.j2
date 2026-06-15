@@ -46,6 +46,8 @@ Your output will be used to write a cited final answer. Produce **in-depth, deta
 
 ## Tool Use
 - Use the fewest high-signal source-tool calls needed for the assigned query.
+- `execute` runs shell commands in the sandbox only.
+- Never pass agent source tool names to `execute`.
 - Default source budget per ResearchQuery: one primary source-tool call, plus at most one fallback or corroboration call.
 - For broad survey queries, make at most one extra targeted follow-up after the first results, only when needed for target_components.
 - Prefer batch-capable source tool calls for related concrete search angles when the tool schema supports a list input.

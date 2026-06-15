@@ -351,19 +351,22 @@ class SourceRegistryMiddleware(AgentMiddleware):
             logger.warning("Failed to load source_registry prompt template", exc_info=True)
             return None
 
+    def get_source_entries(self, mode: str = "compact") -> list[SourceEntry]:
+        """Return the source entries represented by the writer-facing source list."""
+        sources = self.active_registry().all_sources()
+        if mode == "full" or not self._compact_source_keys:
+            return sources
+        compact_sources = [source for source in sources if self._entry_key(source) in self._compact_source_keys]
+        return compact_sources or sources
+
     def get_source_list_text(self, mode: str = "compact") -> str | None:
         """Build a writer-facing verified source list.
 
         Compact mode returns the subset of registered sources that researcher
         workers actually carried forward in structured ResearchNotes. Full mode
-        returns the complete registry. Citation verification always uses the
-        full registry directly and does not depend on this rendered list.
+        returns the complete registry.
         """
-        sources = self.active_registry().all_sources()
-        if mode == "full" or not self._compact_source_keys:
-            return self._render_source_list_text(sources)
-        compact_sources = [source for source in sources if self._entry_key(source) in self._compact_source_keys]
-        return self._render_source_list_text(compact_sources or sources)
+        return self._render_source_list_text(self.get_source_entries(mode=mode))
 
 
 class ToolResultPruningMiddleware(AgentMiddleware):

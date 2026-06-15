@@ -141,8 +141,8 @@ async def _run_research_queries(
     runtime: ToolRuntime | None,
     callbacks: list[Any],
     max_concurrency: int,
-) -> tuple[list[ResearchNotes], list[str]]:
-    """Run researcher workers concurrently and collect notes plus surfaced errors."""
+) -> tuple[list[ResearchQuery], list[ResearchNotes], list[str]]:
+    """Run researcher workers concurrently and collect successful query/note pairs plus surfaced errors."""
     semaphore = asyncio.Semaphore(min(max_concurrency, len(queries)))
     raw_results = await asyncio.gather(
         *(
@@ -158,6 +158,7 @@ async def _run_research_queries(
         return_exceptions=True,
     )
 
+    successful_queries: list[ResearchQuery] = []
     notes: list[ResearchNotes] = []
     errors: list[str] = []
     for query, raw_result in zip(queries, raw_results, strict=False):
@@ -165,8 +166,9 @@ async def _run_research_queries(
             error = str(raw_result) or raw_result.__class__.__name__
             errors.append(f"{query.query}: {error}")
         else:
+            successful_queries.append(query)
             notes.append(raw_result)
-    return notes, errors
+    return successful_queries, notes, errors
 
 
 def build_research_batch_tool(
@@ -193,21 +195,34 @@ def build_research_batch_tool(
                 f"run_research_batch accepts at most {max_research_concurrency} curated queries. "
                 f"Received {len(queries)}. Rank, merge, or drop lower-priority queries and call again."
             )
-        notes, errors = await _run_research_queries(
+        successful_queries, notes, errors = await _run_research_queries(
             queries=queries,
             researcher_runnable=researcher_runnable,
             runtime=runtime,
             callbacks=callbacks,
             max_concurrency=max_research_concurrency,
         )
-        if errors:
-            raise RuntimeError(
-                f"run_research_batch failed for {len(errors)} of {len(queries)} researcher worker(s). "
-                f"Errors: {'; '.join(errors)}"
-            )
         if source_registry_middleware is not None:
             source_registry_middleware.register_research_note_sources(notes)
-        _persist_research_notes(backend=backend, queries=queries, notes=notes)
+        _persist_research_notes(backend=backend, queries=successful_queries, notes=notes)
+
+        if errors:
+            retained_detail = ""
+            if notes:
+                retained_actions = []
+                if source_registry_middleware is not None:
+                    retained_actions.append("registered")
+                if backend is not None:
+                    retained_actions.append("persisted under /shared/")
+                retained_text = " and ".join(retained_actions) if retained_actions else "retained"
+                retained_detail = (
+                    f" {len(notes)} successful researcher worker(s) were {retained_text}; "
+                    "resubmit only the failed queries."
+                )
+            raise RuntimeError(
+                f"run_research_batch failed for {len(errors)} of {len(queries)} researcher worker(s). "
+                f"Errors: {'; '.join(errors)}.{retained_detail}"
+            )
 
         return json.dumps(
             [note.model_dump(mode="json", exclude_none=True) for note in notes],

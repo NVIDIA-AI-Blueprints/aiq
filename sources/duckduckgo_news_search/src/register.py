@@ -89,6 +89,7 @@ async def duckduckgo_news_search(
 
     try:
         from ddgs import DDGS
+        from ddgs.exceptions import DDGSException
     except ImportError:
 
         async def _duckduckgo_news_search_stub(query: str) -> str:
@@ -129,7 +130,12 @@ async def duckduckgo_news_search(
             if tool_config.timelimit is not None:
                 search_kwargs["timelimit"] = tool_config.timelimit
             with DDGS() as ddgs:
-                return list(ddgs.news(query, **search_kwargs))
+                try:
+                    return list(ddgs.news(query, **search_kwargs))
+                except DDGSException as exc:
+                    if str(exc).strip().lower() == "no results found.":
+                        return []
+                    raise
 
         for attempt in range(tool_config.max_retries):
             try:
