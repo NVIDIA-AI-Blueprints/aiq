@@ -424,6 +424,7 @@ precedence over `AWS_PROFILE`.
 ```bash
 unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_CREDENTIAL_EXPIRATION
 aws sso login --profile cs-admin
+aws sts get-caller-identity --profile cs-admin
 
 AIQ_OPENSEARCH_SERVERLESS_LIVE_TESTS=1 \
 OPENSEARCH_URL=https://abc123.us-west-2.aoss.amazonaws.com \

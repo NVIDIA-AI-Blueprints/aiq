@@ -935,12 +935,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             body = {
                 "query": {
                     "bool": {
-                        "should": [
-                            {"term": {"file_id": file_id}},
-                            {"term": {"file_name": resolved_name}},
-                            {"term": {"file_name": file_id}},
-                        ],
-                        "minimum_should_match": 1,
+                        "filter": [{"term": {"file_id": file_id}}],
                     }
                 }
             }
@@ -1041,7 +1036,10 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             for page in range(max_pages):
                 composite: dict[str, Any] = {
                     "size": page_size,
-                    "sources": [{"file_name": {"terms": {"field": "file_name"}}}],
+                    "sources": [
+                        {"file_id": {"terms": {"field": "file_id"}}},
+                        {"file_name": {"terms": {"field": "file_name"}}},
+                    ],
                 }
                 if after_key is not None:
                     composite["after"] = after_key
@@ -1349,8 +1347,10 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             key = bucket.get("key")
             if isinstance(key, dict):
                 file_name = key.get("file_name") or "unknown"
+                file_id_from_key = key.get("file_id")
             else:
                 file_name = key or "unknown"
+                file_id_from_key = None
             chunk_count = int(bucket.get("doc_count", 0))
             top_hits = ((bucket.get("doc") or {}).get("hits") or {}).get("hits") or []
             source = (top_hits[0].get("_source") if top_hits else {}) or {}
@@ -1358,7 +1358,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             content_types = sorted(b.get("key") for b in content_type_buckets if b.get("key"))
             files.append(
                 FileInfo(
-                    file_id=source.get("file_id") or file_name,
+                    file_id=file_id_from_key or source.get("file_id") or file_name,
                     file_name=file_name,
                     collection_name=collection_name,
                     status=FileStatus.SUCCESS,

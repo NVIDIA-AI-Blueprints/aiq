@@ -22,7 +22,7 @@
 
 ---
 
-### Task 1: Add v1.0 → v2.0 migration callout at the top of the AOSS doc
+## Task 1: Add v1.0 → v2.0 migration callout at the top of the AOSS doc
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (insert after the H1 on line 6)
@@ -63,7 +63,7 @@ git commit -m "docs(opensearch): add v1.0 to v2.0 migration callout to AOSS guid
 
 ---
 
-### Task 2: Add an architecture diagram to the AOSS doc
+## Task 2: Add an architecture diagram to the AOSS doc
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (insert a new `## Architecture` section above `## Workflow Config`)
@@ -117,7 +117,7 @@ git commit -m "docs(opensearch): add architecture diagram showing SigV4 in Dask 
 
 ---
 
-### Task 3: Add a Prerequisites section
+## Task 3: Add a Prerequisites section
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (insert `## Prerequisites` immediately after `## Architecture`)
@@ -174,7 +174,7 @@ git commit -m "docs(opensearch): list EKS and tooling prerequisites for AOSS dep
 
 ---
 
-### Task 4: Add an end-to-end AOSS collection creation walkthrough
+## Task 4: Add an end-to-end AOSS collection creation walkthrough
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (insert `## Create the OpenSearch Serverless collection` after `## Prerequisites`)
@@ -254,7 +254,7 @@ git commit -m "docs(opensearch): walk through AOSS encryption, network, and coll
 
 ---
 
-### Task 5: Document the IAM role and trust policy for Pod Identity
+## Task 5: Document the IAM role and trust policy for Pod Identity
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (insert `## IAM role for the AIQ pod` after the collection creation section)
@@ -343,7 +343,7 @@ git commit -m "docs(opensearch): document Pod Identity trust policy and AOSS IAM
 
 ---
 
-### Task 6: Document the AOSS data access policy and Pod Identity association
+## Task 6: Document the AOSS data access policy and Pod Identity association
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` — replace the existing thin `## EKS Pod Identity` section (currently lines ~36–53 of the file) with a deeper version that covers the AOSS data access policy and the association command.
@@ -439,7 +439,7 @@ git commit -m "docs(opensearch): expand Pod Identity section with AOSS data acce
 
 ---
 
-### Task 7: Add `imagePullSecrets` to the example Helm values and document the NGC secret
+## Task 7: Add `imagePullSecrets` to the example Helm values and document the NGC secret
 
 **Files:**
 - Modify: `deploy/helm/examples/aws-opensearch-serverless-values.yaml`
@@ -524,7 +524,7 @@ git commit -m "docs(opensearch): add nvcr.io pull secret to example values and A
 
 ---
 
-### Task 8: Document the embedding endpoint configuration
+## Task 8: Document the embedding endpoint configuration
 
 **Files:**
 - Modify: `deploy/helm/examples/aws-opensearch-serverless-values.yaml` (add `NVIDIA_API_KEY` wiring through a Kubernetes secret)
@@ -601,7 +601,7 @@ git commit -m "docs(opensearch): document hosted-API and NIM-on-EKS embedding se
 
 ---
 
-### Task 9: Add a verification / smoke test section
+## Task 9: Add a verification / smoke test section
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (insert `## Verify the deployment` after the `## Helm Values` section, before `## Local Live Test`)
@@ -692,7 +692,7 @@ git commit -m "docs(opensearch): add end-to-end verification and smoke test for 
 
 ---
 
-### Task 10: Add a teardown section
+## Task 10: Add a teardown section
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (insert `## Cleanup` after `## Troubleshooting`)
@@ -752,7 +752,7 @@ git commit -m "docs(opensearch): add teardown commands for AOSS reference deploy
 
 ---
 
-### Task 11: Cross-link from main READMEs and validate the reference YAML
+## Task 11: Cross-link from main READMEs and validate the reference YAML
 
 **Files:**
 - Modify: `sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md` (add a deployment cross-link near the OpenSearch SigV4 example)
@@ -798,7 +798,7 @@ git commit -m "docs(knowledge): link OpenSearch backend setup to EKS deployment 
 
 ---
 
-### Task 12: Final docs build with `-W` (warnings as errors)
+## Task 12: Final docs build with `-W` (warnings as errors)
 
 **Files:** none (verification only)
 

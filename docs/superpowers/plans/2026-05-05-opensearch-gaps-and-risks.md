@@ -26,7 +26,7 @@
 
 ---
 
-### Task 1: Fail fast on missing `NVIDIA_API_KEY` for hosted-API ingestion
+## Task 1: Fail fast on missing `NVIDIA_API_KEY` for hosted-API ingestion
 
 **Files:**
 - Modify: `sources/knowledge_layer/src/opensearch/adapter.py:508` (ingestor `_embed_texts`)
@@ -134,7 +134,7 @@ git commit -s -m "fix(opensearch): fail fast when NVIDIA_API_KEY is missing for 
 
 ---
 
-### Task 2: Document the OpenSearch backend as text-only
+## Task 2: Document the OpenSearch backend as text-only
 
 **Files:**
 - Modify: `sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md` (in the OpenSearch section)
@@ -184,7 +184,7 @@ git commit -s -m "docs(opensearch): explicit text-only callout for ingestion pat
 
 ---
 
-### Task 3: Fix health-endpoint expected response in the deployment doc
+## Task 3: Fix health-endpoint expected response in the deployment doc
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (the `## Verify the deployment` → `### 2. Backend health check` block)
@@ -221,7 +221,7 @@ git commit -s -m "docs(opensearch): correct health endpoint expected response sh
 
 ---
 
-### Task 4: Add an AOSS visibility-delay note in the Verify section
+## Task 4: Add an AOSS visibility-delay note in the Verify section
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (the `## Verify the deployment` section)
@@ -256,7 +256,7 @@ git commit -s -m "docs(opensearch): note AOSS visibility delay in verification s
 
 ---
 
-### Task 5: Triage the `conversation_id` silent-drop on `/v1/chat/completions`
+## Task 5: Triage the `conversation_id` silent-drop on `/v1/chat/completions`
 
 **Files:** Triage-first; possibly modify `aiq_api` chat-completions route or the workflow config docs depending on findings.
 
@@ -265,8 +265,7 @@ git commit -s -m "docs(opensearch): note AOSS visibility delay in verification s
 - [ ] **Step 1: Locate the chat-completions request handler**
 
 ```bash
-grep -rn 'chat/completions\|conversation_id' src/aiq_api 2>/dev/null || \
-grep -rn 'chat/completions\|conversation_id' /Users/fdecarvalhop/Documents/projects/aiq/.venv/lib/python3.13/site-packages/aiq_api 2>/dev/null
+grep -rn 'chat/completions\|conversation_id' src/aiq_api 2>/dev/null
 ```
 
 Find the route registering `POST /v1/chat/completions`. Read it, identify whether `conversation_id` is present in the Pydantic request model and where (or if) it is ever read.
@@ -274,7 +273,7 @@ Find the route registering `POST /v1/chat/completions`. Read it, identify whethe
 - [ ] **Step 2: Locate where `Context.conversation_id` is set**
 
 ```bash
-grep -rn 'Context.*conversation_id\|set.*conversation_id\|context.*conversation' src/ /Users/fdecarvalhop/Documents/projects/aiq/.venv/lib/python3.13/site-packages/nat 2>/dev/null | head -20
+grep -rn 'Context.*conversation_id\|set.*conversation_id\|context.*conversation' src/ 2>/dev/null | head -20
 ```
 
 Determine the actual mechanism the UI uses (likely a header, cookie, or different route).
@@ -327,7 +326,7 @@ If Step 1 reveals this is outside the OpenSearch story (e.g., a long-standing `a
 
 ---
 
-### Task 6: Document the Dask-worker logging gotcha
+## Task 6: Document the Dask-worker logging gotcha
 
 **Files:**
 - Modify: `docs/source/deployment/aws-opensearch-serverless.md` (the `## Architecture` or `## Troubleshooting` section)
@@ -357,7 +356,7 @@ git commit -s -m "docs(opensearch): note Dask worker logging is silenced by defa
 
 ---
 
-### Task 7: DCO sign-off rebase across the branch
+## Task 7: DCO sign-off rebase across the branch
 
 **Files:** All commits on `feat/opensearch-aoss` not yet signed (everything except commits made *during* this plan, which use `git commit -s` from Task 1 onward).
 
@@ -399,7 +398,7 @@ No commit needed — the rebase already wrote the changes.
 
 ---
 
-### Task 8: Final docs build + adapter test suite as a quality gate
+## Task 8: Final docs build + adapter test suite as a quality gate
 
 **Files:** none (verification only).
 

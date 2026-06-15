@@ -59,6 +59,7 @@ opensearch = [
     "pypdf>=4.0.0",
     "docx2txt>=0.8",
     "python-pptx>=0.6.21",
+    "distributed>=2024.1.0",
 ]
 all = [
     "knowledge-layer[llamaindex,foundational_rag,opensearch]",
