@@ -36,6 +36,7 @@ from aiq_agent.knowledge.schema import JobState
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
+    """env bool."""
     value = os.environ.get(name)
     if value is None:
         return default
@@ -52,6 +53,7 @@ pytestmark = [
 
 
 def _live_config() -> dict[str, Any]:
+    """live config."""
     pytest.importorskip("opensearchpy")
 
     auth_type = os.environ.get("OPENSEARCH_AUTH_TYPE", "none").lower()
@@ -87,6 +89,7 @@ def _live_config() -> dict[str, Any]:
 
 
 def _test_embedding(text: str) -> list[float]:
+    """test embedding."""
     text = text.lower()
     if "alpha" in text:
         return [1.0, 0.0, 0.0, 0.0]
@@ -96,10 +99,12 @@ def _test_embedding(text: str) -> list[float]:
 
 
 def _patch_embeddings(adapter: OpenSearchIngestor | OpenSearchRetriever) -> None:
+    """patch embeddings."""
     adapter._embed_texts = lambda texts: [_test_embedding(text) for text in texts]
 
 
 def _wait_for_job(ingestor: OpenSearchIngestor, job_id: str, timeout_seconds: int = 60):
+    """wait for job."""
     deadline = time.time() + timeout_seconds
     job = ingestor.get_job_status(job_id)
     while time.time() < deadline and not job.is_terminal:
@@ -115,6 +120,7 @@ def _retrieve_with_retry(
     top_k: int = 3,
     timeout_seconds: int = 30,
 ):
+    """retrieve with retry."""
     deadline = time.time() + timeout_seconds
     result = None
     while time.time() < deadline:
@@ -127,6 +133,7 @@ def _retrieve_with_retry(
 
 @pytest.fixture
 def live_backend() -> tuple[OpenSearchIngestor, OpenSearchRetriever, Callable[[str], None]]:
+    """Live backend."""
     config = _live_config()
     ingestor = OpenSearchIngestor(config)
     retriever = OpenSearchRetriever(config)
@@ -136,6 +143,7 @@ def live_backend() -> tuple[OpenSearchIngestor, OpenSearchRetriever, Callable[[s
     created_collections: list[str] = []
 
     def track_collection(collection_name: str) -> None:
+        """Track collection."""
         created_collections.append(collection_name)
 
     yield ingestor, retriever, track_collection
@@ -145,6 +153,7 @@ def live_backend() -> tuple[OpenSearchIngestor, OpenSearchRetriever, Callable[[s
 
 
 def test_live_opensearch_collection_lifecycle(live_backend):
+    """Test that live opensearch collection lifecycle."""
     ingestor, _, track_collection = live_backend
     collection_name = f"live-lifecycle-{uuid.uuid4().hex[:8]}"
     track_collection(collection_name)
@@ -169,6 +178,7 @@ def test_live_opensearch_collection_lifecycle(live_backend):
 
 
 def test_live_opensearch_ingest_retrieve_and_delete(tmp_path, live_backend):
+    """Test that live opensearch ingest retrieve and delete."""
     ingestor, retriever, track_collection = live_backend
     collection_name = f"live-ingest-{uuid.uuid4().hex[:8]}"
     track_collection(collection_name)

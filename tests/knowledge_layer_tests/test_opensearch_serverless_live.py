@@ -55,6 +55,7 @@ pytestmark = [
 
 
 def _env_bool(name: str, default: bool = False) -> bool:
+    """env bool."""
     value = os.environ.get(name)
     if value is None:
         return default
@@ -62,6 +63,7 @@ def _env_bool(name: str, default: bool = False) -> bool:
 
 
 def _env_int(name: str, default: int) -> int:
+    """env int."""
     value = os.environ.get(name)
     if value is None:
         return default
@@ -69,11 +71,13 @@ def _env_int(name: str, default: int) -> int:
 
 
 def _region_from_aoss_endpoint(endpoint: str) -> str | None:
+    """region from aoss endpoint."""
     match = re.search(r"\.([a-z]{2}-[a-z]+-\d)\.aoss\.amazonaws\.com/?$", endpoint)
     return match.group(1) if match else None
 
 
 def _serverless_config() -> dict[str, Any]:
+    """serverless config."""
     boto3 = pytest.importorskip("boto3")
     pytest.importorskip("opensearchpy")
 
@@ -131,6 +135,7 @@ def _serverless_config() -> dict[str, Any]:
 
 
 def _test_embedding(text: str) -> list[float]:
+    """test embedding."""
     text = text.lower()
     if "aurora" in text:
         return [1.0, 0.0, 0.0, 0.0]
@@ -140,10 +145,12 @@ def _test_embedding(text: str) -> list[float]:
 
 
 def _patch_embeddings(adapter: OpenSearchIngestor | OpenSearchRetriever) -> None:
+    """patch embeddings."""
     adapter._embed_texts = lambda texts: [_test_embedding(text) for text in texts]
 
 
 def _wait_for_job(ingestor: OpenSearchIngestor, job_id: str, timeout_seconds: int = 90):
+    """wait for job."""
     deadline = time.time() + timeout_seconds
     job = ingestor.get_job_status(job_id)
     while time.time() < deadline and not job.is_terminal:
@@ -158,6 +165,7 @@ def _visible_doc_count_with_retry(
     expected_count: int,
     timeout_seconds: int | None = None,
 ) -> int:
+    """visible doc count with retry."""
     timeout_seconds = timeout_seconds or _env_int("AIQ_OPENSEARCH_SERVERLESS_VISIBILITY_TIMEOUT", 180)
     index_name = retriever._index_name_for_collection(collection_name)
     client = retriever._get_client()
@@ -193,6 +201,7 @@ def _retrieve_with_retry(
     filters: dict[str, Any] | None = None,
     timeout_seconds: int | None = None,
 ):
+    """retrieve with retry."""
     timeout_seconds = timeout_seconds or _env_int("AIQ_OPENSEARCH_SERVERLESS_RETRIEVAL_TIMEOUT", 180)
     deadline = time.time() + timeout_seconds
     result = None
@@ -210,6 +219,7 @@ def _list_files_with_retry(
     expected_names: set[str],
     timeout_seconds: int | None = None,
 ):
+    """list files with retry."""
     timeout_seconds = timeout_seconds or _env_int("AIQ_OPENSEARCH_SERVERLESS_VISIBILITY_TIMEOUT", 180)
     deadline = time.time() + timeout_seconds
     files = []
@@ -227,6 +237,7 @@ def _file_statuses_with_retry(
     file_ids: dict[str, str],
     timeout_seconds: int = 45,
 ):
+    """file statuses with retry."""
     deadline = time.time() + timeout_seconds
     statuses = {}
     while time.time() < deadline:
@@ -241,6 +252,7 @@ def _file_statuses_with_retry(
 
 @pytest.fixture
 def serverless_backend() -> tuple[OpenSearchIngestor, OpenSearchRetriever, Callable[[str], None]]:
+    """Serverless backend."""
     config = _serverless_config()
     ingestor = OpenSearchIngestor(config)
     retriever = OpenSearchRetriever(config)
@@ -250,6 +262,7 @@ def serverless_backend() -> tuple[OpenSearchIngestor, OpenSearchRetriever, Calla
     created_collections: list[str] = []
 
     def track_collection(collection_name: str) -> None:
+        """Track collection."""
         created_collections.append(collection_name)
 
     yield ingestor, retriever, track_collection
@@ -259,6 +272,7 @@ def serverless_backend() -> tuple[OpenSearchIngestor, OpenSearchRetriever, Calla
 
 
 def test_aoss_sigv4_health_and_collection_lifecycle(serverless_backend):
+    """Test that aoss sigv4 health and collection lifecycle."""
     ingestor, _, track_collection = serverless_backend
     collection_name = f"aoss-lifecycle-{uuid.uuid4().hex[:8]}"
     track_collection(collection_name)
@@ -286,6 +300,7 @@ def test_aoss_sigv4_health_and_collection_lifecycle(serverless_backend):
 
 
 def test_aoss_vector_ingest_retrieve_filter_and_delete(tmp_path, serverless_backend):
+    """Test that aoss vector ingest retrieve filter and delete."""
     ingestor, retriever, track_collection = serverless_backend
     collection_name = f"aoss-ingest-{uuid.uuid4().hex[:8]}"
     track_collection(collection_name)

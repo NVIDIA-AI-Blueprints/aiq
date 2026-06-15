@@ -38,24 +38,29 @@ from aiq_agent.knowledge.schema import JobState
 
 class FakeOpenSearchIndices:
     def __init__(self, client: "FakeOpenSearchClient"):
+        """Initialise FakeOpenSearchIndices."""
         self._client = client
 
     def exists(self, index: str) -> bool:
+        """Return True if the index exists in the fake store."""
         return index in self._client.indexes
 
     def create(self, index: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Create a fake index and return an acknowledged response."""
         with self._client.lock:
             self._client.indexes[index] = body
             self._client.docs.setdefault(index, {})
         return {"acknowledged": True}
 
     def delete(self, index: str) -> dict[str, Any]:
+        """Delete the fake index and its documents."""
         with self._client.lock:
             self._client.indexes.pop(index, None)
             self._client.docs.pop(index, None)
         return {"acknowledged": True}
 
     def get(self, index: str) -> dict[str, Any]:
+        """Return mapping metadata for one or all matching fake indexes."""
         with self._client.lock:
             if "*" in index:
                 prefix = index.rstrip("*")
@@ -69,6 +74,7 @@ class FakeOpenSearchIndices:
             return {index: {"mappings": self._client.indexes[index].get("mappings", {})}}
 
     def put_mapping(self, index: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Update the _meta section of an existing fake index mapping."""
         with self._client.lock:
             mappings = self._client.indexes[index].setdefault("mappings", {})
             if "_meta" in body:
@@ -78,16 +84,19 @@ class FakeOpenSearchIndices:
 
 class FakeOpenSearchClient:
     def __init__(self):
+        """Initialise FakeOpenSearchClient."""
         self.lock = threading.RLock()
         self.indexes: dict[str, dict[str, Any]] = {}
         self.docs: dict[str, dict[str, dict[str, Any]]] = {}
         self.indices = FakeOpenSearchIndices(self)
 
     def count(self, index: str) -> dict[str, int]:
+        """Return the document count for the given fake index."""
         with self.lock:
             return {"count": len(self.docs.get(index, {}))}
 
     def bulk(self, body: list[dict[str, Any]], refresh: bool = True, request_timeout: int | None = None):
+        """Record a bulk indexing request in the fake store."""
         del refresh, request_timeout
         with self.lock:
             for action, doc in zip(body[0::2], body[1::2], strict=True):
@@ -97,6 +106,7 @@ class FakeOpenSearchClient:
         return {"errors": False}
 
     def search(self, index: str, body: dict[str, Any], request_timeout: int | None = None) -> dict[str, Any]:
+        """Execute a fake search, supporting composite aggregations."""
         del request_timeout
         with self.lock:
             docs = self.docs.get(index, {})
@@ -159,6 +169,7 @@ class FakeOpenSearchClient:
         refresh: bool = True,
         conflicts: str = "proceed",
     ) -> dict[str, int]:
+        """Delete documents matching the query from the fake store."""
         del refresh, conflicts
         bool_query = body["query"]["bool"]
         match_terms = bool_query.get("filter") or bool_query.get("should") or []
@@ -171,9 +182,11 @@ class FakeOpenSearchClient:
         return {"deleted": deleted}
 
     def ping(self) -> bool:
+        """Return True to simulate a reachable cluster."""
         return True
 
     def _filter_source(self, source: dict[str, Any], source_filter: Any) -> dict[str, Any]:
+        """Apply an _source include/exclude filter to a document."""
         if isinstance(source_filter, list):
             return {key: source[key] for key in source_filter if key in source}
         if isinstance(source_filter, dict):
@@ -182,6 +195,7 @@ class FakeOpenSearchClient:
         return dict(source)
 
     def _matches_term(self, doc: dict[str, Any], term: dict[str, Any]) -> bool:
+        """Return True if any term in the query matches the document."""
         for key, value in term.items():
             if doc.get(key) == value:
                 return True
@@ -190,15 +204,18 @@ class FakeOpenSearchClient:
 
 class FakeAossTransport:
     def __init__(self):
+        """Initialise FakeAossTransport."""
         self.requests: list[tuple[str, str]] = []
 
     def perform_request(self, method: str, path: str):
+        """Record a transport-level HTTP request."""
         self.requests.append((method, path))
         return ""
 
 
 class FakeAossClient:
     def __init__(self):
+        """Initialise FakeAossClient."""
         self.bulk_body: list[dict[str, Any]] | None = None
         self.bulk_bodies: list[list[dict[str, Any]]] = []
         self.bulk_refresh: bool | str | None = None
@@ -208,9 +225,11 @@ class FakeAossClient:
         self.transport = FakeAossTransport()
 
     def ping(self) -> bool:
+        """Return True to simulate a reachable cluster."""
         return False
 
     def bulk(self, body: list[dict[str, Any]], refresh: bool = True, request_timeout: int | None = None):
+        """Record a bulk indexing request in the fake store."""
         del request_timeout
         self.bulk_body = body
         self.bulk_bodies.append(body)
@@ -218,6 +237,7 @@ class FakeAossClient:
         return {"errors": False}
 
     def search(self, index: str, body: dict[str, Any], request_timeout: int | None = None) -> dict[str, Any]:
+        """Execute a fake search, supporting composite aggregations."""
         del index, body, request_timeout
         self.search_calls += 1
         if self.search_responses:
@@ -229,10 +249,12 @@ class FakeAossClient:
 
 class FakeFuture:
     def __init__(self, result: dict[str, Any] | None = None, error: Exception | None = None):
+        """Initialise FakeFuture."""
         self._result = result
         self._error = error
 
     def result(self):
+        """Return the stored future result or raise the stored error."""
         if self._error:
             raise self._error
         return self._result
@@ -240,14 +262,17 @@ class FakeFuture:
 
 class FakeDaskClient:
     def __init__(self, submit_raises: Exception | None = None):
+        """Initialise FakeDaskClient."""
         self.submissions: list[dict[str, Any]] = []
         self.closed = False
         self._submit_raises = submit_raises
 
     def close(self) -> None:
+        """Mark the fake Dask client as closed."""
         self.closed = True
 
     def submit(self, fn, config, payloads, collection_name, **kwargs):
+        """Record a task submission and return a FakeFuture."""
         if self._submit_raises is not None:
             raise self._submit_raises
         self.submissions.append(
@@ -279,6 +304,7 @@ class FakeDaskClient:
 
 
 def test_opensearch_backend_registers_with_factory():
+    """Test that opensearch backend registers with factory."""
     from aiq_agent.knowledge import factory
     from aiq_agent.knowledge.factory import get_ingestor
     from aiq_agent.knowledge.factory import get_retriever
@@ -295,6 +321,7 @@ def test_opensearch_backend_registers_with_factory():
 
 
 def test_aoss_health_check_falls_back_to_cat_indices():
+    """Test that aoss health check falls back to cat indices."""
     ingestor = OpenSearchIngestor({"auth_type": "sigv4", "aws_service": "aoss"})
     fake_client = FakeAossClient()
     ingestor._client = fake_client
@@ -304,6 +331,7 @@ def test_aoss_health_check_falls_back_to_cat_indices():
 
 
 def test_aoss_bulk_index_omits_document_ids_and_explicit_refresh():
+    """Test that aoss bulk index omits document ids and explicit refresh."""
     ingestor = OpenSearchIngestor({"auth_type": "sigv4", "aws_service": "aoss"})
     fake_client = FakeAossClient()
     ingestor._client = fake_client
@@ -327,6 +355,7 @@ def test_aoss_bulk_index_omits_document_ids_and_explicit_refresh():
 
 
 def test_aoss_delete_searches_then_bulk_deletes_generated_ids():
+    """Test that aoss delete searches then bulk deletes generated ids."""
     ingestor = OpenSearchIngestor({"auth_type": "sigv4", "aws_service": "aoss", "bulk_batch_size": 2})
     fake_client = FakeAossClient()
     fake_client.search_hits = [{"_id": "generated-1"}, {"_id": "generated-2"}]
@@ -353,6 +382,7 @@ def test_aoss_delete_searches_then_bulk_deletes_generated_ids():
 
 
 def test_aoss_delete_stops_after_repeated_stale_hits():
+    """Test that aoss delete stops after repeated stale hits."""
     ingestor = OpenSearchIngestor(
         {
             "auth_type": "sigv4",
@@ -383,12 +413,14 @@ def test_aoss_delete_stops_after_repeated_stale_hits():
 
 
 def test_index_name_helpers_are_opensearch_safe():
+    """Test that index name helpers are opensearch safe."""
     assert opensearch_adapter._sanitize_index_part("Tenant A / Session +1") == "tenant-a-session-1"
     assert opensearch_adapter._sanitize_index_part("+++Bad") == "bad"
     assert len(opensearch_adapter._trim_index_name("a" * 300)) <= 255
 
 
 def test_session_collection_names_are_safe_dynamic_indexes():
+    """Test that session collection names are safe dynamic indexes."""
     ingestor = OpenSearchIngestor({"index_prefix": "aiq-prod", "start_ttl_cleanup": False})
     collection_name = "s_123E4567-E89B-12D3-A456-426614174000"
 
@@ -396,6 +428,7 @@ def test_session_collection_names_are_safe_dynamic_indexes():
 
 
 def test_index_mapping_keeps_metadata_strings_filterable():
+    """Test that index mapping keeps metadata strings filterable."""
     ingestor = OpenSearchIngestor({"embedding_dim": 4, "start_ttl_cleanup": False})
 
     mapping = ingestor._index_mapping("docs")
@@ -412,6 +445,7 @@ def test_index_mapping_keeps_metadata_strings_filterable():
 
 
 def test_search_body_includes_knn_filter():
+    """Test that search body includes knn filter."""
     retriever = OpenSearchRetriever({"embedding_dim": 4, "vector_field": "vec"})
 
     body = retriever._build_search_body([0.1, 0.2, 0.3, 0.4], 3, {"file_name": "report.pdf", "topic": "roadmap"})
@@ -431,6 +465,7 @@ def test_search_body_includes_knn_filter():
 
 
 def test_normalize_maps_opensearch_hit_to_chunk():
+    """Test that normalize maps opensearch hit to chunk."""
     retriever = OpenSearchRetriever({"text_field": "body"})
     chunk = retriever.normalize(
         {
@@ -458,6 +493,7 @@ def test_normalize_maps_opensearch_hit_to_chunk():
 
 
 def test_ingestion_and_retrieval_with_fake_client(tmp_path):
+    """Test that ingestion and retrieval with fake client."""
     fake_client = FakeOpenSearchClient()
     test_file = tmp_path / "doc.txt"
     test_file.write_text(
@@ -562,6 +598,7 @@ def test_indexed_documents_omit_internal_source_path(tmp_path):
 
 
 def test_ttl_cleanup_deletes_only_expired_opensearch_session_indexes():
+    """Test that ttl cleanup deletes only expired opensearch session indexes."""
     fake_client = FakeOpenSearchClient()
     ingestor = OpenSearchIngestor({"index_prefix": "aiq-ttl", "start_ttl_cleanup": False})
     ingestor._client = fake_client
@@ -596,6 +633,7 @@ def test_ttl_cleanup_deletes_only_expired_opensearch_session_indexes():
 
 
 def test_dask_ingestion_submits_bytes_payload_and_updates_job(tmp_path):
+    """Test that dask ingestion submits bytes payload and updates job."""
     fake_dask = FakeDaskClient()
     fake_client = FakeOpenSearchClient()
     test_file = tmp_path / "dask.txt"
@@ -706,6 +744,7 @@ def test_dask_client_closed_when_submit_raises(tmp_path):
 
 
 def test_dask_ingestion_submission_failure_marks_job_failed(tmp_path):
+    """Test that dask ingestion submission failure marks job failed."""
     test_file = tmp_path / "dask.txt"
     test_file.write_text("distributed opensearch ingestion", encoding="utf-8")
     ingestor = OpenSearchIngestor(
@@ -725,18 +764,21 @@ def test_dask_ingestion_submission_failure_marks_job_failed(tmp_path):
 
 
 def test_dask_worker_task_constructs_backend_in_worker(monkeypatch):
+    """Test that dask worker task constructs backend in worker."""
     from knowledge_layer.opensearch.distributed import run_opensearch_ingestion_task
 
     captured: dict[str, Any] = {}
 
     class WorkerIngestor:
         def __init__(self, config: dict[str, Any]):
+            """Initialise WorkerIngestor."""
             captured["config"] = config
             self.text_field = "content"
             self.vector_field = "embedding"
             self.embed_model_name = config["embed_model"]
 
         def _ensure_index(self, collection_name: str) -> str:
+            """Stub that records the collection name passed to _ensure_index."""
             captured["collection_name"] = collection_name
             return "aiq-docs"
 
@@ -747,6 +789,7 @@ def test_dask_worker_task_constructs_backend_in_worker(monkeypatch):
             file_name: str,
             file_metadata: dict[str, Any] | None = None,
         ):
+            """Return fake documents for the given file path."""
             captured["worker_file_exists"] = Path(file_path).exists()
             return (
                 [
@@ -762,14 +805,17 @@ def test_dask_worker_task_constructs_backend_in_worker(monkeypatch):
             )
 
         def _embed_texts(self, texts: list[str]) -> list[list[float]]:
+            """Return dummy embeddings (zero vectors) for the given texts."""
             captured["texts"] = texts
             return [[0.1, 0.2, 0.3, 0.4]]
 
         def _bulk_index_documents(self, index_name: str, documents: list[dict[str, Any]]) -> None:
+            """Record a bulk-index call without writing to OpenSearch."""
             captured["index_name"] = index_name
             captured["documents"] = documents
 
         def _update_collection_timestamp(self, collection_name: str) -> None:
+            """No-op stub for collection timestamp updates."""
             captured["updated_collection"] = collection_name
 
     monkeypatch.setattr(opensearch_adapter, "OpenSearchIngestor", WorkerIngestor)
@@ -806,6 +852,7 @@ def test_dask_worker_task_constructs_backend_in_worker(monkeypatch):
 
 
 def test_setup_backend_passes_opensearch_yaml_config(monkeypatch):
+    """Test that setup backend passes opensearch yaml config."""
     pytest.importorskip("nat")
     from knowledge_layer.register import KnowledgeRetrievalConfig
     from knowledge_layer.register import _setup_backend
@@ -844,6 +891,7 @@ def test_setup_backend_passes_opensearch_yaml_config(monkeypatch):
 
 
 def test_setup_backend_uses_opensearch_environment_defaults(monkeypatch):
+    """Test that setup backend uses opensearch environment defaults."""
     pytest.importorskip("nat")
     from knowledge_layer.register import KnowledgeRetrievalConfig
     from knowledge_layer.register import _setup_backend
@@ -904,6 +952,7 @@ def test_ingestor_embed_allows_local_nim_without_key(monkeypatch):
 
     class _FakeOpenAI:
         def __init__(self, base_url, api_key):
+            """Initialise _FakeOpenAI."""
             fake_emb = type("D", (), {"embedding": [0.0] * 4})()
             fake_resp = type("R", (), {"data": [fake_emb]})()
             self.embeddings = type("E", (), {"create": staticmethod(lambda **kw: fake_resp)})()
@@ -933,10 +982,12 @@ def test_ensure_index_recovers_when_concurrent_create_races(monkeypatch):
     def fake_exists(index: str) -> bool:
         # First call (pre-create) returns False; subsequent re-check after the
         # race loss returns True (the winning worker has created it).
+        """Stub index-exists check used by the ingestor fixture."""
         exists_calls.append(index)
         return len(exists_calls) >= 2
 
     def fake_create(index: str, body: dict) -> None:
+        """Stub index-creation call used by the ingestor fixture."""
         raise RequestError(
             400,
             "resource_already_exists_exception",
@@ -975,6 +1026,7 @@ def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):
     captured_body: dict[str, Any] = {}
 
     def fake_search(index: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Return fake search results driven by the test fixture."""
         captured_body.update(body)
         return {
             "hits": {"hits": []},
@@ -1070,6 +1122,7 @@ def test_list_files_paginates_composite_until_after_key_exhausted(monkeypatch):
     search_calls: list[dict[str, Any] | None] = []
 
     def fake_search(index: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Return fake search results driven by the test fixture."""
         composite = body["aggs"]["by_file"]["composite"]
         after = composite.get("after")
         search_calls.append(after)
@@ -1122,9 +1175,11 @@ def test_ensure_index_reraises_when_create_fails_for_other_reasons(monkeypatch):
     )
 
     def fake_exists(index: str) -> bool:  # Always not-exists, even after failure
+        """Stub index-exists check used by the ingestor fixture."""
         return False
 
     def fake_create(index: str, body: dict) -> None:
+        """Stub index-creation call used by the ingestor fixture."""
         raise RequestError(
             400,
             "invalid_index_name_exception",
