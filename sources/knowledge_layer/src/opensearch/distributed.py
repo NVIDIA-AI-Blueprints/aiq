@@ -108,7 +108,10 @@ def run_opensearch_ingestion_task(
                 except OSError:
                     pass
 
-    ingestor._update_collection_timestamp(collection_name)
+    try:
+        ingestor._update_collection_timestamp(collection_name)
+    except Exception:
+        logger.warning("Failed to update collection timestamp for %s", collection_name)
     failed_count = sum(1 for item in file_results if item["status"] == "failed")
     all_failed = bool(file_results) and failed_count == len(file_results)
     return {

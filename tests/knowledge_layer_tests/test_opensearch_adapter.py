@@ -1064,7 +1064,8 @@ def test_list_files_paginates_composite_until_after_key_exhausted(monkeypatch):
     )
 
     # 7 distinct files; emit in pages of 3. Must take ceil(7/3) = 3 requests.
-    all_files = [f"f{i:02d}.txt" for i in range(7)]
+    # Use distinct file_id and file_name to catch bugs where only one key drives pagination.
+    all_files = [(f"id{i:02d}", f"f{i:02d}.txt") for i in range(7)]
     page_size = 3
     search_calls: list[dict[str, Any] | None] = []
 
@@ -1072,21 +1073,21 @@ def test_list_files_paginates_composite_until_after_key_exhausted(monkeypatch):
         composite = body["aggs"]["by_file"]["composite"]
         after = composite.get("after")
         search_calls.append(after)
-        after_value = (after or {}).get("file_id")
-        remaining = [name for name in all_files if after_value is None or name > after_value]
+        after_key = (after["file_id"], after["file_name"]) if after else None
+        remaining = [(fid, fname) for fid, fname in all_files if after_key is None or (fid, fname) > after_key]
         page = remaining[:page_size]
         buckets = [
             {
-                "key": {"file_id": name, "file_name": name},
+                "key": {"file_id": fid, "file_name": fname},
                 "doc_count": 1,
-                "doc": {"hits": {"hits": [{"_source": {"file_id": name, "file_name": name}}]}},
+                "doc": {"hits": {"hits": [{"_source": {"file_id": fid, "file_name": fname}}]}},
                 "content_types": {"buckets": []},
             }
-            for name in page
+            for fid, fname in page
         ]
         agg: dict[str, Any] = {"buckets": buckets}
         if len(page) == page_size and len(remaining) > page_size:
-            agg["after_key"] = {"file_id": page[-1], "file_name": page[-1]}
+            agg["after_key"] = {"file_id": page[-1][0], "file_name": page[-1][1]}
         return {"hits": {"hits": []}, "aggregations": {"by_file": agg}}
 
     fake_client = type("C", (), {})()
@@ -1097,12 +1098,11 @@ def test_list_files_paginates_composite_until_after_key_exhausted(monkeypatch):
     files = ingestor.list_files("paginated")
 
     # All 7 files surface, none dropped.
-    assert sorted(f.file_name for f in files) == all_files
-    # First call has no after; subsequent calls carry the cursor; the run that returns
-    # < page_size buckets ends the loop without another request.
+    assert sorted(f.file_name for f in files) == [fname for _, fname in all_files]
+    # First call has no after; subsequent calls carry both composite keys in the cursor.
     assert search_calls[0] is None
-    assert search_calls[1] == {"file_id": "f02.txt", "file_name": "f02.txt"}
-    assert search_calls[2] == {"file_id": "f05.txt", "file_name": "f05.txt"}
+    assert search_calls[1] == {"file_id": "id02", "file_name": "f02.txt"}
+    assert search_calls[2] == {"file_id": "id05", "file_name": "f05.txt"}
     assert len(search_calls) == 3, f"expected 3 paginated requests, got {len(search_calls)}"
 
 

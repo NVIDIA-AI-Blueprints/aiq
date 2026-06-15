@@ -578,6 +578,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             if os.path.exists(path)
         ]
         validated_paths = [p for p, _ in validated]
+        job_config["original_filenames"] = [fn for _, fn in validated]
         if not validated_paths:
             job = IngestionJobStatus(
                 job_id=job_id,
@@ -1176,7 +1177,7 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
     async def health_check(self) -> bool:
         """Return True if the OpenSearch cluster is reachable."""
         try:
-            return self._health_check_client()
+            return await asyncio.to_thread(self._health_check_client)
         except Exception as e:
             logger.warning("OpenSearch health check failed: %s", e)
             return False
@@ -1595,7 +1596,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
     async def health_check(self) -> bool:
         """Return True if the OpenSearch cluster is reachable."""
         try:
-            return self._health_check_client()
+            return await asyncio.to_thread(self._health_check_client)
         except Exception:
             return False
 
