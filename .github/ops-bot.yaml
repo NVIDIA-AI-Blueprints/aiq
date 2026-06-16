@@ -1,0 +1,11 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Controls enabled features from the RAPIDS ops-bot GitHub App.
+# The config is effective only after the app is installed and authorized for this repository.
+# Docs: https://github.com/rapidsai/ops-bot
+auto_merger: true
+branch_checker: true
+label_checker: false
+release_drafter: false
+forward_merger: true

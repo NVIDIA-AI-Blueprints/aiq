@@ -7,10 +7,25 @@ SPDX-License-Identifier: Apache-2.0
 
 AI-Q includes portable Agent Skills for coding harnesses that support skill-style instructions and helper scripts.
 
+## Two kinds of AI-Q skill
+
+AI-Q ships two distinct skill sets, separated by audience. This page documents
+the **API-consumer** skills. The maintainer skills are documented in their own
+[README](../../../.agents/skills/README.md).
+
+| | API-consumer skills | Maintainer skills |
+| :-- | :-- | :-- |
+| **Audience** | Users calling a running AI-Q server | Developers changing the AI-Q repo |
+| **Location** | top-level `skills/` | `.agents/skills/` |
+| **Examples** | `aiq-deploy`, `aiq-research` | `aiq-add-data-source` |
+| **Assumes** | A reachable AI-Q backend | A repo checkout and dev toolchain |
+
+The API-consumer skills are:
+
 - `aiq-deploy` helps an assistant clone or locate AI-Q, choose an existing workflow config, deploy locally or in self-hosted environments, verify basic system health, optionally run deep research completion validation, troubleshoot, rebuild, and stop services.
 - `aiq-research` lets an assistant call a running local or self-hosted AI-Q Blueprint server for routed `/chat` requests and async deep research job lifecycle operations.
 
-The canonical packaged skills live at:
+The canonical packaged consumer skills live at:
 
 ```text
 skills/aiq-deploy/
@@ -19,10 +34,14 @@ skills/aiq-research/
 
 Each installed skill directory must contain `SKILL.md` at its root. The deploy skill keeps detailed guidance under `references/` so agents only load the path-specific material they need.
 
-For harnesses that expect repository-local Agent Skills under `.agents/skills`, this repository keeps a compatibility symlink:
+For harnesses that expect repository-local Agent Skills under `.agents/skills`,
+this repository surfaces the consumer skills there with per-skill symlinks
+(`.agents/skills/` itself is the maintainer skill home, not a symlink to
+`skills/`):
 
 ```text
-.agents/skills -> ../skills
+.agents/skills/aiq-deploy -> ../../skills/aiq-deploy
+.agents/skills/aiq-research -> ../../skills/aiq-research
 ```
 
 ## Recommended Flow
@@ -81,20 +100,27 @@ Use the repo-local instructions below when developing AI-Q itself, validating ch
 
 ## Claude Code
 
-Claude Code supports repo-local skills under `.claude/skills/`. This repository keeps those paths as compatibility symlinks:
+Claude Code supports repo-local skills under `.claude/skills/`. This repository
+keeps those paths as compatibility symlinks for both skill sets. The consumer
+skills point into `skills/`; the maintainer skills point into `.agents/skills/`:
 
 ```text
 .claude/skills/aiq-deploy -> ../../skills/aiq-deploy
 .claude/skills/aiq-research -> ../../skills/aiq-research
+.claude/skills/aiq-add-data-source -> ../../.agents/skills/aiq-add-data-source
 ```
 
-To recreate the repo-local install manually:
+To recreate the consumer-skill repo-local install manually:
 
 ```bash
 mkdir -p .claude/skills
 ln -s ../../skills/aiq-deploy .claude/skills/aiq-deploy
 ln -s ../../skills/aiq-research .claude/skills/aiq-research
 ```
+
+The maintainer-skill symlinks are managed alongside the maintainer skill set;
+see the [maintainer skills README](../../../.agents/skills/README.md) for how
+those are added.
 
 For a user-level install:
 

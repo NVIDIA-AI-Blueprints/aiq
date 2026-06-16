@@ -1,0 +1,37 @@
+name: Feature Request
+description: Propose a new AI-Q capability or behavior change.
+title: "[Feature]: "
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What user, contributor, or maintainer problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the behavior, API, workflow, or documentation change you want.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: What other approaches did you consider, and why is this one preferable?
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact
+      description: Name affected agents, APIs, configs, UI flows, docs, or deployment paths.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-Submission Checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: This request does not include secrets, credentials, or private data.
+          required: true
