@@ -169,13 +169,11 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     availableSources.some((s) => s.id === id)
   ).length
   const availableCount = availableSources.length
-  // The "Disable / Enable All" control is a master switch (not a select-all): it is
-  // ON whenever *any* source is enabled, so disabling one source while others remain
-  // on does not flip it off. It only turns off when everything is disabled.
+  // Treat this as a master on/off switch: it stays on while any available source
+  // is enabled, and turns everything off when clicked.
   const anyAvailableEnabled = enabledAvailableCount > 0
 
   const handleToggleAll = useCallback(() => {
-    // Master switch: if anything is on, turn everything off; otherwise turn it all on.
     const updatedIds = anyAvailableEnabled ? [] : availableSources.map((s) => s.id)
     setEnabledDataSources(updatedIds)
     saveDataSourcesToConversation(updatedIds)

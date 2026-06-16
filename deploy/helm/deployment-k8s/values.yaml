@@ -98,16 +98,10 @@ aiq:
         tls:
           termination: edge
           insecureEdgeTerminationPolicy: Redirect
-        # Deep-research SSE streams run up to ~30 min; the default router timeout
-        # (often ~30s) closes them early. Allow the connection to stay open.
-        annotations:
-          haproxy.router.openshift.io/timeout: 1h
+        annotations: {}
       ingress:
         enabled: false
-        annotations:
-          nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-          nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-          nginx.ingress.kubernetes.io/proxy-buffering: "off"
+        annotations: {}
       volumes:
       - name: postgres-init
         configMap:
@@ -268,10 +262,7 @@ aiq:
       route:
         enabled: false
         host: localhost
-        # Deep-research SSE streams run up to ~30 min; the default router timeout
-        # (often ~30s) closes them early. Allow the connection to stay open.
-        annotations:
-          haproxy.router.openshift.io/timeout: 1h
+        annotations: {}
         tls:
           termination: edge
           insecureEdgeTerminationPolicy: Redirect
@@ -279,12 +270,6 @@ aiq:
       ingress:
         enabled: true
         className: nginx
-        # Deep-research jobs stream Server-Sent Events for up to ~30 min. Allow the
-        # connection to stay open well beyond that and disable response buffering so
-        # SSE events (incl. the 30s job.heartbeat) are flushed immediately.
-        annotations:
-          nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
-          nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
-          nginx.ingress.kubernetes.io/proxy-buffering: "off"
+        annotations: {}
       podSecurityContext: null
   secretEnvAsEnv: false

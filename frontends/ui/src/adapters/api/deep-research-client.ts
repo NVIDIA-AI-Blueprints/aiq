@@ -312,10 +312,6 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
   let lastReceivedEventId: string | null = lastEventId || null
   let isTerminated = false
   let reconnectAttempts = 0
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-
-  /** Exponential backoff (capped at 10s) between manual reconnection attempts */
-  const reconnectDelayMs = (attempt: number): number => Math.min(1000 * 2 ** (attempt - 1), 10000)
 
   /**
    * Build the stream URL with optional last event ID for reconnection
@@ -585,41 +581,49 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
       })
     })
 
-    // Handle errors.
-    // EventSource fires onerror on *any* connection issue. Its native auto-reconnect
-    // reuses the URL the EventSource was constructed with, so it cannot advance the
-    // resume position — after an upstream proxy/edge drops a long-lived stream, native
-    // retry would replay every event from the start. Instead we tear the connection
-    // down ourselves and reconnect via connect(), which rebuilds the URL through
-    // buildStreamUrl() with the latest lastReceivedEventId so the backend resumes
-    // exactly where it left off (GET .../stream/{last_event_id}). onopen resets the
-    // attempt counter, so a job that survives repeated cuts never exhausts the budget.
+    // Handle errors
+    // EventSource fires onerror on *any* connection issue, then auto-reconnects
+    // (readyState transitions to CONNECTING). This is normal SSE behaviour, not a
+    // fatal error. We only surface an error to the caller after the reconnection
+    // retry threshold is exceeded or the browser has given up (readyState CLOSED).
     eventSource.onerror = () => {
-      eventSource?.close()
-      eventSource = null
-
       if (isTerminated) {
-        // Expected disconnection after terminal state — do not reconnect.
+        // Expected disconnection after terminal state — close to stop auto-reconnect
+        eventSource?.close()
+        eventSource = null
         return
       }
 
-      reconnectAttempts++
-      if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-        // Too many consecutive failures (without a successful reconnect in between) — give up.
+      if (eventSource?.readyState === EventSource.CLOSED) {
+        // Browser gave up reconnecting — treat as a real disconnect
+        callbacks.onDisconnect?.()
+        eventSource = null
+      } else if (eventSource?.readyState === EventSource.CONNECTING) {
+        // EventSource is auto-reconnecting — this is expected behaviour.
+        // Only escalate to an error after repeated consecutive failures.
+        reconnectAttempts++
+        if (reconnectAttempts <= MAX_RECONNECT_ATTEMPTS) {
+          if (process.env.NODE_ENV === 'development') {
+            console.warn(`[SSE] Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})…`)
+          }
+          return // let EventSource retry on its own
+        }
+        // Too many consecutive reconnection failures — give up
+        eventSource?.close()
+        eventSource = null
         callbacks.onError?.(
-          new Error(`SSE connection failed after ${MAX_RECONNECT_ATTEMPTS} reconnection attempts`)
+          new Error(`SSE connection failed after ${reconnectAttempts} reconnection attempts`)
         )
-        return
-      }
-
-      const delay = reconnectDelayMs(reconnectAttempts)
-      if (process.env.NODE_ENV === 'development') {
-        console.warn(
-          `[SSE] Reconnecting (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}) in ${delay}ms, ` +
-            `resuming from event ${lastReceivedEventId ?? 'start'}…`
+      } else {
+        // Unexpected state (e.g. OPEN) — should not happen per SSE spec, but
+        // handle defensively so the caller is never left in an unknown state.
+        const readyState = eventSource?.readyState
+        eventSource?.close()
+        eventSource = null
+        callbacks.onError?.(
+          new Error(`SSE connection error in unexpected readyState: ${readyState ?? 'unknown'}`)
         )
       }
-      reconnectTimer = setTimeout(connect, delay)
     }
   }
 
@@ -627,12 +631,8 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
    * Disconnect from the SSE stream
    */
   const disconnect = () => {
-    isTerminated = true
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer)
-      reconnectTimer = null
-    }
     if (eventSource) {
+      isTerminated = true
       eventSource.close()
       eventSource = null
     }
