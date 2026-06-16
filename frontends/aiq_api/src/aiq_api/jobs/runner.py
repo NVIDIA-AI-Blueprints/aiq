@@ -449,6 +449,7 @@ async def run_agent_job(
     auth_token: str | None = None,
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
+    owner_user_id: str | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -482,6 +483,9 @@ async def run_agent_job(
             data sources that require authentication (requires_auth: true).
         initial_files: Optional DeepAgents virtual filesystem files to seed into state.
         output_metadata: Optional metadata to persist alongside the final report.
+        owner_user_id: Canonical per-user key (``principal_user_id``) for the job
+            owner. Set on the NAT Context so per_user_mcp_client retrieves the
+            token the owner connected via /v1/auth/mcp/{id}/connect.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -558,6 +562,14 @@ async def run_agent_job(
                     fn_config = fn_config.model_copy(update={"skills": skills_config, "sandbox": sandbox_config})
 
             provider, llm = await _create_llm_provider(builder, fn_config)
+
+            # Bind the job owner's identity on the NAT context before tools are
+            # built or run, so a per_user_mcp_client resolves the token this user
+            # connected via /v1/auth/mcp/{id}/connect (keyed by principal_user_id).
+            if owner_user_id:
+                from nat.builder.context import ContextState
+
+                ContextState.get().user_id.set(owner_user_id)
 
             # Resolve tools: use explicit list or auto-inherit from data_source_registry
             tool_refs = fn_config.tools
@@ -680,41 +692,57 @@ async def run_agent_job(
                     callbacks.append(AgentEventCallback(event_store))
                     callbacks.append(nat_profiler_callback)
 
-                    # Instantiate agent with callbacks
-                    agent = _create_agent_instance(
-                        agent_cls=agent_cls,
-                        llm_provider=provider,
-                        llm=llm,
-                        tools=tools,
-                        fn_config=fn_config,
-                        verbose=verbose,
-                        callbacks=callbacks,
-                        job_id=job_id,
-                        # Artifact harvesting rides 284's job store + event stream: the same db_url
-                        # backs the SqlArtifactStore, and event_store.store carries artifact SSE
-                        # events. Inert unless sandbox.artifact_capture is enabled in config.
-                        artifact_db_url=db_url,
-                        artifact_emit=event_store.store,
-                    )
+                    # Resolve per-user MCP source tools for the job owner (Context.user_id
+                    # was set above). Their MCP client connections are kept open via
+                    # mcp_stack for the duration of the agent run.
+                    from contextlib import AsyncExitStack
 
-                    # Capture the runtime so the terminal path can release the sandbox. None for
-                    # agents without a sandbox runtime; close()/terminate() are then no-ops.
-                    sandbox_runtime = getattr(agent, "deepagents_runtime", None)
+                    from ..mcp_auth.runtime_tools import open_per_user_mcp_tools
 
-                    # Run agent - LLM/tool events will be nested under workflow span
-                    result = await _run_agent(
-                        agent=agent,
-                        input_text=input_text,
-                        builder=builder,
-                        config=config,
-                        function_name=agent_config_name,
-                        function_config=fn_config,
-                        monitor=cancellation_monitor,
-                        available_documents=available_documents,
-                        data_sources=data_sources,
-                        event_store=event_store,
-                        initial_files=initial_files,
-                    )
+                    async with AsyncExitStack() as mcp_stack:
+                        mcp_tools = await open_per_user_mcp_tools(
+                            builder=builder,
+                            data_sources=data_sources,
+                            exit_stack=mcp_stack,
+                            wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+                        )
+                        agent_tools = [*tools, *mcp_tools] if mcp_tools else tools
+
+                        # Instantiate agent with callbacks
+                        agent = _create_agent_instance(
+                            agent_cls=agent_cls,
+                            llm_provider=provider,
+                            llm=llm,
+                            tools=agent_tools,
+                            fn_config=fn_config,
+                            verbose=verbose,
+                            callbacks=callbacks,
+                            job_id=job_id,
+                            # Artifact harvesting rides 284's job store + event stream: the same db_url
+                            # backs the SqlArtifactStore, and event_store.store carries artifact SSE
+                            # events. Inert unless sandbox.artifact_capture is enabled in config.
+                            artifact_db_url=db_url,
+                            artifact_emit=event_store.store,
+                        )
+
+                        # Capture the runtime so the terminal path can release the sandbox. None for
+                        # agents without a sandbox runtime; close()/terminate() are then no-ops.
+                        sandbox_runtime = getattr(agent, "deepagents_runtime", None)
+
+                        # Run agent - LLM/tool events will be nested under workflow span
+                        result = await _run_agent(
+                            agent=agent,
+                            input_text=input_text,
+                            builder=builder,
+                            config=config,
+                            function_name=agent_config_name,
+                            function_config=fn_config,
+                            monitor=cancellation_monitor,
+                            available_documents=available_documents,
+                            data_sources=data_sources,
+                            event_store=event_store,
+                            initial_files=initial_files,
+                        )
 
                     # Emit WORKFLOW_END event for Phoenix
                     context.intermediate_step_manager.push_intermediate_step(

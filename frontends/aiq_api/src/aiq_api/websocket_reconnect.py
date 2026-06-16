@@ -482,7 +482,12 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
         result_type: type | None = None,
         output_type: type | None = None,
     ) -> None:
-        """Run the workflow without breaking reconnect message delivery."""
+        """Run the workflow without breaking reconnect message delivery.
+
+        ``streaming`` is forwarded by NAT's message handler (NAT >= 1.7): True for
+        the ``*_STREAM`` schemas, False for aggregate schemas. Honor it rather than
+        hardcoding, so non-streaming schemas aggregate correctly.
+        """
         socket_scope = getattr(getattr(self, "_socket", None), "scope", {})
         current_user = self._authenticated_user or detect_internal_caller(dict(socket_scope.get("headers", [])))
         with user_context(current_user):

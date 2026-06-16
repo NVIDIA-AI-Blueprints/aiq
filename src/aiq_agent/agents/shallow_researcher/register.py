@@ -95,20 +95,53 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
     verbose = is_verbose(config.verbose)
     callbacks = [VerboseTraceCallback()] if verbose else []
 
-    agent = ShallowResearcherAgent(
-        llm_provider=provider,
-        tools=tools,
-        max_llm_turns=config.max_llm_turns,
-        max_tool_iterations=config.max_tool_iterations,
-        callbacks=callbacks,
-    )
+    # The agent is (re)built per request inside _run, since the active tool set
+    # depends on the request's data_sources and the per-user MCP tools resolved at
+    # run time. (No shared instance is built here.)
 
     async def _run(state: ShallowResearchAgentState) -> ShallowResearchAgentState:
+        from contextlib import AsyncExitStack
+
         try:
             data_sources = state.data_sources
             selected_tools = filter_tools_by_sources(tools, data_sources)
-            active_agent = agent
-            if data_sources is not None and selected_tools != tools:
+
+            if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
+                logger.warning("Shallow research received data_sources with no matching tools")
+
+            # Per-user MCP tools (e.g. a connected Google Drive) are resolved at RUN
+            # time: this function runs per request with Context.user_id set, so we can
+            # build the user's MCP client and add its tools to this turn's tool set.
+            # Build-time inheritance can't do this (the agent is a shared, user-less
+            # instance) — see aiq_api.mcp_auth.runtime_tools. The MCP client is kept
+            # open via mcp_stack for the duration of the agent run.
+            async with AsyncExitStack() as mcp_stack:
+                try:
+                    from aiq_api.jobs.access import require_verified_principal
+                    from aiq_api.mcp_auth.provider import principal_user_id
+                    from aiq_api.mcp_auth.runtime_tools import open_per_user_mcp_tools
+                    from nat.builder.context import ContextState
+
+                    # Align the MCP token-lookup key with where connect stored it. The
+                    # interactive session sets Context.user_id to NAT's user id, which is a
+                    # *different* derivation than principal_user_id (used by connect/status).
+                    # Without this, per_user_mcp_client looks under the wrong key, finds no
+                    # token, and triggers interactive re-auth (a login URL) even though the
+                    # source shows connected. Set (no reset): the per-user MCP client reads
+                    # Context.user_id at build AND on each tool call, so it must stay set for
+                    # the whole turn.
+                    ContextState.get().user_id.set(principal_user_id(require_verified_principal()))
+
+                    mcp_tools = await open_per_user_mcp_tools(
+                        builder=builder, data_sources=data_sources, exit_stack=mcp_stack
+                    )
+                    if mcp_tools:
+                        selected_tools = [*selected_tools, *mcp_tools]
+                except Exception:
+                    logger.exception("Failed to resolve per-user MCP tools for shallow research; continuing")
+
+                # Rebuild the agent with this turn's tool set (base ± data_source
+                # filtering + any per-user MCP tools).
                 active_agent = ShallowResearcherAgent(
                     llm_provider=provider,
                     tools=selected_tools,
@@ -117,32 +150,22 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                     callbacks=callbacks,
                 )
 
-            if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
-                logger.warning("Shallow research received data_sources with no matching tools")
+                # Validate tool availability before starting shallow research. At least
+                # one tool must be available, else the agent would reason about tools it
+                # can't call. selected_tools already reflects filtering + MCP injection.
+                from aiq_agent.common import format_user_facing_tool_error
+                from aiq_agent.common import validate_tool_availability
 
-            # Validate tool availability before starting shallow research
-            # At least one tool must be available
-            # This prevents the agent from trying to reason about unavailable tools
-            # Check selected_tools directly - they already reflect data_sources filtering
-            from aiq_agent.common import format_user_facing_tool_error
-            from aiq_agent.common import validate_tool_availability
+                is_valid, _, unavailable_tools = validate_tool_availability(
+                    selected_tools, research_type="shallow research"
+                )
+                if not is_valid:
+                    error_msg = format_user_facing_tool_error("shallow research", unavailable_tools)
+                    from langchain_core.messages import AIMessage
 
-            is_valid, _, unavailable_tools = validate_tool_availability(
-                selected_tools, research_type="shallow research"
-            )
+                    return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=error_msg)])
 
-            # Fail if no tools are available
-            if not is_valid:
-                error_msg = format_user_facing_tool_error("shallow research", unavailable_tools)
-
-                # Return error state with error message - this prevents the agent from running
-                from langchain_core.messages import AIMessage
-
-                error_state = ShallowResearchAgentState(messages=state.messages + [AIMessage(content=error_msg)])
-                return error_state
-
-            result = await active_agent.run(state)
-            return result
+                return await active_agent.run(state)
         except Exception:
             logger.exception("Error in shallow research execution.")
             raise

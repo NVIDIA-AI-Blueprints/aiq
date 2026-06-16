@@ -12,6 +12,7 @@
 
 import { type FC, memo, useCallback, useMemo } from 'react'
 import { Flex, Text, SidePanel, SegmentedControl, Switch, Button, Banner } from '@/adapters/ui'
+import { createMcpAuthClient, openAuthPopupAndWait } from '@/adapters/api'
 import { useShallow } from 'zustand/react/shallow'
 import { Globe, LoadingSpinner } from '@/adapters/ui/icons'
 import { useAuth } from '@/adapters/auth'
@@ -81,8 +82,19 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
       name: source.name,
       description: source.description ?? '',
       category: source.category ?? 'enterprise',
-      defaultEnabled: true,
+      defaultEnabled: source.default_enabled ?? true,
       requiresAuth: source.requires_auth ?? false,
+      perUserAuth: source.per_user_auth
+        ? {
+            required: source.per_user_auth.required,
+            provider: source.per_user_auth.provider,
+            mcpServerId: source.per_user_auth.mcp_server_id,
+            status: source.per_user_auth.status,
+            connectUrl: source.per_user_auth.connect_url,
+            expiresAt: source.per_user_auth.expires_at,
+            lastError: source.per_user_auth.last_error,
+          }
+        : undefined,
     }))
   }, [availableDataSources])
 
@@ -114,6 +126,21 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     [toggleDataSource, enabledDataSourceIds, saveDataSourcesToConversation, onSourceToggle]
   )
 
+  // Start (or resume) the per-user OAuth flow for a protected source: ask the
+  // backend for a provider login URL, open it in a popup, then refresh statuses
+  // once the popup closes/posts back so the card reflects the new state.
+  const handleConnect = useCallback(
+    async (sourceId: string) => {
+      const client = createMcpAuthClient({ authToken: idToken })
+      const { status, auth_url } = await client.connect(sourceId)
+      if (status === 'auth_required' && auth_url) {
+        await openAuthPopupAndWait(auth_url, sourceId)
+      }
+      await fetchDataSources(idToken)
+    },
+    [idToken, fetchDataSources]
+  )
+
   const handleTabChange = useCallback(
     (value: string) => {
       setDataSourcesPanelTab(value as DataSourcesPanelTab)
@@ -142,13 +169,17 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     availableSources.some((s) => s.id === id)
   ).length
   const availableCount = availableSources.length
-  const allAvailableEnabled = enabledAvailableCount === availableCount && availableCount > 0
+  // The "Disable / Enable All" control is a master switch (not a select-all): it is
+  // ON whenever *any* source is enabled, so disabling one source while others remain
+  // on does not flip it off. It only turns off when everything is disabled.
+  const anyAvailableEnabled = enabledAvailableCount > 0
 
   const handleToggleAll = useCallback(() => {
-    const updatedIds = allAvailableEnabled ? [] : availableSources.map((s) => s.id)
+    // Master switch: if anything is on, turn everything off; otherwise turn it all on.
+    const updatedIds = anyAvailableEnabled ? [] : availableSources.map((s) => s.id)
     setEnabledDataSources(updatedIds)
     saveDataSourcesToConversation(updatedIds)
-  }, [allAvailableEnabled, setEnabledDataSources, availableSources, saveDataSourcesToConversation])
+  }, [anyAvailableEnabled, setEnabledDataSources, availableSources, saveDataSourcesToConversation])
 
   return (
     <SidePanel
@@ -232,12 +263,12 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
             className={`border-base mb-4 rounded-lg border p-3 transition-colors ${
               isBusy ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-surface-raised-50'
             }`}
-            aria-pressed={allAvailableEnabled}
+            aria-pressed={anyAvailableEnabled}
             aria-disabled={isBusy}
             aria-label={
               isBusy
                 ? 'All available connections (disabled during operations)'
-                : `All available connections: ${allAvailableEnabled ? 'enabled' : 'disabled'}`
+                : `All available connections: ${anyAvailableEnabled ? 'enabled' : 'disabled'}`
             }
             title={isBusy ? 'Data source changes disabled during active operations' : undefined}
           >
@@ -248,13 +279,13 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
             <div onClick={(e) => e.stopPropagation()}>
               <Switch
                 size="small"
-                checked={allAvailableEnabled}
+                checked={anyAvailableEnabled}
                 onCheckedChange={handleToggleAll}
                 disabled={isBusy}
                 aria-label={
                   isBusy
                     ? 'Toggle all connections (disabled)'
-                    : allAvailableEnabled
+                    : anyAvailableEnabled
                       ? 'Disable all connections'
                       : 'Enable all connections'
                 }
@@ -309,6 +340,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
                       !isSourceAvailable ? 'Sign in required to access this data source' : undefined
                     }
                     onToggle={handleToggle}
+                    onConnect={handleConnect}
                   />
                 )
               })}

@@ -433,12 +433,17 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
         if scheduler_address:
             from aiq_agent.auth import get_auth_token
-            from aiq_agent.auth import get_current_principal
+            from aiq_api.jobs.access import require_verified_principal
             from aiq_api.jobs.submit import submit_agent_job
 
             async def _submit_deep_job(state: ChatResearcherState) -> str:
-                principal = get_current_principal()
-                owner = principal.email if principal and principal.email else "anonymous"
+                # Use the same principal resolution as the connect/status routes so the
+                # job's per-user MCP token key (principal_user_id) matches where the
+                # token was stored at connect time. Deriving the key from `owner`
+                # (email) instead would mismatch the connect key ("{type}:{sub}") and
+                # cause the worker to trigger interactive re-auth for a connected source.
+                principal = require_verified_principal()
+                owner = principal.email or principal.sub
                 query = state.original_query
                 if not query:
                     if not state.messages:
@@ -471,7 +476,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                     agent_type="deep_researcher",
                     input_text=input_text,
                     owner=owner,
-                    principal=principal,
+                    principal=principal,  # ensures worker token key == connect-time key
                     available_documents=available_docs,
                     data_sources=state.data_sources,
                     auth_token=get_auth_token(),

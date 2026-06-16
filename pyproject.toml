@@ -35,6 +35,7 @@ dependencies = [
     "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.8.0",
     "nvidia-nat-eval==1.8.0",
     "nvidia-nat-profiler==1.8.0",
+    "nvidia-nat-redis==1.8.0",
     "nvidia-nat-security[guardrails]==1.8.0",
     "deepagents>=0.6.5",
     "langgraph-checkpoint-postgres>=3.0.0",
@@ -202,7 +203,7 @@ dev = [
 ]
 
 [tool.uv]
-prerelease = "if-necessary-or-explicit"
+prerelease = "allow"
 override-dependencies = [
     "authlib>=1.6.11,<2",
     "cryptography>=46.0.6,<47",
