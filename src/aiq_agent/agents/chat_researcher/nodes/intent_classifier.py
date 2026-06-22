@@ -186,6 +186,14 @@ class IntentClassifier:
                     elif _looks_report_targeted(query):
                         report_action = "ask"
                     else:
+                        # The model chose target=report but gave no report_action and the
+                        # query matched no ask/edit hint. Fall back to fresh research, but
+                        # log it so this silent downgrade is observable in traces.
+                        logger.debug(
+                            "Report target requested without a resolvable report_action; "
+                            "falling back to new_research (query=%r)",
+                            query,
+                        )
                         target = "new_research"
             else:
                 target = "new_research"

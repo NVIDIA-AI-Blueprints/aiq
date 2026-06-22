@@ -340,6 +340,86 @@ class TestChatResearcherAgent:
         }
 
     @pytest.mark.asyncio
+    async def test_report_ask_degrades_gracefully_when_hook_raises(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """A failing report-ask hook returns a user-facing message, not an unhandled error."""
+
+        async def report_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research",
+                    target="report",
+                    report_action="ask",
+                    raw=None,
+                )
+            }
+
+        async def report_ask_raises(_state):
+            raise RuntimeError("Report follow-up requires an authenticated user")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            report_ask_fn=report_ask_raises,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Summarize this report")],
+            active_report_job_id="job-1",
+        )
+        result = await agent.run(state, thread_id="test-thread")
+
+        content = result["messages"][-1].content
+        assert isinstance(content, str) and content.strip()
+        assert "couldn't" in content.lower() or "could not" in content.lower()
+
+    @pytest.mark.asyncio
+    async def test_report_edit_degrades_gracefully_when_hook_raises(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """A failing report-edit hook returns a user-facing message, not an unhandled error."""
+
+        async def report_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research",
+                    target="report",
+                    report_action="edit",
+                    raw=None,
+                )
+            }
+
+        async def report_edit_raises(_state):
+            raise RuntimeError("boom")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            report_edit_job_submitter=report_edit_raises,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Rewrite this report")],
+            active_report_job_id="job-1",
+        )
+        result = await agent.run(state, thread_id="test-thread")
+
+        content = result["messages"][-1].content
+        assert isinstance(content, str) and content.strip()
+        assert "couldn't" in content.lower() or "could not" in content.lower()
+
+    @pytest.mark.asyncio
     async def test_run_with_empty_messages(
         self,
         mock_intent_classifier,

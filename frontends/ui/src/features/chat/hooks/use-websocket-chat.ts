@@ -616,22 +616,28 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         }
         acknowledgeOutgoingDelivery(parentId)
 
-        // Check for deep research escalation signal
-        // Backend sends: "Deep research job submitted. Job ID: {uuid}"
+        // Check for an async-job escalation signal. Two backend paths produce a
+        // pollable child job whose report is fetched over the same SSE/report
+        // endpoints, so both escalate the same way:
+        //   - "Deep research job submitted. Job ID: {uuid}"   (deep_researcher)
+        //   - "Report edit job submitted. Job ID: {uuid}"     (report_rewriter)
         const deepResearchMatch = content?.match(
-          /Deep research job submitted\. Job ID: ([a-f0-9-]+)/i
+          /(Deep research|Report edit) job submitted\. Job ID: ([a-f0-9-]+)/i
         )
 
         if (deepResearchMatch) {
-          const jobId = deepResearchMatch[1]
+          const isReportEdit = /^report edit$/i.test(deepResearchMatch[1])
+          const jobId = deepResearchMatch[2]
           // Get current state for plan messages and conversation
           const state = useChatStore.getState()
           const currentPlanMessages = state.planMessages
           const currentConversation = state.currentConversation
 
           // Derive a conversation title from the plan (preferred) or fall
-          // back to the last user message.
-          if (currentConversation) {
+          // back to the last user message. Report edits run inside an existing
+          // report conversation, so they must NOT rename it to the edit
+          // instruction -- only new deep-research runs derive a title.
+          if (currentConversation && !isReportEdit) {
             let extractedTitle: string | null = null
 
             // First, look at all plan messages for a title

@@ -414,6 +414,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     from ..jobs.report_context import report_output_metadata
     from ..jobs.report_context import resolve_report_context
     from ..jobs.report_context import to_initial_files
+    from ..jobs.submit import JobIdConflictError
     from ..jobs.submit import submit_agent_job as submit_authorized_job
 
     if not get_all_sources():
@@ -528,6 +529,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         ),
         responses={
             400: {"description": "Unknown agent type or invalid request"},
+            409: {"description": "A custom job_id was supplied that collides with an existing job"},
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
             503: {"description": "Dask scheduler not available"},
         },
@@ -583,6 +585,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 data_sources=req.data_sources,
                 auth_token=auth_token,
             )
+        except JobIdConflictError:
+            raise HTTPException(409, f"Job already exists: {req.job_id}")
         except RuntimeError as e:
             raise HTTPException(403, str(e))
         except Exception as e:
@@ -614,7 +618,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         ),
         responses={
             404: {"description": "Parent job not found"},
-            409: {"description": "Parent job is incomplete or has no durable report"},
+            409: {"description": "Parent job is incomplete, has no durable report, or the child job_id collides"},
             503: {"description": "Dask scheduler not available"},
         },
     )
@@ -643,7 +647,10 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 auth_token=auth_token,
                 initial_files=to_initial_files(context, instruction=req.input),
                 output_metadata=report_output_metadata(job_id, "edit"),
+                allow_internal=True,
             )
+        except JobIdConflictError:
+            raise HTTPException(409, f"Job already exists: {req.job_id}")
         except RuntimeError as e:
             raise HTTPException(403, str(e))
         except Exception as e:

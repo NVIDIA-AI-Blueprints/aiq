@@ -31,6 +31,7 @@ Base path: `/v1/jobs/async`
 | `GET` | `/v1/jobs/async/job/{job_id}/stream` | SSE event stream from beginning |
 | `GET` | `/v1/jobs/async/job/{job_id}/stream/{last_event_id}` | SSE stream from event ID (reconnection) |
 | `POST` | `/v1/jobs/async/job/{job_id}/cancel` | Cancel a running job |
+| `POST` | `/v1/jobs/async/job/{job_id}/report/edit` | Create a revised report from a completed report job |
 | `GET` | `/v1/jobs/async/job/{job_id}/state` | Get accumulated job artifacts |
 | `GET` | `/v1/jobs/async/job/{job_id}/report` | Get final research report |
 | `GET` | `/v1/data_sources` | List available data sources |
@@ -38,7 +39,10 @@ Base path: `/v1/jobs/async`
 
 ### List Available Agents
 
-Returns all registered agent types that can be used with the submit endpoint.
+Returns all **public** registered agent types that can be used with the submit endpoint.
+Internal-only agents (registered with `public=False`, for example the `report_rewriter`
+used by report follow-up) are intentionally omitted from this list and are rejected by
+`POST /v1/jobs/async/submit` with `400 Agent type is internal-only`.
 
 ```bash
 curl http://localhost:8000/v1/jobs/async/agents
@@ -92,8 +96,51 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 
 | Status | Reason |
 |--------|--------|
-| `400` | Unknown agent type or invalid request |
+| `400` | Unknown agent type, **internal-only agent type**, or invalid request |
+| `409` | A custom `job_id` was supplied that collides with an existing job |
 | `422` | One or more unknown data source IDs. Response `detail` includes `message`, `invalid_ids`, and `known_ids` for client-side recovery UX |
+| `503` | Dask scheduler not available |
+
+### Edit a Report (Report Follow-up)
+
+Create a revised report from a **completed** report job. The caller is authorized against
+the parent job, the durable report context is reconstructed, and an internal `report_rewriter`
+child job is submitted that emits a full revised report. The parent report is never mutated.
+
+```bash
+curl -X POST http://localhost:8000/v1/jobs/async/job/{job_id}/report/edit \
+  -H "Content-Type: application/json" \
+  -d '{"input": "Make the executive summary shorter and remove the appendix."}'
+```
+
+**Request body (`ReportEditRequest`):**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `input` | `string` | Yes | Edit instruction for the parent report (min 1 character) |
+| `job_id` | `string` | No | Custom child job ID. Auto-generated if omitted. Pattern: `[a-zA-Z0-9_-]`, max 64 chars |
+| `expiry_seconds` | `integer` | No | Child job expiry in seconds. Range: 600--604800. Default from config |
+
+**Response (`ReportEditResponse`):**
+
+```json
+{
+  "job_id": "child-job-uuid",
+  "parent_job_id": "parent-job-uuid",
+  "status": "SUBMITTED",
+  "agent_type": "report_rewriter"
+}
+```
+
+Track the child job with the standard status/stream/report endpoints. Its `GET .../report`
+response carries `parent_job_id`, `interaction_action` (`edit`), and `result_kind` (`report`).
+
+**Error responses:**
+
+| Status | Reason |
+|--------|--------|
+| `404` | Parent job not found (or not accessible to the caller when auth is enabled) |
+| `409` | Parent job is incomplete, has no durable report, or the supplied child `job_id` collides |
 | `503` | Dask scheduler not available |
 
 ### Get Job Status
@@ -221,9 +268,17 @@ curl http://localhost:8000/v1/jobs/async/job/{job_id}/report
 {
   "job_id": "abc123",
   "has_report": true,
-  "report": "# Quantum Computing Trends in 2026\n\n..."
+  "report": "# Quantum Computing Trends in 2026\n\n...",
+  "parent_job_id": null,
+  "interaction_action": null,
+  "result_kind": null
 }
 ```
+
+For report follow-up child jobs (see [Edit a Report](#edit-a-report-report-follow-up)),
+`parent_job_id`, `interaction_action` (for example `edit`), and `result_kind` (for example
+`report`) identify the originating report and interaction. They are `null` for root research
+jobs.
 
 ## SSE Event Types
 

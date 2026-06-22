@@ -1239,6 +1239,79 @@ describe('useWebSocketChat', () => {
     )
     expect(mockStartDeepResearch).toHaveBeenCalledWith('abc123-def456', 'msg-1')
   })
+
+  test('detects report-edit escalation and starts SSE streaming for the child job', () => {
+    const mockStartDeepResearch = vi.fn()
+    const mockUpdateConversationTitle = vi.fn()
+    const localMockAddAgentResponseWithMeta = vi.fn(() => 'msg-1')
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        ...mockStoreState,
+        addUserMessage: mockAddUserMessage,
+        addAgentResponse: mockAddAgentResponse,
+        addAgentResponseWithMeta: localMockAddAgentResponseWithMeta,
+        addThinkingStep: mockAddThinkingStep,
+        appendToThinkingStep: mockAppendToThinkingStep,
+        completeThinkingStep: mockCompleteThinkingStep,
+        updateThinkingStepByFunctionName: mockUpdateThinkingStepByFunctionName,
+        findThinkingStepByFunctionName: mockFindThinkingStepByFunctionName,
+        setReportContent: mockSetReportContent,
+        addStatusCard: mockAddStatusCard,
+        addAgentPrompt: mockAddAgentPrompt,
+        addErrorCard: mockAddErrorCard,
+        setCurrentStatus: mockSetCurrentStatus,
+        setPendingInteraction: mockSetPendingInteraction,
+        clearPendingInteraction: mockClearPendingInteraction,
+        setLoading: mockSetLoading,
+        setStreaming: mockSetStreaming,
+        clearThinkingSteps: mockClearThinkingSteps,
+        clearReportContent: mockClearReportContent,
+        createConversation: mockCreateConversation,
+        setCurrentUser: mockSetCurrentUser,
+        getUserConversations: mockGetUserConversations,
+        selectConversation: mockSelectConversation,
+        respondToPrompt: mockRespondToPrompt,
+        addPlanMessage: mockAddPlanMessage,
+        updatePlanMessageResponse: mockUpdatePlanMessageResponse,
+        addDeepResearchBanner: mockAddDeepResearchBanner,
+        startDeepResearch: mockStartDeepResearch,
+        updateConversationTitle: mockUpdateConversationTitle,
+      }
+      return selector ? selector(state) : state
+    })
+
+    // A real conversation with a prior user message: a report edit must NOT rename
+    // the existing report conversation to the edit instruction.
+    mockStoreState.currentConversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      messages: [{ id: 'u1', role: 'user', content: 'Rewrite this report to be shorter' }],
+    } as unknown as typeof mockStoreState.currentConversation
+
+    renderWebSocketHook()
+    mockStoreState.isStreaming = true
+
+    // Report edit submits a child report_rewriter job that produces a full report,
+    // pollable through the same SSE path as deep research.
+    act(() => {
+      capturedCallbacks.onResponse?.('Report edit job submitted. Job ID: abcd1234-ef56', 'complete', false)
+    })
+
+    expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('starting', 'abcd1234-ef56')
+    expect(localMockAddAgentResponseWithMeta).toHaveBeenCalledWith(
+      '',
+      false,
+      expect.objectContaining({
+        deepResearchJobId: 'abcd1234-ef56',
+        deepResearchJobStatus: 'submitted',
+        isDeepResearchActive: true,
+      })
+    )
+    expect(mockStartDeepResearch).toHaveBeenCalledWith('abcd1234-ef56', 'msg-1')
+    // Report edits reuse the deep-research escalation plumbing but must not rename
+    // the conversation to the edit instruction (deep-research-only behavior).
+    expect(mockUpdateConversationTitle).not.toHaveBeenCalled()
+  })
 })
 
 /**

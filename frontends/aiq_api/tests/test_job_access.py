@@ -112,6 +112,25 @@ class TestJobAccessStorage:
 
 
 class TestAuthorizeJobAccess:
+    @pytest.fixture(autouse=True)
+    def _enforce_auth(self, monkeypatch):
+        # authorize_job_access only consults the ownership table when REQUIRE_AUTH=true.
+        # Pin it on so these tests deterministically exercise the enforced path instead
+        # of silently passing/failing based on the ambient environment.
+        monkeypatch.setenv("REQUIRE_AUTH", "true")
+
+    def test_no_auth_mode_allows_any_caller(self, db_url, monkeypatch):
+        """With auth disabled, ownership is intentionally not enforced (documented posture)."""
+        monkeypatch.setenv("REQUIRE_AUTH", "false")
+        _insert_job_info(db_url, "job-1")
+        # No job_access row and a different principal -> still allowed under no-auth.
+        job = SimpleNamespace(job_id="job-1", status="running", created_at=None, error=None)
+        job_store = SimpleNamespace(get_job=AsyncMock(return_value=job))
+
+        result = asyncio.run(authorize_job_access(job_store, db_url, "job-1", Principal(type="anonymous", sub="anon")))
+
+        assert result is job
+
     def test_owner_can_access_job(self, db_url):
         _insert_job_info(db_url, "job-1")
         principal = Principal(type="jwt", sub="user-1")
@@ -151,3 +170,25 @@ class TestAuthorizeJobAccess:
             asyncio.run(authorize_job_access(job_store, db_url, "job-1", Principal(type="jwt", sub="user-1")))
 
         assert exc.value.status_code == 404
+
+
+class TestRequireVerifiedPrincipal:
+    """The report follow-up surfaces depend on this resolving correctly per REQUIRE_AUTH."""
+
+    def test_no_auth_synthesizes_a_usable_principal(self, monkeypatch):
+        from aiq_api.jobs.access import require_verified_principal
+
+        monkeypatch.setenv("REQUIRE_AUTH", "false")
+        principal = require_verified_principal()
+        # No 401/403 in no-auth mode; a stable, non-None principal is returned so
+        # chat/HTTP report follow-up works for anonymous callers.
+        assert principal is not None
+        assert principal.sub
+
+    def test_auth_required_without_verified_principal_raises_403(self, monkeypatch):
+        from aiq_api.jobs.access import require_verified_principal
+
+        monkeypatch.setenv("REQUIRE_AUTH", "true")
+        with pytest.raises(HTTPException) as exc:
+            require_verified_principal()
+        assert exc.value.status_code == 403

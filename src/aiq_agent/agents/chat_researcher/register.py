@@ -303,14 +303,16 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     deep_research_job_submitter = None
 
     async def _resolve_report_context_for_state(state: ChatResearcherState):
-        from aiq_agent.auth import get_current_principal
+        from aiq_api.jobs.access import require_verified_principal
         from aiq_api.jobs.report_context import resolve_authorized_report_context
 
         if not state.active_report_job_id:
             raise RuntimeError("Report follow-up requires active_report_job_id")
-        principal = get_current_principal()
-        if principal is None:
-            raise RuntimeError("Report follow-up requires an authenticated user")
+        # Use the same auth contract as the HTTP report endpoints: this returns a
+        # synthesized no-auth principal when REQUIRE_AUTH=false (the public default)
+        # and a verified principal otherwise. Using get_current_principal() directly
+        # would raise for anonymous callers and break report follow-up over chat.
+        principal = require_verified_principal()
         return await resolve_authorized_report_context(state.active_report_job_id, principal)
 
     async def _answer_report_question(state: ChatResearcherState) -> str:
@@ -327,17 +329,15 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
     async def _submit_report_edit_job(state: ChatResearcherState) -> str:
         from aiq_agent.auth import get_auth_token
-        from aiq_agent.auth import get_current_principal
         from aiq_agent.common import get_latest_user_query
+        from aiq_api.jobs.access import require_verified_principal
         from aiq_api.jobs.report_context import report_output_metadata
         from aiq_api.jobs.report_context import to_initial_files
         from aiq_api.jobs.submit import submit_agent_job
 
         report_context = await _resolve_report_context_for_state(state)
         instruction = get_latest_user_query(state.messages)
-        principal = get_current_principal()
-        if principal is None:
-            raise RuntimeError("Report edit requires an authenticated user")
+        principal = require_verified_principal()
         return await submit_agent_job(
             agent_type="report_rewriter",
             input_text=instruction,
@@ -347,6 +347,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             auth_token=get_auth_token(),
             initial_files=to_initial_files(report_context, instruction=instruction),
             output_metadata=report_output_metadata(report_context.parent_job_id, "edit"),
+            allow_internal=True,
         )
 
     if config.use_async_deep_research:

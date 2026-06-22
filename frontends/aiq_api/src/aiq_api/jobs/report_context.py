@@ -237,9 +237,12 @@ async def resolve_authorized_report_context(parent_job_id: str, principal: Princ
 def to_initial_files(context: ReportContext, instruction: str | None = None) -> dict[str, str]:
     """Convert report context into PR 267 DeepAgents virtual filesystem seed files."""
 
+    # Exclude report_markdown from the JSON context: the full report is already seeded
+    # verbatim into /shared/original_report.md, so embedding it again here would roughly
+    # double the report tokens carried into the rewrite/research prompt for no benefit.
     files = {
         "/shared/original_report.md": context.report_markdown,
-        "/shared/parent_report_context.json": context.model_dump_json(indent=2),
+        "/shared/parent_report_context.json": context.model_dump_json(indent=2, exclude={"report_markdown"}),
         "/shared/source_summary.md": context.source_summary_markdown,
     }
     if instruction is not None:
