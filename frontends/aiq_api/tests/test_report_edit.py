@@ -151,6 +151,21 @@ async def test_report_edit_denies_cross_user_access_with_404(report_edit_app):
 
 
 @pytest.mark.asyncio
+async def test_report_edit_rejects_blank_input(report_edit_app):
+    """Whitespace-only edit instructions are rejected at the boundary (422), not submitted."""
+    app, _parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "   "},
+        )
+
+    assert response.status_code == 422
+    submit_agent_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_report_edit_job_id_collision_returns_409(report_edit_app):
     """A caller-supplied job_id that collides returns 409, never a 500/data-loss path."""
     from aiq_api.jobs.submit import JobIdConflictError
@@ -184,7 +199,7 @@ async def test_report_edit_submits_internal_agent_with_allow_internal(report_edi
 
 @pytest.mark.asyncio
 async def test_job_report_response_includes_report_interaction_metadata(report_edit_app):
-    app, child_job, _authorize_job_access, _submit_agent_job, _principal, _job_store = report_edit_app
+    app, child_job, authorize_job_access, _submit_agent_job, principal, job_store = report_edit_app
     child_job.output = {
         "report": "# Revised",
         "parent_job_id": "parent-job-1",
@@ -204,3 +219,6 @@ async def test_job_report_response_includes_report_interaction_metadata(report_e
         "interaction_action": "edit",
         "result_kind": "report",
     }
+    # The GET report route must authorize the caller for THIS job id (the fixture
+    # mock returns the same object for any id, so prove the access check happened).
+    authorize_job_access.assert_awaited_once_with(job_store, "sqlite:///./test.db", "child-job-1", principal)

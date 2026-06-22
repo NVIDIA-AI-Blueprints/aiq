@@ -235,3 +235,22 @@ class TestExtractQueryContext:
 
         assert context.query_text == "Update this with latest data"
         assert context.active_report_job_id == "job-3"
+
+    def test_explicit_empty_data_sources_preserved_dict_payload(self):
+        """An explicit empty data_sources list ('no data-source tools') must survive."""
+        payload = {
+            "data_sources": [],
+            "content": {"messages": [{"role": "user", "content": "hello"}]},
+        }
+        context = _extract_query_context(payload)
+        assert context.data_sources == []
+
+    def test_explicit_empty_data_sources_preserved_object_payload(self):
+        from types import SimpleNamespace
+
+        payload = SimpleNamespace(
+            data_sources=[],
+            messages=[SimpleNamespace(role="user", content="hello")],
+        )
+        context = _extract_query_context(payload)
+        assert context.data_sources == []

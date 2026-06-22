@@ -111,7 +111,6 @@ class ReportRewriterAgent:
         for callback in self.callbacks:
             if hasattr(callback, "emit_final_report"):
                 callback.emit_final_report(revised_report)
-                break
 
         files = dict(state.files)
         files[OUTPUT_REPORT_PATH] = revised_report

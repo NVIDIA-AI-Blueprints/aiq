@@ -15,6 +15,7 @@
 
 """NAT register function for chat researcher agent."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -48,6 +49,10 @@ from .models import ChatResearcherState
 from .utils import _extract_query_context
 
 logger = logging.getLogger(__name__)
+
+# Upper bound on the single bounded report-ask LLM call so a stalled provider
+# degrades to a graceful message instead of blocking the whole chat turn.
+_REPORT_ASK_TIMEOUT_S = 120
 
 _ensure_otel_redaction_registered()
 
@@ -88,7 +93,11 @@ async def _answer_from_report_context(
         report_markdown=report_markdown,
         source_summary_markdown=source_summary_markdown,
     )
-    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    try:
+        response = await asyncio.wait_for(llm.ainvoke([HumanMessage(content=prompt)]), timeout=_REPORT_ASK_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning("Report ask LLM call timed out after %ss", _REPORT_ASK_TIMEOUT_S)
+        return "The report service took too long to respond. Please try again."
     content = response.content if hasattr(response, "content") else response
     answer = content if isinstance(content, str) else str(content)
     if not answer.strip():
@@ -387,15 +396,27 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                     from aiq_api.jobs.report_context import report_output_metadata
                     from aiq_api.jobs.report_context import to_initial_files
 
-                    report_context = await _resolve_report_context_for_state(state)
-                    initial_files = to_initial_files(report_context)
-                    output_metadata = report_output_metadata(report_context.parent_job_id, "research")
-                    input_text = (
-                        f"{input_text}\n\n"
-                        "Use the seeded parent report context in /shared/original_report.md and "
-                        "/shared/source_summary.md. Reuse the parent report where sufficient and perform "
-                        "new research only for the requested delta."
-                    )
+                    # Parent-context seeding is an optional enrichment. If durable context
+                    # resolution fails (e.g. 409/503), still run the delta research rather
+                    # than aborting the whole job.
+                    try:
+                        report_context = await _resolve_report_context_for_state(state)
+                    except Exception as e:
+                        logger.warning(
+                            "Parent report context unavailable for %s (error_type=%s); "
+                            "continuing without seeded context",
+                            state.active_report_job_id,
+                            type(e).__name__,
+                        )
+                    else:
+                        initial_files = to_initial_files(report_context)
+                        output_metadata = report_output_metadata(report_context.parent_job_id, "research")
+                        input_text = (
+                            f"{input_text}\n\n"
+                            "Use the seeded parent report context in /shared/original_report.md and "
+                            "/shared/source_summary.md. Reuse the parent report where sufficient and perform "
+                            "new research only for the requested delta."
+                        )
 
                 return await submit_agent_job(
                     agent_type="deep_researcher",

@@ -11,6 +11,12 @@
         },
         {
             "pattern": "^https://www\\.postgresql\\.org/$"
+        },
+        {
+            "pattern": "^https://fastapi\\.tiangolo\\.com/$"
+        },
+        {
+            "pattern": "^https://www\\.dask\\.org/$"
         }
     ],
     "replacementPatterns": [

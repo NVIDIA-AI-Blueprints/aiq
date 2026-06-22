@@ -204,7 +204,13 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
         raise HTTPException(409, f"Parent job has no durable report: {parent_job_id}")
 
     if events is None:
-        events = await EventStore.get_events_async(db_url, parent_job_id, 0, _EVENT_SCAN_LIMIT)
+        # The report is already in hand (from job output); the event log is only
+        # needed to enrich sources. A transient fetch failure here must not abort
+        # report follow-up — fall back to report-only source extraction.
+        try:
+            events = await EventStore.get_events_async(db_url, parent_job_id, 0, _EVENT_SCAN_LIMIT)
+        except Exception:
+            events = []
     event_sources = _sources_from_events(events)
     report_sources = _extract_sources_from_report_markdown(report)
     sources = _dedupe_sources([*event_sources, *report_sources])

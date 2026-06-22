@@ -337,7 +337,11 @@ class ChatResearcherAgent:
             except Exception as e:
                 # The node has no HTTP scope, so a raised exception would surface as an
                 # opaque workflow error / empty completion. Degrade to a chat message.
-                logger.warning("Report ask failed for report %s: %s", state.active_report_job_id, e)
+                logger.warning(
+                    "Report ask failed for report %s (error_type=%s)",
+                    state.active_report_job_id,
+                    type(e).__name__,
+                )
                 return {
                     "messages": [
                         AIMessage(content="I couldn't access that report to answer your question. Please try again.")
@@ -351,7 +355,11 @@ class ChatResearcherAgent:
             try:
                 job_id = await self.report_edit_job_submitter(state)
             except Exception as e:
-                logger.warning("Report edit submission failed for report %s: %s", state.active_report_job_id, e)
+                logger.warning(
+                    "Report edit submission failed for report %s (error_type=%s)",
+                    state.active_report_job_id,
+                    type(e).__name__,
+                )
                 return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
             return {"messages": [AIMessage(content=f"Report edit job submitted. Job ID: {job_id}")]}
 

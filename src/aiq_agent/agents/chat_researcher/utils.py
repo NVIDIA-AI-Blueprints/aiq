@@ -150,9 +150,11 @@ def _extract_query_context(payload: Any) -> ChatRequestContext:
     """
     if isinstance(payload, dict):
         content = payload.get("content", {}) if isinstance(payload.get("content"), dict) else {}
-        data_sources = parse_data_sources(payload.get("data_sources")) or parse_data_sources(
-            content.get("data_sources")
-        )
+        # Use `is None` (not `or`): an explicit empty list means "no data-source tools"
+        # and must be preserved rather than falling through to the nested/inline value.
+        data_sources = parse_data_sources(payload.get("data_sources"))
+        if data_sources is None:
+            data_sources = parse_data_sources(content.get("data_sources"))
         active_report_job_id = _clean_optional_string(payload.get("active_report_job_id")) or _clean_optional_string(
             content.get("active_report_job_id")
         )
@@ -173,7 +175,8 @@ def _extract_query_context(payload: Any) -> ChatRequestContext:
         if query_text:
             inline_context = _extract_context_from_text(query_text)
             query_text = inline_context.query_text
-            data_sources = data_sources or inline_context.data_sources
+            if data_sources is None:
+                data_sources = inline_context.data_sources
             active_report_job_id = active_report_job_id or inline_context.active_report_job_id
         return ChatRequestContext(
             query_text=query_text or "",
@@ -196,7 +199,8 @@ def _extract_query_context(payload: Any) -> ChatRequestContext:
         if query_text:
             inline_context = _extract_context_from_text(query_text)
             query_text = inline_context.query_text
-            data_sources = data_sources or inline_context.data_sources
+            if data_sources is None:
+                data_sources = inline_context.data_sources
             active_report_job_id = active_report_job_id or inline_context.active_report_job_id
         return ChatRequestContext(
             query_text=query_text or "",

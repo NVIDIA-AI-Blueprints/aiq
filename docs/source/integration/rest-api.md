@@ -141,6 +141,7 @@ response carries `parent_job_id`, `interaction_action` (`edit`), and `result_kin
 |--------|--------|
 | `404` | Parent job not found (or not accessible to the caller when auth is enabled) |
 | `409` | Parent job is incomplete, has no durable report, or the supplied child `job_id` collides |
+| `500` | Failed to submit the report edit job |
 | `503` | Dask scheduler not available |
 
 ### Get Job Status

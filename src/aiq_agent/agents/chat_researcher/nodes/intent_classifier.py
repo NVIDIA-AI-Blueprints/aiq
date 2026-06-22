@@ -169,7 +169,7 @@ class IntentClassifier:
             active_report = bool(state.active_report_job_id)
             target = _normalize_target(parsed.get("target"))
             report_action = _normalize_report_action(parsed.get("report_action"))
-            use_parent_report_context = bool(parsed.get("use_parent_report_context")) and active_report
+            use_parent_report_context = _normalize_bool(parsed.get("use_parent_report_context")) and active_report
 
             if intent == "meta":
                 target = "meta"
@@ -263,3 +263,18 @@ def _normalize_target(raw_target: Any) -> str:
 def _normalize_report_action(raw_action: Any) -> str | None:
     action = raw_action.strip().lower() if isinstance(raw_action, str) else None
     return action if action in ("ask", "edit") else None
+
+
+def _normalize_bool(raw_value: Any) -> bool:
+    """Coerce LLM JSON values to bool, treating string booleans correctly.
+
+    json.loads usually yields real booleans, but models occasionally emit string
+    booleans (e.g. "false"); plain bool("false") would be True, so handle them.
+    """
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        return raw_value.strip().lower() in {"true", "1", "yes"}
+    if isinstance(raw_value, (int, float)):
+        return raw_value != 0
+    return False

@@ -550,9 +550,9 @@ async def run_agent_job(
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
-                    output = {"report": report}
-                    if output_metadata:
-                        output.update(output_metadata)
+                    # Apply caller metadata first, then set the canonical report last so a
+                    # stray "report" key in output_metadata can never overwrite the real report.
+                    output = {**(output_metadata or {}), "report": report}
                     await job_store.update_status(job_id, JobStatus.SUCCESS, output=output)
                     logger.info("Job %s completed (report: %d chars)", job_id, len(report))
 
