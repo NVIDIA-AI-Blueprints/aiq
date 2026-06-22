@@ -125,7 +125,6 @@ def test_connect_then_callback_completes(client):
     cb = tc.get(f"/v1/auth/mcp/gdrive/callback?code=abc&state={state}")
     assert cb.status_code == 200
     assert "Connected" in cb.text
-    # Now status flips to connected.
     assert tc.get("/v1/auth/mcp/gdrive/status").json()["status"] == "connected"
 
 

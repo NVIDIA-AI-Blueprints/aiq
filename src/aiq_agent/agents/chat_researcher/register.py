@@ -437,11 +437,11 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             from aiq_api.jobs.submit import submit_agent_job
 
             async def _submit_deep_job(state: ChatResearcherState) -> str:
-                # Use the same principal resolution as the connect/status routes so the
-                # job's per-user MCP token key (principal_user_id) matches where the
-                # token was stored at connect time. Deriving the key from `owner`
-                # (email) instead would mismatch the connect key ("{type}:{sub}") and
-                # cause the worker to trigger interactive re-auth for a connected source.
+                # Resolve the principal the same way the connect/status routes do, so the
+                # job's per-user MCP token key (principal_user_id) matches where the token
+                # was stored at connect time. Keying off `owner` (email) instead would
+                # mismatch the connect key ("{type}:{sub}") and trigger interactive re-auth
+                # for an already-connected source.
                 principal = require_verified_principal()
                 owner = principal.email or principal.sub
                 query = state.original_query

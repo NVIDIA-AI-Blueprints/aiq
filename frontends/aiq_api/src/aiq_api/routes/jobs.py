@@ -311,10 +311,9 @@ async def _validate_data_sources_for_agent(
 async def _preflight_mcp_auth(provider, principal, data_sources: list[str] | None):
     """Return a 409 JSONResponse if any selected protected source is not connected, else None.
 
-    Thin HTTP wrapper over the shared, transport-agnostic
-    :func:`evaluate_mcp_auth`. The same check runs inside ``submit_agent_job``
-    (raising instead of returning a response) so programmatic submitters cannot
-    bypass it. Sources are validated for existence/availability earlier by
+    Thin HTTP wrapper over the shared :func:`evaluate_mcp_auth`; the same check
+    runs inside ``submit_agent_job`` (raising instead) so programmatic submitters
+    cannot bypass it. Source existence is validated earlier by
     ``_validate_data_sources_for_agent``.
     """
     from fastapi.responses import JSONResponse
@@ -473,8 +472,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     # started via /connect can be completed by /callback in the same process.
     mcp_auth_provider = await build_mcp_auth_provider(builder)
     # Publish the provider process-wide so submit_agent_job() can run the same
-    # connect-state preflight for programmatic submitters (e.g. chat-triggered
-    # async deep research), not just this REST route.
+    # connect-state preflight for programmatic submitters, not just this REST route.
     from ..mcp_auth.active import set_active_mcp_auth_provider
 
     set_active_mcp_auth_provider(mcp_auth_provider)
@@ -1507,11 +1505,10 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     sequence_id = start_event_id
     terminal_statuses = {JobStatus.SUCCESS.value, JobStatus.FAILURE.value, JobStatus.INTERRUPTED.value}
     is_reconnect = start_event_id > 0
-    # Emit an SSE keepalive comment after this many seconds of silence so that
-    # intermediaries (OpenShift router / edge / proxy) never see the long-lived
-    # connection as idle. The worker's job.heartbeat only starts once the worker
-    # is running, so it does not cover worker cold-start on the first request —
-    # this generator-level keepalive does.
+    # Emit an SSE keepalive comment after this many seconds of silence so an
+    # upstream idle timeout (OpenShift router / edge / proxy) never closes the
+    # connection. job.heartbeat only starts once the worker runs, so it does not
+    # cover worker cold-start on the first request — this keepalive does.
     SSE_KEEPALIVE_INTERVAL = 15.0
     last_keepalive = time.monotonic()
 
@@ -1624,9 +1621,8 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
                                 last_event_id = db_event_id
                             event_type = event.pop("type", "event")
                             yield format_sse(event_type, event, db_event_id)
-                        # Keepalive during silent periods (e.g. worker cold-start, before the
-                        # first event or 30s heartbeat) so the connection is never idle long
-                        # enough for an upstream idle timeout to close it.
+                        # Keepalive during silent periods (e.g. worker cold-start) so an
+                        # upstream idle timeout never closes the connection.
                         if fallback_events:
                             last_keepalive = time.monotonic()
                         elif (time.monotonic() - last_keepalive) >= SSE_KEEPALIVE_INTERVAL:

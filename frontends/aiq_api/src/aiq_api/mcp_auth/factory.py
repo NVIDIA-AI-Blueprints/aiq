@@ -120,15 +120,12 @@ async def _resolve_oauth_settings(source_id: str, pua, nat_provider, cfg) -> OAu
     resource = server_url or None
 
     authorization_url = token_url = None
-    # Reuse NAT's discovery (well-known metadata + RFC 7591 dynamic client
-    # registration when no client_id is configured). This module is the explicit
-    # NAT integration seam, so reaching the discovery internals is acceptable; it
-    # is version-pinned to the resolved nat release.
-    #
-    # MCP servers (e.g. NVIDIA MaaS) advertise their authorization server via the
-    # 401 WWW-Authenticate header (RFC 9728 resource_metadata), not the root
-    # well-known — so we probe the server for that 401 first and hand it to
-    # discovery. Without the probe, unauthenticated discovery cannot locate the AS.
+    # Reuse NAT's discovery (well-known metadata + RFC 7591 DCR when no client_id
+    # is set). This module is the explicit NAT integration seam, so reaching
+    # discovery internals is acceptable (version-pinned to the resolved nat release).
+    # MCP servers (e.g. NVIDIA MaaS) advertise their AS via the 401 WWW-Authenticate
+    # header (RFC 9728 resource_metadata), not the root well-known, so we probe for
+    # that 401 first; without it unauthenticated discovery cannot locate the AS.
     try:
         challenge = await _probe_for_oauth_challenge(str(getattr(cfg, "server_url", "") or ""))
         await nat_provider._discover_and_register(response=challenge)  # noqa: SLF001 — NAT seam

@@ -24,7 +24,6 @@ export type PerUserAuthStatus = 'connected' | 'not_connected' | 'expired' | 'err
 
 /** Per-user MCP OAuth block attached to a protected data source (mirrors the API). */
 export interface PerUserAuthInfoFromAPI {
-  /** Whether per-user MCP auth is required for this source */
   required: boolean
   /** Auth mechanism (only mcp_oauth2 today) */
   type?: 'mcp_oauth2'
@@ -32,7 +31,6 @@ export interface PerUserAuthInfoFromAPI {
   provider?: string | null
   /** MCP server/auth-provider key */
   mcp_server_id?: string | null
-  /** Current per-user auth state */
   status?: PerUserAuthStatus | null
   /** Stable URL to (re)start the connect flow */
   connect_url?: string | null

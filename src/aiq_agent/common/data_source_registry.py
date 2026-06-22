@@ -83,11 +83,11 @@ class PerUserAuthConfig(BaseModel):
     auth_provider: str | None = Field(
         default=None,
         description=(
-            "Name of the NAT `authentication` (mcp_oauth2) provider for this source. AIQ resolves it via the "
-            "builder both to derive OAuth settings + shared token storage (connect flow) and to build the "
-            "per-user MCP client in the worker at job time (its server_url is the MCP endpoint). Defaults to "
-            "mcp_server_id when unset. NOTE: no config-declared per_user_mcp_client function group is used — "
-            "see aiq_api.mcp_auth.runtime_tools for why (it breaks the interactive WebSocket path)."
+            "Name of the NAT `authentication` (mcp_oauth2) provider for this source, resolved via the builder "
+            "to derive OAuth settings + shared token storage (connect flow) and to build the per-user MCP "
+            "client in the worker at job time. Defaults to mcp_server_id when unset. NOTE: no config-declared "
+            "per_user_mcp_client function group is used — see aiq_api.mcp_auth.runtime_tools for why (it breaks "
+            "the interactive WebSocket path)."
         ),
     )
     tool_overrides: dict[str, dict[str, str]] | None = Field(
@@ -299,11 +299,11 @@ def register_tool_sources(mapping: dict[str, str]) -> None:
     """Merge additional exact tool→source mappings into the registry.
 
     Used for tools that only become known at runtime — notably a per-user MCP
-    source's tools (resolved per request with the user's token), which aren't in
-    the static config. Registering them so ``get_source_id_for_tool`` resolves
-    their source is what lets citation/source capture treat their results as
-    sources (otherwise shallow research raises EmptySourceRegistryError). Keys are
-    deterministic (tool name -> source id), so merging globally is idempotent.
+    source's tools (resolved per request), which aren't in the static config.
+    Registering them lets ``get_source_id_for_tool`` resolve their source so
+    citation/source capture treats their results as sources (otherwise shallow
+    research raises EmptySourceRegistryError). Keys are deterministic, so merging
+    globally is idempotent.
     """
     if not mapping:
         return

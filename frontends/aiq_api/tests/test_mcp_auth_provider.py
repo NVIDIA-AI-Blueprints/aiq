@@ -145,7 +145,6 @@ def test_complete_callback_exchanges_and_stores(provider, monkeypatch):
     # Token now retrievable under the principal's key -> status connected
     state = asyncio.run(prov.get_status(PRINCIPAL, "gdrive"))
     assert state.status == "connected"
-    # Pending flow consumed
     assert challenge.state not in prov._pending
 
 

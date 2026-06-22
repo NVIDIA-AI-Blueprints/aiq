@@ -255,10 +255,9 @@ async def submit_agent_job(
 
     # Preflight protected MCP sources before enqueue. The REST submit route also
     # does this (returning 409), but programmatic submitters — notably the chat
-    # researcher's async deep-research path — call this function directly and
-    # would otherwise bypass the check. Enforcing it here is the single chokepoint
-    # both paths share. Skipped when MCP auth is not configured in this process
-    # (no active provider), where there is nothing to enforce.
+    # researcher's async deep-research path — call this directly and would otherwise
+    # bypass the check, so this is the single chokepoint both paths share. Skipped
+    # when no MCP auth provider is active in this process (nothing to enforce).
     from aiq_api.mcp_auth.active import get_active_mcp_auth_provider
     from aiq_api.mcp_auth.preflight import McpAuthRequiredError
     from aiq_api.mcp_auth.preflight import evaluate_mcp_auth
