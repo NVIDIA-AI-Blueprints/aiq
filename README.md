@@ -106,7 +106,7 @@ This project is for:
 
 **Optional requirements:**
 - Tavily API key (for web search functionality)
-- Serper API key (for academic paper search functionality)
+- A paper search API key for one of the supported providers: Serper (`SERPER_API_KEY`), SerpAPI (`SERPAPI_API_KEY`), or SearchAPI (`SEARCHAPI_API_KEY`)
 
 > **Note:** Configure at least one data source (Tavily web search, Serper search tool, or knowledge layer) to enable research functionality.
 
@@ -206,10 +206,17 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 2. Navigate to your dashboard
 3. Generate an API key
 
-#### Obtain a Serper API Key
+#### Obtain a Paper Search API Key
 
-1. Sign in to [Serper](https://serper.dev/)
-2. Generate an API key from your dashboard
+Paper search supports three interchangeable providers. Set the `provider` field on the `paper_search` function in your workflow config (defaults to `serper`):
+
+| Provider | Environment Variable | Sign-up |
+|----------|----------------------|---------|
+| Serper (default) | `SERPER_API_KEY` | [serper.dev](https://serper.dev/) |
+| SerpAPI | `SERPAPI_API_KEY` | [serpapi.com](https://serpapi.com/) |
+| SearchAPI | `SEARCHAPI_API_KEY` | [searchapi.io](https://www.searchapi.io/) |
+
+See [sources/google_scholar_paper_search/README.md](sources/google_scholar_paper_search/README.md) for configuration details.
 
 ### Set Up Environment Variables
 
