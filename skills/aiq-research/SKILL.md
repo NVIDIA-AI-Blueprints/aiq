@@ -407,3 +407,5 @@ source URLs intact.
    ```bash
    python3 $SKILL_DIR/scripts/aiq.py research_poll <JOB_ID>
    ```
+
+<!-- nvskills: source touch to trigger an NVSkills validation refresh; safe to revert. -->

@@ -349,3 +349,5 @@ Expected output: a successful health response. Then tell the user to keep `AIQ_S
 1. Prefer a normal restart from `references/shutdown.md`.
 2. Ask for explicit approval before running volume deletion.
 3. After cleanup, rerun deployment and validation from the selected route.
+
+<!-- nvskills: source touch to trigger an NVSkills validation refresh; safe to revert. -->
