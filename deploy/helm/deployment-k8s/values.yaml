@@ -85,6 +85,9 @@ aiq:
         NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
+        # Per-user MCP auth token store (config_web_frag.yml)
+        REDIS_HOST: aiq-redis
+        REDIS_PORT: '6379'
         RAG_SERVER_URL: http://rag-server:8080
         RAG_INGEST_URL: http://rag-ingest:8080
         COLLECTION_NAME: default_collection
@@ -196,6 +199,68 @@ aiq:
           failureThreshold: 5
       labels:
         component: postgres
+      podSecurityContext: null
+    redis:
+      # Shared token store for per-user MCP auth (config_web_frag.yml). The API
+      # pod (connect) and the Dask worker (job) both reach it via aiq-redis:6379.
+      # ALLOW_EMPTY_PASSWORD suits an internal ClusterIP dev install; set a
+      # password (and the matching config_web_frag REDIS_PASSWORD) for production.
+      enabled: true
+      replicas: 1
+      image:
+        repository: bitnami/redis
+        tag: latest
+        pullPolicy: IfNotPresent
+      imagePullSecrets: []
+      service:
+        type: ClusterIP
+        ports:
+        - name: redis
+          port: 6379
+          targetPort: 6379
+      ports:
+      - name: redis
+        containerPort: 6379
+        protocol: TCP
+      env:
+        ALLOW_EMPTY_PASSWORD: 'yes'  # pragma: allowlist secret
+        REDIS_AOF_ENABLED: 'yes'
+      persistence:
+      - name: aiq-redis-data
+        accessModes:
+        - ReadWriteOnce
+        size: 5Gi
+      volumes:
+      - name: redis-data
+        persistentVolumeClaim:
+          claimName: aiq-redis-data
+      volumeMounts:
+      - name: redis-data
+        mountPath: /bitnami/redis/data
+      healthCheck:
+        enabled: true
+        livenessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - redis-cli ping
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 5
+        readinessProbe:
+          exec:
+            command:
+            - sh
+            - -c
+            - redis-cli ping
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 5
+          failureThreshold: 5
+      labels:
+        component: redis
       podSecurityContext: null
     frontend:
       replicas: 1
