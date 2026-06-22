@@ -146,9 +146,9 @@ class PaperSearchTool:
         except TimeoutError:
             logger.error(f"Paper search timed out for query: {query}")
             return f"Paper search timed out after {self.timeout}s for query: {query}"
-        except Exception as e:
-            logger.error(f"Paper search failed: {e}")
-            return f"Paper search failed: {str(e)}"
+        except Exception:
+            logger.exception("Paper search failed for provider '%s'", self.provider.value)
+            return f"Paper search failed: unable to fetch results from {self.provider.value}."
 
     @staticmethod
     def format_results(results: list[dict[str, Any]]) -> str:
@@ -245,8 +245,7 @@ class PaperSearchTool:
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
             ) as response:
                 if response.status != 200:
-                    text = await response.text()
-                    raise Exception(f"Serper API error: {response.status} - {text}")
+                    raise RuntimeError(f"Serper API error: HTTP {response.status}")
                 return await response.json()
 
     async def _search_serper(
@@ -322,8 +321,7 @@ class PaperSearchTool:
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
             ) as response:
                 if response.status != 200:
-                    text = await response.text()
-                    raise Exception(f"SerpAPI error: {response.status} - {text}")
+                    raise RuntimeError(f"SerpAPI error: HTTP {response.status}")
                 return await response.json()
 
     async def _search_serpapi(
@@ -408,8 +406,7 @@ class PaperSearchTool:
                 timeout=aiohttp.ClientTimeout(total=self.timeout),
             ) as response:
                 if response.status != 200:
-                    text = await response.text()
-                    raise Exception(f"SearchAPI error: {response.status} - {text}")
+                    raise RuntimeError(f"SearchAPI error: HTTP {response.status}")
                 return await response.json()
 
     async def _search_searchapi(

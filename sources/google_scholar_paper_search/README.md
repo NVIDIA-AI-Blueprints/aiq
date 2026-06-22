@@ -2,7 +2,7 @@
 
 A NeMo Agent Toolkit function that searches for academic papers using Google Scholar. You can choose between three backend providers:
 
-| Provider | `_type` value | Env var | Sign-up |
+| Provider | `provider` value | Env var | Sign-up |
 |----------|---------------|---------|---------|
 | **Serper** (default) | `serper` | `SERPER_API_KEY` | [serper.dev](https://serper.dev/) |
 | **SerpAPI** | `serpapi` | `SERPAPI_API_KEY` | [serpapi.com](https://serpapi.com/) |

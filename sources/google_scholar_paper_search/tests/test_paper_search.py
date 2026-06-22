@@ -189,7 +189,7 @@ class TestSearch:
             result = await paper_search_tool.search("test query")
 
         assert "Paper search failed" in result
-        assert "API Error" in result
+        assert "API Error" not in result
 
     @pytest.mark.asyncio
     async def test_search_with_integer_year(self, paper_search_tool, sample_serper_response):
@@ -864,4 +864,4 @@ class TestProviderDispatch:
             result = await serpapi_tool.search("test query")
 
         assert "Paper search failed" in result
-        assert "SerpAPI Error" in result
+        assert "SerpAPI Error" not in result

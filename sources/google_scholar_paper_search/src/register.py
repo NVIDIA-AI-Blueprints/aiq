@@ -79,10 +79,13 @@ _PROVIDER_KEY_INFO = {
 
 def _resolve_api_key(provider: PaperSearchProvider, tool_config: PaperSearchToolConfig) -> str | None:
     env_var, config_attr, _ = _PROVIDER_KEY_INFO[provider]
+    env_value = os.environ.get(env_var)
+    if env_value:
+        return env_value
     config_value = getattr(tool_config, config_attr)
-    if not os.environ.get(env_var) and config_value:
-        os.environ[env_var] = config_value.get_secret_value()
-    return os.environ.get(env_var)
+    if config_value:
+        return config_value.get_secret_value()
+    return None
 
 
 @register_function(config_type=PaperSearchToolConfig)
@@ -126,9 +129,9 @@ async def paper_search(tool_config: PaperSearchToolConfig, builder: Builder):
 
     tool = PaperSearchTool(
         provider=provider,
-        serper_api_key=tool_config.serper_api_key.get_secret_value() if tool_config.serper_api_key else None,
-        serpapi_api_key=tool_config.serpapi_api_key.get_secret_value() if tool_config.serpapi_api_key else None,
-        searchapi_api_key=tool_config.searchapi_api_key.get_secret_value() if tool_config.searchapi_api_key else None,
+        serper_api_key=api_key if provider is PaperSearchProvider.SERPER else None,
+        serpapi_api_key=api_key if provider is PaperSearchProvider.SERPAPI else None,
+        searchapi_api_key=api_key if provider is PaperSearchProvider.SEARCHAPI else None,
         timeout=tool_config.timeout,
         max_results=tool_config.max_results,
     )
