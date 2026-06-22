@@ -10,7 +10,7 @@
 
 'use client'
 
-import { type FC, memo, useCallback, useMemo } from 'react'
+import { type FC, memo, useCallback, useMemo, useState } from 'react'
 import { Flex, Text, SidePanel, SegmentedControl, Switch, Button, Banner } from '@/adapters/ui'
 import { createMcpAuthClient, openAuthPopupAndWait } from '@/adapters/api'
 import { useShallow } from 'zustand/react/shallow'
@@ -65,6 +65,9 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
 
   // Check if current session is busy with operations
   const isBusy = useIsCurrentSessionBusy()
+
+  // Error surfaced when a protected-source connect attempt fails.
+  const [connectError, setConnectError] = useState<string | null>(null)
 
   // Check if user has valid auth token
   const hasValidToken = !!idToken
@@ -126,19 +129,33 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     [toggleDataSource, enabledDataSourceIds, saveDataSourcesToConversation, onSourceToggle]
   )
 
-  // Start (or resume) the per-user OAuth flow for a protected source: ask the
-  // backend for a provider login URL, open it in a popup, then refresh statuses
-  // once the popup closes/posts back so the card reflects the new state.
+  // Start (or resume) the per-user OAuth flow for a protected source: get a
+  // provider login URL, open it in a popup, then refresh statuses. On failure
+  // (network/popup errors) surface a banner and still resync in `finally`, so
+  // the card never sticks in "Connecting…".
   const handleConnect = useCallback(
     async (sourceId: string) => {
-      const client = createMcpAuthClient({ authToken: idToken })
-      const { status, auth_url } = await client.connect(sourceId)
-      if (status === 'auth_required' && auth_url) {
-        await openAuthPopupAndWait(auth_url, sourceId)
+      setConnectError(null)
+      const sourceName = displaySources.find((s) => s.id === sourceId)?.name ?? sourceId
+      try {
+        const client = createMcpAuthClient({ authToken: idToken })
+        const { status, auth_url } = await client.connect(sourceId)
+        if (status === 'auth_required' && auth_url) {
+          await openAuthPopupAndWait(auth_url, sourceId)
+        }
+      } catch (err) {
+        console.error('[DataSourcesPanel] Failed to connect data source', sourceId, err)
+        const detail = err instanceof Error ? err.message : 'Please try again.'
+        setConnectError(`Couldn't connect ${sourceName}. ${detail}`)
+      } finally {
+        try {
+          await fetchDataSources(idToken)
+        } catch (err) {
+          console.error('[DataSourcesPanel] Failed to refresh data sources', err)
+        }
       }
-      await fetchDataSources(idToken)
     },
-    [idToken, fetchDataSources]
+    [idToken, fetchDataSources, displaySources]
   )
 
   const handleTabChange = useCallback(
@@ -239,6 +256,13 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
               {!authRequired
                 ? 'Enable authentication to access additional data sources.'
                 : 'Sign in to access additional data sources.'}
+            </Banner>
+          )}
+
+          {/* Connect failure feedback so a failed attempt isn't silent */}
+          {connectError && (
+            <Banner kind="inline" status="error" className="mb-6 px-4 py-3">
+              {connectError}
             </Banner>
           )}
 
