@@ -446,13 +446,27 @@ class ChatResearcherAgent:
         async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
             if self.report_ask_fn is None:
                 return {"messages": [AIMessage(content="Report follow-up is not available in this workflow.")]}
-            answer = await self.report_ask_fn(state)
+            try:
+                answer = await self.report_ask_fn(state)
+            except Exception as e:
+                # The node has no HTTP scope, so a raised exception would surface as an
+                # opaque workflow error / empty completion. Degrade to a chat message.
+                logger.warning("Report ask failed for report %s: %s", state.active_report_job_id, e)
+                return {
+                    "messages": [
+                        AIMessage(content="I couldn't access that report to answer your question. Please try again.")
+                    ]
+                }
             return {"messages": [AIMessage(content=answer)]}
 
         async def report_edit_node(state: ChatResearcherState) -> dict[str, Any]:
             if self.report_edit_job_submitter is None:
                 return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
-            job_id = await self.report_edit_job_submitter(state)
+            try:
+                job_id = await self.report_edit_job_submitter(state)
+            except Exception as e:
+                logger.warning("Report edit submission failed for report %s: %s", state.active_report_job_id, e)
+                return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
             return {"messages": [AIMessage(content=f"Report edit job submitted. Job ID: {job_id}")]}
 
         def route_after_orchestration(state: ChatResearcherState) -> str:
