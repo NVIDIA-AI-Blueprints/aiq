@@ -147,7 +147,7 @@ class PaperSearchTool:
             logger.error(f"Paper search timed out for query: {query}")
             return f"Paper search timed out after {self.timeout}s for query: {query}"
         except Exception:
-            logger.exception("Paper search failed for provider '%s'", self.provider.value)
+            logger.error("Paper search failed for provider '%s'", self.provider.value)
             return f"Paper search failed: unable to fetch results from {self.provider.value}."
 
     @staticmethod

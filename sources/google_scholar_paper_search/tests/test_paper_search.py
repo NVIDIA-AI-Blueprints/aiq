@@ -810,15 +810,29 @@ class TestProviderDispatch:
     @pytest.mark.asyncio
     async def test_search_dispatches_to_searchapi(self, searchapi_tool):
         """Test that search() dispatches to _search_searchapi."""
-        with patch.object(
-            searchapi_tool,
-            "_search_searchapi",
-            new_callable=AsyncMock,
-            return_value=[],
-        ) as mock_searchapi:
+        with (
+            patch.object(
+                searchapi_tool,
+                "_search_searchapi",
+                new_callable=AsyncMock,
+                return_value=[],
+            ) as mock_searchapi,
+            patch.object(
+                searchapi_tool,
+                "_search_serper",
+                new_callable=AsyncMock,
+            ) as mock_serper,
+            patch.object(
+                searchapi_tool,
+                "_search_serpapi",
+                new_callable=AsyncMock,
+            ) as mock_serpapi,
+        ):
             await searchapi_tool.search("test query")
 
         mock_searchapi.assert_called_once()
+        mock_serper.assert_not_called()
+        mock_serpapi.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_search_serpapi_success(self, serpapi_tool, sample_serpapi_response):

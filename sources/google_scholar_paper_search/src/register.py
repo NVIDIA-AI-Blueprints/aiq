@@ -109,7 +109,7 @@ async def paper_search(tool_config: PaperSearchToolConfig, builder: Builder):
 
         async def _paper_search_stub(
             query: str = Field(..., validation_alias=AliasChoices("query", "question")),
-            year: str | None = None,
+            year: str | int | None = None,
         ) -> str:
             return (
                 f"Error: Paper search is unavailable because {env_var} is not set "
