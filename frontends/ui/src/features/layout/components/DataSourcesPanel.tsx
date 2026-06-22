@@ -141,7 +141,12 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
         const client = createMcpAuthClient({ authToken: idToken })
         const { status, auth_url } = await client.connect(sourceId)
         if (status === 'auth_required' && auth_url) {
-          await openAuthPopupAndWait(auth_url, sourceId)
+          // Pass a status probe so the popup resolves once the backend records
+          // the connection, even when the provider's COOP headers sever the
+          // opener and the postMessage / popup-close signals never arrive.
+          await openAuthPopupAndWait(auth_url, sourceId, {
+            pollStatus: () => client.getStatus(sourceId).then((s) => s.status),
+          })
         }
       } catch (err) {
         console.error('[DataSourcesPanel] Failed to connect data source', sourceId, err)

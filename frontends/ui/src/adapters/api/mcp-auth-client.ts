@@ -103,12 +103,36 @@ export interface AuthPopupResult {
   sourceId?: string
 }
 
+export interface AuthPopupOptions {
+  /**
+   * Optional backend status probe. When provided, the popup also resolves as
+   * soon as the source reports a terminal status. This is the reliable signal:
+   * the provider's pages typically send `Cross-Origin-Opener-Policy`, which
+   * severs `window.opener` so the callback's `postMessage` and the parent's
+   * `popup.closed` check both go silent — leaving the card stuck on
+   * "Connecting…". The callback persists the token before it messages the
+   * opener, so a status probe sees the result regardless.
+   */
+  pollStatus?: () => Promise<PerUserAuthStatus | undefined>
+  /** How often to probe backend status, in ms. Default 1500. */
+  pollIntervalMs?: number
+  /** Stop waiting after this long, in ms, so a never-finished login can't poll
+   *  forever. Default 180000 (3 min). */
+  timeoutMs?: number
+}
+
 /**
- * Open the provider login URL in a popup and resolve when it closes or the
- * callback page posts back. The caller should re-fetch the source status after
- * this resolves to confirm the connection (popup-close is not proof of success).
+ * Open the provider login URL in a popup and resolve when it closes, the
+ * callback page posts back, or (when `pollStatus` is supplied) the backend
+ * reports a terminal status. The caller should still re-fetch the source status
+ * after this resolves to confirm the connection.
  */
-export function openAuthPopupAndWait(authUrl: string, sourceId: string): Promise<AuthPopupResult> {
+export function openAuthPopupAndWait(
+  authUrl: string,
+  sourceId: string,
+  options: AuthPopupOptions = {}
+): Promise<AuthPopupResult> {
+  const { pollStatus, pollIntervalMs = 1500, timeoutMs = 180_000 } = options
   return new Promise((resolve) => {
     const popup = window.open(authUrl, `mcp-auth-${sourceId}`, 'popup,width=520,height=680')
 
@@ -125,6 +149,8 @@ export function openAuthPopupAndWait(authUrl: string, sourceId: string): Promise
       settled = true
       window.removeEventListener('message', onMessage)
       clearInterval(poll)
+      if (statusPoll !== undefined) clearInterval(statusPoll)
+      clearTimeout(timeout)
       resolve(result)
     }
 
@@ -146,5 +172,30 @@ export function openAuthPopupAndWait(authUrl: string, sourceId: string): Promise
         finish({})
       }
     }, 700)
+
+    // Authoritative resolve path: poll the backend until the source reaches a
+    // terminal status. Survives the COOP opener-severing described above.
+    const statusPoll: ReturnType<typeof setInterval> | undefined = pollStatus
+      ? setInterval(() => {
+          void (async () => {
+            let status: PerUserAuthStatus | undefined
+            try {
+              status = await pollStatus()
+            } catch {
+              return // transient probe failure — keep polling
+            }
+            if (status === 'connected' || status === 'expired' || status === 'error') {
+              try {
+                popup.close()
+              } catch {
+                /* ignore */
+              }
+              finish({ ok: status === 'connected', sourceId })
+            }
+          })()
+        }, pollIntervalMs)
+      : undefined
+
+    const timeout = setTimeout(() => finish({}), timeoutMs)
   })
 }
