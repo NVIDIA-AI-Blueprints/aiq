@@ -16,22 +16,25 @@ the **only** config change needed — agents inherit registry tools automaticall
 
 ```yaml
 functions:
-  data_source_registry:
+  data_sources:                  # function instance name; _type is the registry
     _type: data_source_registry
     sources:
       - id: my_data_source
-        name: My Data Source
-        category: web          # web | enterprise | storage | collaboration
+        name: "My Data Source"
+        description: "What this source retrieves."
         default_enabled: true
         tools:
-          - _type: my_data_source
+          - my_data_source_tool  # function instance name(s), as plain strings
 
-  my_data_source:
-    _type: my_data_source       # matches the config class name= / entry-point key
+  my_data_source_tool:
+    _type: my_data_source        # _type matches the config class name= / entry-point key
 ```
 
-Confirm the field names against the `DataSourceRegistryConfig` in
-`src/aiq_agent/common/data_source_registry.py`; do not guess the schema.
+Confirm the per-source field names against `DataSourceEntry` (and the parent
+`DataSourceRegistryConfig`) in `src/aiq_agent/common/data_source_registry.py`;
+do not guess the schema. A source entry takes `id`, `name`, `description`,
+`default_enabled`, `requires_auth`, and a `tools` list of plain function-instance
+names — there is no `category` field on the config model.
 
 ## How the registry surfaces the source
 
@@ -52,8 +55,8 @@ Confirm the field names against the `DataSourceRegistryConfig` in
 TypeScript interface (`id`, `name`, `description`, `category`, `defaultEnabled`,
 `requiresAuth`). Because sources are fetched dynamically from
 `GET /v1/data_sources`, adding a source does not require editing this file. Touch
-the UI only for a genuinely new presentation need — that is `aiq-ui-change`
-territory, not this skill.
+the UI only for a genuinely new presentation need — that is a separate frontend
+change under `frontends/ui/`, outside this skill's scope.
 
 ## Authenticated sources
 

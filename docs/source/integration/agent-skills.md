@@ -17,7 +17,7 @@ the **API-consumer** skills. The maintainer skills are documented in their own
 | :-- | :-- | :-- |
 | **Audience** | Users calling a running AI-Q server | Developers changing the AI-Q repo |
 | **Location** | top-level `skills/` | `.agents/skills/` |
-| **Examples** | `aiq-deploy`, `aiq-research` | `aiq-add-data-source` |
+| **Examples** | `aiq-deploy`, `aiq-research` | `aiq-add-data-source`, `aiq-add-tool`, `aiq-release-qa`, `aiq-prepare-pr` |
 | **Assumes** | A reachable AI-Q backend | A repo checkout and dev toolchain |
 
 The API-consumer skills are:
@@ -108,6 +108,9 @@ skills point into `skills/`; the maintainer skills point into `.agents/skills/`:
 .claude/skills/aiq-deploy -> ../../skills/aiq-deploy
 .claude/skills/aiq-research -> ../../skills/aiq-research
 .claude/skills/aiq-add-data-source -> ../../.agents/skills/aiq-add-data-source
+.claude/skills/aiq-add-tool -> ../../.agents/skills/aiq-add-tool
+.claude/skills/aiq-release-qa -> ../../.agents/skills/aiq-release-qa
+.claude/skills/aiq-prepare-pr -> ../../.agents/skills/aiq-prepare-pr
 ```
 
 To recreate the consumer-skill repo-local install manually:

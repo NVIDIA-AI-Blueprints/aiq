@@ -57,8 +57,8 @@ npm run test:ci
 npm run build     # when the change could affect the production build
 ```
 
-Expected: each command exits cleanly. Only `lint`, `type-check`, `test`,
-`test:ci`, and `build` are defined in `package.json` — do not invent scripts.
+Expected: each command exits cleanly. Stick to the canonical checks `lint`,
+`type-check`, `test:ci`, and `build` from `package.json`; do not invent scripts.
 Include a screenshot for user-visible changes.
 
 ## Docs — `docs/`
@@ -98,4 +98,3 @@ nat serve --config_file configs/config_cli_default.yml --port 8000
 ```
 
 The backend API serves at `http://localhost:8000`.
-</content>
