@@ -58,5 +58,5 @@ def parse_manifest(raw: str) -> Manifest | None:
     try:
         return Manifest.model_validate(data)
     except ValidationError:
-        logger.warning("Artifact manifest failed schema validation; falling back to scan", exc_info=True)
+        logger.warning("Artifact manifest failed schema validation; falling back to scan")
         return None

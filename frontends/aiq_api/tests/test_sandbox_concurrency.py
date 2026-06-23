@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -15,6 +16,9 @@ from fastapi import HTTPException
 from aiq_api.routes import jobs as jobs_module
 
 _PRINCIPAL = SimpleNamespace(type="user", sub="subject-1")
+
+# Pin the caps so the assertions are independent of any AIQ_MAX_SANDBOXES_* set in CI/dev.
+_PINNED_CAPS = {"AIQ_MAX_SANDBOXES_PER_PRINCIPAL": "5", "AIQ_MAX_SANDBOXES_GLOBAL": "50"}
 
 
 def _run(coro):
@@ -27,7 +31,8 @@ class TestAgentUsesSandbox:
         assert jobs_module._agent_uses_sandbox(builder, "cfg") is True
 
     def test_false_when_disabled(self) -> None:
-        builder = SimpleNamespace(get_function_config=lambda _n: SimpleNamespace(sandbox=SimpleNamespace(enabled=False)))
+        cfg = SimpleNamespace(sandbox=SimpleNamespace(enabled=False))
+        builder = SimpleNamespace(get_function_config=lambda _n: cfg)
         assert jobs_module._agent_uses_sandbox(builder, "cfg") is False
 
     def test_false_when_no_sandbox(self) -> None:
@@ -45,6 +50,7 @@ class TestAgentUsesSandbox:
 class TestEnforceSandboxConcurrency:
     def test_rejects_when_owner_over_limit(self) -> None:
         with (
+            patch.dict(os.environ, _PINNED_CAPS, clear=False),
             patch("aiq_api.jobs.access.count_active_jobs_for_owner", return_value=5),
             patch("aiq_api.jobs.access.count_active_jobs_global", return_value=0),
             pytest.raises(HTTPException) as exc,
@@ -54,6 +60,7 @@ class TestEnforceSandboxConcurrency:
 
     def test_rejects_when_global_over_limit(self) -> None:
         with (
+            patch.dict(os.environ, _PINNED_CAPS, clear=False),
             patch("aiq_api.jobs.access.count_active_jobs_for_owner", return_value=0),
             patch("aiq_api.jobs.access.count_active_jobs_global", return_value=50),
             pytest.raises(HTTPException) as exc,
@@ -63,6 +70,7 @@ class TestEnforceSandboxConcurrency:
 
     def test_allows_under_limit(self) -> None:
         with (
+            patch.dict(os.environ, _PINNED_CAPS, clear=False),
             patch("aiq_api.jobs.access.count_active_jobs_for_owner", return_value=1),
             patch("aiq_api.jobs.access.count_active_jobs_global", return_value=1),
         ):
@@ -70,6 +78,7 @@ class TestEnforceSandboxConcurrency:
 
     def test_fails_open_when_counts_unknown(self) -> None:
         with (
+            patch.dict(os.environ, _PINNED_CAPS, clear=False),
             patch("aiq_api.jobs.access.count_active_jobs_for_owner", return_value=None),
             patch("aiq_api.jobs.access.count_active_jobs_global", return_value=None),
         ):

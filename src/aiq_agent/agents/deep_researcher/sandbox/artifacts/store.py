@@ -160,7 +160,7 @@ class SqlArtifactStore(ArtifactStore):
         inspector = inspect(self._engine)
         if not inspector.has_table("artifacts"):
             metadata.create_all(self._engine)
-            logger.info("Created artifacts table in %s", self.db_url[:50])
+            logger.info("Created artifacts table (backend=%s)", self._engine.dialect.name)
         SqlArtifactStore._initialized.add(self.db_url)
 
     def put(self, artifact: Artifact, data: bytes) -> Artifact:
@@ -173,7 +173,8 @@ class SqlArtifactStore(ArtifactStore):
 
         stored = artifact.model_copy(
             update={
-                "storage_uri": f"db://{self.db_url}/artifacts/{artifact.artifact_id}",
+                # Logical location only — never embed db_url (it may carry credentials).
+                "storage_uri": f"db://artifacts/{artifact.artifact_id}",
                 "status": ArtifactStatus.AVAILABLE,
             }
         )
@@ -264,6 +265,10 @@ class SqlArtifactStore(ArtifactStore):
     def cleanup_old_artifacts(self, retention_seconds: int) -> int:
         from sqlalchemy import text
 
+        # A non-positive retention would make the cutoff "now or later" and delete everything.
+        if retention_seconds <= 0:
+            logger.warning("Refusing artifact cleanup with non-positive retention_seconds=%s", retention_seconds)
+            return 0
         is_postgres = _normalize_db_url(self.db_url).startswith("postgresql")
         with self._engine.connect() as conn:
             if is_postgres:

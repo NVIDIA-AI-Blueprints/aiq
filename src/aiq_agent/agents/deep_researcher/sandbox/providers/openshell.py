@@ -42,6 +42,11 @@ logger = logging.getLogger(__name__)
 # this switch can be removed and the adapter used unconditionally.
 _ADAPTER_FILE_TRANSFER_ENV = "AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER"
 
+
+def _adapter_file_transfer_enabled() -> bool:
+    """True only when the toggle env var is an explicit truthy value (not just any string)."""
+    return os.getenv(_ADAPTER_FILE_TRANSFER_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
 # File-transfer bootstraps that take the target path via argv (NOT an environment
 # variable). The official langchain-nvidia-openshell adapter passes the path via
 # exec(env=...), but OpenShell 0.0.57's exec does not propagate env to the child
@@ -141,14 +146,14 @@ class OpenShellSandboxProvider(SandboxProvider):
         """Upload files. Uses the local env-free shim by default (OpenShell <=0.0.67 strips
         ``OPENSHELL_*`` env); set ``AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER`` to delegate to the
         official adapter (validates the upstream argv fix)."""
-        if os.getenv(_ADAPTER_FILE_TRANSFER_ENV):
+        if _adapter_file_transfer_enabled():
             return self._call("upload_files", lambda session: session.upload_files(files), idempotent=True)
         return self._call("upload_files", lambda _s: self._upload_files_envfree(files), idempotent=True)
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
         """Download files. Uses the local env-free shim by default; set
         ``AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER`` to delegate to the official adapter."""
-        if os.getenv(_ADAPTER_FILE_TRANSFER_ENV):
+        if _adapter_file_transfer_enabled():
             return self._call("download_files", lambda session: session.download_files(paths), idempotent=True)
         return self._call("download_files", lambda _s: self._download_files_envfree(paths), idempotent=True)
 
@@ -177,8 +182,10 @@ class OpenShellSandboxProvider(SandboxProvider):
                 responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
                 continue
             result = sandbox.exec(["python3", "-c", _DOWNLOAD_CODE, path], timeout_seconds=self.config.timeout)  # type: ignore[union-attr]
-            if getattr(result, "exit_code", 1) != 0:
-                error = _classify_fs_error(getattr(result, "stderr", "") or "")
+            exit_code = getattr(result, "exit_code", 1)
+            if exit_code != 0:
+                # _DOWNLOAD_CODE exits 3 specifically when the path is a directory.
+                error = "is_directory" if exit_code == 3 else _classify_fs_error(getattr(result, "stderr", "") or "")
                 responses.append(FileDownloadResponse(path=path, content=None, error=error))
                 continue
             content = base64.b64decode((getattr(result, "stdout", "") or "").encode("ascii"))

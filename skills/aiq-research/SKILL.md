@@ -152,10 +152,10 @@ Use `status` to inspect job status and saved artifacts. Use `report` when the jo
 the final output. Use `research_poll` to keep waiting for completion.
 
 The final report may reference generated artifacts (charts, CSVs) as `artifact://<id>` links. To materialize them as local
-files, run `artifacts <JOB_ID> --download-dir ./aiq-artifacts`; it downloads each artifact and prints the local path. Do not
-expect base64 image data in the report itself.
+files, run `python3 $SKILL_DIR/scripts/aiq.py artifacts <JOB_ID> --download-dir ./aiq-artifacts`; it downloads each artifact
+and prints the local path. Do not expect base64 image data in the report itself.
 
-For a self-contained, shareable report, run `report <JOB_ID> --out-dir ./my-report`. It writes `report.md` plus an
+For a self-contained, shareable report, run `python3 $SKILL_DIR/scripts/aiq.py report <JOB_ID> --out-dir ./my-report`. It writes `report.md` plus an
 `artifacts/` folder and rewrites each `artifact://<id>` link to the matching local file, so the report renders (charts and
 all) in any markdown viewer without a running backend.
 

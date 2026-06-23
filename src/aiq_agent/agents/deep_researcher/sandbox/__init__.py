@@ -17,6 +17,8 @@ populated before any config is validated against it.
 
 from __future__ import annotations
 
+# Import providers for their registration side effects (built-ins self-register).
+from . import providers as _providers  # noqa: E402,F401
 from .artifacts import Artifact
 from .artifacts import ArtifactManager
 from .artifacts import ArtifactStore
@@ -31,9 +33,6 @@ from .registry import SANDBOX_PROVIDER_ENTRY_POINT_GROUP
 from .registry import create_sandbox_backend
 from .registry import register_sandbox_provider
 from .registry import registered_providers
-
-# Import providers for their registration side effects (built-ins self-register).
-from . import providers as _providers  # noqa: E402,F401
 
 __all__ = [
     "SandboxProvider",

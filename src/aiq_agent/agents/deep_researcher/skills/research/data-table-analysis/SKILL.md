@@ -22,7 +22,7 @@ To ensure the calculation is reproducible and useful, you MUST:
 
 1. Gather candidate facts from researcher outputs, user-provided data, or source excerpts.
 
-2. Create a normalized input table with one row per comparable observation. Prefer explicit CSV or JSON records embedded in the Python script. If the source rows are in `/shared/...`, call `read_file` first and embed the returned content in the script, or write a sandbox-local input file under `/sandbox`. Sandbox code cannot open `/shared/...` directly.
+2. Create a normalized input table with one row per comparable observation. Prefer explicit CSV or JSON records embedded in the Python script. If the source rows are in `/shared/...`, call `read_file` first and embed the returned content in the script, or write a sandbox-local input file under your sandbox working directory (`sandbox_workdir`; e.g. `/sandbox` on OpenShell or `/workspace` on Modal). Sandbox code cannot open `/shared/...` directly.
 
 3. Call the `execute` tool with a Python command or script that:
    - imports pandas,
@@ -31,7 +31,7 @@ To ensure the calculation is reproducible and useful, you MUST:
    - standardizes units and period labels,
    - computes the requested metrics,
    - prints markdown, CSV, JSON, and data-quality notes as text.
-   - uses `/sandbox` for any sandbox-local input or output files.
+   - uses your sandbox working directory (`sandbox_workdir`) for any sandbox-local input or output files.
    - does not read from or write to `/shared/...` inside the sandbox process.
 
 4. Inspect the `execute` output. If the code fails, fix the code and call `execute` again. Do not continue with hand-computed fallback tables unless the sandbox or pandas is unavailable.

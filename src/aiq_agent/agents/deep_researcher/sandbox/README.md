@@ -15,7 +15,7 @@ data-source credentials never enter the sandbox.
 
 ## Architecture
 
-```
+```text
 config YAML (sandbox.provider + providers.<name>)
         -> SandboxConfig (config.py)
         -> registry.create_sandbox_backend  --(fail-closed capability gate)-->  SandboxProvider
@@ -75,20 +75,24 @@ class MySandboxProvider(SandboxProvider):
 
 register_sandbox_provider("mybox", MySandboxProvider)
 ```
+
 Add a `MyProviderConfig` sub-model to `SandboxProvidersConfig` in `config.py`. You do
 NOT implement `read_file`/`write_file`/`ls`/`glob` (inherited from `BaseSandbox` on top
 of `execute`) or the retry/lock/lifecycle (the base owns those). Every provider must
 pass the compliance suite (`tests/.../sandbox/test_provider_compliance.py`).
 
 ### Out-of-tree providers (entry points)
+
 Third-party packages contribute providers without editing AI-Q by declaring the
 `aiq.sandbox_providers` entry-point group (the same plug-in pattern as NAT and
 deepagents Code). They are discovered lazily on first registry use:
+
 ```toml
 # in the third-party package's pyproject.toml
 [project.entry-points."aiq.sandbox_providers"]
 mybox = "my_pkg.provider:MySandboxProvider"
 ```
+
 The entry-point name becomes the config `provider` key. A broken plugin is logged and
 skipped — it can never break resolution of the built-in providers.
 
@@ -120,6 +124,7 @@ sandbox:
       sandbox_name: aiq-openshell-demo
       policy: configs/openshell/generated/aiq-openshell-policy.yaml
 ```
+
 The legacy flat shape (top-level `app_name`/`image`/`python_packages`) still loads and
 is lifted into `providers.modal`.
 
@@ -138,6 +143,7 @@ is lifted into `providers.modal`.
 - Render gate: only PNG/JPEG/WebP may render inline; SVG/notebook/PDF are download-only.
 
 ### Report post-processing (host-side, in `agent.run`)
+
 Run once after the report is produced, reusing a single artifact fetch:
 - `resolve_report_references` - rewrite `artifact://<filename>` to `artifact://<id>`; drop unknown/foreign refs.
 - `ensure_inline_artifacts_embedded` - append a `## Figures` section embedding any produced
@@ -146,6 +152,7 @@ Run once after the report is produced, reusing a single artifact fetch:
   file (charts and their backing CSVs), alongside the external `## Sources`.
 
 ### Rendering surfaces
+
 The stored report keeps `artifact://<id>`; each surface resolves it at its own edge (one
 shared helper, `MarkdownRenderer/artifact-url.ts`, builds the content path):
 - **UI report**: `MarkdownRenderer` preserves the `artifact://` scheme via a custom
@@ -163,21 +170,24 @@ shared helper, `MarkdownRenderer/artifact-url.ts`, builds the content path):
 ## Providers
 
 ### Modal (cloud)
+
 Requires `modal` + `langchain-modal` (in `pyproject`) and `modal setup`. See
 `docs/source/examples/skills-sandbox/index.md`.
 
 ### OpenShell (on-prem)
+
 Two ad-hoc deps (never in `pyproject`): the `openshell` SDK and the official
-`langchain-nvidia-openshell` adapter (`OpenShellSandbox`) - the OpenShell partner
-package in [`langchain-ai/langchain-nvidia`](https://github.com/langchain-ai/langchain-nvidia/pull/303).
-This is the same adapter [AI-Q PR #274](https://github.com/NVIDIA-AI-Blueprints/aiq/pull/274)
-integrates. The adapter is not yet on PyPI, so the setup script installs it from a
-git spec via `LANGCHAIN_NVIDIA_REPO` (switch to the published package once #303 merges).
+`langchain-nvidia-openshell` adapter (`OpenShellSandbox`), the OpenShell partner package in
+[`langchain-ai/langchain-nvidia`](https://github.com/langchain-ai/langchain-nvidia/pull/303).
+The adapter is not yet on PyPI, so the setup script installs it from a git spec via
+`LANGCHAIN_NVIDIA_REPO` (switch to the published package once #303 merges).
 One-command setup:
+
 ```bash
 ./scripts/setup_openshell.sh --policy offline
 ./scripts/start_e2e.sh --config_file configs/config_openshell.yml
 ```
+
 Inference is routed host-side (e.g. NVIDIA Build or an internal inference hub set in the
 config); the network-blocked sandbox never sees the key.
 

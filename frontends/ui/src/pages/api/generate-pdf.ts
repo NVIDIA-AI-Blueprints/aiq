@@ -5,20 +5,24 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import React from 'react'
 import { renderToStream } from '@react-pdf/renderer'
 import { MarkdownPDF } from '../../lib/pdf/ReactPdfDocument'
-import {
-  artifactContentPath,
-  extractArtifactIds,
-  replaceArtifactImages,
-} from '../../shared/components/MarkdownRenderer/artifact-url'
+import { extractArtifactIds, replaceArtifactImages } from '../../shared/components/MarkdownRenderer/artifact-url'
 
 // Cap the bytes we embed per image. Charts are tiny; this guards against base64-inflating a
 // large artifact (up to the 50 MB harvest cap) into a pathological PDF.
 const MAX_PDF_IMAGE_BYTES = 8 * 1024 * 1024
+// Bound the number of artifact fetches per PDF so a report with many refs can't fan out into
+// excessive backend load / memory.
+const MAX_PDF_ARTIFACT_REFS = 25
 
 const getBackendUrl = (): string => {
   const url = process.env.BACKEND_URL || process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:8000'
   return url.replace(/\/$/, '')
 }
+
+// This runs server-side and calls the backend directly, so it targets the backend's `/v1`
+// route. (The `/api/...` path that the browser uses only exists on the Next.js proxy.)
+const backendArtifactContentPath = (jobId: string, artifactId: string): string =>
+  `/v1/jobs/async/job/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactId)}/content`
 
 /**
  * Replace every `![alt](artifact://<id>)` with a self-contained `data:` URI by fetching the
@@ -33,7 +37,7 @@ const inlineArtifactImages = async (
 ): Promise<string> => {
   if (!jobId) return markdown
 
-  const ids = extractArtifactIds(markdown)
+  const ids = extractArtifactIds(markdown).slice(0, MAX_PDF_ARTIFACT_REFS)
   console.log(`[PDF] inline: jobId=${jobId} artifactRefs=${ids.length}`)
   if (ids.length === 0) return markdown
 
@@ -42,14 +46,22 @@ const inlineArtifactImages = async (
   await Promise.all(
     ids.map(async (id) => {
       try {
-        const resp = await fetch(`${backend}${artifactContentPath(jobId, id)}`, {
+        const resp = await fetch(`${backend}${backendArtifactContentPath(jobId, id)}`, {
           headers: { ...authHeaders, Accept: '*/*' },
+          // Bound the call so a stalled backend can't hang PDF generation indefinitely.
+          signal: AbortSignal.timeout(15_000),
         })
         const contentType = resp.headers.get('Content-Type') ?? 'application/octet-stream'
         console.log(`[PDF] fetch ${id}: status=${resp.status} type=${contentType}`)
         if (!resp.ok) return
         // Only raster images are embeddable in the PDF.
         if (!contentType.startsWith('image/')) return
+        // Reject oversized artifacts by declared length before buffering the whole body.
+        const declaredLen = Number(resp.headers.get('Content-Length'))
+        if (Number.isFinite(declaredLen) && declaredLen > MAX_PDF_IMAGE_BYTES) {
+          console.warn(`[PDF] Skipping artifact ${id}: declared ${declaredLen} bytes exceeds embed cap`)
+          return
+        }
         const buffer = Buffer.from(await resp.arrayBuffer())
         if (buffer.byteLength > MAX_PDF_IMAGE_BYTES) {
           console.warn(`[PDF] Skipping artifact ${id}: ${buffer.byteLength} bytes exceeds embed cap`)
@@ -86,10 +98,15 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       return res.status(400).json({ error: 'Invalid or missing markdown content' })
     }
 
-    // Forward the caller's auth so the artifact content endpoint authorizes the job.
+    // Forward only the auth the artifact endpoint needs — the Authorization header and the
+    // idToken cookie — rather than the caller's entire cookie jar.
     const authHeaders: Record<string, string> = {}
     if (req.headers.authorization) authHeaders.Authorization = req.headers.authorization
-    if (req.headers.cookie) authHeaders.Cookie = req.headers.cookie
+    const idTokenCookie = req.headers.cookie
+      ?.split(';')
+      .map((c) => c.trim())
+      .find((c) => c.startsWith('idToken='))
+    if (idTokenCookie) authHeaders.Cookie = idTokenCookie
 
     const resolvedMarkdown = await inlineArtifactImages(
       markdown,

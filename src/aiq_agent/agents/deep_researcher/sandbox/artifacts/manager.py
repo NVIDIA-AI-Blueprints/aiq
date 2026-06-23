@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import re
+import shlex
 import threading
 import uuid
 from collections.abc import Callable
@@ -248,8 +249,9 @@ class ArtifactManager:
         """Append a ``## Generated Artifacts`` section crediting sandbox-produced outputs.
 
         Lists every harvested artifact (charts, CSVs, etc.) so figures and their backing data
-        are credited alongside the report's external sources. Inline charts remain embedded in
-        the body above; this section is the durable index of what the sandbox produced.
+        are credited alongside the report's external sources. Harvest is job-scoped (each job
+        writes to its own ``artifact_dir/<job_id>``), so this lists only the current job's
+        outputs - not leftovers from other jobs sharing a persistent sandbox.
 
         Args:
             markdown: The report body to augment.
@@ -325,7 +327,7 @@ class ArtifactManager:
 
     def _scan_dir(self) -> list[ManifestEntry]:
         try:
-            response = self.backend.execute(f"find {self.artifact_dir} -type f")
+            response = self.backend.execute(f"find {shlex.quote(self.artifact_dir)} -type f")
         except Exception:  # noqa: BLE001 - scan is best-effort
             logger.warning("Artifact scan failed for job %s", self.job_id, exc_info=True)
             return []
@@ -413,16 +415,19 @@ class ArtifactManager:
             title=entry.title,
             caption=entry.caption,
             inline=inline,
-            provenance=ArtifactProvenance(input_file_hashes={src: "" for src in entry.source_files}),
+            provenance=ArtifactProvenance(),
             status=ArtifactStatus.PENDING,
         )
 
         # 8. Store first (durable), then emit (outbox discipline).
         stored = self.store.put(artifact, data)
         self._seen.add((entry.path, digest))
-        self._total_bytes += len(data)
-        self._count += 1
-        self._emit_artifact(stored)
+        # A dedup hit returns a pre-existing artifact (different id); it was already
+        # accounted for and emitted on first capture, so don't charge quota or emit again.
+        if stored.artifact_id == artifact.artifact_id:
+            self._total_bytes += len(data)
+            self._count += 1
+            self._emit_artifact(stored)
         return stored
 
     def _is_confined(self, path: str) -> bool:

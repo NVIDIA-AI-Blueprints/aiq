@@ -180,7 +180,9 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
           if (!resolved || isArtifactRef(resolved)) return null
           const caption = alt ?? ''
           return (
-            <figure className="my-4 flex flex-col items-center">
+            // react-markdown renders images inside a <p>, so use phrasing-content spans
+            // (not <figure>/<figcaption>, which are invalid inside <p>).
+            <span className="my-4 flex flex-col items-center">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={resolved}
@@ -189,11 +191,11 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
                 className="border-base max-w-full rounded-md border"
               />
               {caption && (
-                <Text asChild kind="body/regular/sm" className="text-subtle mt-2 text-center">
-                  <figcaption>{caption}</figcaption>
+                <Text asChild kind="body/regular/sm" className="text-subtle mt-2 block text-center">
+                  <span>{caption}</span>
                 </Text>
               )}
-            </figure>
+            </span>
           )
         },
 

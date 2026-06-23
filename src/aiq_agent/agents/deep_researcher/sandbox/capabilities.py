@@ -44,7 +44,7 @@ class SandboxCapabilities(BaseModel):
     supports_filesystem_policy: bool = Field(default=False)
     supports_process_policy: bool = Field(default=False)
     supports_resource_limits: bool = Field(default=False)
-    supports_artifact_download: bool = Field(default=True)
+    supports_artifact_download: bool = Field(default=False)
     supports_cleanup: bool = Field(default=False)
     supports_terminate: bool = Field(default=False)
 

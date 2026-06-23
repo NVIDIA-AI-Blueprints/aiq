@@ -63,11 +63,19 @@ logger = logging.getLogger(__name__)
 
 
 def _int_env(name: str, default: int) -> int:
-    """Read a non-negative integer ops knob from the environment."""
+    """Read a non-negative integer ops knob from the environment.
+
+    A missing, non-integer, or negative value falls back to ``default`` so a
+    misconfigured cap can never silently invert into "block all submissions".
+    """
     try:
-        return int(os.environ[name])
+        value = int(os.environ[name])
     except (KeyError, ValueError):
         return default
+    if value < 0:
+        logger.warning("%s=%d is negative; using default %d", name, value, default)
+        return default
+    return value
 
 
 def _sandbox_caps_configured() -> bool:
@@ -688,7 +696,15 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
         store = SqlArtifactStore(db_url)
         artifacts = await asyncio.to_thread(store.list, job_id)
-        return {"job_id": job_id, "artifacts": [a.model_dump(mode="json") for a in artifacts]}
+        # Exclude storage internals (storage_uri embeds the db_url, which may carry
+        # credentials/hostnames; sandbox_path is an internal layout detail) from the
+        # client-facing payload. Clients use the content endpoint, not these fields.
+        return {
+            "job_id": job_id,
+            "artifacts": [
+                a.model_dump(mode="json", exclude={"storage_uri", "sandbox_path"}) for a in artifacts
+            ],
+        }
 
     @app.get(
         "/v1/jobs/async/job/{job_id}/artifacts/{artifact_id}/content",
@@ -709,10 +725,21 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         if artifact is None:
             raise HTTPException(404, f"Artifact not found: {artifact_id}")
 
+        # The filename is sandbox-controlled; strip control chars and quotes so it cannot
+        # break out of the header value (response-splitting / header injection).
+        safe_filename = "".join(c for c in artifact.filename if c.isprintable() and c not in '"\\') or "artifact"
+        # Only magic-verified raster images may render inline; everything else (SVG, HTML,
+        # notebooks, PDFs) is forced to download with nosniff to prevent stored-XSS if a
+        # user opens the content URL directly in a browser.
+        inline_safe = artifact.mime_type in {"image/png", "image/jpeg", "image/webp"}
+        disposition = "inline" if inline_safe else "attachment"
         return StreamingResponse(
             store.open_bytes(job_id, artifact_id),
             media_type=artifact.mime_type,
-            headers={"Content-Disposition": f'inline; filename="{artifact.filename}"'},
+            headers={
+                "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
+                "X-Content-Type-Options": "nosniff",
+            },
         )
 
     @app.get(

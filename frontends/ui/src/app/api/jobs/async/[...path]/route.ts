@@ -178,7 +178,7 @@ export async function GET(
       }
       const disposition = response.headers.get('Content-Disposition')
       if (disposition) passthroughHeaders['Content-Disposition'] = disposition
-      return new NextResponse(response.body, { status: 200, headers: passthroughHeaders })
+      return new NextResponse(response.body, { status: response.status, headers: passthroughHeaders })
     }
 
     // For regular JSON responses

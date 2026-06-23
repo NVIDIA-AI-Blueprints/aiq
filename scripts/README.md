@@ -77,8 +77,8 @@ Useful version examples:
 In the interactive version prompt, pressing Enter selects `0.0.57`.
 
 The setup installs the `openshell` SDK plus the official `langchain-nvidia-openshell`
-adapter (`OpenShellSandbox`) - the OpenShell partner package in
-`langchain-ai/langchain-nvidia` (PR #303), the same adapter AI-Q PR #274 integrates.
+adapter (`OpenShellSandbox`), the OpenShell partner package in
+`langchain-ai/langchain-nvidia` (PR #303).
 Until it publishes to PyPI, the script installs it from a git spec by default; set
 `LANGCHAIN_NVIDIA_REPO` or pass `--langchain-nvidia` to use another `uv pip install`
 spec or a local checkout.
@@ -98,7 +98,9 @@ Verify and clean up:
 .venv/bin/openshell status
 .venv/bin/openshell sandbox list          # expect: aiq-openshell-demo ... Ready
 .venv/bin/openshell sandbox delete aiq-openshell-demo
-pkill -f openshell-gateway
+# Inspect, then stop only the gateway you started (avoid killing other sessions):
+pgrep -fl openshell-gateway        # find the PID(s)
+kill <PID>                         # stop the specific process
 ```
 
 

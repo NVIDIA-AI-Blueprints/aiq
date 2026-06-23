@@ -192,6 +192,13 @@ class SandboxProvider(BaseSandbox, ABC):
                 self.provider_name,
                 self.sandbox_name,
             )
+            stale = self._session
+            self._session = None
+            if stale is not None and hasattr(stale, "close"):
+                try:
+                    stale.close()
+                except Exception:  # noqa: BLE001 - best-effort teardown of a stale session
+                    logger.warning("Sandbox %s stale session close failed", self.sandbox_name, exc_info=True)
             self._session = self._create_session()
 
     def _call(self, op_name: str, fn: Callable[[BaseSandbox], _T], *, idempotent: bool) -> _T:

@@ -221,18 +221,33 @@ function renderHeading(token: HeadingToken, index: number): React.ReactNode {
 // as a block figure instead of leaking through the inline link parser as a stray link).
 const IMAGE_MD_RE = /!\[[^\]]*\]\([^)]*\)/g
 
+// Only embed raster image data URIs within a bounded decoded size — the markdown may carry an
+// arbitrary `data:` URI (e.g. one the report wrote directly), which we must not feed unchecked
+// into the PDF renderer.
+const MAX_PDF_EMBED_BYTES = 8 * 1024 * 1024
+const DATA_IMAGE_RE = /^data:image\/(?:png|jpe?g|webp);base64,([A-Za-z0-9+/=]+)$/
+
+function isEmbeddableDataImage(href: string): boolean {
+  const match = DATA_IMAGE_RE.exec(href)
+  if (!match) return false
+  const b64 = match[1]
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0
+  const decodedBytes = Math.floor((b64.length * 3) / 4) - padding
+  return decodedBytes <= MAX_PDF_EMBED_BYTES
+}
+
 /**
- * Recursively collect embeddable image tokens. Only `data:` URIs are embeddable (artifact
- * refs are pre-resolved to data URIs server-side); remote/unresolved images are skipped so
- * the PDF never shows a broken figure. Walks nested `tokens` so images inside list items,
- * blockquotes, etc. are found, not just top-level paragraphs.
+ * Recursively collect embeddable image tokens. Only bounded raster `data:` URIs are embeddable
+ * (artifact refs are pre-resolved to data URIs server-side); remote/unresolved/oversized images
+ * are skipped so the PDF never shows a broken figure or blows up memory. Walks nested `tokens`
+ * so images inside list items, blockquotes, etc. are found, not just top-level paragraphs.
  */
 function collectEmbeddableImages(tokens: unknown): ImageToken[] {
   if (!Array.isArray(tokens)) return []
   const found: ImageToken[] = []
   for (const token of tokens) {
     const t = token as { type?: string; href?: string; tokens?: unknown }
-    if (t.type === 'image' && typeof t.href === 'string' && t.href.startsWith('data:')) {
+    if (t.type === 'image' && typeof t.href === 'string' && isEmbeddableDataImage(t.href)) {
       found.push(t as ImageToken)
     } else if (Array.isArray(t.tokens)) {
       found.push(...collectEmbeddableImages(t.tokens))
@@ -305,9 +320,10 @@ function renderList(token: ListToken, index: number, _nested: boolean = false): 
           .join(' ')
       : stripHtml(preserveHtmlLinks(item.text))
 
-    // A bullet may carry an embedded figure (e.g. "- The chart: ![alt](data:...)"). Render
-    // the figure as a block beneath the bullet text rather than dropping it.
-    const images = collectEmbeddableImages(item.tokens)
+    // A bullet may carry an embedded figure (e.g. "- The chart: ![alt](data:...)"). Collect
+    // only from this item's own text tokens (not nestedLists, which render their own images)
+    // so images in nested list items aren't rendered twice.
+    const images = collectEmbeddableImages(textTokens)
     const mainText = rawText.replace(IMAGE_MD_RE, '').trim()
     const hasNestedContent = nestedLists.length > 0 || images.length > 0
 

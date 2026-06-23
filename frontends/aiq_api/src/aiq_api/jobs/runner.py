@@ -526,6 +526,15 @@ async def run_agent_job(
                     if hasattr(event_store, "flush"):
                         event_store.flush()
 
+                    # Harvest durable artifacts before exposing terminal success so a client
+                    # that observes SUCCESS can immediately list them. Idempotent (content
+                    # dedup) with the finally-block harvest.
+                    if sandbox_runtime is not None and hasattr(sandbox_runtime, "final_harvest"):
+                        try:
+                            await asyncio.to_thread(sandbox_runtime.final_harvest)
+                        except Exception:
+                            logger.warning("Pre-success artifact harvest failed for job %s", job_id, exc_info=True)
+
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)

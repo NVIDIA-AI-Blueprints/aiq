@@ -434,6 +434,21 @@ OUT_DIR_FLAG = "--out-dir"
 _REPORT_ARTIFACT_RE = re.compile(r"(!\[[^\]]*\]\()artifact://([^)]+)(\))")
 
 
+def _unique_filename(directory: str, filename: str, used: set[str]) -> str:
+    """Return a filename that doesn't collide within ``directory``/``used`` (suffix -1, -2, ...)."""
+    if filename not in used and not os.path.exists(os.path.join(directory, filename)):
+        used.add(filename)
+        return filename
+    stem, ext = os.path.splitext(filename)
+    i = 1
+    while True:
+        candidate = f"{stem}-{i}{ext}"
+        if candidate not in used and not os.path.exists(os.path.join(directory, candidate)):
+            used.add(candidate)
+            return candidate
+        i += 1
+
+
 def _export_report_bundle(job_id: str, out_dir: str) -> None:
     """Write a portable report folder: ``report.md`` plus an ``artifacts/`` directory.
 
@@ -451,11 +466,12 @@ def _export_report_bundle(job_id: str, out_dir: str) -> None:
 
     id_to_relpath: dict[str, str] = {}
     saved: list[dict[str, Any]] = []
+    used: set[str] = set()
     for artifact in list_artifacts(job_id).get("artifacts", []):
         artifact_id = artifact.get("artifact_id", "")
         if not artifact_id:
             continue
-        filename = os.path.basename(artifact.get("filename") or artifact_id)
+        filename = _unique_filename(artifacts_dir, os.path.basename(artifact.get("filename") or artifact_id), used)
         data = download_artifact(job_id, artifact_id)
         dest = os.path.join(artifacts_dir, filename)
         with open(dest, "wb") as handle:
@@ -504,9 +520,10 @@ def _command_artifacts(args: list[str]) -> None:
     os.makedirs(download_dir, exist_ok=True)
 
     saved: list[dict[str, Any]] = []
+    used: set[str] = set()
     for artifact in listing.get("artifacts", []):
         artifact_id = artifact.get("artifact_id", "")
-        filename = os.path.basename(artifact.get("filename") or artifact_id)
+        filename = _unique_filename(download_dir, os.path.basename(artifact.get("filename") or artifact_id), used)
         data = download_artifact(job_id, artifact_id)
         dest = os.path.join(download_dir, filename)
         with open(dest, "wb") as handle:

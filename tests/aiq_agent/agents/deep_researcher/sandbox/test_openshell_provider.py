@@ -113,4 +113,4 @@ def test_download_is_directory_exit_code() -> None:
 
     result = provider.download_files(["/sandbox"])
     assert result[0].content is None
-    assert result[0].error == "permission_denied"  # exit 3 with no stderr -> generic
+    assert result[0].error == "is_directory"  # _DOWNLOAD_CODE exits 3 specifically for a directory

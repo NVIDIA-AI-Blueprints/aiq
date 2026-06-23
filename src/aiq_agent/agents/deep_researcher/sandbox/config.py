@@ -187,6 +187,9 @@ class SandboxConfig(BaseModel):
             return data
         data = dict(data)
         legacy_block = data.pop("block_network")
+        if isinstance(legacy_block, str):
+            # Env-interpolated values arrive as strings; treat only explicit truthy as True.
+            legacy_block = legacy_block.strip().lower() in {"1", "true", "yes", "on"}
         if "network" not in data or data.get("network") is None:
             data["network"] = {"mode": "blocked" if legacy_block else "open"}
         return data

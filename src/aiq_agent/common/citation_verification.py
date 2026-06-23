@@ -1036,7 +1036,7 @@ _SUSPICIOUS_SCHEMES_RE = re.compile(r"^(?:javascript|data|vbscript|file):", re.I
 _BARE_URL_RE = re.compile(r"https?://[^\s<>\"'\]]+")
 
 # Body URL patterns (used by sanitize_report)
-_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(\s*\w+://[^\s)]+\)")
+_MD_LINK_RE = re.compile(r"\[([^\]]*)\]\(\s*(\w+://[^\s)]+)\)")
 _BODY_URL_RE = re.compile(r"\w+://[^\s<>\"'\]]+")
 
 
@@ -1119,7 +1119,9 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     # Collapse markdown links to display text, but preserve internal artifact:// image
     # references verbatim so embedded charts survive into the final report.
     def _collapse_md_link(match: re.Match) -> str:
-        if "artifact://" in match.group(0):
+        # Preserve only when the link destination is an artifact ref; a label that merely
+        # contains "artifact://" must still collapse so stray URLs don't leak into the body.
+        if match.group(2).startswith("artifact://"):
             return match.group(0)
         return match.group(1)
 

@@ -22,8 +22,10 @@ artifacts, and embed them in the report by reference (never by pasting image dat
 2. **Normalize units** before plotting (currencies, magnitudes, periods).
 3. **Render with code:** call `execute` to run Python/matplotlib. Do not hand-draw or
    fabricate charts.
-4. **Write to the artifact directory:** save the PNG and its CSV under
-   `/sandbox/aiq-artifacts/` with descriptive filenames.
+4. **Write to the artifact directory:** save the PNG and its CSV under the sandbox
+   artifact directory given in your instructions (`sandbox_artifact_dir`; e.g.
+   `/sandbox/aiq-artifacts/` on OpenShell or `/workspace/aiq-artifacts/` on Modal) with
+   descriptive filenames.
 5. **Write a manifest** so the chart is harvested reliably (see below).
 6. **Reference, do not embed bytes:** in the report, link the chart with
    `![caption](artifact://<filename>.png)`. The runtime resolves this to the durable
@@ -34,12 +36,12 @@ artifacts, and embed them in the report by reference (never by pasting image dat
 1. Assemble the normalized rows (prefer explicit records embedded in the script). If the
    inputs live in `/shared/...`, `read_file` them first and embed the values; sandbox
    code cannot open `/shared/...`.
-2. Use `write_file` to create `/sandbox/make_chart.py` and `execute` it. The script must:
+2. Use `write_file` to create a `make_chart.py` script in your sandbox working directory
+   (`sandbox_workdir`) and `execute` it. The script must:
    - import pandas and matplotlib (use the non-interactive `Agg` backend),
    - build the DataFrame, compute any derived metrics,
-   - save the chart to `/sandbox/aiq-artifacts/<name>.png`,
-   - save the plotted data to `/sandbox/aiq-artifacts/<name>.csv`,
-   - write `/sandbox/aiq-artifacts/manifest.json` declaring the outputs.
+   - set a single `ARTIFACT_DIR` to your `sandbox_artifact_dir` and write the chart
+     (`<name>.png`), its data (`<name>.csv`), and `manifest.json` there (see the example).
 3. Inspect the `execute` output; if it fails, fix the script and re-run (max 2 retries).
 4. In the report, embed the chart with `![<caption>](artifact://<name>.png)` and cite the
    original data sources in the surrounding text.
@@ -56,15 +58,16 @@ Each figure must appear where it is discussed, not buried in a file list:
    states; California leads at roughly 3x Pennsylvania.").
 3. **Reference by filename, never a raw path:** the way to show a figure is the
    `![caption](artifact://<filename>.png)` token. Do NOT instead write the sandbox path
-   (`/sandbox/aiq-artifacts/<name>.png`) as prose and expect it to render - a bare path is
-   not an image.
+   (e.g. `<sandbox_artifact_dir>/<name>.png`) as prose and expect it to render - a bare path
+   is not an image.
 4. **One embed per artifact:** list supporting files (CSVs, manifests) by name in an
    appendix if useful, but the chart itself must be embedded inline as above.
 
 ## Manifest
 
-Write `/sandbox/aiq-artifacts/manifest.json` so the runtime captures the chart with
-metadata:
+Write a `manifest.json` in your `sandbox_artifact_dir` so the runtime captures the chart
+with metadata. Manifest `path` values must be absolute and inside `sandbox_artifact_dir`
+(shown below with the OpenShell default `/sandbox/aiq-artifacts`):
 
 ```json
 {
@@ -93,6 +96,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
+# Set ARTIFACT_DIR to the sandbox_artifact_dir from your instructions:
+# "/sandbox/aiq-artifacts" (OpenShell) or "/workspace/aiq-artifacts" (Modal).
 ARTIFACT_DIR = "/sandbox/aiq-artifacts"
 os.makedirs(ARTIFACT_DIR, exist_ok=True)
 

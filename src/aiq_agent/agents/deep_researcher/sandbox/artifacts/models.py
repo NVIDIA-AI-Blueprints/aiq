@@ -53,14 +53,16 @@ class ArtifactProvenance(BaseModel):
 class Artifact(BaseModel):
     """Durable record for a single generated artifact (metadata, not bytes)."""
 
-    artifact_id: str = Field(..., description="Stable ID (UUID, optionally suffixed with a digest)")
-    job_id: str = Field(..., description="Owning async job (retention + authorization boundary)")
+    artifact_id: str = Field(..., max_length=64, description="Stable ID (UUID, optionally suffixed with a digest)")
+    job_id: str = Field(..., max_length=64, description="Owning async job (retention + authorization boundary)")
     kind: ArtifactKind = Field(default=ArtifactKind.OTHER)
     mime_type: str = Field(..., description="MIME type validated from bytes, not just filename")
     filename: str = Field(..., description="User-facing filename")
     sandbox_path: str = Field(..., description="Original path inside the sandbox")
     storage_uri: str = Field(..., description="Durable location of the bytes (local path or object-store URI)")
-    sha256: str = Field(..., description="Content digest for integrity and deduplication")
+    sha256: str = Field(
+        ..., min_length=64, max_length=64, description="Content digest for integrity and deduplication"
+    )
     size_bytes: int = Field(..., ge=0, description="Byte size for quota and UI display")
     title: str | None = Field(default=None, description="Optional display title")
     caption: str | None = Field(default=None, description="Optional report caption")

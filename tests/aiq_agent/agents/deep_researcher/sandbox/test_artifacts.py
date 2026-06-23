@@ -286,6 +286,11 @@ class TestEnsureInlineArtifactsEmbedded:
         manager, _ = _make_manager(store, {})
         assert manager.append_artifact_index("# Report\n") == "# Report\n"
 
+    def test_append_artifact_index_noop_without_artifacts(self, tmp_path: Any) -> None:
+        store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
+        manager, _ = _make_manager(store, {})
+        assert manager.append_artifact_index("# Report\n") == "# Report\n"
+
     def test_skips_non_inline_and_non_image(self, tmp_path: Any) -> None:
         non_inline = self._image("art_" + "c" * 32, inline=False)
         csv = Artifact(
