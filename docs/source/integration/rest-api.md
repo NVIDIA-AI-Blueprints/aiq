@@ -42,7 +42,8 @@ Base path: `/v1/jobs/async`
 Returns all **public** registered agent types that can be used with the submit endpoint.
 Internal-only agents (registered with `public=False`, for example the `report_rewriter`
 used by report follow-up) are intentionally omitted from this list and are rejected by
-`POST /v1/jobs/async/submit` with `400 Agent type is internal-only`.
+`POST /v1/jobs/async/submit` with `400` and a `detail` of `Agent type is internal-only: <agent_type>`
+(the requested agent type is interpolated into the message).
 
 ```bash
 curl http://localhost:8000/v1/jobs/async/agents
