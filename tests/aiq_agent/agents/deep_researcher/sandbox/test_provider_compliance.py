@@ -1,0 +1,56 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""SandboxProvider compliance suite.
+
+Mirrors the knowledge-layer adapter compliance harness: every registered provider
+must satisfy the same contract. Providers whose optional SDK is not installed
+(e.g. OpenShell) are skipped rather than failed, so this runs without a live gateway.
+"""
+
+from __future__ import annotations
+
+from unittest.mock import MagicMock
+
+import pytest
+
+from aiq_agent.agents.deep_researcher.sandbox import SandboxCapabilities
+from aiq_agent.agents.deep_researcher.sandbox import SandboxConfig
+from aiq_agent.agents.deep_researcher.sandbox import SandboxProvider
+from aiq_agent.agents.deep_researcher.sandbox import create_sandbox_backend
+
+_BUILTIN_PROVIDERS = ("modal", "openshell")
+
+
+def assert_provider_contract(provider: SandboxProvider) -> None:
+    """Assert a provider honors the SandboxProvider contract (no live session needed)."""
+    # Declared capabilities are a real SandboxCapabilities model.
+    assert isinstance(provider.capabilities, SandboxCapabilities)
+
+    # Identity is a non-empty job-scoped name before any session exists.
+    assert isinstance(provider.sandbox_name, str) and provider.sandbox_name
+    assert provider.id == provider.sandbox_name
+
+    # Error classification is conservative for unrelated errors.
+    assert provider.is_recoverable_error(ValueError("unrelated")) is False
+
+    # close() is idempotent and safe with no live session.
+    provider.close()
+    provider.close()
+
+    # The shared resilience path delegates to the session created by _create_session.
+    session = MagicMock()
+    session.execute.return_value = "ok"
+    provider._create_session = lambda: session  # type: ignore[method-assign]
+    assert provider.execute("echo ok", timeout=5) == "ok"
+    session.execute.assert_called_once_with("echo ok", timeout=5)
+
+
+@pytest.mark.parametrize("provider_name", _BUILTIN_PROVIDERS)
+def test_builtin_provider_compliance(provider_name: str) -> None:
+    config = SandboxConfig(provider=provider_name, block_network=False)
+    try:
+        provider = create_sandbox_backend(config, "compliance-job-123")
+    except ImportError:
+        pytest.skip(f"{provider_name} SDK/adapter not installed")
+    assert_provider_contract(provider)

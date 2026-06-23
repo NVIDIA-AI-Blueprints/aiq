@@ -1104,6 +1104,11 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     def _replace_body_url(match: re.Match) -> str:
         nonlocal body_urls_removed, body_urls_replaced
         url = match.group(0).rstrip(_URL_TRIM_CHARS)
+        # Preserve internal artifact references (e.g. embedded chart images). They use the
+        # non-http ``artifact://`` scheme and are validated/rewritten downstream by
+        # ArtifactManager.resolve_report_references, so they must survive sanitization.
+        if url.startswith("artifact://"):
+            return match.group(0)
         normalized = _normalize_url(url)
         if normalized in url_to_citation:
             body_urls_replaced += 1
@@ -1111,8 +1116,14 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
         body_urls_removed += 1
         return ""
 
-    # Collapse markdown links to display text
-    cleaned_body = _MD_LINK_RE.sub(r"\1", body)
+    # Collapse markdown links to display text, but preserve internal artifact:// image
+    # references verbatim so embedded charts survive into the final report.
+    def _collapse_md_link(match: re.Match) -> str:
+        if "artifact://" in match.group(0):
+            return match.group(0)
+        return match.group(1)
+
+    cleaned_body = _MD_LINK_RE.sub(_collapse_md_link, body)
     # Replace matching bare URLs with [N], strip the rest
     cleaned_body = _BODY_URL_RE.sub(_replace_body_url, cleaned_body)
     # Clean up leftover empty parentheses and extra spaces

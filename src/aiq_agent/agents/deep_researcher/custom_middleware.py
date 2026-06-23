@@ -406,6 +406,31 @@ class SourceRegistryMiddleware(AgentMiddleware):
         return self._render_source_list_text(self.get_source_entries(mode=mode))
 
 
+class ArtifactHarvestMiddleware(AgentMiddleware):
+    """Harvests durable sandbox artifacts after each ``execute`` tool call.
+
+    Rides the existing tool-call seam: after a successful ``execute``, it asks the
+    ArtifactManager to harvest (manifest-only). Harvest I/O is offloaded to a thread
+    so the agent event loop never blocks on sandbox network calls. Harvest failures
+    are logged and never propagate into the agent loop.
+    """
+
+    def __init__(self, artifact_manager: object) -> None:
+        self.artifact_manager = artifact_manager
+
+    async def awrap_tool_call(self, request, handler):
+        result = await handler(request)
+        tool_name = ""
+        if hasattr(request, "tool_call") and isinstance(request.tool_call, dict):
+            tool_name = request.tool_call.get("name", "")
+        if tool_name == "execute":
+            try:
+                await asyncio.to_thread(self.artifact_manager.harvest_after_execute)
+            except Exception:
+                logger.warning("Artifact harvest after execute failed", exc_info=True)
+        return result
+
+
 class ToolResultPruningMiddleware(AgentMiddleware):
     """Truncates older tool results to keep context manageable.
 

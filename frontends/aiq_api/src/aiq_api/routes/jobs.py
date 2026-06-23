@@ -32,9 +32,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 from typing import Annotated
+from typing import Any
 
 from fastapi import Body
 from fastapi import FastAPI
@@ -58,6 +60,62 @@ if TYPE_CHECKING:
     from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
 
 logger = logging.getLogger(__name__)
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read a non-negative integer ops knob from the environment."""
+    try:
+        return int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+
+
+def _sandbox_caps_configured() -> bool:
+    """Whether an operator has opted into sandbox concurrency caps via env.
+
+    Default-off so the guard never adds a function-config lookup (or behavior change)
+    to submits unless caps are explicitly configured.
+    """
+    return "AIQ_MAX_SANDBOXES_PER_PRINCIPAL" in os.environ or "AIQ_MAX_SANDBOXES_GLOBAL" in os.environ
+
+
+def _agent_uses_sandbox(builder: Any, config_name: str) -> bool:
+    """Return whether the agent's function config enables a sandbox."""
+    try:
+        fn_config = builder.get_function_config(config_name)
+    except Exception:  # noqa: BLE001 - missing/odd config means "no sandbox guard"
+        return False
+    sandbox = getattr(fn_config, "sandbox", None)
+    if sandbox is None:
+        return False
+    return bool(getattr(sandbox, "enabled", True))
+
+
+async def _enforce_sandbox_concurrency(db_url: str, principal: Any) -> None:
+    """Reject submission when per-principal or global sandbox limits are reached.
+
+    Option A: enforced at the API submit path so cost is stopped before a Dask worker
+    spins up a sandbox. Counts fail open (None) so a query mismatch never blocks submits.
+    Configurable via AIQ_MAX_SANDBOXES_PER_PRINCIPAL / AIQ_MAX_SANDBOXES_GLOBAL.
+    """
+    from ..jobs.access import count_active_jobs_for_owner
+    from ..jobs.access import count_active_jobs_global
+
+    per_principal = _int_env("AIQ_MAX_SANDBOXES_PER_PRINCIPAL", 5)
+    global_cap = _int_env("AIQ_MAX_SANDBOXES_GLOBAL", 50)
+    loop = asyncio.get_running_loop()
+
+    owner_count = await loop.run_in_executor(None, count_active_jobs_for_owner, db_url, principal)
+    if owner_count is not None and owner_count >= per_principal:
+        raise HTTPException(
+            429,
+            f"Active job limit reached for this principal ({per_principal}). "
+            "Wait for running jobs to finish before submitting more.",
+        )
+
+    global_count = await loop.run_in_executor(None, count_active_jobs_global, db_url)
+    if global_count is not None and global_count >= global_cap:
+        raise HTTPException(503, "Server is at sandbox capacity; please retry shortly.")
 
 
 class JobSubmitRequest(BaseModel):
@@ -458,6 +516,13 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             len(req.data_sources) if req.data_sources is not None else "none",
         )
 
+        # Sandbox concurrency / cost guard (Option A): cap concurrent sandbox-enabled
+        # jobs per principal and globally, enforced at submit so cost is stopped before
+        # a worker spins up. Opt-in (default-off) via AIQ_MAX_SANDBOXES_* env vars so the
+        # default submit path stays lazy; fail-open if the active-job count is unknown.
+        if _sandbox_caps_configured() and _agent_uses_sandbox(builder, agent_config.config_name):
+            await _enforce_sandbox_concurrency(db_url, principal)
+
         # Propagate auth token to Dask worker for requires_auth data sources
         from aiq_agent.auth import get_auth_token
 
@@ -605,6 +670,49 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             has_state=artifacts is not None,
             state=None,
             artifacts=artifacts,
+        )
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/artifacts",
+        tags=["async jobs"],
+        summary="List durable artifacts",
+        description="List generated artifacts (charts, CSVs, notebooks) harvested from the sandbox.",
+        responses={404: {"description": "Job not found"}},
+    )
+    async def list_job_artifacts(job_id: str) -> dict:
+        """List durable artifact metadata for a job (no bytes)."""
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        store = SqlArtifactStore(db_url)
+        artifacts = await asyncio.to_thread(store.list, job_id)
+        return {"job_id": job_id, "artifacts": [a.model_dump(mode="json") for a in artifacts]}
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/artifacts/{artifact_id}/content",
+        tags=["async jobs"],
+        summary="Download artifact content",
+        description="Stream the bytes of a single artifact. Job-ownership checks apply.",
+        responses={404: {"description": "Job or artifact not found"}},
+    )
+    async def get_job_artifact_content(job_id: str, artifact_id: str) -> StreamingResponse:
+        """Stream an artifact's bytes (auth-scoped to the owning job)."""
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        store = SqlArtifactStore(db_url)
+        artifact = await asyncio.to_thread(store.get, job_id, artifact_id)
+        if artifact is None:
+            raise HTTPException(404, f"Artifact not found: {artifact_id}")
+
+        return StreamingResponse(
+            store.open_bytes(job_id, artifact_id),
+            media_type=artifact.mime_type,
+            headers={"Content-Disposition": f'inline; filename="{artifact.filename}"'},
         )
 
     @app.get(
@@ -910,6 +1018,19 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
             return (time_deleted, expired_deleted, access_deleted)
 
     time_deleted, expired_deleted, access_deleted = await loop.run_in_executor(None, _do_cleanup)
+
+    # Artifact retention shares the job expiry boundary (best-effort; the artifacts
+    # table only exists when artifact capture has been used).
+    try:
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+
+        artifacts_deleted = await loop.run_in_executor(
+            None, lambda: SqlArtifactStore(db_url).cleanup_old_artifacts(retention_seconds)
+        )
+        if artifacts_deleted:
+            logger.info("Artifact cleanup: %d old artifacts removed", artifacts_deleted)
+    except Exception as e:  # noqa: BLE001 - retention is best-effort
+        logger.debug("Artifact cleanup skipped: %s", e)
 
     if time_deleted > 0 or expired_deleted > 0 or access_deleted > 0:
         logger.info(

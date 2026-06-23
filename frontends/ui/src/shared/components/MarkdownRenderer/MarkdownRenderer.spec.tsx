@@ -174,6 +174,34 @@ Paragraph 2.`} />)
     })
   })
 
+  describe('images', () => {
+    test('resolves artifact:// refs to the content endpoint and renders a caption', () => {
+      render(
+        <MarkdownRenderer
+          content="![Population chart](artifact://art_abc123)"
+          artifactJobId="job-9"
+        />
+      )
+
+      const img = screen.getByRole('img', { name: 'Population chart' })
+      expect(img).toHaveAttribute('src', '/api/jobs/async/job/job-9/artifacts/art_abc123/content')
+      expect(screen.getByText('Population chart').tagName).toBe('FIGCAPTION')
+    })
+
+    test('skips an artifact:// image when no job id is available', () => {
+      render(<MarkdownRenderer content="![Chart](artifact://art_abc123)" />)
+
+      expect(screen.queryByRole('img')).not.toBeInTheDocument()
+    })
+
+    test('passes through a normal image url', () => {
+      render(<MarkdownRenderer content="![Logo](https://example.com/logo.png)" />)
+
+      const img = screen.getByRole('img', { name: 'Logo' })
+      expect(img).toHaveAttribute('src', 'https://example.com/logo.png')
+    })
+  })
+
   describe('code blocks', () => {
     test('renders code block with language', () => {
       const code = '```javascript\nconst x = 1;\n```'

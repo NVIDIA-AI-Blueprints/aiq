@@ -1394,6 +1394,8 @@ class TestAsyncJobRunnerAgentFactory:
                 skills=None,
                 sandbox=None,
                 job_id=None,
+                artifact_db_url=None,
+                artifact_emit=None,
                 max_research_concurrency=None,
                 max_concurrent_source_tool_calls=None,
                 max_source_tool_batch_size=None,
@@ -1408,6 +1410,8 @@ class TestAsyncJobRunnerAgentFactory:
                 self.skills = skills
                 self.sandbox = sandbox
                 self.job_id = job_id
+                self.artifact_db_url = artifact_db_url
+                self.artifact_emit = artifact_emit
                 self.max_research_concurrency = max_research_concurrency
                 self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
                 self.max_source_tool_batch_size = max_source_tool_batch_size
@@ -1649,6 +1653,8 @@ class TestAsyncJobRunnerAgentFactory:
                 skills=None,
                 sandbox=None,
                 job_id=None,
+                artifact_db_url=None,
+                artifact_emit=None,
                 max_research_concurrency=None,
                 max_concurrent_source_tool_calls=None,
                 max_source_tool_batch_size=None,

@@ -1,0 +1,53 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Provider-neutral sandbox + artifact runtime for deep research.
+
+Layout:
+    base.py          SandboxProvider contract (execute required; optional hooks/capabilities)
+    registry.py      register_sandbox_provider / create_sandbox_backend (the config-driven seam)
+    config.py        SandboxConfig (common + providers.<name> + artifact_capture + lifecycle_scope)
+    capabilities.py  SandboxCapabilities + fail-closed verification gate
+    providers/       one module per provider (modal, openshell, ...) — each self-registers
+    artifacts/       durable artifact records, manifest parsing, store, and harvester
+
+Importing this package registers the built-in providers, so the registry is
+populated before any config is validated against it.
+"""
+
+from __future__ import annotations
+
+from .artifacts import Artifact
+from .artifacts import ArtifactManager
+from .artifacts import ArtifactStore
+from .artifacts import LocalArtifactStore
+from .base import SandboxProvider
+from .capabilities import CapabilityError
+from .capabilities import SandboxCapabilities
+from .capabilities import verify_capabilities
+from .config import NetworkPolicy
+from .config import SandboxConfig
+from .registry import SANDBOX_PROVIDER_ENTRY_POINT_GROUP
+from .registry import create_sandbox_backend
+from .registry import register_sandbox_provider
+from .registry import registered_providers
+
+# Import providers for their registration side effects (built-ins self-register).
+from . import providers as _providers  # noqa: E402,F401
+
+__all__ = [
+    "SandboxProvider",
+    "SandboxConfig",
+    "NetworkPolicy",
+    "SandboxCapabilities",
+    "CapabilityError",
+    "verify_capabilities",
+    "register_sandbox_provider",
+    "create_sandbox_backend",
+    "registered_providers",
+    "SANDBOX_PROVIDER_ENTRY_POINT_GROUP",
+    "Artifact",
+    "ArtifactStore",
+    "LocalArtifactStore",
+    "ArtifactManager",
+]

@@ -1,0 +1,215 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Provider-neutral sandbox configuration models.
+
+Common fields apply to every provider; provider-specific settings live under
+``providers.<name>``. A backward-compatible validator lifts legacy flat Modal
+fields into ``providers.modal`` so pre-existing configs keep loading. The
+``provider`` field is validated against the registry, so any registered provider
+is automatically accepted with no edits here.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+from typing import Literal
+
+from pydantic import BaseModel
+from pydantic import Field
+from pydantic import field_validator
+from pydantic import model_validator
+
+DEFAULT_WORKDIR = "/workspace"
+
+# Allowed artifact extensions for the first capture milestone (validated MIME-from-bytes
+# happens in the ArtifactManager; this is the coarse filename allowlist).
+_DEFAULT_ALLOW_EXTENSIONS: tuple[str, ...] = (
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".webp",
+    ".svg",
+    ".csv",
+    ".json",
+    ".md",
+    ".ipynb",
+    ".pdf",
+)
+
+# Legacy top-level Modal fields, kept working via a pre-validator shim.
+_LEGACY_MODAL_FIELDS = ("app_name", "image", "python_packages")
+
+
+class ModalProviderConfig(BaseModel):
+    """Modal-specific sandbox settings."""
+
+    app_name: str = Field(default="aiq-deep-research", description="Modal app name for deep research sandboxes")
+    image: str = Field(default="python:3.12-slim", description="Container image for Modal sandboxes")
+    python_packages: tuple[str, ...] = Field(
+        default=(),
+        description="Python packages to install into the Modal sandbox image (e.g. matplotlib, pandas).",
+    )
+
+
+class OpenShellProviderConfig(BaseModel):
+    """OpenShell-specific sandbox settings (enterprise/on-prem example provider)."""
+
+    gateway: str | None = Field(default=None, description="OpenShell gateway/cluster endpoint or name")
+    sandbox_name: str | None = Field(
+        default=None,
+        description="Existing named OpenShell sandbox to attach to (required when a policy file is used).",
+    )
+    policy: str | None = Field(
+        default=None,
+        description="OpenShell policy file path. Requires a pre-created named sandbox (sandbox_name).",
+    )
+    image: str = Field(default="base", description="OpenShell image identifier")
+    ready_timeout_seconds: float = Field(default=300.0, description="Seconds to wait for the sandbox to become ready")
+    delete_on_exit: bool = Field(default=True, description="Delete the sandbox when its session context closes")
+    shell: tuple[str, ...] = Field(
+        default=("bash", "-c"),
+        description="Shell argv prefix passed to the langchain-nvidia-openshell adapter.",
+    )
+
+
+class SandboxProvidersConfig(BaseModel):
+    """Per-provider configuration blocks. Add a provider by adding an optional field here."""
+
+    modal: ModalProviderConfig = Field(default_factory=ModalProviderConfig)
+    openshell: OpenShellProviderConfig = Field(default_factory=OpenShellProviderConfig)
+
+
+class ArtifactCaptureConfig(BaseModel):
+    """Controls durable harvesting of generated binary/rich artifacts."""
+
+    enabled: bool = Field(default=False, description="Enable artifact harvesting from the sandbox")
+    collect_on: tuple[Literal["execute_end", "job_end"], ...] = Field(
+        default=("execute_end", "job_end"),
+        description="When to scan/harvest artifacts.",
+    )
+    max_file_bytes: int = Field(default=50_000_000, description="Maximum size of a single harvested artifact")
+    max_total_bytes: int = Field(default=500_000_000, description="Maximum total artifact bytes per job (quota)")
+    max_file_count: int = Field(default=200, description="Maximum number of artifacts per job")
+    allow_extensions: tuple[str, ...] = Field(
+        default=_DEFAULT_ALLOW_EXTENSIONS,
+        description="Filename extension allowlist for captured artifacts.",
+    )
+
+
+class NetworkPolicy(BaseModel):
+    """Provider-neutral outbound network policy.
+
+    One normalized shape every provider maps to its native mechanism (Modal's
+    ``block_network`` flag, OpenShell's gateway policy file, etc.):
+
+    * ``blocked`` - no outbound network (the safe default).
+    * ``allowlist`` - only the hosts in ``allow`` are reachable.
+    * ``open`` - unrestricted (use only for trusted workloads).
+    """
+
+    mode: Literal["blocked", "allowlist", "open"] = Field(
+        default="blocked",
+        description="Outbound network policy mode enforced inside the sandbox.",
+    )
+    allow: tuple[str, ...] = Field(
+        default=(),
+        description="Allowed hostnames/domains; only used (and required) when mode='allowlist'.",
+    )
+
+    @model_validator(mode="after")
+    def _validate_allowlist(self) -> NetworkPolicy:
+        """An allowlist policy is meaningless without hosts; fail loudly at config time."""
+        if self.mode == "allowlist" and not self.allow:
+            raise ValueError("network.mode='allowlist' requires a non-empty network.allow list of hosts.")
+        return self
+
+
+class SandboxConfig(BaseModel):
+    """Provider-neutral configuration for a DeepAgents sandbox backend.
+
+    Swapping providers is a config-only change: set ``provider`` and the matching
+    ``providers.<name>`` block. Common fields (workdir, network, timeouts, artifact
+    capture, lifecycle scope) apply to every provider.
+    """
+
+    enabled: bool = Field(default=True, description="Whether the sandbox is active for this agent")
+    provider: str = Field(default="modal", description="Sandbox backend provider (must be registered).")
+    lifecycle_scope: Literal["job", "skill", "subagent"] = Field(
+        default="job",
+        description="Isolation scope for the sandbox. 'job' shares one sandbox across subagents.",
+    )
+    workdir: str = Field(default=DEFAULT_WORKDIR, description="Writable working directory inside the sandbox")
+    artifact_dir: str = Field(
+        default=f"{DEFAULT_WORKDIR}/aiq-artifacts",
+        description="Directory inside the sandbox where generated artifacts are written.",
+    )
+    network: NetworkPolicy = Field(
+        default_factory=NetworkPolicy,
+        description="Normalized outbound network policy. Legacy `block_network: bool` is lifted into this.",
+    )
+    timeout: int = Field(default=1200, description="Maximum sandbox lifetime in seconds")
+    idle_timeout: int = Field(default=1800, description="Sandbox idle timeout in seconds")
+    artifact_capture: ArtifactCaptureConfig = Field(default_factory=ArtifactCaptureConfig)
+    providers: SandboxProvidersConfig = Field(default_factory=SandboxProvidersConfig)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_legacy_modal_fields(cls, data: Any) -> Any:
+        """Lift legacy top-level Modal fields into ``providers.modal`` for back-compat.
+
+        Explicit ``providers.modal`` values take precedence over lifted legacy values.
+        """
+        if not isinstance(data, dict):
+            return data
+        legacy = {key: data[key] for key in _LEGACY_MODAL_FIELDS if key in data}
+        if not legacy:
+            return data
+        data = dict(data)
+        providers = dict(data.get("providers") or {})
+        modal = dict(providers.get("modal") or {})
+        for key, value in legacy.items():
+            modal.setdefault(key, value)
+            data.pop(key, None)
+        providers["modal"] = modal
+        data["providers"] = providers
+        return data
+
+    @model_validator(mode="before")
+    @classmethod
+    def _lift_legacy_block_network(cls, data: Any) -> Any:
+        """Lift legacy ``block_network: bool`` into the normalized ``network`` policy.
+
+        Explicit ``network`` always wins; ``block_network`` is only consulted when
+        ``network`` is not provided, so old configs keep working unchanged.
+        """
+        if not isinstance(data, dict) or "block_network" not in data:
+            return data
+        data = dict(data)
+        legacy_block = data.pop("block_network")
+        if "network" not in data or data.get("network") is None:
+            data["network"] = {"mode": "blocked" if legacy_block else "open"}
+        return data
+
+    @field_validator("provider")
+    @classmethod
+    def _provider_must_be_registered(cls, value: str) -> str:
+        """Validate the provider name against the registry (the single source of truth)."""
+        from .registry import is_registered
+        from .registry import registered_providers
+
+        provider = value.lower()
+        if not is_registered(provider):
+            registered = ", ".join(registered_providers()) or "(none registered)"
+            raise ValueError(f"Unsupported sandbox provider: {value}. Registered providers: {registered}")
+        return provider
+
+    @property
+    def block_network(self) -> bool:
+        """Back-compat accessor: any non-``open`` network policy blocks unrestricted egress."""
+        return self.network.mode != "open"
+
+    @property
+    def python_packages(self) -> tuple[str, ...]:
+        """Active provider's package list (Modal). Empty for providers without one."""
+        return self.providers.modal.python_packages

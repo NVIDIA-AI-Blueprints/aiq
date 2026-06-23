@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -29,7 +30,13 @@ from sqlalchemy.engine import Connection
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
 
+logger = logging.getLogger(__name__)
+
 _job_access_schema_initialized: set[str] = set()
+
+# Statuses that mean a job no longer holds a live sandbox. Anything else (running,
+# pending, submitted, etc.) counts as active for the concurrency guard.
+_TERMINAL_STATUS_SQL = "('success','failure','failed','interrupted','cancelled','completed','error')"
 
 _JOB_ACCESS_INDEX_SQL = "CREATE INDEX IF NOT EXISTS idx_job_access_owner ON job_access(owner_auth_type, owner_subject)"
 _JOB_ACCESS_SELECT_SQL = text(
@@ -108,6 +115,50 @@ def rollback_job_submission(job_id: str, db_url: str) -> None:
         conn.execute(_JOB_EVENTS_DELETE_SQL, {"job_id": job_id})
         conn.execute(_JOB_INFO_DELETE_SQL, {"job_id": job_id})
         conn.commit()
+
+
+def count_active_jobs_for_owner(db_url: str, principal: Principal) -> int | None:
+    """Count an owner's non-terminal, non-expired jobs.
+
+    Returns ``None`` if the count cannot be computed (e.g. the NAT ``job_info``
+    schema differs); callers should fail open so a query mismatch never blocks
+    legitimate submissions. Used by the submit-path sandbox concurrency guard.
+    """
+    try:
+        with _job_access_connection(db_url) as conn:
+            _ensure_job_access_schema(conn, db_url)
+            row = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM job_access ja JOIN job_info ji ON ja.job_id = ji.job_id "
+                    "WHERE ja.owner_auth_type = :t AND ja.owner_subject = :s "
+                    "AND (ji.is_expired IS NOT TRUE) "
+                    f"AND lower(ji.status) NOT IN {_TERMINAL_STATUS_SQL}"
+                ),
+                {"t": principal.type, "s": principal.sub},
+            ).scalar()
+            return int(row or 0)
+    except Exception as exc:  # noqa: BLE001 - guard must fail open, never block submits
+        logger.warning("Could not count active jobs for owner; allowing submit: %s", exc)
+        return None
+
+
+def count_active_jobs_global(db_url: str) -> int | None:
+    """Count all non-terminal, non-expired jobs (global capacity guard).
+
+    Returns ``None`` on query failure so callers fail open.
+    """
+    try:
+        with _job_access_connection(db_url) as conn:
+            row = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM job_info "
+                    f"WHERE (is_expired IS NOT TRUE) AND lower(status) NOT IN {_TERMINAL_STATUS_SQL}"
+                )
+            ).scalar()
+            return int(row or 0)
+    except Exception as exc:  # noqa: BLE001 - guard must fail open, never block submits
+        logger.warning("Could not count active jobs globally; allowing submit: %s", exc)
+        return None
 
 
 def _make_no_auth_principal(owner: str | None = None) -> Principal:

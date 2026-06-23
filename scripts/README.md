@@ -49,6 +49,58 @@ Starts the agent in CLI mode with browser-based authentication.
 | `--verbose` or `-v` | Enable verbose logging |
 | `--config_file <path>` | Use a custom configuration file |
 
+### `setup_openshell.sh` - OpenShell Sandbox Setup
+
+Sets up NVIDIA OpenShell for the AI-Q sandbox path. Run this once before using
+`configs/config_openshell.yml` with `start_cli.sh` or `start_e2e.sh`. It installs
+the `openshell` SDK and the `langchain-nvidia-openshell` adapter, starts/verifies
+the local OpenShell gateway, builds the sandbox image, generates a network policy,
+and creates the named sandbox `aiq-openshell-demo`. Inference is unaffected (it
+stays host-side, routed to NVIDIA Build); only generated code runs in the
+network-blocked sandbox.
+
+```bash
+./scripts/setup_openshell.sh --policy offline
+./scripts/start_e2e.sh --config_file configs/config_openshell.yml
+# or direct serve:
+dotenv -f deploy/.env run .venv/bin/nat serve --config_file configs/config_openshell.yml --host 0.0.0.0 --port 8000
+```
+
+Useful version examples:
+
+```bash
+./scripts/setup_openshell.sh --openshell-version 0.0.57
+./scripts/setup_openshell.sh --openshell-version latest
+./scripts/setup_openshell.sh --list-openshell-versions
+```
+
+In the interactive version prompt, pressing Enter selects `0.0.57`.
+
+The setup installs the `openshell` SDK plus the official `langchain-nvidia-openshell`
+adapter (`OpenShellSandbox`) - the OpenShell partner package in
+`langchain-ai/langchain-nvidia` (PR #303), the same adapter AI-Q PR #274 integrates.
+Until it publishes to PyPI, the script installs it from a git spec by default; set
+`LANGCHAIN_NVIDIA_REPO` or pass `--langchain-nvidia` to use another `uv pip install`
+spec or a local checkout.
+
+Useful policy examples:
+
+```bash
+./scripts/setup_openshell.sh --policy offline
+./scripts/setup_openshell.sh --policy research
+./scripts/setup_openshell.sh --policy python-packages
+./scripts/setup_openshell.sh --policy custom --allow github,pypi,nvidia,tavily
+```
+
+Verify and clean up:
+
+```bash
+.venv/bin/openshell status
+.venv/bin/openshell sandbox list          # expect: aiq-openshell-demo ... Ready
+.venv/bin/openshell sandbox delete aiq-openshell-demo
+pkill -f openshell-gateway
+```
+
 
 ### `start_server_in_debug_mode.sh` - Server Mode
 
@@ -112,6 +164,7 @@ Starts both backend and frontend for full WebSocket support and HITL workflows.
 
 ```bash
 ./scripts/start_e2e.sh
+./scripts/start_e2e.sh --config_file configs/config_openshell.yml
 ```
 
 **Services:**
@@ -128,6 +181,8 @@ Starts both backend and frontend for full WebSocket support and HITL workflows.
 | `configs/config_cli_default.yml` | CLI mode with web search (default) |
 | `configs/config_web_frag.yml` | Server/E2E mode with Foundational RAG |
 | `configs/config_web_default_llamaindex.yml` | Server/E2E mode with LlamaIndex |
+| `configs/config_skills.yml` | Deep research with DeepAgents skills + Modal sandbox |
+| `configs/config_openshell.yml` | Deep research with skills + OpenShell sandbox + artifact capture (run `setup_openshell.sh` first) |
 
 ## Development Workflow
 

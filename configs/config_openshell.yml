@@ -1,0 +1,192 @@
+# AI-Q deep research with an OpenShell (on-prem) sandbox + durable artifact capture.
+#
+# Inference is routed to NVIDIA Build (integrate.api.nvidia.com); only generated
+# Python runs in the OpenShell sandbox, which is network-blocked. Run
+# `./scripts/setup_openshell.sh` first to install the adapter, start the gateway,
+# build the image, and create the named sandbox `aiq-openshell-demo`.
+
+general:
+  use_uvloop: true
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+
+  front_end:
+    _type: aiq_api
+    runner_class: aiq_api.plugin.AIQAPIWorker
+    db_url: ${NAT_JOB_STORE_DB_URL:-sqlite+aiosqlite:///./jobs.db}
+    expiry_seconds: 86400
+    cors:
+      allow_origin_regex: 'http://localhost(:\d+)?|http://127.0.0.1(:\d+)?'
+      allow_methods:
+        - GET
+        - POST
+        - DELETE
+        - OPTIONS
+      allow_headers:
+        - "*"
+      allow_credentials: true
+      expose_headers:
+        - "*"
+
+llms:
+  # NVIDIA Build models; key from NVIDIA_API_KEY.
+  nemotron_llm_intent:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: https://integrate.api.nvidia.com/v1
+    temperature: 0.5
+    top_p: 0.9
+    max_tokens: 4096
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+
+  nemotron_nano_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-nano-30b-a3b
+    base_url: https://integrate.api.nvidia.com/v1
+    temperature: 0.1
+    top_p: 0.3
+    max_tokens: 16384
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+
+  gpt_oss_llm:
+    _type: nim
+    model_name: openai/gpt-oss-120b
+    base_url: https://integrate.api.nvidia.com/v1
+    temperature: 1.0
+    top_p: 1.0
+    max_tokens: 256000
+    api_key: ${NVIDIA_API_KEY}
+    max_retries: 10
+
+  summary_llm:
+    _type: nim
+    model_name: nvidia/nemotron-mini-4b-instruct
+    base_url: https://integrate.api.nvidia.com/v1
+    temperature: 0.3
+    max_tokens: 100
+
+functions:
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      - id: knowledge_layer
+        name: "Knowledge Base"
+        description: "Search uploaded documents and files."
+        tools:
+          - knowledge_search
+
+  web_search_tool:
+    _type: tavily_web_search
+    max_results: 5
+    max_content_length: 1000
+
+  advanced_web_search_tool:
+    _type: tavily_web_search
+    max_results: 2
+    advanced_search: true
+
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: llamaindex
+    collection_name: ${COLLECTION_NAME:-test_collection}
+    generate_summary: true
+    summary_model: summary_llm
+    summary_db: ${AIQ_SUMMARY_DB:-sqlite+aiosqlite:///./summaries.db}
+    top_k: 5
+    chroma_dir: ${AIQ_CHROMA_DIR:-/tmp/chroma_data}
+
+  intent_classifier:
+    _type: intent_classifier
+    llm: nemotron_llm_intent
+    verbose: true
+
+  clarifier_agent:
+    _type: clarifier_agent
+    llm: nemotron_nano_llm
+    planner_llm: nemotron_nano_llm
+    max_turns: 3
+    enable_plan_approval: true
+    log_response_max_chars: 2000
+    verbose: true
+
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: nemotron_nano_llm
+    exclude_tools:
+      - advanced_web_search_tool
+    verbose: true
+    max_llm_turns: 10
+    max_tool_iterations: 5
+
+  deep_research_agent:
+    _type: deep_research_agent
+    orchestrator_llm: gpt_oss_llm
+    researcher_llm: nemotron_nano_llm
+    planner_llm: gpt_oss_llm
+    exclude_tools:
+      - web_search_tool
+    max_loops: 2
+    verbose: true
+    skills:
+      enabled: true
+    # OpenShell sandbox; the named sandbox is created by scripts/setup_openshell.sh
+    # and attached by name.
+    sandbox:
+      enabled: true
+      provider: openshell
+      workdir: /sandbox
+      artifact_dir: /sandbox/aiq-artifacts
+      # Outbound egress policy: blocked | allowlist (+ allow:) | open.
+      network:
+        mode: blocked
+      timeout: 1200
+      idle_timeout: 1800
+      artifact_capture:
+        enabled: true
+        collect_on:
+          - execute_end
+          - job_end
+        max_file_bytes: 50000000
+        allow_extensions:
+          - .png
+          - .jpg
+          - .jpeg
+          - .webp
+          - .csv
+          - .json
+          - .md
+          - .ipynb
+          - .pdf
+      providers:
+        openshell:
+          # null => use the locally selected gateway (set by setup_openshell.sh).
+          # Set to a cluster/endpoint name for a remote gateway.
+          gateway: null
+          sandbox_name: ${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}
+          policy: ${AIQ_OPENSHELL_POLICY_FILE:-configs/openshell/generated/aiq-openshell-policy.yaml}
+          ready_timeout_seconds: 300
+          delete_on_exit: false
+          shell:
+            - bash
+            - -c
+
+workflow:
+  _type: chat_deepresearcher_agent
+  verbose: true
+  enable_escalation: true
+  enable_clarifier: true
+  use_async_deep_research: true
+  checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}

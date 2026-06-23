@@ -3198,6 +3198,19 @@ export const selectHasConnectionError = (state: ChatStore): boolean =>
     (m) => m.messageType === 'error' && m.errorData?.errorCode?.startsWith('connection.')
   ) ?? false
 
+/**
+ * Resolve the deep-research job id for artifact resolution (report images, PDF/markdown
+ * export). Prefers the active streaming job, then falls back to the latest deep-research
+ * message in the conversation — the active id is cleared once a job stops streaming, but a
+ * finished report still needs the id to fetch its artifact content.
+ */
+export const selectResolvedDeepResearchJobId = (state: ChatStore): string | undefined => {
+  if (state.deepResearchJobId) return state.deepResearchJobId
+  const conversation = state.currentConversation
+  if (!conversation) return undefined
+  return getLatestDeepResearchMessage(conversation)?.deepResearchJobId ?? undefined
+}
+
 // ============================================================
 // Storage Event Monitoring (for debugging session clearing)
 // ============================================================

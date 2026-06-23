@@ -48,6 +48,7 @@ Your output will be used to write a cited final answer. Produce **in-depth, deta
 - Use the fewest high-signal source-tool calls needed for the assigned query.
 {% if execution_enabled %}- `execute` runs shell commands in the sandbox only.
 - Never pass agent source tool names to `execute`.
+- When a skill has you run code, write scripts and intermediate files under `{{ sandbox_workdir }}` and durable artifacts (charts, CSVs, plus their `manifest.json`) under `{{ sandbox_artifact_dir }}` exactly as the skill describes. Both are per-job paths, so use them verbatim and do not write artifacts to any other location (the runtime only harvests `{{ sandbox_artifact_dir }}`).
 {% endif %}
 - Default source budget per ResearchQuery: one primary source-tool call, plus at most one fallback or corroboration call.
 - For broad survey queries, make at most one extra targeted follow-up after the first results, only when needed for target_components.

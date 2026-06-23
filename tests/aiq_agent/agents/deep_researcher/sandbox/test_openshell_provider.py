@@ -1,0 +1,116 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""OpenShell provider tests: the env-free upload/download shim.
+
+OpenShell 0.0.57's exec does not propagate ``env`` to the child process, which
+breaks the official adapter's env-var file-transfer bootstraps. Our provider
+overrides ``upload_files``/``download_files`` to pass the path via argv (and data
+via stdin). These tests assert that contract with a fake sandbox, so they require
+only the optional SDK + adapter to be importable.
+"""
+
+from __future__ import annotations
+
+import base64
+from dataclasses import dataclass
+from typing import Any
+from unittest.mock import MagicMock
+
+import pytest
+
+pytest.importorskip("openshell")
+pytest.importorskip("langchain_nvidia_openshell")
+
+from aiq_agent.agents.deep_researcher.sandbox.config import SandboxConfig  # noqa: E402
+from aiq_agent.agents.deep_researcher.sandbox.providers.openshell import OpenShellSandboxProvider  # noqa: E402
+
+
+@dataclass
+class _ExecResult:
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+
+
+class _FakeOpenShellSandbox:
+    """Records exec calls and returns scripted results."""
+
+    id = "fake-os-id"
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.result = _ExecResult(exit_code=0)
+
+    def exec(self, command, **kwargs):  # noqa: ANN001 - mirrors openshell.Sandbox.exec
+        self.calls.append({"command": list(command), **kwargs})
+        return self.result
+
+
+def _provider() -> OpenShellSandboxProvider:
+    cfg = SandboxConfig(
+        provider="openshell",
+        network={"mode": "blocked"},
+        providers={"openshell": {"sandbox_name": "demo", "delete_on_exit": False}},
+    )
+    provider = OpenShellSandboxProvider(cfg, "job-1")
+    # Avoid real session creation: a non-None _session short-circuits _session_or_create.
+    provider._session = MagicMock()  # type: ignore[assignment]
+    return provider
+
+
+def test_upload_passes_path_via_argv_and_data_via_stdin_no_env() -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    provider._os_context = fake
+
+    result = provider.upload_files([("/sandbox/x.py", b"print('hi')")])
+
+    assert result[0].error is None
+    call = fake.calls[0]
+    assert call["command"][0] == "python3" and call["command"][-1] == "/sandbox/x.py"
+    assert call["stdin"] == base64.b64encode(b"print('hi')")
+    assert "env" not in call  # the whole point: never rely on exec env propagation
+
+
+def test_upload_classifies_failure() -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    fake.result = _ExecResult(exit_code=1, stderr="No such file or directory")
+    provider._os_context = fake
+
+    result = provider.upload_files([("/sandbox/x.py", b"data")])
+    assert result[0].error == "file_not_found"
+
+
+def test_upload_rejects_relative_path() -> None:
+    provider = _provider()
+    provider._os_context = _FakeOpenShellSandbox()
+    result = provider.upload_files([("relative.py", b"data")])
+    assert result[0].error == "invalid_path"
+
+
+def test_download_passes_path_via_argv_and_decodes_base64() -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    fake.result = _ExecResult(exit_code=0, stdout=base64.b64encode(b"chart-bytes").decode())
+    provider._os_context = fake
+
+    result = provider.download_files(["/sandbox/aiq-artifacts/chart.png"])
+
+    assert result[0].error is None
+    assert result[0].content == b"chart-bytes"
+    call = fake.calls[0]
+    assert call["command"][-1] == "/sandbox/aiq-artifacts/chart.png"
+    assert "env" not in call
+
+
+def test_download_is_directory_exit_code() -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    fake.result = _ExecResult(exit_code=3, stderr="")
+    provider._os_context = fake
+
+    result = provider.download_files(["/sandbox"])
+    assert result[0].content is None
+    assert result[0].error == "permission_denied"  # exit 3 with no stderr -> generic

@@ -22,6 +22,7 @@ import logging
 import re
 import shlex
 import threading
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from typing import Literal
@@ -40,12 +41,15 @@ from pydantic import field_validator
 
 from nat.data_models.function import FunctionBaseConfig
 
+from .sandbox.config import ArtifactCaptureConfig
+
 logger = logging.getLogger(__name__)
 
 BUILTIN_SKILLS_DIR = Path(__file__).with_name("skills")
 BUILTIN_SKILL_SOURCE = "/skills/"
 SHARED_ROUTE = "/shared/"
 SKILL_AGENT_NAMES = frozenset({"researcher-agent", "writer-agent"})
+DEFAULT_WORKDIR = "/workspace"
 
 
 class DeepResearchSkillsConfig(FunctionBaseConfig, name="deep_research_skills"):
@@ -92,6 +96,10 @@ class DeepResearchSandboxConfig(FunctionBaseConfig, name="deep_research_sandbox"
         default="blocked",
         description="Outbound network policy for Modal sandboxes.",
     )
+    artifact_capture: ArtifactCaptureConfig = Field(
+        default_factory=ArtifactCaptureConfig,
+        description="Durable harvesting of generated artifacts (charts/CSVs). Disabled by default.",
+    )
 
     @property
     def block_network(self) -> bool:
@@ -108,11 +116,15 @@ class DeepAgentsRuntime:
         skills: DeepResearchSkillsConfig | None = None,
         sandbox: DeepResearchSandboxConfig | None = None,
         job_id: str | None = None,
+        artifact_db_url: str | None = None,
+        artifact_emit: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self._skills = skills
         self._sandbox = sandbox
         self._job_id = str(job_id) if job_id is not None else str(uuid4())
         self._backend: Any | None = None
+        self._sandbox_provider: Any | None = None
+        self.artifact_manager: Any | None = None
         self._skill_sources_by_agent = _resolve_agent_skill_sources(skills)
         self._skill_sources = tuple(
             dict.fromkeys(source for sources in self._skill_sources_by_agent.values() for source in sources)
@@ -121,6 +133,17 @@ class DeepAgentsRuntime:
             skills=skills,
             sandbox=sandbox,
         )
+        # Build the provider-neutral sandbox provider eagerly (lazy SDK session) so the
+        # runtime can expose its job-scoped workdir/artifact_dir and own its lifecycle.
+        if sandbox is not None:
+            self._sandbox_provider = _create_sandbox_backend(sandbox, self._job_id)
+            self.artifact_manager = _maybe_build_artifact_manager(
+                provider=self._sandbox_provider,
+                job_id=self._job_id,
+                artifact_dir=self.artifact_dir,
+                artifact_db_url=artifact_db_url,
+                artifact_emit=artifact_emit,
+            )
 
     @property
     def execution_enabled(self) -> bool:
@@ -138,33 +161,101 @@ class DeepAgentsRuntime:
         return list(sources) if sources else None
 
     @property
+    def workdir(self) -> str:
+        """Job-scoped sandbox working directory (or the default when no sandbox)."""
+        if self._sandbox_provider is None:
+            return DEFAULT_WORKDIR
+        return self._sandbox_provider.workdir
+
+    @property
+    def artifact_dir(self) -> str:
+        """Job-scoped sandbox artifact directory (harvest root) or the default."""
+        if self._sandbox_provider is None:
+            return f"{DEFAULT_WORKDIR}/aiq-artifacts"
+        return self._sandbox_provider.artifact_dir
+
+    @property
     def backend(self) -> Any:
         """Return the concrete backend instance passed to DeepAgents."""
         if self._backend is None:
             self._backend = _build_backend(
-                sandbox=self._sandbox,
-                job_id=self._job_id,
+                provider=self._sandbox_provider,
                 skills_enabled=self.skills_enabled,
             )
         return self._backend
 
+    def final_harvest(self) -> None:
+        """Best-effort final artifact harvest before cleanup (terminal job path)."""
+        manager = self.artifact_manager
+        if manager is None:
+            return
+        try:
+            manager.final_harvest()
+        except Exception:  # noqa: BLE001 - harvest is best-effort on the terminal path
+            logger.warning("Final artifact harvest failed for job %s", self._job_id, exc_info=True)
+
+    def close(self) -> None:
+        """Release the sandbox provider on a normal terminal job path (idempotent)."""
+        provider = self._sandbox_provider
+        if provider is not None and hasattr(provider, "close"):
+            provider.close()
+
+    def terminate(self) -> None:
+        """Forcibly stop the sandbox on an interrupted job (cancel/timeout), idempotent."""
+        provider = self._sandbox_provider
+        if provider is not None and hasattr(provider, "terminate"):
+            provider.terminate()
+
 
 def _build_backend(
     *,
-    sandbox: DeepResearchSandboxConfig | None,
-    job_id: str,
+    provider: Any | None,
     skills_enabled: bool,
 ) -> Any:
-    """Build the smallest stock DeepAgents backend needed for this run."""
-    default = _create_sandbox_backend(sandbox, job_id) if sandbox is not None else StateBackend()
+    """Build the smallest stock DeepAgents backend needed for this run.
+
+    The sandbox provider (a ``BaseSandbox``) is created once by the runtime so it can
+    own the artifact manager and lifecycle; here it is simply used as the default backend.
+    """
+    default = provider if provider is not None else StateBackend()
     routes: dict[str, Any] = {}
     if skills_enabled:
         routes[BUILTIN_SKILL_SOURCE] = _skills_backend()
-    if sandbox is not None:
+    if provider is not None:
         routes[SHARED_ROUTE] = StateBackend()
     if not routes:
         return default
     return CompositeBackend(default=default, routes=routes)
+
+
+def _maybe_build_artifact_manager(
+    *,
+    provider: Any | None,
+    job_id: str,
+    artifact_dir: str,
+    artifact_db_url: str | None,
+    artifact_emit: Callable[[dict[str, Any]], None] | None,
+) -> Any | None:
+    """Build an ArtifactManager only when capture is enabled and a store URL is provided.
+
+    Defaults to ``None`` (no harvesting) so adding the sandbox alone never requires a DB.
+    """
+    if provider is None or artifact_db_url is None:
+        return None
+    capture = getattr(getattr(provider, "config", None), "artifact_capture", None)
+    if capture is None or not getattr(capture, "enabled", False):
+        return None
+    from .sandbox.artifacts import ArtifactManager
+    from .sandbox.artifacts import SqlArtifactStore
+
+    return ArtifactManager(
+        job_id=job_id,
+        backend=provider,
+        store=SqlArtifactStore(artifact_db_url),
+        config=capture,
+        artifact_dir=artifact_dir,
+        emit=artifact_emit,
+    )
 
 
 def _skills_backend() -> FilesystemBackend:
@@ -241,9 +332,35 @@ def _validate_modal_sandbox_name(job_id: str) -> str:
 
 
 def _create_sandbox_backend(config: DeepResearchSandboxConfig, job_id: str) -> Any:
+    """Resolve the AI-Q sandbox config to a provider-neutral sandbox backend.
+
+    Keeps the Modal dependency pre-check (clear early error when Modal is configured but
+    not installed), then maps the config to the provider-neutral ``SandboxConfig`` and
+    dispatches through the sandbox provider registry.
+    """
     if config.provider == "modal":
-        return _create_modal_backend(config, job_id)
-    raise ValueError(f"Unsupported sandbox provider: {config.provider}. Supported providers: modal")
+        _ensure_modal_dependencies()
+    from .sandbox import create_sandbox_backend as registry_create
+    from .sandbox.config import SandboxConfig as ProviderSandboxConfig
+
+    provider_config = ProviderSandboxConfig.model_validate(
+        {
+            "provider": config.provider,
+            "workdir": config.workdir,
+            "timeout": config.timeout,
+            "idle_timeout": config.idle_timeout,
+            "network": {"mode": "blocked" if config.block_network else "open"},
+            "artifact_capture": config.artifact_capture.model_dump(),
+            "providers": {
+                "modal": {
+                    "app_name": config.app_name,
+                    "image": config.image,
+                    "python_packages": config.packages,
+                }
+            },
+        }
+    )
+    return registry_create(provider_config, job_id)
 
 
 def _create_modal_backend(config: DeepResearchSandboxConfig, job_id: str) -> Any:

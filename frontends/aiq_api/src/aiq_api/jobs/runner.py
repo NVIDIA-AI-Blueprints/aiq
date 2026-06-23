@@ -481,6 +481,11 @@ async def run_agent_job(
                         verbose=verbose,
                         callbacks=callbacks,
                         job_id=job_id,
+                        # Artifact harvesting rides 284's job store + event stream: the same db_url
+                        # backs the SqlArtifactStore, and event_store.store carries artifact SSE
+                        # events. Inert unless sandbox.artifact_capture is enabled in config.
+                        artifact_db_url=db_url,
+                        artifact_emit=event_store.store,
                     )
 
                     # Run agent - LLM/tool events will be nested under workflow span
@@ -591,6 +596,8 @@ def _create_agent_instance(
     verbose: bool,
     callbacks: list,
     job_id: str | None = None,
+    artifact_db_url: str | None = None,
+    artifact_emit=None,
 ):
     """
     Create an agent instance, supporting different constructor patterns.
@@ -613,6 +620,8 @@ def _create_agent_instance(
             skills=fn_config.skills,
             sandbox=fn_config.sandbox,
             job_id=job_id,
+            artifact_db_url=artifact_db_url,
+            artifact_emit=artifact_emit,
             max_research_concurrency=fn_config.max_research_concurrency,
             max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
             max_source_tool_batch_size=fn_config.max_source_tool_batch_size,

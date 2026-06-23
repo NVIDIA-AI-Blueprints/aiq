@@ -233,6 +233,42 @@ def get_report(job_id: str) -> dict[str, Any]:
     return _api_request("GET", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/report")
 
 
+_ARTIFACT_ID_RE = re.compile(r"^art_[0-9a-f]{32}$")
+
+
+def list_artifacts(job_id: str) -> dict[str, Any]:
+    """Fetch durable artifact metadata (no bytes) for an async AI-Q job."""
+    return _api_request("GET", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/artifacts")
+
+
+def _binary_request(path: str, *, timeout: int = DEFAULT_API_TIMEOUT_SECONDS) -> bytes:
+    """Fetch raw bytes from an AI-Q endpoint (artifact content)."""
+    _validate_api_path(path)
+    url = f"{_validate_base_url(AIQ_SERVER_URL)}{path}"
+    req = urllib.request.Request(url, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.read()
+    except urllib.error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        print(f"HTTP {exc.code}: {error_body[:ERROR_BODY_PREVIEW_CHARS]}", file=sys.stderr)
+        raise RuntimeError(f"HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        print(f"Connection failed for {url}: {exc.reason}", file=sys.stderr)
+        raise RuntimeError(f"Connection failed: {exc.reason}") from exc
+
+
+def download_artifact(job_id: str, artifact_id: str) -> bytes:
+    """Download a single artifact's bytes by id."""
+    valid_job = _validate_job_id(job_id)
+    if not _ARTIFACT_ID_RE.fullmatch(artifact_id):
+        raise RuntimeError("artifact_id must look like art_<hex>")
+    return _binary_request(
+        f"/v1/jobs/async/job/{valid_job}/artifacts/{artifact_id}/content",
+        timeout=DEFAULT_LONG_HTTP_TIMEOUT_SECONDS,
+    )
+
+
 def cancel_job(job_id: str) -> dict[str, Any]:
     """Request cancellation for a running async AI-Q job."""
     return _api_request("POST", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/cancel")
@@ -321,7 +357,8 @@ def _print_usage() -> None:
     print("  status <job_id>               Job status plus /state artifacts")
     print("  state <job_id>                Event-store artifacts for one async job")
     print("  stream <job_id>               Stream SSE events from an async job")
-    print("  report <job_id>               Get final report from an async job")
+    print("  report <job_id> [--out-dir DIR]  Get final report (or export a portable report.md + artifacts/ folder)")
+    print("  artifacts <job_id> [--download-dir DIR]  List or download durable artifacts")
     print("  research <query> [agent_type] Submit async job, poll, and return report")
     print("  research_poll <job_id>        Resume polling an existing async job")
     print("  cancel <job_id>               Cancel a running async job")
@@ -391,9 +428,91 @@ def _command_stream(args: list[str]) -> None:
     stream_job(job_id)
 
 
+OUT_DIR_FLAG = "--out-dir"
+# Matches a markdown image whose target is an artifact:// reference, capturing the
+# "![alt](" prefix, the reference body, and the ")" suffix so only the URL is rewritten.
+_REPORT_ARTIFACT_RE = re.compile(r"(!\[[^\]]*\]\()artifact://([^)]+)(\))")
+
+
+def _export_report_bundle(job_id: str, out_dir: str) -> None:
+    """Write a portable report folder: ``report.md`` plus an ``artifacts/`` directory.
+
+    Downloads every durable artifact for the job and rewrites each
+    ``![caption](artifact://<id>)`` reference to the matching local file so the report
+    renders in any markdown viewer without a running backend.
+    """
+    report = get_report(job_id).get("report")
+    if not report:
+        print(f"No report available for job {job_id}", file=sys.stderr)
+        sys.exit(EXIT_FAILURE)
+
+    artifacts_dir = os.path.join(out_dir, "artifacts")
+    os.makedirs(artifacts_dir, exist_ok=True)
+
+    id_to_relpath: dict[str, str] = {}
+    saved: list[dict[str, Any]] = []
+    for artifact in list_artifacts(job_id).get("artifacts", []):
+        artifact_id = artifact.get("artifact_id", "")
+        if not artifact_id:
+            continue
+        filename = os.path.basename(artifact.get("filename") or artifact_id)
+        data = download_artifact(job_id, artifact_id)
+        dest = os.path.join(artifacts_dir, filename)
+        with open(dest, "wb") as handle:
+            handle.write(data)
+        id_to_relpath[artifact_id] = f"artifacts/{filename}"
+        saved.append({"artifact_id": artifact_id, "path": dest, "size_bytes": len(data)})
+
+    def _rewrite(match: re.Match[str]) -> str:
+        relpath = id_to_relpath.get(match.group(2).strip())
+        return f"{match.group(1)}{relpath}{match.group(3)}" if relpath else match.group(0)
+
+    report_path = os.path.join(out_dir, "report.md")
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(_REPORT_ARTIFACT_RE.sub(_rewrite, report))
+    print(json.dumps({"job_id": job_id, "report": report_path, "artifacts": saved}, indent=JSON_INDENT_SPACES))
+
+
 def _command_report(args: list[str]) -> None:
-    job_id = _require_arg(args, "Usage: aiq.py report <job_id>")
+    job_id = _require_arg(args, f"Usage: aiq.py report <job_id> [{OUT_DIR_FLAG} DIR]")
+    if OUT_DIR_FLAG in args:
+        flag_index = args.index(OUT_DIR_FLAG)
+        if flag_index + 1 >= len(args):
+            print(f"Usage: aiq.py report <job_id> {OUT_DIR_FLAG} DIR", file=sys.stderr)
+            sys.exit(EXIT_FAILURE)
+        _export_report_bundle(job_id, args[flag_index + 1])
+        return
     print(json.dumps(get_report(job_id), indent=JSON_INDENT_SPACES))
+
+
+DOWNLOAD_DIR_FLAG = "--download-dir"
+
+
+def _command_artifacts(args: list[str]) -> None:
+    job_id = _require_arg(args, f"Usage: aiq.py artifacts <job_id> [{DOWNLOAD_DIR_FLAG} DIR]")
+    listing = list_artifacts(job_id)
+
+    if DOWNLOAD_DIR_FLAG not in args:
+        print(json.dumps(listing, indent=JSON_INDENT_SPACES))
+        return
+
+    flag_index = args.index(DOWNLOAD_DIR_FLAG)
+    if flag_index + 1 >= len(args):
+        print(f"Usage: aiq.py artifacts <job_id> {DOWNLOAD_DIR_FLAG} DIR", file=sys.stderr)
+        sys.exit(EXIT_FAILURE)
+    download_dir = args[flag_index + 1]
+    os.makedirs(download_dir, exist_ok=True)
+
+    saved: list[dict[str, Any]] = []
+    for artifact in listing.get("artifacts", []):
+        artifact_id = artifact.get("artifact_id", "")
+        filename = os.path.basename(artifact.get("filename") or artifact_id)
+        data = download_artifact(job_id, artifact_id)
+        dest = os.path.join(download_dir, filename)
+        with open(dest, "wb") as handle:
+            handle.write(data)
+        saved.append({"artifact_id": artifact_id, "path": dest, "size_bytes": len(data)})
+    print(json.dumps({"job_id": job_id, "downloaded": saved}, indent=JSON_INDENT_SPACES))
 
 
 def _command_research(args: list[str]) -> None:
@@ -464,6 +583,7 @@ def main() -> None:
         "state": _command_state,
         "stream": _command_stream,
         "report": _command_report,
+        "artifacts": _command_artifacts,
         "research": _command_research,
         "research_poll": _command_research_poll,
         "cancel": _command_cancel,
