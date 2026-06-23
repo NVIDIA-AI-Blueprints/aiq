@@ -147,8 +147,9 @@ services:
     container_name: aiq-redis
     # Persist tokens across restarts (AOF) so users don't have to reconnect.
     command: ["redis-server", "--appendonly", "yes"]
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
+    # No host port published: the backend reaches Redis over aiq-network by
+    # service name, and the store holds per-user MCP tokens — don't expose it
+    # unauthenticated on the host. Use `docker compose exec redis redis-cli` to inspect.
     volumes:
       - redis-data:/data
     networks:
