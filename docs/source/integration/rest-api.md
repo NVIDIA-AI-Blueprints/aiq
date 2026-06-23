@@ -77,7 +77,7 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `agent_type` | `string` | Yes | Agent identifier (for example, `deep_researcher`, `shallow_researcher`) |
-| `input` | `string` | Yes | Research query (min 1 character) |
+| `input` | `string` | Yes | Research query. Must be non-blank after trimming (whitespace-only is rejected with 422) |
 | `job_id` | `string` | No | Custom job ID. Auto-generated UUID if omitted. Pattern: `[a-zA-Z0-9_-]`, max 64 chars |
 | `expiry_seconds` | `integer` | No | Job expiry in seconds. Range: 600--604800 (10 min to 7 days). Default from config |
 | `data_sources` | `list[string]` | No | Optional data source IDs (from `/v1/data_sources`) to scope the job. Omit or `null` for all data-source tools; `[]` for no data-source tools. Unmapped utility tools remain available. Unknown IDs return 422 |
@@ -98,7 +98,7 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 |--------|--------|
 | `400` | Unknown agent type, **internal-only agent type**, or invalid request |
 | `409` | A custom `job_id` was supplied that collides with an existing job |
-| `422` | One or more unknown data source IDs. Response `detail` includes `message`, `invalid_ids`, and `known_ids` for client-side recovery UX |
+| `422` | Validation error: blank/whitespace-only `input`, invalid request fields, or one or more unknown data source IDs. Data source errors include `message`, `invalid_ids`, and `known_ids` for client-side recovery UX |
 | `503` | Dask scheduler not available |
 
 ### Edit a Report (Report Follow-up)
@@ -117,7 +117,7 @@ curl -X POST http://localhost:8000/v1/jobs/async/job/{job_id}/report/edit \
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `input` | `string` | Yes | Edit instruction for the parent report (min 1 character) |
+| `input` | `string` | Yes | Edit instruction for the parent report. Must be non-blank after trimming (whitespace-only is rejected with 422) |
 | `job_id` | `string` | No | Custom child job ID. Auto-generated if omitted. Pattern: `[a-zA-Z0-9_-]`, max 64 chars |
 | `expiry_seconds` | `integer` | No | Child job expiry in seconds. Range: 600--604800. Default from config |
 
@@ -141,6 +141,7 @@ response carries `parent_job_id`, `interaction_action` (`edit`), and `result_kin
 |--------|--------|
 | `404` | Parent job not found (or not accessible to the caller when auth is enabled) |
 | `409` | Parent job is incomplete, has no durable report, or the supplied child `job_id` collides |
+| `422` | Validation error: blank/whitespace-only `input`, invalid child `job_id`, or invalid `expiry_seconds` |
 | `500` | Failed to submit the report edit job |
 | `503` | Dask scheduler not available |
 
