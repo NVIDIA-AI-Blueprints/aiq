@@ -109,6 +109,23 @@ async def _resolve_oauth_settings(source_id: str, pua, nat_provider, cfg) -> OAu
 
     Returns None (source left unconfigured -> status 'error') if endpoints or a
     client_id cannot be resolved.
+
+    NAT private-API surface (review on every nvidia-nat upgrade; pinned to 1.8.0).
+    All accesses below are defensive (``getattr`` defaults + the surrounding
+    ``try/except``), so a renamed/removed member degrades to status 'error' with a
+    warning rather than crashing:
+
+      * ``nat_provider._discover_and_register(response=...)`` -- coroutine; runs
+        well-known discovery + RFC 7591 dynamic client registration, populating the
+        cached members below.
+      * ``nat_provider._cached_endpoints`` -- object | None; ``.authorization_url``
+        and ``.token_url`` (str-able).
+      * ``nat_provider._cached_credentials`` -- object | None; ``.client_id`` and
+        ``.client_secret`` (str).
+      * ``nat_provider._effective_scopes`` -- Iterable[str] | None; scopes resolved
+        from protected-resource metadata.
+      * ``nat_provider._discoverer`` -- object | None; ``._resource_from_metadata``
+        (str | None) is the RFC 9728 resource identifier.
     """
     redirect_uri = str(cfg.redirect_uri) if getattr(cfg, "redirect_uri", None) else ""
     scopes = list(getattr(cfg, "scopes", None) or [])

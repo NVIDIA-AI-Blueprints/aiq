@@ -250,7 +250,7 @@ functions:
 authentication:
   mcp_oauth2_gdrive:
     _type: mcp_oauth2
-    server_url: ${MCP_GDRIVE_URL:-https://maas.prd.astra.nvidia.com/maas/gdrive/mcp}
+    server_url: ${MCP_GDRIVE_URL:-https://your-mcp-server.example.com/mcp}
     redirect_uri: ${AIQ_PUBLIC_URL:-http://localhost:8000}/v1/auth/mcp/gdrive/callback
     token_storage_object_store: mcp_token_store
     # scopes are discovered from MaaS protected-resource metadata; pin only to override.
