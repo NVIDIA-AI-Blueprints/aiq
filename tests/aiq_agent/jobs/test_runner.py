@@ -469,8 +469,9 @@ class TestSubmitDeepResearchJob:
 
         assert result == "test-job-id"
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        assert job_args[-2] == initial_files
-        assert job_args[-1] == output_metadata
+        # Trailing worker args: data_sources, auth_token, initial_files, output_metadata, principal_user_id
+        assert job_args[-3] == initial_files
+        assert job_args[-2] == output_metadata
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):
