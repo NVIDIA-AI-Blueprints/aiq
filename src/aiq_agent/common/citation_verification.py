@@ -595,21 +595,24 @@ register_source_parser(lambda name: "knowledge" in name, _parse_knowledge_layer)
 # Citation parsing and source-section layout normalization
 # ---------------------------------------------------------------------------
 
+_REFERENCE_HEADING_LABEL_PATTERN = r"(?:Sources|References|Reference[^\S\n]+List)"
+_REFERENCE_HEADING_PATTERN = (
+    r"^[^\S\n]*(?:"
+    rf"#{{1,3}}[^\S\n]+{_REFERENCE_HEADING_LABEL_PATTERN}[^\S\n]*:?"
+    rf"|\*\*{_REFERENCE_HEADING_LABEL_PATTERN}:?\*\*"
+    rf"|{_REFERENCE_HEADING_LABEL_PATTERN}[^\S\n]*:?"
+    r")[^\S\n]*$"
+)
+_REFERENCE_ENTRY_START_PATTERN = r"(?:[-*][^\S\n]*)?(?:\[\d+\]|\[\^\d+\]:?|\d+[.)])[^\S\n]+"
 _REFERENCE_SECTION_RE = re.compile(
-    r"^[^\S\n]*(?:(?:#{1,3}[^\S\n]+)?(?:Sources|References)[^\S\n]*:?"
-    r"|Reference[^\S\n]+List[^\S\n]*:?"
-    r"|\*\*References:?\*\*)[^\S\n]*$",
+    rf"{_REFERENCE_HEADING_PATTERN}(?=\n[^\S\n]*(?:\n[^\S\n]*)*{_REFERENCE_ENTRY_START_PATTERN})",
     re.MULTILINE | re.IGNORECASE,
 )
-_REFERENCE_HEADING_LINE_RE = re.compile(
-    r"^[^\S\n]*(?:(?:#{1,3}[^\S\n]+)?(?:Sources|References)[^\S\n]*:?"
-    r"|Reference[^\S\n]+List[^\S\n]*:?"
-    r"|\*\*References:?\*\*)[^\S\n]*$",
-    re.IGNORECASE,
-)
+_REFERENCE_HEADING_LINE_RE = re.compile(_REFERENCE_HEADING_PATTERN, re.IGNORECASE)
 
 _CITATION_LINE_RE = re.compile(r"^\s*[-*]?\s*\[(\d+)\]\s*(.+)$", re.MULTILINE)
 _ORDERED_REFERENCE_LINE_RE = re.compile(r"^(\s*)(\d+)[.)]\s+(.+)$", re.MULTILINE)
+_COLLAPSED_SOURCE_BOUNDARY_RE = re.compile(r"\s+(?=\[(\d+)\]\s+)")
 _INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
 _FOOTNOTE_REFERENCE_LINE_RE = re.compile(r"^\s*\[\^(\d+)\]:?\s*", re.MULTILINE)
 _FOOTNOTE_INLINE_CITATION_RE = re.compile(r"\[\^(\d+)\]")
@@ -677,6 +680,50 @@ def _normalize_ordered_reference_lines(ref_section: str) -> str:
     return _ORDERED_REFERENCE_LINE_RE.sub(r"\1[\2] \3", ref_section)
 
 
+def _reference_segment_has_target(segment: str) -> bool:
+    """Return true when a source segment already contains a verifiable target."""
+    line_match = _CITATION_LINE_RE.match(segment)
+    if line_match is None:
+        return False
+
+    ref_text = line_match.group(2).strip()
+    if _URL_IN_LINE_RE.search(ref_text):
+        return True
+
+    cleaned = re.sub(r"\*+", "", ref_text).strip()
+    return bool(_KL_CITATION_PATTERN_RE.match(cleaned))
+
+
+def _split_collapsed_source_line(line: str) -> str:
+    """Split only truly collapsed source entries on one line.
+
+    Avoid splitting bracketed numbers that are part of a title, such as
+    ``[1] Semiconductor outlook [2024] update: https://...``.
+    """
+    first_line_match = _CITATION_LINE_RE.match(line)
+    if first_line_match is None:
+        return line
+
+    current_num = int(first_line_match.group(1))
+    segment_start = 0
+    segments: list[str] = []
+    for boundary_match in _COLLAPSED_SOURCE_BOUNDARY_RE.finditer(line):
+        next_num = int(boundary_match.group(1))
+        current_segment = line[segment_start : boundary_match.start()]
+        if next_num <= current_num or next_num >= 1000 or not _reference_segment_has_target(current_segment):
+            continue
+
+        segments.append(current_segment.rstrip())
+        segment_start = boundary_match.end()
+        current_num = next_num
+
+    if not segments:
+        return line
+
+    segments.append(line[segment_start:].lstrip())
+    return "\n".join(segments)
+
+
 def _normalize_source_section_layout(ref_section: str) -> str:
     """Normalize source-section presentation before parsing or final cleanup.
 
@@ -689,7 +736,7 @@ def _normalize_source_section_layout(ref_section: str) -> str:
     if lines and _REFERENCE_HEADING_LINE_RE.match(lines[0]):
         lines[0] = "## Sources"
         ref_section = "\n".join(lines)
-    return re.sub(r"(?<!^)(?<!\n)\s+(?=\[\d+\]\s+)", "\n", ref_section)
+    return "\n".join(_split_collapsed_source_line(line) for line in ref_section.split("\n"))
 
 
 def _inline_citation_numbers(text: str) -> set[int]:
