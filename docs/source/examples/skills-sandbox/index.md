@@ -81,11 +81,12 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
+    enable_citation_verification: true
     skills: deep_research_skills
     sandbox: deep_research_sandbox
 ```
 
-AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q preloads the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run inside a job-scoped Modal sandbox.
+AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run inside a job-scoped Modal sandbox.
 
 ## Run AI-Q
 
