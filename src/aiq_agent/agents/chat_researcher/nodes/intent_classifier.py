@@ -44,24 +44,11 @@ _LLM_UNAVAILABLE_MESSAGE = (
     "Please check your LLM API key and that the configured model is available for your account."
 )
 _LLM_TIMEOUT_MESSAGE = "The model service took too long to respond and the request timed out. "
-_REPORT_ASK_HINTS = (
-    "this report",
-    "the report",
-    "based on this",
-    "what did we conclude",
-    "summarize this",
-)
-_REPORT_EDIT_HINTS = (
-    "rewrite",
-    "redo",
-    "remove",
-    "delete",
-    "make this",
-    "shorter",
-    "change tone",
-    "revise",
-)
-_REPORT_TARGET_HINTS = _REPORT_ASK_HINTS + _REPORT_EDIT_HINTS
+_ROUTE_REPORT_ASK = "report_ask"
+_ROUTE_REPORT_COSMETIC_EDIT = "report_cosmetic_edit"
+_ROUTE_REPORT_DELTA_RESEARCH = "report_delta_research"
+_ROUTE_STANDALONE_RESEARCH = "standalone_research"
+_ROUTE_META = "meta"
 
 
 def _is_llm_api_unavailable(err: BaseException) -> bool:
@@ -80,16 +67,6 @@ def _is_timeout_error(err: BaseException) -> bool:
         return True
     msg = str(err).strip().lower()
     return "504" in msg or "gateway time-out" in msg or "gateway timeout" in msg
-
-
-def _looks_report_targeted(query: str) -> bool:
-    query_lower = query.lower()
-    return any(hint in query_lower for hint in _REPORT_TARGET_HINTS)
-
-
-def _looks_report_edit(query: str) -> bool:
-    query_lower = query.lower()
-    return any(hint in query_lower for hint in _REPORT_EDIT_HINTS)
 
 
 class IntentClassifier:
@@ -165,8 +142,9 @@ class IntentClassifier:
             intent = raw_intent if raw_intent in ("meta", "research") else "research"
             meta_response = parsed.get("meta_response")
             research_depth = (parsed.get("research_depth") or "shallow").strip().lower()
-            depth_reasoning = parsed.get("depth_reasoning") or ""
+            depth_reasoning = parsed.get("route_reasoning") or parsed.get("depth_reasoning") or ""
             active_report = bool(state.active_report_job_id or state.last_report_markdown)
+            route = _normalize_route(parsed.get("route"))
             target = _normalize_target(parsed.get("target"))
             report_action = _normalize_report_action(parsed.get("report_action"))
             use_parent_report_context = _normalize_bool(parsed.get("use_parent_report_context")) and active_report
@@ -175,26 +153,27 @@ class IntentClassifier:
                 target = "meta"
                 report_action = None
                 use_parent_report_context = False
+            elif route is not None:
+                target, report_action, use_parent_report_context, research_depth, depth_reasoning = _route_to_fields(
+                    route=route,
+                    active_report=active_report,
+                    research_depth=research_depth,
+                    depth_reasoning=str(depth_reasoning),
+                )
             elif target == "report":
                 use_parent_report_context = False
                 if not active_report:
                     target = "new_research"
                     report_action = None
                 elif report_action is None:
-                    if _looks_report_edit(query):
-                        report_action = "edit"
-                    elif _looks_report_targeted(query):
-                        report_action = "ask"
-                    else:
-                        # The model chose target=report but gave no report_action and the
-                        # query matched no ask/edit hint. Fall back to fresh research, but
-                        # log it so this silent downgrade is observable in traces.
-                        logger.debug(
-                            "Report target requested without a resolvable report_action; "
-                            "falling back to new_research (query=%r)",
-                            query,
-                        )
-                        target = "new_research"
+                    # Legacy schema compatibility: if the model did not emit the new
+                    # semantic route or an explicit report action, do not maintain a
+                    # second keyword classifier in Python. Fall back to research.
+                    logger.debug(
+                        "Legacy report target without report_action; falling back to new_research (query=%r)",
+                        query,
+                    )
+                    target = "new_research"
             else:
                 target = "new_research"
                 report_action = None
@@ -263,6 +242,47 @@ def _normalize_target(raw_target: Any) -> str:
 def _normalize_report_action(raw_action: Any) -> str | None:
     action = raw_action.strip().lower() if isinstance(raw_action, str) else None
     return action if action in ("ask", "edit") else None
+
+
+def _normalize_route(raw_route: Any) -> str | None:
+    route = raw_route.strip().lower() if isinstance(raw_route, str) else None
+    if route in (
+        _ROUTE_REPORT_ASK,
+        _ROUTE_REPORT_COSMETIC_EDIT,
+        _ROUTE_REPORT_DELTA_RESEARCH,
+        _ROUTE_STANDALONE_RESEARCH,
+        _ROUTE_META,
+    ):
+        return route
+    return None
+
+
+def _route_to_fields(
+    *,
+    route: str,
+    active_report: bool,
+    research_depth: str,
+    depth_reasoning: str,
+) -> tuple[str, str | None, bool, str, str]:
+    """Map the LLM-owned semantic route onto the existing workflow fields."""
+    if route == _ROUTE_META:
+        return "meta", None, False, research_depth, depth_reasoning
+
+    if route == _ROUTE_REPORT_ASK:
+        if active_report:
+            return "report", "ask", False, research_depth, depth_reasoning
+        return "new_research", None, False, research_depth, depth_reasoning
+
+    if route == _ROUTE_REPORT_COSMETIC_EDIT:
+        if active_report:
+            return "report", "edit", False, research_depth, depth_reasoning
+        return "new_research", None, False, research_depth, depth_reasoning
+
+    if route == _ROUTE_REPORT_DELTA_RESEARCH:
+        reasoning = depth_reasoning or "Requires fresh evidence against the active report."
+        return "new_research", None, active_report, "deep", reasoning
+
+    return "new_research", None, False, research_depth, depth_reasoning
 
 
 def _normalize_bool(raw_value: Any) -> bool:

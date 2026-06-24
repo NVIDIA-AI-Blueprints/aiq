@@ -130,9 +130,9 @@ class TestIntentClassifier:
         """Test report ask routing is preserved when an active report is present."""
         mock_response = MagicMock()
         mock_response.content = (
-            '{"intent":"research","target":"report","report_action":"ask",'
+            '{"intent":"research","route":"report_ask","target":"report","report_action":"ask",'
             '"meta_response":null,"research_depth":null,"use_parent_report_context":false,'
-            '"depth_reasoning":"Question refers to the active report."}'
+            '"route_reasoning":"Question refers to the active report."}'
         )
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
@@ -154,9 +154,9 @@ class TestIntentClassifier:
         """Test report routing is ignored when no active report id exists."""
         mock_response = MagicMock()
         mock_response.content = (
-            '{"intent":"research","target":"report","report_action":"edit",'
+            '{"intent":"research","route":"report_cosmetic_edit","target":"report","report_action":"edit",'
             '"meta_response":null,"research_depth":"shallow","use_parent_report_context":false,'
-            '"depth_reasoning":"Asked to edit a report."}'
+            '"route_reasoning":"Asked to edit a report."}'
         )
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
@@ -174,9 +174,9 @@ class TestIntentClassifier:
         """Test latest/update requests can route to deep research with parent report context."""
         mock_response = MagicMock()
         mock_response.content = (
-            '{"intent":"research","target":"new_research","report_action":null,'
+            '{"intent":"research","route":"report_delta_research","target":"new_research","report_action":null,'
             '"meta_response":null,"research_depth":"deep","use_parent_report_context":true,'
-            '"depth_reasoning":"Requires fresh evidence against active report."}'
+            '"route_reasoning":"Requires fresh evidence against active report."}'
         )
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 
@@ -193,8 +193,81 @@ class TestIntentClassifier:
         assert result["depth_decision"].decision == "deep"
 
     @pytest.mark.asyncio
-    async def test_run_infers_edit_action_for_edit_phrasing_when_action_missing(self, mock_llm):
-        """When the LLM omits report_action, an edit-phrased query routes to edit (not ask)."""
+    async def test_prompt_exposes_semantic_route_enum_for_report_followups(self, mock_llm):
+        """The LLM should judge report follow-up semantics via route, not keyword fallbacks."""
+        mock_response = MagicMock()
+        mock_response.content = (
+            '{"intent":"research","route":"report_delta_research","target":"new_research","report_action":null,'
+            '"meta_response":null,"research_depth":"deep","use_parent_report_context":true,'
+            '"route_reasoning":"Requires fresh evidence against active report."}'
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Can we write a report on this from a player performance POV?")],
+            active_report_job_id="job-1",
+        )
+
+        await classifier.run(state)
+
+        rendered_prompt = mock_llm.ainvoke.call_args.args[0][0].content
+        route_schema = (
+            '"route": "report_ask" | "report_cosmetic_edit" | "report_delta_research" | "standalone_research" | "meta"'
+        )
+        delta_example = '"rewrite this report from a player-performance POV" -> route = "report_delta_research"'
+        assert route_schema in rendered_prompt
+        assert delta_example in rendered_prompt
+        assert '"make this shorter" -> route = "report_cosmetic_edit"' in rendered_prompt
+
+    @pytest.mark.asyncio
+    async def test_run_maps_delta_research_route_to_parent_context_deep_research(self, mock_llm):
+        """Evidence-bearing POV rewrites should run delta research against the parent report."""
+        mock_response = MagicMock()
+        mock_response.content = (
+            '{"intent":"research","route":"report_delta_research",'
+            '"meta_response":null,"research_depth":null,"route_reasoning":"New analytical POV."}'
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Rewrite this report from a player performance POV")],
+            active_report_job_id="job-1",
+        )
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].target == "new_research"
+        assert result["user_intent"].report_action is None
+        assert result["user_intent"].use_parent_report_context is True
+        assert result["depth_decision"].decision == "deep"
+
+    @pytest.mark.asyncio
+    async def test_run_maps_cosmetic_edit_route_to_report_edit(self, mock_llm):
+        """Cosmetic edits should use the bounded report rewriter."""
+        mock_response = MagicMock()
+        mock_response.content = (
+            '{"intent":"research","route":"report_cosmetic_edit",'
+            '"meta_response":null,"research_depth":null,"route_reasoning":"Style-only edit."}'
+        )
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Make this shorter")],
+            active_report_job_id="job-1",
+        )
+
+        result = await classifier.run(state)
+
+        assert result["user_intent"].target == "report"
+        assert result["user_intent"].report_action == "edit"
+        assert "depth_decision" not in result
+
+    @pytest.mark.asyncio
+    async def test_run_legacy_report_route_without_action_falls_back_to_research(self, mock_llm):
+        """Legacy target=report payloads without report_action are not keyword-classified in code."""
         mock_response = MagicMock()
         mock_response.content = (
             '{"intent":"research","target":"report","report_action":null,'
@@ -211,17 +284,17 @@ class TestIntentClassifier:
 
         result = await classifier.run(state)
 
-        assert result["user_intent"].target == "report"
-        assert result["user_intent"].report_action == "edit"
+        assert result["user_intent"].target == "new_research"
+        assert result["user_intent"].report_action is None
+        assert result["depth_decision"].decision == "shallow"
 
     @pytest.mark.asyncio
-    async def test_run_infers_ask_action_for_ask_phrasing_when_action_missing(self, mock_llm):
-        """When the LLM omits report_action, an ask-phrased query still routes to ask."""
+    async def test_run_maps_report_ask_route_to_report_ask(self, mock_llm):
+        """The LLM-owned report_ask route maps to bounded report QA."""
         mock_response = MagicMock()
         mock_response.content = (
-            '{"intent":"research","target":"report","report_action":null,'
-            '"meta_response":null,"research_depth":null,"use_parent_report_context":false,'
-            '"depth_reasoning":"Refers to the active report."}'
+            '{"intent":"research","route":"report_ask",'
+            '"meta_response":null,"research_depth":null,"route_reasoning":"Question about active report."}'
         )
         mock_llm.ainvoke = AsyncMock(return_value=mock_response)
 

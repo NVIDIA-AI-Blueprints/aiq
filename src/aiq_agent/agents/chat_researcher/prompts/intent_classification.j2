@@ -16,20 +16,30 @@ Generate a direct response to the user.
 4. **Constraints**: No emojis. Do not answer research questions here.
 
 #### IF INTENT IS "RESEARCH":
-Determine the routing target and depth.
-- **target = "report"** only when an active report is available and the user is asking about or editing that report.
-- **target = "new_research"** for generic factual questions, new topics, or requests needing fresh evidence.
-- If no active report is available, never choose target = "report".
+Determine the semantic route and depth.
+- **route = "report_ask"** only when an active report is available and the user asks a question answerable from that existing report.
+- **route = "report_cosmetic_edit"** only when an active report is available and the user asks for mechanical or aesthetic edits that do not require new evidence.
+- **route = "report_delta_research"** only when an active report is available and the user asks for fresh evidence, deeper analysis, or a new analytical perspective on the same report topic.
+- **route = "standalone_research"** for generic factual questions, new topics, unrelated report requests, or when no active report is available.
 
-Report actions when target = "report":
-- **ask**: answer about the existing report, e.g. "what are the risks in this report?", "summarize this report", "what did we conclude?"
-- **edit**: produce a revised child report, e.g. "remove a section", "rewrite this subsection", "make this shorter", "redo the report", "change tone".
+Route examples:
+- "what are the risks in this report?" -> route = "report_ask"
+- "summarize this report" -> route = "report_ask"
+- "make this shorter" -> route = "report_cosmetic_edit"
+- "change tone" -> route = "report_cosmetic_edit"
+- "format as bullets" -> route = "report_cosmetic_edit"
+- "rewrite this report from a player-performance POV" -> route = "report_delta_research"
+- "redo this with newer evidence" -> route = "report_delta_research"
+- "can we write a report on this from a supply-chain angle?" -> route = "report_delta_research"
+- "write a separate report on player performance" -> route = "standalone_research"
 
-Parent-context research:
-- If an active report is available and the user asks for latest/current/fresh/deeper/new evidence related to that report, choose target = "new_research", research_depth = "deep", and use_parent_report_context = true.
-- If the user asks a generic unrelated question while a report is active, choose target = "new_research" and use_parent_report_context = false.
+Compatibility fields:
+- For route = "report_ask", set target = "report", report_action = "ask", research_depth = null, use_parent_report_context = false.
+- For route = "report_cosmetic_edit", set target = "report", report_action = "edit", research_depth = null, use_parent_report_context = false.
+- For route = "report_delta_research", set target = "new_research", report_action = null, research_depth = "deep", use_parent_report_context = true.
+- For route = "standalone_research", set target = "new_research", report_action = null, use_parent_report_context = false.
 
-Determine the depth for target = "new_research".
+Determine the depth for standalone_research.
 - **shallow**: Single main question, factual lookup, 2-3 tool calls, no complex comparison.
 - **deep**: Multi-faceted, explicit comparisons, trend analysis, strategy/roadmaps, or "comprehensive" requests.
 - **Tie-break**: If unsure, choose "shallow".
@@ -38,12 +48,13 @@ Determine the depth for target = "new_research".
 You must respond ONLY with a JSON object using this schema:
 {
   "intent": "meta" | "research",
+  "route": "report_ask" | "report_cosmetic_edit" | "report_delta_research" | "standalone_research" | "meta",
   "target": "meta" | "report" | "new_research",
   "report_action": "ask" | "edit" | null,
   "meta_response": "The text response if intent is meta, otherwise null",
   "research_depth": "shallow" | "deep" | null,
   "use_parent_report_context": true | false,
-  "depth_reasoning": "One sentence explanation for depth if research, otherwise null"
+  "route_reasoning": "One sentence explanation for the route and depth, otherwise null"
 }
 
 {#- === KV CACHE BOUNDARY — dynamic content below === -#}
