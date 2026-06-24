@@ -5,9 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # Prompt templates
 
-Authoritative source: `docs/source/customization/prompts.md`. This is a quick
-operational summary; defer to that doc for the full template inventory and the
-exact variables each agent expects.
+Authoritative sources: the `.j2` files themselves (for the variables a template
+actually uses) and `docs/source/customization/prompts.md` (for the documented
+workflow and many template variables). Note `prompts.md` does not cover every
+template — e.g. `source_router.j2`, `writer.j2`, and `source_registry.j2` have no
+variable section there yet — so read the `.j2` file when in doubt.
 
 ## Where templates live
 
@@ -15,15 +17,17 @@ Each agent owns its Jinja2 templates under
 `src/aiq_agent/agents/<agent>/prompts/*.j2`. For example, the deep researcher has
 `orchestrator.j2`, `planner.j2`, `researcher.j2`, `source_router.j2`, `writer.j2`,
 and `source_registry.j2`; the clarifier has `plan_generation.j2` and
-`research_clarification.j2`.
+`research_clarification.j2`; `shallow_researcher` and `chat_researcher` have their
+own as well.
 
 ## How templates load and render
 
 - `load_prompt(path, name)` in `src/aiq_agent/common/prompt_utils.py` reads a
   template file as a string.
 - `render_prompt_template(template, **kwargs)` (same module) renders it with
-  Jinja2, injecting the documented template variables. See the "Template
-  Variables" section of `prompts.md` for the exact variables per agent.
+  Jinja2, injecting the variables. `prompts.md` has a "Template Variables" section
+  for many agents; for a template it doesn't list, read the `.j2` to see which
+  variables it references.
 
 ## Editing a template safely
 
@@ -33,20 +37,26 @@ and `source_registry.j2`; the clarifier has `plan_generation.j2` and
    grounding depends on the model emitting citations exactly as instructed.
 3. Prefer putting static instructions before dynamic content so the KV cache is
    reused across calls (lower latency and token cost).
-4. Edit the `.j2` template, not the Python, for wording or structure changes.
+4. Editing an existing `.j2` needs **no** code change.
 
 ## Adding a new template
 
-Follow "Creating a New Template" in `prompts.md`: add the `.j2` file under the
-agent's `prompts/` directory and load it with `load_prompt`. Keep variable names
-consistent with what the agent renders.
+This is the one prompt change that touches Python. Follow "Creating a New
+Template" in `prompts.md`:
+
+1. Add the `.j2` under the agent's `prompts/` directory.
+2. Write the template (keep variable names consistent with what the agent passes).
+3. **Wire it in the agent's Python** — load it with `load_prompt` and render it
+   with `render_prompt_template` (this is `prompts.md` Step 3). Without this step
+   the new template is never used.
 
 ## Validation
 
 ```bash
-./scripts/start_cli.sh           # confirm the template loads (no Jinja2 error)
-uv run pytest tests -k "<agent>"
+./scripts/start_cli.sh --config_file <a config using that agent>   # template loads (no Jinja2 error)
+uv run pytest tests/aiq_agent/agents/<agent>                        # if the agent has tests
 ```
 
-Expected: the agent starts and renders the template without error, and the
-affected tests pass.
+Expected: the agent starts and renders the template without error. A bare
+`start_cli.sh` runs the fixed default config, so pass the config that exercises
+the agent whose template you changed.

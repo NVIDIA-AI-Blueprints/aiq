@@ -37,14 +37,17 @@ keep the gate working and must not weaken security or review rules.
 - [AGENTS.md](../../../AGENTS.md): "Git and PR hygiene" and the validation
   commands CI mirrors.
 - `.github/workflows/ci.yml`: jobs `pre-commit`, `test` (pytest + coverage),
-  `helm-lint`, `test-scripts`.
-- `.github/workflows/ui.yml`: frontend lint / type-check / test / build.
+  `helm-lint`, `test-scripts`. The `pre-commit` job runs Ruff separately and
+  `SKIP=ruff-check,ruff-format,pytest,helm-lint pre-commit run --all-files` — so
+  pytest/helm-lint run as their own jobs, not via the hook.
+- `.github/workflows/ui.yml`: jobs `install`, `lint`, `type-check`, `unit-test`,
+  `build`.
 - `.github/workflows/skills-eval.yml`: the Skills Eval gate (push +
-  `workflow_dispatch`, a `detect-changes` path gate, Harbor trials on the
-  self-hosted `aiq-eval` runner).
+  `workflow_dispatch`; `detect-changes` path gate → `generate-datasets` spec
+  validation → `harbor-eval` on the self-hosted `aiq-eval` runner).
 - `.github/workflows/request-nvskills-ci.yml`: comment-triggered NVSkills CI.
-- `.pre-commit-config.yaml`: the hook set CI enforces (ruff, detect-secrets,
-  `validate-skills`, markdown-link-check, pytest, helm-lint, …).
+- `.pre-commit-config.yaml`: the hook set. Note `pytest` and `helm-lint` are
+  `stages: [push]` (see the reference for what that means locally).
 - `.github/CODEOWNERS`, `.coderabbit.yaml`, `.github/copy-pr-bot.yaml`: review
   routing, path-scoped automated review, and the PR mirror.
 
@@ -52,7 +55,7 @@ Longer procedures live in this bundle:
 
 - [references/workflows-and-hooks.md](references/workflows-and-hooks.md): the
   workflows, their jobs/triggers, the copy-pr-bot mirror flow, and the pre-commit
-  hook inventory.
+  hook inventory (incl. the push-stage hooks).
 - [references/skill-eval-harness.md](references/skill-eval-harness.md): how the
   `.github/skill-eval/` regression gate finds specs, runs adapters, and verifies.
 
@@ -73,15 +76,17 @@ Longer procedures live in this bundle:
 ## Validation
 
 ```bash
-uv run pre-commit run --all-files          # reproduce the pre-commit gate
-uv run pre-commit run --files <changed>    # faster, during iteration
-actionlint .github/workflows/<file>.yml    # if actionlint is installed
+uv run pre-commit run --all-files                     # default-stage hooks (NOT pytest/helm-lint)
+uv run pre-commit run --all-files --hook-stage push   # adds the push-stage pytest + helm-lint hooks
+uv run pre-commit run --files <changed>               # faster, during iteration
+actionlint .github/workflows/<file>.yml               # if actionlint is installed
 ```
 
-Expected: pre-commit passes (or only auto-fixes), and any edited workflow is
-syntactically valid. For skill-eval changes, see the harness reference — full
-Harbor runs need the self-hosted runner, so validate spec/adapter shape locally
-and rely on the mirrored CI run for the full sweep.
+Expected: hooks pass (or only auto-fix) and any edited workflow is valid YAML.
+`pytest` and `helm-lint` are push-stage, so the default `--all-files` run skips
+them — CI runs them as the dedicated `test` and `helm-lint` jobs. For skill-eval
+changes, see the harness reference: full Harbor runs need the self-hosted runner,
+so validate spec/adapter shape locally and rely on the mirrored CI run.
 
 ## Common Mistakes
 
@@ -91,13 +96,14 @@ and rely on the mirrored CI run for the full sweep.
 - Weakening `detect-secrets`, auth gating, or code-owner review to make CI pass.
 - Expecting CI to run on push; it runs on the copy-pr-bot mirror after
   `/ok to test`.
+- Assuming `pre-commit run --all-files` reproduces the whole gate — `pytest` and
+  `helm-lint` are `stages: [push]`, so they do not run at the default stage. Use
+  `--hook-stage push` (or run them directly), and remember CI runs them as
+  separate jobs.
 - Editing `.github/CODEOWNERS` without updating the paths it routes, so reviews
   go to the wrong owners.
-- Forgetting that `helm-lint` and `pytest` are pre-commit hooks too, so a local
-  `pre-commit run --all-files` can be heavier than expected.
 
 ## Related Skills
 
 - `aiq-release-qa`
 - `aiq-prepare-pr`
-- `aiq-add-tool`

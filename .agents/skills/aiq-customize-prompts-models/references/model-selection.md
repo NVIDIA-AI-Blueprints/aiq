@@ -19,27 +19,44 @@ llms:
     _type: nim
     model_name: <a capable model>
   gpt_oss_llm:
-    _type: nim          # `openai` is also supported
+    _type: nim          # `openai` is also supported (also takes model_name)
     model_name: <a cheaper model>
 ```
 
 ## Assign a model to an agent role
 
-Agents expose per-role LLM fields so you can use different models for different
-jobs. For example, `src/aiq_agent/agents/deep_researcher/register.py` defines
-`orchestrator_llm` (required) plus `source_router_llm`, `researcher_llm`,
-`planner_llm`, and `writer_llm` (`LLMRef | None`); the clarifier defines
-`planner_llm`. When a role field is set, the agent resolves the ref via
-`builder.get_llm(...)` and binds it to a role through
-`LLMProvider.configure(LLMRole.<ROLE>, llm)` in
-`src/aiq_agent/common/llm_provider.py`. When unset, the role falls back to the
-agent's default `llm`.
+Agents expose per-role LLM fields, but the two agents wire them differently — so
+check the agent you are editing.
+
+**Deep research agent** (`src/aiq_agent/agents/deep_researcher/register.py`)
+defines `orchestrator_llm` (required) plus `source_router_llm`, `researcher_llm`,
+`planner_llm`, and `writer_llm` (`LLMRef | None`). It seeds the provider default
+from `orchestrator_llm` (`LLMProvider.set_default(...)`) and binds each set role
+with `LLMProvider.configure(LLMRole.<ROLE>, llm)`
+(`src/aiq_agent/common/llm_provider.py`). Field → role:
+
+| Config field | `LLMRole` |
+| :-- | :-- |
+| `orchestrator_llm` (required) | `ORCHESTRATOR` — also the provider default |
+| `source_router_llm` | `ROUTER` |
+| `researcher_llm` | `RESEARCHER` |
+| `planner_llm` | `PLANNER` |
+| `writer_llm` | `REPORT_WRITER` |
+
+An unset role falls back to the provider default (the `orchestrator_llm` model).
+There is **no** generic `llm` field on the deep research agent.
+
+**Clarifier** (`src/aiq_agent/agents/clarifier/register.py`) defines `llm` (its
+default) and `planner_llm`. It does **not** use `LLMProvider.configure` for the
+role — it passes `planner_llm` straight to the agent constructor, and `planner_llm`
+falls back to `llm` when unset.
 
 ```yaml
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm   # required
+    orchestrator_llm: nemotron_super_llm   # required; also the default for unset roles
+    source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_super_llm
     planner_llm: gpt_oss_llm               # cheaper model for planning
     writer_llm: gpt_oss_llm
@@ -58,9 +75,10 @@ lists.
 ## Validation
 
 ```bash
-./scripts/start_cli.sh           # confirm the agent starts with the assigned model
-uv run pytest tests -k "<agent>"
+./scripts/start_cli.sh --config_file <the config where you set the role LLMs>   # agent starts with the assigned models
+uv run pytest tests/aiq_agent/agents/deep_researcher
 ```
 
-Expected: the agent starts with the configured models and the affected tests
-pass. Every role ref must resolve to an entry in `llms:`.
+Expected: the agent starts with the configured models and its tests pass. A bare
+`start_cli.sh` runs the fixed default config, so pass the config you edited. Every
+role ref must resolve to an entry in `llms:`.

@@ -14,8 +14,10 @@ allowed-tools: Read Bash Edit
 
 Use this skill when a developer wants to change *how* an AI-Q agent reasons or
 *which* model it uses — by editing a Jinja2 prompt template or by assigning a
-different LLM to an agent role — without changing agent code. AI-Q agent behavior
-is driven by prompts and config, so most tuning is a template or YAML change.
+different LLM to an agent role — usually without touching agent code. AI-Q agent
+behavior is driven by prompts and config, so most tuning is a template or YAML
+change. The one exception is adding a brand-new template, which needs a one-line
+`load_prompt` wiring in the agent (see the prompt-templates reference).
 
 ## Start Here
 
@@ -29,9 +31,12 @@ is driven by prompts and config, so most tuning is a template or YAML change.
 
 ## Authoritative References
 
-- `docs/source/customization/prompts.md`: canonical prompt guide — template
-  inventory, `load_prompt(path, name)`, `render_prompt_template(template, ...)`,
-  template variables, the STRICT citation rules, and how to edit or add a template.
+- `docs/source/customization/prompts.md`: prompt guide — template inventory,
+  `load_prompt(path, name)`, `render_prompt_template(template, ...)`, the
+  documented template variables, the STRICT citation rules, and "Creating a New
+  Template". Note it does not document every template's variables (e.g.
+  `source_router.j2`, `writer.j2`, `source_registry.j2`) — the `.j2` files are
+  authoritative for the variables they actually use.
 - `docs/source/customization/swapping-models.md`: choosing hosted vs. self-hosted
   NIMs and pointing config at them.
 - `docs/source/customization/configuration-reference.md`: the `llms` section and
@@ -39,10 +44,12 @@ is driven by prompts and config, so most tuning is a template or YAML change.
 - `src/aiq_agent/common/prompt_utils.py`: `load_prompt` and
   `render_prompt_template`.
 - `src/aiq_agent/common/llm_provider.py`: `LLMRole` and `LLMProvider.configure`,
-  which bind a resolved LLM to an agent role.
+  which bind a resolved LLM to an agent role (used by the deep research agent).
 - Templates to model on: `src/aiq_agent/agents/deep_researcher/prompts/*.j2`
   (orchestrator, planner, researcher, source_router, writer) and
-  `src/aiq_agent/agents/clarifier/prompts/*.j2`.
+  `src/aiq_agent/agents/clarifier/prompts/*.j2`. Other agents have prompts too
+  (e.g. `shallow_researcher`, `chat_researcher`) — check
+  `src/aiq_agent/agents/*/prompts/`.
 
 Longer procedures live in this bundle:
 
@@ -63,8 +70,8 @@ Longer procedures live in this bundle:
    model.
 4. Keep token cost in mind: prefer reordering static instructions before dynamic
    content (KV-cache reuse) and a cheaper model for low-stakes roles.
-5. Validate (below): lint any changed Python, run the affected agent tests, and
-   smoke-run the CLI to confirm templates load and the agent uses the new model.
+5. Validate (below): lint any changed Python, run the agent's tests, and
+   smoke-run the CLI against the config you changed.
 6. Summarize changed files and paste the validation evidence.
 
 ## Validation
@@ -72,14 +79,16 @@ Longer procedures live in this bundle:
 Run the narrowest checks first; broaden only if you touched shared code.
 
 ```bash
-uv run ruff check src/aiq_agent             # only if you changed Python
-uv run pytest tests -k "<agent or prompt>"  # affected agent/prompt tests
-./scripts/start_cli.sh                       # smoke: templates load, agent runs
+uv run ruff check src/aiq_agent                      # only if you changed Python
+uv run pytest tests/aiq_agent/agents/<agent>         # the agent's tests (a prompt-only edit may have none)
+./scripts/start_cli.sh --config_file <your config>   # smoke against the config you edited
 ```
 
-Expected: the agent loads its templates without a Jinja2 error, runs with the
-configured model, and the affected tests pass. A prompt-only or config-only change
-needs no Python lint.
+Expected: the agent loads its templates without a Jinja2 error and runs with the
+configured model. A bare `./scripts/start_cli.sh` uses the fixed default
+(`configs/config_cli_default.yml`), so pass `--config_file` to exercise your
+change. For a prompt-only edit (which often has no dedicated unit test), the
+smoke run is the real check; a config/prompt-only change needs no Python lint.
 
 ## Common Mistakes
 
@@ -87,8 +96,10 @@ needs no Python lint.
   `docs/source/customization/prompts.md`, which degrades report grounding.
 - Hard-coding a model name in Python instead of using an `llms:` ref and the
   agent's role field, so the model can no longer be swapped from config.
-- Editing the default `llm` when you meant a single role (e.g. only the
-  `planner_llm`), changing every unset role's model unintentionally.
+- Changing an agent's default model when you meant a single sub-role. The deep
+  research agent's default is `orchestrator_llm` (there is no generic `llm`
+  field); the clarifier's default is `llm`. Editing the default shifts every
+  unset role.
 - Introducing a large dynamic prefix that defeats KV-cache reuse and raises cost.
 - Pointing an agent's role at a model whose entry is not defined in `llms:`.
 
