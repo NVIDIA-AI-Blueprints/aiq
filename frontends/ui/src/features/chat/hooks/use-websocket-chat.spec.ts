@@ -1222,7 +1222,11 @@ describe('useWebSocketChat', () => {
 
     // Simulate response with deep research escalation signal
     act(() => {
-      capturedCallbacks.onResponse?.('Deep research job submitted. Job ID: abc123-def456', 'complete', false)
+      capturedCallbacks.onResponse?.(
+        JSON.stringify({ type: 'job_escalation', kind: 'deep_research', job_id: 'abc123-def456' }),
+        'complete',
+        false
+      )
     })
 
     // Should detect deep research and call banner with 'starting' status
@@ -1294,7 +1298,11 @@ describe('useWebSocketChat', () => {
     // Report edit submits a child report_rewriter job that produces a full report,
     // pollable through the same SSE path as deep research.
     act(() => {
-      capturedCallbacks.onResponse?.('Report edit job submitted. Job ID: abcd1234-ef56', 'complete', false)
+      capturedCallbacks.onResponse?.(
+        JSON.stringify({ type: 'job_escalation', kind: 'report_edit', job_id: 'abcd1234-ef56' }),
+        'complete',
+        false
+      )
     })
 
     expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('starting', 'abcd1234-ef56')

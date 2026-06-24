@@ -333,10 +333,56 @@ class TestChatResearcherAgent:
         )
         result = await agent.run(state, thread_id="test-thread")
 
-        assert result["messages"][-1].content == "Report edit job submitted. Job ID: child-job-1"
+        import json
+
+        assert json.loads(result["messages"][-1].content) == {
+            "type": "job_escalation",
+            "kind": "report_edit",
+            "job_id": "child-job-1",
+        }
         assert captured_state == {
             "active_report_job_id": "job-1",
             "query": "Remove the appendix",
+        }
+
+    @pytest.mark.asyncio
+    async def test_run_deep_research_submitter_emits_structured_escalation(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """A submitted deep-research job yields a structured escalation payload, not a prose sentence."""
+        import json
+
+        async def deep_orchestration(state):
+            return {
+                "user_intent": IntentResult(intent="research", raw=None),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="Complex"),
+            }
+
+        async def submit_deep(state):
+            return "deep-job-1"
+
+        async def fail_if_called(_state):
+            raise AssertionError("inline deep research should not run when a submitter is set")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=fail_if_called,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            deep_research_job_submitter=submit_deep,
+        )
+
+        state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
+        result = await agent.run(state, thread_id="test-thread-deep-escalation")
+
+        assert json.loads(result["messages"][-1].content) == {
+            "type": "job_escalation",
+            "kind": "deep_research",
+            "job_id": "deep-job-1",
         }
 
     @pytest.mark.asyncio

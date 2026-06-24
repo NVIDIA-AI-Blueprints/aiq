@@ -61,6 +61,35 @@ const EMPTY_MESSAGES: ChatMessage[] = []
 const EMPTY_CONVERSATIONS: Conversation[] = []
 
 /**
+ * Structured async-job escalation signal parsed from a system_response `content` string.
+ *
+ * The backend (chat_researcher/agent.py `_job_escalation_message`) emits a compact JSON
+ * payload rather than a prose sentence so escalation detection is immune to wording or
+ * punctuation changes:
+ *   {"type":"job_escalation","kind":"deep_research"|"report_edit","job_id":"<id>"}
+ */
+interface JobEscalation {
+  kind: 'deep_research' | 'report_edit'
+  jobId: string
+}
+
+function parseJobEscalation(content?: string): JobEscalation | null {
+  if (!content) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const obj = parsed as Record<string, unknown>
+  if (obj.type !== 'job_escalation') return null
+  if (obj.kind !== 'deep_research' && obj.kind !== 'report_edit') return null
+  if (typeof obj.job_id !== 'string' || obj.job_id.length === 0) return null
+  return { kind: obj.kind, jobId: obj.job_id }
+}
+
+/**
  * Buffer entry for an outgoing payload that has to bridge a socket
  * rotation. Discriminated by `kind` because both chat messages and HITL
  * interaction responses can hit `auth_expired` at the backend, and the
@@ -618,16 +647,15 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
 
         // Check for an async-job escalation signal. Two backend paths produce a
         // pollable child job whose report is fetched over the same SSE/report
-        // endpoints, so both escalate the same way:
-        //   - "Deep research job submitted. Job ID: {uuid}"   (deep_researcher)
-        //   - "Report edit job submitted. Job ID: {uuid}"     (report_rewriter)
-        const deepResearchMatch = content?.match(
-          /(Deep research|Report edit) job submitted\. Job ID: ([a-f0-9-]+)/i
-        )
+        // endpoints, so both escalate the same way. The backend emits a structured
+        // JSON payload (see _job_escalation_message in chat_researcher/agent.py)
+        // rather than a prose sentence, so detection is robust to wording/punctuation:
+        //   {"type":"job_escalation","kind":"deep_research"|"report_edit","job_id":"<id>"}
+        const escalation = parseJobEscalation(content)
 
-        if (deepResearchMatch) {
-          const isReportEdit = /^report edit$/i.test(deepResearchMatch[1])
-          const jobId = deepResearchMatch[2]
+        if (escalation) {
+          const isReportEdit = escalation.kind === 'report_edit'
+          const jobId = escalation.jobId
           // Get current state for plan messages and conversation
           const state = useChatStore.getState()
           const currentPlanMessages = state.planMessages

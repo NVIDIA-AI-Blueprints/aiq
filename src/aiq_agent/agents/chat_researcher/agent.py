@@ -23,6 +23,7 @@ This is the main orchestrator agent that coordinates the full research workflow:
 4. Optional escalation from shallow to deep
 """
 
+import json
 import logging
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -56,6 +57,19 @@ from .models import ShallowResult
 from .utils import trim_message_history
 
 logger = logging.getLogger(__name__)
+
+
+# Async-job escalation signal. The chat WebSocket frame carries only a string ``content`` field,
+# so the signal the UI consumes to start SSE streaming for a child job is encoded as a compact
+# JSON object rather than a prose sentence -- this keeps detection robust to wording/punctuation
+# changes. Mirrored by the UI parser in frontends/ui/src/features/chat/hooks/use-websocket-chat.ts.
+_ESCALATION_KIND_DEEP_RESEARCH = "deep_research"
+_ESCALATION_KIND_REPORT_EDIT = "report_edit"
+
+
+def _job_escalation_message(kind: str, job_id: str) -> str:
+    """Serialize an async-job escalation signal as a structured JSON payload."""
+    return json.dumps({"type": "job_escalation", "kind": kind, "job_id": job_id})
 
 
 class ChatResearcherAgent:
@@ -286,8 +300,8 @@ class ChatResearcherAgent:
             trimmed_messages: list[BaseMessage] = trim_message_history(state.messages, self.max_history)
             if self.deep_research_job_submitter is not None:
                 job_id = await self.deep_research_job_submitter(state)
-                response = f"Deep research job submitted. Job ID: {job_id}"
-                return {"messages": [AIMessage(content=response)]}
+                escalation = _job_escalation_message(_ESCALATION_KIND_DEEP_RESEARCH, job_id)
+                return {"messages": [AIMessage(content=escalation)]}
 
             research_query = state.original_query or get_latest_user_query(state.messages)
             deep_state = DeepResearchAgentState(
@@ -368,7 +382,8 @@ class ChatResearcherAgent:
                     type(e).__name__,
                 )
                 return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
-            return {"messages": [AIMessage(content=f"Report edit job submitted. Job ID: {job_id}")]}
+            escalation = _job_escalation_message(_ESCALATION_KIND_REPORT_EDIT, job_id)
+            return {"messages": [AIMessage(content=escalation)]}
 
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
