@@ -104,6 +104,8 @@ class ChatResearcherAgent:
         deep_research_job_submitter: Callable[[Any], Awaitable[str]] | None = None,
         report_ask_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
         report_edit_job_submitter: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
+        report_edit_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
+        report_seed_files_fn: Callable[[ChatResearcherState], Awaitable[dict[str, Any] | None]] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         validate_deep_research_tools_fn: Callable[[list[str] | None], tuple[bool, str]] | None = None,
     ) -> None:
@@ -135,6 +137,8 @@ class ChatResearcherAgent:
         self.deep_research_job_submitter = deep_research_job_submitter
         self.report_ask_fn = report_ask_fn
         self.report_edit_job_submitter = report_edit_job_submitter
+        self.report_edit_fn = report_edit_fn
+        self.report_seed_files_fn = report_seed_files_fn
         self.checkpointer = checkpointer
         self.validate_deep_research_tools_fn = validate_deep_research_tools_fn
 
@@ -304,12 +308,38 @@ class ChatResearcherAgent:
                 return {"messages": [AIMessage(content=escalation)]}
 
             research_query = state.original_query or get_latest_user_query(state.messages)
+            seed_files: dict[str, Any] = {}
+            if (
+                self.report_seed_files_fn is not None
+                and state.user_intent is not None
+                and getattr(state.user_intent, "use_parent_report_context", False)
+                and (state.active_report_job_id or state.last_report_markdown)
+            ):
+                # Delta research: seed the parent report into the deep agent's virtual filesystem so it
+                # reuses it and researches only the requested delta. Best-effort -- a seed failure falls
+                # back to fresh research rather than aborting the turn.
+                try:
+                    seed_files = await self.report_seed_files_fn(state) or {}
+                except Exception as e:
+                    logger.warning(
+                        "Parent report seed unavailable for delta (error_type=%s); running fresh research",
+                        type(e).__name__,
+                    )
+                    seed_files = {}
+                if seed_files:
+                    research_query = (
+                        f"{research_query}\n\n"
+                        "Use the seeded parent report context in /shared/original_report.md and "
+                        "/shared/source_summary.md. Reuse the parent report where sufficient and perform "
+                        "new research only for the requested delta."
+                    )
             deep_state = DeepResearchAgentState(
                 messages=trimmed_messages + [HumanMessage(content=research_query)],
                 data_sources=state.data_sources,
                 clarifier_result=state.clarifier_result,
                 available_documents=state.available_documents,
                 user_info=state.user_info,
+                files=seed_files,
             )
             try:
                 result = await self.deep_research_fn(deep_state)
@@ -371,19 +401,30 @@ class ChatResearcherAgent:
             return {"messages": [AIMessage(content=answer)]}
 
         async def report_edit_node(state: ChatResearcherState) -> dict[str, Any]:
-            if self.report_edit_job_submitter is None:
-                return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
-            try:
-                job_id = await self.report_edit_job_submitter(state)
-            except Exception as e:
-                logger.warning(
-                    "Report edit submission failed for report %s (error_type=%s)",
-                    state.active_report_job_id,
-                    type(e).__name__,
-                )
-                return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
-            escalation = _job_escalation_message(_ESCALATION_KIND_REPORT_EDIT, job_id)
-            return {"messages": [AIMessage(content=escalation)]}
+            # Async path (server): submit a report_rewriter child job; the UI streams its result.
+            if self.report_edit_job_submitter is not None:
+                try:
+                    job_id = await self.report_edit_job_submitter(state)
+                except Exception as e:
+                    logger.warning(
+                        "Report edit submission failed for report %s (error_type=%s)",
+                        state.active_report_job_id,
+                        type(e).__name__,
+                    )
+                    return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
+                escalation = _job_escalation_message(_ESCALATION_KIND_REPORT_EDIT, job_id)
+                return {"messages": [AIMessage(content=escalation)]}
+            # Inline path (synchronous CLI): rewrite the in-session report directly -- no job or
+            # scheduler. The revised report becomes the reply and replaces last_report_markdown so
+            # subsequent follow-ups operate on the edited copy.
+            if self.report_edit_fn is not None:
+                try:
+                    revised = await self.report_edit_fn(state)
+                except Exception as e:
+                    logger.warning("Inline report edit failed (error_type=%s)", type(e).__name__)
+                    return {"messages": [AIMessage(content="I couldn't edit the report. Please try again.")]}
+                return {"messages": [AIMessage(content=revised)], "last_report_markdown": revised}
+            return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
 
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""

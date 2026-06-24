@@ -51,6 +51,33 @@ async def test_report_rewriter_uses_parent_report_context_and_emits_output_file(
 
 
 @pytest.mark.asyncio
+async def test_rewrite_report_core_returns_revised_markdown_and_renders_prompt():
+    """The extracted rewrite core (shared by the job and the inline CLI path) is a single LLM call."""
+    from aiq_agent.agents.report_rewriter.agent import rewrite_report
+
+    writer_llm = FakeWriterLLM(content="# Edited\n\nNew body.")
+    revised = await rewrite_report(
+        llm=writer_llm,
+        original_report="# Parent\n\nBody.",
+        edit_instruction="Add a Messi-Ronaldo joke under the title.",
+        source_summary="- [1] https://example.com",
+    )
+
+    assert revised == "# Edited\n\nNew body."
+    rendered_prompt = writer_llm.seen_messages[0].content
+    assert "# Parent" in rendered_prompt
+    assert "Add a Messi-Ronaldo joke under the title." in rendered_prompt
+
+
+@pytest.mark.asyncio
+async def test_rewrite_report_core_rejects_empty_instruction():
+    from aiq_agent.agents.report_rewriter.agent import rewrite_report
+
+    with pytest.raises(ValueError, match="non-empty edit instruction"):
+        await rewrite_report(llm=FakeWriterLLM(), original_report="# R", edit_instruction="   ")
+
+
+@pytest.mark.asyncio
 async def test_report_rewriter_requires_original_report_file():
     from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
     from aiq_agent.agents.report_rewriter.models import ReportRewriterAgentState

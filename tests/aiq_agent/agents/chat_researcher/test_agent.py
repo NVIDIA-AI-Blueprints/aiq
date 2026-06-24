@@ -346,6 +346,50 @@ class TestChatResearcherAgent:
         }
 
     @pytest.mark.asyncio
+    async def test_run_report_edit_runs_inline_when_no_submitter(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """With no async submitter (CLI), report edit runs inline over the in-session report."""
+
+        async def report_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research",
+                    target="report",
+                    report_action="edit",
+                    raw=None,
+                )
+            }
+
+        revised_report = "# FIFA World Cup 2026\n\n_Messi and Ronaldo walk into a bar..._\n\nBody."
+
+        async def inline_edit(state):
+            return revised_report
+
+        async def fail_if_called(_state):
+            raise AssertionError("research path should not run for report edit")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=fail_if_called,
+            deep_research_fn=fail_if_called,
+            clarifier_fn=mock_clarifier,
+            report_edit_fn=inline_edit,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="add a messi-ronaldo joke under the title")],
+            last_report_markdown="# FIFA World Cup 2026\n\nBody.",
+        )
+        result = await agent.run(state, thread_id="test-inline-edit")
+
+        assert result["messages"][-1].content == revised_report
+        assert result["last_report_markdown"] == revised_report
+
+    @pytest.mark.asyncio
     async def test_run_deep_research_submitter_emits_structured_escalation(
         self,
         mock_shallow_research,
@@ -384,6 +428,55 @@ class TestChatResearcherAgent:
             "kind": "deep_research",
             "job_id": "deep-job-1",
         }
+
+    @pytest.mark.asyncio
+    async def test_deep_research_seeds_parent_report_for_inline_delta(
+        self,
+        mock_shallow_research,
+        mock_clarifier,
+    ):
+        """An inline delta (use_parent_report_context + in-session report) seeds the report into the deep agent FS."""
+        captured = {}
+
+        async def deep_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research", target="new_research", use_parent_report_context=True, raw=None
+                ),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="delta"),
+            }
+
+        async def deep(state):
+            captured["files"] = dict(state.files)
+            captured["query"] = state.messages[-1].content
+            result = MagicMock()
+            result.messages = list(state.messages) + [AIMessage(content="# Updated Report\n\nWith delta.")]
+            return result
+
+        async def seed_files(state):
+            return {
+                "/shared/original_report.md": state.last_report_markdown,
+                "/shared/source_summary.md": "- src",
+            }
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=deep,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            report_seed_files_fn=seed_files,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="expand the economic impact section with new 2025 data")],
+            last_report_markdown="# FIFA World Cup 2026\n\nBody.",
+        )
+        result = await agent.run(state, thread_id="test-delta-seed")
+
+        assert captured["files"].get("/shared/original_report.md") == "# FIFA World Cup 2026\n\nBody."
+        assert "/shared/original_report.md" in captured["query"]
+        assert result["last_report_markdown"] == "# Updated Report\n\nWith delta."
 
     @pytest.mark.asyncio
     async def test_report_ask_degrades_gracefully_when_hook_raises(

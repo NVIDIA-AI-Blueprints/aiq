@@ -344,6 +344,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     )
 
     deep_research_job_submitter = None
+    # Wired to the async submitter only when a Dask scheduler is available; otherwise edit runs
+    # inline via report_edit_fn (synchronous CLI).
+    report_edit_job_submitter = None
 
     async def _resolve_report_context_for_state(state: ChatResearcherState):
         from aiq_api.jobs.access import require_verified_principal
@@ -395,6 +398,32 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             output_metadata=report_output_metadata(report_context.parent_job_id, "edit"),
             allow_internal=True,
         )
+
+    async def _inline_report_edit(state: ChatResearcherState) -> str:
+        """Rewrite the in-session report inline (synchronous CLI, no scheduler/job).
+
+        Mirrors the report_rewriter job's single bounded LLM call, sourced from the in-session
+        report (or, if present, the explicit job-backed report) resolved by the same precedence
+        as report ask.
+        """
+        from aiq_agent.agents.report_rewriter.agent import rewrite_report
+        from aiq_agent.common import get_latest_user_query
+
+        report_context = await _resolve_report_context_for_state(state)
+        instruction = get_latest_user_query(state.messages)
+        return await rewrite_report(
+            llm=report_qa_llm,
+            original_report=report_context.report_markdown,
+            edit_instruction=instruction,
+            source_summary=report_context.source_summary_markdown,
+        )
+
+    async def _build_report_seed_files(state: ChatResearcherState) -> dict[str, str]:
+        """Seed files for an inline delta: the parent report context as DeepAgents FS files."""
+        from aiq_api.jobs.report_context import to_initial_files
+
+        report_context = await _resolve_report_context_for_state(state)
+        return to_initial_files(report_context)
 
     if config.use_async_deep_research:
         import os
@@ -468,6 +497,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 )
 
             deep_research_job_submitter = _submit_deep_job
+            report_edit_job_submitter = _submit_report_edit_job
         else:
             logger.info(
                 "use_async_deep_research is enabled but NAT_DASK_SCHEDULER_ADDRESS is not set. "
@@ -487,7 +517,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         max_history=config.max_history,
         deep_research_job_submitter=deep_research_job_submitter,
         report_ask_fn=_answer_report_question,
-        report_edit_job_submitter=_submit_report_edit_job,
+        report_edit_job_submitter=report_edit_job_submitter,
+        report_edit_fn=_inline_report_edit,
+        report_seed_files_fn=_build_report_seed_files,
         checkpointer=checkpointer,
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )

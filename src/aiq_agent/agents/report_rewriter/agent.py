@@ -31,6 +31,48 @@ PARENT_CONTEXT_PATH = "/shared/parent_report_context.json"
 EDIT_INSTRUCTION_PATH = "/shared/edit_instruction.txt"
 OUTPUT_REPORT_PATH = "/shared/output.md"
 
+_DEFAULT_SOURCE_SUMMARY = "No durable source metadata was found for the parent report."
+
+
+async def rewrite_report(
+    *,
+    llm: Any,
+    original_report: str,
+    edit_instruction: str,
+    source_summary: str = _DEFAULT_SOURCE_SUMMARY,
+    parent_context: str = "{}",
+    system_prompt: str | None = None,
+) -> str:
+    """Rewrite a report per an edit instruction with one bounded LLM call.
+
+    Shared by the async ``report_rewriter`` job and the synchronous in-session CLI edit path so
+    both produce identical revisions. Needs no filesystem, job store, or scheduler.
+    """
+    instruction = (edit_instruction or "").strip()
+    if not instruction:
+        raise ValueError("Report rewrite requires a non-empty edit instruction")
+    if system_prompt is None:
+        system_prompt = load_prompt(AGENT_DIR / "prompts", "edit")
+    rendered_prompt = render_prompt_template(
+        system_prompt,
+        original_report=original_report,
+        source_summary=source_summary,
+        parent_context=parent_context,
+        edit_instruction=instruction,
+    )
+    response = await llm.ainvoke(
+        [
+            SystemMessage(content=rendered_prompt),
+            HumanMessage(content=instruction),
+        ]
+    )
+    revised_report = response.content if hasattr(response, "content") else str(response)
+    revised_report = revised_report if isinstance(revised_report, str) else str(revised_report)
+    revised_report = revised_report.strip()
+    if not revised_report:
+        raise ValueError("Report writer returned an empty revised report")
+    return revised_report
+
 
 class ReportRewriterAgent:
     """Rewrite a completed parent report into a full revised child report."""
@@ -80,33 +122,18 @@ class ReportRewriterAgent:
         instruction = (
             self._read_text_file(state.files, EDIT_INSTRUCTION_PATH) or self._latest_user_message(state)
         ).strip()
-        if not instruction:
-            raise ValueError("Report rewrite requires a non-empty edit instruction")
 
-        source_summary = self._read_text_file(state.files, SOURCE_SUMMARY_PATH) or (
-            "No durable source metadata was found for the parent report."
-        )
+        source_summary = self._read_text_file(state.files, SOURCE_SUMMARY_PATH) or _DEFAULT_SOURCE_SUMMARY
         parent_context = self._read_text_file(state.files, PARENT_CONTEXT_PATH) or "{}"
 
-        rendered_prompt = render_prompt_template(
-            self.system_prompt,
+        revised_report = await rewrite_report(
+            llm=self.llm_provider.get(LLMRole.REPORT_WRITER),
             original_report=original_report,
+            edit_instruction=instruction,
             source_summary=source_summary,
             parent_context=parent_context,
-            edit_instruction=instruction,
+            system_prompt=self.system_prompt,
         )
-
-        response = await self.llm_provider.get(LLMRole.REPORT_WRITER).ainvoke(
-            [
-                SystemMessage(content=rendered_prompt),
-                HumanMessage(content=instruction),
-            ]
-        )
-        revised_report = response.content if hasattr(response, "content") else str(response)
-        revised_report = revised_report if isinstance(revised_report, str) else str(revised_report)
-        revised_report = revised_report.strip()
-        if not revised_report:
-            raise ValueError("Report writer returned an empty revised report")
 
         for callback in self.callbacks:
             if hasattr(callback, "emit_final_report"):
