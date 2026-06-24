@@ -128,6 +128,22 @@ class TestToolNameSanitizationMiddleware:
 class TestToolVisibilityMiddleware:
     """Tests for hiding tools from model requests."""
 
+    def test_wrap_model_call_filters_hidden_tools(self):
+        middleware = ToolVisibilityMiddleware(hidden_tool_names={"execute"})
+        execute_tool = SimpleNamespace(name="execute")
+        read_file_tool = SimpleNamespace(name="read_file")
+        mock_request = MagicMock()
+        mock_request.tools = [execute_tool, read_file_tool, {"function": {"name": "execute"}}]
+        filtered_request = MagicMock()
+        mock_request.override.return_value = filtered_request
+        mock_handler = MagicMock(return_value="ok")
+
+        result = middleware.wrap_model_call(mock_request, mock_handler)
+
+        assert result == "ok"
+        mock_request.override.assert_called_once_with(tools=[read_file_tool])
+        mock_handler.assert_called_once_with(filtered_request)
+
     @pytest.mark.asyncio
     async def test_awrap_model_call_filters_hidden_tools(self):
         middleware = ToolVisibilityMiddleware(hidden_tool_names={"execute"})

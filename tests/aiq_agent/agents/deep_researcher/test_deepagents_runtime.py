@@ -129,6 +129,10 @@ class TestDeepAgentsRuntimeRouting:
         with pytest.raises(ValueError, match="require a sandbox"):
             DeepAgentsRuntime(skills=skills)
 
+    def test_skills_config_rejects_unknown_agent_keys(self) -> None:
+        with pytest.raises(ValidationError, match="Unknown deep research skill agent"):
+            DeepResearchSkillsConfig(agents={"researcher": ("research",)})
+
     def test_require_sandbox_collection_with_sandbox_is_allowed(self) -> None:
         skills = DeepResearchSkillsConfig(
             agents={"researcher-agent": ("research",)},
@@ -137,6 +141,15 @@ class TestDeepAgentsRuntimeRouting:
         runtime = DeepAgentsRuntime(skills=skills, sandbox=DeepResearchSandboxConfig())
 
         assert runtime.skill_sources_for("researcher-agent") == ["/skills/research/"]
+
+    def test_require_sandbox_collection_with_sandbox_still_rejects_unknown_names(self) -> None:
+        skills = DeepResearchSkillsConfig(
+            agents={"researcher-agent": ("research",)},
+            require_sandbox=("typo",),
+        )
+
+        with pytest.raises(ValueError, match="Unknown deep research skill collection"):
+            DeepAgentsRuntime(skills=skills, sandbox=DeepResearchSandboxConfig())
 
     def test_deepagents_skill_scanner_finds_synthesis_skills_from_nested_source(self) -> None:
         from deepagents.middleware.skills import _list_skills

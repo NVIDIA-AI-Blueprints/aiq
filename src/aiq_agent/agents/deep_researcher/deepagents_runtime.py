@@ -36,6 +36,7 @@ from deepagents.backends.protocol import FileUploadResponse
 from deepagents.backends.sandbox import BaseSandbox
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_validator
 
 from nat.data_models.function import FunctionBaseConfig
 
@@ -44,6 +45,7 @@ logger = logging.getLogger(__name__)
 BUILTIN_SKILLS_DIR = Path(__file__).with_name("skills")
 BUILTIN_SKILL_SOURCE = "/skills/"
 SHARED_ROUTE = "/shared/"
+SKILL_AGENT_NAMES = frozenset({"researcher-agent", "writer-agent"})
 
 
 class DeepResearchSkillsConfig(FunctionBaseConfig, name="deep_research_skills"):
@@ -59,6 +61,16 @@ class DeepResearchSkillsConfig(FunctionBaseConfig, name="deep_research_skills"):
         default=(),
         description="Skill collection names that require a sandbox when assigned to any agent.",
     )
+
+    @field_validator("agents")
+    @classmethod
+    def _validate_agent_names(cls, value: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+        unknown = sorted(set(value) - SKILL_AGENT_NAMES)
+        if unknown:
+            raise ValueError(
+                f"Unknown deep research skill agent(s): {unknown}. Known agents: {sorted(SKILL_AGENT_NAMES)}"
+            )
+        return value
 
 
 class DeepResearchSandboxConfig(FunctionBaseConfig, name="deep_research_sandbox"):
@@ -199,10 +211,13 @@ def _validate_sandbox_requirements(
     skills: DeepResearchSkillsConfig | None,
     sandbox: DeepResearchSandboxConfig | None,
 ) -> None:
-    if skills is None or sandbox is not None or not skills.require_sandbox:
+    if skills is None or not skills.require_sandbox:
         return
 
     resolve_skill_collections(skills.require_sandbox)
+    if sandbox is not None:
+        return
+
     required_collections = set(skills.require_sandbox)
     violating_agents = sorted(
         agent_name
