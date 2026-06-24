@@ -232,6 +232,9 @@ class DeepResearcherAgent:
         """
         Execute deep research with multi-phase workflow.
         """
+        prepared_files = self.deepagents_runtime.prepare_state_files(dict(state.files))
+        if prepared_files != state.files:
+            state = state.model_copy(update={"files": prepared_files})
         agent = self._build_orchestrator_agent(state)
 
         messages = state.messages
