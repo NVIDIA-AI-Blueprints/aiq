@@ -544,7 +544,7 @@ class TestShallowResearcherSourceRegistryGating:
         result = await agent.run(state)
 
         assert result.messages[-1].content.rstrip() == (
-            "It's currently 4:54 AM in Tokyo [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
+            "It's currently 4:54 AM in Tokyo [1].\n\n## Sources\n- [1] mcp_time__get_current_time"
         )
 
     @pytest.mark.asyncio
