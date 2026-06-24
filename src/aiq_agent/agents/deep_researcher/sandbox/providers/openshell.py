@@ -47,23 +47,12 @@ def _adapter_file_transfer_enabled() -> bool:
     """True only when the toggle env var is an explicit truthy value (not just any string)."""
     return os.getenv(_ADAPTER_FILE_TRANSFER_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
-# File-transfer bootstraps that take the target path via argv (NOT an environment
-# variable). The official langchain-nvidia-openshell adapter passes the path via
-# exec(env=...), but OpenShell 0.0.57's exec does not propagate env to the child
-# process, so its upload/download bootstraps fail (the host-side error is masked as
-# `permission_denied`). We keep the official adapter for `execute` and override only
-# these two methods. Remove this shim once the SDK/adapter propagates exec env.
-#
-# The download bootstrap fails closed BEFORE reading the full file (artifacts come from
-# an untrusted sandbox): exit 5 if the leaf is a symlink (the direct exfil vector, e.g.
-# chart.png -> /etc/shadow); exit 3 for a directory; and read at most cap+1 bytes ->
-# exit 4 if it exceeds the cap. We reject only the leaf symlink (not realpath != abspath)
-# because a symlinked *ancestor* of the artifact base is legitimate and common (e.g.
-# /var or /tmp on some hosts), and would otherwise reject every harvest. Bounding the
-# READ (not a pre-read getsize, which is racy: the file can grow between checks) is what
-# actually prevents a hostile sandbox from pulling a giant file into host memory; the
-# directory scan never follows symlinked dirs, so parent-dir escapes only reach here via
-# a hand-written manifest and are further constrained by the OpenShell filesystem policy.
+# File-transfer bootstraps pass the path via argv (not env): OpenShell <=0.0.67 strips
+# OPENSHELL_* env before exec, breaking the adapter's env-based transfer. We keep the
+# adapter for execute and override only these two methods until the SDK propagates env.
+# The download bootstrap fails closed before reading untrusted bytes: reject a symlink
+# leaf (exit 5) or directory (exit 3), and read at most cap+1 bytes (exit 4 if over) so
+# an oversized/out-of-tree file is never pulled into host memory.
 _UPLOAD_CODE = (
     "import base64,os,sys;"
     "p=sys.argv[1];"
@@ -195,8 +184,7 @@ class OpenShellSandboxProvider(SandboxProvider):
 
     def _download_files_envfree(self, paths: list[str]) -> list[FileDownloadResponse]:
         sandbox = self._os_context
-        # Bound the transfer at the artifact size cap so the bootstrap refuses an oversized
-        # file before it is read into host memory (the manager's post-download cap is a backstop).
+        # Cap passed to the bootstrap so oversized files are refused before transfer.
         max_bytes = self.config.artifact_capture.max_file_bytes
         responses: list[FileDownloadResponse] = []
         for path in paths:
@@ -212,8 +200,7 @@ class OpenShellSandboxProvider(SandboxProvider):
                 error = _DOWNLOAD_EXIT_ERRORS.get(exit_code) or _classify_fs_error(getattr(result, "stderr", "") or "")
                 responses.append(FileDownloadResponse(path=path, content=None, error=error))
                 continue
-            # The bootstrap writes only base64 to stdout; validate so any stray output fails
-            # closed (skipped artifact) instead of decoding into a corrupt stored artifact.
+            # Validate base64 so stray stdout fails closed rather than storing corrupt bytes.
             try:
                 content = base64.b64decode((getattr(result, "stdout", "") or "").strip().encode("ascii"), validate=True)
             except ValueError:

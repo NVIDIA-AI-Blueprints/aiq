@@ -79,6 +79,13 @@ def verify_capabilities(config: SandboxConfig, capabilities: SandboxCapabilities
             "Choose a provider that declares supports_network_allowlist, or use network.mode='blocked'/'open'."
         )
 
+    if config.resources.any_set() and not capabilities.supports_resource_limits:
+        raise CapabilityError(
+            f"Provider '{config.provider}' cannot enforce resource limits (CPU/memory), but "
+            "sandbox.resources requests one. Refusing to run with un-enforceable limits. "
+            "Choose a provider that declares supports_resource_limits, or remove sandbox.resources."
+        )
+
     if config.artifact_capture.enabled and not capabilities.supports_artifact_download:
         raise CapabilityError(
             f"Provider '{config.provider}' cannot download artifacts (no download_files support), "

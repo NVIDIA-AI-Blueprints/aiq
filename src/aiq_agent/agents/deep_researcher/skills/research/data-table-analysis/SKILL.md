@@ -47,7 +47,7 @@ so it must be honest about what is and isn't known:
    - standardizes units and period labels,
    - computes the requested metrics,
    - prints markdown, CSV, JSON, and data-quality notes as text.
-   - uses your sandbox working directory (`sandbox_workdir`) for any sandbox-local input or output files.
+   - uses your sandbox working directory (`sandbox_workdir`) for any sandbox-local input or output files, and writes any script file at the job-unique path your instructions specify (the `<job_id>_<name>.py` form) so a shared sandbox never reuses a stale leftover from another job.
    - does not read from or write to `/shared/...` inside the sandbox process.
 
 4. Inspect the `execute` output. If the code fails, fix the code and call `execute` again. Do not continue with hand-computed fallback tables unless the sandbox or pandas is unavailable.

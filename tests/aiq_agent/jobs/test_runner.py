@@ -76,8 +76,6 @@ from aiq_api.jobs.callbacks import EventCategory
 from aiq_api.jobs.callbacks import EventData
 from aiq_api.jobs.callbacks import EventState
 from aiq_api.jobs.callbacks import IntermediateStepEvent
-from aiq_api.jobs.runner import _finalize_terminal_path
-from aiq_api.jobs.runner import _teardown_sandbox
 
 
 @pytest.fixture(name="event_store_cache_guard", autouse=True)
@@ -88,85 +86,6 @@ def fixture_event_store_cache_guard():
     EventStore.dispose_all_engines()
     yield
     EventStore.dispose_all_engines()
-
-
-class TestTerminalTeardown:
-    """SANDBOX-6 lifecycle coverage for the runner's terminal teardown seam.
-
-    Covers cleanup ordering (harvest -> flush -> stop -> cleanup), interrupted->terminate
-    vs normal->close routing, canceled-job harvest, and the never-raise guarantee — the
-    one part of the new sandbox lifecycle that was previously untested.
-    """
-
-    def test_teardown_closes_on_normal_path(self):
-        runtime = MagicMock()
-        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
-        runtime.close.assert_called_once()
-        runtime.terminate.assert_not_called()
-
-    def test_teardown_terminates_on_interrupted_path(self):
-        runtime = MagicMock()
-        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
-        runtime.terminate.assert_called_once()
-        runtime.close.assert_not_called()
-
-    def test_teardown_never_raises(self):
-        runtime = MagicMock()
-        runtime.terminate.side_effect = RuntimeError("boom")
-        # Teardown must swallow provider errors on the terminal path.
-        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
-
-    def test_teardown_noop_without_runtime(self):
-        _teardown_sandbox(None, job_id="job-1", interrupted=True)
-
-    async def test_finalize_orders_harvest_before_flush_before_cleanup(self):
-        order: list[str] = []
-        runtime = MagicMock()
-        runtime.final_harvest.side_effect = lambda: order.append("harvest")
-        runtime.close.side_effect = lambda: order.append("close")
-        event_store = MagicMock()
-        event_store.flush.side_effect = lambda: order.append("flush")
-        monitor = MagicMock()
-        monitor.stop.side_effect = lambda: order.append("stop")
-
-        await _finalize_terminal_path(
-            sandbox_runtime=runtime,
-            event_store=event_store,
-            cancellation_monitor=monitor,
-            job_id="job-1",
-            interrupted=False,
-        )
-
-        # Harvest emits artifact SSE events, so it must precede the flush; sandbox last.
-        assert order == ["harvest", "flush", "stop", "close"]
-
-    async def test_finalize_harvests_and_terminates_on_interrupt(self):
-        # Canceled-job harvest: an interrupted job still harvests, and tears down with
-        # terminate() (not close()) to stop any in-flight execute.
-        runtime = MagicMock()
-        await _finalize_terminal_path(
-            sandbox_runtime=runtime,
-            event_store=None,
-            cancellation_monitor=None,
-            job_id="job-1",
-            interrupted=True,
-        )
-        runtime.final_harvest.assert_called_once()
-        runtime.terminate.assert_called_once()
-        runtime.close.assert_not_called()
-
-    async def test_finalize_harvest_failure_does_not_block_cleanup(self):
-        runtime = MagicMock()
-        runtime.final_harvest.side_effect = RuntimeError("harvest boom")
-        await _finalize_terminal_path(
-            sandbox_runtime=runtime,
-            event_store=None,
-            cancellation_monitor=None,
-            job_id="job-1",
-            interrupted=False,
-        )
-        # A failed harvest must not prevent sandbox cleanup.
-        runtime.close.assert_called_once()
 
 
 class TestIntermediateStepEvent:

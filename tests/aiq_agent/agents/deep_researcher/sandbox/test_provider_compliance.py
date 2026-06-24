@@ -38,12 +38,15 @@ def assert_provider_contract(provider: SandboxProvider) -> None:
     provider.close()
     provider.close()
 
-    # The shared resilience path delegates to the session created by _create_session.
+    # The shared resilience path delegates to the session created by _create_session, and
+    # prepares the per-job workspace (idempotent mkdir -p) before the first real call.
     session = MagicMock()
     session.execute.return_value = "ok"
     provider._create_session = lambda: session  # type: ignore[method-assign]
     assert provider.execute("echo ok", timeout=5) == "ok"
-    session.execute.assert_called_once_with("echo ok", timeout=5)
+    first_cmd = session.execute.call_args_list[0].args[0]
+    assert first_cmd.startswith("mkdir -p") and provider.workdir in first_cmd
+    session.execute.assert_called_with("echo ok", timeout=5)  # most recent call is the real command
 
 
 @pytest.mark.parametrize("provider_name", _BUILTIN_PROVIDERS)

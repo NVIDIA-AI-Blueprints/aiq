@@ -16,6 +16,7 @@ capabilities with safe defaults, and provider-owned error classification.
 from __future__ import annotations
 
 import logging
+import shlex
 import threading
 from abc import ABC
 from abc import abstractmethod
@@ -29,6 +30,8 @@ from deepagents.backends.protocol import FileUploadResponse
 from deepagents.backends.sandbox import BaseSandbox
 
 from .capabilities import SandboxCapabilities
+from .config import job_scoped_artifact_dir
+from .config import job_scoped_workdir
 
 if TYPE_CHECKING:
     from .config import SandboxConfig
@@ -36,6 +39,9 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 _T = TypeVar("_T")
+
+# Per-job workspace creation is a quick mkdir; bound it well under the sandbox lifetime.
+_WORKSPACE_PREP_TIMEOUT = 60
 
 
 class SandboxTerminatedError(RuntimeError):
@@ -66,6 +72,11 @@ class SandboxProvider(BaseSandbox, ABC):
         self.config = config
         self.job_id = job_id
         self.sandbox_name = self._scoped_name(job_id)
+        # Per-job workspace roots inside the (possibly shared/reused) sandbox. Computed via
+        # the same helpers the runtime uses, so the directory the agent writes to and the
+        # directory the harvest scans always agree.
+        self.workdir = job_scoped_workdir(config.workdir, job_id)
+        self.artifact_dir = job_scoped_artifact_dir(config.workdir, job_id)
         self._session: BaseSandbox | None = None
         # Operation lock: serializes remote calls + gated retry (held across the call).
         self._lock = threading.RLock()
@@ -149,6 +160,20 @@ class SandboxProvider(BaseSandbox, ABC):
         """Forcibly stop a session. Default closes it; providers may override to hard-kill."""
         self._safe_close(session)
 
+    def _prepare_workspace(self, session: BaseSandbox) -> None:
+        """Create the job-scoped workspace and artifact directories in a new session.
+
+        Idempotent (``mkdir -p``); runs once per session creation so the per-job root
+        exists before the first ``write_file``, even when the underlying sandbox is shared
+        and reused across jobs. Best-effort: a failure here is logged rather than raised,
+        since a genuine filesystem problem resurfaces on the first real write.
+        """
+        command = f"mkdir -p {shlex.quote(self.workdir)} {shlex.quote(self.artifact_dir)}"
+        try:
+            session.execute(command, timeout=self._clamp_timeout(_WORKSPACE_PREP_TIMEOUT))
+        except Exception:  # noqa: BLE001 - workspace prep is best-effort; real failures resurface on first write
+            logger.warning("Sandbox %s workspace prep failed (%s)", self.sandbox_name, command, exc_info=True)
+
     def _safe_close(self, session: BaseSandbox | None) -> None:
         """Best-effort close of a session; never raises on the teardown path."""
         if session is not None and hasattr(session, "close"):
@@ -220,6 +245,7 @@ class SandboxProvider(BaseSandbox, ABC):
                 return self._session
         logger.info("Sandbox session init: provider=%s name=%s", self.provider_name, self.sandbox_name)
         created = self._create_session()
+        self._prepare_workspace(created)
         with self._state_lock:
             if not self._terminated:
                 self._session = created
@@ -240,6 +266,7 @@ class SandboxProvider(BaseSandbox, ABC):
             self._session = None
         self._safe_close(stale)
         created = self._create_session()
+        self._prepare_workspace(created)
         with self._state_lock:
             if not self._terminated:
                 self._session = created

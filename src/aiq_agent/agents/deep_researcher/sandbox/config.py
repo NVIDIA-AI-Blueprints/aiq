@@ -22,6 +22,31 @@ from pydantic import model_validator
 
 DEFAULT_WORKDIR = "/workspace"
 
+
+def _safe_job_segment(job_id: str) -> str:
+    """Return a filename-safe single path segment for ``job_id``.
+
+    The job id becomes a directory name, so keep only filename-safe characters: a
+    crafted id containing ``/`` or ``..`` must not be able to escape the base workdir.
+    """
+    return "".join(c if (c.isalnum() or c in "-_") else "_" for c in job_id) or "job"
+
+
+def job_scoped_workdir(base_workdir: str, job_id: str) -> str:
+    """Return the per-job working directory ``<base_workdir>/<safe job id>``.
+
+    Isolating each job under its own subdirectory is what makes a shared or long-lived
+    sandbox (e.g. a reused OpenShell container) safe to reuse across jobs: a fixed script
+    name cannot collide with another job's leftover, and concurrent jobs never share a
+    working directory.
+    """
+    return f"{base_workdir.rstrip('/')}/{_safe_job_segment(job_id)}"
+
+
+def job_scoped_artifact_dir(base_workdir: str, job_id: str) -> str:
+    """Return the per-job artifact directory nested under the job working directory."""
+    return f"{job_scoped_workdir(base_workdir, job_id)}/aiq-artifacts"
+
 # Allowed artifact extensions for the first capture milestone (validated MIME-from-bytes
 # happens in the ArtifactManager; this is the coarse filename allowlist).
 _DEFAULT_ALLOW_EXTENSIONS: tuple[str, ...] = (
@@ -125,6 +150,24 @@ class NetworkPolicy(BaseModel):
         return self
 
 
+class ResourceLimits(BaseModel):
+    """Provider-neutral CPU/memory caps for the sandbox (opt-in).
+
+    Both default to ``None`` (no limit), so an unset ``resources`` block changes nothing.
+    When a limit is set, the fail-closed capability gate refuses to run on a provider that
+    cannot enforce it (``supports_resource_limits``), rather than silently ignoring it.
+    Disk quotas are intentionally omitted: no current provider can enforce them, so a disk
+    field would be unenforceable.
+    """
+
+    cpu: float | None = Field(default=None, gt=0, description="Max CPU cores (provider-enforced).")
+    memory_mb: int | None = Field(default=None, gt=0, description="Max memory in MB (provider-enforced).")
+
+    def any_set(self) -> bool:
+        """Whether any limit is requested (so the capability gate applies)."""
+        return self.cpu is not None or self.memory_mb is not None
+
+
 class SandboxConfig(BaseModel):
     """Provider-neutral configuration for a DeepAgents sandbox backend.
 
@@ -150,6 +193,10 @@ class SandboxConfig(BaseModel):
     )
     timeout: int = Field(default=1200, description="Maximum sandbox lifetime in seconds")
     idle_timeout: int = Field(default=1800, description="Sandbox idle timeout in seconds")
+    resources: ResourceLimits = Field(
+        default_factory=ResourceLimits,
+        description="Optional CPU/memory caps; enforced only by providers declaring supports_resource_limits.",
+    )
     artifact_capture: ArtifactCaptureConfig = Field(default_factory=ArtifactCaptureConfig)
     providers: SandboxProvidersConfig = Field(default_factory=SandboxProvidersConfig)
 

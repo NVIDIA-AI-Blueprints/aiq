@@ -116,6 +116,14 @@ class ModalSandboxProvider(SandboxProvider):
         if cfg.workdir:
             image = image.run_commands(f"mkdir -p {shlex.quote(cfg.workdir)}")
 
+        # Opt-in resource caps (None => Modal default). The capability gate has already
+        # refused limits on providers that cannot enforce them, so passing them here is safe.
+        resource_kwargs: dict[str, object] = {}
+        if cfg.resources.cpu is not None:
+            resource_kwargs["cpu"] = cfg.resources.cpu
+        if cfg.resources.memory_mb is not None:
+            resource_kwargs["memory"] = cfg.resources.memory_mb
+
         try:
             sandbox = modal.Sandbox.create(
                 app=app,
@@ -125,6 +133,7 @@ class ModalSandboxProvider(SandboxProvider):
                 timeout=cfg.timeout,
                 idle_timeout=cfg.idle_timeout,
                 block_network=cfg.block_network,
+                **resource_kwargs,
             )
             logger.info(
                 "Modal sandbox CREATED: name=%s image=%s workdir=%s timeout=%ds",

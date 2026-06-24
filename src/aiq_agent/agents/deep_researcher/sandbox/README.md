@@ -22,11 +22,28 @@ config YAML (sandbox.provider + providers.<name>)
                                                                                      |
 DeepAgentsRuntime (deepagents_runtime.py) holds the provider and composes:           |
    CompositeBackend(default = provider, routes = {/shared/, /skills/ -> StateBackend})
-        - workdir (default route): real sandbox FS, reached via execute
-          (DEFAULT_WORKDIR=/workspace; config_openshell.yml sets workdir: /sandbox)
+        - workdir (default route): real sandbox FS, reached via execute. The EFFECTIVE
+          workdir is per-job: <configured workdir>/<job_id> (e.g. /sandbox/<job_id>), with
+          artifacts nested at <job_id>/aiq-artifacts. See "Workspace isolation" below.
         - /shared/, /skills/: in-process virtual FS (durable text, never the sandbox)
    ArtifactManager (artifacts/manager.py): download_files -> validate -> ArtifactStore -> SSE
 ```
+
+## Workspace isolation (safe reuse)
+
+The effective working directory is scoped per job to `<configured workdir>/<job_id>`, and
+the artifact directory is nested under it at `<job_id>/aiq-artifacts`. The provider base
+creates these on session start (`_prepare_workspace`, an idempotent `mkdir -p`) and the
+runtime injects them into prompts/skills as `sandbox_workdir`/`sandbox_artifact_dir`, so the
+directory the agent writes to and the directory the harvest scans always agree.
+
+This is what makes reusing one long-lived OpenShell container across many jobs safe (the
+OpenShell default; named sandboxes persist, teardown is opt-in). Because each job writes
+under its own root, a fixed script name (e.g. `make_chart.py`) cannot collide with a
+leftover from a previous job, and concurrent jobs never share a working directory - without
+paying the cost of tearing the sandbox down per job. Modal is already fresh-per-job, so the
+same per-job root applies harmlessly there too. No policy change is needed: `/sandbox` is
+already read-write, so a per-job subdirectory is in-policy.
 
 The agent only ever sees a `read_file`/`write_file`/`edit_file`/`execute` tool surface
 plus `/shared/` for durable text. Binary artifacts are harvested host-side via
@@ -109,6 +126,9 @@ sandbox:
     # allow: [pypi.org]        # required for mode: allowlist; needs supports_network_allowlist
   timeout: 1200
   idle_timeout: 1800
+  resources:                   # optional CPU/memory caps; omit for no limit
+    # cpu: 2                   # cores; needs supports_resource_limits (Modal enforces; OpenShell does not)
+    # memory_mb: 4096          # a requested limit on a provider that can't enforce it fails closed
   artifact_capture:
     enabled: true              # requires supports_artifact_download
     collect_on: [execute_end, job_end]

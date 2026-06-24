@@ -22,10 +22,10 @@ artifacts, and embed them in the report by reference (never by pasting image dat
 2. **Normalize units** before plotting (currencies, magnitudes, periods).
 3. **Render with code:** call `execute` to run Python/matplotlib. Do not hand-draw or
    fabricate charts.
-4. **Write to the artifact directory:** save the PNG and its CSV under the sandbox
-   artifact directory given in your instructions (`sandbox_artifact_dir`; e.g.
-   `/sandbox/aiq-artifacts/` on OpenShell or `/workspace/aiq-artifacts/` on Modal) with
-   descriptive filenames.
+4. **Write to the artifact directory:** save the PNG and its CSV under the exact
+   `sandbox_artifact_dir` given in your instructions (a per-job path such as
+   `/sandbox/<job_id>/aiq-artifacts`). Use that value verbatim - do NOT write to a bare
+   `/sandbox/aiq-artifacts`; the runtime only harvests files under `sandbox_artifact_dir`.
 5. **Write a manifest** so the chart is harvested reliably (see below).
 6. **Reference, do not embed bytes:** in the report, link the chart with
    `![caption](artifact://<filename>.png)`. The runtime resolves this to the durable
@@ -55,8 +55,12 @@ outfit. A polished chart of wrong or sparse numbers misleads more than it inform
 1. Assemble the normalized rows (prefer explicit records embedded in the script). If the
    inputs live in `/shared/...`, `read_file` them first and embed the values; sandbox
    code cannot open `/shared/...`.
-2. Use `write_file` to create a `make_chart.py` script in your sandbox working directory
-   (`sandbox_workdir`) and `execute` it. The script must:
+2. Use `write_file` to create the chart script at the job-unique path your instructions
+   specify (the `<job_id>_<name>.py` form under `sandbox_workdir`), then `execute` that
+   exact path. The job-id prefix is required: the sandbox may be shared, and a fixed name
+   like `make_chart.py` can collide with a leftover script from another job and silently
+   run with the wrong `ARTIFACT_DIR`. Only ever execute a script you wrote this session.
+   The script must:
    - import pandas and matplotlib (use the non-interactive `Agg` backend),
    - build the DataFrame, compute any derived metrics,
    - set a single `ARTIFACT_DIR` to your `sandbox_artifact_dir` and write the chart
@@ -85,15 +89,15 @@ Each figure must appear where it is discussed, not buried in a file list:
 ## Manifest
 
 Write a `manifest.json` in your `sandbox_artifact_dir` so the runtime captures the chart
-with metadata. Manifest `path` values must be absolute and inside `sandbox_artifact_dir`
-(shown below with the OpenShell default `/sandbox/aiq-artifacts`):
+with metadata. Manifest `path` values must be absolute and inside your `sandbox_artifact_dir`
+(the per-job path from your instructions, e.g. `/sandbox/<job_id>/aiq-artifacts`):
 
 ```json
 {
   "version": 1,
   "artifacts": [
     {
-      "path": "/sandbox/aiq-artifacts/revenue_chart.png",
+      "path": "<sandbox_artifact_dir>/revenue_chart.png",
       "kind": "image",
       "title": "2024 Semiconductor Revenue Comparison",
       "caption": "Revenue normalized to USD billions.",
@@ -115,9 +119,10 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# Set ARTIFACT_DIR to the sandbox_artifact_dir from your instructions:
-# "/sandbox/aiq-artifacts" (OpenShell) or "/workspace/aiq-artifacts" (Modal).
-ARTIFACT_DIR = "/sandbox/aiq-artifacts"
+# ARTIFACT_DIR MUST be the exact sandbox_artifact_dir from your instructions - a per-job
+# path such as /sandbox/<job_id>/aiq-artifacts. Copy that value here verbatim. Do NOT use a
+# bare /sandbox/aiq-artifacts: the runtime only harvests files under sandbox_artifact_dir.
+ARTIFACT_DIR = "<sandbox_artifact_dir>"  # replace with the path from your instructions
 os.makedirs(ARTIFACT_DIR, exist_ok=True)
 
 rows = [

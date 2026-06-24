@@ -25,6 +25,8 @@ from aiq_agent.agents.deep_researcher.sandbox import create_sandbox_backend
 from aiq_agent.agents.deep_researcher.sandbox import register_sandbox_provider
 from aiq_agent.agents.deep_researcher.sandbox import registered_providers
 from aiq_agent.agents.deep_researcher.sandbox import verify_capabilities
+from aiq_agent.agents.deep_researcher.sandbox.config import job_scoped_artifact_dir
+from aiq_agent.agents.deep_researcher.sandbox.config import job_scoped_workdir
 
 
 class _RecoverableError(Exception):
@@ -42,6 +44,11 @@ class _RegisteredFake(SandboxProvider):
 
     def _create_session(self) -> Any:
         return MagicMock()
+
+    def _prepare_workspace(self, session: Any) -> None:
+        # These fakes assert exact execute call counts in the lock/retry/timeout tests;
+        # per-job workspace prep is covered explicitly in TestWorkspacePreparation.
+        return None
 
 
 class _ScriptedProvider(SandboxProvider):
@@ -65,6 +72,27 @@ class _ScriptedProvider(SandboxProvider):
         session = self._sessions[self.sessions_created]
         self.sessions_created += 1
         return session
+
+    def _prepare_workspace(self, session: Any) -> None:
+        # See _RegisteredFake: keep exact execute call counts under test.
+        return None
+
+
+class _WorkspaceProvider(SandboxProvider):
+    """Uses the default ``_prepare_workspace`` so its mkdir-on-create is observable."""
+
+    provider_name = "workspace-fake"
+
+    def __init__(self, config: SandboxConfig, job_id: str, session: Any) -> None:
+        super().__init__(config, job_id)
+        self._next = session
+
+    @property
+    def capabilities(self) -> SandboxCapabilities:
+        return SandboxCapabilities(supports_network_policy=True)
+
+    def _create_session(self) -> Any:
+        return self._next
 
 
 register_sandbox_provider("registered-fake", _RegisteredFake)
@@ -173,6 +201,28 @@ class TestNetworkPolicy:
     def test_allowlist_passes_when_capability_declared(self) -> None:
         config = SandboxConfig(provider="registered-fake", network={"mode": "allowlist", "allow": ["pypi.org"]})
         verify_capabilities(config, SandboxCapabilities(supports_network_allowlist=True))
+
+
+class TestResourceLimits:
+    """Opt-in CPU/memory caps, gated fail-closed (SANDBOX-5)."""
+
+    def test_unset_resources_run_on_any_provider(self) -> None:
+        # Non-breaking: no limits requested -> no resource gate, regardless of capability.
+        verify_capabilities(_fake_config(), SandboxCapabilities())
+
+    def test_resource_limit_requires_capability(self) -> None:
+        # A requested limit on a provider that can't enforce it must fail closed.
+        config = _fake_config(resources={"cpu": 2})
+        with pytest.raises(CapabilityError, match="resource limits"):
+            verify_capabilities(config, SandboxCapabilities())
+
+    def test_resource_limit_passes_when_declared(self) -> None:
+        config = _fake_config(resources={"memory_mb": 2048})
+        verify_capabilities(config, SandboxCapabilities(supports_resource_limits=True))
+
+    def test_resource_limit_rejects_non_positive(self) -> None:
+        with pytest.raises(ValidationError):
+            SandboxConfig(provider="registered-fake", resources={"cpu": 0})
 
 
 class TestEntryPointDiscovery:
@@ -330,3 +380,53 @@ class TestProviderLifecycle:
         assert not worker.is_alive(), "execute did not unblock after terminate()"
         session.close.assert_called_once()
         assert isinstance(result.get("error"), Exception)
+
+
+class TestJobScopedPaths:
+    """The per-job workspace helper isolates jobs within a shared/reused sandbox."""
+
+    def test_workdir_and_artifact_dir_are_job_scoped(self) -> None:
+        assert job_scoped_workdir("/sandbox", "abc") == "/sandbox/abc"
+        assert job_scoped_artifact_dir("/sandbox", "abc") == "/sandbox/abc/aiq-artifacts"
+
+    def test_trailing_slash_normalized(self) -> None:
+        assert job_scoped_workdir("/sandbox/", "abc") == "/sandbox/abc"
+
+    def test_unsafe_job_id_cannot_escape_base(self) -> None:
+        # A crafted id with path separators must collapse to a single safe segment so it
+        # cannot move the workspace (and harvest confinement root) outside the base.
+        result = job_scoped_workdir("/sandbox", "../../etc")
+        assert result.startswith("/sandbox/")
+        assert ".." not in result
+        assert result.count("/") == 2
+
+
+class TestWorkspacePreparation:
+    """The provider base creates the per-job workspace on session start (mkdir -p)."""
+
+    def test_provider_paths_are_job_scoped(self) -> None:
+        provider = _RegisteredFake(_fake_config(workdir="/sandbox"), "job-xyz")
+        assert provider.workdir == "/sandbox/job-xyz"
+        assert provider.artifact_dir == "/sandbox/job-xyz/aiq-artifacts"
+
+    def test_workspace_created_on_session_start(self) -> None:
+        session = MagicMock()
+        session.execute.return_value = "ok"
+        provider = _WorkspaceProvider(_fake_config(workdir="/sandbox"), "job-xyz", session)
+
+        provider.execute("echo hi")
+
+        # The first execute after creation is the idempotent mkdir -p of the per-job roots.
+        mkdir_cmd = session.execute.call_args_list[0].args[0]
+        assert mkdir_cmd.startswith("mkdir -p")
+        assert "/sandbox/job-xyz" in mkdir_cmd
+        assert "/sandbox/job-xyz/aiq-artifacts" in mkdir_cmd
+
+    def test_workspace_prep_failure_does_not_abort_the_call(self) -> None:
+        # Best-effort: a mkdir failure is swallowed so it cannot break session creation;
+        # a real filesystem problem resurfaces on the first actual write.
+        session = MagicMock()
+        session.execute.side_effect = [RuntimeError("mkdir boom"), "ok"]
+        provider = _WorkspaceProvider(_fake_config(workdir="/sandbox"), "job-1", session)
+
+        assert provider.execute("echo hi") == "ok"
