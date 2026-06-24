@@ -165,39 +165,36 @@ When `research_poll` completes successfully, fetch and present the full report. 
 If the job status is `failed`, `failure`, or `cancelled`, show the error from the status response and ask whether the
 user wants to retry with a narrower query or different approach.
 
-### Step 6 - Follow up: ask about or redo a report
+### Step 6 - Follow up: ask about, edit, or extend a report
 
-After a report is presented, the user often wants to go deeper or adjust scope.
-Reuse the existing backend flow — the same auth boundary, polling, and report
-retrieval from Steps 1-5 apply; there is no separate follow-up endpoint.
+After a report is presented, the user often wants to ask about it, revise it, or
+go deeper. The backend routes follow-up automatically from the chat message plus
+the **conversation** it belongs to — there is no separate follow-up endpoint and
+**you do not pass a report id**. The only requirement is that the follow-up turns
+share the **same conversation** as the original report.
 
-**Ask** — a follow-up question about a report already in hand:
-
-- For a question answerable from the report you already have, answer directly
-  from its content and citations; do not call the backend again.
-- For a question that needs new investigation, send a fresh request that carries
-  the needed context from the prior question and report into the new query
-  text, then present the new result:
-
-  ```bash
-  python3 $SKILL_DIR/scripts/aiq.py chat "<FOLLOW_UP_QUESTION> (context: <PRIOR_TOPIC>)"
-  ```
-
-  If this returns a `deep_research_running` job ID, poll it with `research_poll`
-  exactly as in Step 3.
-
-**Redo** — re-run research with adjusted scope (a narrower query, a corrected
-question, or a different depth):
+**Pin one conversation id for the whole sequence.** Each `aiq.py` call is a
+separate process, so export a stable conversation id once and reuse it for the
+original research and every follow-up. The helper sends it as the `conversation-id`
+header; the backend then defaults to "the last completed report in this
+conversation" when routing the follow-up:
 
 ```bash
-python3 $SKILL_DIR/scripts/aiq.py research "<REFINED_QUERY>" [agent_type]
+export AIQ_CONVERSATION_ID=$(python3 -c "import uuid;print(uuid.uuid4())")
+
+python3 $SKILL_DIR/scripts/aiq.py research "<TOPIC>"     # original report (poll to completion)
+python3 $SKILL_DIR/scripts/aiq.py chat "what are the key risks in this report?"   # ask
+python3 $SKILL_DIR/scripts/aiq.py chat "rewrite it to be shorter"                 # edit (returns a job id)
+python3 $SKILL_DIR/scripts/aiq.py chat "find the latest 2025 updates building on this"  # delta research
 ```
 
-- Choose `agent_type` to match the desired depth (for example a deep agent for a
-  thorough pass, or `shallow_researcher` for a quick one); list options with
-  `agents` if unsure.
-- Treat a redo as a new job: state the target endpoint again before sending
-  (Step 2), then poll and present as in Steps 3-5.
+- **Ask** is answered inline from the prior report; **edit** and **delta**
+  return a `Job ID` — poll it with `research_poll` exactly as in Step 3.
+- Send the natural follow-up question; **do not** hand-inline the prior report
+  text into the query — the backend supplies that context from the conversation.
+- If you do NOT reuse a conversation id (no `AIQ_CONVERSATION_ID`), each call is a
+  brand-new conversation and the backend has no prior report to follow up on, so
+  it runs fresh research instead.
 
 Do not send credentials or secret values in follow-up query text, and keep
 citations and source URLs intact in every follow-up answer.

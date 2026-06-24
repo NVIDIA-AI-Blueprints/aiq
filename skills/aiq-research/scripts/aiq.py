@@ -29,6 +29,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -53,6 +54,12 @@ DEFAULT_SERVER_URL = "http://localhost:8000"
 AIQ_SERVER_URL = os.environ.get("AIQ_SERVER_URL", DEFAULT_SERVER_URL)
 
 _HEADLESS_HEADERS = {"Content-Type": "application/json", "X-AIQ-Mode": "headless"}
+
+# Stable conversation id so the backend can default report follow-up to "the last report in this
+# conversation" without the client managing active_report_job_id. Each `python3 aiq.py ...` call is
+# a separate process, so a per-process UUID only links turns within one invocation; export
+# AIQ_CONVERSATION_ID once to link a multi-command follow-up sequence (see SKILL.md Step 6).
+_SESSION_CONVERSATION_ID = os.environ.get("AIQ_CONVERSATION_ID") or str(uuid.uuid4())
 DEFAULT_AGENT_TYPE = "shallow_researcher"
 _LOCAL_BACKEND_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 
@@ -152,7 +159,8 @@ def _api_request(
     url = f"{_validate_base_url(AIQ_SERVER_URL)}{path}"
     data = None if body is None else json.dumps(body).encode("utf-8")
     if method == "POST":
-        request_payload = {"url": url, "headers": dict(_HEADLESS_HEADERS), "method": method, "data": data}
+        headers = {**_HEADLESS_HEADERS, "conversation-id": _SESSION_CONVERSATION_ID}
+        request_payload = {"url": url, "headers": headers, "method": method, "data": data}
     else:
         request_payload = {"url": url, "method": method}
     req = urllib.request.Request(**request_payload)

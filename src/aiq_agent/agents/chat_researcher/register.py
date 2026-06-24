@@ -105,6 +105,40 @@ async def _answer_from_report_context(
     return answer
 
 
+async def _resolve_effective_report_job_id(
+    request_active_id: str | None,
+    conversation_id: str | None,
+    principal: Any,
+    *,
+    is_input_mode: bool,
+) -> str | None:
+    """Resolve which report a follow-up turn should target.
+
+    A client-supplied ``active_report_job_id`` always wins. Otherwise default to the most recent
+    completed report in THIS conversation, so any client (CLI, API, UI on reload) gets report
+    follow-up without having to track the id. Only falls back for a real, client-supplied
+    conversation id — never for --input or server-generated thread ids. Any lookup failure
+    degrades silently to None (fresh research).
+    """
+    if request_active_id:
+        return request_active_id
+    if is_input_mode or not conversation_id:
+        return None
+    try:
+        import os
+
+        from aiq_api.jobs.access import get_latest_report_job_for_conversation
+
+        db_url = os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, get_latest_report_job_for_conversation, conversation_id, principal, db_url
+        )
+    except Exception as e:
+        logger.debug("Report-job fallback lookup failed: %s", type(e).__name__)
+        return None
+
+
 ########################################################
 # Intent Classifier
 ########################################################
@@ -545,6 +579,19 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 logger.debug("No session context - cannot determine collection")
         except Exception as e:
             logger.warning("Could not fetch available documents: %s", e)
+        # Resolve the report to follow up on: client-supplied id wins, else default to the last
+        # completed report in this conversation (server-side, so any client gets follow-up).
+        _ctx = Context.get()
+        client_conversation_id = _ctx.conversation_id if _ctx else None
+        effective_report_job_id = await _resolve_effective_report_job_id(
+            request_context.active_report_job_id,
+            client_conversation_id,
+            principal,
+            is_input_mode="--input" in sys.argv,
+        )
+        if effective_report_job_id and not request_context.active_report_job_id:
+            logger.info("Defaulting report follow-up to last report %s in conversation", effective_report_job_id)
+
         # Set session-scoped source registry for citation verification across turns.
         # When no conversation ID is available, get_or_create_session_registry returns a
         # fresh per-request registry to prevent anonymous sessions from sharing state.
@@ -557,7 +604,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 data_sources=data_sources,
                 available_documents=available_documents,
                 skip_clarifier=skip_clarifier,
-                active_report_job_id=request_context.active_report_job_id,
+                active_report_job_id=effective_report_job_id,
             )
             result = await agent.run(state, thread_id=nat_context_conversation_id)
         finally:

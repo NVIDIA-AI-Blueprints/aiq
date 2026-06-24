@@ -76,6 +76,16 @@ def _resolve_submission_principal(owner: str) -> Principal | None:
     return _make_no_auth_principal(owner)
 
 
+def _current_conversation_id() -> str | None:
+    """Best-effort read of the originating conversation id from the NAT context."""
+    try:
+        from nat.builder.context import ContextState
+
+        return ContextState.get().conversation_id.get()
+    except Exception:
+        return None
+
+
 def _get_parent_trace_context() -> tuple[
     str | None,  # parent_span_id
     str | None,  # parent_function_id
@@ -300,8 +310,14 @@ async def submit_agent_job(
         await _rollback_partial_submission()
         raise
 
+    # Conversation that originated this job (from the request's conversation-id), recorded so
+    # report follow-up can default to "the last report in this conversation". None when the
+    # client sent no conversation-id (e.g. a CLI that doesn't thread one) — then no linkage.
+    submission_conversation_id = _current_conversation_id()
     try:
-        await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)
+        await loop.run_in_executor(
+            None, create_job_access, resolved_job_id, principal, db_url, submission_conversation_id
+        )
     except Exception:
         # We successfully created this job above, then ownership persistence failed;
         # roll back our own partial state. (Safe: this id was newly created by us.)

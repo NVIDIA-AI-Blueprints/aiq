@@ -117,3 +117,28 @@ async def test_post_create_submit_failure_rolls_back(patched_submit, monkeypatch
         )
 
     rollback.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_submit_records_conversation_id_on_job_access(patched_submit, monkeypatch):
+    """The originating conversation id is persisted with the job for report-follow-up lookups."""
+    submit_mod, job_store_mod, _rollback, create_access = patched_submit
+
+    async def _submit_job_ok(*args, **kwargs):
+        return "ok"
+
+    monkeypatch.setattr(job_store_mod, "JobStore", _fake_job_store_factory(_submit_job_ok))
+    monkeypatch.setattr(submit_mod, "_current_conversation_id", lambda: "conv-XYZ")
+
+    await submit_mod.submit_agent_job(
+        agent_type="deep_researcher",
+        input_text="hello",
+        owner="user@example.com",
+        principal=Principal(type="jwt", sub="user-1", email="user@example.com"),
+        job_id="job-1",
+    )
+
+    create_access.assert_called_once()
+    # create_job_access(job_id, principal, db_url, conversation_id) -> conversation id is the 4th positional arg
+    assert create_access.call_args.args[0] == "job-1"
+    assert create_access.call_args.args[3] == "conv-XYZ"

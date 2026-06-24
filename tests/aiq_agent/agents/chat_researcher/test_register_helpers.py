@@ -481,3 +481,58 @@ class TestExtractQueryAndSourcesEdgeCases:
         query, sources = _extract_query_and_sources(payload)
         assert query == "Query"
         assert sources == ["web_search", "confluence"]
+
+
+class TestResolveEffectiveReportJobId:
+    """Precedence + conversation-scoped fallback for the active report job."""
+
+    @pytest.mark.asyncio
+    async def test_client_supplied_id_wins_without_lookup(self, monkeypatch):
+        from aiq_agent.agents.chat_researcher.register import _resolve_effective_report_job_id
+        from aiq_api.jobs import access
+
+        lookup = MagicMock(return_value="from-db")
+        monkeypatch.setattr(access, "get_latest_report_job_for_conversation", lookup)
+
+        result = await _resolve_effective_report_job_id(
+            "client-id", conversation_id="conv-A", principal=None, is_input_mode=False
+        )
+        assert result == "client-id"
+        lookup.assert_not_called()  # precedence short-circuits the DB query
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_conversation_last_report(self, monkeypatch):
+        from aiq_agent.agents.chat_researcher.register import _resolve_effective_report_job_id
+        from aiq_api.jobs import access
+
+        monkeypatch.setattr(access, "get_latest_report_job_for_conversation", MagicMock(return_value="last-report"))
+
+        result = await _resolve_effective_report_job_id(
+            None, conversation_id="conv-A", principal=None, is_input_mode=False
+        )
+        assert result == "last-report"
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_for_input_mode_or_missing_conversation(self, monkeypatch):
+        from aiq_agent.agents.chat_researcher.register import _resolve_effective_report_job_id
+        from aiq_api.jobs import access
+
+        lookup = MagicMock(return_value="should-not-be-used")
+        monkeypatch.setattr(access, "get_latest_report_job_for_conversation", lookup)
+
+        # --input mode: deliberately discards continuity
+        assert await _resolve_effective_report_job_id(None, "conv-A", None, is_input_mode=True) is None
+        # no client conversation id (generated thread): no fallback
+        assert await _resolve_effective_report_job_id(None, None, None, is_input_mode=False) is None
+        lookup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_lookup_error_degrades_to_none(self, monkeypatch):
+        from aiq_agent.agents.chat_researcher.register import _resolve_effective_report_job_id
+        from aiq_api.jobs import access
+
+        monkeypatch.setattr(
+            access, "get_latest_report_job_for_conversation", MagicMock(side_effect=RuntimeError("db down"))
+        )
+        result = await _resolve_effective_report_job_id(None, "conv-A", None, is_input_mode=False)
+        assert result is None

@@ -146,6 +146,21 @@ response carries `parent_job_id`, `interaction_action` (`edit`), and `result_kin
 | `500` | Failed to submit the report edit job |
 | `503` | Dask scheduler not available |
 
+#### Conversation-scoped default for chat follow-up
+
+The chat surface (`POST /chat`) routes report follow-up (ask / edit / delta) using an
+`active_report_job_id`. Clients may send it explicitly (it always wins), but when it is omitted
+the server **defaults to the most recent completed report job in the request's conversation** —
+identified by the `conversation-id` request header. This lets any client (CLI, API, or the UI on
+reload) get report follow-up by simply reusing a stable `conversation-id` across turns, without
+tracking report ids. Jobs record their originating `conversation-id` at submit time for this lookup.
+
+When no `active_report_job_id` and no (or a brand-new) `conversation-id` are present, follow-up
+degrades to fresh research. The lookup is authorized like every other job read: under
+`REQUIRE_AUTH=true` it is scoped to the caller's own jobs; under `REQUIRE_AUTH=false` (the public
+default) ownership is not enforced, so `conversation-id` is the only isolation boundary — keep it
+unguessable in any shared/multi-user deployment, consistent with the other job endpoints in that mode.
+
 ### Get Job Status
 
 ```bash
