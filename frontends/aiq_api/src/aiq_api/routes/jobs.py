@@ -728,6 +728,13 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         # The filename is sandbox-controlled; strip control chars and quotes so it cannot
         # break out of the header value (response-splitting / header injection).
         safe_filename = "".join(c for c in artifact.filename if c.isprintable() and c not in '"\\') or "artifact"
+        # Starlette encodes header values as Latin-1, so a non-Latin-1 filename (emoji, CJK)
+        # would raise UnicodeEncodeError. Provide an ASCII-only fallback plus an RFC 5987
+        # filename* with the UTF-8 percent-encoded original for clients that support it.
+        from urllib.parse import quote
+
+        ascii_filename = safe_filename.encode("ascii", "ignore").decode() or "artifact"
+        encoded_filename = quote(safe_filename, safe="")
         # Only magic-verified raster images may render inline; everything else (SVG, HTML,
         # notebooks, PDFs) is forced to download with nosniff to prevent stored-XSS if a
         # user opens the content URL directly in a browser.
@@ -737,7 +744,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             store.open_bytes(job_id, artifact_id),
             media_type=artifact.mime_type,
             headers={
-                "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
+                "Content-Disposition": (
+                    f'{disposition}; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}'
+                ),
                 "X-Content-Type-Options": "nosniff",
             },
         )

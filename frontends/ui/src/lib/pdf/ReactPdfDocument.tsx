@@ -225,7 +225,9 @@ const IMAGE_MD_RE = /!\[[^\]]*\]\([^)]*\)/g
 // arbitrary `data:` URI (e.g. one the report wrote directly), which we must not feed unchecked
 // into the PDF renderer.
 const MAX_PDF_EMBED_BYTES = 8 * 1024 * 1024
-const DATA_IMAGE_RE = /^data:image\/(?:png|jpe?g|webp);base64,([A-Za-z0-9+/=]+)$/
+// @react-pdf/renderer supports PNG and JPEG only; a WebP data URI would pass the size
+// guard and then fail silently during PDF rendering, so it is excluded here.
+const DATA_IMAGE_RE = /^data:image\/(?:png|jpe?g);base64,([A-Za-z0-9+/=]+)$/
 
 function isEmbeddableDataImage(href: string): boolean {
   const match = DATA_IMAGE_RE.exec(href)
