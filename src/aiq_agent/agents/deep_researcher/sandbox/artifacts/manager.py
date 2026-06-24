@@ -84,9 +84,6 @@ _MIME_KIND: dict[str, ArtifactKind] = {
 _RASTER_IMAGE_MIMES = frozenset({"image/png", "image/jpeg", "image/webp", "image/gif"})
 _INLINE_SAFE_MIMES = frozenset({"image/png", "image/jpeg", "image/webp"})
 
-_SVG_SCRIPT_RE = re.compile(rb"<script\b[^>]*>.*?</script>", re.IGNORECASE | re.DOTALL)
-_SVG_ON_ATTR_RE = re.compile(rb"""\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
-
 
 def _magic_mime(data: bytes) -> str | None:
     """Return the MIME implied by content magic bytes, or None if unrecognized."""
@@ -126,11 +123,13 @@ def _resolve_mime(data: bytes, filename: str) -> str | None:
 
 
 def _sanitize(data: bytes, mime: str) -> bytes | None:
-    """Strip active content from text-based formats; pass others through unchanged."""
+    """Validate active-content formats; return None to reject what we cannot make safe."""
     if mime == "image/svg+xml":
-        cleaned = _SVG_SCRIPT_RE.sub(b"", data)
-        cleaned = _SVG_ON_ATTR_RE.sub(b"", cleaned)
-        return cleaned
+        # Regex stripping cannot fully neutralize SVG (javascript: URIs, <foreignObject>,
+        # external references, CSS payloads), and the content endpoint serves bytes as the
+        # stored MIME, so a partial clean still leaves a stored-XSS vector. Fail closed and
+        # reject SVG until a vetted allowlist sanitizer (e.g. DOMPurify-equivalent) exists.
+        return None
     return data
 
 

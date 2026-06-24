@@ -31,6 +31,25 @@ artifacts, and embed them in the report by reference (never by pasting image dat
    `![caption](artifact://<filename>.png)`. The runtime resolves this to the durable
    artifact; never paste base64 image data into the report.
 
+## Data sufficiency (earn the chart)
+
+A chart confers authority, so it must be earned - never give unreliable data a cleaner
+outfit. A polished chart of wrong or sparse numbers misleads more than it informs.
+
+1. **Source-anchored points only:** every plotted value must trace to a specific source
+   (the as-reported figure and its URL). Never plot a fabricated, guessed, or inferred
+   number as if it were reported; mark genuine estimates as estimates.
+2. **Suppress misleading charts:** if a series is mostly missing (a majority of periods
+   undisclosed) or mixes metric definitions (e.g. "cash capex" vs "capex including finance
+   leases"), do NOT produce a trend chart. Present the table (which shows the gaps) and
+   state the limitation in one sentence instead.
+3. **Show gaps honestly:** never interpolate or connect across missing periods. Plot only
+   the periods a series actually reports, and render estimates distinctly (e.g. hollow or
+   dashed markers) so they do not read as reported values.
+4. **Prefer gap-tolerant forms:** grouped bars show missing periods as absent bars; favor
+   them over a connected line when series are uneven, since a line drawn across gaps
+   implies a trend that the data does not support.
+
 ## Execution Flow
 
 1. Assemble the normalized rows (prefer explicit records embedded in the script). If the

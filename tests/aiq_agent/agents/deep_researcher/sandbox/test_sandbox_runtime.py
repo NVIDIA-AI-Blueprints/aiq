@@ -14,11 +14,13 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from pydantic import ValidationError
 
 from aiq_agent.agents.deep_researcher.sandbox import CapabilityError
 from aiq_agent.agents.deep_researcher.sandbox import SandboxCapabilities
 from aiq_agent.agents.deep_researcher.sandbox import SandboxConfig
 from aiq_agent.agents.deep_researcher.sandbox import SandboxProvider
+from aiq_agent.agents.deep_researcher.sandbox import SandboxTerminatedError
 from aiq_agent.agents.deep_researcher.sandbox import create_sandbox_backend
 from aiq_agent.agents.deep_researcher.sandbox import register_sandbox_provider
 from aiq_agent.agents.deep_researcher.sandbox import registered_providers
@@ -148,6 +150,11 @@ class TestNetworkPolicy:
         assert config.network.mode == "open"
         assert config.block_network is False
 
+    def test_legacy_block_network_rejects_unknown_string(self) -> None:
+        # A typo must fail loudly, not silently open egress on a network-blocked sandbox.
+        with pytest.raises(ValidationError):
+            SandboxConfig(provider="registered-fake", block_network="flase")
+
     def test_explicit_network_wins_over_legacy_block_network(self) -> None:
         config = SandboxConfig(provider="registered-fake", block_network=True, network={"mode": "open"})
         assert config.network.mode == "open"
@@ -269,3 +276,57 @@ class TestProviderLifecycle:
         provider.close()
         session.close.assert_called_once()
         assert provider._session is None
+
+    def test_terminate_releases_session_and_blocks_further_ops(self) -> None:
+        session = MagicMock()
+        provider = _ScriptedProvider(_fake_config(), "job-1", sessions=[session])
+        provider.execute("echo ok")
+
+        provider.terminate()
+
+        session.close.assert_called_once()
+        assert provider._session is None
+        # A terminated provider refuses new work instead of silently recreating.
+        with pytest.raises(SandboxTerminatedError):
+            provider.execute("echo again")
+        assert provider.sessions_created == 1
+
+    def test_terminate_preempts_in_flight_execute(self) -> None:
+        # terminate() must not wait on the operation lock: while execute() is blocked in a
+        # remote call, a concurrent terminate() closes the session out-of-band, which
+        # interrupts the call. Without the two-lock split this test would deadlock/hang.
+        import threading
+
+        entered = threading.Event()
+        released = threading.Event()
+
+        session = MagicMock()
+
+        def _blocking_execute(command: str, timeout: int | None = None) -> str:
+            entered.set()
+            if not released.wait(timeout=5):
+                raise AssertionError("execute was not interrupted by terminate()")
+            raise RuntimeError("session closed")
+
+        session.execute.side_effect = _blocking_execute
+        session.close.side_effect = lambda: released.set()
+        provider = _ScriptedProvider(_fake_config(), "job-1", sessions=[session])
+
+        result: dict[str, BaseException] = {}
+
+        def _run_execute() -> None:
+            try:
+                provider.execute("sleep")
+            except BaseException as exc:  # noqa: BLE001 - capture for assertion
+                result["error"] = exc
+
+        worker = threading.Thread(target=_run_execute)
+        worker.start()
+        assert entered.wait(timeout=5), "execute never started"
+
+        provider.terminate()  # must return without waiting for the in-flight execute
+        worker.join(timeout=5)
+
+        assert not worker.is_alive(), "execute did not unblock after terminate()"
+        session.close.assert_called_once()
+        assert isinstance(result.get("error"), Exception)

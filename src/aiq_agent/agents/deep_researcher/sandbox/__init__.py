@@ -24,6 +24,7 @@ from .artifacts import ArtifactManager
 from .artifacts import ArtifactStore
 from .artifacts import LocalArtifactStore
 from .base import SandboxProvider
+from .base import SandboxTerminatedError
 from .capabilities import CapabilityError
 from .capabilities import SandboxCapabilities
 from .capabilities import verify_capabilities
@@ -36,6 +37,7 @@ from .registry import registered_providers
 
 __all__ = [
     "SandboxProvider",
+    "SandboxTerminatedError",
     "SandboxConfig",
     "NetworkPolicy",
     "SandboxCapabilities",

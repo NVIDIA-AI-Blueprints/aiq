@@ -188,8 +188,19 @@ class SandboxConfig(BaseModel):
         data = dict(data)
         legacy_block = data.pop("block_network")
         if isinstance(legacy_block, str):
-            # Env-interpolated values arrive as strings; treat only explicit truthy as True.
-            legacy_block = legacy_block.strip().lower() in {"1", "true", "yes", "on"}
+            # Env-interpolated values arrive as strings. Reject anything unrecognized rather
+            # than mapping it to falsy, so a typo (e.g. "flase") cannot silently open egress
+            # on what the operator intended to be a network-blocked sandbox.
+            raw = legacy_block.strip().lower()
+            if raw in {"1", "true", "yes", "on"}:
+                legacy_block = True
+            elif raw in {"0", "false", "no", "off", ""}:
+                legacy_block = False
+            else:
+                raise ValueError(
+                    f"Invalid block_network value {legacy_block!r}; expected a boolean "
+                    "(true/false). Use the 'network' policy for finer control."
+                )
         if "network" not in data or data.get("network") is None:
             data["network"] = {"mode": "blocked" if legacy_block else "open"}
         return data

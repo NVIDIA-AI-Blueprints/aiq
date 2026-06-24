@@ -38,6 +38,10 @@ logger = logging.getLogger(__name__)
 _T = TypeVar("_T")
 
 
+class SandboxTerminatedError(RuntimeError):
+    """Raised when an operation is attempted on a terminated (cancelled/closed) provider."""
+
+
 class SandboxProvider(BaseSandbox, ABC):
     """Job-scoped, lazily-created sandbox backend behind a uniform contract.
 
@@ -63,7 +67,15 @@ class SandboxProvider(BaseSandbox, ABC):
         self.job_id = job_id
         self.sandbox_name = self._scoped_name(job_id)
         self._session: BaseSandbox | None = None
+        # Operation lock: serializes remote calls + gated retry (held across the call).
         self._lock = threading.RLock()
+        # State lock: guards the session reference and the terminated flag only. Held for
+        # microseconds and NEVER across a remote call or session creation, so close()/
+        # terminate() can tear down out-of-band without waiting on an in-flight execute.
+        # Lock order is strictly operation-lock -> state-lock; teardown takes only the
+        # state lock, so the two can never deadlock.
+        self._state_lock = threading.Lock()
+        self._terminated = False
 
     # ------------------------------------------------------------------ #
     # Required surface (the only things a provider must implement)
@@ -106,33 +118,50 @@ class SandboxProvider(BaseSandbox, ABC):
         return False
 
     def close(self) -> None:
-        """Release the underlying sandbox session, if any.
+        """Release the underlying sandbox session, if any (idempotent).
 
-        Idempotent. Default delegates to the session's ``close`` when present;
-        providers without remote cleanup can rely on this no-op-when-absent default.
+        Tears the session down out-of-band (under the short state lock, never the
+        operation lock) so cleanup never blocks behind an in-flight call. Unlike
+        :meth:`terminate`, this does not permanently terminate the provider: a later
+        operation may lazily recreate the session. Default delegates to the session's
+        ``close`` when present.
         """
-        with self._lock:
+        with self._state_lock:
             session = self._session
             self._session = None
+        self._safe_close(session)
+
+    def terminate(self) -> None:
+        """Forcibly stop any in-flight execution and release the sandbox (idempotent).
+
+        Used on the cancellation/timeout path. Because teardown runs out-of-band (it does
+        not take the operation lock), closing the underlying session interrupts a
+        long-running ``execute`` rather than waiting for it to finish. Providers that can
+        hard-kill a remote process should override :meth:`_terminate_session`.
+        """
+        with self._state_lock:
+            session = self._session
+            self._session = None
+            self._terminated = True
+        self._terminate_session(session)
+
+    def _terminate_session(self, session: BaseSandbox | None) -> None:
+        """Forcibly stop a session. Default closes it; providers may override to hard-kill."""
+        self._safe_close(session)
+
+    def _safe_close(self, session: BaseSandbox | None) -> None:
+        """Best-effort close of a session; never raises on the teardown path."""
         if session is not None and hasattr(session, "close"):
             try:
                 session.close()
             except Exception:  # noqa: BLE001 - cleanup must never raise on the terminal path
                 logger.warning("Sandbox %s cleanup failed", self.sandbox_name, exc_info=True)
 
-    def terminate(self) -> None:
-        """Forcibly stop any running execution and release the sandbox.
-
-        Default implementation falls back to :meth:`close`. Providers that can kill a
-        running ``execute`` mid-flight should override and declare
-        ``supports_terminate`` in their capabilities. Used on the cancellation path.
-        """
-        self.close()
-
     @property
     def id(self) -> str:
         """Stable identifier: the live session id once created, else the scoped name."""
-        session = self._session
+        with self._state_lock:
+            session = self._session
         return session.id if session is not None else self.sandbox_name
 
     # ------------------------------------------------------------------ #
@@ -177,42 +206,65 @@ class SandboxProvider(BaseSandbox, ABC):
     # Internal lifecycle
     # ------------------------------------------------------------------ #
     def _session_or_create(self) -> BaseSandbox:
-        """Return the live session, creating it once under the lock (single-flight)."""
-        with self._lock:
-            if self._session is None:
-                logger.info("Sandbox session init: provider=%s name=%s", self.provider_name, self.sandbox_name)
-                self._session = self._create_session()
-            return self._session
+        """Return the live session, creating it once (single-flight).
+
+        Called while the operation lock is held, so creation is serialized. Only the
+        session-reference reads/writes take the short state lock (not the slow
+        ``_create_session`` call), so a concurrent terminate/close can swap the session
+        out without waiting for the in-flight remote call.
+        """
+        with self._state_lock:
+            if self._terminated:
+                raise SandboxTerminatedError(f"Sandbox {self.sandbox_name} has been terminated")
+            if self._session is not None:
+                return self._session
+        logger.info("Sandbox session init: provider=%s name=%s", self.provider_name, self.sandbox_name)
+        created = self._create_session()
+        with self._state_lock:
+            if not self._terminated:
+                self._session = created
+                return created
+        # Terminated mid-creation: discard the freshly created session rather than leak it.
+        self._safe_close(created)
+        raise SandboxTerminatedError(f"Sandbox {self.sandbox_name} has been terminated")
 
     def _reset_session(self) -> None:
         """Drop and recreate the session (used only for idempotent recoverable retries)."""
-        with self._lock:
-            logger.warning(
-                "Sandbox session RESET: provider=%s name=%s (prior in-sandbox files are lost)",
-                self.provider_name,
-                self.sandbox_name,
-            )
+        logger.warning(
+            "Sandbox session RESET: provider=%s name=%s (prior in-sandbox files are lost)",
+            self.provider_name,
+            self.sandbox_name,
+        )
+        with self._state_lock:
             stale = self._session
             self._session = None
-            if stale is not None and hasattr(stale, "close"):
-                try:
-                    stale.close()
-                except Exception:  # noqa: BLE001 - best-effort teardown of a stale session
-                    logger.warning("Sandbox %s stale session close failed", self.sandbox_name, exc_info=True)
-            self._session = self._create_session()
+        self._safe_close(stale)
+        created = self._create_session()
+        with self._state_lock:
+            if not self._terminated:
+                self._session = created
+                return
+        self._safe_close(created)
+        raise SandboxTerminatedError(f"Sandbox {self.sandbox_name} has been terminated")
 
     def _call(self, op_name: str, fn: Callable[[BaseSandbox], _T], *, idempotent: bool) -> _T:
         """Run a remote call with the serialization lock and gated retry.
 
-        The lock serializes calls into a single shared job sandbox to avoid
-        filesystem races and reset-during-execute hazards. Retry only happens when
-        the operation is idempotent AND the provider classifies the error as
-        recoverable; otherwise the error propagates (fail-safe over fail-silent).
+        The operation lock serializes calls into a single shared job sandbox to avoid
+        filesystem races and reset-during-execute hazards. A concurrent ``terminate()``
+        does not take this lock: it closes the session out-of-band, which interrupts the
+        in-flight call; the resulting error is re-raised (never retried) once we observe
+        the terminated flag. Retry otherwise happens only when the operation is idempotent
+        AND the provider classifies the error as recoverable (fail-safe over fail-silent).
         """
         with self._lock:
             try:
                 return fn(self._session_or_create())
             except Exception as exc:
+                with self._state_lock:
+                    terminated = self._terminated
+                if terminated:
+                    raise
                 if idempotent and self.is_recoverable_error(exc):
                     logger.warning("Sandbox %s recoverable error on %s; recreating and retrying once", self.id, op_name)
                     self._reset_session()

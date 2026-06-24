@@ -166,20 +166,17 @@ class TestHarvest:
         manager, _ = _make_manager(store, files)
         assert manager.harvest_after_execute() == []
 
-    def test_sanitizes_svg_and_blocks_inline(self, tmp_path: Any) -> None:
+    def test_rejects_svg_fail_closed(self, tmp_path: Any) -> None:
+        # SVG cannot be reliably sanitized (javascript: URIs, <foreignObject>, CSS payloads),
+        # and the content endpoint serves bytes as the stored MIME, so SVG is rejected at
+        # harvest rather than partially cleaned and stored (stored-XSS prevention).
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
         svg_path = f"{_ARTIFACT_DIR}/diagram.svg"
         svg = b'<svg onload="steal()"><script>alert(1)</script><rect/></svg>'
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(svg_path), svg_path: svg}
         manager, _ = _make_manager(store, files)
 
-        captured = manager.harvest_after_execute()
-
-        assert len(captured) == 1
-        assert captured[0].inline is False  # SVG is download-only, never inline
-        stored_bytes = b"".join(store.open_bytes("job-1", captured[0].artifact_id))
-        assert b"<script" not in stored_bytes
-        assert b"onload" not in stored_bytes
+        assert manager.harvest_after_execute() == []
 
 
 class TestStore:
@@ -207,8 +204,12 @@ class TestStore:
     def test_dedup_by_digest(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
         first = store.put(self._artifact(), _PNG)
-        again = store.put(self._artifact(), _PNG)
-        assert first.artifact_id == again.artifact_id
+        # Same content/digest but a DIFFERENT artifact_id: dedup must key on (job_id, sha256),
+        # not on artifact_id, so the second put returns the existing row instead of inserting
+        # a duplicate. Reusing the same id here would let an id-based regression pass silently.
+        duplicate = self._artifact().model_copy(update={"artifact_id": "art_" + "b" * 32})
+        again = store.put(duplicate, _PNG)
+        assert again.artifact_id == first.artifact_id
         assert len(store.list("job-1")) == 1
 
 
@@ -280,11 +281,6 @@ class TestEnsureInlineArtifactsEmbedded:
         assert "## Generated Artifacts" in result
         assert "`art_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee.png`" in result
         assert "`chart.csv` - Plotted values (generated in the analysis sandbox)" in result
-
-    def test_append_artifact_index_noop_without_artifacts(self, tmp_path: Any) -> None:
-        store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
-        manager, _ = _make_manager(store, {})
-        assert manager.append_artifact_index("# Report\n") == "# Report\n"
 
     def test_append_artifact_index_noop_without_artifacts(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
