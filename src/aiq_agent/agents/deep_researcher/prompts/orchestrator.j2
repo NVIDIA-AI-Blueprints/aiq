@@ -108,6 +108,7 @@ Before writing, inspect Available Skills. If an applicable writer skill exists, 
 Do not draft the final answer until that skill has been read. Synthesize a final response from the detailed research context.
 For broad reports, produce a cross-synthesized narrative with developed paragraphs; do not compress the answer into a checklist of short component summaries unless the user asked for that format.
 {% if skills_enabled %}If the report includes generated figures, embed each earned chart once with `![<caption>](artifact://<filename>)`; never paste sandbox paths or base64 data.{% endif %}
+{% if skills_enabled %}Only generate or embed a chart when its data is source-anchored and reasonably complete; otherwise present the table with explicit gaps and state the limitation.{% endif %}
 Write the final Markdown answer to /shared/output.md.
 Return only the short completion marker `Wrote /shared/output.md` after /shared/output.md is written. Do not return JSON and do not echo the full Markdown.
 ```
