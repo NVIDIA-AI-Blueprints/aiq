@@ -95,8 +95,8 @@ matrix reference.
 - Hand-reformatting unrelated code; only the changed code should move.
 - Forgetting that `nat eval` needs `deploy/.env`; run evals via
   `dotenv -f deploy/.env run nat eval ...` (see the matrix reference).
-- Inventing npm scripts; only `lint`, `type-check`, `test:ci`, and `build`
-  exist in `frontends/ui/package.json`.
+- Inventing npm scripts; stick to the canonical checks `lint`, `type-check`,
+  `test:ci`, and `build` defined in `frontends/ui/package.json`.
 
 ## Related Skills
 
