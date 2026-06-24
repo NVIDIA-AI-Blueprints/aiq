@@ -25,6 +25,7 @@ from typing import Any
 
 from deepagents import create_deep_agent
 from deepagents.middleware.filesystem import FilesystemMiddleware
+from deepagents.middleware.filesystem import FilesystemPermission
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
@@ -44,6 +45,8 @@ from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
+from .custom_middleware import ToolVisibilityMiddleware
+from .deepagents_runtime import BUILTIN_SKILL_SOURCE
 from .deepagents_runtime import DeepAgentsRuntime
 from .models import DeepResearchAgentState
 from .models import ResearchNotes
@@ -57,12 +60,18 @@ logger = logging.getLogger(__name__)
 
 FILESYSTEM_TOOL_NAMES = {
     "edit_file",
+    "execute",
     "grep",
     "glob",
     "ls",
     "read_file",
     "write_file",
 }
+ORCHESTRATOR_AGENT = "orchestrator"
+PLANNER_AGENT = "planner-agent"
+RESEARCHER_AGENT = "researcher-agent"
+SOURCE_ROUTER_AGENT = "source-router-agent"
+WRITER_AGENT = "writer-agent"
 
 
 @tool
@@ -92,6 +101,47 @@ class DeepResearchMiddlewareSet:
     planner: list[Any]
     writer: list[Any]
     orchestrator: list[Any]
+
+
+@dataclass(frozen=True)
+class DeepResearchGraphContext:
+    """Shared graph-build inputs used by the orchestrator and subagent specs."""
+
+    llm_provider: LLMProvider
+    state: DeepResearchAgentState
+    prompts: dict[str, str]
+    tools: Sequence[BaseTool]
+    runtime: DeepAgentsRuntime
+    tool_set: DeepResearchToolSet
+    middleware_set: DeepResearchMiddlewareSet
+    domain_catalog_path: str | None
+    current_datetime: str
+    max_research_concurrency: int
+    enable_source_router: bool
+    backend: Any
+    visibility_middleware: list[Any]
+
+    @property
+    def available_documents(self) -> list[dict[str, Any]]:
+        return [doc.model_dump() for doc in (self.state.available_documents or [])]
+
+    def render_prompt(self, prompt_name: str, **values: Any) -> str:
+        return render_prompt_template(
+            self.prompts[prompt_name],
+            current_datetime=self.current_datetime,
+            user_info=self.state.user_info,
+            available_documents=self.available_documents,
+            **values,
+        )
+
+    def middleware(self, base: Sequence[Any]) -> list[Any]:
+        return [*base, *self.visibility_middleware]
+
+    def permissions(self, agent_name: str) -> list[FilesystemPermission]:
+        return runtime_skill_filesystem_permissions(self.runtime, agent_name)
+
+    def skill_sources(self, agent_name: str) -> list[str] | None:
+        return self.runtime.skill_sources_for(agent_name)
 
 
 def build_deep_research_tool_set(
@@ -157,51 +207,70 @@ def build_deep_research_middleware_set(
     source_registry_middleware: SourceRegistryMiddleware,
 ) -> DeepResearchMiddlewareSet:
     """Build researcher, writer, and orchestrator middleware stacks."""
+
+    def common(extra_valid_tool_names: Sequence[str] = ()) -> list[Any]:
+        return build_common_middleware(
+            tool_set=tool_set,
+            source_registry_middleware=source_registry_middleware,
+            extra_valid_tool_names=extra_valid_tool_names,
+        )
+
     return DeepResearchMiddlewareSet(
-        researcher=build_common_middleware(
-            tool_set=tool_set,
-            source_registry_middleware=source_registry_middleware,
-        ),
-        planner=build_common_middleware(
-            tool_set=tool_set,
-            source_registry_middleware=source_registry_middleware,
-        ),
-        writer=build_common_middleware(
-            tool_set=tool_set,
-            source_registry_middleware=source_registry_middleware,
-        ),
-        orchestrator=build_common_middleware(
-            tool_set=tool_set,
-            source_registry_middleware=source_registry_middleware,
-            extra_valid_tool_names=["run_research_batch"],
-        ),
+        researcher=common(),
+        planner=common(),
+        writer=common(),
+        orchestrator=common(["run_research_batch"]),
     )
 
 
-def _available_documents(state: DeepResearchAgentState) -> list[dict[str, Any]]:
-    return [doc.model_dump() for doc in (state.available_documents or [])]
+def runtime_visibility_middleware(runtime: DeepAgentsRuntime) -> list[Any]:
+    """Hide execution tools unless a sandbox backend is configured."""
+    if runtime.execution_enabled:
+        return []
+    return [ToolVisibilityMiddleware(hidden_tool_names={"execute"})]
 
 
-def build_researcher_runtime_middleware(
-    *,
-    researcher_model: BaseChatModel,
-    shared_middleware: list[Any],
-    skill_sources: list[str] | None = None,
-    backend: Any = None,
-) -> list[Any]:
-    """Build DeepAgents runtime middleware for one isolated researcher worker."""
-    middleware: list[Any] = []
-    if skill_sources:
-        middleware.append(SkillsMiddleware(backend=backend, sources=skill_sources))
-    middleware.extend(
-        [
-            FilesystemMiddleware(backend=backend),
-            create_summarization_middleware(researcher_model, backend),
-            PatchToolCallsMiddleware(),
-            *shared_middleware,
-        ]
+def skill_filesystem_permissions(skill_sources: Sequence[str] | None) -> list[FilesystemPermission]:
+    """Build permissions that expose only assigned built-in skill collections as read-only."""
+    allowed_source_paths = [source.rstrip("/") for source in skill_sources or ()]
+    rules = [
+        FilesystemPermission(
+            operations=["write"],
+            paths=[f"{BUILTIN_SKILL_SOURCE}**"],
+            mode="deny",
+        )
+    ]
+    if allowed_source_paths:
+        rules.append(
+            FilesystemPermission(
+                operations=["read"],
+                paths=[BUILTIN_SKILL_SOURCE],
+                mode="allow",
+            )
+        )
+    rules.extend(
+        FilesystemPermission(
+            operations=["read"],
+            paths=[f"{source_path}{{,/**}}"],
+            mode="allow",
+        )
+        for source_path in allowed_source_paths
     )
-    return middleware
+    rules.append(
+        FilesystemPermission(
+            operations=["read"],
+            paths=[f"{BUILTIN_SKILL_SOURCE}**"],
+            mode="deny",
+        )
+    )
+    return rules
+
+
+def runtime_skill_filesystem_permissions(runtime: DeepAgentsRuntime, agent_name: str) -> list[FilesystemPermission]:
+    """Return filesystem-tool permissions for an agent's configured skill sources."""
+    if not runtime.skills_enabled:
+        return []
+    return skill_filesystem_permissions(runtime.skill_sources_for(agent_name))
 
 
 def build_researcher_runnable(
@@ -212,101 +281,120 @@ def build_researcher_runnable(
     system_prompt: str,
     skill_sources: list[str] | None = None,
     backend: Any = None,
+    visibility_middleware: list[Any] | None = None,
+    filesystem_permissions: list[FilesystemPermission] | None = None,
 ) -> Any:
     """Build the reusable single-query researcher runnable."""
+    middleware: list[Any] = []
+    if skill_sources:
+        middleware.append(SkillsMiddleware(backend=backend, sources=skill_sources))
+    middleware.extend(
+        [
+            FilesystemMiddleware(backend=backend, _permissions=filesystem_permissions),
+            create_summarization_middleware(researcher_model, backend),
+            PatchToolCallsMiddleware(),
+            *researcher_middleware,
+            *(visibility_middleware or []),
+        ]
+    )
     return create_agent(
         model=researcher_model,
         tools=researcher_tools,
         system_prompt=system_prompt,
-        middleware=build_researcher_runtime_middleware(
-            researcher_model=researcher_model,
-            shared_middleware=researcher_middleware,
-            skill_sources=skill_sources,
-            backend=backend,
-        ),
+        middleware=middleware,
         response_format=ResearchNotes,
     )
 
 
-def build_deep_research_subagents(
+def _subagent_spec(
+    context: DeepResearchGraphContext,
     *,
-    llm_provider: LLMProvider,
-    state: DeepResearchAgentState,
-    prompts: dict[str, str],
+    name: str,
+    description: str,
+    prompt_name: str,
+    role: LLMRole,
     tools: Sequence[BaseTool],
-    runtime: DeepAgentsRuntime,
-    tool_set: DeepResearchToolSet,
-    middleware_set: DeepResearchMiddlewareSet,
-    domain_catalog_path: str | None,
-    current_datetime: str,
-    max_research_concurrency: int,
-    enable_source_router: bool = True,
-) -> list[dict[str, Any]]:
+    middleware: Sequence[Any],
+    prompt_values: dict[str, Any] | None = None,
+    response_format: Any = None,
+    skills: list[str] | None = None,
+) -> dict[str, Any]:
+    spec: dict[str, Any] = {
+        "name": name,
+        "description": description,
+        "system_prompt": context.render_prompt(prompt_name, **(prompt_values or {})),
+        "tools": list(tools),
+        "model": context.llm_provider.get(role),
+        "permissions": context.permissions(name),
+        "middleware": context.middleware(middleware),
+    }
+    if response_format is not None:
+        spec["response_format"] = response_format
+    if skills is not None:
+        spec["skills"] = skills
+    return spec
+
+
+def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dict[str, Any]]:
     """Build all DeepAgents subagent specs."""
     subagents: list[dict[str, Any]] = []
-    if enable_source_router:
+    if context.enable_source_router:
         source_catalog_tool = build_lookup_source_catalog_tool(
-            tools,
-            allowed_source_ids=state.data_sources,
-            domain_catalog_path=domain_catalog_path,
+            context.tools,
+            allowed_source_ids=context.state.data_sources,
+            domain_catalog_path=context.domain_catalog_path,
         )
-        source_router_subagent: dict[str, Any] = {
-            "name": "source-router-agent",
-            "description": (
-                "Source router - chooses an advisory domain route and configured source set before detailed planning"
+        subagents.append(
+            _subagent_spec(
+                context,
+                name=SOURCE_ROUTER_AGENT,
+                description=(
+                    "Source router - chooses an advisory domain route and configured source set before detailed "
+                    "planning"
+                ),
+                prompt_name="source_router",
+                role=LLMRole.ROUTER,
+                tools=[source_catalog_tool],
+                middleware=build_source_router_middleware(extra_valid_tool_names=[source_catalog_tool.name]),
+                prompt_values={"clarifier_result": context.state.clarifier_result},
+            )
+        )
+
+    subagents.append(
+        _subagent_spec(
+            context,
+            name=PLANNER_AGENT,
+            description=(
+                "Content-driven research planning - iteratively builds evidence-grounded answer strategies through "
+                "interleaved search and planning"
             ),
-            "system_prompt": render_prompt_template(
-                prompts["source_router"],
-                current_datetime=current_datetime,
-                user_info=state.user_info,
-                clarifier_result=state.clarifier_result,
-                available_documents=_available_documents(state),
+            prompt_name="planner",
+            role=LLMRole.PLANNER,
+            tools=context.tool_set.researcher_tools,
+            middleware=context.middleware_set.planner,
+            prompt_values={
+                "tools": context.tool_set.tools_info,
+                "enable_source_router": context.enable_source_router,
+                "max_research_concurrency": context.max_research_concurrency,
+            },
+            response_format=ResearchPlan,
+        )
+    )
+    subagents.append(
+        _subagent_spec(
+            context,
+            name=WRITER_AGENT,
+            description=(
+                "Final synthesis writer - reads the plan and research notes, then returns a cited Markdown answer "
+                "in the requested output shape"
             ),
-            "tools": [source_catalog_tool],
-            "model": llm_provider.get(LLMRole.ROUTER),
-            "middleware": build_source_router_middleware(extra_valid_tool_names=[source_catalog_tool.name]),
-        }
-        subagents.append(source_router_subagent)
-    writer_agent: dict[str, Any] = {
-        "name": "writer-agent",
-        "description": (
-            "Final synthesis writer - reads the plan and research notes, then returns "
-            "a cited Markdown answer in the requested output shape"
+            prompt_name="writer",
+            role=LLMRole.REPORT_WRITER,
+            tools=context.tool_set.writer_tools,
+            middleware=context.middleware_set.writer,
+            skills=context.skill_sources(WRITER_AGENT),
         ),
-        "system_prompt": render_prompt_template(
-            prompts["writer"],
-            current_datetime=current_datetime,
-            user_info=state.user_info,
-            available_documents=_available_documents(state),
-        ),
-        "tools": tool_set.writer_tools,
-        "model": llm_provider.get(LLMRole.REPORT_WRITER),
-        "middleware": middleware_set.writer,
-    }
-    planner_subagent: dict[str, Any] = {
-        "name": "planner-agent",
-        "description": (
-            "Content-driven research planning - iteratively builds evidence-grounded "
-            "answer strategies through interleaved search and planning"
-        ),
-        "system_prompt": render_prompt_template(
-            prompts["planner"],
-            current_datetime=current_datetime,
-            user_info=state.user_info,
-            tools=tool_set.tools_info,
-            available_documents=_available_documents(state),
-            enable_source_router=enable_source_router,
-            max_research_concurrency=max_research_concurrency,
-        ),
-        "tools": tool_set.researcher_tools,
-        "model": llm_provider.get(LLMRole.PLANNER),
-        "middleware": middleware_set.planner,
-        "response_format": ResearchPlan,
-    }
-    writer_skill_sources = runtime.skill_sources_for("writer-agent")
-    if writer_skill_sources is not None:
-        writer_agent["skills"] = writer_skill_sources
-    subagents.extend([planner_subagent, writer_agent])
+    )
     return subagents
 
 
@@ -326,59 +414,60 @@ def build_deep_research_graph(
     enable_source_router: bool = True,
 ) -> Any:
     """Build the full DeepAgents graph for one deep research run."""
-    current_datetime = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    backend = runtime.backend
-    researcher_model = llm_provider.get(LLMRole.RESEARCHER)
+    context = DeepResearchGraphContext(
+        llm_provider=llm_provider,
+        state=state,
+        prompts=prompts,
+        tools=tools,
+        runtime=runtime,
+        tool_set=tool_set,
+        middleware_set=middleware_set,
+        domain_catalog_path=domain_catalog_path,
+        current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        max_research_concurrency=max_research_concurrency,
+        enable_source_router=enable_source_router,
+        backend=runtime.backend,
+        visibility_middleware=runtime_visibility_middleware(runtime),
+    )
+    researcher_model = context.llm_provider.get(LLMRole.RESEARCHER)
+    researcher_skill_sources = context.skill_sources(RESEARCHER_AGENT)
     researcher_runnable = build_researcher_runnable(
         researcher_model=researcher_model,
-        researcher_tools=tool_set.researcher_tools,
-        system_prompt=render_prompt_template(
-            prompts["researcher"],
-            current_datetime=current_datetime,
-            user_info=state.user_info,
-            available_documents=_available_documents(state),
-            tools=tool_set.tools_info,
+        researcher_tools=context.tool_set.researcher_tools,
+        system_prompt=context.render_prompt(
+            "researcher",
+            tools=context.tool_set.tools_info,
+            execution_enabled=context.runtime.execution_enabled,
         ),
-        researcher_middleware=middleware_set.researcher,
-        skill_sources=runtime.skill_sources_for("researcher"),
-        backend=backend,
+        researcher_middleware=context.middleware_set.researcher,
+        skill_sources=researcher_skill_sources,
+        backend=context.backend,
+        visibility_middleware=context.visibility_middleware,
+        filesystem_permissions=context.permissions(RESEARCHER_AGENT),
     )
     research_batch_tool = build_research_batch_tool(
         researcher_runnable=researcher_runnable,
-        backend=backend,
+        backend=context.backend,
         callbacks=callbacks,
         max_research_concurrency=max_research_concurrency,
         source_registry_middleware=source_registry_middleware,
     )
 
     agent = create_deep_agent(
-        model=llm_provider.get(LLMRole.ORCHESTRATOR),
-        tools=[*tool_set.helper_tools, research_batch_tool],
-        system_prompt=render_prompt_template(
-            prompts["orchestrator"],
-            current_datetime=current_datetime,
-            user_info=state.user_info,
-            clarifier_result=state.clarifier_result,
-            available_documents=_available_documents(state),
-            tools=tool_set.tools_info,
-            enable_source_router=enable_source_router,
-            max_research_concurrency=max_research_concurrency,
+        model=context.llm_provider.get(LLMRole.ORCHESTRATOR),
+        tools=[*context.tool_set.helper_tools, research_batch_tool],
+        system_prompt=context.render_prompt(
+            "orchestrator",
+            clarifier_result=context.state.clarifier_result,
+            tools=context.tool_set.tools_info,
+            enable_source_router=context.enable_source_router,
+            max_research_concurrency=context.max_research_concurrency,
+            execution_enabled=context.runtime.execution_enabled,
         ),
-        subagents=build_deep_research_subagents(
-            llm_provider=llm_provider,
-            state=state,
-            prompts=prompts,
-            tools=tools,
-            runtime=runtime,
-            tool_set=tool_set,
-            middleware_set=middleware_set,
-            domain_catalog_path=domain_catalog_path,
-            enable_source_router=enable_source_router,
-            current_datetime=current_datetime,
-            max_research_concurrency=max_research_concurrency,
-        ),
+        subagents=build_deep_research_subagents(context),
         store=InMemoryStore(),
-        middleware=middleware_set.orchestrator,
-        backend=backend,
+        middleware=context.middleware(context.middleware_set.orchestrator),
+        permissions=context.permissions(ORCHESTRATOR_AGENT),
+        backend=context.backend,
     )
     return agent.with_config({"recursion_limit": 2000})

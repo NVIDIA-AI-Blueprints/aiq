@@ -18,17 +18,24 @@
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+from deepagents.middleware.filesystem import _apply_permissions_to_ls_results
+from deepagents.middleware.filesystem import _check_fs_permission
 from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepAgentsRuntime
-from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
+from aiq_agent.agents.deep_researcher.factory import DeepResearchGraphContext
+from aiq_agent.agents.deep_researcher.factory import build_deep_research_graph
 from aiq_agent.agents.deep_researcher.factory import build_deep_research_middleware_set
 from aiq_agent.agents.deep_researcher.factory import build_deep_research_subagents
 from aiq_agent.agents.deep_researcher.factory import build_deep_research_tool_set
 from aiq_agent.agents.deep_researcher.factory import build_researcher_runnable
+from aiq_agent.agents.deep_researcher.factory import runtime_visibility_middleware
+from aiq_agent.agents.deep_researcher.factory import skill_filesystem_permissions
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
@@ -87,6 +94,32 @@ def _sanitizer(middleware: list[object]) -> ToolNameSanitizationMiddleware:
     return next(item for item in middleware if isinstance(item, ToolNameSanitizationMiddleware))
 
 
+def _graph_context(
+    *,
+    runtime: DeepAgentsRuntime | None = None,
+    state: DeepResearchAgentState | None = None,
+    provider: LLMProvider | None = None,
+    enable_source_router: bool = True,
+) -> DeepResearchGraphContext:
+    _, tool_set, middleware_set = _tool_set_and_middleware()
+    runtime = runtime or DeepAgentsRuntime()
+    return DeepResearchGraphContext(
+        llm_provider=provider or _llm_provider(),
+        state=state or DeepResearchAgentState(messages=[]),
+        prompts=_prompts(),
+        tools=[web_search_tool],
+        runtime=runtime,
+        tool_set=tool_set,
+        middleware_set=middleware_set,
+        domain_catalog_path=None,
+        current_datetime="2026-06-03 12:00:00",
+        max_research_concurrency=6,
+        enable_source_router=enable_source_router,
+        backend=runtime.backend,
+        visibility_middleware=runtime_visibility_middleware(runtime),
+    )
+
+
 def test_tool_set_keeps_helper_researcher_and_writer_tools_separate():
     """Factory tool grouping keeps source tools away from writer-only helpers."""
     _, tool_set, _ = _tool_set_and_middleware()
@@ -119,26 +152,13 @@ def test_middleware_set_adds_orchestrator_batch_tool_name():
 
 def test_subagents_route_tools_and_writer_skills():
     """Source-router excludes source tools, planner receives source tools, and writer receives configured skills."""
-    _, tool_set, middleware_set = _tool_set_and_middleware()
     runtime = DeepAgentsRuntime(
-        skills=SkillsConfig(
-            enabled=True,
-            agent_sources={"writer-agent": ("/skills/synthesis/",)},
+        skills=DeepResearchSkillsConfig(
+            agents={"writer-agent": ("synthesis",)},
         )
     )
 
-    subagents = build_deep_research_subagents(
-        llm_provider=_llm_provider(),
-        state=DeepResearchAgentState(messages=[]),
-        prompts=_prompts(),
-        tools=[web_search_tool],
-        runtime=runtime,
-        tool_set=tool_set,
-        middleware_set=middleware_set,
-        domain_catalog_path=None,
-        current_datetime="2026-06-03 12:00:00",
-        max_research_concurrency=6,
-    )
+    subagents = build_deep_research_subagents(_graph_context(runtime=runtime))
 
     by_name = {subagent["name"]: subagent for subagent in subagents}
     assert set(by_name) == {"source-router-agent", "planner-agent", "writer-agent"}
@@ -149,26 +169,74 @@ def test_subagents_route_tools_and_writer_skills():
     assert "web_search_tool" in _tool_names(by_name["planner-agent"]["tools"])
     assert _tool_names(by_name["writer-agent"]["tools"]) == ["think", "get_verified_sources"]
     assert by_name["writer-agent"]["skills"] == ["/skills/synthesis/"]
+    writer_permissions = by_name["writer-agent"]["permissions"]
+    assert (
+        _check_fs_permission(writer_permissions, "read", "/skills/synthesis/long-form-report-writer/SKILL.md")
+        == "allow"
+    )
+    assert (
+        _check_fs_permission(writer_permissions, "write", "/skills/synthesis/long-form-report-writer/SKILL.md")
+        == "deny"
+    )
+    assert _check_fs_permission(writer_permissions, "read", "/skills/research/data-table-analysis/SKILL.md") == "deny"
+    assert _check_fs_permission(by_name["planner-agent"]["permissions"], "read", "/skills/synthesis/") == "deny"
+    assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["planner-agent"]["middleware"])
+    assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["writer-agent"]["middleware"])
+
+
+def test_skill_filesystem_permissions_filter_unassigned_skill_collections():
+    """Filesystem tools only expose skill collections assigned to the current agent."""
+    permissions = skill_filesystem_permissions(["/skills/synthesis/"])
+    entries = [
+        {"path": "/skills/research/", "is_dir": True, "size": 0, "modified_at": ""},
+        {"path": "/skills/synthesis/", "is_dir": True, "size": 0, "modified_at": ""},
+    ]
+
+    assert _check_fs_permission(permissions, "read", "/skills/") == "allow"
+    assert _check_fs_permission(permissions, "read", "/skills/synthesis/prediction-report-writer/SKILL.md") == "allow"
+    assert _check_fs_permission(permissions, "write", "/skills/synthesis/prediction-report-writer/SKILL.md") == "deny"
+    assert _check_fs_permission(permissions, "read", "/skills/research/data-table-analysis/SKILL.md") == "deny"
+    assert _apply_permissions_to_ls_results(permissions, entries) == ["/skills/synthesis/"]
+
+
+def test_graph_uses_researcher_config_key_for_researcher_skills():
+    """The researcher runnable uses the public `researcher` skill config key."""
+    registry, tool_set, middleware_set = _tool_set_and_middleware()
+    runtime = DeepAgentsRuntime(skills=DeepResearchSkillsConfig(agents={"researcher-agent": ("research",)}))
+    fake_graph = MagicMock()
+    fake_graph.with_config.return_value = fake_graph
+
+    with (
+        patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=fake_graph),
+        patch("aiq_agent.agents.deep_researcher.factory.create_agent", return_value=MagicMock()) as create_researcher,
+        patch("aiq_agent.agents.deep_researcher.factory.create_summarization_middleware", return_value=MagicMock()),
+    ):
+        build_deep_research_graph(
+            llm_provider=_llm_provider(),
+            state=DeepResearchAgentState(messages=[]),
+            prompts=_prompts(),
+            tools=[web_search_tool],
+            runtime=runtime,
+            tool_set=tool_set,
+            middleware_set=middleware_set,
+            source_registry_middleware=registry,
+            callbacks=[],
+            domain_catalog_path=None,
+            max_research_concurrency=6,
+        )
+
+    researcher_middleware = create_researcher.call_args.kwargs["middleware"]
+    skills_middleware = [item for item in researcher_middleware if item.__class__.__name__ == "SkillsMiddleware"]
+    assert skills_middleware[0].sources == ["/skills/research/"]
 
 
 def test_subagents_can_disable_source_router():
     """The source-router subagent can be omitted without changing the rest of the workflow."""
-    _, tool_set, middleware_set = _tool_set_and_middleware()
     provider = _llm_provider()
     provider.get = MagicMock(wraps=provider.get)
 
     subagents = build_deep_research_subagents(
-        llm_provider=provider,
-        state=DeepResearchAgentState(messages=[]),
-        prompts=_prompts(),
-        tools=[web_search_tool],
-        runtime=DeepAgentsRuntime(),
-        tool_set=tool_set,
-        middleware_set=middleware_set,
-        domain_catalog_path=None,
-        current_datetime="2026-06-03 12:00:00",
-        max_research_concurrency=6,
-        enable_source_router=False,
+        _graph_context(provider=provider, enable_source_router=False),
     )
 
     by_name = {subagent["name"]: subagent for subagent in subagents}
@@ -207,8 +275,9 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
             researcher_tools=[web_search_tool],
             system_prompt="rendered researcher prompt",
             researcher_middleware=shared_middleware,
-            skill_sources=["/skills/research-sandbox/"],
+            skill_sources=["/skills/research/"],
             backend=backend,
+            visibility_middleware=[ToolVisibilityMiddleware(hidden_tool_names={"execute"})],
         )
 
     kwargs = create.call_args.kwargs
@@ -223,4 +292,5 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     assert "FilesystemMiddleware" in middleware_names
     assert "FakeSummarizationMiddleware" in middleware_names
     assert "PatchToolCallsMiddleware" in middleware_names
-    assert kwargs["middleware"][-1] is shared_middleware[0]
+    assert "ToolVisibilityMiddleware" in middleware_names
+    assert kwargs["middleware"][-2] is shared_middleware[0]

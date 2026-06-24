@@ -14,7 +14,8 @@ Research is handled through the `run_research_batch` tool.
 
 ## Filesystem Notes
 - `/shared/` is a virtual path managed by the agent runtime. Inspect it only via `read_file`, `write_file`, `ls`, or `glob`.
-- If the `execute` tool is available for scripts, use `/workspace/` for sandbox files and copy durable text artifacts back through DeepAgents filesystem tools. Shell commands cannot see `/shared/`.
+{% if execution_enabled %}- Use `/workspace/` for sandbox-local files and copy durable text artifacts back through DeepAgents filesystem tools. Shell commands cannot see `/shared/`.
+{% endif %}
 - `write_file` cannot overwrite an existing file. To revise, use `edit_file` or write to a new path.
 
 ## Sequential Handoffs

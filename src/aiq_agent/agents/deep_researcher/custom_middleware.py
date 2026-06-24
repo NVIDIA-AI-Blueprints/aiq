@@ -161,6 +161,43 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
         return ModelResponse(result=new_result, structured_response=response.structured_response)
 
 
+def _request_tool_name(tool: object) -> str | None:
+    """Return a LangChain model-request tool name across common tool shapes."""
+    name = getattr(tool, "name", None)
+    if isinstance(name, str):
+        return name
+    if isinstance(tool, dict):
+        dict_name = tool.get("name")
+        if isinstance(dict_name, str):
+            return dict_name
+        function = tool.get("function")
+        if isinstance(function, dict):
+            function_name = function.get("name")
+            if isinstance(function_name, str):
+                return function_name
+    return None
+
+
+class ToolVisibilityMiddleware(AgentMiddleware):
+    """Hide selected tools from model requests without removing scaffolding middleware."""
+
+    def __init__(self, hidden_tool_names: set[str]) -> None:
+        self.hidden_tool_names = hidden_tool_names
+
+    def _filter_tools(self, tools: list[object]) -> list[object]:
+        if not self.hidden_tool_names:
+            return tools
+        return [tool for tool in tools if _request_tool_name(tool) not in self.hidden_tool_names]
+
+    def wrap_model_call(self, request, handler):
+        """Filter hidden tools before a synchronous model call."""
+        return handler(request.override(tools=self._filter_tools(request.tools)))
+
+    async def awrap_model_call(self, request, handler):
+        """Filter hidden tools before an asynchronous model call."""
+        return await handler(request.override(tools=self._filter_tools(request.tools)))
+
+
 class ToolRetryMiddleware(AgentMiddleware):
     """Retries failed tool calls with exponential backoff.
 
