@@ -113,9 +113,44 @@ class TestJobAccessStorage:
 class TestLatestReportJobForConversation:
     """Backend fallback: resolve the conversation's most recent completed report job."""
 
-    def _seed(self, db_url, job_id, principal, conversation_id, *, status, is_expired=False, created_at=None):
+    def _seed(
+        self,
+        db_url,
+        job_id,
+        principal,
+        conversation_id,
+        *,
+        status,
+        is_expired=False,
+        created_at=None,
+        agent_type="deep_researcher",
+    ):
         _insert_job_info(db_url, job_id, status=status, is_expired=is_expired, created_at=created_at)
-        create_job_access(job_id, principal, db_url, conversation_id=conversation_id)
+        create_job_access(job_id, principal, db_url, conversation_id=conversation_id, agent_type=agent_type)
+
+    def test_excludes_non_report_agent(self, db_url):
+        """A newer non-report job (e.g. shallow_researcher) must not become the active report."""
+        from datetime import timedelta
+
+        from aiq_api.jobs.access import get_latest_report_job_for_conversation
+
+        p = Principal(type="jwt", sub="user-1")
+        base = datetime.now(UTC)
+        self._seed(
+            db_url,
+            "report",
+            p,
+            "conv-A",
+            status="success",
+            created_at=base - timedelta(hours=1),
+            agent_type="deep_researcher",
+        )
+        self._seed(
+            db_url, "shallow-newer", p, "conv-A", status="success", created_at=base, agent_type="shallow_researcher"
+        )
+
+        # The newer shallow job is excluded; the report job still wins.
+        assert get_latest_report_job_for_conversation("conv-A", p, db_url) == "report"
 
     def test_returns_latest_success_for_conversation_and_owner(self, db_url):
         from datetime import timedelta

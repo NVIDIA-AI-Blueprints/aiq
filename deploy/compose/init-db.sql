@@ -58,12 +58,14 @@ CREATE TABLE IF NOT EXISTS job_access (
     owner_subject VARCHAR NOT NULL,
     owner_email VARCHAR,
     conversation_id VARCHAR,
+    agent_type VARCHAR,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
 -- Upgrade path: CREATE TABLE IF NOT EXISTS does not add columns to a pre-existing table,
--- so add conversation_id explicitly (idempotent) for deployments created before report follow-up.
+-- so add the report-follow-up columns explicitly (idempotent) for older deployments.
 ALTER TABLE job_access ADD COLUMN IF NOT EXISTS conversation_id VARCHAR;
+ALTER TABLE job_access ADD COLUMN IF NOT EXISTS agent_type VARCHAR;
 
 CREATE INDEX IF NOT EXISTS idx_job_access_owner ON job_access(owner_auth_type, owner_subject);
 -- Supports the report-follow-up default: "latest completed report job in this conversation".

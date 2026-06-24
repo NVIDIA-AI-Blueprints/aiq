@@ -316,7 +316,7 @@ async def submit_agent_job(
     submission_conversation_id = _current_conversation_id()
     try:
         await loop.run_in_executor(
-            None, create_job_access, resolved_job_id, principal, db_url, submission_conversation_id
+            None, create_job_access, resolved_job_id, principal, db_url, submission_conversation_id, agent_type
         )
     except Exception:
         # We successfully created this job above, then ownership persistence failed;

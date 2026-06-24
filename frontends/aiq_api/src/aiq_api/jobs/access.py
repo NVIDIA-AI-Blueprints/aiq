@@ -50,12 +50,18 @@ _JOB_ACCESS_SELECT_SQL = text(
 # applied only when REQUIRE_AUTH=true, mirroring authorize_job_access (which skips ownership
 # under REQUIRE_AUTH=false). This keeps the fallback consistent with the auth gate and avoids
 # brittle owner-subject matching for the synthesized no-auth principal.
+# Agent types whose successful output is a full report eligible for follow-up. Excludes
+# non-report agents (e.g. shallow_researcher); legacy rows with NULL agent_type are allowed.
+_REPORT_PRODUCING_AGENTS = ("deep_researcher", "report_rewriter")
+_REPORT_AGENT_FILTER = (
+    "AND (ja.agent_type IS NULL OR ja.agent_type IN (" + ", ".join(f"'{a}'" for a in _REPORT_PRODUCING_AGENTS) + ")) "
+)
 _LATEST_REPORT_JOB_BASE = (
     "SELECT ja.job_id FROM job_access ja "
     "JOIN job_info ji ON ja.job_id = ji.job_id "
     "WHERE ja.conversation_id = :conversation_id "
     "AND ji.status = 'success' "
-    "AND ji.is_expired IS NOT TRUE "
+    "AND ji.is_expired IS NOT TRUE " + _REPORT_AGENT_FILTER
 )
 _LATEST_REPORT_JOB_SQL_ANY = text(_LATEST_REPORT_JOB_BASE + "ORDER BY ji.created_at DESC LIMIT 1")
 _LATEST_REPORT_JOB_SQL_OWNED = text(
@@ -83,11 +89,17 @@ def ensure_job_access_table(db_url: str) -> None:
         conn.commit()
 
 
-def create_job_access(job_id: str, principal: Principal, db_url: str, conversation_id: str | None = None) -> None:
-    """Persist the verified owner (and originating conversation) for a newly created job."""
+def create_job_access(
+    job_id: str,
+    principal: Principal,
+    db_url: str,
+    conversation_id: str | None = None,
+    agent_type: str | None = None,
+) -> None:
+    """Persist the verified owner (and originating conversation + agent type) for a new job."""
     with _job_access_connection(db_url) as conn:
         _ensure_job_access_schema(conn, db_url)
-        conn.execute(_job_access_upsert_sql(db_url), _principal_params(job_id, principal, conversation_id))
+        conn.execute(_job_access_upsert_sql(db_url), _principal_params(job_id, principal, conversation_id, agent_type))
         conn.commit()
 
 
@@ -294,27 +306,30 @@ def _ensure_job_access_schema(conn: Connection, db_url: str) -> None:
     if db_url in _job_access_schema_initialized:
         return
     conn.execute(text(_job_access_table_sql(db_url)))
-    _ensure_conversation_id_column(conn, db_url)
+    _ensure_extra_columns(conn, db_url)
     conn.execute(text(_JOB_ACCESS_INDEX_SQL))
     conn.execute(text(_JOB_ACCESS_CONVERSATION_INDEX_SQL))
     _job_access_schema_initialized.add(db_url)
 
 
-def _ensure_conversation_id_column(conn: Connection, db_url: str) -> None:
-    """Add conversation_id to a pre-existing job_access table (CREATE TABLE IF NOT EXISTS won't).
+def _ensure_extra_columns(conn: Connection, db_url: str) -> None:
+    """Add conversation_id / agent_type to a pre-existing job_access table.
 
-    Idempotent across upgrades: Postgres supports ADD COLUMN IF NOT EXISTS; SQLite does not, so
-    check PRAGMA table_info first. Best-effort — a concurrent add or older engine degrades cleanly.
+    CREATE TABLE IF NOT EXISTS won't add columns to an existing table. Idempotent across upgrades:
+    Postgres supports ADD COLUMN IF NOT EXISTS; SQLite does not, so check PRAGMA table_info first.
+    Best-effort — a concurrent add or older engine degrades cleanly.
     """
     try:
         if _is_postgres(db_url):
-            conn.execute(text("ALTER TABLE job_access ADD COLUMN IF NOT EXISTS conversation_id VARCHAR"))
+            for col in ("conversation_id", "agent_type"):
+                conn.execute(text(f"ALTER TABLE job_access ADD COLUMN IF NOT EXISTS {col} VARCHAR"))
         else:
             cols = {row[1] for row in conn.execute(text("PRAGMA table_info(job_access)")).fetchall()}
-            if "conversation_id" not in cols:
-                conn.execute(text("ALTER TABLE job_access ADD COLUMN conversation_id VARCHAR"))
+            for col in ("conversation_id", "agent_type"):
+                if col not in cols:
+                    conn.execute(text(f"ALTER TABLE job_access ADD COLUMN {col} VARCHAR"))
     except Exception as e:
-        logger.debug("Could not ensure job_access.conversation_id column: %s", type(e).__name__)
+        logger.debug("Could not ensure job_access extra columns: %s", type(e).__name__)
 
 
 def _job_access_table_sql(db_url: str) -> str:
@@ -329,6 +344,7 @@ def _job_access_table_sql(db_url: str) -> str:
         "  owner_subject VARCHAR NOT NULL,"
         "  owner_email VARCHAR,"
         "  conversation_id VARCHAR,"
+        "  agent_type VARCHAR,"
         f"  created_at {created_at_type}"
         ")"
     )
@@ -336,28 +352,30 @@ def _job_access_table_sql(db_url: str) -> str:
 
 def _job_access_upsert_sql(db_url: str):
     """Return the dialect-appropriate upsert statement for ``job_access``."""
+    cols = "job_id, owner_auth_type, owner_subject, owner_email, conversation_id, agent_type"
+    vals = ":job_id, :owner_auth_type, :owner_subject, :owner_email, :conversation_id, :agent_type"
     postgres_upsert = (
-        "INSERT INTO job_access (job_id, owner_auth_type, owner_subject, owner_email, conversation_id) "
-        "VALUES (:job_id, :owner_auth_type, :owner_subject, :owner_email, :conversation_id) "
+        f"INSERT INTO job_access ({cols}) VALUES ({vals}) "
         "ON CONFLICT(job_id) DO UPDATE SET "
         "owner_auth_type = excluded.owner_auth_type, "
         "owner_subject = excluded.owner_subject, "
         "owner_email = excluded.owner_email, "
-        "conversation_id = excluded.conversation_id"
+        "conversation_id = excluded.conversation_id, "
+        "agent_type = excluded.agent_type"
     )
-    sqlite_upsert = (
-        "INSERT OR REPLACE INTO job_access (job_id, owner_auth_type, owner_subject, owner_email, conversation_id) "
-        "VALUES (:job_id, :owner_auth_type, :owner_subject, :owner_email, :conversation_id)"
-    )
+    sqlite_upsert = f"INSERT OR REPLACE INTO job_access ({cols}) VALUES ({vals})"
     return text(postgres_upsert if _is_postgres(db_url) else sqlite_upsert)
 
 
-def _principal_params(job_id: str, principal: Principal, conversation_id: str | None = None) -> dict[str, str | None]:
-    """Return SQL bind params for a job's owner identity and conversation."""
+def _principal_params(
+    job_id: str, principal: Principal, conversation_id: str | None = None, agent_type: str | None = None
+) -> dict[str, str | None]:
+    """Return SQL bind params for a job's owner identity, conversation, and agent type."""
     return {
         "job_id": job_id,
         "owner_auth_type": principal.type,
         "owner_subject": principal.sub,
         "owner_email": principal.email,
         "conversation_id": conversation_id,
+        "agent_type": agent_type,
     }
