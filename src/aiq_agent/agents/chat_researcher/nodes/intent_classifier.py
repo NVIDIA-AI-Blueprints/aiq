@@ -69,16 +69,6 @@ def _is_timeout_error(err: BaseException) -> bool:
     return "504" in msg or "gateway time-out" in msg or "gateway timeout" in msg
 
 
-def _looks_report_targeted(query: str) -> bool:
-    query_lower = query.lower()
-    return any(hint in query_lower for hint in _REPORT_TARGET_HINTS)
-
-
-def _looks_report_edit(query: str) -> bool:
-    query_lower = query.lower()
-    return any(hint in query_lower for hint in _REPORT_EDIT_HINTS)
-
-
 class IntentClassifier:
     def __init__(
         self,
