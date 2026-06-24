@@ -327,7 +327,14 @@ class ChatResearcherAgent:
                 final_message = AIMessage(content=error_message)
                 return {"messages": [final_message]}
             else:
-                return {"messages": [result.messages[-1]]}
+                report_message = result.messages[-1]
+                report_md = report_message.content
+                # Capture the inline report so follow-up turns in this (synchronous) session can
+                # reference it without an async job. Checkpointed via the keep-if-set reducer.
+                return {
+                    "messages": [report_message],
+                    "last_report_markdown": report_md if isinstance(report_md, str) else str(report_md),
+                }
 
         async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
             if self.report_ask_fn is None:
@@ -367,7 +374,10 @@ class ChatResearcherAgent:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
             if state.user_intent and state.user_intent.intent == "meta":
                 return "END"
-            if state.active_report_job_id and state.user_intent and state.user_intent.target == "report":
+            # A report is available either as an async job (UI/server) or produced inline in this
+            # session (synchronous CLI). Either lets the router serve report follow-up.
+            has_report = bool(state.active_report_job_id or state.last_report_markdown)
+            if has_report and state.user_intent and state.user_intent.target == "report":
                 if state.user_intent.report_action == "edit":
                     return "report_edit"
                 return "report_ask"
@@ -475,6 +485,9 @@ class ChatResearcherAgent:
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
                 "skip_clarifier": state.skip_clarifier,
                 "active_report_job_id": state.active_report_job_id,
+                # Pass through; the keep-if-set reducer preserves a prior in-session report when
+                # this turn supplies None, so report follow-up works across turns without a job.
+                "last_report_markdown": state.last_report_markdown,
             }
             messages = state.messages
 

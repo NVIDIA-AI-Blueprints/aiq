@@ -170,3 +170,26 @@ def test_to_initial_files_uses_shared_paths_only():
     assert files["/shared/source_summary.md"] == "- https://example.com"
     assert files["/shared/edit_instruction.txt"] == "Remove the appendix."
     assert "/report.md" not in files
+
+
+def test_report_context_from_markdown_builds_jobless_context():
+    """In-session (CLI) report context: built from markdown, no job store / auth / scheduler."""
+    from aiq_api.jobs.report_context import report_context_from_markdown
+
+    md = "# Findings\n\nThe key risk is X.\n\n## Sources\n\n[1] https://example.com/a\n[2] https://example.com/b\n"
+    ctx = report_context_from_markdown(md)
+
+    assert ctx.report_markdown == md
+    assert ctx.parent_job_id == "in-session"
+    urls = {s.url for s in ctx.sources}
+    assert "https://example.com/a" in urls
+    assert "https://example.com/b" in urls
+    assert ctx.source_summary_markdown.strip()
+
+
+def test_report_context_from_markdown_no_sources_section():
+    from aiq_api.jobs.report_context import report_context_from_markdown
+
+    ctx = report_context_from_markdown("# Findings\n\nNo sources here.")
+    assert ctx.sources == []
+    assert "No durable source metadata" in ctx.source_summary_markdown

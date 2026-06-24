@@ -563,3 +563,70 @@ class TestChatResearcherAgent:
         await agent.run(state, thread_id="test-thread")
 
         assert captured_state["data_sources"] == []
+
+    @pytest.mark.asyncio
+    async def test_in_session_report_routes_ask_without_job_id(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """A report produced inline (no job id) still routes follow-up 'ask' to the report hook."""
+
+        async def report_orchestration(state):
+            return {"user_intent": IntentResult(intent="research", target="report", report_action="ask", raw=None)}
+
+        async def report_ask(state):
+            return "From the in-session report: the main risk is integration complexity."
+
+        async def fail_if_called(_state):
+            raise AssertionError("research path should not run for an in-session report ask")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=fail_if_called,
+            deep_research_fn=fail_if_called,
+            clarifier_fn=mock_clarifier,
+            report_ask_fn=report_ask,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="What is the biggest risk in this report?")],
+            active_report_job_id=None,
+            last_report_markdown="# Report\n\nThe main risk is integration complexity.",
+        )
+        result = await agent.run(state, thread_id="test-thread-insession")
+
+        assert result["messages"][-1].content.startswith("From the in-session report")
+
+    @pytest.mark.asyncio
+    async def test_deep_research_captures_last_report_markdown(
+        self,
+        mock_shallow_research,
+        mock_clarifier,
+    ):
+        """A synchronous deep-research turn captures its report into last_report_markdown."""
+
+        async def deep_orchestration(state):
+            return {
+                "user_intent": IntentResult(intent="research", raw=None),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="complex"),
+            }
+
+        async def deep(state):
+            result = MagicMock()
+            result.messages = list(state.messages) + [AIMessage(content="# Deep Report\n\nFindings.")]
+            return result
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=deep,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+        )
+
+        state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
+        result = await agent.run(state, thread_id="test-thread-capture")
+
+        assert result["last_report_markdown"] == "# Deep Report\n\nFindings."

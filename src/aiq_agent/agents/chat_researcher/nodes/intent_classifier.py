@@ -140,7 +140,7 @@ class IntentClassifier:
             current_datetime=current_datetime,
             user_info=user_info,
             tools=self.tools_info,
-            active_report_job_id=state.active_report_job_id,
+            active_report_available=bool(state.active_report_job_id or state.last_report_markdown),
         )
         trimmed_conversation = trim_message_history(list(state.messages), max_tokens=self.max_history)
         messages: list[BaseMessage] = [SystemMessage(content=system_content)] + trimmed_conversation
@@ -166,7 +166,7 @@ class IntentClassifier:
             meta_response = parsed.get("meta_response")
             research_depth = (parsed.get("research_depth") or "shallow").strip().lower()
             depth_reasoning = parsed.get("depth_reasoning") or ""
-            active_report = bool(state.active_report_job_id)
+            active_report = bool(state.active_report_job_id or state.last_report_markdown)
             target = _normalize_target(parsed.get("target"))
             report_action = _normalize_report_action(parsed.get("report_action"))
             use_parent_report_context = _normalize_bool(parsed.get("use_parent_report_context")) and active_report

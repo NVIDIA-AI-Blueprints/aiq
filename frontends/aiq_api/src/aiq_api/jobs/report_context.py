@@ -222,6 +222,22 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
     )
 
 
+def report_context_from_markdown(report_markdown: str, parent_job_id: str = "in-session") -> ReportContext:
+    """Build report context directly from report markdown — no job store, auth, or scheduler.
+
+    Used for report follow-up in the synchronous CLI, where the report was produced inline in the
+    current session rather than as a durable async job. Sources are reconstructed from the report's
+    own ``## Sources`` section via the same parser used for job-backed reports.
+    """
+    sources = _extract_sources_from_report_markdown(report_markdown)
+    return ReportContext(
+        parent_job_id=parent_job_id,
+        report_markdown=report_markdown,
+        source_summary_markdown=_source_summary_markdown(sources),
+        sources=sources,
+    )
+
+
 async def resolve_authorized_report_context(parent_job_id: str, principal: Principal) -> ReportContext:
     """Authorize and reconstruct a parent report context using configured async job storage."""
 

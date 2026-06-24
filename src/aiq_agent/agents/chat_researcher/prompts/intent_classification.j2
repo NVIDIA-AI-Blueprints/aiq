@@ -54,11 +54,11 @@ Current Date and Time: {{ current_datetime }}
 User: **{{ user_info.name }}** ({{ user_info.email or "email not provided" }})
 {% endif %}
 
-{% if active_report_job_id %}
-Active Report Job ID: {{ active_report_job_id }}
+{% if active_report_available %}
+Active report: available
 The active report is available as optional context. Do not assume the user wants report mode just because this exists.
 {% else %}
-Active Report Job ID: none
+Active report: none
 {% endif %}
 
 Available Tools:

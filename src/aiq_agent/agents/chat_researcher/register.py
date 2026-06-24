@@ -347,16 +347,19 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
     async def _resolve_report_context_for_state(state: ChatResearcherState):
         from aiq_api.jobs.access import require_verified_principal
+        from aiq_api.jobs.report_context import report_context_from_markdown
         from aiq_api.jobs.report_context import resolve_authorized_report_context
 
-        if not state.active_report_job_id:
-            raise RuntimeError("Report follow-up requires active_report_job_id")
-        # Use the same auth contract as the HTTP report endpoints: this returns a
-        # synthesized no-auth principal when REQUIRE_AUTH=false (the public default)
-        # and a verified principal otherwise. Using get_current_principal() directly
-        # would raise for anonymous callers and break report follow-up over chat.
-        principal = require_verified_principal()
-        return await resolve_authorized_report_context(state.active_report_job_id, principal)
+        # Precedence: an explicit job id (UI/server) wins; otherwise use the report produced
+        # inline in this session (synchronous CLI), which needs no job store / scheduler.
+        if state.active_report_job_id:
+            # Same auth contract as the HTTP report endpoints: synthesizes a no-auth principal
+            # when REQUIRE_AUTH=false (the public default), a verified principal otherwise.
+            principal = require_verified_principal()
+            return await resolve_authorized_report_context(state.active_report_job_id, principal)
+        if state.last_report_markdown:
+            return report_context_from_markdown(state.last_report_markdown)
+        raise RuntimeError("Report follow-up requires an active report")
 
     async def _answer_report_question(state: ChatResearcherState) -> str:
         from aiq_agent.common import get_latest_user_query
