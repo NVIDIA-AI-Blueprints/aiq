@@ -70,14 +70,14 @@ class TestPaperSearchToolInit:
         tool = PaperSearchTool(provider="serpapi", serpapi_api_key="serpapi-key")
 
         assert tool.provider is PaperSearchProvider.SERPAPI
-        assert tool.serpapi_api_key == "serpapi-key"
+        assert tool.serpapi_api_key == "serpapi-key"  # pragma: allowlist secret
 
     def test_init_with_searchapi_provider(self):
         """Test initialization with searchapi provider."""
         tool = PaperSearchTool(provider="searchapi", searchapi_api_key="searchapi-key")
 
         assert tool.provider is PaperSearchProvider.SEARCHAPI
-        assert tool.searchapi_api_key == "searchapi-key"
+        assert tool.searchapi_api_key == "searchapi-key"  # pragma: allowlist secret
 
     def test_init_provider_from_enum(self):
         """Test that provider accepts the enum directly."""
@@ -694,7 +694,7 @@ class TestFetchSerpapiPage:
         assert params["start"] == 0
         assert params["as_ylo"] == "2020"
         assert params["as_yhi"] == "2023"
-        assert params["api_key"] == "test-serpapi-key"
+        assert params["api_key"] == "test-serpapi-key"  # pragma: allowlist secret
 
     @pytest.mark.asyncio
     async def test_fetch_no_year_params_when_none(self, serpapi_tool):
@@ -767,7 +767,7 @@ class TestFetchSearchapiPage:
         assert params["page"] == 2
         assert params["as_ylo"] == "2020"
         assert params["as_yhi"] == "2023"
-        assert params["api_key"] == "test-searchapi-key"
+        assert params["api_key"] == "test-searchapi-key"  # pragma: allowlist secret
 
 
 class TestProviderDispatch:

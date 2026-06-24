@@ -21,9 +21,9 @@ You need an API key for **one** of the supported providers. The default is Serpe
 ```bash
 SERPER_API_KEY="your-serper-api-key"
 # OR
-SERPAPI_API_KEY="your-serpapi-api-key"
+SERPAPI_API_KEY="your-serpapi-api-key"  # pragma: allowlist secret
 # OR
-SEARCHAPI_API_KEY="your-searchapi-api-key"
+SEARCHAPI_API_KEY="your-searchapi-api-key"  # pragma: allowlist secret
 ```
 
 Alternatively, you can provide the API key directly in the configuration file (see below).

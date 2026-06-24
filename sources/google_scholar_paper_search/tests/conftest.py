@@ -34,7 +34,7 @@ def serpapi_tool():
     """Create a PaperSearchTool instance configured for SerpAPI."""
     return PaperSearchTool(
         provider="serpapi",
-        serpapi_api_key="test-serpapi-key",
+        serpapi_api_key="test-serpapi-key",  # pragma: allowlist secret
         timeout=30,
         max_results=10,
     )
@@ -45,7 +45,7 @@ def searchapi_tool():
     """Create a PaperSearchTool instance configured for SearchAPI."""
     return PaperSearchTool(
         provider="searchapi",
-        searchapi_api_key="test-searchapi-key",
+        searchapi_api_key="test-searchapi-key",  # pragma: allowlist secret
         timeout=30,
         max_results=10,
     )

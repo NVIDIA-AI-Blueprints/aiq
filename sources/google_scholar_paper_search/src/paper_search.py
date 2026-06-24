@@ -57,18 +57,18 @@ class PaperSearchTool:
 
     Example:
         >>> # Serper (default, backward compatible)
-        >>> tool = PaperSearchTool(serper_api_key="your-key")
+        >>> tool = PaperSearchTool(serper_api_key="your-key")  # pragma: allowlist secret
         >>>
         >>> # SerpAPI
         >>> tool = PaperSearchTool(
         ...     provider="serpapi",
-        ...     serpapi_api_key="your-key",
+        ...     serpapi_api_key="your-key",  # pragma: allowlist secret
         ... )
         >>>
         >>> # SearchAPI
         >>> tool = PaperSearchTool(
         ...     provider="searchapi",
-        ...     searchapi_api_key="your-key",
+        ...     searchapi_api_key="your-key",  # pragma: allowlist secret
         ... )
         >>> result = await tool.search("machine learning transformers")
     """
