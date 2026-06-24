@@ -479,6 +479,82 @@ class TestChatResearcherAgent:
         assert result["last_report_markdown"] == "# Updated Report\n\nWith delta."
 
     @pytest.mark.asyncio
+    async def test_inline_deep_research_sends_clean_query_not_report_history(
+        self,
+        mock_shallow_research,
+        mock_clarifier,
+    ):
+        """Inline deep research sends only the query (like the async job), not the prior report-laden
+        history, so a large prior report cannot bloat/break the writer."""
+        captured = {}
+
+        async def deep_orchestration(state):
+            return {
+                "user_intent": IntentResult(intent="research", target="new_research", raw=None),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="x"),
+            }
+
+        async def deep(state):
+            captured["messages"] = list(state.messages)
+            result = MagicMock()
+            result.messages = list(state.messages) + [AIMessage(content="# Report")]
+            return result
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=deep,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+        )
+
+        huge_prior_report = "# Old Report\n\n" + ("x" * 5000)
+        state = ChatResearcherState(
+            messages=[
+                HumanMessage(content="old question"),
+                AIMessage(content=huge_prior_report),
+                HumanMessage(content="now compare 2026 and 2022 world cups"),
+            ],
+        )
+        await agent.run(state, thread_id="test-clean-msgs")
+
+        assert len(captured["messages"]) == 1
+        assert "Old Report" not in captured["messages"][0].content
+        assert "compare 2026 and 2022" in captured["messages"][0].content
+
+    @pytest.mark.asyncio
+    async def test_inline_deep_research_degrades_gracefully_on_failure(
+        self,
+        mock_shallow_research,
+        mock_clarifier,
+    ):
+        """A deep-research failure in the synchronous CLI degrades to a chat message, not a hard crash."""
+
+        async def deep_orchestration(state):
+            return {
+                "user_intent": IntentResult(intent="research", target="new_research", raw=None),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="x"),
+            }
+
+        async def deep_boom(state):
+            raise ValueError("writer-agent did not produce a final Markdown answer")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=deep_boom,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+        )
+
+        state = ChatResearcherState(messages=[HumanMessage(content="compare 2026 and 2022 world cups")])
+        result = await agent.run(state, thread_id="test-deep-fail")
+
+        content = result["messages"][-1].content
+        assert content
+        assert "try again" in content.lower()
+
+    @pytest.mark.asyncio
     async def test_report_ask_degrades_gracefully_when_hook_raises(
         self,
         mock_shallow_research,

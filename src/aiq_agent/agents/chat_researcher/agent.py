@@ -301,7 +301,6 @@ class ChatResearcherAgent:
             return {"messages": [], "shallow_result": None}
 
         async def deep_research_node(state: ChatResearcherState) -> dict[str, Any]:
-            trimmed_messages: list[BaseMessage] = trim_message_history(state.messages, self.max_history)
             if self.deep_research_job_submitter is not None:
                 job_id = await self.deep_research_job_submitter(state)
                 escalation = _job_escalation_message(_ESCALATION_KIND_DEEP_RESEARCH, job_id)
@@ -333,8 +332,17 @@ class ChatResearcherAgent:
                         "/shared/source_summary.md. Reuse the parent report where sufficient and perform "
                         "new research only for the requested delta."
                     )
+            logger.info(
+                "Inline deep research: use_parent_report_context=%s has_report=%s seeded_files=%d",
+                bool(getattr(state.user_intent, "use_parent_report_context", False)) if state.user_intent else False,
+                bool(state.active_report_job_id or state.last_report_markdown),
+                len(seed_files),
+            )
+            # Mirror the async job: feed the deep researcher a clean query (plus the approved plan and any
+            # seeded parent-report files), NOT the prior chat history. Forwarding accumulated report
+            # messages bloats the writer's context and can make it fail to emit a final report.
             deep_state = DeepResearchAgentState(
-                messages=trimmed_messages + [HumanMessage(content=research_query)],
+                messages=[HumanMessage(content=research_query)],
                 data_sources=state.data_sources,
                 clarifier_result=state.clarifier_result,
                 available_documents=state.available_documents,
@@ -364,7 +372,14 @@ class ChatResearcherAgent:
                 if _AuthError and isinstance(e, _AuthError):
                     logger.warning("Auth error in deep research: %s", e)
                     return {"messages": [AIMessage(content=str(e))]}
-                raise
+                # Inline (synchronous CLI) path: a raised exception would crash the whole CLI turn.
+                # Degrade to a chat message instead (the error is logged for debugging).
+                logger.error("Inline deep research failed (error_type=%s)", type(e).__name__, exc_info=True)
+                return {
+                    "messages": [
+                        AIMessage(content="I ran into an error while producing that report. Please try again.")
+                    ]
+                }
             if not result.messages:
                 error_message = "An error occurred during deep research."
                 logger.error(error_message)
