@@ -475,7 +475,8 @@ class ChatResearcherAgent:
                     type(e).__name__,
                 )
                 return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
-            return {"messages": [AIMessage(content=f"Report edit job submitted. Job ID: {job_id}")]}
+            escalation = _job_escalation_message(_ESCALATION_KIND_REPORT_EDIT, job_id)
+            return {"messages": [AIMessage(content=escalation)]}
 
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
