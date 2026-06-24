@@ -1,0 +1,16 @@
+[project]
+name = "aiq-rag-eval"
+version = "0.1.0"
+description = "Filesystem RAG benchmark CLI for AI-Q shallow research (knowledge layer, web search, RAGAS scoring)"
+requires-python = ">=3.11,<3.14"
+readme = "README.md"
+dependencies = [
+    "langchain-nvidia-ai-endpoints>=1.4.0,<2.0",
+    "numpy>=1.26,<3.0",
+    "pandas>=2.2,<3.0",
+    "pydantic>=2.11,<3.0",
+    "PyPDF2>=3.0,<4.0",
+    "ragas>=0.2.6,<0.3",
+    "requests>=2.32,<3.0",
+    "tqdm>=4.67,<5.0",
+]
