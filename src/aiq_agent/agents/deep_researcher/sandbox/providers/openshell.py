@@ -54,11 +54,16 @@ def _adapter_file_transfer_enabled() -> bool:
 # `permission_denied`). We keep the official adapter for `execute` and override only
 # these two methods. Remove this shim once the SDK/adapter propagates exec env.
 #
-# The download bootstrap fails closed BEFORE reading bytes (artifacts come from an
-# untrusted sandbox): exit 5 if the path resolves through a symlink (realpath differs
-# from the lexical path -> covers leaf and parent-dir symlink escapes), exit 3 for a
-# directory, exit 4 if the file exceeds the artifact size cap, so a hostile sandbox
-# cannot pull a giant or out-of-tree file into host memory.
+# The download bootstrap fails closed BEFORE reading the full file (artifacts come from
+# an untrusted sandbox): exit 5 if the leaf is a symlink (the direct exfil vector, e.g.
+# chart.png -> /etc/shadow); exit 3 for a directory; and read at most cap+1 bytes ->
+# exit 4 if it exceeds the cap. We reject only the leaf symlink (not realpath != abspath)
+# because a symlinked *ancestor* of the artifact base is legitimate and common (e.g.
+# /var or /tmp on some hosts), and would otherwise reject every harvest. Bounding the
+# READ (not a pre-read getsize, which is racy: the file can grow between checks) is what
+# actually prevents a hostile sandbox from pulling a giant file into host memory; the
+# directory scan never follows symlinked dirs, so parent-dir escapes only reach here via
+# a hand-written manifest and are further constrained by the OpenShell filesystem policy.
 _UPLOAD_CODE = (
     "import base64,os,sys;"
     "p=sys.argv[1];"
@@ -70,10 +75,11 @@ _DOWNLOAD_CODE = (
     "import base64,os,sys;"
     "p=sys.argv[1];"
     "limit=int(sys.argv[2]);"
-    "(sys.exit(5) if os.path.realpath(p)!=os.path.abspath(p) else None);"
+    "(sys.exit(5) if os.path.islink(p) else None);"
     "(sys.exit(3) if os.path.isdir(p) else None);"
-    "(sys.exit(4) if os.path.getsize(p)>limit else None);"
-    "sys.stdout.write(base64.b64encode(open(p,'rb').read()).decode())"
+    "b=open(p,'rb').read(limit+1);"
+    "(sys.exit(4) if len(b)>limit else None);"
+    "sys.stdout.write(base64.b64encode(b).decode())"
 )
 
 # Bootstrap exit codes mapped to a download error reason (see _DOWNLOAD_CODE).
@@ -94,10 +100,12 @@ def _classify_fs_error(text: str) -> str:
 _OPENSHELL_IMPORT_HINT = (
     "The OpenShell sandbox provider requires the `openshell>=0.0.57,<0.1` SDK and the "
     "`langchain-nvidia-openshell` adapter (the OpenShell partner package in "
-    "`langchain-ai/langchain-nvidia`, PR #303). They are optional, ad-hoc dependencies: "
-    "until the adapter is published, install it from a git spec, e.g. "
-    "`uv pip install 'git+https://github.com/pastorsj/langchain-nvidia.git"
-    "@spastoriza/openshell-sandbox#subdirectory=libs/openshell'` (see scripts/setup_openshell.sh), "
+    "`langchain-ai/langchain-nvidia`, PR #303). They are optional, ad-hoc dependencies. "
+    "Install them with `./scripts/setup_openshell.sh` (override the source via "
+    "`LANGCHAIN_NVIDIA_REPO`); until PR #303 publishes, the adapter must include the argv "
+    "file-transfer fix, e.g. `uv pip install --force-reinstall --no-deps "
+    "'git+https://github.com/KyleZheng1284/langchain-nvidia.git"
+    "@fix/openshell-argv-file-transfer#subdirectory=libs/openshell'` (see sandbox/README.md), "
     "and configure an OpenShell gateway before enabling this provider."
 )
 
