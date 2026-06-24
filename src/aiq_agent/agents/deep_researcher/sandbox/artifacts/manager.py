@@ -332,7 +332,13 @@ class ArtifactManager:
             return []
         output = getattr(response, "output", "") or ""
         entries: list[ManifestEntry] = []
+        # Bound the scan so a flood of files can't drive one download round-trip each;
+        # generous relative to the count quota, which is the real ceiling on stored files.
+        max_scan = max(self.config.max_file_count * 5, 100)
         for line in output.splitlines():
+            if len(entries) >= max_scan:
+                logger.warning("Artifact scan truncated at %d files for job %s", max_scan, self.job_id)
+                break
             path = line.strip()
             if not path or path.endswith(f"/{_MANIFEST_NAME}"):
                 continue
@@ -352,6 +358,12 @@ class ArtifactManager:
         ext = PurePosixPath(entry.path).suffix.lower()
         if ext not in self.config.allow_extensions:
             self._emit_warning(entry.path, f"extension {ext} not allowed")
+            return None
+
+        # 1b. Count quota, checked BEFORE download so a flood of files cannot drive one
+        # transfer round-trip per file before the quota stops storing.
+        if self._count >= self.config.max_file_count:
+            self._emit_warning(entry.path, "artifact count quota exceeded; summarize remaining outputs in text")
             return None
 
         # 2. Download bytes.

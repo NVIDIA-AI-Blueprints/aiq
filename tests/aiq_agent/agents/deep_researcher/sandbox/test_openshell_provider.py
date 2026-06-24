@@ -101,7 +101,8 @@ def test_download_passes_path_via_argv_and_decodes_base64() -> None:
     assert result[0].error is None
     assert result[0].content == b"chart-bytes"
     call = fake.calls[0]
-    assert call["command"][-1] == "/sandbox/aiq-artifacts/chart.png"
+    # Path is passed positionally via argv (with the size cap appended); never via env.
+    assert "/sandbox/aiq-artifacts/chart.png" in call["command"]
     assert "env" not in call
 
 
@@ -114,3 +115,39 @@ def test_download_is_directory_exit_code() -> None:
     result = provider.download_files(["/sandbox"])
     assert result[0].content is None
     assert result[0].error == "is_directory"  # _DOWNLOAD_CODE exits 3 specifically for a directory
+
+
+def test_download_passes_size_cap_via_argv() -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    fake.result = _ExecResult(exit_code=0, stdout=base64.b64encode(b"x").decode())
+    provider._os_context = fake
+
+    provider.download_files(["/sandbox/aiq-artifacts/chart.png"])
+
+    # The artifact size cap is passed to the bootstrap so it can refuse oversized files
+    # before reading them into host memory.
+    assert str(provider.config.artifact_capture.max_file_bytes) in fake.calls[0]["command"]
+
+
+def test_download_rejects_oversized_and_symlink() -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    provider._os_context = fake
+
+    fake.result = _ExecResult(exit_code=4, stderr="")
+    assert provider.download_files(["/sandbox/aiq-artifacts/huge.bin"])[0].error == "too_large"
+
+    fake.result = _ExecResult(exit_code=5, stderr="")
+    assert provider.download_files(["/sandbox/aiq-artifacts/evil.png"])[0].error == "symlink_rejected"
+
+
+def test_download_rejects_non_base64_stdout() -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    fake.result = _ExecResult(exit_code=0, stdout="not valid base64 !!!")
+    provider._os_context = fake
+
+    result = provider.download_files(["/sandbox/aiq-artifacts/chart.png"])
+    assert result[0].content is None
+    assert result[0].error == "invalid_content"

@@ -53,7 +53,12 @@ def _adapter_file_transfer_enabled() -> bool:
 # process, so its upload/download bootstraps fail (the host-side error is masked as
 # `permission_denied`). We keep the official adapter for `execute` and override only
 # these two methods. Remove this shim once the SDK/adapter propagates exec env.
-# Exit code 3 distinguishes "is a directory" from a generic failure.
+#
+# The download bootstrap fails closed BEFORE reading bytes (artifacts come from an
+# untrusted sandbox): exit 5 if the path resolves through a symlink (realpath differs
+# from the lexical path -> covers leaf and parent-dir symlink escapes), exit 3 for a
+# directory, exit 4 if the file exceeds the artifact size cap, so a hostile sandbox
+# cannot pull a giant or out-of-tree file into host memory.
 _UPLOAD_CODE = (
     "import base64,os,sys;"
     "p=sys.argv[1];"
@@ -64,9 +69,15 @@ _UPLOAD_CODE = (
 _DOWNLOAD_CODE = (
     "import base64,os,sys;"
     "p=sys.argv[1];"
+    "limit=int(sys.argv[2]);"
+    "(sys.exit(5) if os.path.realpath(p)!=os.path.abspath(p) else None);"
     "(sys.exit(3) if os.path.isdir(p) else None);"
+    "(sys.exit(4) if os.path.getsize(p)>limit else None);"
     "sys.stdout.write(base64.b64encode(open(p,'rb').read()).decode())"
 )
+
+# Bootstrap exit codes mapped to a download error reason (see _DOWNLOAD_CODE).
+_DOWNLOAD_EXIT_ERRORS = {3: "is_directory", 4: "too_large", 5: "symlink_rejected"}
 
 
 def _classify_fs_error(text: str) -> str:
@@ -176,19 +187,30 @@ class OpenShellSandboxProvider(SandboxProvider):
 
     def _download_files_envfree(self, paths: list[str]) -> list[FileDownloadResponse]:
         sandbox = self._os_context
+        # Bound the transfer at the artifact size cap so the bootstrap refuses an oversized
+        # file before it is read into host memory (the manager's post-download cap is a backstop).
+        max_bytes = self.config.artifact_capture.max_file_bytes
         responses: list[FileDownloadResponse] = []
         for path in paths:
             if not path.startswith("/"):
                 responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
                 continue
-            result = sandbox.exec(["python3", "-c", _DOWNLOAD_CODE, path], timeout_seconds=self.config.timeout)  # type: ignore[union-attr]
+            result = sandbox.exec(  # type: ignore[union-attr]
+                ["python3", "-c", _DOWNLOAD_CODE, path, str(max_bytes)],
+                timeout_seconds=self.config.timeout,
+            )
             exit_code = getattr(result, "exit_code", 1)
             if exit_code != 0:
-                # _DOWNLOAD_CODE exits 3 specifically when the path is a directory.
-                error = "is_directory" if exit_code == 3 else _classify_fs_error(getattr(result, "stderr", "") or "")
+                error = _DOWNLOAD_EXIT_ERRORS.get(exit_code) or _classify_fs_error(getattr(result, "stderr", "") or "")
                 responses.append(FileDownloadResponse(path=path, content=None, error=error))
                 continue
-            content = base64.b64decode((getattr(result, "stdout", "") or "").encode("ascii"))
+            # The bootstrap writes only base64 to stdout; validate so any stray output fails
+            # closed (skipped artifact) instead of decoding into a corrupt stored artifact.
+            try:
+                content = base64.b64decode((getattr(result, "stdout", "") or "").strip().encode("ascii"), validate=True)
+            except ValueError:
+                responses.append(FileDownloadResponse(path=path, content=None, error="invalid_content"))
+                continue
             responses.append(FileDownloadResponse(path=path, content=content, error=None))
         return responses
 

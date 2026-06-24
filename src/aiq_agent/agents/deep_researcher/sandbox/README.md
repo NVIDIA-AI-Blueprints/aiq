@@ -141,6 +141,13 @@ is lifted into `providers.modal`.
 - Endpoints: `GET /v1/jobs/async/job/{job_id}/artifacts` and `.../artifacts/{id}/content`
   (auth-scoped via `authorize_job_access`). CLI: `python3 skills/aiq-research/scripts/aiq.py artifacts <job_id> [--download-dir DIR]`.
 - Render gate: only PNG/JPEG/WebP may render inline; SVG/notebook/PDF are download-only.
+- Transfer guards (artifacts come from an untrusted sandbox): the OpenShell download
+  bootstrap fails closed BEFORE reading bytes - it rejects symlink escapes (`realpath`
+  differs from the lexical path: leaf or parent), directories, and files over
+  `max_file_bytes` - so a hostile sandbox cannot pull an out-of-tree or oversized file
+  into host memory. The harvest also count-gates before each download and bounds the
+  directory scan, and decoded bytes are base64-validated. SQL is fully parameterized
+  and the content endpoint is auth-scoped per job with `nosniff` + RFC 5987 filenames.
 
 ### Report post-processing (host-side, in `agent.run`)
 
@@ -179,8 +186,17 @@ Requires `modal` + `langchain-modal` (in `pyproject`) and `modal setup`. See
 Two ad-hoc deps (never in `pyproject`): the `openshell` SDK and the official
 `langchain-nvidia-openshell` adapter (`OpenShellSandbox`), the OpenShell partner package in
 [`langchain-ai/langchain-nvidia`](https://github.com/langchain-ai/langchain-nvidia/pull/303).
-The adapter is not yet on PyPI, so the setup script installs it from a git spec via
-`LANGCHAIN_NVIDIA_REPO` (switch to the published package once #303 merges).
+The adapter is not yet on PyPI, so it is installed from a git spec — `./scripts/setup_openshell.sh`
+does this for you (override the source with `LANGCHAIN_NVIDIA_REPO`). Until #303 publishes, the
+adapter must include the `argv` file-transfer fix; to install it into your `.venv` manually, use
+the fork branch that carries it (without it, in-sandbox file transfer fails with a misleading
+`permission_denied`):
+
+```bash
+uv pip install --force-reinstall --no-deps \
+  'git+https://github.com/KyleZheng1284/langchain-nvidia.git@fix/openshell-argv-file-transfer#subdirectory=libs/openshell'
+```
+
 One-command setup:
 
 ```bash
