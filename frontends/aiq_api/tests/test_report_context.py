@@ -152,6 +152,55 @@ async def test_resolve_report_context_fetches_events_once_in_fallback(monkeypatc
     assert calls["n"] == 1
 
 
+@pytest.mark.asyncio
+async def test_resolve_report_context_skips_event_scan_when_output_has_inline_sources(monkeypatch):
+    """Report in job.output with its own ## Sources -> skip the (potentially large) event scan."""
+    from aiq_api.jobs import report_context
+
+    calls = {"n": 0}
+
+    async def _events(_db_url: str, _job_id: str, _after_id: int, _limit: int):
+        calls["n"] += 1
+        return []
+
+    monkeypatch.setattr(report_context.EventStore, "get_events_async", _events)
+
+    report = "# Report\n\nBody [1].\n\n## Sources\n\n[1] https://example.com/path\n"
+    job = type("Job", (), {"output": {"report": report}})()
+
+    ctx = await report_context.resolve_report_context(job, "sqlite:///unused.db", "job-1")
+
+    assert calls["n"] == 0
+    assert [s.url for s in ctx.sources] == ["https://example.com/path"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_report_context_scans_events_when_output_report_lacks_sources(monkeypatch):
+    """Report in job.output but no inline ## Sources -> fall back to the event scan for enrichment."""
+    from aiq_api.jobs import report_context
+
+    calls = {"n": 0}
+
+    async def _events(_db_url: str, _job_id: str, _after_id: int, _limit: int):
+        calls["n"] += 1
+        return [
+            {
+                "type": "artifact.update",
+                "name": "Ex",
+                "data": {"type": "citation_source", "url": "https://events.example/x"},
+            },
+        ]
+
+    monkeypatch.setattr(report_context.EventStore, "get_events_async", _events)
+
+    job = type("Job", (), {"output": {"report": "# Report\n\nNo sources section here.\n"}})()
+
+    ctx = await report_context.resolve_report_context(job, "sqlite:///unused.db", "job-1")
+
+    assert calls["n"] == 1
+    assert [s.url for s in ctx.sources] == ["https://events.example/x"]
+
+
 def test_to_initial_files_uses_shared_paths_only():
     from aiq_api.jobs.report_context import ReportContext
     from aiq_api.jobs.report_context import ReportContextSource
@@ -193,3 +242,49 @@ def test_report_context_from_markdown_no_sources_section():
     ctx = report_context_from_markdown("# Findings\n\nNo sources here.")
     assert ctx.sources == []
     assert "No durable source metadata" in ctx.source_summary_markdown
+
+
+@pytest.mark.asyncio
+async def test_resolve_authorized_report_context_caches_job_store(monkeypatch):
+    """JobStore is built once per (scheduler_address, db_url), not per request.
+
+    JobStore eagerly builds a SQLAlchemy AsyncEngine (own connection pool), so per-request
+    construction wastes work and leaks pooled connections.
+    """
+    from aiq_api.jobs import report_context
+
+    report_context._JOB_STORE_CACHE.clear()
+
+    monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", "tcp://localhost:8786")
+    monkeypatch.setenv("NAT_JOB_STORE_DB_URL", "sqlite:///unused.db")
+
+    constructions = {"n": 0}
+
+    class _FakeJobStore:
+        def __init__(self, *, scheduler_address, db_url):
+            constructions["n"] += 1
+
+    class _FakeJobStatus:
+        SUCCESS = type("E", (), {"value": "success"})
+
+    import nat.front_ends.fastapi.async_jobs.job_store as js
+
+    monkeypatch.setattr(js, "JobStore", _FakeJobStore)
+    monkeypatch.setattr(js, "JobStatus", _FakeJobStatus)
+
+    job = type("Job", (), {"status": "success"})()
+
+    async def _authorize(_store, _db_url, _job_id, _principal):
+        return job
+
+    async def _resolve(_job, _db_url, _job_id):
+        return report_context.ReportContext(parent_job_id=_job_id, report_markdown="# R", source_summary_markdown="")
+
+    monkeypatch.setattr(report_context, "authorize_job_access", _authorize)
+    monkeypatch.setattr(report_context, "resolve_report_context", _resolve)
+
+    await report_context.resolve_authorized_report_context("job-1", None)
+    await report_context.resolve_authorized_report_context("job-1", None)
+
+    assert constructions["n"] == 1
+    report_context._JOB_STORE_CACHE.clear()

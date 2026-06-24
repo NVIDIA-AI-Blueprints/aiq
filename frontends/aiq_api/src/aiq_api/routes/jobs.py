@@ -551,6 +551,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             400: {"description": "Unknown agent type or invalid request"},
             409: {"description": "A custom job_id was supplied that collides with an existing job"},
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
+            500: {"description": "Failed to persist async job authorization metadata"},
             503: {"description": "Dask scheduler not available"},
         },
     )
@@ -563,7 +564,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         except KeyError as e:
             raise HTTPException(400, str(e))
         if not agent_config.public:
-            raise HTTPException(400, f"Agent type is internal-only: {req.agent_type}")
+            raise HTTPException(400, f"Agent type is internal-only and cannot be submitted directly: {req.agent_type}")
 
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
         # Authenticate the caller (raises 401/403 if unverified). The returned principal
@@ -643,6 +644,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         responses={
             404: {"description": "Parent job not found"},
             409: {"description": "Parent job is incomplete, has no durable report, or the child job_id collides"},
+            422: {"description": "Request validation failed (e.g. blank edit instruction)"},
+            500: {"description": "Failed to submit the report edit job"},
             503: {"description": "Dask scheduler not available"},
         },
     )

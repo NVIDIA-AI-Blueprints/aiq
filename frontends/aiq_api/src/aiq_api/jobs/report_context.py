@@ -203,17 +203,24 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
     if not report:
         raise HTTPException(409, f"Parent job has no durable report: {parent_job_id}")
 
-    if events is None:
-        # The report is already in hand (from job output); the event log is only
-        # needed to enrich sources. A transient fetch failure here must not abort
-        # report follow-up — fall back to report-only source extraction.
-        try:
-            events = await EventStore.get_events_async(db_url, parent_job_id, 0, _EVENT_SCAN_LIMIT)
-        except Exception:
-            events = []
-    event_sources = _sources_from_events(events)
     report_sources = _extract_sources_from_report_markdown(report)
-    sources = _dedupe_sources([*event_sources, *report_sources])
+
+    if events is None:
+        # The report came from job output. Its own ## Sources section is authoritative for
+        # follow-up context, so only pay the (potentially large) event scan when the report
+        # carries no inline sources. A transient fetch failure must not abort follow-up.
+        if report_sources:
+            sources = report_sources
+        else:
+            try:
+                events = await EventStore.get_events_async(db_url, parent_job_id, 0, _EVENT_SCAN_LIMIT)
+            except Exception:
+                events = []
+            sources = _dedupe_sources([*_sources_from_events(events), *report_sources])
+    else:
+        # The event log was already fetched to reconstruct the report; reuse it for sources.
+        sources = _dedupe_sources([*_sources_from_events(events), *report_sources])
+
     return ReportContext(
         parent_job_id=parent_job_id,
         report_markdown=report,
@@ -238,18 +245,35 @@ def report_context_from_markdown(report_markdown: str, parent_job_id: str = "in-
     )
 
 
+# Cache JobStore instances by (scheduler_address, db_url). JobStore eagerly builds a SQLAlchemy
+# AsyncEngine with its own connection pool, so constructing one per request both wastes work and
+# leaks pooled connections. Engines are designed to be long-lived and shared, and JobStore's
+# sessions are task-scoped (async_scoped_session), so a process-wide cache is safe.
+_JOB_STORE_CACHE: dict[tuple[str, str], Any] = {}
+
+
+def _get_job_store(scheduler_address: str, db_url: str) -> Any:
+    from nat.front_ends.fastapi.async_jobs.job_store import JobStore
+
+    key = (scheduler_address, db_url)
+    store = _JOB_STORE_CACHE.get(key)
+    if store is None:
+        store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+        _JOB_STORE_CACHE[key] = store
+    return store
+
+
 async def resolve_authorized_report_context(parent_job_id: str, principal: Principal) -> ReportContext:
     """Authorize and reconstruct a parent report context using configured async job storage."""
 
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
-    from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
     scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
     if not scheduler_address:
         raise HTTPException(503, "Async job storage is not configured")
 
     db_url = os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
-    job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+    job_store = _get_job_store(scheduler_address, db_url)
     job = await authorize_job_access(job_store, db_url, parent_job_id, principal)
     if getattr(job, "status", None) != JobStatus.SUCCESS.value:
         raise HTTPException(409, f"Parent job is not complete: {parent_job_id}")
@@ -257,7 +281,7 @@ async def resolve_authorized_report_context(parent_job_id: str, principal: Princ
 
 
 def to_initial_files(context: ReportContext, instruction: str | None = None) -> dict[str, str]:
-    """Convert report context into PR 267 DeepAgents virtual filesystem seed files."""
+    """Convert report context into DeepAgents virtual filesystem seed files."""
 
     # Exclude report_markdown from the JSON context: the full report is already seeded
     # verbatim into /shared/original_report.md, so embedding it again here would roughly

@@ -166,7 +166,7 @@ async def test_submit_job_rejects_internal_agent(submit_app, monkeypatch):
         )
 
     assert response.status_code == 400
-    assert response.json()["detail"] == "Agent type is internal-only: report_rewriter"
+    assert response.json()["detail"] == "Agent type is internal-only and cannot be submitted directly: report_rewriter"
     submitted_job.assert_not_awaited()
 
 
