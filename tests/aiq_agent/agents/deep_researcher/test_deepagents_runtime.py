@@ -115,10 +115,12 @@ class TestDeepAgentsRuntimeRouting:
     def test_prepare_state_files_normalizes_shared_paths_for_route_backend(self) -> None:
         runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
 
-        files = runtime.prepare_state_files({
-            "/shared/original_report.md": "# Parent",
-            "/shared/source_summary.md": b"- src",
-        })
+        files = runtime.prepare_state_files(
+            {
+                "/shared/original_report.md": "# Parent",
+                "/shared/source_summary.md": b"- src",
+            }
+        )
 
         assert "/original_report.md" in files
         assert "/source_summary.md" in files
