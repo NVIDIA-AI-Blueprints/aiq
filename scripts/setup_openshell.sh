@@ -2,6 +2,18 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
 # Set up NVIDIA OpenShell for AI-Q with a named, policy-backed sandbox.
 
 set -euo pipefail
@@ -10,8 +22,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 VENV_DIR="$REPO_ROOT/.venv"
 
-MIN_OPENSHELL_VERSION="0.0.57"
-DEFAULT_OPENSHELL_VERSION="0.0.57"
+# Floor aligned with the langchain-nvidia-openshell adapter (openshell>=0.0.68).
+# Anything below this is upgraded by the adapter during its install, so do not pin under it.
+MIN_OPENSHELL_VERSION="0.0.68"
+DEFAULT_OPENSHELL_VERSION="0.0.68"
 OPENSHELL_VERSION="${AIQ_OPENSHELL_VERSION:-}"
 OPENSHELL_VERSION_USER_SUPPLIED=false
 if [[ -n "$OPENSHELL_VERSION" ]]; then
@@ -63,8 +77,8 @@ Sets up OpenShell for AI-Q:
 
 Options:
   --openshell-version VERSION   Exact OpenShell version, or "latest".
-                                Default: asks in an interactive shell; Enter selects 0.0.57.
-                                Non-interactive default: 0.0.57.
+                                Default: asks in an interactive shell; Enter selects 0.0.68.
+                                Non-interactive default: 0.0.68.
   --policy CHOICE               Sandbox network policy.
                                 Choices: $SUPPORTED_POLICIES
                                 Default: asks in an interactive shell, offline otherwise.
@@ -85,7 +99,7 @@ Options:
   --skip-sandbox                Do not create the named sandbox.
   --list-policies               Print supported policy choices.
   --list-services               Print supported services for --allow.
-  --list-openshell-versions     Print released OpenShell versions >= 0.0.57.
+  --list-openshell-versions     Print released OpenShell versions >= 0.0.68.
   -h, --help                    Show this help.
 
 Examples:
@@ -403,14 +417,35 @@ EOF
         exit 1
     fi
 
+    # The adapter still declares deepagents<0.6, so its install downgrades the 0.6.x that
+    # AI-Q's deep-research runtime requires (pyproject: deepagents>=0.6.5). The adapter's
+    # code only uses the stable deepagents BaseSandbox/protocol surface (the same imports
+    # AI-Q's own sandbox package uses on 0.6.x), so reasserting the floor AI-Q needs is
+    # safe. This is the OpenShell setup script, so keeping AI-Q runnable is the goal.
+    log "Reasserting deepagents>=0.6.5 (AI-Q runtime floor) after adapter install"
+    uv pip install "deepagents>=0.6.5"
+
     local installed
     installed="$("$VENV_DIR/bin/python" - <<'PY'
 import openshell
 print(getattr(openshell, "__version__", "unknown"))
 PY
 )"
-    if [[ "$installed" != "$OPENSHELL_VERSION" ]]; then
-        fail "Expected openshell==$OPENSHELL_VERSION, but Python imports version $installed"
+    # The adapter pins openshell>=0.0.68 and may upgrade the package above the requested
+    # version during its own install; only a version BELOW the requested floor is an error
+    # (an exact-match check would spuriously fail on that allowed adapter-driven upgrade).
+    if ! "$VENV_DIR/bin/python" - "$OPENSHELL_VERSION" "$installed" <<'PY'
+import sys
+
+
+def parts(v):
+    return tuple(int(p) for p in v.split(".")[:3] if p.isdigit())
+
+
+sys.exit(0 if parts(sys.argv[2]) >= parts(sys.argv[1]) else 1)
+PY
+    then
+        fail "Installed openshell $installed is older than the requested floor $OPENSHELL_VERSION"
     fi
     "$VENV_DIR/bin/python" - <<'PY'
 import langchain_nvidia_openshell  # noqa: F401
@@ -611,14 +646,23 @@ resolve_gateway_launcher() {
         fi
     done
 
-    if [[ "$OS_NAME" == "macos" ]] && command -v brew >/dev/null 2>&1; then
-        log "Installing OpenShell gateway with Homebrew"
-        brew install nvidia/openshell/openshell
-        OPENSHELL_GATEWAY_LAUNCH_BIN="/opt/homebrew/opt/openshell/libexec/openshell-gateway-homebrew-service"
-        if [[ -x "$OPENSHELL_GATEWAY_LAUNCH_BIN" ]]; then
-            echo "OpenShell gateway launcher: $OPENSHELL_GATEWAY_LAUNCH_BIN"
-            return
-        fi
+    if [[ "$OS_NAME" == "macos" ]]; then
+        # The nvidia/openshell Homebrew tap (github.com/nvidia/homebrew-openshell) is not
+        # published, so `brew install nvidia/openshell/openshell` 404s. Use OpenShell's
+        # official installer instead, which sets up the gateway (local brew service + mTLS).
+        log "Installing the OpenShell gateway via the official installer (NVIDIA/OpenShell)"
+        curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
+        local installed_candidate
+        for installed_candidate in \
+            "/opt/homebrew/opt/openshell/libexec/openshell-gateway-homebrew-service" \
+            "$(command -v openshell-gateway || true)" \
+            "/opt/homebrew/bin/openshell-gateway"; do
+            if [[ -n "$installed_candidate" && -x "$installed_candidate" ]]; then
+                OPENSHELL_GATEWAY_LAUNCH_BIN="$installed_candidate"
+                echo "OpenShell gateway launcher: $OPENSHELL_GATEWAY_LAUNCH_BIN"
+                return
+            fi
+        done
     fi
 
     cat <<EOF
@@ -628,9 +672,9 @@ Install the gateway, or rerun with:
 
   scripts/setup_openshell.sh --gateway-bin /path/to/openshell-gateway
 
-On macOS with Homebrew:
+On macOS, install the OpenShell gateway with the official installer:
 
-  brew install nvidia/openshell/openshell
+  curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
 EOF
     exit 1
 }

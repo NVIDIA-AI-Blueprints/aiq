@@ -82,19 +82,38 @@ class DeepResearchSandboxConfig(FunctionBaseConfig, name="deep_research_sandbox"
 
     model_config = ConfigDict(extra="forbid")
 
-    provider: Literal["modal"] = Field(default="modal", description="Sandbox backend provider.")
+    provider: str = Field(default="openshell", description="Sandbox backend provider (resolved by registry).")
+    # Modal-specific (used when provider == "modal").
     app_name: str = Field(default="aiq-deep-research", description="Modal app name for deep research sandboxes")
     image: str = Field(default="python:3.13-slim", description="Container image for Modal sandboxes")
     packages: tuple[str, ...] = Field(
         default=(),
         description="Python packages to install into the Modal sandbox image.",
     )
-    workdir: str = Field(default="/workspace", description="Working directory inside Modal sandboxes")
-    timeout: int = Field(default=1200, description="Maximum Modal sandbox lifetime in seconds")
-    idle_timeout: int = Field(default=1800, description="Modal sandbox idle timeout in seconds")
+    # OpenShell-specific (used when provider == "openshell"). The named sandbox is created
+    # out-of-band by scripts/setup_openshell.sh and attached to by name.
+    sandbox_name: str | None = Field(default=None, description="Existing named OpenShell sandbox to attach to.")
+    gateway: str | None = Field(
+        default=None,
+        description="OpenShell gateway endpoint/name (null uses the locally selected gateway).",
+    )
+    policy: str | None = Field(default=None, description="OpenShell policy file path (requires a named sandbox).")
+    ready_timeout_seconds: float = Field(
+        default=300.0,
+        description="Seconds to wait for the OpenShell sandbox to become ready.",
+    )
+    delete_on_exit: bool = Field(default=False, description="Delete the OpenShell sandbox when the session closes.")
+    shell: tuple[str, ...] = Field(
+        default=("bash", "-c"),
+        description="Shell argv prefix passed to the langchain-nvidia-openshell adapter.",
+    )
+    # Shared across providers.
+    workdir: str | None = Field(default=None, description="Working directory inside the sandbox")
+    timeout: int = Field(default=1200, description="Maximum sandbox lifetime in seconds")
+    idle_timeout: int = Field(default=1800, description="Sandbox idle timeout in seconds")
     network: Literal["blocked", "enabled"] = Field(
         default="blocked",
-        description="Outbound network policy for Modal sandboxes.",
+        description="Outbound network policy for the sandbox.",
     )
     artifact_capture: ArtifactCaptureConfig = Field(
         default_factory=ArtifactCaptureConfig,
@@ -338,26 +357,44 @@ def _create_sandbox_backend(config: DeepResearchSandboxConfig, job_id: str) -> A
     not installed), then maps the config to the provider-neutral ``SandboxConfig`` and
     dispatches through the sandbox provider registry.
     """
-    if config.provider == "modal":
-        _ensure_modal_dependencies()
     from .sandbox import create_sandbox_backend as registry_create
     from .sandbox.config import SandboxConfig as ProviderSandboxConfig
 
+    provider = config.provider.lower()
+    workdir = config.workdir or ("/workspace" if provider == "modal" else "/sandbox")
+
+    if provider == "modal":
+        _ensure_modal_dependencies()
+        providers = {
+            "modal": {
+                "app_name": config.app_name,
+                "image": config.image,
+                "python_packages": config.packages,
+            }
+        }
+    elif provider == "openshell":
+        providers = {
+            "openshell": {
+                "gateway": config.gateway,
+                "sandbox_name": config.sandbox_name,
+                "policy": config.policy,
+                "ready_timeout_seconds": config.ready_timeout_seconds,
+                "delete_on_exit": config.delete_on_exit,
+                "shell": list(config.shell),
+            }
+        }
+    else:
+        providers = {}
+
     provider_config = ProviderSandboxConfig.model_validate(
         {
-            "provider": config.provider,
-            "workdir": config.workdir,
+            "provider": provider,
+            "workdir": workdir,
             "timeout": config.timeout,
             "idle_timeout": config.idle_timeout,
             "network": {"mode": "blocked" if config.block_network else "open"},
             "artifact_capture": config.artifact_capture.model_dump(),
-            "providers": {
-                "modal": {
-                    "app_name": config.app_name,
-                    "image": config.image,
-                    "python_packages": config.packages,
-                }
-            },
+            "providers": providers,
         }
     )
     return registry_create(provider_config, job_id)

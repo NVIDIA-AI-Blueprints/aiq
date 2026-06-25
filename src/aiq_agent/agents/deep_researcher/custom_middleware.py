@@ -16,6 +16,7 @@
 """Custom middleware for the deep research agent."""
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
@@ -429,6 +430,79 @@ class ArtifactHarvestMiddleware(AgentMiddleware):
             except Exception:
                 logger.warning("Artifact harvest after execute failed", exc_info=True)
         return result
+
+
+class PlanPersistenceMiddleware(AgentMiddleware):
+    """Persists the planner's structured ResearchPlan to the shared filesystem.
+
+    The planner returns a schema-validated ``ResearchPlan`` (``response_format``).
+    This middleware writes that plan to ``/shared/plan.json`` deterministically via
+    the overwrite-safe ``backend.upload_files`` (the same state-channel write
+    ``run_research_batch`` uses for ResearchNotes), so the planner never performs
+    file I/O itself. Keeping the write off the LLM removes the ``write_file`` /
+    ``edit_file`` loop the planner otherwise hits when ``/shared/plan.json`` already
+    exists, since the LLM ``write_file`` tool refuses to overwrite while
+    ``upload_files`` overwrites in place.
+
+    Persistence failures are logged and never propagate into the agent loop.
+    """
+
+    def __init__(self, backend: object, *, path: str = "/shared/plan.json") -> None:
+        """Initialize the middleware.
+
+        Args:
+            backend: Shared filesystem backend exposing ``upload_files``.
+            path: Shared path the serialized plan is written to.
+        """
+        self.backend = backend
+        self.path = path
+
+    @staticmethod
+    def _plan_from_state(state: object) -> object:
+        if isinstance(state, dict):
+            return state.get("structured_response")
+        return getattr(state, "structured_response", None)
+
+    def _persist_plan(self, plan: object) -> None:
+        """Serialize a structured ResearchPlan and upload it to shared state."""
+        if plan is None:
+            return
+        if hasattr(plan, "model_dump"):
+            payload = plan.model_dump(mode="json", exclude_none=True)
+        elif isinstance(plan, dict):
+            payload = plan
+        else:
+            return
+        content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        responses = self.backend.upload_files([(self.path, content)])
+        errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
+        if errors:
+            logger.warning("Failed to persist plan to %s: %s", self.path, "; ".join(errors))
+
+    async def awrap_model_call(self, request, handler):
+        """Persist the structured plan as soon as the model emits it."""
+        response = await handler(request)
+        plan = getattr(response, "structured_response", None)
+        if plan is not None:
+            try:
+                self._persist_plan(plan)
+            except Exception:
+                logger.warning("Plan persistence (model_call) failed", exc_info=True)
+        return response
+
+    def after_agent(self, state, runtime):
+        """Persist the plan after a synchronous planner run completes."""
+        try:
+            self._persist_plan(self._plan_from_state(state))
+        except Exception:
+            logger.warning("Plan persistence to %s failed", self.path, exc_info=True)
+
+    async def aafter_agent(self, state, runtime):
+        """Persist the plan after an asynchronous planner run completes."""
+        try:
+            self._persist_plan(self._plan_from_state(state))
+        except Exception:
+            logger.warning("Plan persistence to %s failed", self.path, exc_info=True)
 
 
 class ToolResultPruningMiddleware(AgentMiddleware):

@@ -223,6 +223,12 @@ class TestDeepAgentsRuntimeRouting:
 class TestDeepAgentsRuntimeJobId:
     """job_id should drive the sandbox name; a missing one falls back to uuid."""
 
+    def test_default_sandbox_provider_is_openshell(self) -> None:
+        sandbox = DeepResearchSandboxConfig()
+
+        assert sandbox.provider == "openshell"
+        assert sandbox.workdir is None
+
     def test_explicit_job_id_is_kept(self) -> None:
         sandbox = DeepResearchSandboxConfig()
         with patch("aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend") as create_backend:
@@ -257,4 +263,4 @@ class TestDeepAgentsRuntimeJobId:
             ),
             pytest.raises(ImportError, match="langchain-modal"),
         ):
-            _ = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig()).backend
+            _ = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig(provider="modal")).backend

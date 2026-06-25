@@ -55,12 +55,10 @@ outfit. A polished chart of wrong or sparse numbers misleads more than it inform
 1. Assemble the normalized rows (prefer explicit records embedded in the script). If the
    inputs live in `/shared/...`, `read_file` them first and embed the values; sandbox
    code cannot open `/shared/...`.
-2. Use `write_file` to create the chart script at the job-unique path your instructions
-   specify (the `<job_id>_<name>.py` form under `sandbox_workdir`), then `execute` that
-   exact path. The job-id prefix is required: the sandbox may be shared, and a fixed name
-   like `make_chart.py` can collide with a leftover script from another job and silently
-   run with the wrong `ARTIFACT_DIR`. Only ever execute a script you wrote this session.
-   The script must:
+2. Use `write_file` to create the chart script under the `sandbox_workdir` from your
+   instructions (e.g. `<sandbox_workdir>/make_chart.py`), then `execute` that exact path.
+   `sandbox_workdir` is already per-job, so scripts there cannot collide with another job's
+   leftovers. Only ever execute a script you wrote this session. The script must:
    - import pandas and matplotlib (use the non-interactive `Agg` backend),
    - build the DataFrame, compute any derived metrics,
    - set a single `ARTIFACT_DIR` to your `sandbox_artifact_dir` and write the chart

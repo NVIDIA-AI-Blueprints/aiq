@@ -208,6 +208,9 @@ class AgentEventCallback(BaseCallbackHandler):
     URL_PATTERN = re.compile(r'https?://[^\s<>"\')\]}>]+', re.IGNORECASE)
     SEARCH_TOOL_PATTERNS = {"search", "tavily", "web_search", "google", "bing"}
     TOOL_CALL_PATTERN = re.compile(r'\b[a-z][a-z0-9_]*\s*\(\s*(?:["\'{]|[a-z_]+\s*=)', re.IGNORECASE)
+    SANDBOX_EXEC_TOOLS = frozenset({"execute"})
+    SANDBOX_FILE_TOOLS = frozenset({"write_file", "read_file", "edit_file", "ls"})
+    SHARED_FS_PREFIX = "/shared"
 
     AGENT_PATTERNS = {"agent"}
     AGENT_EXCLUDE_PATTERNS = {"middleware", "handler", "callback"}
@@ -228,6 +231,7 @@ class AgentEventCallback(BaseCallbackHandler):
         self._run_id_to_name: dict[str, str] = {}
         self._run_id_to_parent: dict[str, str] = {}
         self._agent_run_ids: dict[str, str] = {}  # {run_id: name}
+        self._run_id_to_sandbox_tool: dict[str, bool] = {}
 
         self._job_id = event_store.job_id if event_store else None
         self._instance_discovered_urls: set[str] = set()
@@ -346,6 +350,15 @@ class AgentEventCallback(BaseCallbackHandler):
             if name:
                 return name
         return kwargs.get("name", "unknown")
+
+    def _is_sandbox_tool(self, tool_name: str, parsed_input: Any) -> bool:
+        """Return whether a tool call runs against the provisioned sandbox."""
+        if tool_name in self.SANDBOX_EXEC_TOOLS:
+            return True
+        if tool_name not in self.SANDBOX_FILE_TOOLS or not isinstance(parsed_input, dict):
+            return False
+        path = str(parsed_input.get("file_path") or parsed_input.get("path") or parsed_input.get("filename") or "")
+        return bool(path and not path.startswith(self.SHARED_FS_PREFIX))
 
     def _get_source_registry(self):
         """Return the session-scoped SourceRegistry if set, otherwise None."""
@@ -604,6 +617,9 @@ class AgentEventCallback(BaseCallbackHandler):
         parsed_input = self._parse_tool_input(input_str)
 
         emit_input = self._trim_tool_input(parsed_input)
+        is_sandbox_tool = self._is_sandbox_tool(tool_name, parsed_input)
+        if run_id:
+            self._run_id_to_sandbox_tool[run_id] = is_sandbox_tool
 
         self._emit(
             IntermediateStepEvent(
@@ -611,7 +627,7 @@ class AgentEventCallback(BaseCallbackHandler):
                 state=EventState.START,
                 name=tool_name,
                 data=EventData(input=emit_input) if emit_input else None,
-                metadata=self._build_metadata_for_run(run_id),
+                metadata=self._build_metadata_for_run(run_id, sandbox=True if is_sandbox_tool else None),
             )
         )
 
@@ -620,6 +636,7 @@ class AgentEventCallback(BaseCallbackHandler):
     def on_tool_end(self, output: str, **kwargs) -> None:
         run_id = str(kwargs.get("run_id", ""))
         tool_name = self._run_id_to_name.pop(run_id, kwargs.get("name", "unknown"))
+        is_sandbox_tool = self._run_id_to_sandbox_tool.pop(run_id, False)
 
         agent_info = self._find_agent_for_run(run_id)
 
@@ -629,7 +646,7 @@ class AgentEventCallback(BaseCallbackHandler):
                 state=EventState.END,
                 name=tool_name,
                 data=None,
-                metadata=self._build_metadata_for_run(run_id),
+                metadata=self._build_metadata_for_run(run_id, sandbox=True if is_sandbox_tool else None),
             )
         )
 

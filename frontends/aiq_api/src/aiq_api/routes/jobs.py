@@ -1128,6 +1128,7 @@ def _process_tool_start(event: dict, data: dict, metadata: dict, tool_call_map: 
         "output": None,
         "status": "running",
         "workflow": metadata.get("workflow"),
+        "is_sandbox": bool(metadata.get("sandbox")),
         "timestamp": event.get("timestamp"),
     }
 
@@ -1141,6 +1142,7 @@ def _process_tool_end(event: dict, data: dict, metadata: dict, tool_call_map: di
     if tool_id in tool_call_map:
         tool_call_map[tool_id]["output"] = tool_output
         tool_call_map[tool_id]["status"] = "completed"
+        tool_call_map[tool_id]["is_sandbox"] = tool_call_map[tool_id].get("is_sandbox") or bool(metadata.get("sandbox"))
     else:
         tool_call_map[tool_id] = {
             "id": tool_id,
@@ -1149,6 +1151,7 @@ def _process_tool_end(event: dict, data: dict, metadata: dict, tool_call_map: di
             "output": tool_output,
             "status": "completed",
             "workflow": metadata.get("workflow"),
+            "is_sandbox": bool(metadata.get("sandbox")),
             "timestamp": event.get("timestamp"),
         }
 

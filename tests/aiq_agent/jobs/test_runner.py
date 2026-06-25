@@ -1678,3 +1678,56 @@ class TestAsyncJobRunnerAgentFactory:
                 callbacks=["callback"],
                 job_id="job-123",
             )
+
+
+class TestTerminalTeardown:
+    """_teardown_sandbox routes close()/terminate() and never raises on the terminal path."""
+
+    def test_none_runtime_is_noop(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        # Must not raise when no sandbox runtime is present (non-sandbox agents).
+        _teardown_sandbox(None, job_id="job-1", interrupted=False)
+
+    def test_normal_path_calls_close(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        runtime.close.assert_called_once_with()
+        runtime.terminate.assert_not_called()
+
+    def test_interrupted_path_calls_terminate(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.terminate.assert_called_once_with()
+        runtime.close.assert_not_called()
+
+    def test_interrupted_without_terminate_falls_back_to_close(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close"])  # no terminate attribute
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.close.assert_called_once_with()
+
+    def test_never_raises_when_teardown_fails(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        runtime.close.side_effect = RuntimeError("sdk session close failed")
+        # Must swallow the error; teardown is best-effort on the terminal path.
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+    def test_does_not_harvest(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        # The single harvest happens in agent.run(); teardown must not call final_harvest.
+        runtime = MagicMock(spec=["close", "terminate", "final_harvest"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        runtime.final_harvest.assert_not_called()

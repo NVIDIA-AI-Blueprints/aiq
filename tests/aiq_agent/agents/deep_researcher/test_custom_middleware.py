@@ -23,6 +23,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import ToolMessage
 
+from aiq_agent.agents.deep_researcher.custom_middleware import PlanPersistenceMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
@@ -463,3 +464,70 @@ class TestSourceRegistryMiddleware:
         result = await middleware.awrap_tool_call(request, handler)
 
         assert result.content == content
+
+
+class _RecordingBackend:
+    """Minimal backend stub capturing upload_files calls (overwrite-safe)."""
+
+    def __init__(self):
+        self.uploads: list[tuple[str, bytes]] = []
+
+    def upload_files(self, files):
+        self.uploads.extend(files)
+        return [SimpleNamespace(path=path, error=None) for path, _ in files]
+
+
+class TestPlanPersistenceMiddleware:
+    """Tests for PlanPersistenceMiddleware."""
+
+    @pytest.mark.asyncio
+    async def test_persists_structured_plan(self):
+        """A structured ResearchPlan in state is serialized and uploaded once."""
+        import json
+
+        backend = _RecordingBackend()
+        mw = PlanPersistenceMiddleware(backend=backend)
+        plan = SimpleNamespace(model_dump=lambda **_: {"answer_strategy": {"answer_type": "table"}})
+
+        result = await mw.aafter_agent({"structured_response": plan}, runtime=None)
+
+        assert result is None
+        assert len(backend.uploads) == 1
+        path, content = backend.uploads[0]
+        assert path == "/shared/plan.json"
+        assert json.loads(content.decode("utf-8")) == {"answer_strategy": {"answer_type": "table"}}
+
+    @pytest.mark.asyncio
+    async def test_no_structured_response_is_noop(self):
+        """Missing structured_response writes nothing rather than erroring."""
+        backend = _RecordingBackend()
+        mw = PlanPersistenceMiddleware(backend=backend)
+
+        await mw.aafter_agent({"structured_response": None}, runtime=None)
+        await mw.aafter_agent({}, runtime=None)
+
+        assert backend.uploads == []
+
+    def test_sync_after_agent_persists(self):
+        """The synchronous hook persists via the same path (dict payloads supported)."""
+        import json
+
+        backend = _RecordingBackend()
+        mw = PlanPersistenceMiddleware(backend=backend)
+
+        mw.after_agent({"structured_response": {"title": "Plan"}}, runtime=None)
+
+        assert len(backend.uploads) == 1
+        assert json.loads(backend.uploads[0][1].decode("utf-8")) == {"title": "Plan"}
+
+    @pytest.mark.asyncio
+    async def test_backend_failure_does_not_propagate(self):
+        """Upload errors are swallowed so the agent loop is never interrupted."""
+
+        class _BoomBackend:
+            def upload_files(self, files):
+                raise RuntimeError("boom")
+
+        mw = PlanPersistenceMiddleware(backend=_BoomBackend())
+
+        await mw.aafter_agent({"structured_response": {"title": "Plan"}}, runtime=None)

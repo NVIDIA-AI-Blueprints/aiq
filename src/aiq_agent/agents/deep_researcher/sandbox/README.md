@@ -224,6 +224,15 @@ One-command setup:
 ./scripts/start_e2e.sh --config_file configs/config_openshell.yml
 ```
 
+The setup script prints the environment variables needed by any later shell that starts
+AI-Q. If you start the backend in a different terminal/session, export the printed values
+before running `start_e2e.sh` (or put them in your local env file):
+
+```bash
+export AIQ_OPENSHELL_SANDBOX_NAME="aiq-openshell-demo"
+export AIQ_OPENSHELL_POLICY_FILE="$PWD/configs/openshell/generated/aiq-openshell-policy.yaml"
+```
+
 Inference is routed host-side (e.g. NVIDIA Build or an internal inference hub set in the
 config); the network-blocked sandbox never sees the key.
 

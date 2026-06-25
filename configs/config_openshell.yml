@@ -131,57 +131,48 @@ functions:
     max_llm_turns: 10
     max_tool_iterations: 5
 
+  # Skills assigned per subagent (PR 284 schema). `research` includes chart-generation
+  # and data-table-analysis; it requires a sandbox to execute generated code.
+  deep_research_skills:
+    _type: deep_research_skills
+    agents:
+      researcher-agent: [research]
+      # writer also gets `research` so it can generate the chart/CSV at synthesis and embed
+      # it (it has no search tools, so it only gains chart-generation + data-table-analysis).
+      writer-agent: [synthesis, research]
+    require_sandbox:
+      - research
+
+  # OpenShell (on-prem) sandbox. The named sandbox is created out-of-band by
+  # scripts/setup_openshell.sh and attached to by name; AI-Q only runs generated Python in
+  # it (network-blocked) and harvests durable artifacts (charts/CSVs) into the report.
+  deep_research_sandbox:
+    _type: deep_research_sandbox
+    provider: openshell
+    sandbox_name: ${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}
+    policy: ${AIQ_OPENSHELL_POLICY_FILE:-configs/openshell/generated/aiq-openshell-policy.yaml}
+    workdir: /sandbox
+    network: blocked
+    timeout: 1200
+    idle_timeout: 1800
+    delete_on_exit: false
+    artifact_capture:
+      enabled: true
+      collect_on: [execute_end, job_end]
+      max_file_bytes: 50000000
+      allow_extensions: [.png, .jpg, .jpeg, .webp, .csv, .json, .md, .ipynb, .pdf]
+
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: gpt_oss_llm
     researcher_llm: nemotron_nano_llm
     planner_llm: gpt_oss_llm
+    writer_llm: gpt_oss_llm
     exclude_tools:
       - web_search_tool
-    max_loops: 2
     verbose: true
-    skills:
-      enabled: true
-    # OpenShell sandbox; the named sandbox is created by scripts/setup_openshell.sh
-    # and attached by name.
-    sandbox:
-      enabled: true
-      provider: openshell
-      workdir: /sandbox
-      artifact_dir: /sandbox/aiq-artifacts
-      # Outbound egress policy: blocked | allowlist (+ allow:) | open.
-      network:
-        mode: blocked
-      timeout: 1200
-      idle_timeout: 1800
-      artifact_capture:
-        enabled: true
-        collect_on:
-          - execute_end
-          - job_end
-        max_file_bytes: 50000000
-        allow_extensions:
-          - .png
-          - .jpg
-          - .jpeg
-          - .webp
-          - .csv
-          - .json
-          - .md
-          - .ipynb
-          - .pdf
-      providers:
-        openshell:
-          # null => use the locally selected gateway (set by setup_openshell.sh).
-          # Set to a cluster/endpoint name for a remote gateway.
-          gateway: null
-          sandbox_name: ${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}
-          policy: ${AIQ_OPENSHELL_POLICY_FILE:-configs/openshell/generated/aiq-openshell-policy.yaml}
-          ready_timeout_seconds: 300
-          delete_on_exit: false
-          shell:
-            - bash
-            - -c
+    skills: deep_research_skills
+    sandbox: deep_research_sandbox
 
 workflow:
   _type: chat_deepresearcher_agent

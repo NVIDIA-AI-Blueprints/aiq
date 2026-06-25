@@ -42,6 +42,7 @@ from aiq_agent.common import LLMRole
 from aiq_agent.common import render_prompt_template
 
 from .custom_middleware import EmptyContentFixMiddleware
+from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
@@ -126,12 +127,19 @@ class DeepResearchGraphContext:
         return [doc.model_dump() for doc in (self.state.available_documents or [])]
 
     def render_prompt(self, prompt_name: str, **values: Any) -> str:
+        prompt_values = {
+            "current_datetime": self.current_datetime,
+            "user_info": self.state.user_info,
+            "available_documents": self.available_documents,
+            "execution_enabled": self.runtime.execution_enabled,
+            "skills_enabled": self.runtime.skills_enabled,
+            "sandbox_workdir": self.runtime.workdir,
+            "sandbox_artifact_dir": self.runtime.artifact_dir,
+            **values,
+        }
         return render_prompt_template(
             self.prompts[prompt_name],
-            current_datetime=self.current_datetime,
-            user_info=self.state.user_info,
-            available_documents=self.available_documents,
-            **values,
+            **prompt_values,
         )
 
     def middleware(self, base: Sequence[Any]) -> list[Any]:
@@ -371,7 +379,7 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
             prompt_name="planner",
             role=LLMRole.PLANNER,
             tools=context.tool_set.researcher_tools,
-            middleware=context.middleware_set.planner,
+            middleware=[*context.middleware_set.planner, PlanPersistenceMiddleware(backend=context.backend)],
             prompt_values={
                 "tools": context.tool_set.tools_info,
                 "enable_source_router": context.enable_source_router,

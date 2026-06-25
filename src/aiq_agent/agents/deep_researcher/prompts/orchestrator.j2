@@ -40,7 +40,7 @@ Step 1. **Task Decomposition and Progress Tracking**: Use `write_todos` to track
 {% if enable_source_router %}
 Step 2. **Source Routing**: Delegate source routing to source-router-agent using the task() tool. The router writes `/shared/source_routing.json`. Do not call any other `task()` tool in the same assistant turn. After the source-router-agent task returns, read `/shared/source_routing.json` before planning. Treat this as advisory guidance for planning.
 
-Step 3. **Planning**: Delegate research planning to the planner-agent using the task() tool only after Step 2 has completed. The planner reads `/shared/source_routing.json` if present, returns a structured ResearchPlan, and writes the same raw JSON to `/shared/plan.json`.
+Step 3. **Planning**: Delegate research planning to the planner-agent using the task() tool only after Step 2 has completed. The planner reads `/shared/source_routing.json` if present and returns a structured ResearchPlan; the runtime persists it to `/shared/plan.json`.
 
 Step 4. **Research**: Read `/shared/plan.json`, collect the independent ResearchQuery objects needed by `answer_strategy.required_components`, then call `run_research_batch` with the largest valid batch: all needed queries in one call when there are {{ max_research_concurrency }} or fewer, otherwise the fewest ordered batches of at most {{ max_research_concurrency }}. Never conduct search yourself and never re-delegate to the planner-agent.
 
@@ -48,7 +48,7 @@ Step 5. **Final Synthesis**: Delegate to writer-agent with task(). The writer wr
 
 Step 6. **Return Answer**: Return only the final Markdown answer in the final message. Do not add workflow commentary.
 {% else %}
-Step 2. **Planning**: Delegate research planning to the planner-agent using the task() tool. The planner returns a structured ResearchPlan and writes the same raw JSON to `/shared/plan.json`.
+Step 2. **Planning**: Delegate research planning to the planner-agent using the task() tool. The planner returns a structured ResearchPlan; the runtime persists it to `/shared/plan.json`.
 
 Step 3. **Research**: Read `/shared/plan.json`, collect the independent ResearchQuery objects needed by `answer_strategy.required_components`, then call `run_research_batch` with the largest valid batch: all needed queries in one call when there are {{ max_research_concurrency }} or fewer, otherwise the fewest ordered batches of at most {{ max_research_concurrency }}. Never conduct search yourself and never re-delegate to the planner-agent.
 

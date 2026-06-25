@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Provider-neutral sandbox configuration models.
 
@@ -61,9 +73,6 @@ _DEFAULT_ALLOW_EXTENSIONS: tuple[str, ...] = (
     ".ipynb",
     ".pdf",
 )
-
-# Legacy top-level Modal fields, kept working via a pre-validator shim.
-_LEGACY_MODAL_FIELDS = ("app_name", "image", "python_packages")
 
 
 class ModalProviderConfig(BaseModel):
@@ -199,28 +208,6 @@ class SandboxConfig(BaseModel):
     )
     artifact_capture: ArtifactCaptureConfig = Field(default_factory=ArtifactCaptureConfig)
     providers: SandboxProvidersConfig = Field(default_factory=SandboxProvidersConfig)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _lift_legacy_modal_fields(cls, data: Any) -> Any:
-        """Lift legacy top-level Modal fields into ``providers.modal`` for back-compat.
-
-        Explicit ``providers.modal`` values take precedence over lifted legacy values.
-        """
-        if not isinstance(data, dict):
-            return data
-        legacy = {key: data[key] for key in _LEGACY_MODAL_FIELDS if key in data}
-        if not legacy:
-            return data
-        data = dict(data)
-        providers = dict(data.get("providers") or {})
-        modal = dict(providers.get("modal") or {})
-        for key, value in legacy.items():
-            modal.setdefault(key, value)
-            data.pop(key, None)
-        providers["modal"] = modal
-        data["providers"] = providers
-        return data
 
     @model_validator(mode="before")
     @classmethod
