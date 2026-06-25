@@ -53,44 +53,46 @@ See Modal's token configuration docs for details: [modal.config](https://modal.c
 
 ## Configuration
 
-Use `configs/config_skills.yml`. The relevant section is:
+Use `configs/config_domain_routing_and_skills.yml`. The relevant section is:
 
 ```yaml
 functions:
+  deep_research_skills:
+    _type: deep_research_skills
+    agents:
+      researcher-agent:
+        - research
+      writer-agent:
+        - synthesis
+    require_sandbox:
+      - research
+
+  deep_research_sandbox:
+    _type: deep_research_sandbox
+    provider: modal
+    app_name: aiq-deep-research
+    image: python:3.12-slim
+    packages:
+      - matplotlib
+      - numpy
+      - pandas
+      - pillow
+    network: blocked
+
   deep_research_agent:
     _type: deep_research_agent
-    skills:
-      enabled: true
-      agent_sources:
-        orchestrator:
-          - /skills/
-        planner-agent:
-          - /skills/
-        researcher:
-          - /skills/
-        writer-agent:
-          - /skills/synthesis/
-      sandbox_required_sources:
-        - /skills/
-    sandbox:
-      provider: modal
-      app_name: aiq-deep-research
-      image: python:3.12-slim
-      python_packages:
-        - matplotlib
-        - numpy
-        - pandas
-        - pillow
-      block_network: true
+    enable_citation_verification: true
+    skills: deep_research_skills
+    sandbox: deep_research_sandbox
 ```
 
-When `skills.enabled` is true, AI-Q preloads the built-in skill files into the DeepAgents virtual filesystem and passes the configured per-agent skill sources directly to DeepAgents. When the sandbox block is present, DeepAgents `execute` calls run inside a job-scoped Modal sandbox.
+AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run inside a job-scoped Modal sandbox.
 
 ## Run AI-Q
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat run \
-  --config_file configs/config_skills.yml \
+  --config_file configs/config_domain_routing_and_skills.yml \
   --input "Compare the top 10 publicly traded semiconductor companies by 2024 revenue. Build a markdown table with revenue, YoY growth, market cap, and gross margin. Then rank them and compute summary statistics. Use the data analysis tool for all calculations."
 ```
 
@@ -98,7 +100,7 @@ For API or UI testing:
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat serve \
-  --config_file configs/config_skills.yml \
+  --config_file configs/config_domain_routing_and_skills.yml \
   --host 0.0.0.0 \
   --port 8000
 ```
@@ -185,13 +187,13 @@ To add a built-in AI-Q deep research skill:
 3. Put optional helper scripts, references, or templates inside the same skill directory.
 4. Reference any helper files from `SKILL.md` so the agent knows when to read or run them.
 5. Keep workflow instructions generic enough to handle variations of the task, but concrete enough to force required tool calls.
-6. Run with `configs/config_skills.yml` and test a query that should trigger the new skill.
+6. Run with `configs/config_domain_routing_and_skills.yml` and test a query that should trigger the new skill.
 
-No config change is required for additional built-in skills in this directory when `skills.enabled: true` is set. AI-Q collects available skill directories at runtime and exposes them through the `/skills/` source.
+No config change is required for additional built-in skills inside an enabled collection. AI-Q collects available skill directories at runtime and exposes them to DeepAgents through an internal `/skills/` source.
 
 ## Notes and Limitations
 
 - The Modal sandbox is used for code execution. Text artifacts that need to survive for the report should be written through DeepAgents filesystem tools to `/shared/...`.
 - `/shared/` is a virtual DeepAgents filesystem path. Use `ls`, `read_file`, `write_file`, and `edit_file` for `/shared/`; do not inspect `/shared/` with shell commands through `execute`.
-- The sandbox is configured with `block_network: true`, so research should happen through AI-Q search tools, not from sandbox code.
+- The sandbox is configured with `network: blocked`, so research should happen through AI-Q search tools, not from sandbox code.
 - For the first release, sandbox lifecycle cleanup, persistence policy, quotas, and production capacity controls are tracked as follow-up work.

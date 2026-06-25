@@ -25,6 +25,7 @@ from langchain_core.messages import ToolMessage
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
 from aiq_agent.agents.deep_researcher.tools.source_registry import build_get_verified_sources_tool
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.data_source_registry import populate_from_config
@@ -122,6 +123,43 @@ class TestToolNameSanitizationMiddleware:
 
         assert result.result[0].content == "Just text, no tools"
         assert not result.result[0].tool_calls
+
+
+class TestToolVisibilityMiddleware:
+    """Tests for hiding tools from model requests."""
+
+    def test_wrap_model_call_filters_hidden_tools(self):
+        middleware = ToolVisibilityMiddleware(hidden_tool_names={"execute"})
+        execute_tool = SimpleNamespace(name="execute")
+        read_file_tool = SimpleNamespace(name="read_file")
+        mock_request = MagicMock()
+        mock_request.tools = [execute_tool, read_file_tool, {"function": {"name": "execute"}}]
+        filtered_request = MagicMock()
+        mock_request.override.return_value = filtered_request
+        mock_handler = MagicMock(return_value="ok")
+
+        result = middleware.wrap_model_call(mock_request, mock_handler)
+
+        assert result == "ok"
+        mock_request.override.assert_called_once_with(tools=[read_file_tool])
+        mock_handler.assert_called_once_with(filtered_request)
+
+    @pytest.mark.asyncio
+    async def test_awrap_model_call_filters_hidden_tools(self):
+        middleware = ToolVisibilityMiddleware(hidden_tool_names={"execute"})
+        execute_tool = SimpleNamespace(name="execute")
+        read_file_tool = SimpleNamespace(name="read_file")
+        mock_request = MagicMock()
+        mock_request.tools = [execute_tool, read_file_tool, {"function": {"name": "execute"}}]
+        filtered_request = MagicMock()
+        mock_request.override.return_value = filtered_request
+        mock_handler = AsyncMock(return_value="ok")
+
+        result = await middleware.awrap_model_call(mock_request, mock_handler)
+
+        assert result == "ok"
+        mock_request.override.assert_called_once_with(tools=[read_file_tool])
+        mock_handler.assert_awaited_once_with(filtered_request)
 
 
 class TestSourceRegistryMiddleware:

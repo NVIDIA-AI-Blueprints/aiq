@@ -128,6 +128,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
+    enable_citation_verification: true
     orchestrator_llm: gpt_oss_llm
     source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_super_llm

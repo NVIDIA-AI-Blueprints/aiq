@@ -172,6 +172,27 @@ functions:
     max_results: 5
     serper_api_key: ${SERPER_API_KEY}
 
+  deep_research_skills:
+    _type: deep_research_skills
+    agents:
+      researcher-agent: [research]
+      writer-agent: [synthesis]
+    require_sandbox:
+      - research
+
+  deep_research_sandbox:
+    _type: deep_research_sandbox
+    provider: modal
+    app_name: aiq-deep-research
+    image: python:3.13-slim
+    packages:
+      - matplotlib
+      - numpy
+      - pandas
+      - pillow
+      - tabulate  # required by pandas.DataFrame.to_markdown(), used by data-table-analysis skill
+    network: blocked
+
   # =========================================================================
   # Agents
   # =========================================================================
@@ -183,6 +204,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
+    enable_citation_verification: false
     orchestrator_llm: gpt_oss_llm
     source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_super_llm
@@ -193,26 +215,8 @@ functions:
       - web_search_tool
     verbose: true
     domain_catalog_path: configs/domain_catalogs/deep_research_domain_catalog.yml
-    skills:
-      enabled: true
-      agent_sources:
-        researcher:
-          - /skills/research-sandbox/
-        writer-agent:
-          - /skills/synthesis/
-      sandbox_required_sources:
-        - /skills/research-sandbox/
-    sandbox:
-      provider: modal
-      app_name: aiq-deep-research
-      image: python:3.13-slim
-      python_packages:
-        - matplotlib
-        - numpy
-        - pandas
-        - pillow
-        - tabulate  # required by pandas.DataFrame.to_markdown(), used by data-table-analysis skill
-      block_network: true
+    skills: deep_research_skills
+    sandbox: deep_research_sandbox
 
 workflow:
   _type: deep_research_workflow

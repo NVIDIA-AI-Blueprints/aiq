@@ -671,6 +671,43 @@ class TestVerifyCitations:
         assert len(result.valid_citations) == 2
         assert len(result.removed_citations) == 0
 
+    def test_plain_sources_heading_and_collapsed_lines_are_normalized(self, registry):
+        report = (
+            "Finding one [1]. Finding two [2].\n\n"
+            "Sources\n"
+            "[1] Article 1: https://valid.com/article1 [2] Article 2: https://valid.com/article2"
+        )
+        result = verify_citations(report, registry)
+
+        assert "## Sources\n[1] Article 1: https://valid.com/article1\n" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_bracketed_year_in_source_title_is_not_split(self, registry):
+        report = "Finding [1].\n\n## Sources\n[1] Semiconductor outlook [2024] update: https://valid.com/article1"
+        result = verify_citations(report, registry)
+
+        assert "[1] Semiconductor outlook [2024] update: https://valid.com/article1" in result.verified_report
+        assert len(result.valid_citations) == 1
+        assert not result.removed_citations
+
+    def test_bare_sources_line_does_not_terminate_body_before_marked_sources(self, registry):
+        report = (
+            "Summary.\n"
+            "Sources\n"
+            "This sentence is part of the report body and should stay there [1].\n\n"
+            "## Sources\n"
+            "[1] Article 1: https://valid.com/article1"
+        )
+        result = verify_citations(report, registry)
+
+        assert result.verified_report.startswith(
+            "Summary.\nSources\nThis sentence is part of the report body and should stay there [1]."
+        )
+        assert len(result.valid_citations) == 1
+        assert not result.removed_citations
+
     def test_ordered_list_references_are_normalized_and_verified(self, registry):
         report = (
             "Finding one [1]. Finding two [2].\n\n"
@@ -917,7 +954,7 @@ class TestVerifyCitations:
         assert "Time in Mumbai [1]." in result.verified_report
         assert "Time in Tokyo [1]." in result.verified_report
         # Reference section keeps exactly one entry for the source.
-        ref_section = result.verified_report.split("**References**", 1)[1]
+        ref_section = result.verified_report.split("## Sources", 1)[1]
         assert ref_section.count("mcp_time__get_current_time") == 1
         assert "[2]" not in ref_section
 
@@ -1048,6 +1085,38 @@ class TestSanitizeReport:
         result = sanitize_report(report)
         assert result.body_urls_removed == 0
         assert "Finding [1]" in result.sanitized_report
+
+    def test_plain_sources_heading_and_collapsed_lines_are_sanitized(self):
+        report = (
+            "Finding [1]. Another finding [2].\n\n"
+            "Sources\n"
+            "[1] Title: https://example.com/article [2] Title: https://other.com/page"
+        )
+        result = sanitize_report(report)
+
+        assert "## Sources\n[1] Title: https://example.com/article\n" in result.sanitized_report
+        assert "[2] Title: https://other.com/page" in result.sanitized_report
+
+    def test_bracketed_year_in_sanitized_source_title_is_not_split(self):
+        report = "Finding [1].\n\n## Sources\n[1] Semiconductor outlook [2024] update: https://example.com/article"
+        result = sanitize_report(report)
+
+        assert "[1] Semiconductor outlook [2024] update: https://example.com/article" in result.sanitized_report
+
+    def test_bare_sources_line_does_not_terminate_sanitized_body_before_marked_sources(self):
+        report = (
+            "Summary.\n"
+            "Sources\n"
+            "This sentence is part of the report body and should stay there [1].\n\n"
+            "## Sources\n"
+            "[1] Title: https://example.com/article"
+        )
+        result = sanitize_report(report)
+
+        assert result.sanitized_report.startswith(
+            "Summary.\nSources\nThis sentence is part of the report body and should stay there [1]."
+        )
+        assert "## Sources\n[1] Title: https://example.com/article" in result.sanitized_report
 
     def test_shortened_url_removed_from_references(self):
         report = "Finding [1].\n\n## Sources\n[1] Article: https://bit.ly/abc123"

@@ -1373,10 +1373,10 @@ class TestAsyncJobRunnerAgentFactory:
         assert provider.get(LLMRole.REPORT_WRITER) is shared_llm
         builder.get_llm.assert_awaited_once()
 
-    def test_create_agent_instance_passes_config_and_job_id_when_supported(self):
-        """Async workers can receive generic function config without runner-specific agent knowledge."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+    def test_create_agent_instance_passes_deep_research_config_as_explicit_args(self):
+        """Async workers pass DeepResearchAgentConfig fields through the explicit constructor surface."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_api.jobs.runner import _create_agent_instance
 
@@ -1388,20 +1388,40 @@ class TestAsyncJobRunnerAgentFactory:
                 tools,
                 verbose,
                 callbacks,
-                config=None,
+                domain_catalog_path=None,
+                enable_source_router=True,
+                enable_citation_verification=True,
+                skills=None,
+                sandbox=None,
                 job_id=None,
+                max_research_concurrency=None,
+                max_concurrent_source_tool_calls=None,
+                max_source_tool_batch_size=None,
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
                 self.verbose = verbose
                 self.callbacks = callbacks
-                self.config = config
+                self.domain_catalog_path = domain_catalog_path
+                self.enable_source_router = enable_source_router
+                self.enable_citation_verification = enable_citation_verification
+                self.skills = skills
+                self.sandbox = sandbox
                 self.job_id = job_id
+                self.max_research_concurrency = max_research_concurrency
+                self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
+                self.max_source_tool_batch_size = max_source_tool_batch_size
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            enable_citation_verification=False,
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
+            max_research_concurrency=2,
+            max_concurrent_source_tool_calls=3,
+            max_source_tool_batch_size=4,
         )
 
         agent = _create_agent_instance(
@@ -1416,14 +1436,20 @@ class TestAsyncJobRunnerAgentFactory:
         )
 
         assert agent.job_id == "job-123"
-        assert agent.config is fn_config
-        assert agent.config.skills.enabled is True
-        assert agent.config.skills.agent_sources == {}
-        assert agent.config.sandbox is not None
-        assert agent.config.sandbox.app_name == "async-aiq"
+        assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
+        assert agent.enable_source_router is False
+        assert agent.enable_citation_verification is False
+        assert agent.skills is fn_config.skills
+        assert agent.skills.agents == {"writer-agent": ("synthesis",)}
+        assert agent.sandbox is fn_config.sandbox
+        assert agent.sandbox is not None
+        assert agent.sandbox.app_name == "async-aiq"
+        assert agent.max_research_concurrency == 2
+        assert agent.max_concurrent_source_tool_calls == 3
+        assert agent.max_source_tool_batch_size == 4
 
     def test_async_deep_researcher_constructor_applies_config_tuning(self):
-        """Async config= construction preserves catalog and concurrency settings."""
+        """Async construction preserves catalog and concurrency settings."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_agent.common import LLMProvider
@@ -1466,8 +1492,8 @@ class TestAsyncJobRunnerAgentFactory:
         from langchain_core.tools import tool
 
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_agent.common import LLMProvider
@@ -1488,13 +1514,8 @@ class TestAsyncJobRunnerAgentFactory:
         provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            skills=SkillsConfig(
-                enabled=True,
-                agent_sources={
-                    "writer-agent": ("/skills/synthesis/",),
-                },
-            ),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
         )
         mock_deep_agent = MagicMock()
         mock_deep_agent.with_config.return_value = mock_deep_agent
@@ -1607,10 +1628,10 @@ class TestAsyncJobRunnerAgentFactory:
             "get_verified_sources",
         ]
 
-    def test_create_agent_instance_does_not_drop_config_on_internal_type_error(self):
-        """Constructor bugs must not silently fall back to no-config construction."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+    def test_create_agent_instance_does_not_swallow_deep_research_constructor_type_error(self):
+        """Constructor bugs must not silently fall back to another construction pattern."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_api.jobs.runner import _create_agent_instance
 
@@ -1622,15 +1643,22 @@ class TestAsyncJobRunnerAgentFactory:
                 tools,
                 verbose,
                 callbacks,
-                config=None,
+                domain_catalog_path=None,
+                enable_source_router=True,
+                enable_citation_verification=True,
+                skills=None,
+                sandbox=None,
                 job_id=None,
+                max_research_concurrency=None,
+                max_concurrent_source_tool_calls=None,
+                max_source_tool_batch_size=None,
             ):
                 raise TypeError("internal constructor failure")
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
         )
 
         with pytest.raises(TypeError, match="internal constructor failure"):

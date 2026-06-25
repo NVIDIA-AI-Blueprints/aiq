@@ -929,35 +929,21 @@ async def _cancel_dask_task(scheduler_address: str, job_id: str) -> bool:
         job_id: Job ID to cancel.
 
     Returns:
-        True if task was cancelled, False otherwise.
+        True if a Dask cancellation request was sent, False otherwise.
     """
     try:
         from distributed import Client
         from distributed import Future
-        from distributed import Variable
 
         async with Client(scheduler_address, asynchronous=True) as client:
-            var = Variable(name=job_id, client=client)
-            try:
-                # Short timeout: variable may be unset if worker hasn't started or job already finished.
-                future = await var.get(timeout=2)
-                if isinstance(future, Future):
-                    await client.cancel([future], asynchronous=True, force=True)
-                    logger.info("Cancelled Dask task for job %s", job_id)
-                    return True
-            except (TimeoutError, asyncio.CancelledError) as e:
-                logger.warning(
-                    "Could not get Dask future for job %s (variable not set or wait cancelled): %s",
-                    job_id,
-                    type(e).__name__,
-                )
-            except Exception as e:
-                logger.warning("Error getting Dask future for job %s: %s", job_id, e)
-            finally:
-                try:
-                    var.delete()
-                except (KeyError, RuntimeError):
-                    pass
+            # NAT JobStore submits job futures with key ``{job_id}-job``. Targeting
+            # the key directly avoids using Dask Variable.get as a maybe-exists
+            # check, which logs scheduler-side timeout errors when the variable is
+            # absent or slow to resolve.
+            future = Future(f"{job_id}-job", client)
+            await client.cancel([future], asynchronous=True, force=True)
+            logger.info("Sent cancellation request for Dask task %s", future.key)
+            return True
     except (ConnectionError, TimeoutError, OSError) as e:
         logger.warning("Failed to cancel Dask task for job %s: %s", job_id, e)
     except Exception as e:
