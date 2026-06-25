@@ -37,7 +37,10 @@ own as well.
    grounding depends on the model emitting citations exactly as instructed.
 3. Prefer putting static instructions before dynamic content so the KV cache is
    reused across calls (lower latency and token cost).
-4. Editing an existing `.j2` needs **no** code change.
+4. Keep the template task-agnostic — don't hard-code specific queries, domains, or
+   source/tool names; source/domain routing is data-driven (`data_source_registry`,
+   `source_router.j2`), and hard-coding it bypasses that routing.
+5. Editing an existing `.j2` needs **no** code change.
 
 ## Adding a new template
 

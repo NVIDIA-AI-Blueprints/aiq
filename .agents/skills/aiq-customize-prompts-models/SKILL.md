@@ -28,6 +28,9 @@ change. The one exception is adding a brand-new template, which needs a one-line
 - Prefer editing an existing template or config field over adding new machinery.
 - Keep the prompt's STRICT citation rules intact, and never hard-code a model
   name where an `llms:` ref belongs.
+- Keep templates general-purpose: don't hard-code specific queries, domains, or
+  source/tool names — those come from the user's request and the
+  `data_source_registry` at runtime.
 
 ## Authoritative References
 
@@ -94,6 +97,10 @@ smoke run is the real check; a config/prompt-only change needs no Python lint.
 
 - Breaking a template variable or the STRICT citation rules in
   `docs/source/customization/prompts.md`, which degrades report grounding.
+- Hard-coding specific queries, domains, or source/tool names into a template,
+  which biases the agent toward one task and breaks generalization. Source/domain
+  selection is data-driven (`data_source_registry`, `source_router.j2`); keep
+  prompts task-agnostic.
 - Hard-coding a model name in Python instead of using an `llms:` ref and the
   agent's role field, so the model can no longer be swapped from config.
 - Changing an agent's default model when you meant a single sub-role. The deep
