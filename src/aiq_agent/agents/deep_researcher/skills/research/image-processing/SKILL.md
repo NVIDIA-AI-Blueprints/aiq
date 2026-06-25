@@ -28,7 +28,7 @@ To keep results reproducible and report-usable, you MUST:
    - performs the requested inspection or transform,
    - writes any derived image to `/workspace` (not `/shared`),
    - prints metadata/analysis as JSON or Markdown text, and a base64 string only for a small thumbnail.
-4. Inspect the `execute` output. If it fails (missing Pillow, unreadable file), fix the code and call `execute` again. Do not invent image properties.
+4. Inspect the `execute` output. For fixable errors (bad path, unreadable/decode error), fix the code and call `execute` again. If a required library is missing (e.g. Pillow), report it as a sandbox limitation and stop — do not retry or invent image properties.
 5. Return the result in your `ResearchNotes` — put the metadata/analysis (and any small base64 thumbnail) into a `ResearchFinding`'s `evidence` and/or `narrative_notes`. Do not call `write_file`/`edit_file`; `run_research_batch` persists your returned notes under `/shared/` automatically.
 6. In the response or report, cite where the image came from and label any computed or derived values.
 
@@ -44,20 +44,23 @@ Keep any embedded base64 thumbnail small (≤256 px) — base64 inflates size ~3
 
 ### A. Inspect Image Metadata
 
-Use when you only need dimensions, mode, format, and size.
+Use when you only need dimensions, mode, format, and size. EXIF orientation is applied so
+width/height are the *displayed* dimensions (orientation-tagged photos store them rotated).
 
 ```python
 import json
 from pathlib import Path
-from PIL import Image
+from PIL import Image, ImageOps
 
 src = "/workspace/input.png"  # staged from /shared or decoded from base64
 with Image.open(src) as im:
+    fmt = im.format                         # read before transpose (transpose drops .format)
+    oriented = ImageOps.exif_transpose(im)  # honor EXIF orientation -> displayed size
     meta = {
-        "width": im.width,
-        "height": im.height,
-        "mode": im.mode,        # e.g. "RGB", "RGBA", "L"
-        "format": im.format,    # e.g. "PNG", "JPEG"
+        "width": oriented.width,            # displayed dimensions
+        "height": oriented.height,
+        "mode": oriented.mode,              # e.g. "RGB", "RGBA", "L"
+        "format": fmt,                      # e.g. "PNG", "JPEG"
         "size_bytes": Path(src).stat().st_size,
     }
 print(json.dumps(meta, indent=2))
@@ -71,10 +74,10 @@ Use when the report should show a small inline preview (there is no binary-artif
 import base64
 import io
 import json
-from PIL import Image
+from PIL import Image, ImageOps
 
 with Image.open("/workspace/input.png") as im:
-    im = im.convert("RGB")
+    im = ImageOps.exif_transpose(im).convert("RGB")  # honor EXIF orientation
     im.thumbnail((256, 256))     # preserves aspect ratio
     buf = io.BytesIO()
     im.save(buf, format="PNG")
