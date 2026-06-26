@@ -253,13 +253,17 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
 
             self._restore_signal_handlers()
 
-        try:
-            from aiq_debug import register_debug_routes
+        enable_debug = os.environ.get("AIQ_ENABLE_DEBUG", "true").lower() not in {"0", "false", "no", "off"}
+        if enable_debug:
+            try:
+                from aiq_debug import register_debug_routes
 
-            await register_debug_routes(app)
-            logger.info("Debug console registered at /debug")
-        except ImportError:
-            pass
+                await register_debug_routes(app)
+                logger.info("Debug console registered at /debug")
+            except ImportError:
+                pass
+        else:
+            logger.info("Debug console disabled by AIQ_ENABLE_DEBUG")
 
     def _install_signal_handlers(self):
         """Install signal handlers to notify SSE connections on shutdown."""

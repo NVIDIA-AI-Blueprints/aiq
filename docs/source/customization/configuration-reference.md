@@ -92,13 +92,13 @@ and the [Observability](../deployment/observability.md) guide for:
 
 ## `llms` Section
 
-Defines named LLM instances. Each entry gets a user-chosen key (for example, `nemotron_nano_llm`) that agents reference.
+Defines named LLM instances. Each entry gets a user-chosen key (for example, `nemotron_super_llm`) that agents reference.
 
 ```yaml
 llms:
-  nemotron_nano_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.1
     top_p: 0.3
@@ -111,7 +111,7 @@ llms:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `_type` | `str` | **required** | LLM provider type. Use `nim` for NVIDIA NIM endpoints, `openai` for OpenAI-compatible endpoints. |
-| `model_name` | `str` | **required** | Model identifier (for example, `nvidia/nemotron-3-nano-30b-a3b`, `azure/openai/gpt-4.1-mini`). |
+| `model_name` | `str` | **required** | Model identifier (for example, `nvidia/nemotron-3-super-120b-a12b`, `azure/openai/gpt-4.1-mini`). |
 | `base_url` | `str` | `None` | API endpoint URL. Should always be set explicitly for NVIDIA NIM endpoints. |
 | `api_key` | `str` | -- | API key. If omitted, uses `NVIDIA_API_KEY` from the environment. |
 | `temperature` | `float` | `None` | Sampling temperature. Lower values produce more deterministic output. When `None`, the API uses its server-side default. |
@@ -347,24 +347,26 @@ Multi-phase research agent with separate orchestrator, planner, and researcher s
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    planner_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
+    orchestrator_llm: nemotron_super_llm
+    source_router_llm: nemotron_super_llm
+    researcher_llm: nemotron_super_llm
+    planner_llm: nemotron_super_llm
+    writer_llm: gpt_oss_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool
       - knowledge_search
-    max_loops: 2
     verbose: true
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `orchestrator_llm` | `str` | **required** | LLM for the orchestrator that coordinates the research workflow. |
+| `source_router_llm` | `str` | `None` | LLM for the source-router sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `researcher_llm` | `str` | `None` | LLM for the researcher sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `planner_llm` | `str` | `None` | LLM for the planner sub-agent. Falls back to `orchestrator_llm` if not specified. |
+| `writer_llm` | `str` | `None` | LLM for the final writer/synthesis sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `tools` | `list[str]` | `[]` | Search tools available to the researcher sub-agent. |
-| `max_loops` | `int` | `2` | Maximum number of orchestrator planning/research loops. |
 | `verbose` | `bool` | `true` | Enable verbose logging. |
 
 ---
@@ -415,7 +417,7 @@ general:
 llms:
   intent_llm:                          # Used by intent classifier
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.5
     top_p: 0.9
@@ -426,7 +428,7 @@ llms:
 
   research_llm:                        # Used by shallow researcher + clarifier
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.1
     top_p: 0.3
@@ -437,7 +439,7 @@ llms:
 
   deep_llm:                            # Used by deep research orchestrator
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 1.0
     top_p: 1.0
@@ -491,10 +493,12 @@ functions:
   deep_research_agent:                 # Multi-phase deep research
     _type: deep_research_agent
     orchestrator_llm: deep_llm
+    researcher_llm: research_llm
+    source_router_llm: research_llm
+    writer_llm: deep_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool
-    max_loops: 2
 
 # Top-level orchestrator
 workflow:

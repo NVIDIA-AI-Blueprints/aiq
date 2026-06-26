@@ -100,7 +100,10 @@ export const checkStorageHealth = (): {
 /**
  * Get chat store data from localStorage
  */
-const getChatStoreData = (): { conversations: Conversation[]; currentConversationId: string | null } | null => {
+const getChatStoreData = (): {
+  conversations: Conversation[]
+  currentConversationId: string | null
+} | null => {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (!stored) return null
@@ -222,7 +225,7 @@ export const cleanupOldSessions = (
   const now = Date.now()
   while (isAboveTarget() && !hitLimit()) {
     const staleCandidates = conversations.filter(
-      (c) => !protectedIds.has(c.id) && (now - getUpdatedAtMs(c)) > STALE_SESSION_MS
+      (c) => !protectedIds.has(c.id) && now - getUpdatedAtMs(c) > STALE_SESSION_MS
     )
     const oldest = pickOldest(staleCandidates)
     if (!oldest) break
@@ -248,38 +251,6 @@ export const cleanupOldSessions = (
   }
 
   return deletedSessionIds.length
-}
-
-/**
- * Compute IDs of sessions whose updatedAt is older than STALE_SESSION_MS
- * (24 hours) — mirrors the backend job_info TTL (expiry_seconds: 86400).
- * After that window, "View Report" loads from the backend and would 404,
- * so the local stub becomes a ghost entry that confuses users.
- *
- * Protection rules:
- * - Sessions with a non-terminal deep research job in their message history
- *   (hasActiveDeepResearchJob) are kept regardless of age, since deleting
- *   them would orphan an in-flight backend job.
- * - Sessions with a missing or unparseable updatedAt (NaN) are kept, so
- *   malformed persisted state never triggers silent data loss.
- *
- * Pure: does not touch localStorage. Use this from contexts that already
- * own the in-memory snapshot (e.g. Zustand actions) so persist middleware
- * handles the single write.
- */
-export const getExpiredSessionIds = (
-  conversations: Conversation[],
-  now: number = Date.now()
-): string[] => {
-  const protectedIds = getBusySessionIds(conversations)
-  const ids: string[] = []
-  for (const c of conversations) {
-    if (protectedIds.has(c.id)) continue
-    const updated = getUpdatedAtMs(c)
-    if (!Number.isFinite(updated)) continue
-    if (now - updated > STALE_SESSION_MS) ids.push(c.id)
-  }
-  return ids
 }
 
 /**

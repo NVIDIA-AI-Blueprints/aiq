@@ -15,6 +15,7 @@
 
 """Tests for custom middleware."""
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -24,6 +25,9 @@ from langchain_core.messages import ToolMessage
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
+from aiq_agent.agents.deep_researcher.tools.source_registry import build_get_verified_sources_tool
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
 
@@ -119,6 +123,43 @@ class TestToolNameSanitizationMiddleware:
 
         assert result.result[0].content == "Just text, no tools"
         assert not result.result[0].tool_calls
+
+
+class TestToolVisibilityMiddleware:
+    """Tests for hiding tools from model requests."""
+
+    def test_wrap_model_call_filters_hidden_tools(self):
+        middleware = ToolVisibilityMiddleware(hidden_tool_names={"execute"})
+        execute_tool = SimpleNamespace(name="execute")
+        read_file_tool = SimpleNamespace(name="read_file")
+        mock_request = MagicMock()
+        mock_request.tools = [execute_tool, read_file_tool, {"function": {"name": "execute"}}]
+        filtered_request = MagicMock()
+        mock_request.override.return_value = filtered_request
+        mock_handler = MagicMock(return_value="ok")
+
+        result = middleware.wrap_model_call(mock_request, mock_handler)
+
+        assert result == "ok"
+        mock_request.override.assert_called_once_with(tools=[read_file_tool])
+        mock_handler.assert_called_once_with(filtered_request)
+
+    @pytest.mark.asyncio
+    async def test_awrap_model_call_filters_hidden_tools(self):
+        middleware = ToolVisibilityMiddleware(hidden_tool_names={"execute"})
+        execute_tool = SimpleNamespace(name="execute")
+        read_file_tool = SimpleNamespace(name="read_file")
+        mock_request = MagicMock()
+        mock_request.tools = [execute_tool, read_file_tool, {"function": {"name": "execute"}}]
+        filtered_request = MagicMock()
+        mock_request.override.return_value = filtered_request
+        mock_handler = AsyncMock(return_value="ok")
+
+        result = await middleware.awrap_model_call(mock_request, mock_handler)
+
+        assert result == "ok"
+        mock_request.override.assert_called_once_with(tools=[read_file_tool])
+        mock_handler.assert_awaited_once_with(filtered_request)
 
 
 class TestSourceRegistryMiddleware:
@@ -334,6 +375,47 @@ class TestSourceRegistryMiddleware:
         urls = {s.url for s in middleware.registry.all_sources()}
         assert "https://a.com" in urls
         assert "https://b.com" in urls
+
+    def test_get_verified_sources_defaults_to_research_note_compact_subset(self, middleware):
+        """The writer-facing source list prefers sources carried forward by ResearchNotes."""
+        middleware.registry.add(SourceEntry(url="https://used.example/report", title="Used Report"))
+        middleware.registry.add(SourceEntry(url="https://unused.example/report", title="Unused Report"))
+        middleware.register_research_note_sources(
+            [SimpleNamespace(sources=[SimpleNamespace(locator="https://used.example/report")])]
+        )
+        tool = build_get_verified_sources_tool(middleware)
+
+        compact = tool.invoke({})
+        full = tool.invoke({"mode": "full"})
+        compact_entries = middleware.get_source_entries()
+        full_entries = middleware.get_source_entries(mode="full")
+
+        assert "https://used.example/report" in compact
+        assert "https://unused.example/report" not in compact
+        assert [entry.url for entry in compact_entries] == ["https://used.example/report"]
+        assert "https://used.example/report" in full
+        assert "https://unused.example/report" in full
+        assert {entry.url for entry in full_entries} == {
+            "https://used.example/report",
+            "https://unused.example/report",
+        }
+
+    def test_get_verified_sources_compact_matches_internal_citation_keys(self, middleware):
+        """Compact source filtering also works for URL-less internal citation keys."""
+        middleware.registry.add(SourceEntry(citation_key="report.pdf, p.5", title="report.pdf"))
+        middleware.registry.add(SourceEntry(citation_key="other.pdf, p.9", title="other.pdf"))
+        middleware.register_research_note_sources(
+            [SimpleNamespace(sources=[SimpleNamespace(locator="report.pdf, p.5")])]
+        )
+        tool = build_get_verified_sources_tool(middleware)
+
+        compact = tool.invoke({})
+        full = tool.invoke({"mode": "full"})
+
+        assert "report.pdf, p.5" in compact
+        assert "other.pdf, p.9" not in compact
+        assert "report.pdf, p.5" in full
+        assert "other.pdf, p.9" in full
 
     # -- Edge cases --
 

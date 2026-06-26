@@ -10,13 +10,22 @@ import { AppBar } from './AppBar'
 const mockToggleSessionsPanel = vi.fn()
 const mockOpenRightPanel = vi.fn()
 const mockCloseRightPanel = vi.fn()
+const mockSetTheme = vi.fn()
 
 const mockState = () => ({
   toggleSessionsPanel: mockToggleSessionsPanel,
   rightPanel: null as string | null,
   openRightPanel: mockOpenRightPanel,
   closeRightPanel: mockCloseRightPanel,
+  theme: 'system',
+  setTheme: mockSetTheme,
 })
+
+const expectElementBefore = (first: Element, second: Element) => {
+  expect(Boolean(first.compareDocumentPosition(second) & Node.DOCUMENT_POSITION_FOLLOWING)).toBe(
+    true
+  )
+}
 
 vi.mock('../store', () => ({
   useLayoutStore: Object.assign(
@@ -74,7 +83,7 @@ describe('AppBar', () => {
     expect(screen.getByRole('button', { name: /create new session/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).toBeDisabled()
     expect(screen.getByRole('button', { name: /add data sources/i })).toBeDisabled()
-    expect(screen.getByRole('button', { name: /open settings/i })).toBeDisabled()
+    expect(screen.queryByRole('button', { name: /open documentation/i })).not.toBeInTheDocument()
   })
 
   test('enables action buttons when authenticated', () => {
@@ -83,7 +92,7 @@ describe('AppBar', () => {
     expect(screen.getByRole('button', { name: /create new session/i })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).not.toBeDisabled()
     expect(screen.getByRole('button', { name: /add data sources/i })).not.toBeDisabled()
-    expect(screen.getByRole('button', { name: /open settings/i })).not.toBeDisabled()
+    expect(screen.queryByRole('button', { name: /open documentation/i })).not.toBeInTheDocument()
   })
 
   test('calls onNewSession when logo button clicked', async () => {
@@ -125,28 +134,35 @@ describe('AppBar', () => {
     expect(mockOpenRightPanel).toHaveBeenCalledWith('data-sources')
   })
 
-  test('opens settings panel when Settings clicked', async () => {
-    const user = userEvent.setup()
-
-    render(<AppBar isAuthenticated={true} />)
-
-    await user.click(screen.getByRole('button', { name: /open settings/i }))
-
-    expect(mockOpenRightPanel).toHaveBeenCalledWith('settings')
-  })
-
-  test('renders Docs button that opens in new tab', () => {
+  test('does not render Documentation in the top navigation', () => {
     render(<AppBar />)
 
-    const docsButton = screen.getByRole('button', { name: /open documentation/i })
-    expect(docsButton).toBeInTheDocument()
-    expect(docsButton).not.toBeDisabled() // Docs always accessible
+    expect(screen.queryByRole('button', { name: /open documentation/i })).not.toBeInTheDocument()
+    expect(screen.queryByText('Documentation')).not.toBeInTheDocument()
   })
 
   test('shows user avatar when authenticated', () => {
     render(<AppBar isAuthenticated={true} authRequired={true} user={{ name: 'John Doe', email: 'john@example.com' }} />)
 
     expect(screen.getByRole('button', { name: /user menu for john doe/i })).toBeInTheDocument()
+  })
+
+  test('shows Documentation section in authenticated user menu', async () => {
+    const user = userEvent.setup()
+
+    render(
+      <AppBar
+        isAuthenticated={true}
+        authRequired={true}
+        user={{ name: 'John Doe', email: 'john@example.com' }}
+      />
+    )
+
+    await user.click(screen.getByRole('button', { name: /user menu for john doe/i }))
+
+    expect(screen.getByText('Appearance')).toBeInTheDocument()
+    expect(screen.getByText('Documentation')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /github docs/i })).toBeInTheDocument()
   })
 
   describe('auth disabled mode', () => {
@@ -166,7 +182,7 @@ describe('AppBar', () => {
       expect(screen.queryByRole('button', { name: /sign in/i })).not.toBeInTheDocument()
     })
 
-    test('shows auth disabled popover with info message when clicked', async () => {
+    test('shows auth disabled popover with info message before appearance and docs', async () => {
       const user = userEvent.setup()
 
       render(<AppBar isAuthenticated={true} authRequired={false} />)
@@ -176,9 +192,34 @@ describe('AppBar', () => {
       })
       await user.click(avatarButton)
 
-      // Popover should show "Default User" and info message
+      // Popover should show "Default User", auth notice, theme control, and docs.
       expect(screen.getByText('Default User')).toBeInTheDocument()
-      expect(screen.getByText('Authentication Not Configured')).toBeInTheDocument()
+      expect(screen.getByRole('radiogroup', { name: /theme/i })).toBeInTheDocument()
+      const authNotice = screen.getByText('Authentication Not Configured')
+      const appearanceSection = screen.getByText('Appearance')
+      const docsSection = screen.getByText('Documentation')
+      expect(authNotice).toBeInTheDocument()
+      expect(docsSection).toBeInTheDocument()
+      expect(screen.getByRole('link', { name: /github docs/i })).toBeInTheDocument()
+      expectElementBefore(authNotice, appearanceSection)
+      expectElementBefore(appearanceSection, docsSection)
+    })
+
+    test('uses the KUI popover with the app background surface for user settings', async () => {
+      const user = userEvent.setup()
+
+      render(<AppBar isAuthenticated={true} authRequired={false} />)
+
+      await user.click(screen.getByRole('button', {
+        name: /default user.*authentication not configured/i,
+      }))
+
+      const popoverContent = screen.getByTestId('nv-popover-content')
+      expect(popoverContent).toHaveClass('nv-popover-content')
+      expect(popoverContent).toHaveClass('bg-surface-base')
+      expect(popoverContent).not.toHaveClass('!bg-transparent')
+      expect(popoverContent).not.toHaveClass('!shadow-none')
+      expect(popoverContent).not.toHaveStyle({ backgroundColor: 'transparent' })
     })
 
     test('does not show Sign Out button when auth is disabled', async () => {
@@ -201,7 +242,7 @@ describe('AppBar', () => {
       expect(screen.getByRole('button', { name: /create new session/i })).not.toBeDisabled()
       expect(screen.getByRole('button', { name: /toggle sessions sidebar/i })).not.toBeDisabled()
       expect(screen.getByRole('button', { name: /add data sources/i })).not.toBeDisabled()
-      expect(screen.getByRole('button', { name: /open settings/i })).not.toBeDisabled()
+      expect(screen.queryByRole('button', { name: /open documentation/i })).not.toBeInTheDocument()
     })
 
     test('shows session title when auth is disabled', () => {

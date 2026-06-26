@@ -1,18 +1,32 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { useLayoutStore } from './store'
+
+const mockGetDataSources = vi.hoisted(() => vi.fn())
+
+vi.mock('@/adapters/api', () => ({
+  createDataSourcesClient: vi.fn(() => ({
+    getDataSources: mockGetDataSources,
+  })),
+}))
 
 describe('useLayoutStore', () => {
   beforeEach(() => {
+    mockGetDataSources.mockReset()
     // Reset store to initial state before each test (matches store.ts initialState)
     useLayoutStore.setState({
       isSessionsPanelOpen: false,
       rightPanel: 'data-sources',
-      researchPanelTab: 'plan',
+      researchPanelTab: 'tasks',
       dataSourcesPanelTab: 'connections',
+      enabledDataSourceIds: [],
       theme: 'system',
+      availableDataSources: null,
+      knowledgeLayerAvailable: false,
+      dataSourcesLoading: false,
+      dataSourcesError: null,
     })
   })
 
@@ -22,7 +36,7 @@ describe('useLayoutStore', () => {
 
       expect(state.isSessionsPanelOpen).toBe(false)
       expect(state.rightPanel).toBe('data-sources')
-      expect(state.researchPanelTab).toBe('plan')
+      expect(state.researchPanelTab).toBe('tasks')
       expect(state.dataSourcesPanelTab).toBe('connections')
     })
   })
@@ -125,12 +139,6 @@ describe('useLayoutStore', () => {
       expect(useLayoutStore.getState().researchPanelTab).toBe('thinking')
     })
 
-    test('sets citations tab', () => {
-      useLayoutStore.getState().setResearchPanelTab('citations')
-
-      expect(useLayoutStore.getState().researchPanelTab).toBe('citations')
-    })
-
     test('sets report tab', () => {
       useLayoutStore.setState({ researchPanelTab: 'thinking' })
 
@@ -175,6 +183,26 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setTheme('system')
 
       expect(useLayoutStore.getState().theme).toBe('system')
+    })
+  })
+
+  describe('fetchDataSources', () => {
+    test('enables all returned sources by default', async () => {
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          { id: 'web_search', name: 'Web Search', requires_auth: false },
+          { id: 'knowledge_base', name: 'Knowledge Base', requires_auth: true },
+        ],
+        knowledge_layer: true,
+      })
+
+      await useLayoutStore.getState().fetchDataSources('token-1')
+
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual([
+        'web_search',
+        'knowledge_base',
+      ])
+      expect(useLayoutStore.getState().knowledgeLayerAvailable).toBe(true)
     })
   })
 })

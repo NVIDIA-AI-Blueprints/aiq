@@ -58,7 +58,7 @@ The orchestrator and subagents use middleware for task management and state pers
 
 ### Subagent Middleware
 
-Each subagent (planner-agent, researcher-agent) has its own middleware stack:
+Declarative subagents such as planner-agent and writer-agent receive DeepAgents runtime middleware:
 
 | Middleware | Purpose |
 |------------|---------|
@@ -66,6 +66,8 @@ Each subagent (planner-agent, researcher-agent) has its own middleware stack:
 | `FilesystemMiddleware` | Manages subagent-level state |
 | `EmptyContentFixMiddleware` | Handles empty content |
 | `ModelRetryMiddleware` | Retries model calls with backoff |
+
+Isolated researcher workers launched by `run_research_batch` do not use `TodoListMiddleware`; they return structured `ResearchNotes` directly.
 
 ## Workflow Phases
 
@@ -119,9 +121,11 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: nemotron_nano_llm   # LLM for orchestrator; replace with nemotron_super_llm if available
+    source_router_llm: nemotron_nano_llm  # optional source-router model
     researcher_llm: nemotron_nano_llm    # optional; replace with nemotron_super_llm if available
     planner_llm: nemotron_nano_llm        # optional; replace with nemotron_super_llm if available
-    max_loops: 2                     # Maximum research iterations
+    writer_llm: nemotron_nano_llm         # optional final writer model
+    enable_source_router: true            # set false to skip advisory source routing
     verbose: true                    # Enable detailed logging
     tools:
       - web_search_tool              # Search tools (e.g. tavily_web_search, paper_search)
@@ -132,10 +136,12 @@ functions:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `orchestrator_llm` | LLMRef | required | LLM for orchestrator and report generation |
+| `source_router_llm` | LLMRef | optional | LLM for source-router subagent; falls back to default if unset |
 | `researcher_llm` | LLMRef | optional | LLM for researcher subagent; falls back to default if unset |
 | `planner_llm` | LLMRef | optional | LLM for planner subagent; falls back to default if unset |
+| `writer_llm` | LLMRef | optional | LLM for final writer subagent; falls back to default if unset |
+| `enable_source_router` | bool | `true` | Enable advisory source routing before planning |
 | `tools` | list | `[]` | Research tools (web search, paper search, etc.) |
-| `max_loops` | int | `2` | Maximum research iterations |
 | `verbose` | bool | `true` | Enable detailed logging |
 
 ### Workflow: `deep_research_workflow`
@@ -209,7 +215,6 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    max_loops: 2
     tools:
       - web_search_tool
 

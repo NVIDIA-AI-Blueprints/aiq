@@ -16,7 +16,7 @@ export type ThemeMode = 'light' | 'dark' | 'system'
 export type RightPanelType = 'research' | 'data-sources' | 'settings' | null
 
 /** Tabs within the Research panel */
-export type ResearchPanelTab = 'plan' | 'tasks' | 'thinking' | 'citations' | 'report'
+export type ResearchPanelTab = 'tasks' | 'thinking' | 'report'
 
 /** Tabs within the DataSources panel */
 export type DataSourcesPanelTab = 'connections' | 'files'

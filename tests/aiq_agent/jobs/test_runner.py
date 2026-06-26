@@ -1302,10 +1302,81 @@ class TestSQLAlchemyPoolFilter:
 class TestAsyncJobRunnerAgentFactory:
     """Tests for async job agent construction."""
 
-    def test_create_agent_instance_passes_config_and_job_id_when_supported(self):
-        """Async workers can receive generic function config without runner-specific agent knowledge."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+    @pytest.mark.asyncio
+    async def test_create_llm_provider_configures_deep_research_roles(self):
+        """Async workers honor all deep-research role-specific LLM config fields."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_llm_provider
+
+        llms = {
+            "orchestrator": MagicMock(name="orchestrator_llm"),
+            "router": MagicMock(name="source_router_llm"),
+            "planner": MagicMock(name="planner_llm"),
+            "researcher": MagicMock(name="researcher_llm"),
+            "writer": MagicMock(name="writer_llm"),
+        }
+
+        async def get_llm(llm_ref, wrapper_type):
+            return llms[llm_ref]
+
+        builder = MagicMock()
+        builder.get_llm = AsyncMock(side_effect=get_llm)
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="orchestrator",
+            source_router_llm="router",
+            planner_llm="planner",
+            researcher_llm="researcher",
+            writer_llm="writer",
+        )
+
+        provider, default_llm = await _create_llm_provider(builder, fn_config)
+
+        assert default_llm is llms["orchestrator"]
+        assert provider.get(LLMRole.ORCHESTRATOR) is llms["orchestrator"]
+        assert provider.get(LLMRole.ROUTER) is llms["router"]
+        assert provider.get(LLMRole.PLANNER) is llms["planner"]
+        assert provider.get(LLMRole.RESEARCHER) is llms["researcher"]
+        assert provider.get(LLMRole.REPORT_WRITER) is llms["writer"]
+        assert builder.get_llm.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_create_llm_provider_reuses_shared_llm_refs(self):
+        """Shared role/default LLM refs should initialize one wrapper instance."""
+        from types import SimpleNamespace
+
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_llm_provider
+
+        shared_llm = MagicMock(name="shared_llm")
+
+        async def get_llm(llm_ref, wrapper_type):
+            assert llm_ref == "shared"
+            return shared_llm
+
+        builder = MagicMock()
+        builder.get_llm = AsyncMock(side_effect=get_llm)
+        fn_config = SimpleNamespace(
+            source_router_llm="shared",
+            planner_llm="shared",
+            researcher_llm="shared",
+            writer_llm="shared",
+            llm="shared",
+        )
+
+        provider, default_llm = await _create_llm_provider(builder, fn_config)
+
+        assert default_llm is shared_llm
+        assert provider.get(LLMRole.ROUTER) is shared_llm
+        assert provider.get(LLMRole.PLANNER) is shared_llm
+        assert provider.get(LLMRole.RESEARCHER) is shared_llm
+        assert provider.get(LLMRole.REPORT_WRITER) is shared_llm
+        builder.get_llm.assert_awaited_once()
+
+    def test_create_agent_instance_passes_deep_research_config_as_explicit_args(self):
+        """Async workers pass DeepResearchAgentConfig fields through the explicit constructor surface."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_api.jobs.runner import _create_agent_instance
 
@@ -1315,25 +1386,42 @@ class TestAsyncJobRunnerAgentFactory:
                 *,
                 llm_provider,
                 tools,
-                max_loops,
                 verbose,
                 callbacks,
-                config=None,
+                domain_catalog_path=None,
+                enable_source_router=True,
+                enable_citation_verification=True,
+                skills=None,
+                sandbox=None,
                 job_id=None,
+                max_research_concurrency=None,
+                max_concurrent_source_tool_calls=None,
+                max_source_tool_batch_size=None,
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
-                self.max_loops = max_loops
                 self.verbose = verbose
                 self.callbacks = callbacks
-                self.config = config
+                self.domain_catalog_path = domain_catalog_path
+                self.enable_source_router = enable_source_router
+                self.enable_citation_verification = enable_citation_verification
+                self.skills = skills
+                self.sandbox = sandbox
                 self.job_id = job_id
+                self.max_research_concurrency = max_research_concurrency
+                self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
+                self.max_source_tool_batch_size = max_source_tool_batch_size
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            max_loops=7,
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            enable_citation_verification=False,
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
+            max_research_concurrency=2,
+            max_concurrent_source_tool_calls=3,
+            max_source_tool_batch_size=4,
         )
 
         agent = _create_agent_instance(
@@ -1347,22 +1435,65 @@ class TestAsyncJobRunnerAgentFactory:
             job_id="job-123",
         )
 
-        assert agent.max_loops == 7
         assert agent.job_id == "job-123"
-        assert agent.config is fn_config
-        assert agent.config.skills.enabled is True
-        assert agent.config.skills.sources == ("/skills/",)
-        assert agent.config.sandbox is not None
-        assert agent.config.sandbox.app_name == "async-aiq"
+        assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
+        assert agent.enable_source_router is False
+        assert agent.enable_citation_verification is False
+        assert agent.skills is fn_config.skills
+        assert agent.skills.agents == {"writer-agent": ("synthesis",)}
+        assert agent.sandbox is fn_config.sandbox
+        assert agent.sandbox is not None
+        assert agent.sandbox.app_name == "async-aiq"
+        assert agent.max_research_concurrency == 2
+        assert agent.max_concurrent_source_tool_calls == 3
+        assert agent.max_source_tool_batch_size == 4
 
-    def test_async_deep_researcher_constructor_gets_rendered_skill_instructions(self):
-        """Async job construction preserves skills/sandbox config through orchestrator prompt creation."""
+    def test_async_deep_researcher_constructor_applies_config_tuning(self):
+        """Async construction preserves catalog and concurrency settings."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMProvider
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        mock_llm = MagicMock()
+        provider = LLMProvider()
+        provider.set_default(mock_llm)
+        provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            max_research_concurrency=2,
+            max_concurrent_source_tool_calls=3,
+            max_source_tool_batch_size=4,
+        )
+
+        agent = _create_agent_instance(
+            agent_cls=DeepResearcherAgent,
+            llm_provider=provider,
+            llm=mock_llm,
+            tools=[],
+            fn_config=fn_config,
+            verbose=False,
+            callbacks=[],
+            job_id="async-job-123",
+        )
+
+        assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
+        assert agent.enable_source_router is False
+        assert agent.max_research_concurrency == 2
+        assert agent.max_concurrent_source_tool_calls == 3
+        assert agent.max_source_tool_batch_size == 4
+
+    def test_async_deep_researcher_constructor_preserves_writer_skills(self):
+        """Async job construction preserves writer-only skills and sandbox job scoping."""
         from langchain_core.messages import HumanMessage
         from langchain_core.tools import tool
 
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_agent.common import LLMProvider
@@ -1380,10 +1511,11 @@ class TestAsyncJobRunnerAgentFactory:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
         )
         mock_deep_agent = MagicMock()
         mock_deep_agent.with_config.return_value = mock_deep_agent
@@ -1392,11 +1524,19 @@ class TestAsyncJobRunnerAgentFactory:
             patch(
                 "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
                 return_value=MagicMock(),
-            ),
+            ) as create_backend,
             patch(
-                "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
                 return_value=mock_deep_agent,
             ) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_summarization_middleware",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
+                return_value=MagicMock(),
+            ),
         ):
             agent = _create_agent_instance(
                 agent_cls=DeepResearcherAgent,
@@ -1420,14 +1560,18 @@ class TestAsyncJobRunnerAgentFactory:
             agent._build_orchestrator_agent(state)
 
         kwargs = create.call_args.kwargs
-        assert kwargs["skills"] == ["/skills/"]
-        assert "Available Skills:" in kwargs["system_prompt"]
-        assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" in kwargs["system_prompt"]
-        assert 'execute("python /workspace/[name].py")' in kwargs["system_prompt"]
-        assert "Tell the planner to account for available skills" in kwargs["system_prompt"]
-        assert "Include any applicable skill-use requirements from the plan" in kwargs["system_prompt"]
+        assert "skills" not in kwargs
+        subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
+        assert "skills" not in subagents["planner-agent"]
+        assert subagents["writer-agent"]["skills"] == ["/skills/synthesis/"]
+        assert "Available Skills:" not in kwargs["system_prompt"]
+        assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" not in kwargs["system_prompt"]
+        assert 'execute("python /workspace/[name].py")' not in kwargs["system_prompt"]
+        assert "Skills System" not in kwargs["system_prompt"]
+        assert "Shell commands cannot see `/shared/`" in kwargs["system_prompt"]
+        assert "writer-agent" in kwargs["system_prompt"]
         assert "data-table-analysis" not in kwargs["system_prompt"]
-        assert agent.deepagents_runtime.job_id == "async-job-123"
+        assert create_backend.call_args.args[1] == "async-job-123"
 
     def test_async_deep_researcher_empty_data_sources_keeps_internal_tools(self):
         """Explicit empty data_sources disables source tools but keeps DeepResearcher helpers."""
@@ -1446,10 +1590,21 @@ class TestAsyncJobRunnerAgentFactory:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         mock_deep_agent = MagicMock()
         mock_deep_agent.with_config.return_value = mock_deep_agent
 
-        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_deep_agent) as create:
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_deep_agent) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_summarization_middleware",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
+                return_value=MagicMock(),
+            ),
+        ):
             agent = _create_agent_instance(
                 agent_cls=DeepResearcherAgent,
                 llm_provider=provider,
@@ -1464,14 +1619,19 @@ class TestAsyncJobRunnerAgentFactory:
             agent._build_orchestrator_agent(state)
 
         tool_names = [tool.name for tool in create.call_args.kwargs["tools"]]
-        assert tool_names == ["think", "get_verified_sources"]
-        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == tool_names
-        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == tool_names
+        assert tool_names == ["think", "get_verified_sources", "run_research_batch"]
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == [
+            "lookup_source_catalog",
+        ]
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == [
+            "think",
+            "get_verified_sources",
+        ]
 
-    def test_create_agent_instance_does_not_drop_config_on_internal_type_error(self):
-        """Constructor bugs must not silently fall back to no-config construction."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+    def test_create_agent_instance_does_not_swallow_deep_research_constructor_type_error(self):
+        """Constructor bugs must not silently fall back to another construction pattern."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_api.jobs.runner import _create_agent_instance
 
@@ -1481,18 +1641,24 @@ class TestAsyncJobRunnerAgentFactory:
                 *,
                 llm_provider,
                 tools,
-                max_loops,
                 verbose,
                 callbacks,
-                config=None,
+                domain_catalog_path=None,
+                enable_source_router=True,
+                enable_citation_verification=True,
+                skills=None,
+                sandbox=None,
                 job_id=None,
+                max_research_concurrency=None,
+                max_concurrent_source_tool_calls=None,
+                max_source_tool_batch_size=None,
             ):
                 raise TypeError("internal constructor failure")
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
         )
 
         with pytest.raises(TypeError, match="internal constructor failure"):

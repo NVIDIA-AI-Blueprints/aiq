@@ -1,0 +1,62 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# Domain catalog for deep research source routing.
+#
+# This file is intentionally data-only. Add, remove, or revise domains here
+# without changing Python source code. Source IDs must match entries in the
+# data_source_registry for the active workflow config.
+
+default_domain_id: general_research
+
+domains:
+  - domain_id: general_research
+    domain_name: General Research
+    description: Broad factual research, explainers, company/product research, and mixed-domain questions.
+    preferred_source_ids:
+      - knowledge_layer
+      - web_search
+    fallback_source_ids:
+      - web_search
+    is_default: true
+
+  - domain_id: scholarly_technical
+    domain_name: Scholarly and Technical Research
+    description: Scientific, engineering, medical, benchmark, method, paper, and standards-heavy questions.
+    preferred_source_ids:
+      - paper_search
+      - web_search
+      - knowledge_layer
+    fallback_source_ids:
+      - web_search
+
+  - domain_id: market_forecasting
+    domain_name: Market Forecasting
+    description: Markets, probabilities, companies, commodities, crypto, elections, and forward-looking outcomes.
+    preferred_source_ids:
+      - prediction_market
+      - news_search
+      - web_search
+    fallback_source_ids:
+      - web_search
+
+  - domain_id: current_news
+    domain_name: Current News
+    description: Recent events, breaking developments, announcements, and fast-changing public facts.
+    preferred_source_ids:
+      - news_search
+      - web_search
+    fallback_source_ids:
+      - web_search

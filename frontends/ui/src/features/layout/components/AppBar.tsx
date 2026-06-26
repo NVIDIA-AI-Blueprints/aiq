@@ -5,7 +5,7 @@
  * AppBar Component
  *
  * Top navigation bar with menu toggle, logo, session title,
- * and action buttons (Add Sources, Settings, Docs, User Avatar).
+ * and action buttons (Add Sources, User Avatar).
  *
  * Shows different states based on authentication:
  * - Auth disabled: Default User avatar with info tooltip (no sign in/out)
@@ -17,8 +17,9 @@
 
 import { type FC, memo, useCallback, useState } from 'react'
 import { Flex, Text, Button, Logo, Avatar, Popover, Divider } from '@/adapters/ui'
-import { Globe, Settings, Book, Lock, Logout, ChevronRight, Info, ChatMessage } from '@/adapters/ui/icons'
+import { Globe, Book, Lock, Logout, OpenExternal, Info, Moon, Sun, ChatMessage } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
+import type { ThemeMode } from '../types'
 
 interface AppBarProps {
   /** Current session title to display */
@@ -74,20 +75,6 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
       openRightPanel('data-sources')
     }
   }, [isAuthenticated])
-
-  const handleSettingsClick = useCallback(() => {
-    if (!isAuthenticated) return
-    const { rightPanel, closeRightPanel, openRightPanel } = useLayoutStore.getState()
-    if (rightPanel === 'settings') {
-      closeRightPanel()
-    } else {
-      openRightPanel('settings')
-    }
-  }, [isAuthenticated])
-
-  const handleDocsClick = useCallback(() => {
-    window.open('https://github.com/NVIDIA-AI-Blueprints/aiq', '_blank')
-  }, [])
 
   const handleNewSessionClick = useCallback(() => {
     if (!isAuthenticated || isNewSessionDisabled) return
@@ -173,34 +160,6 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
             </Flex>
           </Button>
 
-          <Button
-            kind="tertiary"
-            size="small"
-            onClick={handleSettingsClick}
-            disabled={!isAuthenticated}
-            aria-label="Open settings"
-            title="Open settings"
-          >
-            <Flex align="center" gap="1">
-              <Settings className="h-4 w-4" />
-              <Text kind="label/regular/md">Settings</Text>
-            </Flex>
-          </Button>
-
-          <Button
-            kind="tertiary"
-            size="small"
-            onClick={handleDocsClick}
-            aria-label="Open documentation"
-            title="Open documentation"
-          >
-            <Flex align="center" gap="1">
-              <Book className="h-4 w-4" />
-              <Text kind="label/regular/md">Docs</Text>
-              <ChevronRight className="h-3 w-3 -rotate-45" />
-            </Flex>
-          </Button>
-
           {/* User section: Auth not required notice, Avatar with dropdown, or Sign In button */}
           {!authRequired ? (
             <Popover
@@ -208,6 +167,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
               onOpenChange={setIsUserMenuOpen}
               side="bottom"
               align="end"
+              className="bg-surface-base"
               slotContent={<AuthDisabledContent />}
             >
               <Button
@@ -226,6 +186,7 @@ export const AppBar: FC<AppBarProps> = memo(function AppBar({
               onOpenChange={setIsUserMenuOpen}
               side="bottom"
               align="end"
+              className="bg-surface-base"
               slotContent={<UserDropdownContent user={user} onSignOut={handleSignOut} />}
             >
               <Button
@@ -275,6 +236,103 @@ interface UserDropdownContentProps {
   onSignOut?: () => void
 }
 
+const APPEARANCE_SEGMENTS: { mode: ThemeMode; label: string }[] = [
+  { mode: 'system', label: 'System' },
+  { mode: 'dark', label: 'Dark' },
+  { mode: 'light', label: 'Light' },
+]
+
+const DOCS_URL = 'https://github.com/NVIDIA-AI-Blueprints/aiq/tree/develop/docs'
+
+const AppearanceThemeControl: FC = () => {
+  const theme = useLayoutStore((s) => s.theme)
+  const setTheme = useLayoutStore((s) => s.setTheme)
+
+  return (
+    <Flex direction="col" gap="2">
+      <Text kind="label/regular/sm" className="text-subtle">
+        Appearance
+      </Text>
+      <Flex
+        align="center"
+        gap="1"
+        className="p-1"
+        role="radiogroup"
+        aria-label="Theme"
+        style={{
+          background: 'var(--color-component-track-background, #FFFFFF33)',
+          borderRadius: 'var(--radius-lg)',
+        }}
+      >
+        {APPEARANCE_SEGMENTS.map(({ mode, label }) => {
+          const selected = theme === mode
+          return (
+            <Button
+              key={mode}
+              type="button"
+              role="radio"
+              aria-checked={selected}
+              aria-label={`${label} theme`}
+              kind="tertiary"
+              size="small"
+              onClick={() => setTheme(mode)}
+              className={`h-auto min-h-9 flex-1 rounded-[var(--radius-md)] border-0 px-2 py-1.5 shadow-none transition-colors focus-visible:ring-2 focus-visible:ring-[var(--color-border-focus,#76b900)] ${
+                selected ? '!bg-black !text-white hover:!bg-black' : 'bg-transparent hover:bg-white/10'
+              }`}
+            >
+              <Flex align="center" justify="center" gap="1" className="w-full">
+                {mode === 'dark' ? (
+                  <Moon
+                    className={`h-4 w-4 shrink-0 ${selected ? '!text-white' : 'text-primary'}`}
+                    width={16}
+                    height={16}
+                  />
+                ) : null}
+                {mode === 'light' ? (
+                  <Sun
+                    className={`h-4 w-4 shrink-0 ${selected ? '!text-white' : 'text-primary'}`}
+                    width={16}
+                    height={16}
+                  />
+                ) : null}
+                <Text
+                  kind={selected ? 'label/semibold/sm' : 'label/regular/sm'}
+                  className={selected ? 'text-white' : 'text-primary'}
+                >
+                  {label}
+                </Text>
+              </Flex>
+            </Button>
+          )
+        })}
+      </Flex>
+    </Flex>
+  )
+}
+
+const DocumentationSection: FC = () => {
+  return (
+    <Flex direction="col" gap="2">
+      <Text kind="label/regular/sm" className="text-subtle">
+        Documentation
+      </Text>
+      <a
+        href={DOCS_URL}
+        target="_blank"
+        rel="noopener noreferrer"
+        aria-label="Open GitHub Docs"
+        className="flex w-full items-center justify-between rounded-[var(--radius-md)] px-2 py-2 text-primary transition-colors hover:bg-surface-raised-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--color-border-focus,#76b900)]"
+      >
+        <Flex align="center" gap="2">
+          <Book className="h-4 w-4 shrink-0" />
+          <Text kind="label/regular/sm">GitHub Docs</Text>
+        </Flex>
+        <OpenExternal className="h-4 w-4 shrink-0 text-subtle" />
+      </a>
+    </Flex>
+  )
+}
+
 const UserDropdownContent: FC<UserDropdownContentProps> = ({ user, onSignOut }) => {
   return (
     <Flex direction="col" gap="3" className="min-w-[240px] p-4">
@@ -296,6 +354,14 @@ const UserDropdownContent: FC<UserDropdownContentProps> = ({ user, onSignOut }) 
           )}
         </Flex>
       </Flex>
+
+      <Divider />
+
+      <AppearanceThemeControl />
+
+      <Divider />
+
+      <DocumentationSection />
 
       <Divider />
 
@@ -334,15 +400,21 @@ const AuthDisabledContent: FC = () => {
         </Flex>
       </Flex>
 
-      <Divider />
-
       {/* Info message */}
-      <Flex align="center" gap="2" className="rounded bg-[var(--background-color-surface-raised)] p-3">
+      <Flex align="center" gap="2" className="rounded border border-base p-3">
         <Info className="h-4 w-4 shrink-0 text-[var(--text-color-subtle)]" />
         <Text kind="body/regular/sm" className="text-subtle">
           Authentication Not Configured
         </Text>
       </Flex>
+
+      <Divider />
+
+      <AppearanceThemeControl />
+
+      <Divider />
+
+      <DocumentationSection />
     </Flex>
   )
 }

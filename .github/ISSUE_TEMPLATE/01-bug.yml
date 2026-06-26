@@ -1,0 +1,53 @@
+name: Bug Report
+description: Report a reproducible AI-Q defect.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Include enough detail for maintainers to reproduce the issue without access to your private environment.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction Steps
+      description: Provide the smallest command, config, prompt, or UI flow that reproduces the issue.
+      placeholder: |
+        1. Run ...
+        2. Open ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include AI-Q version or commit, Python version, OS, deployment mode, and relevant package versions.
+      placeholder: |
+        AI-Q commit:
+        Python:
+        OS:
+        Deployment:
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or Error Output
+      description: Paste relevant logs. Redact tokens, secrets, hostnames, and private data.
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-Submission Checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: I removed secrets, credentials, and private data from this report.
+          required: true

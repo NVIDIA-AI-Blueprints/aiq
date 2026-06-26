@@ -548,6 +548,23 @@ describe('useDeepResearch', () => {
     return hook
   }
 
+  /**
+   * Helper: render hook, advance timers to connect in replay-buffer mode.
+   *
+   * Sets deepResearchStatus to 'running' so the hook treats the connection
+   * as a restored job and buffers historical events until stream.mode="live".
+   */
+  const setupBufferedHook = async (overrides?: Partial<typeof mockStoreState>) => {
+    if (overrides) Object.assign(mockStoreState, overrides)
+    mockStoreState.deepResearchJobId = mockStoreState.deepResearchJobId || 'job-456'
+    mockStoreState.isDeepResearchStreaming = true
+    mockStoreState.deepResearchStatus = mockStoreState.deepResearchStatus || 'running'
+    const hook = renderHook(() => useDeepResearch())
+    await act(async () => { await advanceAndFlush(60) })
+    vi.clearAllMocks()
+    return hook
+  }
+
   describe('SSE callbacks', () => {
     test('onStreamStart sets status to researching', async () => {
       await setupConnectedHook()
@@ -557,6 +574,27 @@ describe('useDeepResearch', () => {
       })
 
       expect(mockSetCurrentStatus).toHaveBeenCalledWith('researching')
+    })
+
+    test('does not flush a replay buffer after the active job changes', async () => {
+      await setupBufferedHook({
+        deepResearchJobId: 'job-old',
+        deepResearchStatus: 'running',
+      })
+
+      act(() => {
+        mockClient?.callbacks.onOutputUpdate?.('Old job report', 'final_report')
+        mockClient?.callbacks.onCitationUpdate?.('https://old.example', 'Old citation', true)
+      })
+
+      mockStoreState.deepResearchJobId = 'job-new'
+
+      act(() => {
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      expect(useChatStore.setState).not.toHaveBeenCalled()
+      expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('researching')
     })
 
     test('onJobStatus success completes research and patches message', async () => {
@@ -823,6 +861,64 @@ describe('useDeepResearch', () => {
       expect(mockSetDeepResearchTodos).toHaveBeenCalledWith(todos)
     })
 
+    test('onTodoUpdate ignores workflow-scoped sub-agent todos', async () => {
+      await setupConnectedHook()
+
+      const todos = [
+        { id: '1', content: 'Review sources', status: 'in_progress' as const },
+      ]
+
+      act(() => {
+        mockClient?.callbacks.onTodoUpdate?.(todos, 'deep_research_agent')
+      })
+
+      expect(mockSetDeepResearchTodos).not.toHaveBeenCalled()
+    })
+
+    test('replay buffer restores root-level todos after refresh', async () => {
+      await setupBufferedHook()
+
+      const todos = [
+        { id: '1', content: 'Replay task', status: 'pending' as const },
+      ]
+
+      act(() => {
+        mockClient?.callbacks.onTodoUpdate?.(todos)
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      expect(replayCommit).toEqual(expect.any(Function))
+
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      expect(updates.deepResearchTodos).toEqual([
+        { id: 'todo-0-replay-task', content: 'Replay task', status: 'pending' },
+      ])
+    })
+
+    test('replay buffer ignores workflow-scoped sub-agent todos after refresh', async () => {
+      await setupBufferedHook()
+
+      const todos = [
+        { id: '1', content: 'Sub-agent task', status: 'pending' as const },
+      ]
+
+      act(() => {
+        mockClient?.callbacks.onTodoUpdate?.(todos, 'researcher-agent')
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      expect(replayCommit).toEqual(expect.any(Function))
+
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      expect(updates).not.toHaveProperty('deepResearchTodos')
+    })
+
     test('onCitationUpdate adds citation to store', async () => {
       await setupConnectedHook()
 
@@ -884,15 +980,37 @@ describe('useDeepResearch', () => {
       expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
     })
 
-    test('onOutputUpdate sets report content', async () => {
+    test('onOutputUpdate sets report content for final_report output', async () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onOutputUpdate?.('Report content here')
+        mockClient?.callbacks.onOutputUpdate?.('Report content here', 'final_report')
       })
 
-      expect(mockSetReportContent).toHaveBeenCalledWith('Report content here')
+      expect(mockSetReportContent).toHaveBeenCalledWith('Report content here', 'final_report')
       expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
+    })
+
+    test('onOutputUpdate ignores uncategorized output so failed jobs do not fill the report tab with JSON', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onOutputUpdate?.('{"status":"failure","error":"worker failed"}')
+      })
+
+      expect(mockSetReportContent).not.toHaveBeenCalled()
+      expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
+    })
+
+    test('onOutputUpdate ignores research notes because the report tab only shows final reports', async () => {
+      await setupConnectedHook()
+
+      act(() => {
+        mockClient?.callbacks.onOutputUpdate?.('Draft research notes', 'research_notes')
+      })
+
+      expect(mockSetReportContent).not.toHaveBeenCalled()
+      expect(mockSetCurrentStatus).not.toHaveBeenCalledWith('writing')
     })
 
     test('onComplete does not throw in live mode', async () => {

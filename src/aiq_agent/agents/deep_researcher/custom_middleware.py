@@ -27,6 +27,7 @@ from langchain_core.messages import ToolMessage
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 
@@ -160,6 +161,43 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
         return ModelResponse(result=new_result, structured_response=response.structured_response)
 
 
+def _request_tool_name(tool: object) -> str | None:
+    """Return a LangChain model-request tool name across common tool shapes."""
+    name = getattr(tool, "name", None)
+    if isinstance(name, str):
+        return name
+    if isinstance(tool, dict):
+        dict_name = tool.get("name")
+        if isinstance(dict_name, str):
+            return dict_name
+        function = tool.get("function")
+        if isinstance(function, dict):
+            function_name = function.get("name")
+            if isinstance(function_name, str):
+                return function_name
+    return None
+
+
+class ToolVisibilityMiddleware(AgentMiddleware):
+    """Hide selected tools from model requests without removing scaffolding middleware."""
+
+    def __init__(self, hidden_tool_names: set[str]) -> None:
+        self.hidden_tool_names = hidden_tool_names
+
+    def _filter_tools(self, tools: list[object]) -> list[object]:
+        if not self.hidden_tool_names:
+            return tools
+        return [tool for tool in tools if _request_tool_name(tool) not in self.hidden_tool_names]
+
+    def wrap_model_call(self, request, handler):
+        """Filter hidden tools before a synchronous model call."""
+        return handler(request.override(tools=self._filter_tools(request.tools)))
+
+    async def awrap_model_call(self, request, handler):
+        """Filter hidden tools before an asynchronous model call."""
+        return await handler(request.override(tools=self._filter_tools(request.tools)))
+
+
 class ToolRetryMiddleware(AgentMiddleware):
     """Retries failed tool calls with exponential backoff.
 
@@ -208,7 +246,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
     1. awrap_tool_call: Capture URLs/citation keys from tool results
     2. awrap_model_call: Inject a consolidated source list into the LLM context
        so the orchestrator has a single, authoritative reference list when
-       writing the final report (no manual reconciliation across subagent files)
+       writing the final report (no manual reconciliation across research-note files)
 
     Source capture is gated only by the agent's loaded tool set
     (``source_tool_names``). Internal scratchpad/runtime tools (think,
@@ -225,12 +263,46 @@ class SourceRegistryMiddleware(AgentMiddleware):
     def __init__(self, source_tool_names: set[str] | None = None) -> None:
         self.registry = SourceRegistry()
         self._source_tool_names = source_tool_names or set()
+        self._compact_source_keys: set[str] = set()
+        self._lock = asyncio.Lock()
 
-    def _get_registry(self) -> SourceRegistry:
+    def active_registry(self) -> SourceRegistry:
         """Return the session-scoped registry if set, otherwise the instance registry."""
         from aiq_agent.common.citation_verification import get_session_registry
 
         return get_session_registry() or self.registry
+
+    def has_sources(self) -> bool:
+        """Return True when the active source registry contains captured sources."""
+        return bool(self.active_registry().all_sources())
+
+    @staticmethod
+    def _locator_key(locator: str) -> str:
+        """Return the comparable key used for source locators and registry entries."""
+        locator = locator.strip()
+        if locator.startswith(("http://", "https://")):
+            from aiq_agent.common.citation_verification import _normalize_url
+
+            return _normalize_url(locator)
+        return locator
+
+    @classmethod
+    def _entry_key(cls, entry: SourceEntry) -> str | None:
+        """Return the comparable key for a registered source entry."""
+        if entry.url:
+            return cls._locator_key(entry.url)
+        if entry.citation_key:
+            return entry.citation_key.strip()
+        return None
+
+    def register_research_note_sources(self, notes: list[object]) -> None:
+        """Mark ResearchNotes source locators as the compact writer-facing citation set."""
+        for note in notes:
+            sources = getattr(note, "sources", None) or []
+            for source in sources:
+                locator = getattr(source, "locator", "")
+                if isinstance(locator, str) and locator.strip():
+                    self._compact_source_keys.add(self._locator_key(locator))
 
     async def awrap_tool_call(self, request, handler):
         """Capture sources from tool results after execution.
@@ -256,9 +328,10 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 return result
             source_id = get_source_id_for_tool(tool_name)
             sources = extract_sources_from_tool_result(tool_name, str(result.content), source_id=source_id)
-            active_registry = self._get_registry()
-            for source in sources:
-                active_registry.add(source)
+            async with self._lock:
+                active_registry = self.active_registry()
+                for source in sources:
+                    active_registry.add(source)
             if sources:
                 logger.info(
                     "[CitationRegistry] Captured %d source(s) from %s: %s",
@@ -268,8 +341,8 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 )
         return result
 
-    def get_source_list_text(self) -> str | None:
-        """Build a consolidated source list for injection into retry feedback.
+    def _render_source_list_text(self, sources: list[SourceEntry]) -> str | None:
+        """Render a consolidated source list from registry entries.
 
         Returns rendered template text, or None if no sources captured.
         Used by agent.run() to include the source list in retry messages
@@ -279,7 +352,6 @@ class SourceRegistryMiddleware(AgentMiddleware):
 
         from aiq_agent.common.citation_verification import _normalize_url
 
-        sources = self._get_registry().all_sources()
         if not sources:
             return None
 
@@ -315,6 +387,23 @@ class SourceRegistryMiddleware(AgentMiddleware):
         except Exception:
             logger.warning("Failed to load source_registry prompt template", exc_info=True)
             return None
+
+    def get_source_entries(self, mode: str = "compact") -> list[SourceEntry]:
+        """Return the source entries represented by the writer-facing source list."""
+        sources = self.active_registry().all_sources()
+        if mode == "full" or not self._compact_source_keys:
+            return sources
+        compact_sources = [source for source in sources if self._entry_key(source) in self._compact_source_keys]
+        return compact_sources or sources
+
+    def get_source_list_text(self, mode: str = "compact") -> str | None:
+        """Build a writer-facing verified source list.
+
+        Compact mode returns the subset of registered sources that researcher
+        workers actually carried forward in structured ResearchNotes. Full mode
+        returns the complete registry.
+        """
+        return self._render_source_list_text(self.get_source_entries(mode=mode))
 
 
 class ToolResultPruningMiddleware(AgentMiddleware):

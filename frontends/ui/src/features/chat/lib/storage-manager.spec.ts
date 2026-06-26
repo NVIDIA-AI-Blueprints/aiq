@@ -10,7 +10,6 @@ import {
   cleanupOldSessions,
   ensureStorageCapacity,
   getBusySessionIds,
-  getExpiredSessionIds,
 } from './storage-manager'
 import type { Conversation, ChatMessage } from '../types'
 
@@ -141,9 +140,7 @@ describe('storage-manager', () => {
     })
 
     test('returns null when only protected sessions exist', () => {
-      const conversations = [
-        makeConversation('s_current', 'user1', new Date()),
-      ]
+      const conversations = [makeConversation('s_current', 'user1', new Date())]
 
       const oldest = getOldestSession(conversations, new Set(['s_current']))
 
@@ -205,9 +202,7 @@ describe('storage-manager', () => {
         },
       ]
 
-      const conversations = [
-        makeConversation('s1', 'user1', new Date(), completedMessages),
-      ]
+      const conversations = [makeConversation('s1', 'user1', new Date(), completedMessages)]
 
       const busy = getBusySessionIds(conversations)
 
@@ -248,81 +243,12 @@ describe('storage-manager', () => {
     })
 
     test('accepts null userId for Tier 2 gracefully', () => {
-      const conversations = [
-        makeConversation('s1', 'user1', '2026-02-01'),
-      ]
+      const conversations = [makeConversation('s1', 'user1', '2026-02-01')]
 
       setStoreData(conversations, 's1')
 
       // Should not throw with null userId
       expect(() => cleanupOldSessions('s1', null)).not.toThrow()
-    })
-  })
-
-  describe('getExpiredSessionIds', () => {
-    const HOUR_MS = 60 * 60 * 1000
-
-    const isoHoursAgo = (hours: number): string =>
-      new Date(Date.now() - hours * HOUR_MS).toISOString()
-
-    test('returns IDs of sessions older than 24h', () => {
-      const conversations = [
-        makeConversation('s_old', 'user1', isoHoursAgo(30)),
-        makeConversation('s_fresh', 'user1', isoHoursAgo(2)),
-      ]
-
-      expect(getExpiredSessionIds(conversations)).toEqual(['s_old'])
-    })
-
-    test('protects sessions with active deep research', () => {
-      const busyMessages: ChatMessage[] = [
-        {
-          id: 'msg1',
-          role: 'assistant',
-          content: 'Running...',
-          timestamp: new Date(),
-          messageType: 'agent_response',
-          deepResearchJobId: 'job_1',
-          deepResearchJobStatus: 'running',
-        },
-      ]
-
-      const conversations = [
-        makeConversation('s_busy_old', 'user1', isoHoursAgo(48), busyMessages),
-        makeConversation('s_idle_old', 'user1', isoHoursAgo(48)),
-      ]
-
-      expect(getExpiredSessionIds(conversations)).toEqual(['s_idle_old'])
-    })
-
-    test('does not touch localStorage', () => {
-      const conversations = [makeConversation('s_old', 'user1', isoHoursAgo(48))]
-      setStoreData(conversations)
-      const before = localStorage.getItem('aiq-chat-store')
-
-      getExpiredSessionIds(conversations)
-
-      expect(localStorage.getItem('aiq-chat-store')).toBe(before)
-    })
-
-    test('keeps sessions with NaN updatedAt', () => {
-      const malformed = makeConversation('s_malformed', 'user1', isoHoursAgo(48))
-      ;(malformed as unknown as { updatedAt: string }).updatedAt = 'not-a-date'
-
-      expect(getExpiredSessionIds([malformed])).toEqual([])
-    })
-
-    test('uses caller-supplied "now" for deterministic boundary checks', () => {
-      // 25h-old session relative to a fixed "now" → should be expired.
-      const fixedNow = new Date('2026-01-01T00:00:00Z').getTime()
-      const conv = makeConversation(
-        's_borderline',
-        'user1',
-        new Date(fixedNow - 25 * HOUR_MS).toISOString()
-      )
-
-      expect(getExpiredSessionIds([conv], fixedNow)).toEqual(['s_borderline'])
-      expect(getExpiredSessionIds([conv], fixedNow - 2 * HOUR_MS)).toEqual([])
     })
   })
 

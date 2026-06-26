@@ -13,7 +13,9 @@ vi.mock('./AgentCard', () => ({
     <div data-testid="agent-card">
       {agent.name}
       {agent.toolCalls?.map((tc) => (
-        <div key={tc.id} data-testid="tool-call">{tc.name}</div>
+        <div key={tc.id} data-testid="tool-call">
+          {tc.name}
+        </div>
       ))}
     </div>
   ),
@@ -48,14 +50,20 @@ describe('AgentsTab', () => {
     test('shows empty state when no agents', () => {
       render(<AgentsTab />)
 
-      expect(screen.getByText('Active agents will appear here during research.')).toBeInTheDocument()
-      expect(screen.getByText(/Shows planner, researcher, and writer agents/)).toBeInTheDocument()
+      expect(screen.getByText('No agent activity available.')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'These details appear during active research and may not be available for completed reports.'
+        )
+      ).toBeInTheDocument()
     })
 
     test('shows description in header', () => {
       render(<AgentsTab />)
 
-      expect(screen.getByText('Active planner, researcher, and writer agents executing tasks.')).toBeInTheDocument()
+      expect(
+        screen.getByText('Active planner, researcher, and writer agents executing tasks.')
+      ).toBeInTheDocument()
     })
   })
 
@@ -100,9 +108,7 @@ describe('AgentsTab', () => {
 
     test('groups tool calls by agent', () => {
       useChatStore.setState({
-        deepResearchAgents: [
-          createStoreAgent({ id: 'agent-1', name: 'researcher-agent' }),
-        ],
+        deepResearchAgents: [createStoreAgent({ id: 'agent-1', name: 'researcher-agent' })],
         deepResearchToolCalls: [
           createToolCall({ id: 'tool-1', name: 'web_search', agentId: 'agent-1' }),
           createToolCall({ id: 'tool-2', name: 'tavily_search', agentId: 'agent-1' }),
@@ -117,9 +123,7 @@ describe('AgentsTab', () => {
 
     test('ignores orphaned tool calls without agentId', () => {
       useChatStore.setState({
-        deepResearchAgents: [
-          createStoreAgent({ id: 'agent-1', name: 'researcher-agent' }),
-        ],
+        deepResearchAgents: [createStoreAgent({ id: 'agent-1', name: 'researcher-agent' })],
         deepResearchToolCalls: [
           createToolCall({ id: 'tool-1', name: 'web_search', agentId: 'agent-1' }),
           createToolCall({ id: 'tool-2', name: 'write_todos', agentId: undefined }),

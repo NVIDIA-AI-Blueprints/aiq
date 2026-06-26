@@ -673,6 +673,30 @@ const getDeepResearchBaseUrl = (): string => {
   return isBrowser ? '/api/jobs/async' : `${apiConfig.baseUrl}/v1/jobs/async`
 }
 
+const getDeepResearchErrorDetails = async (response: Response): Promise<string | null> => {
+  const responseText = await response.text().catch(() => '')
+  if (!responseText) return null
+
+  try {
+    const parsed = JSON.parse(responseText) as {
+      error?: {
+        code?: unknown
+        message?: unknown
+      }
+    }
+    const code = typeof parsed.error?.code === 'string' ? parsed.error.code : ''
+    const message = typeof parsed.error?.message === 'string' ? parsed.error.message : ''
+    return [code, message].filter(Boolean).join(': ') || responseText
+  } catch {
+    return responseText
+  }
+}
+
+const throwDeepResearchApiError = async (response: Response, context: string): Promise<never> => {
+  const details = await getDeepResearchErrorDetails(response)
+  throw new Error(`${context}: ${response.status}${details ? ` - ${details}` : ''}`)
+}
+
 /** Get job status */
 export const getJobStatus = async (
   jobId: string,
@@ -690,7 +714,7 @@ export const getJobStatus = async (
   const response = await fetch(url, { headers })
 
   if (!response.ok) {
-    throw new Error(`Failed to get job status: ${response.status}`)
+    await throwDeepResearchApiError(response, 'Failed to get job status')
   }
 
   return response.json()
@@ -713,7 +737,7 @@ export const getJobReport = async (
   const response = await fetch(url, { headers })
 
   if (!response.ok) {
-    throw new Error(`Failed to get job report: ${response.status}`)
+    await throwDeepResearchApiError(response, 'Failed to get job report')
   }
 
   return response.json()
@@ -739,7 +763,7 @@ export const cancelJob = async (
   })
 
   if (!response.ok) {
-    throw new Error(`Failed to cancel job: ${response.status}`)
+    await throwDeepResearchApiError(response, 'Failed to cancel job')
   }
 
   return response.json()
@@ -760,6 +784,7 @@ export interface JobStateResponse {
     outputs: Array<{
       type: string
       content: string
+      output_category?: string
       timestamp?: string
     }>
   } | null
@@ -782,7 +807,7 @@ export const getJobState = async (
   const response = await fetch(url, { headers })
 
   if (!response.ok) {
-    throw new Error(`Failed to get job state: ${response.status}`)
+    await throwDeepResearchApiError(response, 'Failed to get job state')
   }
 
   return response.json()

@@ -59,6 +59,17 @@ export interface NATWebSocketClientOptions {
   reconnectDelay?: number
   /** Override WebSocket URL (uses same-origin by default, proxied through UI server) */
   websocketUrl?: string
+  /**
+   * Hook invoked before opening a new WebSocket (initial or reconnect).
+   *
+   * Used to refresh auth credentials so the upgrade request carries an up-to-date
+   * httpOnly idToken cookie. The WebSocket handshake is the only point where the
+   * backend (re)reads auth, so a stale cookie can leave a long-lived connection
+   * authenticated by an expired token.
+   *
+   * Errors are swallowed -- the connect attempt proceeds regardless.
+   */
+  onBeforeReconnect?: () => Promise<void>
 }
 
 /**
@@ -73,6 +84,15 @@ export class NATWebSocketClient {
   private isIntentionallyClosed = false
   private errorBeforeClose = false
   private messageIdCounter = 0
+  /**
+   * In-flight rotation promise, set for the duration of `rotate()`.
+   * Subsequent rotate() calls await the same promise instead of each
+   * one independently detaching handlers from a socket that the previous
+   * rotate() already replaced -- the worst case there is two parallel
+   * `new WebSocket(...)` opens with the second one orphaning the first.
+   * See the `rotate()` docstring.
+   */
+  private rotationInFlight: Promise<void> | null = null
   /** ID of the last user message sent -- used by callbacks to detect stale responses */
   activeParentId: string | null = null
 
@@ -96,7 +116,7 @@ export class NATWebSocketClient {
    * Connect to the WebSocket server
    */
   connect = async (): Promise<void> => {
-    if (this.ws?.readyState === WebSocket.OPEN) {
+    if (this.ws?.readyState === WebSocket.OPEN || this.ws?.readyState === WebSocket.CONNECTING) {
       return
     }
 
@@ -104,6 +124,15 @@ export class NATWebSocketClient {
     this.options.callbacks.onConnectionChange?.('connecting')
 
     try {
+      if (this.options.onBeforeReconnect) {
+        try {
+          await this.options.onBeforeReconnect()
+        } catch (err) {
+          // Auth refresh is best-effort; the upgrade still happens with whatever
+          // cookie the browser has. The backend will close the socket if it's bad.
+          console.warn('[WS] onBeforeReconnect failed, proceeding with current auth', err)
+        }
+      }
       const wsUrl = this.options.websocketUrl || (await getWebSocketUrl())
       this.ws = new WebSocket(wsUrl)
       this.setupEventHandlers()
@@ -129,11 +158,73 @@ export class NATWebSocketClient {
   }
 
   /**
+   * Atomically swap the underlying WebSocket for a fresh one.
+   *
+   * Done as a single client-side operation (rather than `disconnect()` +
+   * `connect()` interleaved from the caller) because of an `onclose` race:
+   *   1. `disconnect()` sets `isIntentionallyClosed = true` and calls
+   *      `ws.close()`, but the browser fires `onclose` asynchronously.
+   *   2. `connect()` immediately flips `isIntentionallyClosed = false`.
+   *   3. The old socket's `onclose` then arrives, sees the flag is now
+   *      false, classifies the close as unintentional, and drives
+   *      `onConnectionChange('disconnected' | 'error')` -- clobbering the
+   *      streaming/loading UX of the freshly-opened socket and potentially
+   *      scheduling a redundant reconnect via `handleReconnect()`.
+   *
+   * Three layers of defense:
+   *   - Detach handlers from the old socket BEFORE closing it, so any
+   *     late event the browser still tries to deliver hits a no-op.
+   *   - Belt-and-braces: `setupEventHandlers()` also captures the source
+   *     socket in each handler and early-returns unless `this.ws ===
+   *     socket`, protecting against any other reordering we can't control.
+   *   - Idempotency: if a rotation is already in flight (e.g. soft-timer
+   *     fires while an `auth_expired` rotation is mid-handshake),
+   *     subsequent callers await the same in-flight promise instead of
+   *     each independently ripping handlers off whatever `this.ws`
+   *     currently is. Without this, the second rotate() would detach
+   *     handlers from the brand-new (still `connecting`) socket and could
+   *     leave two parallel `new WebSocket(...)` opens racing for the
+   *     `this.ws` slot.
+   */
+  rotate = (): Promise<void> => {
+    if (this.rotationInFlight) {
+      // Coalesce: every concurrent caller observes the same outcome.
+      return this.rotationInFlight
+    }
+    this.rotationInFlight = (async () => {
+      try {
+        const oldSocket = this.ws
+        if (oldSocket) {
+          oldSocket.onopen = null
+          oldSocket.onclose = null
+          oldSocket.onerror = null
+          oldSocket.onmessage = null
+          try {
+            oldSocket.close()
+          } catch {
+            // close() can throw in test or polyfill environments; the
+            // rotation doesn't depend on a clean close because handlers
+            // are already detached.
+          }
+          if (this.ws === oldSocket) this.ws = null
+        }
+        this.isIntentionallyClosed = false
+        this.reconnectCount = 0
+        this.errorBeforeClose = false
+        await this.connect()
+      } finally {
+        this.rotationInFlight = null
+      }
+    })()
+    return this.rotationInFlight
+  }
+
+  /**
    * Send a user chat message
    * @param content - The message text content (query)
    * @param enabledDataSources - Optional array of enabled data source IDs to include in the query
    */
-  sendMessage = (content: string, enabledDataSources?: string[]): void => {
+  sendMessage = (content: string, enabledDataSources?: string[]): string | null => {
     // Format the text content as JSON with query and data_sources
     const textContent = JSON.stringify({
       query: content,
@@ -141,8 +232,6 @@ export class NATWebSocketClient {
     })
 
     const messageId = this.generateMessageId()
-    this.activeParentId = messageId
-
     const message: NATUserMessage = {
       type: NATMessageType.USER_MESSAGE,
       schema_type: NATSchemaType.CHAT_STREAM,
@@ -159,16 +248,20 @@ export class NATWebSocketClient {
       timestamp: new Date().toISOString(),
     }
 
-    this.send(message)
+    if (!this.send(message)) return null
+
+    this.activeParentId = messageId
+    return messageId
   }
 
   /**
    * Send a response to a human prompt (clarification, approval, etc.)
    */
-  sendInteractionResponse = (promptId: string, parentId: string, responseText: string): void => {
+  sendInteractionResponse = (promptId: string, parentId: string, responseText: string): string | null => {
+    const messageId = this.generateMessageId()
     const message: NATUserInteractionResponse = {
       type: NATMessageType.USER_INTERACTION,
-      id: this.generateMessageId(),
+      id: messageId,
       parent_id: parentId,
       conversation_id: this.options.conversationId,
       content: {
@@ -182,7 +275,8 @@ export class NATWebSocketClient {
       timestamp: new Date().toISOString(),
     }
 
-    this.send(message)
+    if (!this.send(message)) return null
+    return messageId
   }
 
   /**
@@ -200,22 +294,30 @@ export class NATWebSocketClient {
   }
 
   private setupEventHandlers = (): void => {
-    if (!this.ws) return
+    // Capture the socket instance in each handler closure. If `this.ws` is
+    // swapped (rotate(), reconnect, etc.), late events from the old socket
+    // hit `this.ws !== socket` and are dropped before they can drive any
+    // connection-state side effects on the new socket.
+    const socket = this.ws
+    if (!socket) return
 
-    this.ws.onopen = () => {
+    socket.onopen = () => {
+      if (this.ws !== socket) return
       this.reconnectCount = 0
       this.errorBeforeClose = false
       this.options.callbacks.onConnectionChange?.('connected')
     }
 
-    this.ws.onerror = () => {
+    socket.onerror = () => {
+      if (this.ws !== socket) return
       // Flag that an error preceded the close event.
       // Don't fire onConnectionChange here -- onclose always follows onerror
       // in the browser WebSocket API. This prevents double-firing.
       this.errorBeforeClose = true
     }
 
-    this.ws.onclose = () => {
+    socket.onclose = () => {
+      if (this.ws !== socket) return
       const hadError = this.errorBeforeClose
       this.errorBeforeClose = false
 
@@ -239,7 +341,8 @@ export class NATWebSocketClient {
       this.handleReconnect()
     }
 
-    this.ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
+      if (this.ws !== socket) return
       this.handleMessage(event.data)
     }
   }
@@ -291,8 +394,15 @@ export class NATWebSocketClient {
 
         case NATMessageType.ERROR: {
           // Auth errors carry the specific error_code in `message`
-          // (e.g. "token_expired", "token_invalid", "auth_error").
-          const authCodes = new Set(['auth_error', 'token_expired', 'token_invalid'])
+          // (e.g. "token_expired", "token_invalid", "auth_error",
+          // "auth_expired"). `auth_expired` is the per-message re-auth
+          // gate -- the hook turns it into a silent reconnect + auto-resend.
+          const authCodes = new Set([
+            'auth_error',
+            'token_expired',
+            'token_invalid',
+            'auth_expired',
+          ])
           const errorMsg = message.content?.message
           if (errorMsg && authCodes.has(errorMsg)) {
             trackAuthEvent(errorMsg, {
@@ -309,11 +419,13 @@ export class NATWebSocketClient {
     }
   }
 
-  private send = (message: object): void => {
+  private send = (message: object): boolean => {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message))
+      return true
     } else {
       console.warn('NAT WebSocket not connected, message not sent')
+      return false
     }
   }
 

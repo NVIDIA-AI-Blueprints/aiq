@@ -16,9 +16,12 @@
 """NAT register function for deep research agent."""
 
 import logging
+from typing import TypeVar
 
 from langchain_core.messages import HumanMessage
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_validator
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
@@ -37,20 +40,29 @@ from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
+from .agent import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
+from .agent import DEFAULT_MAX_RESEARCH_CONCURRENCY
+from .agent import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
 from .agent import DeepResearcherAgent
-from .deepagents_runtime import SandboxConfig
-from .deepagents_runtime import SkillsConfig
+from .deepagents_runtime import DeepResearchSandboxConfig
+from .deepagents_runtime import DeepResearchSkillsConfig
 from .models import DeepResearchAgentState
 
 logger = logging.getLogger(__name__)
+
+ConfigT = TypeVar("ConfigT")
 
 
 class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     """Configuration for the deep research agent."""
 
+    model_config = ConfigDict(extra="forbid")
+
     orchestrator_llm: LLMRef = Field(..., description="LLM for orchestrator")
+    source_router_llm: LLMRef | None = Field(default=None, description="LLM for source-router subagent")
     researcher_llm: LLMRef | None = Field(default=None, description="LLM for researcher")
     planner_llm: LLMRef | None = Field(default=None, description="LLM for planner")
+    writer_llm: LLMRef | None = Field(default=None, description="LLM for final writer/synthesis subagent")
     tools: list[FunctionRef | FunctionGroupRef] = Field(
         default_factory=list,
         description="Explicit tool list. Empty = inherit all from data_source_registry.",
@@ -59,18 +71,107 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default_factory=list,
         description="Tool names to exclude when inheriting from registry.",
     )
-    max_loops: int = Field(default=2)
     verbose: bool = Field(default=True)
-    skills: SkillsConfig = Field(default_factory=SkillsConfig)
-    sandbox: SandboxConfig | None = Field(
+    domain_catalog_path: str | None = Field(
         default=None,
-        description="Optional DeepAgents sandbox backend for execute support.",
+        description="Optional YAML/JSON domain catalog path for source-router-agent.",
     )
+    enable_source_router: bool = Field(
+        default=True,
+        description="Enable the advisory source-router-agent before planning.",
+    )
+    enable_citation_verification: bool = Field(
+        default=True,
+        description="Verify generated citations against sources captured from configured tools.",
+    )
+    skills: DeepResearchSkillsConfig | FunctionRef | None = Field(
+        default=None,
+        description="Optional inline skills config or function ref to a deep_research_skills config.",
+    )
+    sandbox: DeepResearchSandboxConfig | FunctionRef | None = Field(
+        default=None,
+        description="Optional inline sandbox config or function ref to a deep_research_sandbox config.",
+    )
+    max_research_concurrency: int = Field(
+        default=DEFAULT_MAX_RESEARCH_CONCURRENCY,
+        ge=1,
+        description="Maximum ResearchQuery items accepted and run concurrently per run_research_batch call.",
+    )
+    max_concurrent_source_tool_calls: int = Field(
+        default=DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
+        ge=1,
+        description="Shared maximum concurrent source-tool calls across researcher workers.",
+    )
+    max_source_tool_batch_size: int = Field(
+        default=DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
+        ge=1,
+        description="Maximum concrete inputs accepted by batch-capable source tool wrappers.",
+    )
+
+    @field_validator("skills", mode="before")
+    @classmethod
+    def _parse_inline_skills(cls, value):
+        if isinstance(value, dict):
+            return DeepResearchSkillsConfig.model_validate(value)
+        return value
+
+    @field_validator("sandbox", mode="before")
+    @classmethod
+    def _parse_inline_sandbox(cls, value):
+        if isinstance(value, dict):
+            return DeepResearchSandboxConfig.model_validate(value)
+        return value
+
+
+@register_function(config_type=DeepResearchSkillsConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
+async def deep_research_skills(config: DeepResearchSkillsConfig, builder: Builder):
+    """Config-only function for deep research skill collection assignments."""
+
+    async def _noop(query: str) -> str:
+        """Deep research skills config placeholder."""
+        return "This is a config-only function."
+
+    yield FunctionInfo.from_fn(_noop, description="Deep research skills config-only function.")
+
+
+@register_function(config_type=DeepResearchSandboxConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
+async def deep_research_sandbox(config: DeepResearchSandboxConfig, builder: Builder):
+    """Config-only function for deep research sandbox settings."""
+
+    async def _noop(query: str) -> str:
+        """Deep research sandbox config placeholder."""
+        return "This is a config-only function."
+
+    yield FunctionInfo.from_fn(_noop, description="Deep research sandbox config-only function.")
+
+
+def _resolve_config_ref(
+    builder: Builder, value: ConfigT | FunctionRef | None, expected_type: type[ConfigT]
+) -> ConfigT | None:
+    if value is None or isinstance(value, expected_type):
+        return value
+
+    resolved = builder.get_function_config(value)
+    if not isinstance(resolved, expected_type):
+        raise TypeError(f"{value!r} must reference {expected_type.__name__}, got {type(resolved).__name__}")
+    return resolved
+
+
+def resolve_deep_research_runtime_config(
+    config: DeepResearchAgentConfig,
+    builder: Builder,
+) -> tuple[DeepResearchSkillsConfig | None, DeepResearchSandboxConfig | None]:
+    """Resolve optional Deep Research runtime config refs into concrete config objects."""
+    skills = _resolve_config_ref(builder, config.skills, DeepResearchSkillsConfig)
+    sandbox = _resolve_config_ref(builder, config.sandbox, DeepResearchSandboxConfig)
+    return skills, sandbox
 
 
 @register_function(config_type=DeepResearchAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder):
     """Deep research agent using multi-phase workflow."""
+    skills_config, sandbox_config = resolve_deep_research_runtime_config(config, builder)
+
     if config.tools:
         tool_refs = config.tools
     else:
@@ -102,12 +203,18 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     provider.set_default(llm)
 
     provider.configure(LLMRole.ORCHESTRATOR, llm)
+    if config.source_router_llm:
+        source_router_llm = await builder.get_llm(config.source_router_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+        provider.configure(LLMRole.ROUTER, source_router_llm)
     if config.researcher_llm:
         researcher_llm = await builder.get_llm(config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.RESEARCHER, researcher_llm)
     if config.planner_llm:
         planner_llm = await builder.get_llm(config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.PLANNER, planner_llm)
+    if config.writer_llm:
+        writer_llm = await builder.get_llm(config.writer_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+        provider.configure(LLMRole.REPORT_WRITER, writer_llm)
 
     verbose = is_verbose(config.verbose)
     callbacks = [VerboseTraceCallback()] if verbose else []
@@ -115,11 +222,16 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
     agent = DeepResearcherAgent(
         llm_provider=provider,
         tools=tools,
-        max_loops=config.max_loops,
         verbose=verbose,
         callbacks=callbacks,
-        skills=config.skills,
-        sandbox=config.sandbox,
+        domain_catalog_path=config.domain_catalog_path,
+        enable_source_router=config.enable_source_router,
+        enable_citation_verification=config.enable_citation_verification,
+        skills=skills_config,
+        sandbox=sandbox_config,
+        max_research_concurrency=config.max_research_concurrency,
+        max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
+        max_source_tool_batch_size=config.max_source_tool_batch_size,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -128,7 +240,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
             data_sources = state.data_sources
             selected_tools = filter_tools_by_sources(tools, data_sources)
             active_agent = agent
-            if config.sandbox is not None or (data_sources is not None and selected_tools != tools):
+            if sandbox_config is not None or (data_sources is not None and selected_tools != tools):
                 # Scope the Modal sandbox to the async job_id when one is in
                 # NAT context (set by aiq_api/jobs/runner.py). Falls back to a
                 # per-request uuid in DeepAgentsRuntime when None.
@@ -142,12 +254,17 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                 active_agent = DeepResearcherAgent(
                     llm_provider=provider,
                     tools=selected_tools,
-                    max_loops=config.max_loops,
                     verbose=verbose,
                     callbacks=callbacks,
-                    skills=config.skills,
-                    sandbox=config.sandbox,
+                    domain_catalog_path=config.domain_catalog_path,
+                    enable_source_router=config.enable_source_router,
+                    enable_citation_verification=config.enable_citation_verification,
+                    skills=skills_config,
+                    sandbox=sandbox_config,
                     job_id=job_id,
+                    max_research_concurrency=config.max_research_concurrency,
+                    max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
+                    max_source_tool_batch_size=config.max_source_tool_batch_size,
                 )
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):

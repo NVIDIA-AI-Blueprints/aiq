@@ -31,9 +31,78 @@ import {
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
-import { isUnavailableDeepResearchJobError } from '../lib/deep-research-errors'
+import {
+  getDeepResearchJobLoadErrorDetails,
+  getDeepResearchJobLoadFailureKind,
+} from '../lib/deep-research-errors'
 import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
+import type { ResearchPanelTab } from '@/features/layout/types'
+import { normalizeDeepResearchTodos } from '../lib/deep-research-todos'
+
+const EXPIRED_REPORT_MESSAGE = 'This research report is no longer available.'
+const BACKEND_UNREACHABLE_MESSAGE = 'The backend is not reachable. Start the backend and try again.'
+const STREAM_BACKED_RESEARCH_TABS = new Set<ResearchPanelTab>(['tasks', 'thinking'])
+
+interface JobLoadScope {
+  jobId: string
+  conversationId: string | null
+  requiresJobMatch: boolean
+}
+
+const conversationHasJob = (
+  conversation: ReturnType<typeof useChatStore.getState>['currentConversation'],
+  jobId: string
+): boolean => {
+  return Boolean(conversation?.messages.some((m) => m.deepResearchJobId === jobId))
+}
+
+const createJobLoadScope = (jobId: string): JobLoadScope => {
+  const state = useChatStore.getState()
+  const currentConversation = state.currentConversation
+
+  if (conversationHasJob(currentConversation, jobId)) {
+    return { jobId, conversationId: currentConversation?.id ?? null, requiresJobMatch: true }
+  }
+
+  if (state.deepResearchJobId === jobId) {
+    return {
+      jobId,
+      conversationId: state.deepResearchOwnerConversationId ?? currentConversation?.id ?? null,
+      requiresJobMatch: true,
+    }
+  }
+
+  const matchingConversation = state.conversations.find((conversation) =>
+    conversation.messages.some((message) => message.deepResearchJobId === jobId)
+  )
+
+  if (matchingConversation) {
+    return { jobId, conversationId: matchingConversation.id, requiresJobMatch: true }
+  }
+
+  // Tests and a few legacy entry points can load by job ID before the message
+  // has been persisted. In that case we still bind to the current session ID
+  // so switching sessions aborts the eventual replay commit.
+  return { jobId, conversationId: currentConversation?.id ?? null, requiresJobMatch: false }
+}
+
+const isJobLoadScopeCurrent = (scope: JobLoadScope): boolean => {
+  const state = useChatStore.getState()
+
+  if (scope.conversationId && state.currentConversation?.id !== scope.conversationId) {
+    return false
+  }
+
+  if (!scope.requiresJobMatch) {
+    return true
+  }
+
+  return (
+    state.deepResearchJobId === scope.jobId ||
+    conversationHasJob(state.currentConversation, scope.jobId)
+  )
+}
 
 export interface LoadJobDataOptions {
   /**
@@ -78,6 +147,12 @@ export interface UseLoadJobDataReturn {
    * @deprecated Use loadReport or importJobStream directly for clarity
    */
   loadJobData: (jobId: string, options?: LoadJobDataOptions) => Promise<void>
+
+  /**
+   * Open a research panel tab and ensure the minimum data required for that tab is loaded.
+   * Report uses the cheap report endpoint; detail tabs use full stream replay.
+   */
+  loadResearchPanelTab: (jobId: string, tab: ResearchPanelTab) => Promise<void>
 
   /** Whether data is currently being loaded */
   isLoading: boolean
@@ -133,14 +208,28 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         .reverse()
         .find((m) => m.messageType === 'agent_response' && m.deepResearchJobId === jobId)
 
-      if (trackingMessage?.id) {
-        const hasPartialReport = Boolean(
-          trackingMessage.reportContent?.trim() || trackingMessage.showViewReport
+      let hadCompletedReport =
+        Boolean(trackingMessage?.deepResearchReportExpired) ||
+        Boolean(
+          trackingMessage?.deepResearchJobStatus === 'success' &&
+          (trackingMessage.showViewReport || trackingMessage.reportContent?.trim())
         )
+
+      if (!hadCompletedReport) {
+        hadCompletedReport = conversation.messages.some(
+          (m) =>
+            m.messageType === 'deep_research_banner' &&
+            m.deepResearchBannerData?.jobId === jobId &&
+            m.deepResearchBannerData?.bannerType === 'success'
+        )
+      }
+
+      if (trackingMessage?.id) {
         patchConversationMessage(conversation.id, trackingMessage.id, {
           deepResearchJobStatus: 'failure',
           isDeepResearchActive: false,
-          showViewReport: hasPartialReport,
+          showViewReport: false,
+          deepResearchReportExpired: hadCompletedReport,
         })
       }
 
@@ -148,11 +237,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         (m) =>
           m.messageType === 'deep_research_banner' &&
           m.deepResearchBannerData?.jobId === jobId &&
-          ['success', 'failure', 'cancelled'].includes(m.deepResearchBannerData?.bannerType || '')
+          ['success', 'failure', 'cancelled', 'expired'].includes(
+            m.deepResearchBannerData?.bannerType || ''
+          )
       )
 
-      if (!hasTerminalBanner) {
-        addDeepResearchBanner('failure', jobId, conversation.id)
+      if (hadCompletedReport || !hasTerminalBanner) {
+        addDeepResearchBanner(hadCompletedReport ? 'expired' : 'failure', jobId, conversation.id)
       }
     },
     [patchConversationMessage, addDeepResearchBanner]
@@ -166,7 +257,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       const response = await getJobReport(jobId, idToken || undefined)
 
       if (response.has_report && response.report) {
-        setReportContent(response.report)
+        setReportContent(response.report, 'final_report')
         return true
       }
 
@@ -180,27 +271,31 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
    * This is faster than streaming but provides less data than full stream replay
    */
   const loadJobState = useCallback(
-    async (jobId: string): Promise<void> => {
+    async (jobId: string, scope: JobLoadScope): Promise<void> => {
       try {
         const stateResponse = await getJobState(jobId, idToken || undefined)
 
         if (stateResponse.has_state && stateResponse.artifacts) {
+          if (!isJobLoadScopeCurrent(scope)) return
+
           const { tools, outputs } = stateResponse.artifacts
 
-          tools?.forEach((tool: { name: string; input?: Record<string, unknown>; output?: string }) => {
-            const toolCallId = addDeepResearchToolCall({
-              name: tool.name,
-              input: tool.input,
-              workflow: undefined,
-            })
-            if (tool.output) {
-              completeDeepResearchToolCall(toolCallId, tool.output)
+          tools?.forEach(
+            (tool: { name: string; input?: Record<string, unknown>; output?: string }) => {
+              const toolCallId = addDeepResearchToolCall({
+                name: tool.name,
+                input: tool.input,
+                workflow: undefined,
+              })
+              if (tool.output) {
+                completeDeepResearchToolCall(toolCallId, tool.output)
+              }
             }
-          })
+          )
 
-          outputs?.forEach((output: { type: string; content: string }) => {
-            if (output.type === 'report' || output.type === 'output') {
-              setReportContent(output.content)
+          outputs?.forEach((output: { type: string; content: string; output_category?: string }) => {
+            if (output.type === 'report' || output.output_category === 'final_report') {
+              setReportContent(output.content, 'final_report')
             }
           })
         }
@@ -216,14 +311,20 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
    * Fetches both report and state in parallel for speed
    */
   const loadJobDataFast = useCallback(
-    async (jobId: string): Promise<void> => {
+    async (jobId: string, scope: JobLoadScope): Promise<void> => {
       const [reportResult] = await Promise.allSettled([
         getJobReport(jobId, idToken || undefined),
-        loadJobState(jobId),
+        loadJobState(jobId, scope),
       ])
 
-      if (reportResult.status === 'fulfilled' && reportResult.value.has_report && reportResult.value.report) {
-        setReportContent(reportResult.value.report)
+      if (!isJobLoadScopeCurrent(scope)) return
+
+      if (
+        reportResult.status === 'fulfilled' &&
+        reportResult.value.has_report &&
+        reportResult.value.report
+      ) {
+        setReportContent(reportResult.value.report, 'final_report')
       }
     },
     [idToken, loadJobState, setReportContent]
@@ -236,7 +337,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
    * set() calls that cause render storms and Aw Snap crashes.
    */
   const streamFullJob = useCallback(
-    (jobId: string): Promise<void> => {
+    (jobId: string, scope: JobLoadScope): Promise<void> => {
       return new Promise((resolve, reject) => {
         // Stacks to track active items per name (for matching start/end when events interleave)
         const activeLLMStack: string[] = []
@@ -246,11 +347,29 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         // Accumulation buffer — everything stays here until the stream ends
         const buffer = {
           agents: new Map<string, { name: string; input?: string; output?: string }>(),
-          llmSteps: new Map<string, { name: string; workflow?: string; content: string; thinking?: string; usage?: { input_tokens: number; output_tokens: number } }>(),
-          toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string }>(),
+          llmSteps: new Map<
+            string,
+            {
+              name: string
+              workflow?: string
+              content: string
+              thinking?: string
+              usage?: { input_tokens: number; output_tokens: number }
+            }
+          >(),
+          toolCalls: new Map<
+            string,
+            {
+              name: string
+              input?: Record<string, unknown>
+              output?: string
+              workflow?: string
+              agentId?: string
+            }
+          >(),
           todos: null as TodoItem[] | null,
           citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-          files: new Map<string, string>(),  // filename -> latest content (deduped)
+          files: new Map<string, string>(), // filename -> latest content (deduped)
           reportContent: null as string | null,
         }
 
@@ -258,7 +377,11 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
          * Convert buffer to store-compatible arrays and write everything
          * in a single useChatStore.setState() call.
          */
-        const commitToStore = (): void => {
+        const commitToStore = (): boolean => {
+          if (!isJobLoadScopeCurrent(scope)) {
+            return false
+          }
+
           const now = new Date()
 
           const agents = Array.from(buffer.agents.entries()).map(([id, a]) => ({
@@ -308,16 +431,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             timestamp: now,
           }))
 
-          const todos = buffer.todos
-            ? buffer.todos.map((t, idx) => ({
-                id: `todo-${idx}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`,
-                content: t.content,
-                status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped',
-              }))
-            : undefined
+          const todos = buffer.todos ? normalizeDeepResearchTodos(buffer.todos) : undefined
 
           useChatStore.setState((state) => ({
-            ...(buffer.reportContent !== null && { reportContent: buffer.reportContent }),
+            ...(buffer.reportContent !== null && {
+              reportContent: buffer.reportContent,
+              reportContentCategory: 'final_report' as const,
+            }),
             ...(todos && { deepResearchTodos: todos }),
             ...(agents.length > 0 && { deepResearchAgents: agents }),
             ...(llmSteps.length > 0 && { deepResearchLLMSteps: llmSteps }),
@@ -326,6 +446,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             ...(files.length > 0 && { deepResearchFiles: files }),
             currentStatus: buffer.reportContent !== null ? 'complete' : state.currentStatus,
           }))
+          return true
         }
 
         if (clientRef.current) {
@@ -333,18 +454,27 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           clientRef.current = null
         }
 
-        const client = createDeepResearchClient({
+        let client: DeepResearchClient | null = null
+        const disconnectReplayClient = (): void => {
+          if (!client) return
+          client.disconnect()
+          if (clientRef.current === client) {
+            clientRef.current = null
+          }
+        }
+
+        client = createDeepResearchClient({
           jobId,
           authToken: idToken || undefined,
           callbacks: {
             onStreamStart: () => {
+              if (!isJobLoadScopeCurrent(scope)) return
               setCurrentStatus('researching')
             },
 
             onJobStatus: (status: DeepResearchJobStatus, statusError?: string) => {
               if (status === 'success' || status === 'failure' || status === 'interrupted') {
-                clientRef.current?.disconnect()
-                clientRef.current = null
+                disconnectReplayClient()
                 commitToStore()
 
                 if (status === 'failure' && statusError) {
@@ -360,7 +490,11 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               if (!buffer.agents.has(agentId)) {
                 buffer.agents.set(agentId, {
                   name,
-                  input: input ? (typeof input === 'string' ? input : JSON.stringify(input)) : undefined,
+                  input: input
+                    ? typeof input === 'string'
+                      ? input
+                      : JSON.stringify(input)
+                    : undefined,
                 })
               }
             },
@@ -369,7 +503,11 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               if (!agentId) return
               const agent = buffer.agents.get(agentId)
               if (agent) {
-                agent.output = output ? (typeof output === 'string' ? output : JSON.stringify(output)) : undefined
+                agent.output = output
+                  ? typeof output === 'string'
+                    ? output
+                    : JSON.stringify(output)
+                  : undefined
               }
             },
 
@@ -438,11 +576,8 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             },
 
             onOutputUpdate: (content, outputCategory) => {
-              if (outputCategory === 'intermediate') return
-              // research_notes are already captured via write_file artifacts — skip to avoid duplicates
-              if (outputCategory === 'final_report' || !outputCategory) {
-                buffer.reportContent = content
-              }
+              if (outputCategory !== 'final_report') return
+              buffer.reportContent = content
             },
 
             onComplete: () => {
@@ -478,6 +613,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
   const loadJobData = useCallback(
     async (jobId: string, options: LoadJobDataOptions = {}): Promise<void> => {
       const { streamFullJob: shouldStreamFull = false } = options
+      const scope = createJobLoadScope(jobId)
 
       // Check ephemeral cache first - if we have data for this job, just show it
       const currentState = useChatStore.getState()
@@ -488,8 +624,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
       // For stream requests, also check if stream is already loaded
       const hasStreamData =
-        currentState.deepResearchJobId === jobId &&
-        currentState.deepResearchStreamLoaded
+        currentState.deepResearchJobId === jobId && currentState.deepResearchStreamLoaded
 
       // If we have what we need, just open the panel
       if (hasReportData && (!shouldStreamFull || hasStreamData)) {
@@ -505,21 +640,21 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         const statusResponse = await getJobStatus(jobId, idToken || undefined)
         const jobStatus = statusResponse.status
 
-        if (
-          jobStatus !== 'success' &&
-          jobStatus !== 'failure' &&
-          jobStatus !== 'interrupted'
-        ) {
+        if (!isJobLoadScopeCurrent(scope)) return
+
+        if (jobStatus !== 'success' && jobStatus !== 'failure' && jobStatus !== 'interrupted') {
           throw new Error(`Job is still ${jobStatus}. Cannot load data from incomplete job.`)
         }
 
         clearDeepResearch()
 
         if (shouldStreamFull) {
-          await streamFullJob(jobId)
+          await streamFullJob(jobId, scope)
+          if (!isJobLoadScopeCurrent(scope)) return
           setStreamLoaded(true)
         } else {
-          await loadJobDataFast(jobId)
+          await loadJobDataFast(jobId, scope)
+          if (!isJobLoadScopeCurrent(scope)) return
         }
 
         // Defensive cleanup: loaded data may have stale 'running' items
@@ -534,16 +669,33 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         setResearchPanelTab('report')
         openRightPanel('research')
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Failed to load job data'
+        if (!isJobLoadScopeCurrent(scope)) return
+
+        const failureKind = getDeepResearchJobLoadFailureKind(err)
+        const errorDetails = getDeepResearchJobLoadErrorDetails(err)
+        const errorMessage =
+          failureKind === 'unavailable'
+            ? EXPIRED_REPORT_MESSAGE
+            : failureKind === 'backend_unreachable'
+              ? BACKEND_UNREACHABLE_MESSAGE
+              : err instanceof Error
+                ? err.message
+                : 'Failed to load job data'
         setError(errorMessage)
-        console.error('Failed to load job data:', err)
-        if (isUnavailableDeepResearchJobError(err)) {
+        if (failureKind === 'unavailable') {
           syncMissingJobToFailureState(jobId)
+          stopAllDeepResearchSpinners()
+          completeDeepResearch()
+          setStreaming(false)
+        } else if (failureKind === 'backend_unreachable') {
+          addErrorCard('connection.failed', errorMessage, errorDetails)
+        } else {
+          console.error('Failed to load job data:', err)
+          addErrorCard('agent.deep_research_load_failed', errorMessage)
+          stopAllDeepResearchSpinners()
+          completeDeepResearch()
+          setStreaming(false)
         }
-        addErrorCard('agent.deep_research_load_failed', errorMessage)
-        stopAllDeepResearchSpinners()
-        completeDeepResearch()
-        setStreaming(false)
       } finally {
         setIsLoading(false)
       }
@@ -594,12 +746,11 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
    */
   const importStreamOnly = useCallback(
     async (jobId: string): Promise<void> => {
+      const scope = createJobLoadScope(jobId)
+
       // Check if stream is already loaded for this job
       const currentState = useChatStore.getState()
-      if (
-        currentState.deepResearchJobId === jobId &&
-        currentState.deepResearchStreamLoaded
-      ) {
+      if (currentState.deepResearchJobId === jobId && currentState.deepResearchStreamLoaded) {
         return
       }
 
@@ -610,20 +761,18 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         const statusResponse = await getJobStatus(jobId, idToken || undefined)
         const jobStatus = statusResponse.status
 
-        if (
-          jobStatus !== 'success' &&
-          jobStatus !== 'failure' &&
-          jobStatus !== 'interrupted'
-        ) {
+        if (!isJobLoadScopeCurrent(scope)) return
+
+        if (jobStatus !== 'success' && jobStatus !== 'failure' && jobStatus !== 'interrupted') {
           // Job is still in progress - silently return (live SSE will populate data)
           // This is expected when opening tabs for active jobs
-          console.log(`[importStreamOnly] Job ${jobId} is still ${jobStatus}, skipping archive load`)
           setIsLoading(false)
           return
         }
 
         clearDeepResearch()
-        await streamFullJob(jobId)
+        await streamFullJob(jobId, scope)
+        if (!isJobLoadScopeCurrent(scope)) return
         // Defensive cleanup: loaded data may have stale 'running' items.
         // Only mark as successful completion for success jobs; interrupted/failed
         // jobs should leave un-attempted tasks as 'stopped'.
@@ -631,21 +780,93 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         setStreamLoaded(true)
         setLoadedJobId(jobId)
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Failed to load stream data'
+        if (!isJobLoadScopeCurrent(scope)) return
+
+        const failureKind = getDeepResearchJobLoadFailureKind(err)
+        const errorDetails = getDeepResearchJobLoadErrorDetails(err)
+        const errorMessage =
+          failureKind === 'unavailable'
+            ? EXPIRED_REPORT_MESSAGE
+            : failureKind === 'backend_unreachable'
+              ? BACKEND_UNREACHABLE_MESSAGE
+              : err instanceof Error
+                ? err.message
+                : 'Failed to load stream data'
         setError(errorMessage)
-        console.error('Failed to load stream data:', err)
-        if (isUnavailableDeepResearchJobError(err)) {
+        if (failureKind === 'unavailable') {
           syncMissingJobToFailureState(jobId)
+          stopAllDeepResearchSpinners()
+          completeDeepResearch()
+          setStreaming(false)
+        } else if (failureKind === 'backend_unreachable') {
+          addErrorCard('connection.failed', errorMessage, errorDetails)
+        } else {
+          console.error('Failed to load stream data:', err)
+          addErrorCard('agent.deep_research_load_failed', errorMessage)
+          stopAllDeepResearchSpinners()
+          completeDeepResearch()
+          setStreaming(false)
         }
-        addErrorCard('agent.deep_research_load_failed', errorMessage)
-        stopAllDeepResearchSpinners()
-        completeDeepResearch()
-        setStreaming(false)
       } finally {
         setIsLoading(false)
       }
     },
-    [idToken, clearDeepResearch, streamFullJob, stopAllDeepResearchSpinners, setStreamLoaded, setLoadedJobId, syncMissingJobToFailureState, addErrorCard, completeDeepResearch, setStreaming]
+    [
+      idToken,
+      clearDeepResearch,
+      streamFullJob,
+      stopAllDeepResearchSpinners,
+      setStreamLoaded,
+      setLoadedJobId,
+      syncMissingJobToFailureState,
+      addErrorCard,
+      completeDeepResearch,
+      setStreaming,
+    ]
+  )
+
+  /**
+   * Shared tab-loading policy for all ResearchPanel entry points.
+   *
+   * This keeps "View Report", banner actions, and direct tab clicks aligned:
+   * - Report tab fetches the final report quickly via /report.
+   * - Tasks/Thinking hydrate rich details by replaying /stream.
+   */
+  const loadResearchPanelTab = useCallback(
+    async (jobId: string, tab: ResearchPanelTab): Promise<void> => {
+      setResearchPanelTab(tab)
+      openRightPanel('research')
+
+      const currentState = useChatStore.getState()
+
+      if (tab === 'report') {
+        const hasReportForJob =
+          currentState.deepResearchJobId === jobId && currentState.reportContent.trim().length > 0
+        const isLiveReportForJob =
+          currentState.deepResearchJobId === jobId && currentState.isDeepResearchStreaming
+
+        if (hasReportForJob || isLiveReportForJob) {
+          return
+        }
+
+        await loadJobData(jobId, { streamFullJob: false })
+        return
+      }
+
+      if (STREAM_BACKED_RESEARCH_TABS.has(tab)) {
+        const hasStreamForJob =
+          currentState.deepResearchJobId === jobId && currentState.deepResearchStreamLoaded
+        const isLiveStreamForJob =
+          currentState.deepResearchJobId === jobId && currentState.isDeepResearchStreaming
+
+        if (hasStreamForJob || isLiveStreamForJob) {
+          return
+        }
+
+        await importStreamOnly(jobId)
+      }
+    },
+    [loadJobData, importStreamOnly, setResearchPanelTab, openRightPanel]
   )
 
   return {
@@ -653,6 +874,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
     importJobStream,
     importStreamOnly,
     loadJobData,
+    loadResearchPanelTab,
     isLoading,
     error,
     clearError,

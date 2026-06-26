@@ -11,7 +11,7 @@ This example is based on `configs/config_cli_default.yml` with modifications to 
 
 ## Prerequisites
 
-You need Docker and an NVIDIA GPU with sufficient VRAM to run the NIM containers. The Nemotron Nano 30B model requires approximately 40 GB of VRAM (or two 24 GB GPUs).
+You need Docker and NVIDIA GPUs with sufficient VRAM to run the NIM containers. Check the Nemotron Super model card and support matrix for current self-hosted hardware requirements.
 
 ## Running NIM Containers
 
@@ -25,7 +25,7 @@ docker run -d \
   --gpus all \
   -p 8001:8000 \
   -e NVIDIA_API_KEY="${NVIDIA_API_KEY}" \
-  nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest
+  nvcr.io/nim/nvidia/nemotron-3-super-120b-a12b:latest
 ```
 
 Verify the model is ready:
@@ -74,7 +74,7 @@ general:
 llms:
   nemotron_llm_intent:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "http://localhost:8001/v1"   # <-- Local NIM
     temperature: 0.5
     top_p: 0.9
@@ -83,9 +83,9 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_nano_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "http://localhost:8001/v1"   # <-- Local NIM
     temperature: 0.1
     top_p: 0.3
@@ -93,20 +93,6 @@ llms:
     num_retries: 3
     chat_template_kwargs:
       enable_thinking: true
-
-  # Nemotron Super is compatible and tested with AIQ but has limited availability
-  # on the Build API due to high demand.
-  # Uncomment nemotron_super_llm below if the endpoint is accessible.
-  # nemotron_super_llm:
-  #   _type: nim
-  #   model_name: nvidia/nemotron-3-super-120b-a12b
-  #   base_url: "http://localhost:8001/v1"   # <-- Local NIM
-  #   temperature: 1.0
-  #   top_p: 1.0
-  #   max_tokens: 128000
-  #   num_retries: 3
-  #   chat_template_kwargs:
-  #     enable_thinking: true
 
 # ===========================================================================
 # Functions
@@ -136,8 +122,8 @@ functions:
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_nano_llm
-    planner_llm: nemotron_nano_llm
+    llm: nemotron_super_llm
+    planner_llm: nemotron_super_llm
     tools:
       - web_search_tool
     max_turns: 3
@@ -147,7 +133,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_nano_llm
+    llm: nemotron_super_llm
     tools:
       - web_search_tool
     max_llm_turns: 10
@@ -155,8 +141,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    max_loops: 2
+    orchestrator_llm: nemotron_super_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool

@@ -60,6 +60,7 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
 
     Uses the tool->source map built at startup from config ``data_source`` fields.
     Tools without a mapping (e.g. "think", calculator) are always included.
+    Source ID matching is case-insensitive.
 
     Args:
         tools: List of LangChain tools.
@@ -72,7 +73,7 @@ def filter_tools_by_sources(tools: list[Any], data_sources: list[str] | None) ->
     if data_sources is None:
         return tools
 
-    selected = {s.lower() for s in data_sources}
+    selected = {source_id.strip().lower() for source_id in data_sources if source_id.strip()}
     filtered = []
     for tool in tools:
         name = getattr(tool, "name", "")

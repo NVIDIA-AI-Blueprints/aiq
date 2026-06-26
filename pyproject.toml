@@ -31,14 +31,14 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat-core==1.6.0",
-    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.6.0",
-    "nvidia-nat-eval==1.6.0",
-    "nvidia-nat-profiler==1.6.0",
-    "deepagents==0.5.0",
-    "langchain-modal==0.0.3",
+    "nvidia-nat-core==1.7.0",
+    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.7.0",
+    "nvidia-nat-eval==1.7.0",
+    "nvidia-nat-profiler==1.7.0",
+    "deepagents>=0.6.5",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
+    "langchain-modal==0.0.5",
     "psycopg[binary]>=3.0.0",
     "asyncpg>=0.29.0",
     "aiosqlite>=0.19.0",
@@ -93,6 +93,7 @@ aiq_data_source_registry = "aiq_agent.common.data_source_registry"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
+addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 
@@ -190,6 +191,8 @@ dev = [
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
+    "duckduckgo-news-search",
+    "polymarket-prediction-market",
     "knowledge-layer[all]",
     "aiq-api",
     "aiq-research-cli",
@@ -231,6 +234,8 @@ aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }
+duckduckgo-news-search = { workspace = true }
+polymarket-prediction-market = { workspace = true }
 knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }

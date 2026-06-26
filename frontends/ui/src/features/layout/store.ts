@@ -23,7 +23,7 @@ import { createDataSourcesClient, type DataSourceFromAPI } from '@/adapters/api'
 const initialState: LayoutState = {
   isSessionsPanelOpen: false,
   rightPanel: 'data-sources',
-  researchPanelTab: 'plan',
+  researchPanelTab: 'tasks',
   dataSourcesPanelTab: 'connections',
   enabledDataSourceIds: [], // Start empty, populated when data sources are fetched
   theme: 'system',
@@ -88,10 +88,9 @@ export const useLayoutStore = create<LayoutStore>()(
           const client = createDataSourcesClient({ authToken })
           const response = await client.getDataSources()
 
-          // Enable sources that don't require auth by default
-          const enabledIds = response.data_sources
-            .filter((source) => !source.requires_auth)
-            .map((source) => source.id)
+          // Start with every returned source enabled. Auth-aware cleanup still
+          // runs through disableAuthRequiredSources when a user loses access.
+          const enabledIds = response.data_sources.map((source) => source.id)
 
           set(
             {

@@ -26,29 +26,28 @@
 # =============================================================================
 # Stage 1: Builder (shared between dev and release)
 # =============================================================================
-FROM nvcr.io/nvidia/base/ubuntu:jammy-20260217 AS builder
+FROM nvcr.io/nvidia/base/ubuntu:noble-20260217 AS builder
 
 WORKDIR /app
 
-# Install system dependencies and Python 3.13
+# Install system dependencies and bootstrap Python for uv.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     tzdata \
     build-essential \
+    ca-certificates \
     curl \
     git \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3.13 \
-    python3.13-dev \
-    python3.13-venv \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3.13 -m ensurepip --upgrade \
-    && python3.13 -m pip install --no-cache-dir uv \
-    && ln -sf /usr/bin/python3.13 /usr/local/bin/python \
-    && ln -sf /usr/bin/python3.13 /usr/local/bin/python3
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+
+RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
+    && uv python install 3.13 \
+    && UV_PYTHON_BIN="$(uv python find 3.13)" \
+    && ln -sf "$UV_PYTHON_BIN" /usr/local/bin/python \
+    && ln -sf "$UV_PYTHON_BIN" /usr/local/bin/python3
 
 RUN uv venv /app/.venv --python /usr/local/bin/python
 
@@ -106,6 +105,7 @@ FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS dev
 
 WORKDIR /app
 
+COPY --from=dev-builder /opt/uv-python /opt/uv-python
 COPY --from=dev-builder /app /app
 
 USER 1000:1000
@@ -126,6 +126,7 @@ FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS release
 WORKDIR /app
 
 # Copy from base builder (no CLI)
+COPY --from=builder /opt/uv-python /opt/uv-python
 COPY --from=builder /app /app
 
 USER 1000:1000

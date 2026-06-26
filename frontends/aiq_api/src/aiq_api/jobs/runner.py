@@ -189,6 +189,44 @@ def _load_agent_class(agent_class_path: str) -> type:
     return getattr(module, class_name)
 
 
+async def _create_llm_provider(builder: Any, fn_config: Any) -> tuple[Any, Any]:
+    """Create a role-aware LLM provider from a NAT function config."""
+    from aiq_agent.common import LLMProvider
+    from aiq_agent.common import LLMRole
+    from nat.builder.framework_enum import LLMFrameworkEnum
+
+    role_config_attrs = (
+        (LLMRole.ORCHESTRATOR, "orchestrator_llm"),
+        (LLMRole.ROUTER, "source_router_llm"),
+        (LLMRole.PLANNER, "planner_llm"),
+        (LLMRole.RESEARCHER, "researcher_llm"),
+        (LLMRole.REPORT_WRITER, "writer_llm"),
+    )
+    llm_cache: dict[Any, Any] = {}
+    role_llms = {}
+    for role, config_attr in role_config_attrs:
+        llm_ref = getattr(fn_config, config_attr, None)
+        if llm_ref:
+            if llm_ref not in llm_cache:
+                llm_cache[llm_ref] = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            role_llms[role] = llm_cache[llm_ref]
+
+    default_llm = role_llms.get(LLMRole.ORCHESTRATOR)
+    if default_llm is None:
+        llm_ref = getattr(fn_config, "llm", None)
+        if llm_ref:
+            if llm_ref not in llm_cache:
+                llm_cache[llm_ref] = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            default_llm = llm_cache[llm_ref]
+
+    provider = LLMProvider()
+    provider.set_default(default_llm)
+    for role, llm in role_llms.items():
+        provider.configure(role, llm)
+
+    return provider, default_llm
+
+
 async def run_agent_job(
     configure_logging: bool,
     log_level: int,
@@ -256,8 +294,6 @@ async def run_agent_job(
 
     install_request_trace_span_injection()
 
-    from aiq_agent.common import LLMProvider
-    from aiq_agent.common import LLMRole
     from aiq_agent.common import VerboseTraceCallback
     from aiq_agent.common import is_verbose
     from nat.builder.framework_enum import LLMFrameworkEnum
@@ -304,25 +340,15 @@ async def run_agent_job(
 
         async with WorkflowBuilder.from_config(config=config) as builder:
             fn_config = builder.get_function_config(agent_config_name)
+            if getattr(fn_config, "type", None) == "deep_research_agent":
+                from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+                from aiq_agent.agents.deep_researcher.register import resolve_deep_research_runtime_config
 
-            # Get LLMs - handle both deep_researcher (orchestrator_llm) and shallow/other agents (llm)
-            orchestrator_llm = None
-            if hasattr(fn_config, "orchestrator_llm") and fn_config.orchestrator_llm:
-                orchestrator_llm = await builder.get_llm(
-                    fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-                )
-            planner_llm = None
-            researcher_llm = None
-            if hasattr(fn_config, "planner_llm") and fn_config.planner_llm:
-                planner_llm = await builder.get_llm(fn_config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-            if hasattr(fn_config, "researcher_llm") and fn_config.researcher_llm:
-                researcher_llm = await builder.get_llm(
-                    fn_config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-                )
+                if isinstance(fn_config, DeepResearchAgentConfig):
+                    skills_config, sandbox_config = resolve_deep_research_runtime_config(fn_config, builder)
+                    fn_config = fn_config.model_copy(update={"skills": skills_config, "sandbox": sandbox_config})
 
-            llm = orchestrator_llm
-            if llm is None and hasattr(fn_config, "llm") and fn_config.llm:
-                llm = await builder.get_llm(fn_config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            provider, llm = await _create_llm_provider(builder, fn_config)
 
             # Resolve tools: use explicit list or auto-inherit from data_source_registry
             tool_refs = fn_config.tools
@@ -436,16 +462,6 @@ async def run_agent_job(
 
                     # Create profiler callback AFTER workflow starts (ensures correct parent)
                     nat_profiler_callback = LangchainProfilerHandler()
-
-                    # Set up LLM provider
-                    provider = LLMProvider()
-                    provider.set_default(llm)
-                    if orchestrator_llm:
-                        provider.configure(LLMRole.ORCHESTRATOR, orchestrator_llm)
-                    if planner_llm:
-                        provider.configure(LLMRole.PLANNER, planner_llm)
-                    if researcher_llm:
-                        provider.configure(LLMRole.RESEARCHER, researcher_llm)
 
                     verbose = is_verbose(getattr(fn_config, "verbose", False))
                     callbacks = [VerboseTraceCallback()] if verbose else []
@@ -583,27 +599,30 @@ def _create_agent_instance(
     1. llm_provider + tools pattern (DeepResearcherAgent style)
     2. llm + tools pattern (simpler agents)
     """
-    # Try async deep_researcher pattern with generic function config and job-scoped runtime state.
-    try:
+    from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+
+    if isinstance(fn_config, DeepResearchAgentConfig):
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            max_loops=getattr(fn_config, "max_loops", 3),
             verbose=verbose,
             callbacks=callbacks,
-            config=fn_config,
+            domain_catalog_path=fn_config.domain_catalog_path,
+            enable_source_router=fn_config.enable_source_router,
+            enable_citation_verification=fn_config.enable_citation_verification,
+            skills=fn_config.skills,
+            sandbox=fn_config.sandbox,
             job_id=job_id,
+            max_research_concurrency=fn_config.max_research_concurrency,
+            max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
+            max_source_tool_batch_size=fn_config.max_source_tool_batch_size,
         )
-    except TypeError as exc:
-        if "unexpected keyword argument" not in str(exc):
-            raise
 
-    # Try original deep_researcher pattern (llm_provider + tools + max_loops + verbose)
+    # Try original deep_researcher pattern (llm_provider + tools + verbose)
     try:
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            max_loops=getattr(fn_config, "max_loops", 3),
             verbose=verbose,
             callbacks=callbacks,
         )
