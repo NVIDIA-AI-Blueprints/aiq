@@ -257,6 +257,7 @@ merges, drop the shim and the toggle.
 ```bash
 pytest tests/aiq_agent/agents/deep_researcher/sandbox/ -q
 ```
+
 All provider/artifact tests run without a live Modal/OpenShell gateway (OpenShell
 compliance auto-skips when the SDK is absent).
 

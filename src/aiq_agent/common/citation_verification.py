@@ -81,6 +81,7 @@ class EmptySourceRegistryError(Exception):
         unavailable_tools: list[str] | None = None,
         available_count: int = 0,
     ) -> None:
+        """Build the empty-registry error with agent type and tool-availability context."""
         self.agent_type = agent_type
         self.unavailable_tools = unavailable_tools or []
         self.available_count = available_count
@@ -171,6 +172,7 @@ class SourceRegistry:
     """
 
     def __init__(self) -> None:
+        """Initialize empty URL, parsed-URL, and citation-key indexes."""
         self._urls: dict[str, SourceEntry] = {}
         self._parsed_urls: dict[str, _ParsedURL] = {}
         self._citation_keys: list[SourceEntry] = []
@@ -1102,6 +1104,7 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
                 url_to_citation[_normalize_url(url_m.group(0).rstrip(_URL_TRIM_CHARS))] = num
 
     def _replace_body_url(match: re.Match) -> str:
+        """Replace a bare body URL with its citation number, or strip it; keep artifact refs."""
         nonlocal body_urls_removed, body_urls_replaced
         url = match.group(0).rstrip(_URL_TRIM_CHARS)
         # Preserve internal artifact references (e.g. embedded chart images). They use the
@@ -1119,6 +1122,7 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     # Collapse markdown links to display text, but preserve internal artifact:// image
     # references verbatim so embedded charts survive into the final report.
     def _collapse_md_link(match: re.Match) -> str:
+        """Collapse a markdown link to its display text, preserving ``artifact://`` targets."""
         # Preserve only when the link destination is an artifact ref; a label that merely
         # contains "artifact://" must still collapse so stray URLs don't leak into the body.
         if match.group(2).startswith("artifact://"):

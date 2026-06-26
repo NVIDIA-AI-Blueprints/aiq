@@ -72,6 +72,14 @@ class CancellationMonitor:
         job_id: str,
         poll_interval: float = 1.0,
     ):
+        """Configure the job-status poller used to detect interruption.
+
+        Args:
+            scheduler_address: Dask scheduler address (unused by polling, kept for context).
+            db_url: Database URL of the job store to poll.
+            job_id: Job whose status is monitored.
+            poll_interval: Seconds between status polls.
+        """
         self.scheduler_address = scheduler_address
         self.db_url = db_url
         self.job_id = job_id
@@ -81,6 +89,7 @@ class CancellationMonitor:
 
     @property
     def is_cancelled(self) -> bool:
+        """Return whether the monitored job has been interrupted."""
         return self._cancelled.is_set()
 
     async def _poll_job_status(self) -> None:

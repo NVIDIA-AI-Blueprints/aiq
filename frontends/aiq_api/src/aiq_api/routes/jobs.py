@@ -1012,6 +1012,7 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
     loop = asyncio.get_running_loop()
 
     def _do_cleanup() -> tuple[int, int, int]:
+        """Delete expired events/jobs/access rows synchronously; return removal counts."""
         from sqlalchemy import text
 
         engine = EventStore._get_or_create_sync_engine(db_url)
@@ -1322,6 +1323,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     is_reconnect = start_event_id > 0
 
     def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+        """Format an SSE frame and advance (or set) the monotonic event sequence id."""
         nonlocal sequence_id
         if event_id is not None:
             sequence_id = event_id
@@ -1343,6 +1345,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     notification_queue: asyncio.Queue = asyncio.Queue()
 
     def notification_handler(connection, pid, channel_name, payload):
+        """Enqueue a Postgres LISTEN/NOTIFY payload, dropping it if the queue is full."""
         try:
             notification_queue.put_nowait(payload)
         except asyncio.QueueFull:
@@ -1508,6 +1511,7 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     replay_mode_announced = False
 
     def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+        """Format an SSE frame and advance (or set) the monotonic event sequence id."""
         nonlocal sequence_id
         if event_id is not None:
             sequence_id = event_id

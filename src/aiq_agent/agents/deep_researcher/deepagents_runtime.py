@@ -69,6 +69,7 @@ class DeepResearchSkillsConfig(FunctionBaseConfig, name="deep_research_skills"):
     @field_validator("agents")
     @classmethod
     def _validate_agent_names(cls, value: dict[str, tuple[str, ...]]) -> dict[str, tuple[str, ...]]:
+        """Reject skill assignments to agent names that are not skill-bearing agents."""
         unknown = sorted(set(value) - SKILL_AGENT_NAMES)
         if unknown:
             raise ValueError(
@@ -138,6 +139,15 @@ class DeepAgentsRuntime:
         artifact_db_url: str | None = None,
         artifact_emit: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
+        """Resolve skill sources and eagerly build the sandbox provider/artifact manager.
+
+        Args:
+            skills: Skill collections assigned per agent, or None for no skills.
+            sandbox: Sandbox configuration, or None to run without a sandbox.
+            job_id: Owning job id; a random id is generated when omitted.
+            artifact_db_url: Database URL for durable artifact storage.
+            artifact_emit: Optional SSE emitter for artifact events.
+        """
         self._skills = skills
         self._sandbox = sandbox
         self._job_id = str(job_id) if job_id is not None else str(uuid4())
@@ -307,6 +317,7 @@ def resolve_skill_collections(collection_names: tuple[str, ...]) -> tuple[str, .
 
 
 def _resolve_agent_skill_sources(skills: DeepResearchSkillsConfig | None) -> dict[str, tuple[str, ...]]:
+    """Map each agent to its resolved skill source paths, skipping empty assignments."""
     if skills is None:
         return {}
     return {
@@ -321,6 +332,7 @@ def _validate_sandbox_requirements(
     skills: DeepResearchSkillsConfig | None,
     sandbox: DeepResearchSandboxConfig | None,
 ) -> None:
+    """Fail fast when a skill collection that requires a sandbox is assigned without one."""
     if skills is None or not skills.require_sandbox:
         return
 
@@ -342,6 +354,7 @@ def _validate_sandbox_requirements(
 
 
 def _validate_modal_sandbox_name(job_id: str) -> str:
+    """Return the job id if it is a valid Modal sandbox name, else raise ValueError."""
     if len(job_id) > 64 or re.match(r"^[a-zA-Z0-9-_.]+$", job_id) is None or re.match(r"^ap-[a-zA-Z0-9]{22}$", job_id):
         raise ValueError(
             "Deep research job_id must be a valid Modal sandbox name: "
@@ -401,11 +414,13 @@ def _create_sandbox_backend(config: DeepResearchSandboxConfig, job_id: str) -> A
 
 
 def _create_modal_backend(config: DeepResearchSandboxConfig, job_id: str) -> Any:
+    """Return a lazy Modal backend after verifying Modal dependencies are installed."""
     _ensure_modal_dependencies()
     return _LazyModalSandboxBackend(config, job_id)
 
 
 def _ensure_modal_dependencies() -> None:
+    """Raise ImportError listing any missing Modal packages when Modal is configured."""
     missing = [
         package
         for module_name, package in (("modal", "modal"), ("langchain_modal", "langchain-modal"))
@@ -423,6 +438,7 @@ class _LazyModalSandboxBackend(BaseSandbox):
     """Job-scoped Modal backend that creates and recreates the sandbox on demand."""
 
     def __init__(self, config: DeepResearchSandboxConfig, job_id: str) -> None:
+        """Store config and validated sandbox name; defer real backend creation."""
         self.config = config
         self.sandbox_name = _validate_modal_sandbox_name(job_id)
         self._backend: Any | None = None
@@ -430,12 +446,14 @@ class _LazyModalSandboxBackend(BaseSandbox):
 
     @property
     def id(self) -> str:
+        """Return the live backend id, or the sandbox name before it is created."""
         backend = self._backend
         if backend is None:
             return self.sandbox_name
         return backend.id
 
     def execute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
+        """Run a command, recreating the sandbox and retrying once if it vanished."""
         for attempt in range(2):
             try:
                 return self._get_backend().execute(command, timeout=timeout)
@@ -451,6 +469,7 @@ class _LazyModalSandboxBackend(BaseSandbox):
         raise RuntimeError("unreachable")
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        """Upload files, recreating the sandbox and retrying once if it vanished."""
         for attempt in range(2):
             try:
                 return self._get_backend().upload_files(files)
@@ -466,6 +485,7 @@ class _LazyModalSandboxBackend(BaseSandbox):
         raise RuntimeError("unreachable")
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Download files, recreating the sandbox and retrying once if it vanished."""
         for attempt in range(2):
             try:
                 return self._get_backend().download_files(paths)
@@ -481,6 +501,7 @@ class _LazyModalSandboxBackend(BaseSandbox):
         raise RuntimeError("unreachable")
 
     def _get_backend(self) -> Any:
+        """Return the backend, creating it once under the lock on first use."""
         backend = self._backend
         if backend is not None:
             return backend
@@ -496,6 +517,7 @@ class _LazyModalSandboxBackend(BaseSandbox):
             return self._backend
 
     def _reset_backend(self) -> None:
+        """Force-create a fresh Modal sandbox, discarding the prior (lost) one."""
         with self._lock:
             logger.warning(
                 "Modal sandbox backend RESET: sandbox_name=%s app=%s "
@@ -512,6 +534,7 @@ def _create_modal_backend_now(
     *,
     force_new: bool = False,
 ) -> Any:
+    """Attach to or create the named Modal sandbox and wrap it as a ModalSandbox backend."""
     try:
         import modal
         from langchain_modal import ModalSandbox
@@ -560,6 +583,7 @@ def _create_modal_backend_now(
 
 
 def _is_modal_not_found_error(exc: Exception) -> bool:
+    """Return whether the exception is Modal's NotFoundError (with an import-free fallback)."""
     try:
         import modal
 

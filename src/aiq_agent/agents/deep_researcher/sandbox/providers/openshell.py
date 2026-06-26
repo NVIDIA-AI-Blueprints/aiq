@@ -138,6 +138,7 @@ class OpenShellSandboxProvider(SandboxProvider):
     provider_name = "openshell"
 
     def __init__(self, config: SandboxConfig, job_id: str) -> None:
+        """Initialize the provider, requiring the OpenShell SDK and adapter to import."""
         super().__init__(config, job_id)
         self._os_context: object | None = None
         try:
@@ -148,10 +149,12 @@ class OpenShellSandboxProvider(SandboxProvider):
 
     @classmethod
     def _scoped_name(cls, job_id: str) -> str:
+        """Return the OpenShell-safe sandbox name derived from the job id."""
         return _normalize_openshell_name(job_id)
 
     @property
     def capabilities(self) -> SandboxCapabilities:
+        """Declare the gateway-enforced guarantees this provider supports."""
         return SandboxCapabilities(
             supports_network_policy=True,
             supports_network_allowlist=True,
@@ -162,6 +165,7 @@ class OpenShellSandboxProvider(SandboxProvider):
         )
 
     def is_recoverable_error(self, exc: Exception) -> bool:
+        """Return whether the error is a missing-sandbox condition worth one retry."""
         return _is_openshell_not_found_error(exc)
 
     def upload_files(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
@@ -180,6 +184,7 @@ class OpenShellSandboxProvider(SandboxProvider):
         return self._call("download_files", lambda _s: self._download_files_envfree(paths), idempotent=True)
 
     def _upload_files_envfree(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
+        """Upload files via argv + stdin so no ``OPENSHELL_*`` env is required."""
         sandbox = self._os_context
         responses: list[FileUploadResponse] = []
         for path, content in files:
@@ -197,6 +202,7 @@ class OpenShellSandboxProvider(SandboxProvider):
         return responses
 
     def _download_files_envfree(self, paths: list[str]) -> list[FileDownloadResponse]:
+        """Download files via an argv bootstrap that enforces size/symlink limits in-sandbox."""
         sandbox = self._os_context
         # Cap passed to the bootstrap so oversized files are refused before transfer.
         max_bytes = self.config.artifact_capture.max_file_bytes
@@ -271,10 +277,12 @@ class OpenShellSandboxProvider(SandboxProvider):
         return backend
 
     def close(self) -> None:
+        """Terminate the session and exit the OpenShell context manager."""
         super().close()
         self._exit_context()
 
     def _exit_context(self) -> None:
+        """Exit the OpenShell context once, swallowing cleanup errors on the terminal path."""
         ctx = self._os_context
         self._os_context = None
         if ctx is not None and hasattr(ctx, "__exit__"):

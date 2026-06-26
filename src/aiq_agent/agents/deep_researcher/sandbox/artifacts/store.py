@@ -103,12 +103,18 @@ class SqlArtifactStore(ArtifactStore):
     _lock = threading.Lock()
 
     def __init__(self, db_url: str = "sqlite+aiosqlite:///./jobs.db") -> None:
+        """Bind to the shared job database and ensure the artifacts table exists.
+
+        Args:
+            db_url: SQLAlchemy URL of the shared job/event database.
+        """
         self.db_url = db_url
         self._engine = self._get_engine(db_url)
         self._ensure_table()
 
     @classmethod
     def _get_engine(cls, db_url: str) -> Any:
+        """Return a process-wide engine for the URL, creating it once (thread-safe)."""
         from sqlalchemy import create_engine
         from sqlalchemy import event
 
@@ -122,6 +128,7 @@ class SqlArtifactStore(ArtifactStore):
                 # WAL improves concurrency between the worker writer and API reader.
                 @event.listens_for(engine, "connect")
                 def _set_wal(dbapi_conn: Any, _record: Any) -> None:  # pragma: no cover - driver callback
+                    """Enable SQLite WAL mode on connect for reader/writer concurrency."""
                     cursor = dbapi_conn.cursor()
                     cursor.execute("PRAGMA journal_mode=WAL")
                     cursor.close()
@@ -130,6 +137,7 @@ class SqlArtifactStore(ArtifactStore):
             return engine
 
     def _ensure_table(self) -> None:
+        """Create the ``artifacts`` table on first use for this database URL."""
         if self.db_url in SqlArtifactStore._initialized:
             return
         from sqlalchemy import BigInteger
@@ -176,6 +184,15 @@ class SqlArtifactStore(ArtifactStore):
         SqlArtifactStore._initialized.add(self.db_url)
 
     def put(self, artifact: Artifact, data: bytes) -> Artifact:
+        """Persist bytes and metadata, deduping per job by content digest.
+
+        Args:
+            artifact: Metadata for the artifact to store.
+            data: Raw artifact bytes.
+
+        Returns:
+            The stored record, or the existing record on a digest dedup hit.
+        """
         existing = self.find_by_digest(artifact.job_id, artifact.sha256)
         if existing is not None:
             logger.debug("Artifact dedup hit for job=%s sha=%s", artifact.job_id, artifact.sha256[:12])
@@ -223,6 +240,7 @@ class SqlArtifactStore(ArtifactStore):
         return stored
 
     def open_bytes(self, job_id: str, artifact_id: str) -> Iterator[bytes]:
+        """Yield an artifact's bytes in 1 MiB chunks, or nothing if not found."""
         from sqlalchemy import text
 
         with self._engine.connect() as conn:
@@ -237,6 +255,7 @@ class SqlArtifactStore(ArtifactStore):
             yield data[start : start + _READ_CHUNK_BYTES]
 
     def get(self, job_id: str, artifact_id: str) -> Artifact | None:
+        """Return artifact metadata for the job, or ``None`` if not found."""
         from sqlalchemy import text
 
         with self._engine.connect() as conn:
@@ -247,6 +266,7 @@ class SqlArtifactStore(ArtifactStore):
         return _row_to_artifact(row) if row else None
 
     def find_by_digest(self, job_id: str, sha256: str) -> Artifact | None:
+        """Return an existing artifact with the same digest for the job, if any."""
         from sqlalchemy import text
 
         with self._engine.connect() as conn:
@@ -257,6 +277,7 @@ class SqlArtifactStore(ArtifactStore):
         return _row_to_artifact(row) if row else None
 
     def list(self, job_id: str) -> list[Artifact]:
+        """Return all artifacts owned by the job, ordered by creation time."""
         from sqlalchemy import text
 
         with self._engine.connect() as conn:
@@ -267,6 +288,7 @@ class SqlArtifactStore(ArtifactStore):
         return [_row_to_artifact(row) for row in rows]
 
     def delete_job(self, job_id: str) -> int:
+        """Delete all artifacts for the job and return the number removed."""
         from sqlalchemy import text
 
         with self._engine.connect() as conn:
@@ -275,6 +297,10 @@ class SqlArtifactStore(ArtifactStore):
             return result.rowcount
 
     def cleanup_old_artifacts(self, retention_seconds: int) -> int:
+        """Delete artifacts older than the retention window and return the count.
+
+        A non-positive retention is refused (returns 0) to avoid deleting everything.
+        """
         from sqlalchemy import text
 
         # A non-positive retention would make the cutoff "now or later" and delete everything.
@@ -307,6 +333,7 @@ _META_COLUMNS = (
 
 
 def _row_to_artifact(row: Any) -> Artifact:
+    """Build an ``Artifact`` from a metadata row, tolerating bad provenance JSON."""
     provenance = ArtifactProvenance()
     raw = row.get("provenance")
     if raw:

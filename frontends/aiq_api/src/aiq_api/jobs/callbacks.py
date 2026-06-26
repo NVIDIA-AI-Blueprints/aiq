@@ -136,6 +136,7 @@ class ToolArtifactMapping:
     """
 
     def __init__(self):
+        """Initialize an empty tool-to-artifact mapping and register the defaults."""
         self._mappings: dict[str, dict] = {}
         self._register_defaults()
 
@@ -224,6 +225,12 @@ class AgentEventCallback(BaseCallbackHandler):
         event_store: EventStore | None = None,
         tool_artifact_mapping: ToolArtifactMapping | None = None,
     ):
+        """Wire the event store and tool/artifact mapping and init per-job URL caches.
+
+        Args:
+            event_store: Sink for SSE events; None disables emission.
+            tool_artifact_mapping: Mapping of tools to artifact types; a default is used when omitted.
+        """
         super().__init__()
         self._event_store = event_store
         self._tool_mapping = tool_artifact_mapping or ToolArtifactMapping()
@@ -303,6 +310,7 @@ class AgentEventCallback(BaseCallbackHandler):
         return metadata if metadata else None
 
     def _emit(self, event: IntermediateStepEvent):
+        """Store an event as an SSE dict when an event store is configured."""
         if self._event_store:
             self._event_store.store(event.to_sse_dict())
 
@@ -345,6 +353,7 @@ class AgentEventCallback(BaseCallbackHandler):
         )
 
     def _get_chain_name(self, serialized: dict | None, **kwargs) -> str:
+        """Resolve a human-readable chain name from serialized data or kwargs."""
         if serialized:
             name = serialized.get("name") or serialized.get("id", [""])[-1]
             if name:
@@ -535,6 +544,7 @@ class AgentEventCallback(BaseCallbackHandler):
             self._emit_artifact(artifact_type, content, name=name, **extra_data)
 
     def on_chain_start(self, serialized: dict | None, inputs: dict, **kwargs) -> None:
+        """Track the run/parent lineage and emit an agent.start event for agent-like chains."""
         name = self._get_chain_name(serialized, **kwargs)
         run_id = str(kwargs.get("run_id", ""))
         parent_run_id = str(kwargs.get("parent_run_id", "")) if kwargs.get("parent_run_id") else ""
@@ -558,6 +568,7 @@ class AgentEventCallback(BaseCallbackHandler):
             )
 
     def on_chain_end(self, outputs: dict, **kwargs) -> None:
+        """Emit an agent.end event for agent-like chains and clear run bookkeeping."""
         run_id = str(kwargs.get("run_id", ""))
         name = self._run_id_to_name.pop(run_id, kwargs.get("name", ""))
 
@@ -606,6 +617,7 @@ class AgentEventCallback(BaseCallbackHandler):
         return serialized[: self.TOOL_INPUT_TRIM_LIMIT] + "..."
 
     def on_tool_start(self, serialized: dict | None, input_str: str, **kwargs) -> None:
+        """Emit a tool.start event and record sandbox/lineage state for the tool run."""
         tool_name = serialized.get("name", "unknown") if serialized else "unknown"
         run_id = str(kwargs.get("run_id", ""))
         parent_run_id = str(kwargs.get("parent_run_id", "")) if kwargs.get("parent_run_id") else ""
@@ -635,6 +647,7 @@ class AgentEventCallback(BaseCallbackHandler):
         self._emit_tool_artifact(tool_name, parsed_input, run_id=run_id)
 
     def on_tool_end(self, output: str, **kwargs) -> None:
+        """Emit a tool.end event and clear the tool run's lineage/sandbox state."""
         run_id = str(kwargs.get("run_id", ""))
         tool_name = self._run_id_to_name.pop(run_id, kwargs.get("name", "unknown"))
         is_sandbox_tool = self._run_id_to_sandbox_tool.pop(run_id, False)
@@ -670,6 +683,7 @@ class AgentEventCallback(BaseCallbackHandler):
         self._run_id_to_parent.pop(run_id, None)
 
     def on_llm_start(self, serialized: dict, prompts: list, **kwargs) -> None:
+        """Emit an llm.start event for a completion-style model call."""
         model_name = "unknown"
         if serialized:
             model_name = serialized.get("name") or serialized.get("id", ["unknown"])[-1]
@@ -695,6 +709,7 @@ class AgentEventCallback(BaseCallbackHandler):
         )
 
     def on_llm_new_token(self, token: str, **kwargs) -> None:
+        """Emit a streaming llm.chunk event for each non-empty token."""
         if token:
             self._emit(
                 IntermediateStepEvent(
@@ -708,6 +723,7 @@ class AgentEventCallback(BaseCallbackHandler):
     THINKING_TRIM_SUFFIX = " [Trimmed - check traces for full logs]"
 
     def on_llm_end(self, response, **kwargs) -> None:
+        """Emit an llm.end event with content, thinking, and token usage."""
         run_id = str(kwargs.get("run_id", ""))
         model_name = self._run_id_to_name.pop(run_id, "unknown")
 
@@ -752,6 +768,7 @@ class AgentEventCallback(BaseCallbackHandler):
         self._run_id_to_parent.pop(run_id, None)
 
     def on_chat_model_start(self, serialized: dict, messages: list, **kwargs) -> None:
+        """Emit an llm.start event for a chat-model call."""
         model_name = "unknown"
         if serialized:
             model_name = serialized.get("name") or serialized.get("kwargs", {}).get("model", "unknown")

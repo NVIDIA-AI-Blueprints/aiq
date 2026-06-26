@@ -213,12 +213,13 @@ class TestDeepResearcherAgent:
             assert agent.deepagents_runtime.skill_sources_for("researcher-agent") == ["/skills/research/"]
 
     def test_sandbox_config_rejects_unsupported_provider(self):
-        """Unsupported sandbox providers fail with a clear error at backend resolution."""
-        from aiq_agent.agents.deep_researcher.sandbox.config import SandboxConfig
-        from aiq_agent.agents.deep_researcher.sandbox.registry import create_sandbox_backend
+        """Unsupported sandbox providers fail validation at config load (registry-backed)."""
+        from pydantic import ValidationError
 
-        with pytest.raises(ValueError, match="Unsupported sandbox provider"):
-            create_sandbox_backend(SandboxConfig(provider="not-a-real-provider"), "job-1")
+        from aiq_agent.agents.deep_researcher.sandbox.config import SandboxConfig
+
+        with pytest.raises(ValidationError, match="Unsupported sandbox provider"):
+            SandboxConfig(provider="not-a-real-provider")
 
     def test_register_uses_runtime_config_models(self):
         """NAT config uses the same skills and sandbox models as runtime."""

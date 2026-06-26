@@ -80,6 +80,7 @@ class ModalSandboxProvider(SandboxProvider):
     provider_name = "modal"
 
     def __init__(self, config: SandboxConfig, job_id: str) -> None:
+        """Initialize the provider, requiring the Modal SDK and adapter to import."""
         super().__init__(config, job_id)
         try:
             import langchain_modal  # noqa: F401
@@ -89,10 +90,12 @@ class ModalSandboxProvider(SandboxProvider):
 
     @classmethod
     def _scoped_name(cls, job_id: str) -> str:
+        """Return the validated, job-scoped Modal sandbox name."""
         return _validate_modal_sandbox_name(job_id)
 
     @property
     def capabilities(self) -> SandboxCapabilities:
+        """Declare the guarantees the Modal backend can enforce."""
         return SandboxCapabilities(
             supports_network_policy=True,
             supports_resource_limits=True,
@@ -101,6 +104,7 @@ class ModalSandboxProvider(SandboxProvider):
         )
 
     def is_recoverable_error(self, exc: Exception) -> bool:
+        """Return whether the error is a missing-sandbox condition worth one retry."""
         return _is_modal_not_found_error(exc)
 
     def _create_session(self) -> BaseSandbox:

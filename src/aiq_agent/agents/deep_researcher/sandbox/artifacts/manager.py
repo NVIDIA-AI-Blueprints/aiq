@@ -159,6 +159,17 @@ class ArtifactManager:
         emit: Callable[[dict[str, Any]], None] | None = None,
         content_url_template: str = "/v1/jobs/async/job/{job_id}/artifacts/{artifact_id}/content",
     ) -> None:
+        """Configure harvesting for one job against a backend, store, and artifact dir.
+
+        Args:
+            job_id: Owning job id used to scope and key artifacts.
+            backend: Sandbox backend used to download/enumerate artifact files.
+            store: Durable store for persisting metadata and bytes.
+            config: Capture policy (quotas, allowed extensions, collection points).
+            artifact_dir: Sandbox directory that confines harvestable paths.
+            emit: Optional SSE emitter for artifact/warning events.
+            content_url_template: Template for the artifact content endpoint URL.
+        """
         self.job_id = job_id
         self.backend = backend
         self.store = store
@@ -206,6 +217,7 @@ class ArtifactManager:
         by_name = {a.filename: a for a in artifacts}
 
         def _replace(match: re.Match[str]) -> str:
+            """Rewrite a known reference to its durable id; drop unknown ones."""
             caption = match.group(1)
             token = match.group(2).strip()
             artifact = by_id.get(token) or by_name.get(token) or by_name.get(PurePosixPath(token).name)
@@ -288,6 +300,7 @@ class ArtifactManager:
     # Internal
     # ------------------------------------------------------------------ #
     def _harvest(self, *, scan: bool) -> list[Artifact]:
+        """Discover and capture artifacts under the lock; optionally scan the directory."""
         with self._lock:
             entries = self._discover(scan=scan)
             captured: list[Artifact] = []
@@ -308,6 +321,7 @@ class ArtifactManager:
             return captured
 
     def _discover(self, *, scan: bool) -> list[ManifestEntry]:
+        """Return manifest entries, unioned with a directory scan when ``scan`` is set."""
         entries: list[ManifestEntry] = list(self._read_manifest())
         if not scan:
             return entries
@@ -322,6 +336,7 @@ class ArtifactManager:
         return entries
 
     def _read_manifest(self) -> list[ManifestEntry]:
+        """Download and parse ``manifest.json``; return [] if absent or invalid."""
         manifest_path = f"{self.artifact_dir}/{_MANIFEST_NAME}"
         try:
             responses = self.backend.download_files([manifest_path])
@@ -337,6 +352,7 @@ class ArtifactManager:
         return []
 
     def _scan_dir(self) -> list[ManifestEntry]:
+        """Enumerate allowed files in the artifact dir (bounded, best-effort fallback)."""
         try:
             response = self.backend.execute(f"find {shlex.quote(self.artifact_dir)} -type f")
         except Exception:  # noqa: BLE001 - scan is best-effort
@@ -361,6 +377,11 @@ class ArtifactManager:
         return entries
 
     def _capture(self, entry: ManifestEntry) -> Artifact | None:
+        """Validate, download, sanitize, and persist one entry; return the stored artifact.
+
+        Returns ``None`` when the entry is rejected (confinement, allowlist, quota, size,
+        MIME spoofing, sanitization, or per-run dedup).
+        """
         # 0. Path-traversal confinement.
         if not self._is_confined(entry.path):
             logger.warning("Rejecting artifact outside artifact_dir: %s", entry.path)
@@ -454,6 +475,7 @@ class ArtifactManager:
         return stored
 
     def _is_confined(self, path: str) -> bool:
+        """Return whether the normalized path stays within ``artifact_dir``."""
         try:
             resolved = PurePosixPath(path)
             if not resolved.is_absolute():
@@ -465,12 +487,14 @@ class ArtifactManager:
             return False
 
     def _emit_artifact(self, artifact: Artifact) -> None:
+        """Emit an ``artifact.update`` SSE event with the artifact's content URL."""
         if self._emit is None:
             return
         content_url = self._content_url_template.format(job_id=self.job_id, artifact_id=artifact.artifact_id)
         self._emit(artifact.to_sse_payload(content_url))
 
     def _emit_warning(self, path: str, reason: str) -> None:
+        """Log and emit an ``artifact.warning`` SSE event for a rejected file."""
         logger.warning("Artifact rejected (%s): %s", reason, path)
         if self._emit is None:
             return

@@ -51,6 +51,7 @@ _JOB_EVENTS_DELETE_SQL = text("DELETE FROM job_events WHERE job_id = :job_id")
 
 
 def _is_postgres(db_url: str) -> bool:
+    """Return whether the database URL targets PostgreSQL."""
     return db_url.startswith("postgres")
 
 
@@ -224,10 +225,12 @@ async def authorize_job_access(job_store: Any, db_url: str, job_id: str, princip
 
 
 def _principal_matches_access(principal: Principal, access: Mapping[str, Any]) -> bool:
+    """Return whether a principal matches a job-access row's owner identity."""
     return principal.type == access.get("owner_auth_type") and principal.sub == access.get("owner_subject")
 
 
 def _job_access_connection(db_url: str):
+    """Open a sync connection on the shared event-store engine for the URL."""
     from .event_store import EventStore
 
     engine = EventStore._get_or_create_sync_engine(db_url)
@@ -235,6 +238,7 @@ def _job_access_connection(db_url: str):
 
 
 def _ensure_job_access_schema(conn: Connection, db_url: str) -> None:
+    """Create the ``job_access`` table and index once per database URL."""
     if db_url in _job_access_schema_initialized:
         return
     conn.execute(text(_job_access_table_sql(db_url)))
@@ -243,6 +247,7 @@ def _ensure_job_access_schema(conn: Connection, db_url: str) -> None:
 
 
 def _job_access_table_sql(db_url: str) -> str:
+    """Return the ``CREATE TABLE`` SQL for ``job_access``, dialect-aware for the URL."""
     created_at_type = (
         "TIMESTAMP WITH TIME ZONE DEFAULT NOW()" if _is_postgres(db_url) else "DATETIME DEFAULT CURRENT_TIMESTAMP"
     )
@@ -258,6 +263,7 @@ def _job_access_table_sql(db_url: str) -> str:
 
 
 def _job_access_upsert_sql(db_url: str):
+    """Return the dialect-appropriate upsert statement for ``job_access``."""
     postgres_upsert = (
         "INSERT INTO job_access (job_id, owner_auth_type, owner_subject, owner_email) "
         "VALUES (:job_id, :owner_auth_type, :owner_subject, :owner_email) "
@@ -274,6 +280,7 @@ def _job_access_upsert_sql(db_url: str):
 
 
 def _principal_params(job_id: str, principal: Principal) -> dict[str, str | None]:
+    """Return the SQL bind params for a job's owner identity."""
     return {
         "job_id": job_id,
         "owner_auth_type": principal.type,

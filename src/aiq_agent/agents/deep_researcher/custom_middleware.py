@@ -95,6 +95,7 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
     """
 
     def __init__(self, valid_tool_names: list[str]):
+        """Store the set of valid tool names used to correct malformed tool calls."""
         self.valid_tool_names = set(valid_tool_names)
 
     def _sanitize_tool_name(self, name: str) -> str:
@@ -183,9 +184,11 @@ class ToolVisibilityMiddleware(AgentMiddleware):
     """Hide selected tools from model requests without removing scaffolding middleware."""
 
     def __init__(self, hidden_tool_names: set[str]) -> None:
+        """Store the tool names to hide from model requests."""
         self.hidden_tool_names = hidden_tool_names
 
     def _filter_tools(self, tools: list[object]) -> list[object]:
+        """Return the tool list with hidden tools removed."""
         if not self.hidden_tool_names:
             return tools
         return [tool for tool in tools if _request_tool_name(tool) not in self.hidden_tool_names]
@@ -213,6 +216,7 @@ class ToolRetryMiddleware(AgentMiddleware):
         backoff_factor: float = 2.0,
         initial_delay: float = 1.0,
     ):
+        """Configure retry count and exponential backoff for failed tool calls."""
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.initial_delay = initial_delay
@@ -262,6 +266,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
     """
 
     def __init__(self, source_tool_names: set[str] | None = None) -> None:
+        """Create a source registry scoped to the given source-producing tool names."""
         self.registry = SourceRegistry()
         self._source_tool_names = source_tool_names or set()
         self._compact_source_keys: set[str] = set()
@@ -417,9 +422,11 @@ class ArtifactHarvestMiddleware(AgentMiddleware):
     """
 
     def __init__(self, artifact_manager: object) -> None:
+        """Store the artifact manager used to harvest after ``execute`` calls."""
         self.artifact_manager = artifact_manager
 
     async def awrap_tool_call(self, request, handler):
+        """Run the tool call, then harvest artifacts after a successful ``execute``."""
         result = await handler(request)
         tool_name = ""
         if hasattr(request, "tool_call") and isinstance(request.tool_call, dict):
@@ -459,6 +466,7 @@ class PlanPersistenceMiddleware(AgentMiddleware):
 
     @staticmethod
     def _plan_from_state(state: object) -> object:
+        """Extract the planner's ``structured_response`` from dict or attribute state."""
         if isinstance(state, dict):
             return state.get("structured_response")
         return getattr(state, "structured_response", None)
@@ -514,6 +522,7 @@ class ToolResultPruningMiddleware(AgentMiddleware):
     """
 
     def __init__(self, keep_last_n: int = 3, max_chars: int = 500):
+        """Configure how many recent tool results to keep intact and the truncation cap."""
         self.keep_last_n = keep_last_n
         self.max_chars = max_chars
 
