@@ -76,9 +76,11 @@ _DOWNLOAD_CODE = (
     "import base64,os,sys;"
     "p=sys.argv[1];"
     "limit=int(sys.argv[2]);"
-    "(sys.exit(5) if os.path.islink(p) else None);"
-    "(sys.exit(3) if os.path.isdir(p) else None);"
-    "b=open(p,'rb').read(limit+1);"
+    "root=os.path.realpath(sys.argv[3]);"
+    "rp=os.path.realpath(p);"
+    "(sys.exit(5) if not (rp==root or rp.startswith(root+os.sep)) else None);"
+    "(sys.exit(3) if os.path.isdir(rp) else None);"
+    "b=open(rp,'rb').read(limit+1);"
     "(sys.exit(4) if len(b)>limit else None);"
     "sys.stdout.write(base64.b64encode(b).decode())"
 )
@@ -204,7 +206,9 @@ class OpenShellSandboxProvider(SandboxProvider):
                 responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
                 continue
             result = sandbox.exec(  # type: ignore[union-attr]
-                ["python3", "-c", _DOWNLOAD_CODE, path, str(max_bytes)],
+                # Pass the workdir as the trusted root so the bootstrap rejects only paths
+                # whose realpath escapes it (exit 5), not benign symlinked mounts of the root.
+                ["python3", "-c", _DOWNLOAD_CODE, path, str(max_bytes), self.config.workdir],
                 timeout_seconds=self.config.timeout,
             )
             exit_code = getattr(result, "exit_code", 1)

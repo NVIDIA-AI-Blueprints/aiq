@@ -523,6 +523,8 @@ def _command_artifacts(args: list[str]) -> None:
     used: set[str] = set()
     for artifact in listing.get("artifacts", []):
         artifact_id = artifact.get("artifact_id", "")
+        if not artifact_id:
+            continue
         filename = _unique_filename(download_dir, os.path.basename(artifact.get("filename") or artifact_id), used)
         data = download_artifact(job_id, artifact_id)
         dest = os.path.join(download_dir, filename)

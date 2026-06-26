@@ -36,9 +36,9 @@ if TYPE_CHECKING:
 class SandboxCapabilities(BaseModel):
     """Security and lifecycle guarantees a provider declares it can enforce.
 
-    Defaults are conservative: an unknown provider is assumed to support nothing
-    except artifact download, so the fail-closed gate refuses workloads that
-    require guarantees the provider has not explicitly claimed.
+    Defaults are conservative: an unknown provider is assumed to support nothing,
+    so the fail-closed gate refuses workloads that require guarantees the provider
+    has not explicitly claimed.
 
     Attributes:
         supports_network_policy: Provider can enforce outbound network blocking.

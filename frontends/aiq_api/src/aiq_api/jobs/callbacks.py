@@ -358,7 +358,8 @@ class AgentEventCallback(BaseCallbackHandler):
         if tool_name not in self.SANDBOX_FILE_TOOLS or not isinstance(parsed_input, dict):
             return False
         path = str(parsed_input.get("file_path") or parsed_input.get("path") or parsed_input.get("filename") or "")
-        return bool(path and not path.startswith(self.SHARED_FS_PREFIX))
+        in_shared = path == self.SHARED_FS_PREFIX or path.startswith(self.SHARED_FS_PREFIX + "/")
+        return bool(path and not in_shared)
 
     def _get_source_registry(self):
         """Return the session-scoped SourceRegistry if set, otherwise None."""
