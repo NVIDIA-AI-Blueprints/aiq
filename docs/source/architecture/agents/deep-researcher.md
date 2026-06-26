@@ -156,7 +156,7 @@ functions:
     source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_llm
     planner_llm: nemotron_llm
-    writer_llm: gpt_oss_llm
+    writer_llm: nemotron_super_llm
     verbose: true
     tools:
       - web_search_tool
