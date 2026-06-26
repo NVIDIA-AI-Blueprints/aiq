@@ -38,6 +38,42 @@ from .event_store import EventStore
 logger = logging.getLogger(__name__)
 
 
+_DEEP_RESEARCH_AGENT_KWARGS = frozenset(
+    {
+        "domain_catalog_path",
+        "enable_source_router",
+        "enable_citation_verification",
+        "skills",
+        "sandbox",
+        "job_id",
+        "max_research_concurrency",
+        "max_concurrent_source_tool_calls",
+        "max_source_tool_batch_size",
+    }
+)
+_CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
+
+
+def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset[str]) -> bool:
+    """Return true when a class constructor explicitly declares all requested kwargs."""
+    import inspect
+
+    try:
+        signature = inspect.signature(agent_cls)
+    except (TypeError, ValueError):
+        try:
+            signature = inspect.signature(agent_cls.__init__)
+        except (TypeError, ValueError):
+            return False
+
+    accepted_kwargs = {
+        name
+        for name, param in signature.parameters.items()
+        if param.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    }
+    return kwarg_names.issubset(accepted_kwargs)
+
+
 def _normalize_trace_id(trace_id: int | str | None) -> int | None:
     """Convert trace ID to integer format.
 
@@ -652,12 +688,16 @@ def _create_agent_instance(
     Create an agent instance, supporting different constructor patterns.
 
     Tries in order:
-    1. llm_provider + tools pattern (DeepResearcherAgent style)
-    2. llm + tools pattern (simpler agents)
+    1. DeepResearcherAgent explicit config pattern
+    2. llm_provider + tools + config/job_id pattern
+    3. llm_provider + tools pattern
+    4. llm + tools pattern (simpler agents)
     """
     from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
 
-    if isinstance(fn_config, DeepResearchAgentConfig):
+    if isinstance(fn_config, DeepResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
+        agent_cls, _DEEP_RESEARCH_AGENT_KWARGS
+    ):
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
@@ -675,6 +715,19 @@ def _create_agent_instance(
             max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
             max_source_tool_batch_size=fn_config.max_source_tool_batch_size,
         )
+
+    if _constructor_accepts_explicit_kwargs(agent_cls, _CONFIGURABLE_AGENT_KWARGS):
+        try:
+            return agent_cls(
+                llm_provider=llm_provider,
+                tools=tools,
+                verbose=verbose,
+                callbacks=callbacks,
+                config=fn_config,
+                job_id=job_id,
+            )
+        except TypeError:
+            pass
 
     # Try original deep_researcher pattern (llm_provider + tools + verbose)
     try:

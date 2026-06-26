@@ -1356,6 +1356,59 @@ class TestFinalMarkdownExtraction:
 
             assert "# CapEx Report" in result.messages[-1].content
 
+    @pytest.mark.asyncio
+    async def test_run_seeds_parent_sources_for_delta_citation_verification(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Delta reports may preserve parent citations that must be valid in the child registry."""
+        parent_url = "https://parent.example/source"
+        report = f"Preserved parent claim [1].\n\n## Sources\n[1] Parent: {parent_url}"
+        parent_context = {
+            "parent_job_id": "parent-job-1",
+            "source_summary_markdown": f"- [1] Parent: {parent_url}",
+            "sources": [
+                {
+                    "url": parent_url,
+                    "title": "Parent",
+                    "source_type": "parent_report",
+                    "tool_name": "parent_report",
+                }
+            ],
+        }
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [AIMessage(content="Wrote /shared/output.md")],
+                "files": {
+                    **output_markdown_file(report),
+                    "/shared/parent_report_context.json": {"content": json.dumps(parent_context)},
+                },
+            }
+        )
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="Add OpenShell")],
+                files={
+                    "/shared/parent_report_context.json": json.dumps(parent_context),
+                },
+            )
+
+            result = await agent.run(state)
+
+            assert "[1] Parent: https://parent.example/source" in result.messages[-1].content
+            assert agent.source_registry_middleware.active_registry().has_url(parent_url)
+            assert agent.source_registry_middleware.get_source_entries(mode="compact")[0].url == parent_url
+
 
 class TestDeepResearcherCitationVerification:
     """Tests for deep researcher citation post-processing."""

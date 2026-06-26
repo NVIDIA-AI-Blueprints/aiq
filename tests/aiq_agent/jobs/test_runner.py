@@ -1485,6 +1485,54 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
 
+    def test_create_agent_instance_allows_non_deep_agent_to_reuse_deep_config(self):
+        """Async workers should not treat shared DeepResearchAgentConfig as a constructor contract."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeReportRewriterAgent:
+            def __init__(
+                self,
+                llm_provider,
+                tools=None,
+                *,
+                verbose=False,
+                callbacks=None,
+                config=None,
+                job_id=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.verbose = verbose
+                self.callbacks = callbacks
+                self.config = config
+                self.job_id = job_id
+
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            enable_citation_verification=False,
+        )
+
+        agent = _create_agent_instance(
+            agent_cls=FakeReportRewriterAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=fn_config,
+            verbose=True,
+            callbacks=["callback"],
+            job_id="job-123",
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.verbose is True
+        assert agent.callbacks == ["callback"]
+        assert agent.config is fn_config
+        assert agent.job_id == "job-123"
+
     def test_async_deep_researcher_constructor_applies_config_tuning(self):
         """Async construction preserves catalog and concurrency settings."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
