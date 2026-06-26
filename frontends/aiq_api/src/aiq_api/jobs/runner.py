@@ -93,6 +93,7 @@ _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
     }
 )
 _CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
+_JOB_SCOPED_AGENT_KWARGS = frozenset({"job_id"})
 
 
 def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset[str]) -> bool:

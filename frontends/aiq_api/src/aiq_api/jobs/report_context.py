@@ -87,11 +87,6 @@ def _report_from_events(events: list[dict[str, Any]]) -> str | None:
     return final_report or fallback
 
 
-async def _extract_report_from_events(db_url: str, job_id: str) -> str | None:
-    events = await EventStore.get_events_async(db_url, job_id, 0, _EVENT_SCAN_LIMIT)
-    return _report_from_events(events)
-
-
 def _is_url(value: str | None) -> bool:
     return bool(value and value.lower().startswith(("http://", "https://")))
 
