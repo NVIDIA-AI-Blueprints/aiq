@@ -1533,6 +1533,44 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.config is fn_config
         assert agent.job_id == "job-123"
 
+    def test_create_agent_instance_passes_job_id_to_agent_without_config_arg(self):
+        """Async workers should preserve job_id for non-deep agents that do not need config."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeReportRewriterAgent:
+            def __init__(
+                self,
+                llm_provider,
+                tools=None,
+                *,
+                verbose=False,
+                callbacks=None,
+                job_id=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.verbose = verbose
+                self.callbacks = callbacks
+                self.job_id = job_id
+
+        agent = _create_agent_instance(
+            agent_cls=FakeReportRewriterAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=DeepResearchAgentConfig(orchestrator_llm="llm"),
+            verbose=True,
+            callbacks=["callback"],
+            job_id="job-123",
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.verbose is True
+        assert agent.callbacks == ["callback"]
+        assert agent.job_id == "job-123"
+
     def test_async_deep_researcher_constructor_applies_config_tuning(self):
         """Async construction preserves catalog and concurrency settings."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent

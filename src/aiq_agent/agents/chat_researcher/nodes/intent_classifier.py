@@ -146,15 +146,17 @@ class IntentClassifier:
                 }
 
             raw_intent = (parsed.get("intent") or "research").strip().lower()
-            intent = raw_intent if raw_intent in ("meta", "research") else "research"
+            route = _normalize_route(parsed.get("route"))
+            if route == _ROUTE_META:
+                intent = "meta"
+            elif route is not None:
+                intent = "research"
+            else:
+                intent = raw_intent if raw_intent in ("meta", "research") else "research"
             meta_response = parsed.get("meta_response")
             research_depth = (parsed.get("research_depth") or "shallow").strip().lower()
             depth_reasoning = parsed.get("route_reasoning") or parsed.get("depth_reasoning") or ""
             active_report = bool(state.active_report_job_id or state.last_report_markdown)
-            route = _normalize_route(parsed.get("route"))
-            target = _normalize_target(parsed.get("target"))
-            report_action = _normalize_report_action(parsed.get("report_action"))
-            use_parent_report_context = _normalize_bool(parsed.get("use_parent_report_context")) and active_report
 
             if intent == "meta":
                 target = "meta"
@@ -167,23 +169,10 @@ class IntentClassifier:
                     research_depth=research_depth,
                     depth_reasoning=str(depth_reasoning),
                 )
-            elif target == "report":
-                use_parent_report_context = False
-                if not active_report:
-                    target = "new_research"
-                    report_action = None
-                elif report_action is None:
-                    # Legacy schema compatibility: if the model did not emit the new
-                    # semantic route or an explicit report action, do not maintain a
-                    # second keyword classifier in Python. Fall back to research.
-                    logger.debug(
-                        "Legacy report target without report_action; falling back to new_research (query=%r)",
-                        query,
-                    )
-                    target = "new_research"
             else:
                 target = "new_research"
                 report_action = None
+                use_parent_report_context = False
 
             update: dict[str, Any] = {
                 "user_intent": IntentResult(
@@ -270,16 +259,6 @@ class IntentClassifier:
         return repaired if isinstance(repaired, dict) else None
 
 
-def _normalize_target(raw_target: Any) -> str:
-    target = raw_target.strip().lower() if isinstance(raw_target, str) else "new_research"
-    return target if target in ("report", "new_research") else "new_research"
-
-
-def _normalize_report_action(raw_action: Any) -> str | None:
-    action = raw_action.strip().lower() if isinstance(raw_action, str) else None
-    return action if action in ("ask", "edit") else None
-
-
 def _normalize_route(raw_route: Any) -> str | None:
     route = raw_route.strip().lower() if isinstance(raw_route, str) else None
     if route in (
@@ -301,9 +280,6 @@ def _route_to_fields(
     depth_reasoning: str,
 ) -> tuple[str, str | None, bool, str, str]:
     """Map the LLM-owned semantic route onto the existing workflow fields."""
-    if route == _ROUTE_META:
-        return "meta", None, False, research_depth, depth_reasoning
-
     if route == _ROUTE_REPORT_ASK:
         if active_report:
             return "report", "ask", False, research_depth, depth_reasoning
@@ -318,19 +294,7 @@ def _route_to_fields(
         reasoning = depth_reasoning or "Requires fresh evidence against the active report."
         return "new_research", None, active_report, "deep", reasoning
 
-    return "new_research", None, False, research_depth, depth_reasoning
+    if route == _ROUTE_STANDALONE_RESEARCH:
+        return "new_research", None, False, research_depth, depth_reasoning
 
-
-def _normalize_bool(raw_value: Any) -> bool:
-    """Coerce LLM JSON values to bool, treating string booleans correctly.
-
-    json.loads usually yields real booleans, but models occasionally emit string
-    booleans (e.g. "false"); plain bool("false") would be True, so handle them.
-    """
-    if isinstance(raw_value, bool):
-        return raw_value
-    if isinstance(raw_value, str):
-        return raw_value.strip().lower() in {"true", "1", "yes"}
-    if isinstance(raw_value, (int, float)):
-        return raw_value != 0
-    return False
+    raise ValueError(f"Unsupported research route: {route}")

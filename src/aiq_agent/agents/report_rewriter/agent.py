@@ -84,14 +84,12 @@ class ReportRewriterAgent:
         *,
         verbose: bool = False,
         callbacks: list[Any] | None = None,
-        config: Any | None = None,
         job_id: str | None = None,
     ) -> None:
         self.llm_provider = llm_provider
         self.tools = list(tools or [])
         self.verbose = verbose
         self.callbacks = callbacks or []
-        self.config = config
         self.job_id = job_id
         self.system_prompt = load_prompt(AGENT_DIR / "prompts", "edit")
 

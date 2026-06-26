@@ -33,12 +33,6 @@ Route examples:
 - "can we write a report on this from a supply-chain angle?" -> route = "report_delta_research"
 - "write a separate report on player performance" -> route = "standalone_research"
 
-Compatibility fields:
-- For route = "report_ask", set target = "report", report_action = "ask", research_depth = null, use_parent_report_context = false.
-- For route = "report_cosmetic_edit", set target = "report", report_action = "edit", research_depth = null, use_parent_report_context = false.
-- For route = "report_delta_research", set target = "new_research", report_action = null, research_depth = "deep", use_parent_report_context = true.
-- For route = "standalone_research", set target = "new_research", report_action = null, use_parent_report_context = false.
-
 Determine the depth for standalone_research.
 - **shallow**: Single main question, factual lookup, 2-3 tool calls, no complex comparison.
 - **deep**: Explicit report-generation requests ("write/create/generate a report"), multi-faceted requests,
@@ -50,11 +44,8 @@ You must respond ONLY with a JSON object using this schema:
 {
   "intent": "meta" | "research",
   "route": "report_ask" | "report_cosmetic_edit" | "report_delta_research" | "standalone_research" | "meta",
-  "target": "meta" | "report" | "new_research",
-  "report_action": "ask" | "edit" | null,
   "meta_response": "The text response if intent is meta, otherwise null",
   "research_depth": "shallow" | "deep" | null,
-  "use_parent_report_context": true | false,
   "route_reasoning": "One sentence explanation for the route and depth, otherwise null"
 }
 

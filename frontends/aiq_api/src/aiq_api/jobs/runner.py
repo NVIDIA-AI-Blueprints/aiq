@@ -52,6 +52,7 @@ _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
     }
 )
 _CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
+_JOB_SCOPED_AGENT_KWARGS = frozenset({"job_id"})
 
 
 def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset[str]) -> bool:
@@ -690,8 +691,9 @@ def _create_agent_instance(
     Tries in order:
     1. DeepResearcherAgent explicit config pattern
     2. llm_provider + tools + config/job_id pattern
-    3. llm_provider + tools pattern
-    4. llm + tools pattern (simpler agents)
+    3. llm_provider + tools + job_id pattern
+    4. llm_provider + tools pattern
+    5. llm + tools pattern (simpler agents)
     """
     from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
 
@@ -724,6 +726,18 @@ def _create_agent_instance(
                 verbose=verbose,
                 callbacks=callbacks,
                 config=fn_config,
+                job_id=job_id,
+            )
+        except TypeError:
+            pass
+
+    if _constructor_accepts_explicit_kwargs(agent_cls, _JOB_SCOPED_AGENT_KWARGS):
+        try:
+            return agent_cls(
+                llm_provider=llm_provider,
+                tools=tools,
+                verbose=verbose,
+                callbacks=callbacks,
                 job_id=job_id,
             )
         except TypeError:

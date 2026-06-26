@@ -15,66 +15,60 @@ def test_extract_report_from_job_output_prefers_job_output():
     assert _extract_report_from_job_output(job) == "# Stored report"
 
 
-@pytest.mark.asyncio
-async def test_extract_report_from_events_prefers_final_report(monkeypatch):
+def test_report_from_events_prefers_final_report():
     from aiq_api.jobs import report_context
 
-    async def _events(_db_url: str, _job_id: str, _after_id: int, _limit: int):
-        return [
-            {"type": "artifact.update", "data": {"type": "output", "content": "draft"}},
-            {
-                "type": "artifact.update",
-                "data": {"type": "output", "content": "# Final", "output_category": "final_report"},
-            },
-        ]
+    events = [
+        {"type": "artifact.update", "data": {"type": "output", "content": "draft"}},
+        {
+            "type": "artifact.update",
+            "data": {"type": "output", "content": "# Final", "output_category": "final_report"},
+        },
+    ]
 
-    monkeypatch.setattr(report_context.EventStore, "get_events_async", _events)
-
-    assert await report_context._extract_report_from_events("sqlite:///unused.db", "job-1") == "# Final"
+    assert report_context._report_from_events(events) == "# Final"
 
 
-@pytest.mark.asyncio
-async def test_extract_sources_from_events_dedupes_urls_and_citation_keys(monkeypatch):
+def test_sources_from_events_preserves_duplicates_until_context_boundary():
     from aiq_api.jobs import report_context
 
-    async def _events(_db_url: str, _job_id: str, _after_id: int, _limit: int):
-        return [
-            {
-                "type": "artifact.update",
-                "name": "Example",
-                "data": {"type": "citation_source", "content": "https://example.com/", "url": "https://example.com/"},
+    events = [
+        {
+            "type": "artifact.update",
+            "name": "Example",
+            "data": {"type": "citation_source", "content": "https://example.com/", "url": "https://example.com/"},
+        },
+        {
+            "type": "artifact.update",
+            "name": "Example again",
+            "data": {"type": "citation_source", "content": "https://example.com", "url": "https://example.com"},
+        },
+        {
+            "type": "artifact.update",
+            "name": "internal.pdf",
+            "data": {
+                "type": "citation_source",
+                "content": "internal.pdf, p.3",
+                "citation_key": "internal.pdf, p.3",
             },
-            {
-                "type": "artifact.update",
-                "name": "Example again",
-                "data": {"type": "citation_source", "content": "https://example.com", "url": "https://example.com"},
+        },
+        {
+            "type": "artifact.update",
+            "name": "internal.pdf duplicate",
+            "data": {
+                "type": "citation_source",
+                "content": "internal.pdf, p.3",
+                "citation_key": "internal.pdf, p.3",
             },
-            {
-                "type": "artifact.update",
-                "name": "internal.pdf",
-                "data": {
-                    "type": "citation_source",
-                    "content": "internal.pdf, p.3",
-                    "citation_key": "internal.pdf, p.3",
-                },
-            },
-            {
-                "type": "artifact.update",
-                "name": "internal.pdf duplicate",
-                "data": {
-                    "type": "citation_source",
-                    "content": "internal.pdf, p.3",
-                    "citation_key": "internal.pdf, p.3",
-                },
-            },
-        ]
+        },
+    ]
 
-    monkeypatch.setattr(report_context.EventStore, "get_events_async", _events)
-
-    sources = await report_context._extract_sources_from_events("sqlite:///unused.db", "job-1")
+    sources = report_context._sources_from_events(events)
 
     assert [(source.url, source.citation_key) for source in sources] == [
         ("https://example.com/", None),
+        ("https://example.com", None),
+        (None, "internal.pdf, p.3"),
         (None, "internal.pdf, p.3"),
     ]
 
@@ -102,6 +96,22 @@ Not a source: https://ignored.example
         ("https://example.com/path", None),
         (None, "internal.pdf, p.3"),
     ]
+
+
+def test_extract_sources_from_report_markdown_preserves_duplicates_until_context_boundary():
+    from aiq_api.jobs.report_context import _extract_sources_from_report_markdown
+
+    report = """# Report
+
+## Sources
+
+[1] https://example.com/path
+[2] https://example.com/path/
+"""
+
+    sources = _extract_sources_from_report_markdown(report)
+
+    assert [source.url for source in sources] == ["https://example.com/path", "https://example.com/path/"]
 
 
 @pytest.mark.asyncio
@@ -234,6 +244,15 @@ def test_report_context_from_markdown_builds_jobless_context():
     assert "https://example.com/a" in urls
     assert "https://example.com/b" in urls
     assert ctx.source_summary_markdown.strip()
+
+
+def test_report_context_from_markdown_dedupes_sources_at_context_boundary():
+    from aiq_api.jobs.report_context import report_context_from_markdown
+
+    md = "# Findings\n\n## Sources\n\n[1] https://example.com/a\n[2] https://example.com/a/\n"
+    ctx = report_context_from_markdown(md)
+
+    assert [source.url for source in ctx.sources] == ["https://example.com/a"]
 
 
 def test_report_context_from_markdown_no_sources_section():

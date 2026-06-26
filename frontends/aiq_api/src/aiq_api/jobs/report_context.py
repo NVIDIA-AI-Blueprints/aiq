@@ -87,11 +87,6 @@ def _report_from_events(events: list[dict[str, Any]]) -> str | None:
     return final_report or fallback
 
 
-async def _extract_report_from_events(db_url: str, job_id: str) -> str | None:
-    events = await EventStore.get_events_async(db_url, job_id, 0, _EVENT_SCAN_LIMIT)
-    return _report_from_events(events)
-
-
 def _is_url(value: str | None) -> bool:
     return bool(value and value.lower().startswith(("http://", "https://")))
 
@@ -141,12 +136,7 @@ def _sources_from_events(events: list[dict[str, Any]]) -> list[ReportContextSour
                 tool_name=str(data.get("tool_name") or "parent_report"),
             )
         )
-    return _dedupe_sources(sources)
-
-
-async def _extract_sources_from_events(db_url: str, job_id: str) -> list[ReportContextSource]:
-    events = await EventStore.get_events_async(db_url, job_id, 0, _EVENT_SCAN_LIMIT)
-    return _sources_from_events(events)
+    return sources
 
 
 def _sources_section(report_markdown: str) -> str:
@@ -176,7 +166,7 @@ def _extract_sources_from_report_markdown(report_markdown: str) -> list[ReportCo
             sources.append(ReportContextSource(url=url_match.group(0).rstrip(_URL_TRIM_CHARS), title=ref_text))
         else:
             sources.append(ReportContextSource(citation_key=ref_text, title=ref_text))
-    return _dedupe_sources(sources)
+    return sources
 
 
 def _source_summary_markdown(sources: list[ReportContextSource]) -> str:
@@ -210,7 +200,7 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
         # follow-up context, so only pay the (potentially large) event scan when the report
         # carries no inline sources. A transient fetch failure must not abort follow-up.
         if report_sources:
-            sources = report_sources
+            sources = _dedupe_sources(report_sources)
         else:
             try:
                 events = await EventStore.get_events_async(db_url, parent_job_id, 0, _EVENT_SCAN_LIMIT)
@@ -236,7 +226,7 @@ def report_context_from_markdown(report_markdown: str, parent_job_id: str = "in-
     current session rather than as a durable async job. Sources are reconstructed from the report's
     own ``## Sources`` section via the same parser used for job-backed reports.
     """
-    sources = _extract_sources_from_report_markdown(report_markdown)
+    sources = _dedupe_sources(_extract_sources_from_report_markdown(report_markdown))
     return ReportContext(
         parent_job_id=parent_job_id,
         report_markdown=report_markdown,
