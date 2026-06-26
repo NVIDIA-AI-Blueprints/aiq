@@ -465,12 +465,6 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                     report_context = await _resolve_report_context_for_state(state)
                     initial_files = to_initial_files(report_context)
                     output_metadata = report_output_metadata(report_context.parent_job_id, "research")
-                    input_text = (
-                        f"{input_text}\n\n"
-                        "Use the seeded parent report context in /shared/original_report.md and "
-                        "/shared/source_summary.md. Reuse the parent report where sufficient and perform "
-                        "new research only for the requested delta."
-                    )
 
                 return await submit_agent_job(
                     agent_type="deep_researcher",

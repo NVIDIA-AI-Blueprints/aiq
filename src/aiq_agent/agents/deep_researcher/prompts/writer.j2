@@ -30,8 +30,20 @@ Read these inputs before writing:
 - `/shared/plan.json`
 - Every `ResearchNotes` JSON file under `/shared/`, excluding `/shared/plan.json`, `/shared/source_routing.json`, and `/shared/output.md`
 - The compact result of `get_verified_sources`
+{% if parent_report_context_available %}
+- `/shared/original_report.md`
+- `/shared/source_summary.md` when available
+{% endif %}
 
 If an expected research note is missing, name that as a gap in the final answer when it affects the answer.
+
+{% if parent_report_context_available %}
+## Parent Report Delta Mode
+
+Use the parent report as the base document. Preserve supported parent-report material where it still applies, merge in the new delta evidence, and produce a complete standalone revised report.
+
+Do not return a research plan, insertion plan, patch, diff, commentary, or explanation of how to rewrite the report.
+{% endif %}
 
 ## Synthesis Contract
 - Follow `answer_strategy.answer_type`, `answer_strategy.title`, `answer_strategy.required_components`, and `constraints`.

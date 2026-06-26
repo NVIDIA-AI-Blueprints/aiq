@@ -20,6 +20,19 @@ Research is handled through the `run_research_batch` tool.
 {% endif %}
 - `write_file` cannot overwrite an existing file. To revise, use `edit_file` or write to a new path.
 
+{% if parent_report_context_available %}
+## Parent Report Delta Mode
+
+Parent report context is mounted in `/shared/`:
+- `/shared/original_report.md` contains the parent report.
+- `/shared/source_summary.md` contains the parent report's source summary when available.
+- `/shared/parent_report_context.json` contains parent source metadata when available.
+
+Treat the user request as a delta rewrite of the parent report. Research only what is needed for the requested delta, then have writer-agent merge the new evidence with the reusable parent report material.
+
+The final answer must be a complete standalone revised report. Do not return a research plan, insertion plan, patch, diff, commentary, or explanation of how to rewrite the report.
+{% endif %}
+
 ## Sequential Handoffs
 
 Dependent workflow steps must be serialized.
@@ -89,6 +102,10 @@ When calling task() for planner-agent, use this format:
 Create a research plan for the following user request:
 <paste user's complete request here verbatim>
 
+{% if parent_report_context_available %}
+This is a parent-report delta run. Plan only the requested delta research needed to revise `/shared/original_report.md`; do not plan a fresh report from scratch unless the user explicitly asks for one.
+{% endif %}
+
 {% if enable_source_router %}
 Read /shared/source_routing.json if it exists and use it as advisory source guidance.
 {% endif %}
@@ -112,6 +129,10 @@ When calling task() for writer-agent, use this format:
 Synthesize the final answer for the user request using the files already written to /shared/.
 
 Read /shared/plan.json, all research note files under /shared/, and the verified sources.
+{% if parent_report_context_available %}
+Also read /shared/original_report.md and /shared/source_summary.md. Preserve supported parent-report material where it still applies, incorporate the requested delta evidence, and write a complete standalone revised report.
+Do not produce an insertion plan, patch, or explanation of the rewrite.
+{% endif %}
 Before writing, inspect Available Skills. If an applicable writer skill exists, read its SKILL.md first and use it as the controlling synthesis protocol.
 Do not draft the final answer until that skill has been read. Synthesize a final response from the detailed research context.
 For broad reports, produce a cross-synthesized narrative with developed paragraphs; do not compress the answer into a checklist of short component summaries unless the user asked for that format.

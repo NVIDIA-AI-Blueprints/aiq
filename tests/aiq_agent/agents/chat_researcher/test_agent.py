@@ -475,7 +475,7 @@ class TestChatResearcherAgent:
         result = await agent.run(state, thread_id="test-delta-seed")
 
         assert captured["files"].get("/shared/original_report.md") == "# FIFA World Cup 2026\n\nBody."
-        assert "/shared/original_report.md" in captured["query"]
+        assert captured["query"] == "expand the economic impact section with new 2025 data"
         assert result["last_report_markdown"] == "# Updated Report\n\nWith delta."
 
     @pytest.mark.asyncio

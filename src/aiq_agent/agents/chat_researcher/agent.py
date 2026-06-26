@@ -325,13 +325,6 @@ class ChatResearcherAgent:
                         type(e).__name__,
                     )
                     seed_files = {}
-                if seed_files:
-                    research_query = (
-                        f"{research_query}\n\n"
-                        "Use the seeded parent report context in /shared/original_report.md and "
-                        "/shared/source_summary.md. Reuse the parent report where sufficient and perform "
-                        "new research only for the requested delta."
-                    )
             logger.info(
                 "Inline deep research: use_parent_report_context=%s has_report=%s seeded_files=%d",
                 bool(getattr(state.user_intent, "use_parent_report_context", False)) if state.user_intent else False,
