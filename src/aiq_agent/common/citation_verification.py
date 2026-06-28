@@ -13,11 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Deterministic citation verification for research agent reports.
+"""Deterministic citation and report post-processing for research reports.
 
 This module provides:
 - SourceRegistry: captures URLs/citation keys from tool call results
-- verify_citations(): validates report citations against the registry
+- verify_citations(): validates cited source identities against the registry
+- sanitize_report(): normalizes final report display and URL hygiene
 - Extensible parser registry for adding new source types
 
 Usage:
@@ -220,7 +221,7 @@ class SourceRegistry:
     def _pick_unique(candidates: list[SourceEntry], strategy: str, url: str) -> str | None:
         """Return the registry URL when exactly one candidate matches.
 
-        The references section can only show one URL per citation. If multiple
+        The source section can only show one URL per citation. If multiple
         registry URLs match (e.g. same path, different query), we cannot know
         which one the author meant, so we reject.
         """
@@ -591,16 +592,27 @@ def _parse_knowledge_layer(content: str, tool_name: str) -> list[SourceEntry]:
 register_source_parser(lambda name: "knowledge" in name, _parse_knowledge_layer)
 
 # ---------------------------------------------------------------------------
-# Citation verification
+# Citation parsing and source-section layout normalization
 # ---------------------------------------------------------------------------
 
+_REFERENCE_HEADING_LABEL_PATTERN = r"(?:Sources|References|Reference[^\S\n]+List)"
+_REFERENCE_HEADING_PATTERN = (
+    r"^[^\S\n]*(?:"
+    rf"#{{1,3}}[^\S\n]+{_REFERENCE_HEADING_LABEL_PATTERN}[^\S\n]*:?"
+    rf"|\*\*{_REFERENCE_HEADING_LABEL_PATTERN}:?\*\*"
+    rf"|{_REFERENCE_HEADING_LABEL_PATTERN}[^\S\n]*:?"
+    r")[^\S\n]*$"
+)
+_REFERENCE_ENTRY_START_PATTERN = r"(?:[-*][^\S\n]*)?(?:\[\d+\]|\[\^\d+\]:?|\d+[.)])[^\S\n]+"
 _REFERENCE_SECTION_RE = re.compile(
-    r"^(?:#{2,3}\s+(?:Sources|References)|Reference\s+List|\*\*References:?\*\*)",
+    rf"{_REFERENCE_HEADING_PATTERN}(?=\n[^\S\n]*(?:\n[^\S\n]*)*{_REFERENCE_ENTRY_START_PATTERN})",
     re.MULTILINE | re.IGNORECASE,
 )
+_REFERENCE_HEADING_LINE_RE = re.compile(_REFERENCE_HEADING_PATTERN, re.IGNORECASE)
 
 _CITATION_LINE_RE = re.compile(r"^\s*[-*]?\s*\[(\d+)\]\s*(.+)$", re.MULTILINE)
 _ORDERED_REFERENCE_LINE_RE = re.compile(r"^(\s*)(\d+)[.)]\s+(.+)$", re.MULTILINE)
+_COLLAPSED_SOURCE_BOUNDARY_RE = re.compile(r"\s+(?=\[(\d+)\]\s+)")
 _INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
 _FOOTNOTE_REFERENCE_LINE_RE = re.compile(r"^\s*\[\^(\d+)\]:?\s*", re.MULTILINE)
 _FOOTNOTE_INLINE_CITATION_RE = re.compile(r"\[\^(\d+)\]")
@@ -646,7 +658,7 @@ def _is_knowledge_citation(ref_text: str, registry: SourceRegistry | None = None
 
 
 def _format_registry_reference(num: int, entry: SourceEntry) -> str | None:
-    """Render a registered source as a verifier-readable reference line."""
+    """Render a registered source as a source-section line."""
     title = entry.title or entry.tool_name or entry.source_type or "Source"
     if entry.url:
         return f"[{num}] {title}: {entry.url}"
@@ -664,8 +676,67 @@ def _normalize_citation_syntax(report_text: str) -> str:
 
 
 def _normalize_ordered_reference_lines(ref_section: str) -> str:
-    """Convert ordered-list reference lines to the verifier's canonical [N] form."""
+    """Convert ordered-list source lines to canonical [N] form."""
     return _ORDERED_REFERENCE_LINE_RE.sub(r"\1[\2] \3", ref_section)
+
+
+def _reference_segment_has_target(segment: str) -> bool:
+    """Return true when a source segment already contains a verifiable target."""
+    line_match = _CITATION_LINE_RE.match(segment)
+    if line_match is None:
+        return False
+
+    ref_text = line_match.group(2).strip()
+    if _URL_IN_LINE_RE.search(ref_text):
+        return True
+
+    cleaned = re.sub(r"\*+", "", ref_text).strip()
+    return bool(_KL_CITATION_PATTERN_RE.match(cleaned))
+
+
+def _split_collapsed_source_line(line: str) -> str:
+    """Split only truly collapsed source entries on one line.
+
+    Avoid splitting bracketed numbers that are part of a title, such as
+    ``[1] Semiconductor outlook [2024] update: https://...``.
+    """
+    first_line_match = _CITATION_LINE_RE.match(line)
+    if first_line_match is None:
+        return line
+
+    current_num = int(first_line_match.group(1))
+    segment_start = 0
+    segments: list[str] = []
+    for boundary_match in _COLLAPSED_SOURCE_BOUNDARY_RE.finditer(line):
+        next_num = int(boundary_match.group(1))
+        current_segment = line[segment_start : boundary_match.start()]
+        if next_num <= current_num or next_num >= 1000 or not _reference_segment_has_target(current_segment):
+            continue
+
+        segments.append(current_segment.rstrip())
+        segment_start = boundary_match.end()
+        current_num = next_num
+
+    if not segments:
+        return line
+
+    segments.append(line[segment_start:].lstrip())
+    return "\n".join(segments)
+
+
+def _normalize_source_section_layout(ref_section: str) -> str:
+    """Normalize source-section presentation before parsing or final cleanup.
+
+    This is report hygiene, not source-identity verification. ``verify_citations``
+    calls it only so common writer variants are parseable; ``sanitize_report``
+    owns the final display normalization.
+    """
+    ref_section = _normalize_ordered_reference_lines(ref_section)
+    lines = ref_section.split("\n")
+    if lines and _REFERENCE_HEADING_LINE_RE.match(lines[0]):
+        lines[0] = "## Sources"
+        ref_section = "\n".join(lines)
+    return "\n".join(_split_collapsed_source_line(line) for line in ref_section.split("\n"))
 
 
 def _inline_citation_numbers(text: str) -> set[int]:
@@ -684,9 +755,9 @@ def _strip_inline_citations_not_in(text: str, valid_numbers: set[int]) -> str:
 def _renumber_citations(body: str, ref_section: str) -> tuple[str, str, dict[int, int]]:
     """Renumber [N] citations sequentially, closing any gaps.
 
-    Scans the references section for citation numbers, builds a mapping
+    Scans the source section for citation numbers, builds a mapping
     from old to new sequential numbers, and applies it to both body and
-    references via collision-safe placeholders.
+    source lines via collision-safe placeholders.
 
     Returns:
         (body, ref_section, renumber_map) where renumber_map maps every
@@ -721,13 +792,18 @@ def verify_citations(
     *,
     reference_sources: Sequence[SourceEntry] | None = None,
 ) -> CitationVerificationResult:
-    """Verify citations in a report against the source registry.
+    """Verify cited source identities against the captured source registry.
+
+    This function decides whether each cited source line maps to a real captured
+    URL or citation key. It may normalize source-section layout enough to parse
+    common writer variants, but final Markdown hygiene belongs to
+    ``sanitize_report``.
 
     Algorithm:
-    1. Find the references section
-    2. Parse each [N] reference line
+    1. Find the source section
+    2. Parse each [N] source line
     3. Validate URL or citation_key against registry
-    4. Remove invalid references and orphaned inline citations
+    4. Remove invalid source lines and orphaned inline citations
 
     Renumbering is NOT done here — it is deferred to sanitize_report()
     which always runs after this function and handles it in a single pass.
@@ -737,7 +813,7 @@ def verify_citations(
         registry: SourceRegistry populated from tool call results.
         reference_sources: Optional writer-facing source list, in the same
             numbering order the writer saw. Used only to synthesize a missing
-            references section.
+            source section.
 
     Returns:
         CitationVerificationResult with cleaned report and audit trail.
@@ -760,16 +836,16 @@ def verify_citations(
         [s.url for s in all_sources if s.url],
     )
 
-    # Find references section
+    # Find source section
     ref_match = _REFERENCE_SECTION_RE.search(report_text)
     if not ref_match:
         if not _INLINE_CITATION_RE.search(report_text):
-            logger.warning("[CitationVerify] No references section found in report; skipping")
+            logger.warning("[CitationVerify] No source section found in report; skipping")
             return CitationVerificationResult(verified_report=report_text)
 
         if reference_sources is None:
             logger.warning(
-                "[CitationVerify] No references section found; cannot safely synthesize references "
+                "[CitationVerify] No source section found; cannot safely synthesize sources "
                 "without the writer-facing source list"
             )
             return CitationVerificationResult(verified_report=report_text)
@@ -783,11 +859,11 @@ def verify_citations(
             if (line := _format_registry_reference(i, writer_sources[i - 1]))
         ]
         if not reference_lines:
-            logger.warning("[CitationVerify] No references section found and no renderable writer-facing sources")
+            logger.warning("[CitationVerify] No source section found and no renderable writer-facing sources")
             return CitationVerificationResult(verified_report=_strip_inline_citations_not_in(report_text, set()))
 
         logger.warning(
-            "[CitationVerify] No references section found; appending %d inline-cited registered source(s)",
+            "[CitationVerify] No source section found; appending %d inline-cited registered source(s)",
             len(reference_lines),
         )
         report_text = report_text.rstrip() + "\n\n## Sources\n" + "\n".join(reference_lines)
@@ -798,9 +874,9 @@ def verify_citations(
     ref_start = ref_match.start()
     body = report_text[:ref_start]
     original_ref_section = report_text[ref_start:]
-    ref_section = _normalize_ordered_reference_lines(original_ref_section)
+    ref_section = _normalize_source_section_layout(original_ref_section)
 
-    # Parse citation lines in the references section
+    # Parse citation lines in the source section
     valid_citations: list[dict] = []
     removed_citations: list[dict] = []
     url_replacements: dict[str, str] = {}  # garbled_url -> canonical_url
@@ -842,7 +918,7 @@ def verify_citations(
         logger.debug("[CitationVerify]   [%d] REMOVE — unverifiable: %s", num, ref_text[:80])
         removed_citations.append({"number": num, "line": full_line, "reason": "unverifiable"})
 
-    # Dedup: collapse multiple [N] reference lines that resolve to the same
+    # Dedup: collapse multiple [N] source lines that resolve to the same
     # registry source. The model often makes the same tool call twice (e.g.
     # ``mcp_time__get_current_time`` for two timezones) and emits a separate
     # ``[N] tool_name`` line for each call; without this pass both lines
@@ -880,14 +956,14 @@ def verify_citations(
         )
     valid_citations = deduped_valid
 
-    # Apply URL replacements (garbled -> canonical) in the references section
+    # Apply URL replacements (garbled -> canonical) in the source section
     if url_replacements:
         for garbled, canonical in url_replacements.items():
             ref_section = ref_section.replace(garbled, canonical)
 
     removed_numbers = {c["number"] for c in removed_citations}
 
-    # Remove invalid (and duplicate) reference lines from the references section.
+    # Remove invalid (and duplicate) source lines from the source section.
     cleaned_ref_lines = [
         line
         for line in ref_section.split("\n")
@@ -977,16 +1053,19 @@ class ReportSanitizationResult:
 
 
 def sanitize_report(report_text: str) -> ReportSanitizationResult:
-    """Deterministic sanitization of a research report.
+    """Deterministic report hygiene and final display normalization.
 
     Checks:
-    1. Strip body URLs — collapse markdown links to display text, replace
+    1. Normalize the source-section heading and one-source-per-line layout.
+    2. Strip body URLs — collapse markdown links to display text, replace
        bare URLs that match a reference with ``[N]``, remove the rest.
-    2. Remove shortened/obfuscated URLs from References — all URLs must
+    3. Remove shortened/obfuscated URLs from Sources — all URLs must
        be fully expanded (no bit.ly, t.co, etc.).
-    3. Remove truncated/garbled URLs — URLs ending in '...' or with no
+    4. Remove truncated/garbled URLs — URLs ending in '...' or with no
        path (domain-only like 'https://arxiv.org') are incomplete.
-    4. Block unsafe URLs — no IP-address URLs, no non-http schemes.
+    5. Block unsafe URLs — no IP-address URLs, no non-http schemes.
+    6. Renumber citations after verification/sanitization and trim any
+       trailing source-section meta-commentary.
 
     Args:
         report_text: Report text (ideally after verify_citations()).
@@ -1002,11 +1081,11 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     truncated_urls_removed: list[str] = []
     unsafe_urls_removed: list[str] = []
 
-    # Split into body and references section
+    # Split into body and source section
     ref_match = _REFERENCE_SECTION_RE.search(report_text)
     if ref_match:
         body = report_text[: ref_match.start()]
-        ref_section = report_text[ref_match.start() :]
+        ref_section = _normalize_source_section_layout(report_text[ref_match.start() :])
     else:
         body = report_text
         ref_section = ""
@@ -1045,7 +1124,7 @@ def sanitize_report(report_text: str) -> ReportSanitizationResult:
     if body_urls_removed:
         logger.debug("[ReportSanitize] Removed %d unmatched URL(s) from report body", body_urls_removed)
 
-    # --- Checks 2 & 3: Validate URLs in references section ---
+    # --- Checks 3 & 4: Validate URLs in source section ---
     if ref_section:
         lines_to_remove: set[int] = set()
         ref_lines = ref_section.split("\n")

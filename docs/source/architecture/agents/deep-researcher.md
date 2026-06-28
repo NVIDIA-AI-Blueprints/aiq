@@ -141,6 +141,9 @@ Configured through `DeepResearchAgentConfig` (NeMo Agent Toolkit type name: `dee
 | `planner_llm` | `LLMRef` or `None` | `None` | LLM for planner subagent; falls back to `orchestrator_llm` if unset |
 | `writer_llm` | `LLMRef` or `None` | `None` | LLM for writer subagent; falls back to `orchestrator_llm` if unset |
 | `tools` | `list[FunctionRef \| FunctionGroupRef]` | `[]` | Research tools (web search, paper search, etc.) |
+| `skills` | `FunctionRef`, inline `deep_research_skills`, or `None` | `None` | Optional built-in skill collection assignments by agent name |
+| `sandbox` | `FunctionRef`, inline `deep_research_sandbox`, or `None` | `None` | Optional sandbox profile for DeepAgents `execute` support |
+| `enable_citation_verification` | `bool` | `true` | Verify generated citations against sources captured from tools |
 | `verbose` | `bool` | `true` | Enable detailed logging |
 
 **Example YAML:**

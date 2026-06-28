@@ -34,8 +34,8 @@ from aiq_agent.common.citation_verification import verify_citations
 
 from .custom_middleware import SourceRegistryMiddleware
 from .deepagents_runtime import DeepAgentsRuntime
-from .deepagents_runtime import SandboxConfig
-from .deepagents_runtime import SkillsConfig
+from .deepagents_runtime import DeepResearchSandboxConfig
+from .deepagents_runtime import DeepResearchSkillsConfig
 from .factory import build_deep_research_graph
 from .factory import build_deep_research_middleware_set
 from .factory import build_deep_research_tool_set
@@ -49,6 +49,14 @@ DEFAULT_MAX_RESEARCH_CONCURRENCY = 6
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
+
+# Salvage gate: when the orchestrator synthesizes the report inline instead of delegating to
+# writer-agent, no /shared/output.md is written. We accept the final message as the report only
+# when it is clearly a substantive report (long + has a markdown heading), so workflow chatter is
+# still rejected and the strict file-first contract is preserved.
+_WRITER_COMPLETION_MARKER = "Wrote /shared/output.md"
+_MIN_INLINE_REPORT_CHARS = 400
+_MD_HEADING_RE = re.compile(r"(?m)^#{1,6}\s")
 
 
 class DeepResearcherAgent:
@@ -65,9 +73,9 @@ class DeepResearcherAgent:
         callbacks: list[Any] | None = None,
         domain_catalog_path: str | None = None,
         enable_source_router: bool = True,
-        skills: SkillsConfig | None = None,
-        sandbox: SandboxConfig | None = None,
-        config: Any | None = None,
+        enable_citation_verification: bool = True,
+        skills: DeepResearchSkillsConfig | None = None,
+        sandbox: DeepResearchSandboxConfig | None = None,
         job_id: str | None = None,
         max_research_concurrency: int = DEFAULT_MAX_RESEARCH_CONCURRENCY,
         max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
@@ -83,9 +91,9 @@ class DeepResearcherAgent:
             callbacks: Optional list of callbacks.
             domain_catalog_path: Optional YAML/JSON domain catalog path for source-router-agent.
             enable_source_router: Enable the advisory source-router-agent before planning.
+            enable_citation_verification: Verify generated citations against the captured source registry.
             skills: Optional DeepAgents skills config.
             sandbox: Optional DeepAgents sandbox config.
-            config: Optional agent config. Used by async workers to pass function config generically.
             job_id: Optional async job identifier used to scope sandbox backends.
             max_research_concurrency: Maximum ResearchQuery items accepted and run concurrently per
                 run_research_batch call.
@@ -96,25 +104,12 @@ class DeepResearcherAgent:
         self.tools = list(tools) if tools else []
         self.verbose = verbose
         self.callbacks = callbacks or []
-
-        if config is not None:
-            skills = skills or getattr(config, "skills", None)
-            sandbox = sandbox if sandbox is not None else getattr(config, "sandbox", None)
-            domain_catalog_path = getattr(config, "domain_catalog_path", domain_catalog_path)
-            enable_source_router = getattr(config, "enable_source_router", enable_source_router)
-            max_research_concurrency = getattr(config, "max_research_concurrency", max_research_concurrency)
-            max_concurrent_source_tool_calls = getattr(
-                config,
-                "max_concurrent_source_tool_calls",
-                max_concurrent_source_tool_calls,
-            )
-            max_source_tool_batch_size = getattr(config, "max_source_tool_batch_size", max_source_tool_batch_size)
-
         self.max_research_concurrency = max_research_concurrency
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
         self.domain_catalog_path = domain_catalog_path
         self.enable_source_router = enable_source_router
+        self.enable_citation_verification = enable_citation_verification
         self.job_id = str(job_id) if job_id is not None else str(uuid4())
 
         self.deepagents_runtime = DeepAgentsRuntime(skills=skills, sandbox=sandbox, job_id=self.job_id)
@@ -185,7 +180,31 @@ class DeepResearcherAgent:
                     output_entry = output_entry.decode("utf-8")
                 if isinstance(output_entry, str) and output_entry.strip():
                     return output_entry.strip()
-        return None
+        return self._salvage_inline_report(result)
+
+    @staticmethod
+    def _salvage_inline_report(result: dict | Any) -> str | None:
+        """Salvage a report the orchestrator wrote inline instead of via writer-agent.
+
+        When the orchestrator skips the writer-agent delegation and emits the full report in its
+        final message, no output file exists. Accept that message only when it is clearly a
+        substantive report so plain workflow chatter is still rejected.
+        """
+        messages = result.get("messages") if isinstance(result, dict) else getattr(result, "messages", None)
+        if not messages:
+            return None
+        content = getattr(messages[-1], "content", None)
+        if not isinstance(content, str):
+            return None
+        stripped = content.strip()
+        if (
+            not stripped
+            or stripped == _WRITER_COMPLETION_MARKER
+            or len(stripped) < _MIN_INLINE_REPORT_CHARS
+            or not _MD_HEADING_RE.search(stripped)
+        ):
+            return None
+        return stripped
 
     @staticmethod
     def _replace_last_message_content(result: dict | Any, content: str) -> None:
@@ -203,7 +222,6 @@ class DeepResearcherAgent:
         """
         Execute deep research with multi-phase workflow.
         """
-        state = self.deepagents_runtime.prepare_state(state)
         agent = self._build_orchestrator_agent(state)
 
         messages = state.messages
@@ -223,7 +241,7 @@ class DeepResearcherAgent:
                 raise ValueError("writer-agent did not produce a final Markdown answer")
 
             # Post-process: verify citations against source registry
-            if self.source_registry_middleware.has_sources():
+            if self.enable_citation_verification and self.source_registry_middleware.has_sources():
                 registry = self.source_registry_middleware.active_registry()
                 verification = verify_citations(
                     final_message,
@@ -248,7 +266,7 @@ class DeepResearcherAgent:
                         "returning the generated report without failing the job. "
                         "This may indicate unsupported citation formatting or over-aggressive verification."
                     )
-            else:
+            elif self.enable_citation_verification:
                 from aiq_agent.common.tool_validation import validate_tool_availability
 
                 _, available_count, unavailable = validate_tool_availability(

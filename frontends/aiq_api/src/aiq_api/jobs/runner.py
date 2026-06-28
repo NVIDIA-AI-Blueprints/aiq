@@ -340,6 +340,13 @@ async def run_agent_job(
 
         async with WorkflowBuilder.from_config(config=config) as builder:
             fn_config = builder.get_function_config(agent_config_name)
+            if getattr(fn_config, "type", None) == "deep_research_agent":
+                from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+                from aiq_agent.agents.deep_researcher.register import resolve_deep_research_runtime_config
+
+                if isinstance(fn_config, DeepResearchAgentConfig):
+                    skills_config, sandbox_config = resolve_deep_research_runtime_config(fn_config, builder)
+                    fn_config = fn_config.model_copy(update={"skills": skills_config, "sandbox": sandbox_config})
 
             provider, llm = await _create_llm_provider(builder, fn_config)
 
@@ -592,19 +599,24 @@ def _create_agent_instance(
     1. llm_provider + tools pattern (DeepResearcherAgent style)
     2. llm + tools pattern (simpler agents)
     """
-    # Try async deep_researcher pattern with generic function config and job-scoped runtime state.
-    try:
+    from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+
+    if isinstance(fn_config, DeepResearchAgentConfig):
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
             verbose=verbose,
             callbacks=callbacks,
-            config=fn_config,
+            domain_catalog_path=fn_config.domain_catalog_path,
+            enable_source_router=fn_config.enable_source_router,
+            enable_citation_verification=fn_config.enable_citation_verification,
+            skills=fn_config.skills,
+            sandbox=fn_config.sandbox,
             job_id=job_id,
+            max_research_concurrency=fn_config.max_research_concurrency,
+            max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
+            max_source_tool_batch_size=fn_config.max_source_tool_batch_size,
         )
-    except TypeError as exc:
-        if "unexpected keyword argument" not in str(exc):
-            raise
 
     # Try original deep_researcher pattern (llm_provider + tools + verbose)
     try:

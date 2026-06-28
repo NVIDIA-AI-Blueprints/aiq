@@ -1,7 +1,7 @@
 ---
 name: lightweight-calculation
 description: >
-  Use this skill for small deterministic calculations during research when pandas/table analysis is unnecessary. Triggers: "calculate", "arithmetic", "unit conversion", "percentage point", "expected value", "weighted average", "range", "ratio", "sanity check", "implied value", "probability conversion". Outputs: concise calculation notes, JSON snippets, or Markdown bullets saved under /shared/ for later synthesis.
+  Use this skill for small deterministic calculations during research when pandas/table analysis is unnecessary. Triggers: "calculate", "arithmetic", "unit conversion", "percentage point", "expected value", "weighted average", "range", "ratio", "sanity check", "implied value", "probability conversion". Outputs: concise calculation notes, JSON snippets, or Markdown bullets returned in your ResearchNotes for later synthesis.
 ---
 
 # Lightweight Calculation Skill
@@ -14,7 +14,7 @@ Use this skill when the research task needs a small reproducible calculation but
 2. Use `execute` with a short Python script for arithmetic, ratios, probability conversion, expected value, weighted averages, confidence/range arithmetic, or unit conversion.
 3. Do not hand-compute values in prose when the arithmetic affects a finding.
 4. Use `/workspace` for sandbox-local files. Sandbox code cannot read or write `/shared/` directly.
-5. Save the final text artifact to `/shared/...` with `write_file` after the successful `execute` call.
+5. Return the final result in your `ResearchNotes` after the successful `execute` call (not via `write_file`); `run_research_batch` persists your returned notes to `/shared/`.
 6. State assumptions, rounding rules, missing inputs, and source references.
 
 ## Execution Pattern
@@ -22,7 +22,7 @@ Use this skill when the research task needs a small reproducible calculation but
 1. Gather the relevant figures from source-tool output or research notes.
 2. Run a compact Python calculation with explicit variables.
 3. Inspect output and fix any code issue before using the result.
-4. Write a short artifact such as `/shared/calculation_check_[topic].md` or `/shared/calculation_check_[topic].json`.
+4. Include a short calculation summary (Markdown or JSON) in your `ResearchNotes` for synthesis.
 5. Cite the original source IDs in the eventual `ResearchFinding`; the calculation artifact is supporting work, not a substitute for sources.
 
 ## Python Template

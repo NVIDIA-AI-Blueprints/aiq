@@ -18,6 +18,8 @@
 from __future__ import annotations
 
 import asyncio
+import sys
+import types
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
@@ -472,3 +474,46 @@ class TestStopPeriodicCleanup:
 
         jobs_module._cleanup_task = None
         await jobs_module.stop_periodic_cleanup()  # should not raise
+
+
+class TestCancelDaskTask:
+    """Tests for cancelling submitted Dask jobs."""
+
+    @pytest.mark.asyncio
+    async def test_cancels_deterministic_future_key_without_variable_get(self, monkeypatch):
+        from aiq_api.routes.jobs import _cancel_dask_task
+
+        calls: dict[str, object] = {}
+
+        class FakeFuture:
+            def __init__(self, key, client):
+                self.key = key
+                self.client = client
+
+        class FakeClient:
+            def __init__(self, scheduler_address, asynchronous):
+                calls["scheduler_address"] = scheduler_address
+                calls["asynchronous"] = asynchronous
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return None
+
+            async def cancel(self, futures, asynchronous, force):
+                calls["cancelled_keys"] = [future.key for future in futures]
+                calls["cancel_asynchronous"] = asynchronous
+                calls["force"] = force
+
+        fake_distributed = types.SimpleNamespace(Client=FakeClient, Future=FakeFuture)
+        monkeypatch.setitem(sys.modules, "distributed", fake_distributed)
+
+        assert await _cancel_dask_task("tcp://localhost:8786", "job-123") is True
+        assert calls == {
+            "scheduler_address": "tcp://localhost:8786",
+            "asynchronous": True,
+            "cancelled_keys": ["job-123-job"],
+            "cancel_asynchronous": True,
+            "force": True,
+        }
