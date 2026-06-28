@@ -313,8 +313,17 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     from ..jobs.access import authorize_job_access
     from ..jobs.access import ensure_job_access_table
+    from ..jobs.crypto import ContentEncryptionConfigError
+    from ..jobs.crypto import ContentEncryptionInvalidData
+    from ..jobs.crypto import ContentEncryptionUnavailable
+    from ..jobs.crypto import get_content_encryption_health
+    from ..jobs.crypto import read_job_output
+    from ..jobs.crypto import require_content_encryption_ready_for_submission
+    from ..jobs.crypto import validate_content_encryption_startup
     from ..jobs.event_store import EventStore
     from ..jobs.submit import submit_agent_job as submit_authorized_job
+
+    validate_content_encryption_startup()
 
     if not get_all_sources():
         logger.warning(
@@ -415,6 +424,27 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
             return JSONResponse(status_code=503, content=result)
 
+        try:
+            encryption = get_content_encryption_health()
+            result["encryption"] = encryption.to_health_dict()
+            if encryption.mode != "off" and not encryption.ready:
+                result["status"] = "degraded"
+                from fastapi.responses import JSONResponse
+
+                return JSONResponse(status_code=503, content=result)
+        except ContentEncryptionConfigError as exc:
+            logger.warning("Health check encryption config failed exception=%s", exc.__class__.__name__)
+            result["status"] = "degraded"
+            result["encryption"] = {
+                "mode": "invalid",
+                "ready": False,
+                "reason": "configuration_invalid",
+                "exception_type": exc.__class__.__name__,
+            }
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=503, content=result)
+
         return result
 
     @app.post(
@@ -444,6 +474,21 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         # Authenticate the caller (raises 401/403 if unverified). The returned principal
         # is also forwarded to submit_authorized_job(...) below for ownership recording.
         principal = require_verified_principal()
+        try:
+            require_content_encryption_ready_for_submission()
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Rejected async job submission because content encryption is unready: %s",
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is not ready")
+        except ContentEncryptionConfigError as e:
+            logger.warning(
+                "Rejected async job submission because content encryption config is invalid: %s",
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Content encryption configuration is invalid")
+
         validation_start = time.perf_counter()
         await _validate_data_sources_for_agent(
             builder=builder,
@@ -473,6 +518,18 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 data_sources=req.data_sources,
                 auth_token=auth_token,
             )
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Failed to submit authorized job because content encryption is unready: %s",
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is not ready")
+        except ContentEncryptionConfigError as e:
+            logger.warning(
+                "Failed to submit authorized job because content encryption config is invalid: %s",
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Content encryption configuration is invalid")
         except RuntimeError as e:
             raise HTTPException(403, str(e))
         except Exception as e:
@@ -623,10 +680,23 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         report = None
         if job.output:
             try:
-                output = json.loads(job.output) if isinstance(job.output, str) else job.output
+                output = read_job_output(job_id, job.output)
+            except ContentEncryptionUnavailable as e:
+                logger.warning(
+                    "Final report decrypt unavailable job_id=%s exception=%s",
+                    job_id,
+                    e.__class__.__name__,
+                )
+                raise HTTPException(503, "Content encryption is unavailable")
+            except ContentEncryptionInvalidData as e:
+                logger.warning(
+                    "Final report persisted output invalid job_id=%s exception=%s",
+                    job_id,
+                    e.__class__.__name__,
+                )
+                raise HTTPException(500, "Final report data is invalid")
+            if isinstance(output, dict):
                 report = output.get("report")
-            except (json.JSONDecodeError, AttributeError):
-                pass
 
         return JobReportResponse(job_id=job_id, has_report=bool(report), report=report)
 

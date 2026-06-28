@@ -79,6 +79,7 @@ RUN uv pip install --no-deps -e . \
     && uv pip install --no-deps -e ./sources/exa_web_search \
     && uv pip install --no-deps -e "./sources/knowledge_layer[all]" \
     && uv pip install --no-deps -e ./frontends/aiq_api \
+	&& uv pip install "hvac>=2.3.0,<3" \
     && uv pip install "psycopg[binary]>=3.0.0"
 
 RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; print('✓ Base packages installed')"

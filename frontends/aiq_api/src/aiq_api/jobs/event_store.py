@@ -22,6 +22,7 @@ used by LangGraph checkpointer, reducing dependency footprint.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import threading
 import time
@@ -101,12 +102,68 @@ class EventStore:
     _cache_lock = threading.Lock()
     _tables_initialized: set[str] = set()
 
-    def __init__(self, db_url: str = "sqlite+aiosqlite:///./jobs.db", job_id: str | None = None):
+    def __init__(
+        self,
+        db_url: str = "sqlite+aiosqlite:///./jobs.db",
+        job_id: str | None = None,
+        content_cipher: Any | None = None,
+    ):
         self.db_url = db_url
         self.job_id = job_id
+        self._content_cipher = content_cipher
         self._is_postgres = db_url.startswith("postgresql")
         self._sync_engine = self._get_or_create_sync_engine(db_url)
         self._ensure_table_sync()
+
+    def _prepare_event_for_storage(self, event: dict) -> dict:
+        """Encrypt sensitive event fields before persistence when content encryption is enabled."""
+
+        if self.job_id is None or self._content_cipher is None:
+            return event
+        if event.get("type") != "artifact.update":
+            return event
+        data = event.get("data")
+        if not isinstance(data, dict) or data.get("type") not in {"output", "file"} or "content" not in data:
+            return event
+
+        from .crypto import encrypt_event_field
+        from .crypto import is_encrypted_event_field
+
+        if is_encrypted_event_field(data["content"]):
+            return event
+
+        encrypted_event = copy.deepcopy(event)
+        encrypted_event["data"]["content"] = encrypt_event_field(
+            self.job_id,
+            "artifact.update.data.content",
+            encrypted_event["data"].get("content"),
+            self._content_cipher,
+        )
+        return encrypted_event
+
+    @classmethod
+    def _prepare_event_for_return(cls, job_id: str, event: dict) -> dict:
+        """Decrypt sensitive event fields before returning events to API/SSE callers."""
+
+        if event.get("type") != "artifact.update":
+            return event
+        data = event.get("data")
+        if not isinstance(data, dict) or data.get("type") not in {"output", "file"} or "content" not in data:
+            return event
+
+        from .crypto import decrypt_event_field
+        from .crypto import is_encrypted_event_field
+
+        if not is_encrypted_event_field(data["content"]):
+            return event
+
+        decrypted_event = copy.deepcopy(event)
+        decrypted_event["data"]["content"] = decrypt_event_field(
+            job_id,
+            "artifact.update.data.content",
+            decrypted_event["data"].get("content"),
+        )
+        return decrypted_event
 
     @classmethod
     def _get_or_create_sync_engine(cls, db_url: str):
@@ -343,7 +400,8 @@ class EventStore:
         from sqlalchemy import text
 
         event_type = event.get("type", "unknown")
-        event_json = json.dumps(event)
+        stored_event = self._prepare_event_for_storage(event)
+        event_json = json.dumps(stored_event)
 
         try:
             with self._sync_engine.connect() as conn:
@@ -398,11 +456,12 @@ class EventStore:
 
         rows = []
         for event in events:
+            stored_event = self._prepare_event_for_storage(event)
             rows.append(
                 {
                     "job_id": self.job_id,
-                    "event_type": event.get("type", "unknown"),
-                    "event_data": json.dumps(event),
+                    "event_type": stored_event.get("type", "unknown"),
+                    "event_data": json.dumps(stored_event),
                 }
             )
 
@@ -508,7 +567,7 @@ class EventStore:
                 events = []
                 for row in result:
                     try:
-                        event = json.loads(row[1])
+                        event = cls._prepare_event_for_return(job_id, json.loads(row[1]))
                         event["_id"] = row[0]
                         events.append(event)
                     except json.JSONDecodeError:
@@ -544,7 +603,7 @@ class EventStore:
                 events = []
                 for row in result:
                     try:
-                        event = json.loads(row[1])
+                        event = cls._prepare_event_for_return(job_id, json.loads(row[1]))
                         event["_id"] = row[0]
                         events.append(event)
                     except json.JSONDecodeError:
@@ -580,13 +639,13 @@ class EventStore:
             engine = cls._get_or_create_sync_engine(db_url)
             with engine.connect() as conn:
                 result = conn.execute(
-                    text("SELECT id, event_data FROM job_events WHERE id = :event_id"),
+                    text("SELECT id, job_id, event_data FROM job_events WHERE id = :event_id"),
                     {"event_id": event_id},
                 )
                 row = result.fetchone()
                 if row:
                     try:
-                        event = json.loads(row[1])
+                        event = cls._prepare_event_for_return(row[1], json.loads(row[2]))
                         event["_id"] = row[0]
                         return event
                     except json.JSONDecodeError:

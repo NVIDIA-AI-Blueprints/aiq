@@ -31,6 +31,8 @@ All containerized deployments run the same three services:
 
 - **[Authentication](./authentication.md)** -- Enable OAuth/OIDC sign-in, configure backend JWT validation, and use AIQ user tokens in tools and MCP pass-through integrations.
 
+- **[Async Final Report Encryption](./content-encryption.md)** -- Configure encryption at rest for async job final reports stored in `job_info.output`, including Vault Transit and static-key modes.
+
 - **[Observability](./observability.md)** -- Tracing and monitoring with Phoenix, LangSmith, Weave, and OpenTelemetry.
 
 - **[Production Considerations](./production.md)** -- Guidance on managed databases, horizontal scaling, security hardening, monitoring, and resource requirements.

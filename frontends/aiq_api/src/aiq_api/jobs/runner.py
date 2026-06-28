@@ -313,6 +313,7 @@ async def run_agent_job(
             std_logging.basicConfig(level=log_level)
 
     job_store: JobStore | None = None
+    job_output_cipher = None
     cancellation_monitor: CancellationMonitor | None = None
     event_store: EventStore | BatchingEventStore | None = None
     logger.info(
@@ -324,6 +325,20 @@ async def run_agent_job(
 
     try:
         job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+        try:
+            from .crypto import ContentEncryptionError
+            from .crypto import create_job_content_cipher
+
+            job_output_cipher = create_job_content_cipher(job_id)
+        except ContentEncryptionError as exc:
+            logger.warning(
+                "Job %s failed encryption readiness before running mode=encrypted exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
+            await job_store.update_status(job_id, JobStatus.FAILURE, error="content encryption unavailable")
+            return
+
         await job_store.update_status(job_id, JobStatus.RUNNING)
 
         cancellation_monitor = CancellationMonitor(
@@ -466,7 +481,7 @@ async def run_agent_job(
                     verbose = is_verbose(getattr(fn_config, "verbose", False))
                     callbacks = [VerboseTraceCallback()] if verbose else []
 
-                    raw_event_store = EventStore(db_url, job_id)
+                    raw_event_store = EventStore(db_url, job_id, content_cipher=job_output_cipher)
                     event_store = BatchingEventStore(raw_event_store)
                     callbacks.append(AgentEventCallback(event_store))
                     callbacks.append(nat_profiler_callback)
@@ -524,7 +539,25 @@ async def run_agent_job(
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
-                    await job_store.update_status(job_id, JobStatus.SUCCESS, output={"report": report})
+                    from .crypto import update_job_output
+
+                    if job_output_cipher is None:
+                        raise RuntimeError("job output cipher was not initialized")
+                    try:
+                        await update_job_output(
+                            job_store,
+                            job_id,
+                            JobStatus.SUCCESS,
+                            output={"report": report},
+                            cipher=job_output_cipher,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Job %s encrypted output write failed exception=%s",
+                            job_id,
+                            exc.__class__.__name__,
+                        )
+                        raise
                     logger.info("Job %s completed (report: %d chars)", job_id, len(report))
 
     except asyncio.CancelledError:

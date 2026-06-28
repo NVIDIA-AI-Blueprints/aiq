@@ -156,6 +156,8 @@ async def submit_agent_job(
     """
     from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
+    from .crypto import require_content_encryption_ready_for_submission
+
     # Get agent configuration from registry
     agent_config = get_agent_config(agent_type)
 
@@ -199,6 +201,8 @@ async def submit_agent_job(
 
     if not scheduler_address:
         raise RuntimeError("Async job submission requires NAT_DASK_SCHEDULER_ADDRESS to be set")
+
+    require_content_encryption_ready_for_submission()
 
     # Auto-capture auth token if not explicitly provided
     if auth_token is None:
