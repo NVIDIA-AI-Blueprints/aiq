@@ -1297,11 +1297,19 @@ class TestClarifierSkipMessageOrdering:
         assert any(isinstance(m, HumanMessage) and m.content == "skip" for m in msgs), (
             "skip reply was not persisted as a HumanMessage"
         )
-        # Exactly one completion AIMessage should terminate the dialog (no duplicate).
+        # Exactly one *terminal completion* AIMessage should end the dialog: a
+        # message that parses to needs_clarification=false. Matching any non-tool
+        # AIMessage (e.g. the earlier clarification prompt) or allowing >= 1 would
+        # not catch a missing or duplicated completion.
         completion_ais = [
-            m for m in msgs if isinstance(m, AIMessage) and ClarifierAgent._has_tool_invocations([m]) is False
+            m
+            for m in msgs
+            if isinstance(m, AIMessage)
+            and not ClarifierAgent._has_tool_invocations([m])
+            and agent._is_complete(m.content)
         ]
-        assert len(completion_ais) >= 1
+        got = len(completion_ais)
+        assert got == 1, f"expected exactly one terminal completion AIMessage, got {got}"
 
     @pytest.mark.asyncio
     async def test_skip_with_plan_approval_planner_gets_valid_sequence(self, mock_llm_provider, mock_llm):
@@ -1344,3 +1352,51 @@ class TestClarifierSkipMessageOrdering:
             sent = call.args[0]
             offenders = self._adjacent_assistant_pairs(sent)
             assert not offenders, f"planner ainvoke #{call_idx} had consecutive assistant messages at {offenders}"
+
+    @pytest.mark.asyncio
+    async def test_blank_skip_reply_does_not_persist_empty_human_message(self, mock_llm_provider, mock_llm):
+        """A blank skip reply must not put an empty HumanMessage into history.
+
+        ``_is_skip_command`` treats ``""``/whitespace as skip, so the skip branch
+        substitutes a non-empty sentinel. With plan approval enabled the history
+        flows into the planner's ainvoke; an empty-content message there is
+        rejected by some chat APIs. Assert no empty HumanMessage reaches the
+        planner. Regression test for the blank-skip-reply edge case.
+        """
+        clarif = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif])
+
+        planner_llm = MagicMock()
+        planner_llm.ainvoke = AsyncMock(
+            return_value=AIMessage(content='{"title": "Plan", "sections": ["Intro", "Analysis"]}')
+        )
+
+        # First reply is blank (still a skip command); then approve the plan.
+        replies = iter(["", "approve"])
+
+        async def user_callback(question: str) -> str:
+            return next(replies)
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[],
+            user_prompt_callback=user_callback,
+            enable_plan_approval=True,
+            planner_llm=planner_llm,
+        )
+
+        state = ClarifierAgentState(messages=[HumanMessage(content="Research AI")])
+        result = await agent.run(state)
+
+        assert result is not None
+        assert planner_llm.ainvoke.call_count >= 1
+        for call_idx, call in enumerate(planner_llm.ainvoke.call_args_list):
+            sent = call.args[0]
+            empty = [
+                i for i, m in enumerate(sent) if isinstance(m, HumanMessage) and not str(m.content).strip()
+            ]
+            assert not empty, f"planner ainvoke #{call_idx} received empty HumanMessage(s) at {empty}"

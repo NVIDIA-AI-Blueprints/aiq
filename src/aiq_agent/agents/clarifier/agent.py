@@ -662,9 +662,15 @@ class ClarifierAgent:
                 # human message the two assistant turns would be adjacent, which
                 # the OpenAI/Anthropic APIs reject. (The duplicate completion on
                 # graph re-entry is suppressed by the guard in agent_node.)
+                #
+                # A blank/whitespace reply also counts as skip (see
+                # SKIP_COMMANDS), but an empty HumanMessage must not be persisted
+                # -- it would flow into plan generation, and some chat APIs reject
+                # empty message content. Substitute a non-empty sentinel.
+                skip_reply = user_reply if user_reply.strip() else "[skipped clarification]"
                 return {
                     "messages": [
-                        HumanMessage(content=user_reply),
+                        HumanMessage(content=skip_reply),
                         AIMessage(content=complete_response.model_dump_json()),
                     ],
                     "iteration": max_turns,  # Force end of clarification
