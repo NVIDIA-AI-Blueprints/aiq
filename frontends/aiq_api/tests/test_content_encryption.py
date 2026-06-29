@@ -15,13 +15,20 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
+import sys
+import threading
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from hvac import exceptions as vault_exceptions
+from requests import exceptions as requests_exceptions
 
 from aiq_api.jobs import crypto
 
@@ -79,6 +86,34 @@ def _enable_static_key(monkeypatch, *, cache_ttl: str | None = None) -> None:
     crypto.reset_content_encryption_manager_for_tests()
 
 
+def _vault_config() -> crypto.ContentEncryptionConfig:
+    return crypto.ContentEncryptionConfig(
+        mode="vault",
+        vault_addr="https://vault.example.com",
+        vault_transit_key="reports",
+        vault_role_id="role-id",
+        vault_secret_id="secret-id",
+    )
+
+
+def _vault_client_for_tests() -> crypto._VaultTransitClient:
+    return crypto._VaultTransitClient(_vault_config())
+
+
+def _disable_vault_retry_sleep(monkeypatch) -> list[float]:
+    sleeps = []
+    monkeypatch.setattr(crypto.time, "sleep", sleeps.append)
+    monkeypatch.setattr(crypto.random, "uniform", lambda _start, _end: 0)
+    return sleeps
+
+
+def test_content_encryption_defaults_to_off():
+    config = crypto.get_content_encryption_config()
+
+    assert config.mode == "off"
+    assert config.encrypted is False
+
+
 def test_static_key_envelope_round_trip(monkeypatch):
     _enable_static_key(monkeypatch)
 
@@ -127,6 +162,69 @@ def test_off_mode_preserves_current_behavior_and_does_not_decrypt_envelopes(monk
 
     assert crypto.read_job_output("job-1", '{"report":"plaintext"}') == {"report": "plaintext"}
     assert crypto.read_job_output("job-1", "aiqenc:not-json") == "aiqenc:not-json"
+
+
+@pytest.mark.asyncio
+async def test_async_content_encryption_wrappers_run_off_event_loop(monkeypatch):
+    loop_thread = threading.get_ident()
+    call_threads = {}
+
+    def fake_validate_startup():
+        call_threads["startup"] = threading.get_ident()
+        return crypto.ContentEncryptionReadiness(mode="off", ready=True)
+
+    def fake_health():
+        call_threads["health"] = threading.get_ident()
+        return crypto.ContentEncryptionReadiness(mode="off", ready=True)
+
+    def fake_require_ready():
+        call_threads["readiness"] = threading.get_ident()
+
+    def fake_read_output(job_id, stored_output):
+        call_threads["read_output"] = threading.get_ident()
+        return {"job_id": job_id, "stored_output": stored_output}
+
+    monkeypatch.setattr(crypto, "validate_content_encryption_startup", fake_validate_startup)
+    monkeypatch.setattr(crypto, "get_content_encryption_health", fake_health)
+    monkeypatch.setattr(crypto, "require_content_encryption_ready_for_submission", fake_require_ready)
+    monkeypatch.setattr(crypto, "read_job_output", fake_read_output)
+
+    assert await crypto.validate_content_encryption_startup_async() == crypto.ContentEncryptionReadiness(
+        mode="off", ready=True
+    )
+    assert await crypto.get_content_encryption_health_async() == crypto.ContentEncryptionReadiness(
+        mode="off", ready=True
+    )
+    await crypto.require_content_encryption_ready_for_submission_async()
+    assert await crypto.read_job_output_async("job-1", "stored") == {"job_id": "job-1", "stored_output": "stored"}
+
+    assert set(call_threads) == {"startup", "health", "readiness", "read_output"}
+    assert all(thread_id != loop_thread for thread_id in call_threads.values())
+
+
+@pytest.mark.asyncio
+async def test_async_content_encryption_wrapper_does_not_block_event_loop(monkeypatch):
+    import time
+
+    def slow_read_output(_job_id, _stored_output):
+        time.sleep(0.1)
+        return {"report": "secret"}
+
+    monkeypatch.setattr(crypto, "read_job_output", slow_read_output)
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while ticks < 3:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    read_task = asyncio.create_task(crypto.read_job_output_async("job-1", "stored"))
+    ticker_task = asyncio.create_task(ticker())
+
+    assert await read_task == {"report": "secret"}
+    await ticker_task
+    assert ticks >= 3
 
 
 @pytest.mark.asyncio
@@ -236,6 +334,163 @@ def test_dek_cache_evicts_lru_when_max_entries_is_exceeded():
     assert cache.get("third") == b"3" * 32
 
 
+def test_dek_cache_is_thread_safe_under_concurrent_access():
+    cache = crypto._DEKCache(ttl_seconds=60, max_entries=8)
+
+    def exercise_cache(worker_id: int) -> None:
+        for index in range(500):
+            cache_key = f"key-{(worker_id + index) % 16}"
+            cache.put(cache_key, bytes([index % 256]) * crypto.DEK_BYTES)
+            cache.get(cache_key)
+            cache.get(f"key-{index % 16}")
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(exercise_cache, worker_id) for worker_id in range(8)]
+        for future in as_completed(futures):
+            future.result()
+
+    cache.put("final", b"f" * crypto.DEK_BYTES)
+    assert cache.get("final") == b"f" * crypto.DEK_BYTES
+
+
+def test_vault_client_initialization_is_thread_safe(monkeypatch):
+    clients = []
+    login_calls = 0
+    calls_lock = threading.Lock()
+
+    class FakeAppRole:
+        def login(self, *, role_id, secret_id):
+            nonlocal login_calls
+            with calls_lock:
+                login_calls += 1
+            assert role_id == "role-id"
+            assert secret_id == "secret-id"
+            clients[0].authenticated = True
+
+    class FakeAuth:
+        def __init__(self):
+            self.approle = FakeAppRole()
+
+    class FakeClient:
+        def __init__(self, *, url, namespace, timeout):
+            assert url == "https://vault.example.com"
+            assert namespace is None
+            assert timeout == crypto.DEFAULT_VAULT_TIMEOUT_SECONDS
+            self.auth = FakeAuth()
+            self.authenticated = False
+            clients.append(self)
+
+        def is_authenticated(self):
+            return self.authenticated
+
+    monkeypatch.setitem(sys.modules, "hvac", SimpleNamespace(Client=FakeClient))
+    vault = _vault_client_for_tests()
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(vault._get_client) for _ in range(16)]
+        results = [future.result() for future in as_completed(futures)]
+
+    assert len(clients) == 1
+    assert login_calls == 1
+    assert all(result is clients[0] for result in results)
+
+
+def test_vault_retry_retries_transient_network_error(monkeypatch):
+    sleeps = _disable_vault_retry_sleep(monkeypatch)
+    vault = _vault_client_for_tests()
+    calls = 0
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise requests_exceptions.Timeout("request timed out")
+        return {"data": {"ok": True}}
+
+    assert vault._with_retry(operation, operation="unit") == {"data": {"ok": True}}
+    assert calls == 2
+    assert len(sleeps) == 1
+
+
+def test_vault_retry_retries_transient_vault_error(monkeypatch):
+    sleeps = _disable_vault_retry_sleep(monkeypatch)
+    vault = _vault_client_for_tests()
+    calls = 0
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise vault_exceptions.InternalServerError("vault server error")
+        return {"data": {"ok": True}}
+
+    assert vault._with_retry(operation, operation="unit") == {"data": {"ok": True}}
+    assert calls == 2
+    assert len(sleeps) == 1
+
+
+def test_vault_retry_fails_after_bounded_transient_attempts(monkeypatch):
+    sleeps = _disable_vault_retry_sleep(monkeypatch)
+    vault = _vault_client_for_tests()
+    calls = 0
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        raise vault_exceptions.RateLimitExceeded("vault is busy")
+
+    with pytest.raises(crypto.ContentEncryptionUnavailable, match="vault_unit_failed"):
+        vault._with_retry(operation, operation="unit")
+
+    assert calls == crypto._VAULT_ATTEMPTS
+    assert len(sleeps) == crypto._VAULT_ATTEMPTS - 1
+
+
+def test_vault_retry_reauthenticates_after_unauthorized(monkeypatch):
+    sleeps = _disable_vault_retry_sleep(monkeypatch)
+    vault = _vault_client_for_tests()
+    calls = 0
+    login_forces = []
+
+    def login(*, force):
+        login_forces.append(force)
+
+    monkeypatch.setattr(vault, "_login", login)
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise vault_exceptions.Unauthorized("token expired")
+        return {"data": {"ok": True}}
+
+    assert vault._with_retry(operation, operation="unit") == {"data": {"ok": True}}
+    assert calls == 2
+    assert login_forces == [True]
+    assert len(sleeps) == 1
+
+
+@pytest.mark.parametrize("exc_cls", [vault_exceptions.Forbidden, vault_exceptions.InvalidRequest])
+def test_vault_retry_does_not_retry_permission_or_invalid_request_errors(monkeypatch, caplog, exc_cls):
+    sleeps = _disable_vault_retry_sleep(monkeypatch)
+    vault = _vault_client_for_tests()
+    calls = 0
+
+    def operation():
+        nonlocal calls
+        calls += 1
+        raise exc_cls("secret-value")
+
+    with caplog.at_level("WARNING", logger=crypto.__name__):
+        with pytest.raises(crypto.ContentEncryptionUnavailable, match="vault_unit_failed"):
+            vault._with_retry(operation, operation="unit")
+
+    assert calls == 1
+    assert sleeps == []
+    assert exc_cls.__name__ in caplog.text
+    assert "secret-value" not in caplog.text
+
+
 def test_vault_missing_required_config_fails_startup(monkeypatch):
     monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "vault")
     monkeypatch.setenv("VAULT_ADDR", "https://vault.example.com")
@@ -272,7 +527,139 @@ def test_vault_operational_failure_starts_unhealthy_and_uses_readiness_cache(mon
 
     assert startup.ready is False
     assert health.ready is False
+    assert health.encrypt_ready is False
+    assert health.decrypt_ready is False
+    assert health.reason == "vault_generate_unavailable"
     assert calls == 1
+
+
+def test_vault_readiness_requires_generate_and_unwrap(monkeypatch):
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "vault")
+    monkeypatch.setenv("VAULT_ADDR", "https://vault.example.com")
+    monkeypatch.setenv("VAULT_ROLE_ID", "role-id")
+    monkeypatch.setenv("VAULT_SECRET_ID", "secret-id")
+    monkeypatch.setenv("AIQ_ENCRYPTION_TRANSIT_KEY", "reports")
+    calls = {"generate": 0, "unwrap": 0}
+    dek = b"d" * crypto.DEK_BYTES
+
+    class ReadyVault:
+        def __init__(self, _config):
+            pass
+
+        def generate_data_key(self, *, operation):
+            calls["generate"] += 1
+            assert operation == "api_startup_readiness_generate"
+            return dek, crypto.WrappedDEK(wrap="vault", kid="transit/reports", wrapped_dek="vault:v1:dek")
+
+        def unwrap_dek(self, wrapped_dek, *, operation):
+            calls["unwrap"] += 1
+            assert wrapped_dek == "vault:v1:dek"
+            assert operation == "api_startup_readiness_decrypt"
+            return dek
+
+    monkeypatch.setattr(crypto, "_VaultTransitClient", ReadyVault)
+    crypto.reset_content_encryption_manager_for_tests()
+
+    readiness = crypto.validate_content_encryption_startup()
+
+    assert readiness.ready is True
+    assert readiness.encrypt_ready is True
+    assert readiness.decrypt_ready is True
+    assert calls == {"generate": 1, "unwrap": 1}
+
+
+def test_vault_readiness_fails_when_unwrap_is_denied(monkeypatch):
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "vault")
+    monkeypatch.setenv("VAULT_ADDR", "https://vault.example.com")
+    monkeypatch.setenv("VAULT_ROLE_ID", "role-id")
+    monkeypatch.setenv("VAULT_SECRET_ID", "secret-id")
+    monkeypatch.setenv("AIQ_ENCRYPTION_TRANSIT_KEY", "reports")
+
+    class DecryptDeniedVault:
+        def __init__(self, _config):
+            pass
+
+        def generate_data_key(self, *, operation):
+            return b"d" * crypto.DEK_BYTES, crypto.WrappedDEK(
+                wrap="vault", kid="transit/reports", wrapped_dek="vault:v1:dek"
+            )
+
+        def unwrap_dek(self, wrapped_dek, *, operation):
+            raise crypto.ContentEncryptionUnavailable("decrypt denied")
+
+    monkeypatch.setattr(crypto, "_VaultTransitClient", DecryptDeniedVault)
+    crypto.reset_content_encryption_manager_for_tests()
+
+    readiness = crypto.validate_content_encryption_startup()
+
+    assert readiness.ready is False
+    assert readiness.encrypt_ready is True
+    assert readiness.decrypt_ready is False
+    assert readiness.reason == "vault_decrypt_unavailable"
+    assert readiness.exception_type == "ContentEncryptionUnavailable"
+
+
+def test_vault_readiness_fails_when_unwrapped_dek_differs(monkeypatch):
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "vault")
+    monkeypatch.setenv("VAULT_ADDR", "https://vault.example.com")
+    monkeypatch.setenv("VAULT_ROLE_ID", "role-id")
+    monkeypatch.setenv("VAULT_SECRET_ID", "secret-id")
+    monkeypatch.setenv("AIQ_ENCRYPTION_TRANSIT_KEY", "reports")
+
+    class MismatchedVault:
+        def __init__(self, _config):
+            pass
+
+        def generate_data_key(self, *, operation):
+            return b"d" * crypto.DEK_BYTES, crypto.WrappedDEK(
+                wrap="vault", kid="transit/reports", wrapped_dek="vault:v1:dek"
+            )
+
+        def unwrap_dek(self, wrapped_dek, *, operation):
+            return b"e" * crypto.DEK_BYTES
+
+    monkeypatch.setattr(crypto, "_VaultTransitClient", MismatchedVault)
+    crypto.reset_content_encryption_manager_for_tests()
+
+    readiness = crypto.validate_content_encryption_startup()
+
+    assert readiness.ready is False
+    assert readiness.encrypt_ready is True
+    assert readiness.decrypt_ready is False
+    assert readiness.reason == "vault_readiness_dek_mismatch"
+
+
+def test_vault_readiness_cache_avoids_repeated_generate_and_unwrap(monkeypatch):
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "vault")
+    monkeypatch.setenv("VAULT_ADDR", "https://vault.example.com")
+    monkeypatch.setenv("VAULT_ROLE_ID", "role-id")
+    monkeypatch.setenv("VAULT_SECRET_ID", "secret-id")
+    monkeypatch.setenv("AIQ_ENCRYPTION_TRANSIT_KEY", "reports")
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_READINESS_TTL_SECONDS", "60")
+    calls = {"generate": 0, "unwrap": 0}
+    dek = b"d" * crypto.DEK_BYTES
+
+    class ReadyVault:
+        def __init__(self, _config):
+            pass
+
+        def generate_data_key(self, *, operation):
+            calls["generate"] += 1
+            return dek, crypto.WrappedDEK(wrap="vault", kid="transit/reports", wrapped_dek="vault:v1:dek")
+
+        def unwrap_dek(self, wrapped_dek, *, operation):
+            calls["unwrap"] += 1
+            return dek
+
+    monkeypatch.setattr(crypto, "_VaultTransitClient", ReadyVault)
+    crypto.reset_content_encryption_manager_for_tests()
+
+    startup = crypto.validate_content_encryption_startup()
+    health = crypto.get_content_encryption_health()
+
+    assert startup.ready is True
+    assert health.ready is True
+    assert calls == {"generate": 1, "unwrap": 1}
 
 
 def test_vault_readiness_rechecks_when_cache_is_stale(monkeypatch):
@@ -282,24 +669,28 @@ def test_vault_readiness_rechecks_when_cache_is_stale(monkeypatch):
     monkeypatch.setenv("VAULT_SECRET_ID", "secret-id")
     monkeypatch.setenv("AIQ_ENCRYPTION_TRANSIT_KEY", "reports")
     monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_READINESS_TTL_SECONDS", "0")
-    calls = 0
+    calls = {"generate": 0, "unwrap": 0}
+    dek = b"d" * crypto.DEK_BYTES
 
-    class FailingVault:
+    class ReadyVault:
         def __init__(self, _config):
             pass
 
         def generate_data_key(self, *, operation):
-            nonlocal calls
-            calls += 1
-            raise crypto.ContentEncryptionUnavailable("vault down")
+            calls["generate"] += 1
+            return dek, crypto.WrappedDEK(wrap="vault", kid="transit/reports", wrapped_dek="vault:v1:dek")
 
-    monkeypatch.setattr(crypto, "_VaultTransitClient", FailingVault)
+        def unwrap_dek(self, wrapped_dek, *, operation):
+            calls["unwrap"] += 1
+            return dek
+
+    monkeypatch.setattr(crypto, "_VaultTransitClient", ReadyVault)
     crypto.reset_content_encryption_manager_for_tests()
 
     crypto.validate_content_encryption_startup()
     crypto.get_content_encryption_health()
 
-    assert calls == 2
+    assert calls == {"generate": 2, "unwrap": 2}
 
 
 @pytest.mark.skipif(not _real_vault_env_present(), reason="real Vault Transit credentials are not configured")
@@ -311,6 +702,8 @@ def test_real_vault_transit_round_trip(monkeypatch):
     stored = crypto.create_job_content_cipher("job-real-vault").encrypt_output_json('{"report":"secret"}')
 
     assert readiness.ready is True
+    assert readiness.encrypt_ready is True
+    assert readiness.decrypt_ready is True
     assert stored.startswith(crypto.ENVELOPE_PREFIX)
     assert "secret" not in stored
     assert crypto.read_job_output("job-real-vault", stored) == {"report": "secret"}

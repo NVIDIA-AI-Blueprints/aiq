@@ -28,6 +28,8 @@ import threading
 import time
 from typing import Any
 
+from .crypto import ContentEncryptionError
+
 logger = logging.getLogger(__name__)
 
 
@@ -535,6 +537,30 @@ class EventStore:
         cls._tables_initialized.add(db_url)
 
     @classmethod
+    def _prepare_event_rows_for_return(cls, job_id: str, rows: list[Any]) -> list[dict]:
+        """Deserialize and decrypt event rows in sync code, suitable for thread offload."""
+
+        import json
+
+        events = []
+        for row in rows:
+            try:
+                event = cls._prepare_event_for_return(job_id, json.loads(row[1]))
+                event["_id"] = row[0]
+                events.append(event)
+            except json.JSONDecodeError:
+                logger.warning("Malformed event data for job %s, event id %d", job_id, row[0])
+            except ContentEncryptionError as e:
+                logger.warning(
+                    "Encrypted event data failed for job %s, event id %d: %s",
+                    job_id,
+                    row[0],
+                    e.__class__.__name__,
+                )
+                raise
+        return events
+
+    @classmethod
     def get_events(cls, db_url: str, job_id: str, after_id: int = 0, limit: int = 100) -> list[dict]:
         """
         Retrieve events for SSE streaming (sync).
@@ -548,8 +574,6 @@ class EventStore:
         Returns:
             List of event dicts with '_id' field for cursor tracking
         """
-        import json
-
         from sqlalchemy import text
 
         try:
@@ -564,15 +588,9 @@ class EventStore:
                     ),
                     {"job_id": job_id, "after_id": after_id, "limit": limit},
                 )
-                events = []
-                for row in result:
-                    try:
-                        event = cls._prepare_event_for_return(job_id, json.loads(row[1]))
-                        event["_id"] = row[0]
-                        events.append(event)
-                    except json.JSONDecodeError:
-                        logger.warning("Malformed event data for job %s, event id %d", job_id, row[0])
-                return events
+                return cls._prepare_event_rows_for_return(job_id, list(result))
+        except ContentEncryptionError:
+            raise
         except Exception as e:
             logger.warning("Failed to get events for job %s: %s", job_id, e)
             return []
@@ -584,8 +602,6 @@ class EventStore:
 
         Uses native async SQLAlchemy with psycopg for true async I/O.
         """
-        import json
-
         from sqlalchemy import text
 
         try:
@@ -600,15 +616,9 @@ class EventStore:
                     ),
                     {"job_id": job_id, "after_id": after_id, "limit": limit},
                 )
-                events = []
-                for row in result:
-                    try:
-                        event = cls._prepare_event_for_return(job_id, json.loads(row[1]))
-                        event["_id"] = row[0]
-                        events.append(event)
-                    except json.JSONDecodeError:
-                        logger.warning("Malformed event data for job %s, event id %d", job_id, row[0])
-                return events
+                return await asyncio.to_thread(cls._prepare_event_rows_for_return, job_id, list(result))
+        except ContentEncryptionError:
+            raise
         except Exception as e:
             logger.warning("Failed to get events async for job %s: %s", job_id, e)
             return await asyncio.get_running_loop().run_in_executor(
@@ -650,7 +660,17 @@ class EventStore:
                         return event
                     except json.JSONDecodeError:
                         logger.warning("Malformed event data for event id %d", event_id)
+                    except ContentEncryptionError as e:
+                        logger.warning(
+                            "Encrypted event data failed for job %s, event id %d: %s",
+                            row[1],
+                            event_id,
+                            e.__class__.__name__,
+                        )
+                        raise
                 return None
+        except ContentEncryptionError:
+            raise
         except Exception as e:
             logger.warning("Failed to get event %d: %s", event_id, e)
             return None

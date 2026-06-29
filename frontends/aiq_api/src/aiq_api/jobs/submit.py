@@ -120,6 +120,7 @@ async def submit_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    skip_encryption_readiness_check: bool = False,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -138,6 +139,8 @@ async def submit_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
+        skip_encryption_readiness_check: Skip the internal readiness check when
+            the caller already performed it off the event loop.
 
     Returns:
         The job ID.
@@ -156,7 +159,7 @@ async def submit_agent_job(
     """
     from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
-    from .crypto import require_content_encryption_ready_for_submission
+    from .crypto import require_content_encryption_ready_for_submission_async
 
     # Get agent configuration from registry
     agent_config = get_agent_config(agent_type)
@@ -202,7 +205,8 @@ async def submit_agent_job(
     if not scheduler_address:
         raise RuntimeError("Async job submission requires NAT_DASK_SCHEDULER_ADDRESS to be set")
 
-    require_content_encryption_ready_for_submission()
+    if not skip_encryption_readiness_check:
+        await require_content_encryption_ready_for_submission_async()
 
     # Auto-capture auth token if not explicitly provided
     if auth_token is None:

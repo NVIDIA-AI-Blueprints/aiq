@@ -22,12 +22,14 @@ and errors remain plaintext.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
 import json
 import logging
 import os
 import random
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -54,6 +56,24 @@ DEFAULT_DEK_CACHE_MAX_ENTRIES = 1024
 DEFAULT_VAULT_TRANSIT_MOUNT = "transit"
 DEFAULT_VAULT_TIMEOUT_SECONDS = 5.0
 _VAULT_ATTEMPTS = 2
+_VAULT_RETRY_BASE_SECONDS = 0.05
+_VAULT_RETRY_JITTER_SECONDS = 0.025
+_VAULT_AUTH_RETRY_EXCEPTION_NAMES = {"Unauthorized"}
+_VAULT_RETRYABLE_EXCEPTION_NAMES = {
+    "BadGateway",
+    "InternalServerError",
+    "RateLimitExceeded",
+    "VaultDown",
+}
+_VAULT_NON_RETRYABLE_EXCEPTION_NAMES = {
+    "Forbidden",
+    "InvalidPath",
+    "InvalidRequest",
+    "ParamValidationError",
+    "PreconditionFailed",
+    "UnsupportedOperation",
+    "VaultNotInitialized",
+}
 
 
 class ContentEncryptionError(Exception):
@@ -136,9 +156,15 @@ class ContentEncryptionReadiness:
     checked_at: float | None = None
     reason: str | None = None
     exception_type: str | None = None
+    encrypt_ready: bool | None = None
+    decrypt_ready: bool | None = None
 
     def to_health_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {"mode": self.mode, "ready": self.ready}
+        if self.encrypt_ready is not None:
+            result["encrypt_ready"] = self.encrypt_ready
+        if self.decrypt_ready is not None:
+            result["decrypt_ready"] = self.decrypt_ready
         if self.reason:
             result["reason"] = self.reason
         if self.exception_type:
@@ -196,29 +222,36 @@ class _DEKCache:
     ttl_seconds: float
     max_entries: int
     _entries: OrderedDict[str, _DEKCacheEntry] = field(default_factory=OrderedDict)
+    _lock: threading.RLock = field(default_factory=threading.RLock)
 
     def get(self, cache_key: str) -> bytes | None:
         if self.ttl_seconds <= 0:
             return None
-        now = time.monotonic()
-        entry = self._entries.get(cache_key)
-        if entry is None:
-            return None
-        if entry.expires_at <= now:
-            self._entries.pop(cache_key, None)
-            return None
-        self._entries.move_to_end(cache_key)
-        return entry.dek
+        with self._lock:
+            now = time.monotonic()
+            entry = self._entries.get(cache_key)
+            if entry is None:
+                return None
+            if entry.expires_at <= now:
+                self._entries.pop(cache_key, None)
+                return None
+            self._entries.move_to_end(cache_key)
+            return entry.dek
 
     def put(self, cache_key: str, dek: bytes) -> None:
         if self.ttl_seconds <= 0:
             return
-        now = time.monotonic()
-        self._entries[cache_key] = _DEKCacheEntry(dek=dek, expires_at=now + self.ttl_seconds)
-        self._entries.move_to_end(cache_key)
-        self._evict(now)
+        with self._lock:
+            now = time.monotonic()
+            self._entries[cache_key] = _DEKCacheEntry(dek=dek, expires_at=now + self.ttl_seconds)
+            self._entries.move_to_end(cache_key)
+            self._evict_locked(now)
 
     def _evict(self, now: float) -> None:
+        with self._lock:
+            self._evict_locked(now)
+
+    def _evict_locked(self, now: float) -> None:
         expired = [key for key, entry in self._entries.items() if entry.expires_at <= now]
         for key in expired:
             self._entries.pop(key, None)
@@ -231,6 +264,7 @@ class ContentEncryptionManager:
 
     def __init__(self, config: ContentEncryptionConfig):
         self.config = config
+        self._lock = threading.RLock()
         self._dek_cache = _DEKCache(
             ttl_seconds=config.dek_cache_ttl_seconds,
             max_entries=config.dek_cache_max_entries,
@@ -239,46 +273,100 @@ class ContentEncryptionManager:
         self._vault_client: _VaultTransitClient | None = None
 
     def get_readiness(self) -> ContentEncryptionReadiness:
-        if self.config.mode == "off":
-            return ContentEncryptionReadiness(mode="off", ready=True)
-        return self._readiness
+        with self._lock:
+            if self.config.mode == "off":
+                return ContentEncryptionReadiness(mode="off", ready=True)
+            return self._readiness
 
     def check_readiness(self, *, force: bool = False, operation: str = "readiness") -> ContentEncryptionReadiness:
-        if self.config.mode == "off":
-            self._readiness = ContentEncryptionReadiness(mode="off", ready=True)
-            return self._readiness
-        if self.config.mode == "key":
-            self._readiness = ContentEncryptionReadiness(mode="key", ready=True, checked_at=time.monotonic())
-            return self._readiness
-        if not force and self._readiness.checked_at is not None:
-            age = time.monotonic() - self._readiness.checked_at
-            if age < self.config.readiness_ttl_seconds:
+        with self._lock:
+            if self.config.mode == "off":
+                self._readiness = ContentEncryptionReadiness(mode="off", ready=True)
                 return self._readiness
+            if self.config.mode == "key":
+                self._readiness = ContentEncryptionReadiness(mode="key", ready=True, checked_at=time.monotonic())
+                return self._readiness
+            if not force and self._readiness.checked_at is not None:
+                age = time.monotonic() - self._readiness.checked_at
+                if age < self.config.readiness_ttl_seconds:
+                    return self._readiness
 
+            self._readiness = self._check_vault_readiness(operation=operation)
+            return self._readiness
+
+    def _check_vault_readiness(self, *, operation: str) -> ContentEncryptionReadiness:
+        dek: bytes | None = None
+        unwrapped_dek: bytes | None = None
         try:
-            dek, _wrapped = self._vault().generate_data_key(operation=operation)
-            _zero_bytes(dek)
-            self._readiness = ContentEncryptionReadiness(
+            dek, wrapped = self._vault().generate_data_key(operation=f"{operation}_readiness_generate")
+            try:
+                unwrapped_dek = self._vault().unwrap_dek(
+                    wrapped.wrapped_dek,
+                    operation=f"{operation}_readiness_decrypt",
+                )
+            except ContentEncryptionUnavailable as exc:
+                return self._failed_vault_readiness(
+                    operation=operation,
+                    reason="vault_decrypt_unavailable",
+                    exception=exc,
+                    encrypt_ready=True,
+                    decrypt_ready=False,
+                )
+            if unwrapped_dek != dek:
+                return self._failed_vault_readiness(
+                    operation=operation,
+                    reason="vault_readiness_dek_mismatch",
+                    exception=None,
+                    encrypt_ready=True,
+                    decrypt_ready=False,
+                )
+            return ContentEncryptionReadiness(
                 mode=self.config.mode,
                 ready=True,
                 checked_at=time.monotonic(),
+                encrypt_ready=True,
+                decrypt_ready=True,
             )
         except ContentEncryptionUnavailable as exc:
-            self._readiness = ContentEncryptionReadiness(
-                mode=self.config.mode,
-                ready=False,
-                checked_at=time.monotonic(),
-                reason="vault_unavailable",
-                exception_type=exc.__class__.__name__,
+            return self._failed_vault_readiness(
+                operation=operation,
+                reason="vault_generate_unavailable",
+                exception=exc,
+                encrypt_ready=False,
+                decrypt_ready=False,
             )
-            logger.warning(
-                "Content encryption readiness failed mode=%s operation=%s reason=%s exception=%s",
-                self.config.mode,
-                operation,
-                self._readiness.reason,
-                self._readiness.exception_type,
-            )
-        return self._readiness
+        finally:
+            if dek is not None:
+                _zero_bytes(dek)
+            if unwrapped_dek is not None:
+                _zero_bytes(unwrapped_dek)
+
+    def _failed_vault_readiness(
+        self,
+        *,
+        operation: str,
+        reason: str,
+        exception: Exception | None,
+        encrypt_ready: bool,
+        decrypt_ready: bool,
+    ) -> ContentEncryptionReadiness:
+        readiness = ContentEncryptionReadiness(
+            mode=self.config.mode,
+            ready=False,
+            checked_at=time.monotonic(),
+            reason=reason,
+            exception_type=exception.__class__.__name__ if exception is not None else None,
+            encrypt_ready=encrypt_ready,
+            decrypt_ready=decrypt_ready,
+        )
+        logger.warning(
+            "Content encryption readiness failed mode=%s operation=%s reason=%s exception=%s",
+            self.config.mode,
+            operation,
+            readiness.reason,
+            readiness.exception_type,
+        )
+        return readiness
 
     def require_ready(self, *, operation: str) -> None:
         readiness = self.check_readiness(force=False, operation=operation)
@@ -423,9 +511,10 @@ class ContentEncryptionManager:
         return dek
 
     def _vault(self) -> _VaultTransitClient:
-        if self._vault_client is None:
-            self._vault_client = _VaultTransitClient(self.config)
-        return self._vault_client
+        with self._lock:
+            if self._vault_client is None:
+                self._vault_client = _VaultTransitClient(self.config)
+            return self._vault_client
 
 
 class _VaultTransitClient:
@@ -433,6 +522,7 @@ class _VaultTransitClient:
 
     def __init__(self, config: ContentEncryptionConfig):
         self._config = config
+        self._lock = threading.RLock()
         self._client: Any | None = None
 
     def generate_data_key(self, *, operation: str) -> tuple[bytes, WrappedDEK]:
@@ -484,71 +574,88 @@ class _VaultTransitClient:
         last_exc: Exception | None = None
         for attempt in range(_VAULT_ATTEMPTS):
             try:
-                return fn()
+                with self._lock:
+                    return fn()
             except Exception as exc:  # hvac exposes several operational exception classes.
+                if isinstance(exc, ContentEncryptionConfigError):
+                    raise
                 last_exc = exc
-                if _is_auth_failure(exc):
-                    self._login(force=True)
+                if not _should_retry_vault_failure(exc):
+                    break
                 if attempt + 1 < _VAULT_ATTEMPTS:
-                    time.sleep(0.05 * (2**attempt) + random.uniform(0, 0.025))
+                    if _is_auth_failure(exc):
+                        try:
+                            self._login(force=True)
+                        except Exception as login_exc:  # AppRole login can fail transiently too.
+                            if isinstance(login_exc, ContentEncryptionConfigError):
+                                raise
+                            last_exc = login_exc
+                            if not _should_retry_vault_failure(login_exc):
+                                break
+                    _sleep_before_vault_retry(attempt)
                     continue
 
         assert last_exc is not None
         logger.warning(
-            "Vault transit operation failed mode=vault operation=%s exception=%s",
+            "Vault transit operation failed mode=vault operation=%s retryable=%s exception=%s",
             operation,
+            _should_retry_vault_failure(last_exc),
             last_exc.__class__.__name__,
         )
         raise ContentEncryptionUnavailable(f"vault_{operation}_failed") from last_exc
 
     def _authenticated_client(self) -> Any:
-        client = self._get_client()
-        if not client.is_authenticated():
-            self._login(force=True)
-        return client
+        with self._lock:
+            client = self._get_client()
+            if not client.is_authenticated():
+                self._login(force=True)
+            return client
 
     def _get_client(self) -> Any:
-        if self._client is not None:
-            return self._client
-        try:
-            import hvac
-        except ImportError as exc:
-            raise ContentEncryptionConfigError("Vault mode requires the hvac package") from exc
+        with self._lock:
+            if self._client is not None:
+                return self._client
+            try:
+                import hvac
+            except ImportError as exc:
+                raise ContentEncryptionConfigError("Vault mode requires the hvac package") from exc
 
-        self._client = hvac.Client(
-            url=self._required(self._config.vault_addr, "VAULT_ADDR"),
-            namespace=self._config.vault_namespace,
-            timeout=self._config.vault_timeout_seconds,
-        )
-        self._login(force=True)
-        return self._client
+            self._client = hvac.Client(
+                url=self._required(self._config.vault_addr, "VAULT_ADDR"),
+                namespace=self._config.vault_namespace,
+                timeout=self._config.vault_timeout_seconds,
+            )
+            self._login(force=True)
+            return self._client
 
     def _login(self, *, force: bool) -> None:
-        client = self._get_client_without_login()
-        if not force and client.is_authenticated():
-            return
-        try:
-            client.auth.approle.login(
-                role_id=self._required(self._config.vault_role_id, "VAULT_ROLE_ID"),
-                secret_id=self._required(self._config.vault_secret_id, "VAULT_SECRET_ID"),
-            )
-        except Exception as exc:
-            logger.warning("Vault AppRole login failed mode=vault exception=%s", exc.__class__.__name__)
-            raise ContentEncryptionUnavailable("vault_approle_login_failed") from exc
+        with self._lock:
+            client = self._get_client_without_login()
+            if not force and client.is_authenticated():
+                return
+            try:
+                client.auth.approle.login(
+                    role_id=self._required(self._config.vault_role_id, "VAULT_ROLE_ID"),
+                    secret_id=self._required(self._config.vault_secret_id, "VAULT_SECRET_ID"),
+                )
+            except Exception as exc:
+                logger.warning("Vault AppRole login failed mode=vault exception=%s", exc.__class__.__name__)
+                raise ContentEncryptionUnavailable("vault_approle_login_failed") from exc
 
     def _get_client_without_login(self) -> Any:
-        if self._client is not None:
+        with self._lock:
+            if self._client is not None:
+                return self._client
+            try:
+                import hvac
+            except ImportError as exc:
+                raise ContentEncryptionConfigError("Vault mode requires the hvac package") from exc
+            self._client = hvac.Client(
+                url=self._required(self._config.vault_addr, "VAULT_ADDR"),
+                namespace=self._config.vault_namespace,
+                timeout=self._config.vault_timeout_seconds,
+            )
             return self._client
-        try:
-            import hvac
-        except ImportError as exc:
-            raise ContentEncryptionConfigError("Vault mode requires the hvac package") from exc
-        self._client = hvac.Client(
-            url=self._required(self._config.vault_addr, "VAULT_ADDR"),
-            namespace=self._config.vault_namespace,
-            timeout=self._config.vault_timeout_seconds,
-        )
-        return self._client
 
     @staticmethod
     def _required(value: str | None, name: str) -> str:
@@ -559,13 +666,15 @@ class _VaultTransitClient:
 
 _manager: ContentEncryptionManager | None = None
 _manager_signature: tuple[Any, ...] | None = None
+_manager_lock = threading.RLock()
 
 
 def reset_content_encryption_manager_for_tests() -> None:
     global _manager
     global _manager_signature
-    _manager = None
-    _manager_signature = None
+    with _manager_lock:
+        _manager = None
+        _manager_signature = None
 
 
 def get_content_encryption_config() -> ContentEncryptionConfig:
@@ -644,10 +753,11 @@ def get_content_encryption_manager() -> ContentEncryptionManager:
     global _manager
     global _manager_signature
     config = get_content_encryption_config()
-    if _manager is None or _manager_signature != config.signature:
-        _manager = ContentEncryptionManager(config)
-        _manager_signature = config.signature
-    return _manager
+    with _manager_lock:
+        if _manager is None or _manager_signature != config.signature:
+            _manager = ContentEncryptionManager(config)
+            _manager_signature = config.signature
+        return _manager
 
 
 def validate_content_encryption_startup() -> ContentEncryptionReadiness:
@@ -661,12 +771,30 @@ def validate_content_encryption_startup() -> ContentEncryptionReadiness:
     return manager.check_readiness(force=True, operation="api_startup")
 
 
+async def validate_content_encryption_startup_async() -> ContentEncryptionReadiness:
+    """Validate startup readiness without blocking the FastAPI event loop."""
+
+    return await asyncio.to_thread(validate_content_encryption_startup)
+
+
 def get_content_encryption_health() -> ContentEncryptionReadiness:
     return get_content_encryption_manager().check_readiness(force=False, operation="health")
 
 
+async def get_content_encryption_health_async() -> ContentEncryptionReadiness:
+    """Check encryption health without blocking the FastAPI event loop."""
+
+    return await asyncio.to_thread(get_content_encryption_health)
+
+
 def require_content_encryption_ready_for_submission() -> None:
     get_content_encryption_manager().require_ready(operation="submit")
+
+
+async def require_content_encryption_ready_for_submission_async() -> None:
+    """Check submission readiness without blocking the FastAPI event loop."""
+
+    await asyncio.to_thread(require_content_encryption_ready_for_submission)
 
 
 def create_job_content_cipher(job_id: str) -> JobContentCipher:
@@ -720,6 +848,12 @@ def read_job_output(job_id: str, stored_output: Any) -> Any:
         return json.loads(plaintext_json)
     except json.JSONDecodeError as exc:
         raise ContentEncryptionInvalidData("decrypted job output is not valid JSON") from exc
+
+
+async def read_job_output_async(job_id: str, stored_output: Any) -> Any:
+    """Read/decrypt job output without blocking the FastAPI event loop."""
+
+    return await asyncio.to_thread(read_job_output, job_id, stored_output)
 
 
 def encrypt_event_field(job_id: str, field_path: str, value: Any, cipher: JobContentCipher | None) -> Any:
@@ -878,7 +1012,81 @@ def _empty_to_none(value: str | None) -> str | None:
 
 
 def _is_auth_failure(exc: Exception) -> bool:
-    return exc.__class__.__name__ in {"Forbidden", "Unauthorized"}
+    candidate = _vault_failure_candidate(exc)
+    return candidate.__class__.__name__ in _VAULT_AUTH_RETRY_EXCEPTION_NAMES
+
+
+def _should_retry_vault_failure(exc: Exception) -> bool:
+    candidate = _vault_failure_candidate(exc)
+    if _is_auth_failure(candidate):
+        return True
+    if _is_retryable_network_failure(candidate):
+        return True
+
+    status_code = _status_code_from_exception(candidate)
+    if status_code is not None:
+        return status_code == 429 or 500 <= status_code < 600
+
+    exception_name = candidate.__class__.__name__
+    if exception_name in _VAULT_NON_RETRYABLE_EXCEPTION_NAMES:
+        return False
+    return exception_name in _VAULT_RETRYABLE_EXCEPTION_NAMES
+
+
+def _vault_failure_candidate(exc: Exception) -> Exception:
+    if isinstance(exc, ContentEncryptionUnavailable) and isinstance(exc.__cause__, Exception):
+        return exc.__cause__
+    return exc
+
+
+def _is_retryable_network_failure(exc: Exception) -> bool:
+    try:
+        import requests
+    except ImportError:
+        requests = None
+    if requests is not None and isinstance(
+        exc,
+        (
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+        ),
+    ):
+        return True
+
+    try:
+        import urllib3
+    except ImportError:
+        urllib3 = None
+    if urllib3 is not None and isinstance(
+        exc,
+        (
+            urllib3.exceptions.ConnectTimeoutError,
+            urllib3.exceptions.MaxRetryError,
+            urllib3.exceptions.NewConnectionError,
+            urllib3.exceptions.ReadTimeoutError,
+            urllib3.exceptions.TimeoutError,
+        ),
+    ):
+        return True
+    return False
+
+
+def _status_code_from_exception(exc: Exception) -> int | None:
+    status_code = getattr(exc, "status_code", None)
+    if isinstance(status_code, int):
+        return status_code
+
+    response = getattr(exc, "response", None)
+    response_status_code = getattr(response, "status_code", None)
+    if isinstance(response_status_code, int):
+        return response_status_code
+    return None
+
+
+def _sleep_before_vault_retry(attempt: int) -> None:
+    delay = _VAULT_RETRY_BASE_SECONDS * (2**attempt)
+    jitter = random.uniform(0, _VAULT_RETRY_JITTER_SECONDS)
+    time.sleep(delay + jitter)
 
 
 def _zero_bytes(_value: bytes) -> None:

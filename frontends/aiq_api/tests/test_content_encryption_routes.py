@@ -36,6 +36,10 @@ def _static_key() -> str:
     return base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
 
 
+def _other_static_key() -> str:
+    return base64.urlsafe_b64encode(bytes(reversed(range(32)))).decode("ascii")
+
+
 @pytest.fixture(autouse=True)
 def clean_encryption_route_env(monkeypatch):
     for name in (
@@ -155,6 +159,39 @@ async def test_health_returns_503_when_vault_readiness_failed(monkeypatch, tmp_p
     body = response.json()
     assert body["encryption"]["mode"] == "vault"
     assert body["encryption"]["ready"] is False
+    assert body["encryption"]["encrypt_ready"] is False
+    assert body["encryption"]["decrypt_ready"] is False
+
+
+@pytest.mark.asyncio
+async def test_health_returns_503_when_vault_decrypt_readiness_failed(monkeypatch, tmp_path):
+    _enable_vault(monkeypatch)
+
+    class DecryptDeniedVault:
+        def __init__(self, _config):
+            pass
+
+        def generate_data_key(self, *, operation):
+            return b"d" * crypto.DEK_BYTES, crypto.WrappedDEK(
+                wrap="vault", kid="transit/reports", wrapped_dek="vault:v1:dek"
+            )
+
+        def unwrap_dek(self, wrapped_dek, *, operation):
+            raise crypto.ContentEncryptionUnavailable("decrypt denied")
+
+    monkeypatch.setattr(crypto, "_VaultTransitClient", DecryptDeniedVault)
+    app = await _build_jobs_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["encryption"]["mode"] == "vault"
+    assert body["encryption"]["ready"] is False
+    assert body["encryption"]["encrypt_ready"] is True
+    assert body["encryption"]["decrypt_ready"] is False
+    assert body["encryption"]["reason"] == "vault_decrypt_unavailable"
 
 
 @pytest.mark.asyncio
@@ -170,6 +207,33 @@ async def test_submit_rejects_when_encryption_readiness_failed(monkeypatch, tmp_
             raise crypto.ContentEncryptionUnavailable("vault down")
 
     monkeypatch.setattr(crypto, "_VaultTransitClient", FailingVault)
+    app = await _build_jobs_app(monkeypatch, tmp_path, submitted_job=submitted_job)
+
+    with TestClient(app) as client:
+        response = client.post("/v1/jobs/async/submit", json={"agent_type": "deep_researcher", "input": "query"})
+
+    assert response.status_code == 503
+    submitted_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_rejects_when_vault_decrypt_readiness_failed(monkeypatch, tmp_path):
+    _enable_vault(monkeypatch)
+    submitted_job = AsyncMock(return_value="job-1")
+
+    class DecryptDeniedVault:
+        def __init__(self, _config):
+            pass
+
+        def generate_data_key(self, *, operation):
+            return b"d" * crypto.DEK_BYTES, crypto.WrappedDEK(
+                wrap="vault", kid="transit/reports", wrapped_dek="vault:v1:dek"
+            )
+
+        def unwrap_dek(self, wrapped_dek, *, operation):
+            raise crypto.ContentEncryptionUnavailable("decrypt denied")
+
+    monkeypatch.setattr(crypto, "_VaultTransitClient", DecryptDeniedVault)
     app = await _build_jobs_app(monkeypatch, tmp_path, submitted_job=submitted_job)
 
     with TestClient(app) as client:
@@ -263,3 +327,123 @@ async def test_report_decrypts_encrypted_final_output(monkeypatch, tmp_path):
 
     assert response.status_code == 200
     assert response.json() == {"job_id": "job-1", "has_report": True, "report": "secret"}
+
+
+@pytest.mark.asyncio
+async def test_state_returns_500_for_invalid_encrypted_event_data(monkeypatch, tmp_path):
+    from aiq_api.jobs.event_store import EventStore
+
+    _enable_static_key(monkeypatch)
+    app = await _build_jobs_app(monkeypatch, tmp_path)
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    cipher = crypto.create_job_content_cipher("job-1")
+    EventStore(db_url, "job-1", content_cipher=cipher).store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": "secret report",
+            },
+        }
+    )
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY", _other_static_key())
+    crypto.reset_content_encryption_manager_for_tests()
+
+    with TestClient(app) as client:
+        response = client.get("/v1/jobs/async/job/job-1/state")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Job state data is invalid"
+
+
+@pytest.mark.asyncio
+async def test_state_returns_503_when_event_decrypt_is_unavailable(monkeypatch, tmp_path):
+    from aiq_api.jobs.event_store import EventStore
+
+    _enable_static_key(monkeypatch)
+    app = await _build_jobs_app(monkeypatch, tmp_path)
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    cipher = crypto.create_job_content_cipher("job-1")
+    EventStore(db_url, "job-1", content_cipher=cipher).store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": "secret report",
+            },
+        }
+    )
+
+    def unavailable_decrypt(*_args, **_kwargs):
+        raise crypto.ContentEncryptionUnavailable("vault down")
+
+    monkeypatch.setattr(crypto, "decrypt_event_field", unavailable_decrypt)
+
+    with TestClient(app) as client:
+        response = client.get("/v1/jobs/async/job/job-1/state")
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Content encryption is unavailable"
+
+
+@pytest.mark.asyncio
+async def test_sse_emits_job_error_for_invalid_encrypted_event_data(monkeypatch, tmp_path):
+    from aiq_api.jobs.event_store import EventStore
+
+    _enable_static_key(monkeypatch)
+    app = await _build_jobs_app(monkeypatch, tmp_path)
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    cipher = crypto.create_job_content_cipher("job-1")
+    EventStore(db_url, "job-1", content_cipher=cipher).store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": "secret report",
+            },
+        }
+    )
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY", _other_static_key())
+    crypto.reset_content_encryption_manager_for_tests()
+
+    with TestClient(app) as client:
+        with client.stream("GET", "/v1/jobs/async/job/job-1/stream") as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "event: job.error" in body
+    assert "Job event data is invalid" in body
+    assert "secret report" not in body
+
+
+@pytest.mark.asyncio
+async def test_sse_emits_job_error_when_event_decrypt_is_unavailable(monkeypatch, tmp_path):
+    from aiq_api.jobs.event_store import EventStore
+
+    _enable_static_key(monkeypatch)
+    app = await _build_jobs_app(monkeypatch, tmp_path)
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    cipher = crypto.create_job_content_cipher("job-1")
+    EventStore(db_url, "job-1", content_cipher=cipher).store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": "secret report",
+            },
+        }
+    )
+
+    def unavailable_decrypt(*_args, **_kwargs):
+        raise crypto.ContentEncryptionUnavailable("vault down")
+
+    monkeypatch.setattr(crypto, "decrypt_event_field", unavailable_decrypt)
+
+    with TestClient(app) as client:
+        with client.stream("GET", "/v1/jobs/async/job/job-1/stream") as response:
+            body = "".join(response.iter_text())
+
+    assert response.status_code == 200
+    assert "event: job.error" in body
+    assert "Content encryption is unavailable" in body
+    assert "secret report" not in body

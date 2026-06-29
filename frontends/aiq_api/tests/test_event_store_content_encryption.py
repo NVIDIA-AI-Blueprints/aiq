@@ -15,8 +15,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import as_completed
 
 import pytest
 from sqlalchemy import text
@@ -27,6 +32,10 @@ from aiq_api.jobs.event_store import EventStore
 
 def _static_key() -> str:
     return base64.urlsafe_b64encode(bytes(range(32))).decode("ascii")
+
+
+def _other_static_key() -> str:
+    return base64.urlsafe_b64encode(bytes(reversed(range(32)))).decode("ascii")
 
 
 @pytest.fixture(autouse=True)
@@ -71,6 +80,14 @@ def _raw_event_data(db_url: str) -> dict:
         row = conn.execute(text("SELECT event_data FROM job_events ORDER BY id DESC LIMIT 1")).fetchone()
     assert row is not None
     return json.loads(row[0])
+
+
+def _latest_event_id(db_url: str) -> int:
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    with engine.connect() as conn:
+        row = conn.execute(text("SELECT id FROM job_events ORDER BY id DESC LIMIT 1")).fetchone()
+    assert row is not None
+    return row[0]
 
 
 def test_output_artifact_content_is_encrypted_at_rest_and_decrypted_on_read(monkeypatch, db_url):
@@ -183,3 +200,192 @@ async def test_async_event_reads_decrypt_content(monkeypatch, db_url):
     events = await EventStore.get_events_async(db_url, "job-1")
 
     assert events[0]["data"]["content"] == "async secret report"
+
+
+@pytest.mark.asyncio
+async def test_async_event_read_decrypts_off_event_loop(monkeypatch, db_url):
+    loop_thread = threading.get_ident()
+    decrypt_thread = None
+    store = EventStore(db_url, "job-1")
+    store.store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": {
+                    crypto.ENCRYPTED_FIELD_MARKER: True,
+                    crypto.ENCRYPTED_FIELD_VALUE: f"{crypto.ENVELOPE_PREFIX}fake",
+                },
+            },
+        }
+    )
+
+    def fake_decrypt_event_field(_job_id, _field_path, _stored_value):
+        nonlocal decrypt_thread
+        decrypt_thread = threading.get_ident()
+        return "decrypted report"
+
+    monkeypatch.setattr(crypto, "decrypt_event_field", fake_decrypt_event_field)
+
+    events = await EventStore.get_events_async(db_url, "job-1")
+
+    assert events[0]["data"]["content"] == "decrypted report"
+    assert decrypt_thread is not None
+    assert decrypt_thread != loop_thread
+
+
+@pytest.mark.asyncio
+async def test_async_event_read_slow_decrypt_does_not_block_event_loop(monkeypatch, db_url):
+    store = EventStore(db_url, "job-1")
+    store.store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": {
+                    crypto.ENCRYPTED_FIELD_MARKER: True,
+                    crypto.ENCRYPTED_FIELD_VALUE: f"{crypto.ENVELOPE_PREFIX}fake",
+                },
+            },
+        }
+    )
+
+    def slow_decrypt_event_field(_job_id, _field_path, _stored_value):
+        time.sleep(0.1)
+        return "decrypted report"
+
+    monkeypatch.setattr(crypto, "decrypt_event_field", slow_decrypt_event_field)
+    ticks = 0
+
+    async def ticker():
+        nonlocal ticks
+        while ticks < 3:
+            await asyncio.sleep(0.01)
+            ticks += 1
+
+    read_task = asyncio.create_task(EventStore.get_events_async(db_url, "job-1"))
+    ticker_task = asyncio.create_task(ticker())
+
+    events = await read_task
+    await ticker_task
+
+    assert events[0]["data"]["content"] == "decrypted report"
+    assert ticks >= 3
+
+
+def test_concurrent_event_reads_decrypt_consistently(monkeypatch, db_url):
+    _enable_static_key(monkeypatch)
+    cipher = crypto.create_job_content_cipher("job-1")
+    store = EventStore(db_url, "job-1", content_cipher=cipher)
+    for index in range(10):
+        store.store(
+            {
+                "type": "artifact.update",
+                "data": {
+                    "type": "output",
+                    "content": f"secret report {index}",
+                },
+            }
+        )
+    event_id = _latest_event_id(db_url)
+
+    def read_events() -> tuple[list[str], str]:
+        events = EventStore.get_events(db_url, "job-1", 0, 100)
+        event = EventStore.get_event_by_id(db_url, event_id)
+        assert event is not None
+        return [item["data"]["content"] for item in events], event["data"]["content"]
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(read_events) for _ in range(32)]
+        for future in as_completed(futures):
+            contents, latest_content = future.result()
+            assert contents == [f"secret report {index}" for index in range(10)]
+            assert latest_content == "secret report 9"
+
+
+def test_encrypted_event_wrong_key_raises_instead_of_returning_empty(monkeypatch, db_url):
+    _enable_static_key(monkeypatch)
+    cipher = crypto.create_job_content_cipher("job-1")
+    store = EventStore(db_url, "job-1", content_cipher=cipher)
+    store.store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": "secret report",
+            },
+        }
+    )
+
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY", _other_static_key())
+    crypto.reset_content_encryption_manager_for_tests()
+
+    with pytest.raises(crypto.ContentEncryptionInvalidData):
+        EventStore.get_events(db_url, "job-1")
+
+
+def test_encrypted_event_by_id_wrong_key_raises_instead_of_returning_none(monkeypatch, db_url):
+    _enable_static_key(monkeypatch)
+    cipher = crypto.create_job_content_cipher("job-1")
+    store = EventStore(db_url, "job-1", content_cipher=cipher)
+    store.store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": "secret report",
+            },
+        }
+    )
+    event_id = _latest_event_id(db_url)
+
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY", _other_static_key())
+    crypto.reset_content_encryption_manager_for_tests()
+
+    with pytest.raises(crypto.ContentEncryptionInvalidData):
+        EventStore.get_event_by_id(db_url, event_id)
+
+
+@pytest.mark.asyncio
+async def test_async_encrypted_event_wrong_key_raises_instead_of_fallback(monkeypatch, db_url):
+    _enable_static_key(monkeypatch)
+    cipher = crypto.create_job_content_cipher("job-1")
+    store = EventStore(db_url, "job-1", content_cipher=cipher)
+    store.store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": "secret report",
+            },
+        }
+    )
+
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY", _other_static_key())
+    crypto.reset_content_encryption_manager_for_tests()
+
+    with pytest.raises(crypto.ContentEncryptionInvalidData):
+        await EventStore.get_events_async(db_url, "job-1")
+
+
+@pytest.mark.asyncio
+async def test_async_encrypted_event_by_id_wrong_key_raises_instead_of_returning_none(monkeypatch, db_url):
+    _enable_static_key(monkeypatch)
+    cipher = crypto.create_job_content_cipher("job-1")
+    store = EventStore(db_url, "job-1", content_cipher=cipher)
+    store.store(
+        {
+            "type": "artifact.update",
+            "data": {
+                "type": "output",
+                "content": "secret report",
+            },
+        }
+    )
+    event_id = _latest_event_id(db_url)
+
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY", _other_static_key())
+    crypto.reset_content_encryption_manager_for_tests()
+
+    with pytest.raises(crypto.ContentEncryptionInvalidData):
+        await EventStore.get_event_by_id_async(db_url, event_id)

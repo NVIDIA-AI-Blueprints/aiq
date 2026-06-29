@@ -316,14 +316,14 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     from ..jobs.crypto import ContentEncryptionConfigError
     from ..jobs.crypto import ContentEncryptionInvalidData
     from ..jobs.crypto import ContentEncryptionUnavailable
-    from ..jobs.crypto import get_content_encryption_health
-    from ..jobs.crypto import read_job_output
-    from ..jobs.crypto import require_content_encryption_ready_for_submission
-    from ..jobs.crypto import validate_content_encryption_startup
+    from ..jobs.crypto import get_content_encryption_health_async
+    from ..jobs.crypto import read_job_output_async
+    from ..jobs.crypto import require_content_encryption_ready_for_submission_async
+    from ..jobs.crypto import validate_content_encryption_startup_async
     from ..jobs.event_store import EventStore
     from ..jobs.submit import submit_agent_job as submit_authorized_job
 
-    validate_content_encryption_startup()
+    await validate_content_encryption_startup_async()
 
     if not get_all_sources():
         logger.warning(
@@ -425,7 +425,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             return JSONResponse(status_code=503, content=result)
 
         try:
-            encryption = get_content_encryption_health()
+            encryption = await get_content_encryption_health_async()
             result["encryption"] = encryption.to_health_dict()
             if encryption.mode != "off" and not encryption.ready:
                 result["status"] = "degraded"
@@ -475,7 +475,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         # is also forwarded to submit_authorized_job(...) below for ownership recording.
         principal = require_verified_principal()
         try:
-            require_content_encryption_ready_for_submission()
+            await require_content_encryption_ready_for_submission_async()
         except ContentEncryptionUnavailable as e:
             logger.warning(
                 "Rejected async job submission because content encryption is unready: %s",
@@ -517,6 +517,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 expiry_seconds=expiry,
                 data_sources=req.data_sources,
                 auth_token=auth_token,
+                skip_encryption_readiness_check=True,
             )
         except ContentEncryptionUnavailable as e:
             logger.warning(
@@ -656,7 +657,22 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         principal = require_verified_principal()
         await authorize_job_access(job_store, db_url, job_id, principal)
 
-        artifacts = await _get_job_artifacts(db_url, job_id)
+        try:
+            artifacts = await _get_job_artifacts(db_url, job_id)
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Job state decrypt unavailable job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is unavailable")
+        except ContentEncryptionInvalidData as e:
+            logger.warning(
+                "Job state persisted event data invalid job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Job state data is invalid")
         return JobStateResponse(
             job_id=job_id,
             has_state=artifacts is not None,
@@ -680,7 +696,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         report = None
         if job.output:
             try:
-                output = read_job_output(job_id, job.output)
+                output = await read_job_output_async(job_id, job.output)
             except ContentEncryptionUnavailable as e:
                 logger.warning(
                     "Final report decrypt unavailable job_id=%s exception=%s",
@@ -1142,6 +1158,7 @@ async def _get_job_artifacts(db_url: str, job_id: str) -> dict | None:
     Returns:
         Dict with 'tools', 'outputs', and 'sources' (counts), or None if no artifacts found.
     """
+    from ..jobs.crypto import ContentEncryptionError
     from ..jobs.event_store import EventStore
 
     try:
@@ -1178,6 +1195,8 @@ async def _get_job_artifacts(db_url: str, job_id: str) -> dict | None:
         }
         return result if tools or outputs or sources_found else None
 
+    except ContentEncryptionError:
+        raise
     except (KeyError, TypeError) as e:
         logger.warning("Failed to parse artifacts for job %s: %s", job_id, e)
         return None
@@ -1193,12 +1212,20 @@ async def _sse_generator(job_store, job_id: str, db_url: str, start_event_id: in
     PostgreSQL: Uses LISTEN/NOTIFY for real-time push-based events (sub-10ms latency).
     SQLite: Uses polling (0.5s interval) since SQLite doesn't support pub-sub.
     """
+    from ..jobs.crypto import ContentEncryptionInvalidData
+    from ..jobs.crypto import ContentEncryptionUnavailable
     from ..jobs.event_store import EventStore
 
     if EventStore.is_postgres(db_url):
         try:
             async for event in _sse_generator_postgres(job_store, job_id, db_url, start_event_id):
                 yield event
+        except ContentEncryptionUnavailable as e:
+            logger.warning("SSE encrypted event decrypt unavailable for job %s: %s", job_id, e.__class__.__name__)
+            yield f"event: job.error\ndata: {json.dumps({'error': 'Content encryption is unavailable'})}\n\n"
+        except ContentEncryptionInvalidData as e:
+            logger.warning("SSE encrypted event data invalid for job %s: %s", job_id, e.__class__.__name__)
+            yield f"event: job.error\ndata: {json.dumps({'error': 'Job event data is invalid'})}\n\n"
         except Exception as e:
             logger.warning("Pub-sub failed, falling back to polling: %s", e)
             async for event in _sse_generator_polling(job_store, job_id, db_url, start_event_id):
@@ -1222,6 +1249,8 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs.connection_manager import get_connection_manager
+    from ..jobs.crypto import ContentEncryptionInvalidData
+    from ..jobs.crypto import ContentEncryptionUnavailable
     from ..jobs.event_store import EventStore
 
     connection_manager = get_connection_manager()
@@ -1377,6 +1406,22 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
                 except asyncio.CancelledError:
                     logger.info("SSE pub-sub stream cancelled for job %s", job_id)
                     break
+                except ContentEncryptionUnavailable as e:
+                    logger.warning(
+                        "SSE pub-sub encrypted event decrypt unavailable for job %s: %s",
+                        job_id,
+                        e.__class__.__name__,
+                    )
+                    yield format_sse("job.error", {"error": "Content encryption is unavailable"})
+                    break
+                except ContentEncryptionInvalidData as e:
+                    logger.warning(
+                        "SSE pub-sub encrypted event data invalid for job %s: %s",
+                        job_id,
+                        e.__class__.__name__,
+                    )
+                    yield format_sse("job.error", {"error": "Job event data is invalid"})
+                    break
                 except Exception as e:
                     logger.exception("SSE pub-sub stream error for job %s: %s", job_id, e)
                     yield format_sse("job.error", {"error": "Internal server error"})
@@ -1406,6 +1451,8 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs.connection_manager import get_connection_manager
+    from ..jobs.crypto import ContentEncryptionInvalidData
+    from ..jobs.crypto import ContentEncryptionUnavailable
     from ..jobs.event_store import EventStore
 
     connection_manager = get_connection_manager()
@@ -1517,6 +1564,14 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
 
             except asyncio.CancelledError:
                 logger.info("SSE stream cancelled for job %s", job_id)
+                break
+            except ContentEncryptionUnavailable as e:
+                logger.warning("SSE encrypted event decrypt unavailable for job %s: %s", job_id, e.__class__.__name__)
+                yield format_sse("job.error", {"error": "Content encryption is unavailable"})
+                break
+            except ContentEncryptionInvalidData as e:
+                logger.warning("SSE encrypted event data invalid for job %s: %s", job_id, e.__class__.__name__)
+                yield format_sse("job.error", {"error": "Job event data is invalid"})
                 break
             except Exception as e:
                 logger.exception("SSE stream error for job %s: %s", job_id, e)
