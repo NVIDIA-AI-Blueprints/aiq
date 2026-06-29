@@ -196,7 +196,14 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
   const anyAvailableEnabled = enabledAvailableCount > 0
 
   const handleToggleAll = useCallback(() => {
-    const updatedIds = anyAvailableEnabled ? [] : availableSources.map((s) => s.id)
+    // Mirror DataConnectionCard's per-card gate: a protected source must be
+    // connected before it can be enabled. "Enable All" must skip protected
+    // sources that aren't connected, otherwise it bypasses that gate.
+    const updatedIds = anyAvailableEnabled
+      ? []
+      : availableSources
+          .filter((s) => !(s.perUserAuth?.required && s.perUserAuth.status !== 'connected'))
+          .map((s) => s.id)
     setEnabledDataSources(updatedIds)
     saveDataSourcesToConversation(updatedIds)
   }, [anyAvailableEnabled, setEnabledDataSources, availableSources, saveDataSourcesToConversation])

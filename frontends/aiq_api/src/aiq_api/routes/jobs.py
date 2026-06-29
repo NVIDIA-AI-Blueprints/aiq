@@ -596,7 +596,12 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         ),
         responses={
             400: {"description": "Unknown agent type or invalid request"},
-            409: {"description": "A custom job_id was supplied that collides with an existing job"},
+            409: {
+                "description": (
+                    "A custom job_id was supplied that collides with an existing job, or a selected "
+                    "protected data source requires per-user OAuth connection"
+                )
+            },
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
             500: {"description": "Failed to persist async job authorization metadata"},
             503: {"description": "Dask scheduler not available"},

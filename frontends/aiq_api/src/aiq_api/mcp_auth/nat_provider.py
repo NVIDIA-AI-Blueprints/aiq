@@ -203,7 +203,7 @@ class NatMcpAuthProvider:
 
         expires_at = self.now() + self.challenge_ttl
         async with self._lock:
-            self._prune_locked()
+            stale = self._prune_locked()
             self._pending[state] = _PendingFlow(
                 source_id=source_id,
                 user_id=user_id,
@@ -212,6 +212,7 @@ class NatMcpAuthProvider:
                 settings=settings,
                 expires_at=expires_at,
             )
+        await self._aclose_flows(stale)
         logger.info("Started MCP auth challenge for source=%s user=%s state=%s", source_id, user_id, state[:8])
         return SourceAuthChallenge(source_id=source_id, auth_url=auth_url, state=state, expires_at=expires_at)
 
@@ -245,8 +246,9 @@ class NatMcpAuthProvider:
         exchange errors to the caller (the route maps them to an HTML error).
         """
         async with self._lock:
-            self._prune_locked()
+            stale = self._prune_locked()
             flow = self._pending.pop(state, None)
+        await self._aclose_flows(stale)
         if flow is None:
             raise KeyError("Unknown or expired auth state")
 
@@ -265,11 +267,26 @@ class NatMcpAuthProvider:
         logger.info("Completed MCP auth for source=%s user=%s", flow.source_id, flow.user_id)
         return flow.source_id
 
-    def _prune_locked(self) -> None:
+    def _prune_locked(self) -> list[_PendingFlow]:
+        """Pop expired flows and return them so the caller can close their clients.
+
+        Returns the popped flows rather than discarding them: each holds an
+        ``AsyncOAuth2Client`` (an httpx client pool) that must be ``aclose()``d to
+        avoid leaking connection state. Pruning runs under ``self._lock`` and is
+        synchronous, so the async close happens outside the lock via
+        :meth:`_aclose_flows`.
+        """
         now = self.now()
         expired = [s for s, f in self._pending.items() if f.expires_at <= now]
-        for s in expired:
-            self._pending.pop(s, None)
+        return [self._pending.pop(s) for s in expired]
+
+    @staticmethod
+    async def _aclose_flows(flows: list[_PendingFlow]) -> None:
+        for flow in flows:
+            try:
+                await flow.client.aclose()
+            except Exception as exc:  # best-effort cleanup; never fail the caller
+                logger.debug("Error closing expired auth flow client: %s", exc)
 
 
 def _auth_result_from_token(token: dict) -> AuthResult:

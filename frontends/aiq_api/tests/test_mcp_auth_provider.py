@@ -152,3 +152,25 @@ def test_complete_callback_unknown_state_raises(provider):
     prov, _ = provider
     with pytest.raises(KeyError):
         asyncio.run(prov.complete_callback("nope", "https://aiq.example/cb?code=x&state=nope"))
+
+
+def test_prune_closes_expired_flow_client():
+    # An abandoned challenge (started, never completed) must have its
+    # AsyncOAuth2Client closed when pruned, otherwise it leaks httpx connections.
+    clock = [datetime(2026, 1, 1, tzinfo=UTC)]
+    prov = NatMcpAuthProvider(
+        settings_by_source={"gdrive": _settings()},
+        token_storage_resolver=lambda _s: InMemoryTokenStorage(),
+        challenge_ttl=timedelta(minutes=5),
+        now=lambda: clock[0],
+    )
+    challenge = asyncio.run(prov.start_auth(PRINCIPAL, "gdrive"))
+    closer = AsyncMock()
+    prov._pending[challenge.state].client.aclose = closer
+
+    # Advance past the TTL so the flow is expired, then trigger a prune.
+    clock[0] = clock[0] + timedelta(minutes=10)
+    asyncio.run(prov.start_auth(PRINCIPAL, "gdrive"))
+
+    closer.assert_awaited_once()
+    assert challenge.state not in prov._pending

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { render, screen } from '@/test-utils'
+import { render, screen, waitFor } from '@/test-utils'
 import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { DataSourcesPanel } from './DataSourcesPanel'
@@ -49,19 +49,34 @@ vi.mock('@/adapters/auth', () => ({
   })),
 }))
 
-// Mock child components
+// Mock the MCP auth client + popup so we can drive the connect flow.
+const mockConnect = vi.fn()
+const mockGetStatus = vi.fn()
+const mockOpenAuthPopupAndWait = vi.fn()
+vi.mock('@/adapters/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/adapters/api')>()),
+  createMcpAuthClient: vi.fn(() => ({ connect: mockConnect, getStatus: mockGetStatus })),
+  openAuthPopupAndWait: (...args: unknown[]) => mockOpenAuthPopupAndWait(...args),
+}))
+
+// Mock child components. The connect button lets tests trigger handleConnect.
 vi.mock('./DataConnectionCard', () => ({
   DataConnectionCard: ({
     source,
     isEnabled,
     isAvailable,
+    onConnect,
   }: {
     source: { id: string; name: string }
     isEnabled: boolean
     isAvailable: boolean
+    onConnect?: (id: string) => void
   }) => (
     <div data-testid={`connection-card-${source.id}`}>
       {source.name} - {isEnabled ? 'enabled' : 'disabled'} - {isAvailable ? 'available' : 'unavailable'}
+      <button data-testid={`connect-${source.id}`} onClick={() => onConnect?.(source.id)}>
+        connect
+      </button>
     </div>
   ),
 }))
@@ -232,6 +247,42 @@ describe('DataSourcesPanel', () => {
     expect(mockSetEnabledDataSources).toHaveBeenCalled()
   })
 
+  test('enable all excludes protected sources that are not connected', async () => {
+    const user = userEvent.setup()
+    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        rightPanel: 'data-sources',
+        closeRightPanel: mockCloseRightPanel,
+        openRightPanel: mockOpenRightPanel,
+        dataSourcesPanelTab: 'connections',
+        setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+        enabledDataSourceIds: [], // nothing enabled -> click enables all
+        toggleDataSource: mockToggleDataSource,
+        setEnabledDataSources: mockSetEnabledDataSources,
+        availableDataSources: [
+          { id: 'web_search', name: 'Web Search', description: 'Search', requires_auth: false },
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            description: 'Drive',
+            requires_auth: true,
+            per_user_auth: { required: true, status: 'not_connected' },
+          },
+        ],
+        dataSourcesLoading: false,
+        dataSourcesError: null,
+        fetchDataSources: mockFetchDataSources,
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<DataSourcesPanel />)
+    await user.click(screen.getByRole('button', { name: /all available connections/i }))
+
+    // gdrive is protected + not connected, so it must be excluded from bulk enable.
+    expect(mockSetEnabledDataSources).toHaveBeenCalledWith(['web_search'])
+  })
+
   test('shows correct enabled state for data connection cards', () => {
     render(<DataSourcesPanel />)
 
@@ -383,6 +434,51 @@ describe('DataSourcesPanel', () => {
       expect(screen.getByTestId('connection-card-web_search')).toHaveTextContent('available')
       expect(screen.getByTestId('connection-card-knowledge_base')).toHaveTextContent('available')
       expect(screen.getByTestId('connection-card-bug_tracker')).toHaveTextContent('available')
+    })
+  })
+
+  describe('connect flow (handleConnect)', () => {
+    test('opens the auth popup when the source requires auth', async () => {
+      const user = userEvent.setup()
+      mockConnect.mockResolvedValue({ status: 'auth_required', auth_url: 'https://provider/oauth' })
+      mockOpenAuthPopupAndWait.mockResolvedValue({ ok: true })
+
+      render(<DataSourcesPanel />)
+      await user.click(screen.getByTestId('connect-knowledge_base'))
+
+      await waitFor(() => expect(mockOpenAuthPopupAndWait).toHaveBeenCalled())
+      expect(mockOpenAuthPopupAndWait).toHaveBeenCalledWith(
+        'https://provider/oauth',
+        'knowledge_base',
+        expect.objectContaining({ pollStatus: expect.any(Function) })
+      )
+      // finally: always refresh statuses after the attempt
+      await waitFor(() => expect(mockFetchDataSources).toHaveBeenCalledWith('valid-token'))
+    })
+
+    test('does not open the popup when no auth is required, but still refreshes', async () => {
+      const user = userEvent.setup()
+      mockConnect.mockResolvedValue({ status: 'connected', auth_url: null })
+
+      render(<DataSourcesPanel />)
+      await user.click(screen.getByTestId('connect-knowledge_base'))
+
+      await waitFor(() => expect(mockFetchDataSources).toHaveBeenCalledWith('valid-token'))
+      expect(mockOpenAuthPopupAndWait).not.toHaveBeenCalled()
+    })
+
+    test('shows a failure banner and still refreshes when connect throws', async () => {
+      const user = userEvent.setup()
+      mockConnect.mockRejectedValue(new Error('network down'))
+
+      render(<DataSourcesPanel />)
+      await user.click(screen.getByTestId('connect-knowledge_base'))
+
+      // connectError banner surfaces the source name + error detail
+      expect(await screen.findByText(/Couldn't connect Knowledge Base\. network down/)).toBeInTheDocument()
+      // finally still runs despite the failure
+      await waitFor(() => expect(mockFetchDataSources).toHaveBeenCalledWith('valid-token'))
+      expect(mockOpenAuthPopupAndWait).not.toHaveBeenCalled()
     })
   })
 })

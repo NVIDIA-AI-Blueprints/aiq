@@ -304,11 +304,28 @@ def register_tool_sources(mapping: dict[str, str]) -> None:
     citation/source capture treats their results as sources (otherwise shallow
     research raises EmptySourceRegistryError). Keys are deterministic, so merging
     globally is idempotent.
+
+    Re-registering the same tool→source pair is a no-op. A key that already maps
+    to a *different* source is a collision (e.g. two sources exposing a tool with
+    the same name); we keep the existing owner and skip the conflicting entry
+    rather than silently reassigning citation ownership.
     """
     if not mapping:
         return
     global _tool_source_map
-    _tool_source_map = {**_tool_source_map, **mapping}
+    merged = dict(_tool_source_map)
+    for tool, source in mapping.items():
+        existing = merged.get(tool)
+        if existing is not None and existing != source:
+            logger.warning(
+                "Tool '%s' already maps to source '%s'; skipping conflicting registration to '%s'.",
+                tool,
+                existing,
+                source,
+            )
+            continue
+        merged[tool] = source
+    _tool_source_map = merged
     _rebuild_prefix_index()
 
 

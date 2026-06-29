@@ -115,8 +115,8 @@ export const DataConnectionCard: FC<DataConnectionCardProps> = ({
             : ''
       }`}
       aria-pressed={isEnabled}
-      aria-disabled={isDisabled}
-      aria-label={`${source.name}: ${isEnabled ? 'enabled' : 'disabled'}${isDisabled ? ' (disabled)' : ''}`}
+      aria-disabled={!canToggle}
+      aria-label={`${source.name}: ${isEnabled ? 'enabled' : 'disabled'}${!canToggle ? ' (disabled)' : ''}`}
       title={
         isBusy
           ? 'Data source changes disabled during active operations'
