@@ -5,10 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # Deep Research Sandbox Notes
 
-Deep research can optionally run DeepAgents `execute` calls in a provider-neutral
-sandbox (Modal, OpenShell, or any registered provider). Sandboxes are scoped to a
-single async job: the sandbox name is the resolved job ID, so unrelated jobs never
-share filesystem state.
+Deep research can optionally run DeepAgents `execute` calls through a sandbox provider
+(Modal, OpenShell, or any registered provider). Modal creates a sandbox per job. The
+experimental OpenShell path attaches to a pre-created named sandbox shared by its jobs;
+job-scoped directories prevent filename collisions but are not a security boundary.
 
 The sandbox is an internal execution detail. There are no sandbox-specific API
 endpoints, and job-level auth remains responsible for submit, stream, status,
@@ -21,31 +21,32 @@ runtime (`.../job/{job_id}/artifacts`), which is also auth-scoped to the job.
 
 ## Current Behavior
 
-- One sandbox name is used per deep research job when sandboxing is enabled; the
-  name is the resolved job ID, and different jobs produce different names.
+- Modal uses one sandbox per deep research job. OpenShell currently attaches jobs to
+  the configured shared sandbox name and is intended for local, single-operator testing.
 - Synchronous sandbox-enabled runs use an internal per-agent runtime ID.
 - Providers are selected by config (`sandbox.provider` + `providers.<name>`); the
-  provider is validated against the registry and gated by a fail-closed capability
-  check (e.g. `block_network` requires `supports_network_policy`).
+  provider is validated against the registry and gated by its declared capabilities.
+  OpenShell policy is provisioned externally and is not verified when AI-Q attaches.
 - Job IDs must satisfy each provider's object-name rules (Modal: 64 chars or fewer,
   alphanumeric plus dash/period/underscore).
-- `timeout` and `idle_timeout` control sandbox lifetime.
+- `timeout` bounds individual execution. Other lifecycle controls are provider-dependent.
 - Files written inside the workdir are temporary scratch state. Durable text should
   be written through DeepAgents virtual paths such as `/shared/`; durable binaries
   (charts, CSVs) are captured by the artifact runtime.
 
 ## Operational Notes
 
-- High concurrency creates one sandbox per concurrent sandbox-enabled job. Optional
-  submit-path caps (`AIQ_MAX_SANDBOXES_PER_PRINCIPAL` / `AIQ_MAX_SANDBOXES_GLOBAL`,
-  default-off) bound concurrency/cost.
+- High-concurrency Modal runs create one sandbox per job. OpenShell runs share the named
+  sandbox and must not be used concurrently for mutually untrusted jobs. Optional submit-path
+  caps (`AIQ_MAX_SANDBOXES_PER_PRINCIPAL` / `AIQ_MAX_SANDBOXES_GLOBAL`, default-off) bound
+  concurrency/cost but do not provide filesystem isolation.
 - Custom client-supplied job IDs must not be reused for a new job.
-- The runtime performs explicit cleanup (`close()` / `terminate()`) on job success,
-  failure, cancellation, and timeout via the job runner's terminal path.
+- The runtime closes provider sessions on success, failure, cancellation, and timeout.
+  A named OpenShell sandbox persists when `delete_on_exit` is disabled.
 
-## Implemented Hardening
+## Current Safeguards
 
-The following production hardening (formerly deferred) is now in place:
+The following safeguards are in place:
 
 - Explicit sandbox cleanup on success, failure, cancellation, and timeout.
 - Idempotency-gated retry-on-stale-container handling.

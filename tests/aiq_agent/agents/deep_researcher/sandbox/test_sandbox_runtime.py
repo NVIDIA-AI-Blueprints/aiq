@@ -140,10 +140,9 @@ class TestSandboxConfig:
     def test_provider_normalized_lowercase(self) -> None:
         assert SandboxConfig(provider="MODAL").provider == "modal"
 
-    def test_default_workdir_and_artifact_dir(self) -> None:
+    def test_default_workdir(self) -> None:
         config = SandboxConfig()
         assert config.workdir == "/workspace"
-        assert config.artifact_dir == "/workspace/aiq-artifacts"
 
     def test_unknown_provider_rejected(self) -> None:
         with pytest.raises(ValueError, match="Registered providers"):

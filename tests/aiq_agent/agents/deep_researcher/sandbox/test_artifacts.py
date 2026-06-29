@@ -112,7 +112,7 @@ class TestHarvest:
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(png_path), png_path: _PNG}
         manager, emitted = _make_manager(store, files)
 
-        captured = manager.harvest_after_execute()
+        captured = manager.final_harvest()
 
         assert len(captured) == 1
         assert captured[0].mime_type == "image/png"
@@ -126,21 +126,21 @@ class TestHarvest:
         evil = "/etc/passwd.png"
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(evil), evil: _PNG}
         manager, _ = _make_manager(store, files)
-        assert manager.harvest_after_execute() == []
+        assert manager.final_harvest() == []
 
     def test_enforces_extension_allowlist(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
         exe = f"{_ARTIFACT_DIR}/evil.exe"
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(exe), exe: _PNG}
         manager, _ = _make_manager(store, files)
-        assert manager.harvest_after_execute() == []
+        assert manager.final_harvest() == []
 
     def test_enforces_size_cap(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
         png_path = f"{_ARTIFACT_DIR}/chart.png"
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(png_path), png_path: _PNG}
         manager, _ = _make_manager(store, files, max_file_bytes=8)
-        assert manager.harvest_after_execute() == []
+        assert manager.final_harvest() == []
 
     def test_enforces_quota(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
@@ -151,7 +151,7 @@ class TestHarvest:
         ).encode("utf-8")
         files = {f"{_ARTIFACT_DIR}/manifest.json": manifest, a: _PNG, b: _PNG + b"x"}
         manager, _ = _make_manager(store, files, max_file_count=1)
-        captured = manager.harvest_after_execute()
+        captured = manager.final_harvest()
         assert len(captured) == 1
 
     def test_dedups_identical_content(self, tmp_path: Any) -> None:
@@ -159,8 +159,8 @@ class TestHarvest:
         png_path = f"{_ARTIFACT_DIR}/chart.png"
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(png_path), png_path: _PNG}
         manager, _ = _make_manager(store, files)
-        manager.harvest_after_execute()
-        manager.harvest_after_execute()  # same bytes again
+        manager.final_harvest()
+        manager.final_harvest()  # same bytes again
         assert len(store.list("job-1")) == 1
 
     def test_scan_fallback_without_manifest(self, tmp_path: Any) -> None:
@@ -195,7 +195,7 @@ class TestHarvest:
         png_path = f"{_ARTIFACT_DIR}/chart.png"
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(png_path), png_path: b"#!/bin/sh\nrm -rf /\n"}
         manager, _ = _make_manager(store, files)
-        assert manager.harvest_after_execute() == []
+        assert manager.final_harvest() == []
 
     def test_rejects_svg_fail_closed(self, tmp_path: Any) -> None:
         # SVG cannot be reliably sanitized (javascript: URIs, <foreignObject>, CSS payloads),
@@ -207,7 +207,7 @@ class TestHarvest:
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(svg_path), svg_path: svg}
         manager, _ = _make_manager(store, files)
 
-        assert manager.harvest_after_execute() == []
+        assert manager.final_harvest() == []
 
 
 class TestStore:

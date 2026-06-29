@@ -29,21 +29,21 @@ DeepAgentsRuntime (deepagents_runtime.py) holds the provider and composes:      
    ArtifactManager (artifacts/manager.py): download_files -> validate -> ArtifactStore -> SSE
 ```
 
-## Workspace isolation (safe reuse)
+## Workspace organization and isolation limits
 
 The effective working directory is scoped per job to `<configured workdir>/<job_id>`, and
 the artifact directory is nested under it at `<job_id>/aiq-artifacts`. The provider base
 creates these on session start (`_prepare_workspace`, an idempotent `mkdir -p`) and the
-runtime injects them into prompts/skills as `sandbox_workdir`/`sandbox_artifact_dir`, so the
-directory the agent writes to and the directory the harvest scans always agree.
+runtime injects them into prompts/skills as `sandbox_workdir`/`sandbox_artifact_dir`. This
+prevents accidental filename collisions and keeps harvesting scoped to the current job.
 
-This is what makes reusing one long-lived OpenShell container across many jobs safe (the
-OpenShell default; named sandboxes persist, teardown is opt-in). Because each job writes
-under its own root, a fixed script name (e.g. `make_chart.py`) cannot collide with a
-leftover from a previous job, and concurrent jobs never share a working directory - without
-paying the cost of tearing the sandbox down per job. Modal is already fresh-per-job, so the
-same per-job root applies harmlessly there too. No policy change is needed: `/sandbox` is
-already read-write, so a per-job subdirectory is in-policy.
+Modal creates a fresh sandbox for each job. The experimental OpenShell configuration instead
+attaches jobs to one pre-created named sandbox because the SDK cannot apply the configured
+policy when creating an anonymous sandbox. Per-job directories inside that sandbox are not
+an access-control boundary: executed code can access sibling job directories allowed by the
+shared policy. Use OpenShell only for local, single-operator testing, and do not run mutually
+untrusted jobs concurrently. Physical per-job OpenShell isolation and attach-time policy
+verification are follow-up work.
 
 The agent only ever sees a `read_file`/`write_file`/`edit_file`/`execute` tool surface
 plus `/shared/` for durable text. Binary artifacts are harvested host-side via
@@ -120,7 +120,6 @@ sandbox:
   enabled: true
   provider: openshell          # registry key
   workdir: /sandbox            # injected into prompts + skills
-  artifact_dir: /sandbox/aiq-artifacts
   network:                     # normalized, provider-neutral egress policy
     mode: blocked              # blocked | allowlist | open  (legacy `block_network: true` => blocked)
     # allow: [pypi.org]        # required for mode: allowlist; needs supports_network_allowlist
@@ -131,7 +130,6 @@ sandbox:
     # memory_mb: 4096          # a requested limit on a provider that can't enforce it fails closed
   artifact_capture:
     enabled: true              # requires supports_artifact_download
-    collect_on: [execute_end, job_end]
     max_file_bytes: 50000000
     allow_extensions: [.png, .jpg, .jpeg, .webp, .csv, .json, .md, .ipynb, .pdf]
   providers:
@@ -151,11 +149,12 @@ is lifted into `providers.modal`.
 ## Artifact runtime
 
 - Generated code writes binaries + a `manifest.json` to `artifact_dir`.
-- After each `execute` (`ArtifactHarvestMiddleware`) and at job end (`runner.py`),
+- Once at the end of the agent run (`agent.run()` -> `ArtifactManager.final_harvest`),
   the `ArtifactManager` pulls bytes via `download_files`, runs the validation pipeline
   (path-traversal confinement -> extension allowlist -> size cap -> MIME-from-bytes/spoof
   reject -> quota -> SVG sanitize -> sha256), stores via `SqlArtifactStore`, then emits an
   `artifact` SSE event (`to_sse_payload`, metadata + `content_url`, never bytes).
+- Failed or cancelled runs are not harvested in the current implementation.
 - Reports reference artifacts as `![caption](artifact://<filename-or-id>)`; the report
   postprocessor rewrites filename refs to durable ids and drops unknown/foreign refs.
 - Endpoints: `GET /v1/jobs/async/job/{job_id}/artifacts` and `.../artifacts/{id}/content`
@@ -201,7 +200,12 @@ shared helper, `MarkdownRenderer/artifact-url.ts`, builds the content path):
 Requires `modal` + `langchain-modal` (in `pyproject`) and `modal setup`. See
 `docs/source/examples/skills-sandbox/index.md`.
 
-### OpenShell (on-prem)
+### OpenShell (experimental, local single-operator)
+
+> OpenShell jobs currently attach to one pre-created named sandbox. Its policy is applied by
+> the setup command and is not verified when AI-Q attaches. Job directories prevent accidental
+> collisions but do not isolate mutually untrusted jobs. Do not use this path as a multi-tenant
+> security boundary.
 
 Two ad-hoc deps (never in `pyproject`): the `openshell` SDK and the official
 `langchain-nvidia-openshell` adapter (`OpenShellSandbox`), the OpenShell partner package in
@@ -236,20 +240,21 @@ export AIQ_OPENSHELL_POLICY_FILE="$PWD/configs/openshell/generated/aiq-openshell
 Inference is routed host-side (e.g. NVIDIA Build or an internal inference hub set in the
 config); the network-blocked sandbox never sees the key.
 
-**File-transfer gotcha:** the provider overrides `upload_files`/`download_files` with an
-env-free shim that passes the path via `argv`. OpenShell 0.0.57-0.0.67 strip
+**File-transfer gotcha:** the provider overrides file transfer with an env-free shim that
+passes the path via `argv`. OpenShell 0.0.57-0.0.67 strip
 `OPENSHELL_`-prefixed env before exec, so the adapter's env-based file transfer silently
 fails (masked host-side as `permission_denied`). Set `AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER=1`
-to delegate to the official adapter instead - use this to validate the upstream argv fix
-([langchain-nvidia#303](https://github.com/langchain-ai/langchain-nvidia/pull/303)); once it
-merges, drop the shim and the toggle.
+to delegate uploads to the official adapter and validate the upstream argv fix
+([langchain-nvidia#303](https://github.com/langchain-ai/langchain-nvidia/pull/303)). Downloads
+always use AI-Q's bounded shim so realpath confinement and pre-transfer size checks remain
+in force. Once the upstream adapter provides equivalent guards, drop the shim and toggle.
 
 ## Operational knobs
 
 - `AIQ_MAX_SANDBOXES_PER_PRINCIPAL` / `AIQ_MAX_SANDBOXES_GLOBAL` (default-off): submit-path
   concurrency/cost caps for sandbox-enabled jobs.
-- `AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER` (default-off): route OpenShell file transfer through
-  the official adapter instead of the env-free shim (see OpenShell gotcha above).
+- `AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER` (default-off): route OpenShell uploads through the
+  official adapter instead of the env-free shim (see OpenShell gotcha above).
 - Artifact retention reuses the job-expiry periodic cleanup (`expiry_seconds`).
 - In-container OpenShell log verbosity (opt-in): `agent.execute()` calls and their output are
   already logged on the AI-Q side (the `execute` tool-call events). To also see what runs

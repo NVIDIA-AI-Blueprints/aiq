@@ -998,7 +998,7 @@ build_image() {
     log "Building sandbox image: $IMAGE_NAME (sandbox log level: $SANDBOX_LOG_LEVEL)"
     "$DOCKER_BIN" build -t "$IMAGE_NAME" \
         --build-arg OPENSHELL_SANDBOX_LOG_LEVEL="$SANDBOX_LOG_LEVEL" \
-        -f "$REPO_ROOT/configs/openshell/Dockerfile.aiq-demo" "$REPO_ROOT/configs/openshell"
+        -f "$REPO_ROOT/deploy/openshell/Dockerfile.aiq-demo" "$REPO_ROOT/deploy/openshell"
 }
 
 create_sandbox() {

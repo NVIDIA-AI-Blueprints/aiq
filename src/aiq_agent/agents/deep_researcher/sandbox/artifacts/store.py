@@ -259,10 +259,16 @@ class SqlArtifactStore(ArtifactStore):
         from sqlalchemy import text
 
         with self._engine.connect() as conn:
-            row = conn.execute(
-                text(f"SELECT {_META_COLUMNS} FROM artifacts WHERE job_id = :job_id AND artifact_id = :artifact_id"),
-                {"job_id": job_id, "artifact_id": artifact_id},
-            ).mappings().fetchone()
+            row = (
+                conn.execute(
+                    text(
+                        f"SELECT {_META_COLUMNS} FROM artifacts WHERE job_id = :job_id AND artifact_id = :artifact_id"
+                    ),
+                    {"job_id": job_id, "artifact_id": artifact_id},
+                )
+                .mappings()
+                .fetchone()
+            )
         return _row_to_artifact(row) if row else None
 
     def find_by_digest(self, job_id: str, sha256: str) -> Artifact | None:
@@ -270,10 +276,14 @@ class SqlArtifactStore(ArtifactStore):
         from sqlalchemy import text
 
         with self._engine.connect() as conn:
-            row = conn.execute(
-                text(f"SELECT {_META_COLUMNS} FROM artifacts WHERE job_id = :job_id AND sha256 = :sha256 LIMIT 1"),
-                {"job_id": job_id, "sha256": sha256},
-            ).mappings().fetchone()
+            row = (
+                conn.execute(
+                    text(f"SELECT {_META_COLUMNS} FROM artifacts WHERE job_id = :job_id AND sha256 = :sha256 LIMIT 1"),
+                    {"job_id": job_id, "sha256": sha256},
+                )
+                .mappings()
+                .fetchone()
+            )
         return _row_to_artifact(row) if row else None
 
     def list(self, job_id: str) -> list[Artifact]:
@@ -281,10 +291,14 @@ class SqlArtifactStore(ArtifactStore):
         from sqlalchemy import text
 
         with self._engine.connect() as conn:
-            rows = conn.execute(
-                text(f"SELECT {_META_COLUMNS} FROM artifacts WHERE job_id = :job_id ORDER BY created_at"),
-                {"job_id": job_id},
-            ).mappings().fetchall()
+            rows = (
+                conn.execute(
+                    text(f"SELECT {_META_COLUMNS} FROM artifacts WHERE job_id = :job_id ORDER BY created_at"),
+                    {"job_id": job_id},
+                )
+                .mappings()
+                .fetchall()
+            )
         return [_row_to_artifact(row) for row in rows]
 
     def delete_job(self, job_id: str) -> int:

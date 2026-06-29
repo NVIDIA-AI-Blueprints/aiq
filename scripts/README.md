@@ -51,13 +51,18 @@ Starts the agent in CLI mode with browser-based authentication.
 
 ### `setup_openshell.sh` - OpenShell Sandbox Setup
 
-Sets up NVIDIA OpenShell for the AI-Q sandbox path. Run this once before using
+Sets up the experimental, local single-operator NVIDIA OpenShell path for AI-Q. Run this once before using
 `configs/config_openshell.yml` with `start_cli.sh` or `start_e2e.sh`. It installs
 the `openshell` SDK and the `langchain-nvidia-openshell` adapter, starts/verifies
 the local OpenShell gateway, builds the sandbox image, generates a network policy,
 and creates the named sandbox `aiq-openshell-demo`. Inference is unaffected (it
 stays host-side, routed to NVIDIA Build); only generated code runs in the
 network-blocked sandbox.
+
+The generated configuration attaches all jobs to one named sandbox. Per-job directories
+avoid filename collisions but do not isolate mutually untrusted jobs, and AI-Q does not
+verify the provisioned policy when attaching. Do not treat this setup as a multi-tenant
+security boundary.
 
 ```bash
 ./scripts/setup_openshell.sh --policy offline
@@ -184,7 +189,7 @@ Starts both backend and frontend for full WebSocket support and HITL workflows.
 | `configs/config_web_frag.yml` | Server/E2E mode with Foundational RAG |
 | `configs/config_web_default_llamaindex.yml` | Server/E2E mode with LlamaIndex |
 | `configs/config_skills.yml` | Deep research with DeepAgents skills + Modal sandbox |
-| `configs/config_openshell.yml` | Deep research with skills + OpenShell sandbox + artifact capture (run `setup_openshell.sh` first) |
+| `configs/config_openshell.yml` | Experimental local single-operator OpenShell sandbox + artifact capture (run `setup_openshell.sh` first) |
 
 ## Development Workflow
 

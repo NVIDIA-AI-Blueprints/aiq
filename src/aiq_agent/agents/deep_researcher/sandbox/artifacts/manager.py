@@ -165,7 +165,7 @@ class ArtifactManager:
             job_id: Owning job id used to scope and key artifacts.
             backend: Sandbox backend used to download/enumerate artifact files.
             store: Durable store for persisting metadata and bytes.
-            config: Capture policy (quotas, allowed extensions, collection points).
+            config: Capture policy (quotas and allowed extensions).
             artifact_dir: Sandbox directory that confines harvestable paths.
             emit: Optional SSE emitter for artifact/warning events.
             content_url_template: Template for the artifact content endpoint URL.
@@ -182,15 +182,9 @@ class ArtifactManager:
         self._total_bytes = 0
         self._count = 0
 
-    def harvest_after_execute(self) -> list[Artifact]:
-        """Manifest-only harvest after an ``execute`` call (cheap, no enumeration)."""
-        if not self.config.enabled or "execute_end" not in self.config.collect_on:
-            return []
-        return self._harvest(scan=False)
-
     def final_harvest(self) -> list[Artifact]:
-        """Final harvest before cleanup: manifest plus a directory scan fallback."""
-        if not self.config.enabled or "job_end" not in self.config.collect_on:
+        """Harvest at the end of a successful agent run, with a directory scan fallback."""
+        if not self.config.enabled:
             return []
         return self._harvest(scan=True)
 
@@ -249,9 +243,7 @@ class ArtifactManager:
         orphans = [
             a
             for a in artifacts
-            if a.inline
-            and a.kind == ArtifactKind.IMAGE
-            and f"artifact://{a.artifact_id}" not in markdown
+            if a.inline and a.kind == ArtifactKind.IMAGE and f"artifact://{a.artifact_id}" not in markdown
         ]
         if not orphans:
             return markdown

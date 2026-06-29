@@ -302,15 +302,11 @@ class DeepResearcherAgent:
                 try:
                     await asyncio.to_thread(manager.final_harvest)
                     produced = await asyncio.to_thread(manager.store.list, manager.job_id)
-                    final_message = await asyncio.to_thread(
-                        manager.resolve_report_references, final_message, produced
-                    )
+                    final_message = await asyncio.to_thread(manager.resolve_report_references, final_message, produced)
                     final_message = await asyncio.to_thread(
                         manager.ensure_inline_artifacts_embedded, final_message, produced
                     )
-                    final_message = await asyncio.to_thread(
-                        manager.append_artifact_index, final_message, produced
-                    )
+                    final_message = await asyncio.to_thread(manager.append_artifact_index, final_message, produced)
                 except Exception:
                     # Best-effort: never discard an already verified/sanitized report because
                     # artifact harvest or embedding failed. final_message stays as-is.

@@ -47,10 +47,9 @@ def _safe_job_segment(job_id: str) -> str:
 def job_scoped_workdir(base_workdir: str, job_id: str) -> str:
     """Return the per-job working directory ``<base_workdir>/<safe job id>``.
 
-    Isolating each job under its own subdirectory is what makes a shared or long-lived
-    sandbox (e.g. a reused OpenShell container) safe to reuse across jobs: a fixed script
-    name cannot collide with another job's leftover, and concurrent jobs never share a
-    working directory.
+    Per-job directories prevent accidental filename collisions in a shared sandbox.
+    They are organization, not an access-control boundary: code running in one job can
+    still access sibling directories unless the provider enforces stronger isolation.
     """
     return f"{base_workdir.rstrip('/')}/{_safe_job_segment(job_id)}"
 
@@ -58,6 +57,7 @@ def job_scoped_workdir(base_workdir: str, job_id: str) -> str:
 def job_scoped_artifact_dir(base_workdir: str, job_id: str) -> str:
     """Return the per-job artifact directory nested under the job working directory."""
     return f"{job_scoped_workdir(base_workdir, job_id)}/aiq-artifacts"
+
 
 # Allowed artifact extensions for the first capture milestone (validated MIME-from-bytes
 # happens in the ArtifactManager; this is the coarse filename allowlist).
@@ -118,10 +118,6 @@ class ArtifactCaptureConfig(BaseModel):
     """Controls durable harvesting of generated binary/rich artifacts."""
 
     enabled: bool = Field(default=False, description="Enable artifact harvesting from the sandbox")
-    collect_on: tuple[Literal["execute_end", "job_end"], ...] = Field(
-        default=("execute_end", "job_end"),
-        description="When to scan/harvest artifacts.",
-    )
     max_file_bytes: int = Field(default=50_000_000, description="Maximum size of a single harvested artifact")
     max_total_bytes: int = Field(default=500_000_000, description="Maximum total artifact bytes per job (quota)")
     max_file_count: int = Field(default=200, description="Maximum number of artifacts per job")
@@ -192,10 +188,6 @@ class SandboxConfig(BaseModel):
         description="Isolation scope for the sandbox. 'job' shares one sandbox across subagents.",
     )
     workdir: str = Field(default=DEFAULT_WORKDIR, description="Writable working directory inside the sandbox")
-    artifact_dir: str = Field(
-        default=f"{DEFAULT_WORKDIR}/aiq-artifacts",
-        description="Directory inside the sandbox where generated artifacts are written.",
-    )
     network: NetworkPolicy = Field(
         default_factory=NetworkPolicy,
         description="Normalized outbound network policy. Legacy `block_network: bool` is lifted into this.",

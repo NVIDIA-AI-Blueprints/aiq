@@ -283,13 +283,13 @@ class TestDeepResearcherAgent:
 
     def test_modal_sandbox_name_is_job_id(self):
         """Modal sandbox names use the resolved job ID directly."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
+        from aiq_agent.agents.deep_researcher.sandbox.providers.modal import _validate_modal_sandbox_name
 
         assert _validate_modal_sandbox_name("job-123") == "job-123"
 
     def test_modal_sandbox_name_rejects_invalid_job_id(self):
         """Invalid custom job IDs fail before creating a Modal sandbox."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
+        from aiq_agent.agents.deep_researcher.sandbox.providers.modal import _validate_modal_sandbox_name
 
         with pytest.raises(ValueError, match="valid Modal sandbox name"):
             _validate_modal_sandbox_name("bad/job/id")

@@ -59,6 +59,7 @@ def _adapter_file_transfer_enabled() -> bool:
     """True only when the toggle env var is an explicit truthy value (not just any string)."""
     return os.getenv(_ADAPTER_FILE_TRANSFER_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
 
+
 # File-transfer bootstraps pass the path via argv (not env): OpenShell <=0.0.67 strips
 # OPENSHELL_* env before exec, breaking the adapter's env-based transfer. We keep the
 # adapter for execute and override only these two methods until the SDK propagates env.
@@ -100,6 +101,7 @@ def _classify_fs_error(text: str) -> str:
         return "invalid_path"
     return "permission_denied"
 
+
 _OPENSHELL_IMPORT_HINT = (
     "The OpenShell sandbox provider requires the `openshell>=0.0.57,<0.1` SDK and the "
     "`langchain-nvidia-openshell` adapter (the OpenShell partner package in "
@@ -128,11 +130,12 @@ def _is_openshell_not_found_error(exc: Exception) -> bool:
 
 
 class OpenShellSandboxProvider(SandboxProvider):
-    """Job-scoped OpenShell backend.
+    """OpenShell backend that attaches to a configured sandbox.
 
-    OpenShell enforces filesystem/process/network policy at the gateway, so it
-    declares those capabilities. Note: the SDK cannot apply a policy file to an
-    anonymous sandbox - a ``policy`` requires a pre-created named sandbox.
+    OpenShell enforces filesystem/process/network policy at the gateway, so this
+    provider declares those capabilities. The SDK cannot apply or verify a policy
+    file while attaching: ``policy`` requires a pre-created named sandbox whose
+    policy is managed externally.
     """
 
     provider_name = "openshell"
@@ -177,10 +180,7 @@ class OpenShellSandboxProvider(SandboxProvider):
         return self._call("upload_files", lambda _s: self._upload_files_envfree(files), idempotent=True)
 
     def download_files(self, paths: list[str]) -> list[FileDownloadResponse]:
-        """Download files. Uses the local env-free shim by default; set
-        ``AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER`` to delegate to the official adapter."""
-        if _adapter_file_transfer_enabled():
-            return self._call("download_files", lambda session: session.download_files(paths), idempotent=True)
+        """Download artifacts through the bounded, job-confined local shim."""
         return self._call("download_files", lambda _s: self._download_files_envfree(paths), idempotent=True)
 
     def _upload_files_envfree(self, files: list[tuple[str, bytes]]) -> list[FileUploadResponse]:
@@ -212,9 +212,9 @@ class OpenShellSandboxProvider(SandboxProvider):
                 responses.append(FileDownloadResponse(path=path, content=None, error="invalid_path"))
                 continue
             result = sandbox.exec(  # type: ignore[union-attr]
-                # Pass the workdir as the trusted root so the bootstrap rejects only paths
-                # whose realpath escapes it (exit 5), not benign symlinked mounts of the root.
-                ["python3", "-c", _DOWNLOAD_CODE, path, str(max_bytes), self.config.workdir],
+                # Confine resolved paths to this job's artifact directory. The configured
+                # workdir may be shared by several jobs in an attached named sandbox.
+                ["python3", "-c", _DOWNLOAD_CODE, path, str(max_bytes), self.artifact_dir],
                 timeout_seconds=self.config.timeout,
             )
             exit_code = getattr(result, "exit_code", 1)
@@ -279,6 +279,11 @@ class OpenShellSandboxProvider(SandboxProvider):
     def close(self) -> None:
         """Terminate the session and exit the OpenShell context manager."""
         super().close()
+        self._exit_context()
+
+    def _terminate_session(self, session: BaseSandbox | None) -> None:
+        """Close the adapter session and the owning OpenShell context on cancellation."""
+        super()._terminate_session(session)
         self._exit_context()
 
     def _exit_context(self) -> None:

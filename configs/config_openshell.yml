@@ -1,5 +1,7 @@
-# AI-Q deep research over an OpenShell (on-prem) sandbox.
+# EXPERIMENTAL: AI-Q deep research over a local, single-operator OpenShell sandbox.
 # Run ./scripts/setup_openshell.sh first to provision the gateway and named sandbox.
+# Jobs attach to that shared sandbox; per-job directories prevent filename collisions
+# but are not a security boundary. Do not run mutually untrusted jobs concurrently.
 
 general:
   use_uvloop: true
@@ -148,7 +150,6 @@ functions:
     delete_on_exit: false
     artifact_capture:
       enabled: true
-      collect_on: [execute_end, job_end]
       max_file_bytes: 50000000
       allow_extensions: [.png, .jpg, .jpeg, .webp, .csv, .json, .md, .ipynb, .pdf]
 

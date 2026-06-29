@@ -701,9 +701,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         # client-facing payload. Clients use the content endpoint, not these fields.
         return {
             "job_id": job_id,
-            "artifacts": [
-                a.model_dump(mode="json", exclude={"storage_uri", "sandbox_path"}) for a in artifacts
-            ],
+            "artifacts": [a.model_dump(mode="json", exclude={"storage_uri", "sandbox_path"}) for a in artifacts],
         }
 
     @app.get(
@@ -745,7 +743,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             media_type=artifact.mime_type,
             headers={
                 "Content-Disposition": (
-                    f'{disposition}; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}'
+                    f"{disposition}; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}"
                 ),
                 "X-Content-Type-Options": "nosniff",
             },

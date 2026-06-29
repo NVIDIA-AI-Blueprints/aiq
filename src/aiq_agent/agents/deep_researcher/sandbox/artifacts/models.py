@@ -72,9 +72,7 @@ class Artifact(BaseModel):
     filename: str = Field(..., description="User-facing filename")
     sandbox_path: str = Field(..., description="Original path inside the sandbox")
     storage_uri: str = Field(..., description="Durable location of the bytes (local path or object-store URI)")
-    sha256: str = Field(
-        ..., min_length=64, max_length=64, description="Content digest for integrity and deduplication"
-    )
+    sha256: str = Field(..., min_length=64, max_length=64, description="Content digest for integrity and deduplication")
     size_bytes: int = Field(..., ge=0, description="Byte size for quota and UI display")
     title: str | None = Field(default=None, description="Optional display title")
     caption: str | None = Field(default=None, description="Optional report caption")
@@ -82,9 +80,7 @@ class Artifact(BaseModel):
     workflow: str | None = Field(default=None, description="orchestrator | planner-agent | researcher-agent | skill")
     source_tool_call_id: str | None = Field(default=None, description="Tool call that created or registered it")
     provenance: ArtifactProvenance = Field(default_factory=ArtifactProvenance)
-    created_at: datetime = Field(
-        default_factory=lambda: datetime.now(UTC), description="Event ordering timestamp"
-    )
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC), description="Event ordering timestamp")
     status: ArtifactStatus = Field(default=ArtifactStatus.PENDING)
 
     def to_sse_payload(self, content_url: str) -> dict[str, object]:

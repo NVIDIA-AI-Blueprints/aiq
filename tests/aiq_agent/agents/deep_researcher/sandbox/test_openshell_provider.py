@@ -53,10 +53,14 @@ class _FakeOpenShellSandbox:
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
         self.result = _ExecResult(exit_code=0)
+        self.exit_calls = 0
 
     def exec(self, command, **kwargs):  # noqa: ANN001 - mirrors openshell.Sandbox.exec
         self.calls.append({"command": list(command), **kwargs})
         return self.result
+
+    def __exit__(self, *_args: object) -> None:
+        self.exit_calls += 1
 
 
 def _provider() -> OpenShellSandboxProvider:
@@ -108,14 +112,30 @@ def test_download_passes_path_via_argv_and_decodes_base64() -> None:
     fake.result = _ExecResult(exit_code=0, stdout=base64.b64encode(b"chart-bytes").decode())
     provider._os_context = fake
 
-    result = provider.download_files(["/sandbox/aiq-artifacts/chart.png"])
+    artifact_path = f"{provider.artifact_dir}/chart.png"
+    result = provider.download_files([artifact_path])
 
     assert result[0].error is None
     assert result[0].content == b"chart-bytes"
     call = fake.calls[0]
     # Path is passed positionally via argv (with the size cap appended); never via env.
-    assert "/sandbox/aiq-artifacts/chart.png" in call["command"]
+    assert artifact_path in call["command"]
+    assert call["command"][-1] == provider.artifact_dir
     assert "env" not in call
+
+
+def test_download_uses_confined_shim_when_adapter_transfer_enabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    fake.result = _ExecResult(exit_code=0, stdout=base64.b64encode(b"chart-bytes").decode())
+    provider._os_context = fake
+    provider._session.download_files.side_effect = AssertionError("adapter download bypassed confinement")  # type: ignore[union-attr]
+    monkeypatch.setenv("AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER", "1")
+
+    result = provider.download_files([f"{provider.artifact_dir}/chart.png"])
+
+    assert result[0].content == b"chart-bytes"
+    assert fake.calls[0]["command"][-1] == provider.artifact_dir
 
 
 def test_download_is_directory_exit_code() -> None:
@@ -163,3 +183,15 @@ def test_download_rejects_non_base64_stdout() -> None:
     result = provider.download_files(["/sandbox/aiq-artifacts/chart.png"])
     assert result[0].content is None
     assert result[0].error == "invalid_content"
+
+
+def test_terminate_exits_openshell_context_once() -> None:
+    provider = _provider()
+    fake = _FakeOpenShellSandbox()
+    provider._os_context = fake
+
+    provider.terminate()
+    provider.terminate()
+
+    assert fake.exit_calls == 1
+    assert provider._os_context is None
