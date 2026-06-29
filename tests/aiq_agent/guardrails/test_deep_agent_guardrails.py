@@ -31,7 +31,7 @@ from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.guardrails.deep_agent.middleware import _DeepAgentGuardrails
 from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
 from nat.middleware.middleware import FunctionMiddlewareContext
-from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import _DEFAULT_REFUSAL
+from tests.aiq_agent.guardrails._test_utils import TEST_REFUSAL
 
 _TEST_DEEP_AGENT_FUNCTION = "test_deep_agent_function"
 
@@ -161,7 +161,7 @@ async def test_pre_invoke_modifies_when_rail_modifies(guardrails: _DeepAgentGuar
 async def test_pre_invoke_block_skips_function_invocation(guardrails: _DeepAgentGuardrails):
     """A blocked `detect sensitive data on input` response skips the wrapped deep function."""
     raw_input = "Please follow up with customer@example.com about this issue."
-    blocked_output = _DEFAULT_REFUSAL
+    blocked_output = TEST_REFUSAL
     state = DeepResearchAgentState(messages=[HumanMessage(content=raw_input)])
 
     # Blocking input rails set context.output, so the wrapped deep function is skipped.
@@ -247,7 +247,7 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _DeepAgentGuardra
     """A blocked output rail returns the refusal inside deep-agent state."""
     user_text = "Please summarize this issue."
     output_text = "Please follow up with customer@example.com about this issue."
-    blocked_output = _DEFAULT_REFUSAL
+    blocked_output = TEST_REFUSAL
     output = DeepResearchAgentState(messages=[HumanMessage(content=user_text), AIMessage(content=output_text)])
 
     # First message passes; second message blocks and replaces context.output with refusal.

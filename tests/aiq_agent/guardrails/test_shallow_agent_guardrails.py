@@ -32,7 +32,7 @@ from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
 from aiq_agent.guardrails.shallow_agent.middleware import _ShallowAgentGuardrails
 from nat.middleware.middleware import FunctionMiddlewareContext
-from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import _DEFAULT_REFUSAL
+from tests.aiq_agent.guardrails._test_utils import TEST_REFUSAL
 
 _TEST_SHALLOW_AGENT_FUNCTION = "test_shallow_agent_function"
 
@@ -164,7 +164,7 @@ async def test_pre_invoke_modifies_when_rail_modifies(guardrails: _ShallowAgentG
 async def test_pre_invoke_block_skips_function_invocation(guardrails: _ShallowAgentGuardrails):
     """A blocked `detect sensitive data on input` response skips the wrapped shallow function."""
     raw_input = "Please follow up with customer@example.com about this issue."
-    blocked_output = _DEFAULT_REFUSAL
+    blocked_output = TEST_REFUSAL
     state = ShallowResearchAgentState(messages=[HumanMessage(content=raw_input)])
 
     # Blocking input rails set context.output, so the wrapped shallow function is skipped.
@@ -300,7 +300,7 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _ShallowAgentGuar
     """A blocked output rail returns the refusal inside shallow-agent state."""
     user_text = "Please summarize this issue."
     output_text = "Please follow up with customer@example.com about this issue."
-    blocked_output = _DEFAULT_REFUSAL
+    blocked_output = TEST_REFUSAL
     output = ShallowResearchAgentState(messages=[HumanMessage(content=user_text), AIMessage(content=output_text)])
 
     # First message passes; second message blocks and replaces context.output with refusal.

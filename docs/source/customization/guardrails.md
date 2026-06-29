@@ -9,12 +9,6 @@ AI-Q can use NeMo Guardrails through NeMo Agent Toolkit middleware to evaluate s
 
 The reference configuration is `configs/config_web_default_guardrails.yml`, which keeps the default web workflow and applies guardrails at the workflow, shallow researcher, and deep researcher boundaries.
 
-Run the guarded configuration with the same CLI entry point used for other AI-Q configs:
-
-```bash
-nat run --config_file configs/config_web_default_guardrails.yml --input "hello"
-```
-
 ## Guarded Boundaries
 
 | Boundary | Middleware | Applies To |
@@ -73,12 +67,12 @@ For nested response objects, selected fields can be dotted paths:
 
 ```yaml
 workflow_functions:
-  workflow_response:
+  "<workflow>":
     choices:
       - message.content
 ```
 
-This selects `message.content` from each item in `choices`.
+For workflow-level guardrails, this selects `message.content` from each item in the final response `choices`.
 
 Agent-boundary guardrails can also select message fields by message type. This lets the same agent state carry multiple message types while guardrails evaluate only the configured string fields.
 

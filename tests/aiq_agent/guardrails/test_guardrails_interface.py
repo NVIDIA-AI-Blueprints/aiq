@@ -15,6 +15,7 @@
 
 """Tests for shared Guardrails middleware dynamic field selection."""
 
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Annotated
 
@@ -35,6 +36,10 @@ class _StringListMessage(BaseModel):
     content: str | list[str | dict[str, object]]
 
 
+class _StringTupleMessage(BaseModel):
+    content: tuple[str, ...]
+
+
 class _MessageWithNonStringContent(BaseModel):
     content: int
 
@@ -53,6 +58,26 @@ class _ToolMessage(BaseModel):
 
 class _StateWithAnnotatedUnion(BaseModel):
     messages: list[Annotated[_StringMessage | _StringListMessage, "message choices"]]
+
+
+class _StateWithTupleMessages(BaseModel):
+    messages: tuple[_StringMessage, ...]
+
+
+class _StateWithSetMessages(BaseModel):
+    messages: set[_StringMessage]
+
+
+class _StateWithFrozenSetMessages(BaseModel):
+    messages: frozenset[_StringMessage]
+
+
+class _StateWithSequenceMessages(BaseModel):
+    messages: Sequence[_StringMessage]
+
+
+class _StateWithTupleMessageContent(BaseModel):
+    messages: list[_StringTupleMessage]
 
 
 class _StateWithInvalidAnnotatedUnion(BaseModel):
@@ -91,6 +116,25 @@ def test_rejects_invalid_path_through_annotated_union(
     """Config validation rejects annotated unions with non-string target fields."""
     with pytest.raises(ValueError, match="messages.content"):
         guardrails._validate_guarded_field_paths(_discovered_function(_StateWithInvalidAnnotatedUnion))
+
+
+@pytest.mark.parametrize(
+    "input_schema",
+    [
+        _StateWithTupleMessages,
+        _StateWithSetMessages,
+        _StateWithFrozenSetMessages,
+        _StateWithSequenceMessages,
+        _StateWithTupleMessageContent,
+    ],
+)
+def test_rejects_container_annotations_not_traversed_at_runtime(
+    guardrails: GuardrailsMixin,
+    input_schema: type[BaseModel],
+):
+    """Config validation rejects containers that runtime traversal cannot rewrite."""
+    with pytest.raises(ValueError, match="messages.content"):
+        guardrails._validate_guarded_field_paths(_discovered_function(input_schema))
 
 
 def test_targets_configured_union_members_and_rewrites_in_place(guardrails: GuardrailsMixin):

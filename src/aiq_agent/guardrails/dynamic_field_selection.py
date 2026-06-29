@@ -21,7 +21,6 @@ import types
 import typing
 from collections.abc import Callable
 from collections.abc import Iterator
-from collections.abc import Sequence
 from typing import Any
 from typing import TypeAlias
 
@@ -97,7 +96,7 @@ class DynamicFieldSelectionMixin:
                 model_choices.extend(resolved)
             return model_choices
 
-        if origin in (list, tuple, set, frozenset, Sequence):
+        if origin is list:
             element_args = typing.get_args(annotation)
             if not element_args:
                 return []
@@ -119,7 +118,7 @@ class DynamicFieldSelectionMixin:
                 arg is not type(None) and self._annotation_is_string_compatible(arg)
                 for arg in typing.get_args(annotation)
             )
-        if origin in (list, tuple, set, frozenset, Sequence):
+        if origin is list:
             element_args = typing.get_args(annotation)
             return bool(element_args) and self._annotation_is_string_compatible(element_args[0])
         return False

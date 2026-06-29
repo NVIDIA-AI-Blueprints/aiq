@@ -21,6 +21,8 @@ normalized workflow input text and apply pass/block/modify results returned by
 the Guardrails runtime on both pre-invoke and post-invoke boundaries.
 """
 
+import json
+from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -29,8 +31,8 @@ import pytest
 from aiq_agent.common import _create_chat_response
 from aiq_agent.guardrails.workflow.middleware import _WorkflowGuardrails
 from nat.middleware.middleware import FunctionMiddlewareContext
-from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import _DEFAULT_REFUSAL
 from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware_config import GuardrailFunctionFields
+from tests.aiq_agent.guardrails._test_utils import TEST_REFUSAL
 
 _TEST_WORKFLOW_FUNCTION = "test_workflow_function"
 
@@ -306,13 +308,130 @@ async def test_pre_invoke_modifies_when_rail_modifies(
     assert context.output is None
 
 
+@pytest.mark.parametrize(
+    ("raw_input", "assert_rewrite"),
+    [
+        pytest.param(
+            {"message": "Please follow up with customer@example.com.", "data_sources": ["docs"]},
+            lambda value, modified: (
+                value["message"] == modified
+                and value["data_sources"] == ["docs"]
+                and set(value.keys()) == {"message", "data_sources"}
+            ),
+            id="dict-message",
+        ),
+        pytest.param(
+            {"text": "Please follow up with customer@example.com.", "data_sources": "docs"},
+            lambda value, modified: value["text"] == modified and value["data_sources"] == "docs",
+            id="dict-text",
+        ),
+        pytest.param(
+            {
+                "content": {
+                    "messages": [
+                        {"role": "user", "content": "Earlier question"},
+                        {"role": "assistant", "content": "Earlier answer"},
+                        {"role": "user", "content": "Please follow up with customer@example.com."},
+                    ],
+                    "data_sources": ["docs"],
+                }
+            },
+            lambda value, modified: (
+                value["content"]["messages"][0]["content"] == "Earlier question"
+                and value["content"]["messages"][1]["content"] == "Earlier answer"
+                and value["content"]["messages"][2]["content"] == modified
+                and value["content"]["data_sources"] == ["docs"]
+            ),
+            id="dict-message-history",
+        ),
+        pytest.param(
+            {
+                "content": {
+                    "messages": [{"role": "user", "text": "Please follow up with customer@example.com."}],
+                    "data_sources": ["docs"],
+                }
+            },
+            lambda value, modified: (
+                value["content"]["messages"][0] == {"role": "user", "text": modified}
+                and value["content"]["data_sources"] == ["docs"]
+            ),
+            id="dict-message-text-field",
+        ),
+        pytest.param(
+            {"content": {"messages": ["Please follow up with customer@example.com."], "data_sources": ["docs"]}},
+            lambda value, modified: (
+                value["content"]["messages"] == [modified] and value["content"]["data_sources"] == ["docs"]
+            ),
+            id="dict-message-string-item",
+        ),
+        pytest.param(
+            {
+                "content": {
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": '{"query": "Please follow up with customer@example.com.", '
+                            '"data_sources": ["docs"]}',
+                        }
+                    ]
+                }
+            },
+            lambda value, modified: (
+                json.loads(value["content"]["messages"][0]["content"]) == {"query": modified, "data_sources": ["docs"]}
+            ),
+            id="dict-message-inline-json",
+        ),
+        pytest.param(
+            '{"query": "Please follow up with customer@example.com.", "data_sources": ["docs"]}',
+            lambda value, modified: json.loads(value) == {"query": modified, "data_sources": ["docs"]},
+            id="string-inline-json",
+        ),
+        pytest.param(
+            SimpleNamespace(
+                messages=[
+                    SimpleNamespace(role="system", content="System note"),
+                    SimpleNamespace(role="user", content="Please follow up with customer@example.com."),
+                ],
+                data_sources=["docs"],
+            ),
+            lambda value, modified: (
+                value.messages[0].content == "System note"
+                and value.messages[1].content == modified
+                and value.data_sources == ["docs"]
+            ),
+            id="object-message-history",
+        ),
+    ],
+)
+@pytest.mark.asyncio
+async def test_pre_invoke_modifies_structured_input_in_place(
+    guardrails: _WorkflowGuardrails,
+    raw_input: object,
+    assert_rewrite: Callable[[object, str], bool],
+):
+    """A modified input rail rewrites only the extracted query location."""
+    modified_input = "Please follow up with <EMAIL_ADDRESS>."
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(return_value=_rail_response(modified_input, rail_name="mask sensitive data on input"))
+    )
+    context = SimpleNamespace(modified_args=(raw_input,), output=None)
+
+    result = await guardrails.pre_invoke(context)
+
+    assert result is context
+    assert assert_rewrite(context.modified_args[0], modified_input)
+    assert context.output is None
+
+
 @pytest.mark.asyncio
 async def test_pre_invoke_block_skips_function_invocation(
     guardrails: _WorkflowGuardrails,
 ):
     """A blocked `detect sensitive data on input` response skips the wrapped function."""
     raw_input = "Please follow up with customer@example.com about this issue."
-    blocked_output = _DEFAULT_REFUSAL
+    blocked_output = TEST_REFUSAL
 
     # Blocking input rails set context.output, so the wrapped workflow must not run.
     guardrails.bind_llms_to_rail = AsyncMock()
@@ -402,7 +521,7 @@ async def test_post_invoke_modifies_when_rail_modifies(guardrails: _WorkflowGuar
 async def test_post_invoke_blocks_when_rail_blocks(guardrails: _WorkflowGuardrails):
     """A blocked output rail replaces context output with the inherited refusal string."""
     output_text = "Please follow up with customer@example.com about this issue."
-    blocked_output = _DEFAULT_REFUSAL
+    blocked_output = TEST_REFUSAL
     output = _workflow_response(output_text)
 
     # Blocking output rails replace context.output with the inherited refusal string.
