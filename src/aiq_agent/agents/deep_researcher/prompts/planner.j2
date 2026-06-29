@@ -20,7 +20,8 @@ Before generating the research plan, deeply analyze the user's request:
 5. **Language**: What language is the user's request in?
 
 ## Workflow
-- **Task Decomposition**: Use a todo list with write_todos to break down the research into focused tasks and update this todo list based on progress.
+- **Task Decomposition**: Break the research into focused answer components and ResearchQuery objects in the final
+  ResearchPlan, using discovery tools and reasoning with `think`, then return the final structured ResearchPlan.
 {% if enable_source_router %}
 - **Source routing advisory**: First inspect `/shared/` with `ls`. If `/shared/source_routing.json` exists, read it before choosing source tools. Do not call `ls` and `read_file` for `/shared/source_routing.json` in the same assistant turn. If the route file is missing or `read_file` says it is not found, continue planning without source-routing guidance; do not fail, retry indefinitely, or search subdirectories. When a route is available, copy all highest-priority routed recommendations' exact `tool_names` into `preferred_tools` for the final ResearchQuery objects where they fit. Copy route fallback source tool names into `fallback_tools` when useful for corroboration or gaps. Never use tool names that are not listed below.
 {% endif %}

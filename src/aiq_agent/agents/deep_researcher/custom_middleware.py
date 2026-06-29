@@ -23,6 +23,7 @@ from pathlib import Path
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
 from aiq_agent.common import get_source_id_for_tool
@@ -200,6 +201,47 @@ class ToolVisibilityMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         """Filter hidden tools before an asynchronous model call."""
         return await handler(request.override(tools=self._filter_tools(request.tools)))
+
+
+class TodoSuppressionMiddleware(AgentMiddleware):
+    """Strip the framework's ``write_todos`` tool and its injected prompt for a subagent.
+
+    deepagents attaches ``TodoListMiddleware`` to every subagent, which adds the
+    ``write_todos`` tool plus a system-prompt block telling the agent to use it.
+    Agents that own no progress list - e.g. the planner, which returns a single
+    structured ``ResearchPlan`` - should not have it. Placed after the framework's
+    ``TodoListMiddleware`` in the stack, this removes both the tool and the injected
+    prompt block from the model request, keeping todo tracking solely with the
+    orchestrator. It is a no-op when neither is present.
+    """
+
+    _TODO_TOOL = "write_todos"
+    _TODO_PROMPT_MARKER = "## `write_todos`"
+
+    def _clean_request(self, request: object) -> object:
+        """Return the request with the write_todos tool and its prompt block removed."""
+        overrides: dict[str, object] = {
+            "tools": [tool for tool in request.tools if _request_tool_name(tool) != self._TODO_TOOL]
+        }
+        system_message = getattr(request, "system_message", None)
+        if system_message is not None:
+            blocks = system_message.content_blocks
+            kept = [
+                block
+                for block in blocks
+                if not (isinstance(block, dict) and self._TODO_PROMPT_MARKER in str(block.get("text", "")))
+            ]
+            if len(kept) != len(blocks):
+                overrides["system_message"] = SystemMessage(content=kept)
+        return request.override(**overrides)
+
+    def wrap_model_call(self, request, handler):
+        """Strip write_todos and its prompt before a synchronous model call."""
+        return handler(self._clean_request(request))
+
+    async def awrap_model_call(self, request, handler):
+        """Strip write_todos and its prompt before an asynchronous model call."""
+        return await handler(self._clean_request(request))
 
 
 class ToolRetryMiddleware(AgentMiddleware):
@@ -451,7 +493,8 @@ class PlanPersistenceMiddleware(AgentMiddleware):
     exists, since the LLM ``write_file`` tool refuses to overwrite while
     ``upload_files`` overwrites in place.
 
-    Persistence failures are logged and never propagate into the agent loop.
+    Persistence failures propagate so the planner task fails before the
+    orchestrator reads a missing or stale ``/shared/plan.json``.
     """
 
     def __init__(self, backend: object, *, path: str = "/shared/plan.json") -> None:
@@ -485,32 +528,18 @@ class PlanPersistenceMiddleware(AgentMiddleware):
         responses = self.backend.upload_files([(self.path, content)])
         errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
         if errors:
-            logger.warning("Failed to persist plan to %s: %s", self.path, "; ".join(errors))
-
-    async def awrap_model_call(self, request, handler):
-        """Persist the structured plan as soon as the model emits it."""
-        response = await handler(request)
-        plan = getattr(response, "structured_response", None)
-        if plan is not None:
-            try:
-                self._persist_plan(plan)
-            except Exception:
-                logger.warning("Plan persistence (model_call) failed", exc_info=True)
-        return response
+            # Raw backend detail stays in logs; the raised error reaches the job status /
+            # caller, so it must not echo backend-internal strings (hostnames, paths, etc.).
+            logger.error("Failed to persist plan to %s: %s", self.path, "; ".join(errors))
+            raise RuntimeError(f"Failed to persist the research plan to {self.path}")
 
     def after_agent(self, state, runtime):
-        """Persist the plan after a synchronous planner run completes."""
-        try:
-            self._persist_plan(self._plan_from_state(state))
-        except Exception:
-            logger.warning("Plan persistence to %s failed", self.path, exc_info=True)
+        """Persist the plan once the synchronous planner run completes."""
+        self._persist_plan(self._plan_from_state(state))
 
     async def aafter_agent(self, state, runtime):
-        """Persist the plan after an asynchronous planner run completes."""
-        try:
-            self._persist_plan(self._plan_from_state(state))
-        except Exception:
-            logger.warning("Plan persistence to %s failed", self.path, exc_info=True)
+        """Persist the plan once the asynchronous planner run completes."""
+        await asyncio.to_thread(self._persist_plan, self._plan_from_state(state))
 
 
 class ToolResultPruningMiddleware(AgentMiddleware):

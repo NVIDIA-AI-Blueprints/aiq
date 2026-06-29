@@ -58,9 +58,17 @@ Step 5. **Return Answer**: After writer-agent returns, return only its short com
 {% endif %}
 
 ## Progress Tracking
-Use write_todos to update progress after each workflow step. Use status values: "pending", "in_progress", or "completed".
+Use write_todos only after a workflow-advancing tool has already run. Use status values: "pending", "in_progress",
+or "completed".
+When calling `write_todos`, pass a single argument named `todos`. Each todo item must use this exact shape:
+`{"content": "<task description>", "status": "pending"}`.
+`status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`.
+Never use `task`, `title`, or `description` keys for todo items.
+Do not call `write_todos` as the only tool call in an assistant turn.
+If todo tracking causes uncertainty, skip it and continue the workflow.
 
-Before returning the final answer, invoke write_todos to mark all tasks as "completed". Do not output tool calls as text.
+Before returning the final answer, mark todos as "completed" only if todo tracking has already been used. Do not add
+a todo-only final turn. Do not output tool calls as text.
 
 {% if enable_source_router %}
 ## Source Routing Delegation Template

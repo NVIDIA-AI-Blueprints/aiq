@@ -413,6 +413,14 @@ class TestDeepResearcherAgent:
             assert "do not create smaller curated waves" in kwargs["system_prompt"]
             assert "Never repeat a covered query" in kwargs["system_prompt"]
             assert "revise only the invalid, failed, or missing ResearchQuery objects" in kwargs["system_prompt"]
+            assert '{"content": "<task description>", "status": "pending"}' in kwargs["system_prompt"]
+            assert (
+                '`status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`'
+                in kwargs["system_prompt"]
+            )
+            assert "Never use `task`, `title`, or `description` keys for todo items" in kwargs["system_prompt"]
+            assert "Do not call `write_todos` as the only tool call in an assistant turn" in kwargs["system_prompt"]
+            assert "If todo tracking causes uncertainty, skip it and continue the workflow" in kwargs["system_prompt"]
             assert "max_batch_research_queries" not in kwargs["system_prompt"]
             assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
@@ -474,6 +482,9 @@ class TestDeepResearcherAgent:
             assert "answer_strategy" in planner_prompt
             assert "Dynamic Discovery Budget" in planner_prompt
             assert "Do not turn planning into full evidence gathering" in planner_prompt
+            # write_todos is suppressed for the planner at the middleware level
+            # (TodoSuppressionMiddleware), so the prompt no longer mentions it at all.
+            assert "write_todos" not in planner_prompt
             assert "configured batch concurrency of 6" in planner_prompt
             assert "Thorough evidence gathering is essential" not in planner_prompt
             assert "Table of Contents" not in planner_prompt
