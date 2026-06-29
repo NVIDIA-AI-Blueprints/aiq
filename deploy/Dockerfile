@@ -69,8 +69,14 @@ COPY configs/ ./configs/
 # to avoid leaking .env, Helm charts, compose files, or other dev artifacts.
 COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
 
-# Install dependencies using uv sync
-RUN uv sync --frozen --no-dev --no-install-workspace
+# Install dependencies using uv sync. We do NOT pass --no-dev: the workspace
+# source packages (tavily-web-search, exa-web-search, ...) and their runtime
+# deps (e.g. langchain-tavily) are declared in the [dependency-groups] dev group,
+# so --no-dev would omit them and the editable source installs below would
+# import-fail at runtime. Syncing with the dev group installs those deps from the
+# frozen lock (still pinned, no re-resolve). TODO(deploy): move the source
+# packages to a dedicated non-dev group to keep test-only tooling out of the image.
+RUN uv sync --frozen
 
 # Install workspace packages (without CLI for base)
 RUN uv pip install --no-deps -e . \
