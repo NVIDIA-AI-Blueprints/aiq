@@ -908,6 +908,36 @@ class TestHasToolInvocations:
         assert ClarifierAgent._has_tool_invocations([msg]) is False
 
 
+class TestSearchedSinceLastUserTurn:
+    """Tests for _searched_since_last_user_turn (current-request scoping)."""
+
+    def test_no_messages(self):
+        """An empty history has no search this turn."""
+        assert ClarifierAgent._searched_since_last_user_turn([]) is False
+
+    def test_only_current_query_no_search(self):
+        """Just the user query, no tool calls yet -> not searched."""
+        msgs = [HumanMessage(content="Research AI")]
+        assert ClarifierAgent._searched_since_last_user_turn(msgs) is False
+
+    def test_tool_call_after_query_counts(self):
+        """A tool call after the latest user turn counts as searched."""
+        ai = AIMessage(content="", tool_calls=[{"name": "web_search_tool", "args": {}, "id": "c1"}])
+        msgs = [HumanMessage(content="Research AI"), ai]
+        assert ClarifierAgent._searched_since_last_user_turn(msgs) is True
+
+    def test_tool_call_before_latest_user_turn_is_ignored(self):
+        """A tool call from an earlier turn must not suppress the nudge for a new query."""
+        prior_tool = AIMessage(content="", tool_calls=[{"name": "web_search_tool", "args": {}, "id": "c0"}])
+        msgs = [
+            HumanMessage(content="earlier question"),
+            prior_tool,
+            ToolMessage(content="result", tool_call_id="c0"),
+            HumanMessage(content="a fresh research query"),  # latest user turn, no search after it
+        ]
+        assert ClarifierAgent._searched_since_last_user_turn(msgs) is False
+
+
 class TestClarifierForceSearch:
     """Tests for the search-before-clarify behavior (issue #234)."""
 
@@ -1097,6 +1127,7 @@ class TestClarifierForceSearch:
         prompts_received: list[str] = []
 
         async def user_callback(question: str) -> str:
+            """Return the canned user reply for this test."""
             prompts_received.append(question)
             return "skip"
 
@@ -1111,10 +1142,11 @@ class TestClarifierForceSearch:
         await agent.run(state)
 
         # The user was prompted exactly once - with a fallback derived from
-        # their actual query, never from the force-search guidance.
+        # their actual query (the full topic survives), never from the
+        # force-search guidance.
         assert len(prompts_received) == 1
         prompt_text = prompts_received[0]
-        assert "Project Foo" in prompt_text or "Acme" in prompt_text
+        assert "Project Foo" in prompt_text and "Acme" in prompt_text
         assert FORCE_SEARCH_GUIDANCE not in prompt_text
         # The internal force-search guidance must never be visible in any
         # message the user-facing fallback would draw from.
@@ -1202,6 +1234,7 @@ class TestClarifierForceSearch:
         # Inspect every message list that was actually sent to the LLM and assert
         # no two consecutive AIMessages appear (the API-invalid shape).
         def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
+            """Return index pairs of any two consecutive AIMessages (the invalid shape)."""
             pairs = []
             for i in range(len(messages) - 1):
                 if isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], AIMessage):
@@ -1242,18 +1275,21 @@ class TestClarifierSkipMessageOrdering:
 
     @pytest.fixture
     def mock_llm(self):
+        """Create a mock LLM."""
         llm = MagicMock()
         llm.bind_tools = MagicMock(return_value=llm)
         return llm
 
     @pytest.fixture
     def mock_llm_provider(self, mock_llm):
+        """Create a mock LLM provider returning the mock LLM."""
         provider = MagicMock(spec=LLMProvider)
         provider.get = MagicMock(return_value=mock_llm)
         return provider
 
     @staticmethod
     def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
+        """Return index pairs of any two consecutive AIMessages (the invalid shape)."""
         return [
             (i, i + 1)
             for i in range(len(messages) - 1)
@@ -1273,9 +1309,8 @@ class TestClarifierSkipMessageOrdering:
         # without another model call (the early-complete guard returns {}).
         mock_llm.ainvoke = AsyncMock(side_effect=[clarif])
 
-        captured: dict = {}
-
         async def user_callback(question: str) -> str:
+            """Always skip the clarification."""
             return "skip"
 
         agent = ClarifierAgent(
@@ -1286,11 +1321,9 @@ class TestClarifierSkipMessageOrdering:
 
         state = ClarifierAgentState(messages=[HumanMessage(content="Research AI")])
 
-        # Capture the final graph state to inspect persisted message ordering.
+        # Inspect persisted message ordering from the final graph state.
         final = await agent.graph.ainvoke(state, config={"callbacks": []})
-        captured["messages"] = final["messages"] if isinstance(final, dict) else final.messages
-
-        msgs = captured["messages"]
+        msgs = final["messages"] if isinstance(final, dict) else final.messages
         offenders = self._adjacent_assistant_pairs(msgs)
         assert not offenders, f"persisted history has consecutive assistant messages at {offenders}: {msgs}"
         # The skip reply must be persisted as a HumanMessage.
@@ -1330,6 +1363,7 @@ class TestClarifierSkipMessageOrdering:
         replies = iter(["skip", "approve"])
 
         async def user_callback(question: str) -> str:
+            """Return the canned user reply for this test."""
             return next(replies)
 
         agent = ClarifierAgent(
@@ -1347,7 +1381,7 @@ class TestClarifierSkipMessageOrdering:
         assert result.plan_approved is True
         # The planner was called; none of its input message lists may contain
         # consecutive assistant messages.
-        assert planner_llm.ainvoke.call_count >= 1
+        assert planner_llm.ainvoke.call_count == 1
         for call_idx, call in enumerate(planner_llm.ainvoke.call_args_list):
             sent = call.args[0]
             offenders = self._adjacent_assistant_pairs(sent)
@@ -1379,6 +1413,7 @@ class TestClarifierSkipMessageOrdering:
         replies = iter(["", "approve"])
 
         async def user_callback(question: str) -> str:
+            """Return the canned user reply for this test."""
             return next(replies)
 
         agent = ClarifierAgent(
@@ -1393,10 +1428,117 @@ class TestClarifierSkipMessageOrdering:
         result = await agent.run(state)
 
         assert result is not None
-        assert planner_llm.ainvoke.call_count >= 1
+        assert planner_llm.ainvoke.call_count == 1
         for call_idx, call in enumerate(planner_llm.ainvoke.call_args_list):
             sent = call.args[0]
-            empty = [
-                i for i, m in enumerate(sent) if isinstance(m, HumanMessage) and not str(m.content).strip()
-            ]
+            empty = [i for i, m in enumerate(sent) if isinstance(m, HumanMessage) and not str(m.content).strip()]
             assert not empty, f"planner ainvoke #{call_idx} received empty HumanMessage(s) at {empty}"
+
+
+class TestClarifierReviewRegressions:
+    """Regression tests for edge cases surfaced in deep review of #245."""
+
+    @pytest.fixture
+    def mock_llm(self):
+        """Create a mock LLM."""
+        llm = MagicMock()
+        llm.bind_tools = MagicMock(return_value=llm)
+        return llm
+
+    @pytest.fixture
+    def mock_llm_provider(self, mock_llm):
+        """Create a mock LLM provider returning the mock LLM."""
+        provider = MagicMock(spec=LLMProvider)
+        provider.get = MagicMock(return_value=mock_llm)
+        return provider
+
+    @staticmethod
+    def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
+        """Return index pairs of any two consecutive AIMessages (the invalid shape)."""
+        return [
+            (i, i + 1)
+            for i in range(len(messages) - 1)
+            if isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], AIMessage)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_force_search_fires_despite_prior_turn_tool_calls(self, mock_llm_provider, mock_llm):
+        """A tool call from an earlier conversation turn must not suppress the
+        search-before-clarify nudge for a fresh user query. The guard is scoped
+        to tool activity since the latest user turn."""
+        # First model call (for the new query): clarify without a tool call.
+        # Second call (after the nudge): emit a tool call. Third: complete.
+        clarif = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        tool_call = AIMessage(content="", tool_calls=[{"name": "web_search_tool", "args": {"query": "x"}, "id": "c1"}])
+        complete = AIMessage(
+            content=ClarificationResponse(needs_clarification=False, clarification_question=None).model_dump_json()
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[clarif, tool_call, complete])
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=AsyncMock(),
+        )
+
+        # History carries a tool call from an EARLIER turn, then the fresh query.
+        prior_tool = AIMessage(content="", tool_calls=[{"name": "web_search_tool", "args": {}, "id": "c0"}])
+        state = ClarifierAgentState(
+            messages=[
+                HumanMessage(content="an earlier question"),
+                prior_tool,
+                ToolMessage(content="old result", tool_call_id="c0"),
+                HumanMessage(content="a fresh research query"),
+            ]
+        )
+        await agent.run(state)
+
+        # The nudge must still have fired: 3 model calls, and the 2nd received
+        # the FORCE_SEARCH_GUIDANCE (it is not suppressed by the prior tool call).
+        assert mock_llm.ainvoke.call_count == 3
+        second_call_messages = mock_llm.ainvoke.call_args_list[1].args[0]
+        assert any(isinstance(m, HumanMessage) and FORCE_SEARCH_GUIDANCE in m.content for m in second_call_messages)
+
+    @pytest.mark.asyncio
+    async def test_exhausted_entry_with_clarification_last_no_adjacent_assistants(self, mock_llm_provider, mock_llm):
+        """If the budget is already exhausted and the last message is a
+        non-complete clarification AIMessage, the completion must be interleaved
+        with a sentinel user turn so no two assistant messages are adjacent
+        (which would 400 the planner under plan approval)."""
+        planner_llm = MagicMock()
+        planner_llm.ainvoke = AsyncMock(
+            return_value=AIMessage(content='{"title": "Plan", "sections": ["Intro", "Analysis"]}')
+        )
+
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[],
+            user_prompt_callback=AsyncMock(return_value="approve"),
+            enable_plan_approval=True,
+            planner_llm=planner_llm,
+        )
+
+        # Externally-provided state at exhaustion (max_turns=0) whose last turn
+        # is a non-complete clarification AIMessage.
+        clarif = AIMessage(
+            content=ClarificationResponse(
+                needs_clarification=True, clarification_question="What aspect?"
+            ).model_dump_json()
+        )
+        state = ClarifierAgentState(
+            messages=[HumanMessage(content="Research AI"), clarif],
+            max_turns=0,
+        )
+        result = await agent.run(state)
+
+        assert result is not None
+        # The planner must never receive two consecutive assistant messages.
+        assert planner_llm.ainvoke.call_count == 1
+        for call_idx, call in enumerate(planner_llm.ainvoke.call_args_list):
+            sent = call.args[0]
+            offenders = self._adjacent_assistant_pairs(sent)
+            assert not offenders, f"planner ainvoke #{call_idx} had consecutive assistant messages at {offenders}"
