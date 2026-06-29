@@ -3,15 +3,21 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Async Final Report Encryption
+# Async Job Content Encryption
 
-AI-Q can encrypt async job final reports before they are persisted in
-`job_info.output`. This is application-level envelope encryption for the
-AI-Q async jobs API.
+AI-Q can encrypt sensitive async job content before it is persisted by the
+AI-Q async jobs API. This is application-level envelope encryption for final
+report output and selected artifact event payload fields.
 
-This feature is intentionally narrow in its first milestone. It protects only
-the serialized final output payload returned by
-`GET /v1/jobs/async/job/{job_id}/report`, such as `{"report": "..."}`.
+Content encryption is disabled by default. Operators must explicitly set
+`AIQ_CONTENT_ENCRYPTION=key` or `vault` on every API and worker process to
+enable it.
+
+This feature is intentionally narrow in its first milestone. It protects the
+serialized final output payload returned by
+`GET /v1/jobs/async/job/{job_id}/report`, such as `{"report": "..."}`, and
+the `content` field of `artifact.update` events for `output` and `file`
+artifacts.
 
 ## Scope and Limitations
 
@@ -19,24 +25,34 @@ Encrypted when enabled:
 
 - `job_info.output` for jobs submitted through `/v1/jobs/async/submit` or
   `aiq_api.jobs.submit.submit_agent_job`.
+- `job_events.event_data` field `artifact.update.data.content` when the
+  artifact `data.type` is `output` or `file`.
 
 Still plaintext:
 
-- `job_events.event_data`, including tool events, artifact updates, heartbeat
-  events, cancellation events, error events, and possible final-report
-  duplicates emitted through events.
+- Other `job_events.event_data` fields, including artifact metadata, tool
+  events, heartbeat events, cancellation events, error events, citation source
+  artifacts, citation use artifacts, and todo artifacts.
 - Job status, ownership metadata, timestamps, event type, and other control
   plane fields.
 - `job_info.error`.
 - PostgreSQL notification payloads.
 - `summaries.summary`.
 - LangGraph checkpoints in `aiq_checkpoints`.
-- Historical rows written before encryption was enabled.
+- Historical `job_info.output` rows written before encryption was enabled.
 - Inline CLI and local NeMo Agent Toolkit runs that do not use the AI-Q async
   API job runner.
 
-Because events and checkpoints can contain equivalent research content, this
-phase does not provide full database-level job-content confidentiality.
+Because checkpoints, errors, citations, todos, and other event fields can
+contain equivalent research content, this phase does not provide full
+database-level job-content confidentiality.
+
+This feature protects the configured fields from storage readers and detects
+ciphertext tampering within the authenticated job and field context. It is not
+a database integrity or event-freshness control. A principal with database
+write access can still delete or reorder rows, replay an entire encrypted row,
+or swap encrypted artifact content between events in the same job when the
+authenticated field path is identical.
 
 ## Modes
 
@@ -48,10 +64,12 @@ Set `AIQ_CONTENT_ENCRYPTION` on every API and worker process.
 | `key` | Uses one operator-managed static 32-byte key to wrap per-job data encryption keys. Intended only for development, testing, or deployments that cannot use Vault. |
 | `vault` | Uses HashiCorp Vault Transit to generate and wrap per-job data encryption keys. Recommended for production. |
 
-Encrypted values are stored as `aiqenc:` envelopes. The envelope contains
-non-secret metadata, the wrapped data encryption key, nonce, ciphertext, tag,
-algorithm, key id, and an AAD hint that binds the value to
-`job_info.output:{job_id}`.
+Encrypted values are stored as `aiqenc:` envelopes. Encrypted event fields are
+stored as marker objects containing the envelope so the surrounding event JSON
+remains inspectable. The envelope contains non-secret metadata, the wrapped data
+encryption key, nonce, ciphertext, tag, algorithm, key id, and an AAD hint that
+binds the value to either `job_info.output:{job_id}` or the encrypted
+`job_events.event_data` field path for that job.
 
 ## Static Key Configuration
 
@@ -64,10 +82,13 @@ AIQ_CONTENT_ENCRYPTION_KEY=<base64url-encoded-32-byte-key>
 AIQ_CONTENT_ENCRYPTION_KEY_ID=<operator-managed-key-id>
 ```
 
-`AIQ_CONTENT_ENCRYPTION_KEY_ID` is optional metadata. If omitted, envelopes use
-`static-key` as the key id. The first implementation supports one active static
-key only; rotation requires jobs encrypted with the previous key to expire or a
-future rewrap/backfill process.
+`AIQ_CONTENT_ENCRYPTION_KEY_ID` is optional, but it is cryptographic identity,
+not cosmetic metadata: it is authenticated while wrapping each data encryption
+key. If omitted, envelopes use `static-key` as the key id. Keep the configured
+key id unchanged while encrypted jobs are retained. The first implementation
+supports one active static key only; changing the key or key id makes existing
+envelopes unreadable unless those jobs have expired or a future rewrap process
+has migrated them.
 
 Invalid static-key configuration fails startup.
 
@@ -102,18 +123,54 @@ after Transit key rotation. Do not disable or destroy old Transit key versions
 until corresponding encrypted jobs have expired or have been rewrapped by a
 future migration process.
 
+## Vault Client and Retry Behavior
+
+Vault mode uses the synchronous `hvac.Client`. API routes that may call Vault
+offload that work to worker threads so Vault latency does not block the FastAPI
+event loop. Each API or worker process keeps one process-local Vault client and
+guards client creation, AppRole login, and Transit calls with a lock. This
+serializes Vault Transit operations per process and avoids concurrent mutation
+of the shared `hvac.Client`.
+
+Vault Transit operations use bounded retries for transient failures only:
+
+- request connection failures and timeouts,
+- Vault rate limiting,
+- Vault 5xx-style operational failures, and
+- unauthorized responses after forcing one AppRole re-login.
+
+The retry policy does not retry missing configuration, invalid requests,
+permission-denied responses, missing Transit paths, malformed Vault responses,
+or decrypt denials. Tune `VAULT_TIMEOUT_SECONDS` to bound individual Vault
+requests and `AIQ_CONTENT_ENCRYPTION_READINESS_TTL_SECONDS` to control how
+often health and submit readiness recheck Vault.
+
 ## Rollout Behavior
 
-The first implementation is forward-only:
+The feature defaults to `off`, so upgrading AI-Q does not change persisted job
+content unless an operator explicitly enables encryption. The first
+implementation is forward-only after enablement:
 
 - New `job_info.output` writes are encrypted after enablement.
+- New `artifact.update.data.content` event fields are encrypted after
+  enablement for `output` and `file` artifacts.
 - Existing plaintext `job_info.output` rows are intentionally unreadable while
   `AIQ_CONTENT_ENCRYPTION=key` or `vault`.
+- Existing plaintext event rows remain readable in encrypted modes.
 - No historical plaintext backfill is included.
 - No rewrap tooling is included.
 
-Enable encryption only after operators accept that old plaintext final-report
-rows cannot be read in encrypted modes until a future backfill exists.
+Migration, backfill, application-managed key rotation, and decrypt-on-rollback
+tooling are outside the scope of this release. Enable encryption only for a new
+or empty job history, after existing jobs have expired, or after operators
+accept that old plaintext final-report rows in `job_info.output` cannot be read
+in encrypted modes.
+
+Keep the encryption mode, static key and key id, or Vault Transit mount and key
+name stable while encrypted jobs are retained. Switching the mode to `off`
+does not decrypt existing values: report reads can expose the stored `aiqenc:`
+value and encrypted event fields remain marker objects. Restore the original
+encryption configuration to read those jobs.
 
 ## Health and Failure Behavior
 
@@ -125,9 +182,9 @@ Workers independently validate encryption before marking a job `RUNNING`. If
 encryption is unavailable at worker startup, the job is marked `FAILURE` and
 the agent does not run.
 
-If final-report encryption or encrypted persistence fails after an agent has
-completed, the job is marked `FAILURE`. The worker does not fall back to writing
-plaintext output.
+If final-report encryption, artifact event-content encryption, or encrypted
+persistence fails after an agent has completed, the job is marked `FAILURE`.
+The worker does not fall back to writing plaintext output.
 
 Report reads fail closed:
 
