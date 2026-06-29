@@ -1,26 +1,5 @@
-# This configuration enables NeMo Guardrails for the default Web mode.
-# It keeps the same tools and agents as config_web_default_llamaindex.yml, then
-# adds NAT Guardrails middleware at the workflow boundary and the shallow/deep
-# agent boundaries.
-#
-# The included rails are a minimal smoke policy: deterministic regex blocks
-# that demonstrate workflow and agent-boundary interception without requiring
-# LLM-backed rails or heavyweight masking dependencies. Deployments should
-# replace these patterns and flows with their production Guardrails policy.
-#
-# The workflow_guardrails, shallow_agent_guardrails, and deep_agent_guardrails
-# middleware types are required AIQ registrations for the overridden middleware
-# implementations used below. They preserve AIQ workflow and agent state shapes
-# while delegating rail decisions to NAT/NeMo Guardrails; they are not a separate
-# guardrails runtime.
-#
-# Workflow-boundary rails:
-#   workflow_guardrails – guards the raw query input string and assistant text
-#                         via ChatResponse.choices[0].message.content.
-#
-# Agent-boundary rails:
-#   shallow_agent_guardrails – guards shallow-agent input and output fields.
-#   deep_agent_guardrails    – guards deep-agent input and output fields.
+# Default Web mode configuration with NeMo Guardrails enabled at the workflow,
+# shallow researcher, and deep researcher boundaries.
 
 general:
   use_uvloop: true

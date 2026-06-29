@@ -21,8 +21,8 @@ from typing import Annotated
 import pytest
 from pydantic import BaseModel
 
+from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
-from aiq_agent.middleware.dynamic_field_selection import FunctionFieldSelection
 
 _TEST_FUNCTION = "test_guarded_function"
 

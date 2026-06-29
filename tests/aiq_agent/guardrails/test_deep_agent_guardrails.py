@@ -29,7 +29,7 @@ from langchain_core.messages import HumanMessage
 
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.guardrails.deep_agent.middleware import _DeepAgentGuardrails
-from aiq_agent.middleware.dynamic_field_selection import FunctionFieldSelection
+from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
 from nat.middleware.middleware import FunctionMiddlewareContext
 from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import _DEFAULT_REFUSAL
 

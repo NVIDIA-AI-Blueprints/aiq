@@ -17,7 +17,7 @@
 
 from __future__ import annotations
 
-from aiq_agent.middleware.dynamic_field_selection import DynamicFieldSelectionMixin
+from aiq_agent.guardrails.dynamic_field_selection import DynamicFieldSelectionMixin
 from nat.middleware.middleware import InvocationContext
 from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GuardrailsMiddleware
 

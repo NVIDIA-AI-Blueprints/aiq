@@ -29,8 +29,8 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
+from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
 from aiq_agent.guardrails.shallow_agent.middleware import _ShallowAgentGuardrails
-from aiq_agent.middleware.dynamic_field_selection import FunctionFieldSelection
 from nat.middleware.middleware import FunctionMiddlewareContext
 from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import _DEFAULT_REFUSAL
 

@@ -15,7 +15,7 @@
 
 """Shallow-agent Guardrails middleware configuration."""
 
-from aiq_agent.middleware.dynamic_field_selection import DynamicFieldSelectionConfigMixin
+from aiq_agent.guardrails.dynamic_field_selection import DynamicFieldSelectionConfigMixin
 from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware_config import GuardrailsMiddlewareConfig
 
 
