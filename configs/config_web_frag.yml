@@ -258,16 +258,28 @@ authentication:
     # client_secret: ${MCP_GDRIVE_CLIENT_SECRET}
 
 # A shared object store is required so the API process (connect) and the worker
-# process (job) see the same token. Redis/S3/MySQL each ship in a separate NAT
-# package — nvidia-nat-redis is added to this project's dependencies.
+# process (job) see the same token. Two modes, selected by MCP_TOKEN_STORE_TYPE:
+#   * aiq_sqlite (default) — a SQLite file, serviceless and shared across the API
+#     and worker processes on the same host. Works locally with nothing deployed.
+#   * redis — a networked store for multi-replica / multi-host deployments
+#     (requires nvidia-nat-redis; deploy sets MCP_TOKEN_STORE_TYPE=redis).
+# Fields not used by the active _type are ignored, so both sets can coexist here.
+#
+# aiq_sqlite requirement: the API and worker processes must resolve db_path to the
+# SAME file, so they must share a filesystem (single host / shared volume). Prefer
+# an ABSOLUTE path — a relative path only works if both processes share a working
+# directory. Separate hosts/pods do NOT share a filesystem; use redis there.
 object_stores:
   mcp_token_store:
-    _type: redis        # requires nvidia-nat-redis; or s3 (nvidia-nat-s3) / mysql (nvidia-nat-mysql)
+    _type: ${MCP_TOKEN_STORE_TYPE:-aiq_sqlite}
+    bucket_name: mcp-tokens
+    # aiq_sqlite (use an absolute path in any multi-process deployment):
+    db_path: ${MCP_TOKEN_DB:-./mcp_tokens.db}
+    # redis (S3/MySQL also available via their NAT packages):
     host: ${REDIS_HOST:-localhost}
     port: ${REDIS_PORT:-6379}
-    bucket_name: mcp-tokens
     # password: ${REDIS_PASSWORD}
-    # ttl: 2592000        # optional, seconds
+    # ttl: 2592000        # optional, seconds (both modes)
 
 workflow:
   _type: chat_deepresearcher_agent

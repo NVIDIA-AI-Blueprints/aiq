@@ -85,9 +85,22 @@ aiq:
         NAT_JOB_STORE_DB_URL: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         AIQ_CHECKPOINT_DB: postgresql://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
         AIQ_SUMMARY_DB: postgresql+asyncpg://$(DB_USER_NAME):$(DB_USER_PASSWORD)@aiq-postgres:5432/aiq_jobs
-        # Per-user MCP auth token store (config_web_frag.yml)
+        # Per-user MCP auth token store (config_web_frag.yml). redis is used here
+        # because the backend may run multiple replicas; the serviceless
+        # aiq_sqlite default only spans processes that share a host filesystem.
+        MCP_TOKEN_STORE_TYPE: redis
         REDIS_HOST: aiq-redis
         REDIS_PORT: '6379'
+        # Per-user MCP source connection (config_web_frag.yml gdrive source).
+        # Required to CONNECT the source — separate from the token store above.
+        # Connect discovers OAuth endpoints by reaching MCP_GDRIVE_URL, so it must
+        # be reachable from the pod; AIQ_PUBLIC_URL builds the OAuth redirect_uri
+        # (<AIQ_PUBLIC_URL>/v1/auth/mcp/gdrive/callback). Uncomment and set to
+        # enable; without them the gdrive card shows but connect fails.
+        # MCP_GDRIVE_URL: https://maas.prd.astra.nvidia.com/maas/gdrive/mcp
+        # AIQ_PUBLIC_URL: https://aiq.example.com
+        # MCP_GDRIVE_CLIENT_ID: ''
+        # MCP_GDRIVE_CLIENT_SECRET: ''
         RAG_SERVER_URL: http://rag-server:8080
         RAG_INGEST_URL: http://rag-ingest:8080
         COLLECTION_NAME: default_collection

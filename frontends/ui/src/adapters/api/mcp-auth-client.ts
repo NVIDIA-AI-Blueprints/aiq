@@ -175,6 +175,14 @@ export function openAuthPopupAndWait(
 
     // Authoritative resolve path: poll the backend until the source reaches a
     // terminal status. Survives the COOP opener-severing described above.
+    //
+    // `expired`/`error` are the PRE-EXISTING states that make the card show
+    // "Reconnect", so they're also what the first poll sees before the user has
+    // authenticated. Treating them as terminal would close the popup ~1.5s after
+    // it opens (UI: "Session expired") before login can complete. So we snapshot
+    // the baseline on the first probe and only resolve on a real transition:
+    // `connected` (success), or a NEW `error` that differs from the baseline.
+    let baselineStatus: PerUserAuthStatus | undefined
     const statusPoll: ReturnType<typeof setInterval> | undefined = pollStatus
       ? setInterval(() => {
           void (async () => {
@@ -184,13 +192,16 @@ export function openAuthPopupAndWait(
             } catch {
               return // transient probe failure — keep polling
             }
-            if (status === 'connected' || status === 'expired' || status === 'error') {
+            if (baselineStatus === undefined) baselineStatus = status
+            const succeeded = status === 'connected'
+            const newlyErrored = status === 'error' && baselineStatus !== 'error'
+            if (succeeded || newlyErrored) {
               try {
                 popup.close()
               } catch {
                 /* ignore */
               }
-              finish({ ok: status === 'connected', sourceId })
+              finish({ ok: succeeded, sourceId })
             }
           })()
         }, pollIntervalMs)

@@ -46,7 +46,13 @@ services:
       - NAT_JOB_STORE_DB_URL=${NAT_JOB_STORE_DB_URL:-postgresql+asyncpg://aiq:aiq_dev@postgres:5432/aiq_jobs}
       - AIQ_CHECKPOINT_DB=${AIQ_CHECKPOINT_DB:-postgresql://aiq:aiq_dev@postgres:5432/aiq_checkpoints}
       - AIQ_SUMMARY_DB=${AIQ_SUMMARY_DB:-postgresql+psycopg://aiq:aiq_dev@postgres:5432/aiq_jobs}
-      # Shared token store for per-user MCP auth (config_web_frag.yml)
+      # Shared token store for per-user MCP auth (config_web_frag.yml).
+      # Deploy uses redis (networked, multi-replica safe); local defaults to the
+      # serviceless aiq_sqlite store. Set MCP_TOKEN_STORE_TYPE=aiq_sqlite to opt out
+      # — if you do, use an ABSOLUTE MCP_TOKEN_DB on a shared volume so the API and
+      # worker resolve the same file (e.g. /app/data/mcp_tokens.db under AIQ_DATA_DIR).
+      - MCP_TOKEN_STORE_TYPE=${MCP_TOKEN_STORE_TYPE:-redis}
+      # - MCP_TOKEN_DB=${MCP_TOKEN_DB:-/app/data/mcp_tokens.db}
       - REDIS_HOST=${REDIS_HOST:-redis}
       - REDIS_PORT=${REDIS_PORT:-6379}
       # LlamaIndex persistence (used by config_web_default_llamaindex.yml)
