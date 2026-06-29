@@ -25,18 +25,27 @@ from nemoguardrails.rails.llm.options import GenerationOptions
 from nemoguardrails.rails.llm.options import GenerationResponse
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
+from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
+from aiq_agent.guardrails.workflow.config import WorkflowGuardrailsConfig
+from nat.builder.builder import Builder
 from nat.middleware.middleware import InvocationContext
 from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GuardrailsMiddleware
 
 logger = logging.getLogger(__name__)
 
 
-class _WorkflowInputGuardrails(GuardrailsMiddleware):
-    """Apply input rails to the workflow's entry argument.
+class _WorkflowGuardrails(GuardrailsMixin):
+    """Provide Guardrails enforcement for workflow boundaries.
 
-    Normalizes the workflow's first argument into a query string (and optional data
-    sources) before running NeMo Guardrails input rails.
+    This middleware evaluates configured policies around workflow invocation:
+    incoming workflow input is reduced to the user-facing text that should be
+    checked, and outgoing workflow results are checked through the configured
+    field selections.
     """
+
+    def __init__(self, config: WorkflowGuardrailsConfig, builder: Builder):
+        """Initialize workflow Guardrails with its registered config."""
+        super().__init__(config=config, builder=builder)
 
     async def pre_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run input rails over the normalized workflow query.
@@ -83,6 +92,10 @@ class _WorkflowInputGuardrails(GuardrailsMiddleware):
         except Exception:
             logger.exception("Workflow input Guardrails failed while evaluating query text; continuing without rails")
             return None
+
+    async def post_invoke(self, context: InvocationContext) -> InvocationContext | None:
+        """Run output rails for the configured workflow result fields."""
+        return await GuardrailsMiddleware.post_invoke(self, context)
 
     def _extract_guardrail_target(self, raw_input: object) -> str | None:
         """Extract the normalized user query text from a raw workflow input."""

@@ -13,12 +13,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for workflow-input Guardrails target selection and response handling.
+"""Tests for workflow Guardrails input and output boundary handling.
 
 These tests mock the NeMo Guardrails response shapes observed from the built-in
-sensitive-data input rails. They verify that the workflow input class can find
-the normalized user input text and apply pass/block/modify results returned by
-the Guardrails runtime.
+sensitive-data rails. They verify that the workflow middleware can find the
+normalized workflow input text and apply pass/block/modify results returned by
+the Guardrails runtime on both pre-invoke and post-invoke boundaries.
 """
 
 from types import SimpleNamespace
@@ -26,25 +26,55 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from aiq_agent.guardrails.workflow_input_guardrails import _WorkflowInputGuardrails
+from aiq_agent.common import _create_chat_response
+from aiq_agent.guardrails.workflow.middleware import _WorkflowGuardrails
 from nat.middleware.middleware import FunctionMiddlewareContext
+from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import _DEFAULT_REFUSAL
+from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware_config import GuardrailFunctionFields
+
+_TEST_WORKFLOW_FUNCTION = "test_workflow_function"
 
 
 @pytest.fixture
-def guardrails() -> _WorkflowInputGuardrails:
+def guardrails() -> _WorkflowGuardrails:
     """Create the middleware without constructing the NeMo Guardrails runtime."""
-    return _WorkflowInputGuardrails.__new__(_WorkflowInputGuardrails)
+    guardrails = _WorkflowGuardrails.__new__(_WorkflowGuardrails)
+    guardrails._guardrails_config = SimpleNamespace(
+        workflow_functions={
+            _TEST_WORKFLOW_FUNCTION: GuardrailFunctionFields.model_validate({"choices": ["message.content"]})
+        }
+    )
+    return guardrails
+
+
+def _workflow_context(output: object, *, original_input: str = "Please summarize this issue.") -> SimpleNamespace:
+    return SimpleNamespace(
+        function_context=FunctionMiddlewareContext(
+            name=_TEST_WORKFLOW_FUNCTION,
+            config=None,
+            description=None,
+            input_schema=None,
+            single_output_schema=type(None),
+            stream_output_schema=type(None),
+        ),
+        original_args=(original_input,),
+        output=output,
+    )
+
+
+def _workflow_response(content: str):
+    return _create_chat_response(content, response_id="research_response", model=_TEST_WORKFLOW_FUNCTION)
 
 
 def _rail_response(
-    response: str,
+    response: object,
     *,
     rail_name: str,
     stopped: bool = False,
     bot_message: str | None = None,
 ) -> SimpleNamespace:
     """Build the small response shape used by the NAT Guardrails helpers."""
-    output_data = {"user_message": response}
+    output_data = {"user_message": response} if isinstance(response, str) else {}
     if bot_message is not None:
         output_data["bot_message"] = bot_message
 
@@ -180,11 +210,11 @@ def _rail_response(
     ],
 )
 def test_input_text_can_be_extracted_to_apply_rail(
-    guardrails: _WorkflowInputGuardrails,
+    guardrails: _WorkflowGuardrails,
     raw_input: object,
     expected_query_text: str,
 ):
-    """Supported raw inputs resolve to guardable query text."""
+    """Supported raw workflow inputs resolve to guardable query text."""
     query_text = guardrails._extract_guardrail_target(raw_input)
 
     assert query_text == expected_query_text
@@ -221,7 +251,7 @@ def test_input_text_can_be_extracted_to_apply_rail(
 )
 @pytest.mark.asyncio
 async def test_pre_invoke_does_nothing_when_input_text_cannot_be_extracted(
-    guardrails: _WorkflowInputGuardrails,
+    guardrails: _WorkflowGuardrails,
     raw_input: object,
 ):
     """Unsupported structured inputs do not run rails or change workflow input."""
@@ -236,10 +266,11 @@ async def test_pre_invoke_does_nothing_when_input_text_cannot_be_extracted(
 
 
 @pytest.mark.asyncio
-async def test_pre_invoke_passes_when_rail_passes(guardrails: _WorkflowInputGuardrails):
+async def test_pre_invoke_passes_when_rail_passes(guardrails: _WorkflowGuardrails):
     """A passing `detect sensitive data on input` response leaves the input unchanged."""
     raw_input = "Please follow up about this issue."
 
+    # Rail returns the same text, so pre_invoke should not change the workflow input.
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._llm_rails = SimpleNamespace(
         generate_async=AsyncMock(return_value=_rail_response(raw_input, rail_name="detect sensitive data on input"))
@@ -255,12 +286,13 @@ async def test_pre_invoke_passes_when_rail_passes(guardrails: _WorkflowInputGuar
 
 @pytest.mark.asyncio
 async def test_pre_invoke_modifies_when_rail_modifies(
-    guardrails: _WorkflowInputGuardrails,
+    guardrails: _WorkflowGuardrails,
 ):
     """A modified `mask sensitive data on input` response rewrites the workflow input."""
     raw_input = "Please follow up with customer@example.com about this issue."
     modified_input = "Please follow up with <EMAIL_ADDRESS> about this issue."
 
+    # Rail returns rewritten text, so pre_invoke should replace the workflow argument.
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._llm_rails = SimpleNamespace(
         generate_async=AsyncMock(return_value=_rail_response(modified_input, rail_name="mask sensitive data on input"))
@@ -276,12 +308,13 @@ async def test_pre_invoke_modifies_when_rail_modifies(
 
 @pytest.mark.asyncio
 async def test_pre_invoke_block_skips_function_invocation(
-    guardrails: _WorkflowInputGuardrails,
+    guardrails: _WorkflowGuardrails,
 ):
     """A blocked `detect sensitive data on input` response skips the wrapped function."""
     raw_input = "Please follow up with customer@example.com about this issue."
-    blocked_output = "I don't know the answer to that."
+    blocked_output = _DEFAULT_REFUSAL
 
+    # Blocking input rails set context.output, so the wrapped workflow must not run.
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._llm_rails = SimpleNamespace(
         generate_async=AsyncMock(
@@ -299,7 +332,7 @@ async def test_pre_invoke_block_skips_function_invocation(
         raw_input,
         call_next=call_next,
         context=FunctionMiddlewareContext(
-            name="chat_deepresearcher_agent",
+            name=_TEST_WORKFLOW_FUNCTION,
             config=None,
             description=None,
             input_schema=None,
@@ -310,3 +343,86 @@ async def test_pre_invoke_block_skips_function_invocation(
 
     assert result == blocked_output
     call_next.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_passes_when_rail_passes(guardrails: _WorkflowGuardrails):
+    """A passing output rail leaves configured ChatResponse message content unchanged."""
+    output_text = "The requested follow up is complete."
+    output = _workflow_response(output_text)
+
+    # Output rail returns the same assistant content, so the ChatResponse stays unchanged.
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            return_value=_rail_response(
+                [{"role": "assistant", "content": output_text}],
+                rail_name="detect sensitive data on output",
+            )
+        )
+    )
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is None
+    assert context.output.choices[0].message.content == output_text
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_modifies_when_rail_modifies(guardrails: _WorkflowGuardrails):
+    """A modified output rail rewrites configured ChatResponse message content."""
+    output_text = "Please follow up with customer@example.com about this issue."
+    modified_output = "Please follow up with <EMAIL_ADDRESS> about this issue."
+    output = _workflow_response(output_text)
+
+    # Output rail returns rewritten assistant content, so the configured field is updated.
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            return_value=_rail_response(
+                [{"role": "assistant", "content": modified_output}],
+                rail_name="mask sensitive data on output",
+            )
+        )
+    )
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert context.output.choices[0].message.content == modified_output
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_blocks_when_rail_blocks(guardrails: _WorkflowGuardrails):
+    """A blocked output rail replaces context output with the inherited refusal string."""
+    output_text = "Please follow up with customer@example.com about this issue."
+    blocked_output = _DEFAULT_REFUSAL
+    output = _workflow_response(output_text)
+
+    # Blocking output rails replace context.output with the inherited refusal string.
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            return_value=_rail_response(
+                [{"role": "assistant", "content": blocked_output}],
+                rail_name="detect sensitive data on output",
+                stopped=True,
+                bot_message=blocked_output,
+            )
+        )
+    )
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert context.output == blocked_output
+    assert output.choices[0].message.content == output_text
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
