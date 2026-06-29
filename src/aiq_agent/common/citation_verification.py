@@ -669,6 +669,86 @@ def _format_registry_reference(num: int, entry: SourceEntry) -> str | None:
     return None
 
 
+def _normalize_reference_title(text: str) -> str:
+    """Normalize a source-line title for exact-match backfill comparison.
+
+    Strips any trailing URL, trailing parenthetical (e.g. ``(Internal)``),
+    markdown emphasis, and a trailing ``:`` separator, then lowercases and
+    collapses whitespace so a writer line and its registry entry compare equal.
+    """
+    cleaned = _URL_IN_LINE_RE.sub("", text)
+    cleaned = re.sub(r"\s*\(.*?\)\s*$", "", cleaned)
+    cleaned = re.sub(r"\*+", "", cleaned)
+    cleaned = cleaned.strip().rstrip(":").strip()
+    return re.sub(r"\s+", " ", cleaned).lower()
+
+
+def _build_reference_title_index(
+    reference_sources: Sequence[SourceEntry] | None,
+    registry: SourceRegistry,
+) -> dict[str, tuple[str | None, str | None]]:
+    """Index writer-facing source titles to their registry-validated target.
+
+    Used to repair URL-less ``[N] Title`` lines (the writer dropped the ``: url``
+    suffix) from the same captured-source list the writer was shown. Each title
+    is validated against the registry exactly as an inline target would be, and
+    titles shared by more than one distinct source are dropped so an ambiguous
+    title is never auto-resolved.
+
+    Args:
+        reference_sources: Writer-facing source list, or None.
+        registry: SourceRegistry the targets must resolve against.
+
+    Returns:
+        Mapping of normalized title -> ``(canonical_url, citation_key)`` with
+        exactly one tuple value set.
+    """
+    if not reference_sources:
+        return {}
+    index: dict[str, tuple[str | None, str | None]] = {}
+    ambiguous: set[str] = set()
+    for entry in reference_sources:
+        if not entry.title:
+            continue
+        key = _normalize_reference_title(entry.title)
+        if not key:
+            continue
+        target: tuple[str | None, str | None] | None = None
+        if entry.url:
+            canonical = registry.resolve_url(entry.url)
+            if canonical:
+                target = (canonical, None)
+        elif entry.citation_key and registry.has_citation_key(entry.citation_key):
+            target = (None, entry.citation_key)
+        if target is None:
+            continue
+        if key in index and index[key] != target:
+            ambiguous.add(key)
+            continue
+        index[key] = target
+    for key in ambiguous:
+        index.pop(key, None)
+    return index
+
+
+def _backfill_reference_target(
+    ref_text: str,
+    reference_index: dict[str, tuple[str | None, str | None]],
+) -> tuple[str | None, str | None] | None:
+    """Resolve a URL-less source line's title to a registry-backed target.
+
+    Exact normalized-title match only. Aggregate-style labels (multiple sources
+    joined with ``;``) are never matched, so they keep stripping as before.
+
+    Returns:
+        ``(canonical_url, citation_key)`` when the title uniquely maps to a
+        registry source, otherwise None.
+    """
+    if ";" in ref_text:
+        return None
+    return reference_index.get(_normalize_reference_title(ref_text))
+
+
 def _normalize_citation_syntax(report_text: str) -> str:
     """Normalize citation bracket variants before verification/sanitization."""
     report_text = report_text.replace("【", "[").replace("】", "]")
@@ -882,6 +962,12 @@ def verify_citations(
     valid_citations: list[dict] = []
     removed_citations: list[dict] = []
     url_replacements: dict[str, str] = {}  # garbled_url -> canonical_url
+    line_replacements: dict[str, str] = {}  # url-less line -> backfilled canonical line
+
+    # Exact-title index over the writer-facing source list, so a "[N] Title"
+    # line whose ": url" suffix the writer dropped can be repaired from the same
+    # captured registry instead of stripped (recall fix, precision unchanged).
+    reference_index = _build_reference_title_index(reference_sources, registry)
 
     for line_match in _CITATION_LINE_RE.finditer(ref_section):
         num = int(line_match.group(1))
@@ -914,6 +1000,22 @@ def verify_citations(
             else:
                 logger.debug("[CitationVerify]   [%d] REMOVE — citation_key_not_in_registry: %s", num, citation_key)
                 removed_citations.append({"number": num, "line": full_line, "reason": "citation_key_not_in_registry"})
+            continue
+
+        # Backfill: the writer emitted "[N] Title" but dropped the verified URL.
+        # Recover the target from the writer-facing source list (exact-title,
+        # unique match) and rewrite the line to canonical "[N] Title: url" form.
+        backfilled = _backfill_reference_target(ref_text, reference_index)
+        if backfilled:
+            canonical_url, citation_key = backfilled
+            if canonical_url:
+                rewritten = f"[{num}] {ref_text}: {canonical_url}"
+                line_replacements[full_line] = rewritten
+                logger.info("[CitationVerify]   [%d] BACKFILL — %s", num, canonical_url)
+                valid_citations.append({"number": num, "url": canonical_url, "citation_key": None, "line": rewritten})
+            else:
+                logger.info("[CitationVerify]   [%d] BACKFILL — %s", num, citation_key)
+                valid_citations.append({"number": num, "url": None, "citation_key": citation_key, "line": full_line})
             continue
 
         # Neither URL nor recognizable citation key
@@ -962,6 +1064,11 @@ def verify_citations(
     if url_replacements:
         for garbled, canonical in url_replacements.items():
             ref_section = ref_section.replace(garbled, canonical)
+
+    # Apply backfilled lines (url-less "[N] Title" -> "[N] Title: url").
+    if line_replacements:
+        for original, rewritten in line_replacements.items():
+            ref_section = ref_section.replace(original, rewritten)
 
     removed_numbers = {c["number"] for c in removed_citations}
 
