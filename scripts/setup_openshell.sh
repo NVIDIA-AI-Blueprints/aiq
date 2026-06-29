@@ -42,6 +42,9 @@ DEFAULT_LANGCHAIN_NVIDIA_INSTALL_SPEC="git+https://github.com/pastorsj/langchain
 LANGCHAIN_NVIDIA_REPO="${LANGCHAIN_NVIDIA_REPO:-$DEFAULT_LANGCHAIN_NVIDIA_INSTALL_SPEC}"
 SANDBOX_NAME="${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}"
 IMAGE_NAME="${AIQ_OPENSHELL_IMAGE:-aiq-openshell-demo:latest}"
+# Sandbox log verbosity baked into the image (RUST_LOG). Default `warn` is OpenShell's
+# stock sandbox level; set to `debug` to surface in-container process/relay detail.
+SANDBOX_LOG_LEVEL="${AIQ_OPENSHELL_SANDBOX_LOG_LEVEL:-warn}"
 POLICY_PRESET="${AIQ_OPENSHELL_POLICY:-}"
 POLICY_ALLOWLIST="${AIQ_OPENSHELL_POLICY_ALLOWLIST:-${AIQ_OPENSHELL_POLICY_SERVICES:-}}"
 POLICY_FILE="${AIQ_OPENSHELL_POLICY_FILE:-$REPO_ROOT/configs/openshell/generated/aiq-openshell-policy.yaml}"
@@ -88,6 +91,9 @@ Options:
                                 Default: configs/openshell/generated/aiq-openshell-policy.yaml
   --sandbox-name NAME           OpenShell sandbox name (default: aiq-openshell-demo).
   --image-name NAME             Docker image tag (default: aiq-openshell-demo:latest).
+  --sandbox-log-level LEVEL     In-container OpenShell log verbosity baked into the
+                                image via RUST_LOG (default: warn). Use "debug" to
+                                surface process/relay detail in the sandbox logs.
   --langchain-nvidia SPEC       uv install spec or local langchain-nvidia checkout
                                 for the langchain-nvidia-openshell adapter.
   --gateway-name NAME           OpenShell gateway name (default: aiq-local).
@@ -149,6 +155,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --image-name)
             IMAGE_NAME="$2"
+            shift 2
+            ;;
+        --sandbox-log-level)
+            SANDBOX_LOG_LEVEL="$2"
             shift 2
             ;;
         --langchain-nvidia)
@@ -985,8 +995,10 @@ build_image() {
     if [[ "$BUILD_IMAGE" != "true" ]]; then
         return
     fi
-    log "Building sandbox image: $IMAGE_NAME"
-    "$DOCKER_BIN" build -t "$IMAGE_NAME" -f "$REPO_ROOT/configs/openshell/Dockerfile.aiq-demo" "$REPO_ROOT/configs/openshell"
+    log "Building sandbox image: $IMAGE_NAME (sandbox log level: $SANDBOX_LOG_LEVEL)"
+    "$DOCKER_BIN" build -t "$IMAGE_NAME" \
+        --build-arg OPENSHELL_SANDBOX_LOG_LEVEL="$SANDBOX_LOG_LEVEL" \
+        -f "$REPO_ROOT/configs/openshell/Dockerfile.aiq-demo" "$REPO_ROOT/configs/openshell"
 }
 
 create_sandbox() {

@@ -251,6 +251,13 @@ merges, drop the shim and the toggle.
 - `AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER` (default-off): route OpenShell file transfer through
   the official adapter instead of the env-free shim (see OpenShell gotcha above).
 - Artifact retention reuses the job-expiry periodic cleanup (`expiry_seconds`).
+- In-container OpenShell log verbosity (opt-in): `agent.execute()` calls and their output are
+  already logged on the AI-Q side (the `execute` tool-call events). To also see what runs
+  inside the OpenShell container, rebuild the sandbox image with a higher `RUST_LOG`:
+  `./scripts/setup_openshell.sh --sandbox-log-level debug` (or `--build-arg
+  OPENSHELL_SANDBOX_LOG_LEVEL=debug`). Default `warn` keeps OpenShell's stock behavior.
+  Read the container logs with `openshell logs <sandbox-name>`, the OpenShell TUI, or inside
+  the sandbox at `/var/log/openshell.*.log` (e.g. `grep "OCSF PROC:"` for process activity).
 
 ## Testing
 

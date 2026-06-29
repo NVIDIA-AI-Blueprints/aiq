@@ -5,6 +5,14 @@ FROM python:3.13-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Optional OpenShell sandbox log verbosity. Defaults to `warn` (OpenShell's stock
+# sandbox level, so default behavior is unchanged). Rebuild with
+# `--build-arg OPENSHELL_SANDBOX_LOG_LEVEL=debug` (or `setup_openshell.sh
+# --sandbox-log-level debug`) to surface process/relay detail (`OCSF PROC:` etc.)
+# in the container logs (`/var/log/openshell.*.log`, `openshell logs <name>`).
+ARG OPENSHELL_SANDBOX_LOG_LEVEL=warn
+ENV RUST_LOG=${OPENSHELL_SANDBOX_LOG_LEVEL}
+
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         bash \
