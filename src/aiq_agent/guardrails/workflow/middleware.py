@@ -144,6 +144,9 @@ class _WorkflowGuardrails(GuardrailsMixin):
         # Each target is one concrete string leaf. Input rails are applied to
         # leaves independently, and modified text is written back to that same
         # leaf without aggregating or redistributing text.
+        if isinstance(raw_input, str):
+            return [self._target_from_text(raw_input, lambda new_text: new_text)]
+
         if isinstance(raw_input, dict):
             content = raw_input.get("content", {}) if isinstance(raw_input.get("content"), dict) else {}
             targets = self._extract_messages_targets(raw_input, content.get("messages"))
@@ -166,11 +169,7 @@ class _WorkflowGuardrails(GuardrailsMixin):
         targets = self._extract_messages_targets(raw_input, messages)
         if targets:
             return targets
-        if isinstance(messages, list):
-            return []
-
-        text = str(raw_input)
-        return [self._target_from_text(text, lambda new_text: new_text)]
+        return []
 
     def _extract_messages_targets(
         self,

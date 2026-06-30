@@ -22,6 +22,7 @@ the Guardrails runtime on both pre-invoke and post-invoke boundaries.
 """
 
 import json
+import logging
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -249,14 +250,19 @@ def test_input_text_targets_can_be_extracted_to_apply_rails(
                 data_sources=None,
             ),
         ),
+        pytest.param(  # Arbitrary objects are not stringified into guardrail text.
+            object(),
+        ),
     ],
 )
 @pytest.mark.asyncio
 async def test_pre_invoke_does_nothing_when_input_text_cannot_be_extracted(
     guardrails: _WorkflowGuardrails,
     raw_input: object,
+    caplog: pytest.LogCaptureFixture,
 ):
     """Unsupported structured inputs do not run rails or change workflow input."""
+    caplog.set_level(logging.WARNING, logger="aiq_agent.guardrails.workflow.middleware")
     guardrails.bind_llms_to_rail = AsyncMock()
     context = SimpleNamespace(modified_args=(raw_input,), output=None)
 
@@ -265,6 +271,8 @@ async def test_pre_invoke_does_nothing_when_input_text_cannot_be_extracted(
     assert result is None
     assert context.modified_args == (raw_input,)
     assert context.output is None
+    guardrails.bind_llms_to_rail.assert_not_awaited()
+    assert "could not extract query text from input type" in caplog.text
 
 
 @pytest.mark.asyncio
