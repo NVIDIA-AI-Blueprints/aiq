@@ -69,16 +69,6 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  gpt_oss_llm:
-    _type: nim
-    model_name: openai/gpt-oss-120b
-    base_url: https://integrate.api.nvidia.com/v1
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 256000
-    api_key: ${NVIDIA_API_KEY}
-    max_retries: 10
-
   # LLM for document summaries (required when generate_summary: true)
   summary_llm:
     _type: nim
@@ -203,11 +193,11 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     enable_citation_verification: true
-    orchestrator_llm: gpt_oss_llm
+    orchestrator_llm: nemotron_super_llm
     source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_super_llm
-    planner_llm: gpt_oss_llm
-    writer_llm: gpt_oss_llm
+    planner_llm: nemotron_super_llm
+    writer_llm: nemotron_super_llm
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
       - web_search_tool

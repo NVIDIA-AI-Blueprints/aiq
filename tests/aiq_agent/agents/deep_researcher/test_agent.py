@@ -413,6 +413,14 @@ class TestDeepResearcherAgent:
             assert "do not create smaller curated waves" in kwargs["system_prompt"]
             assert "Never repeat a covered query" in kwargs["system_prompt"]
             assert "revise only the invalid, failed, or missing ResearchQuery objects" in kwargs["system_prompt"]
+            assert '{"content": "<task description>", "status": "pending"}' in kwargs["system_prompt"]
+            assert (
+                '`status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`'
+                in kwargs["system_prompt"]
+            )
+            assert "Never use `task`, `title`, or `description` keys for todo items" in kwargs["system_prompt"]
+            assert "Do not call `write_todos` as the only tool call in an assistant turn" in kwargs["system_prompt"]
+            assert "If todo tracking causes uncertainty, skip it and continue the workflow" in kwargs["system_prompt"]
             assert "max_batch_research_queries" not in kwargs["system_prompt"]
             assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
@@ -474,6 +482,9 @@ class TestDeepResearcherAgent:
             assert "answer_strategy" in planner_prompt
             assert "Dynamic Discovery Budget" in planner_prompt
             assert "Do not turn planning into full evidence gathering" in planner_prompt
+            # write_todos is suppressed for the planner at the middleware level
+            # (TodoSuppressionMiddleware), so the prompt no longer mentions it at all.
+            assert "write_todos" not in planner_prompt
             assert "configured batch concurrency of 6" in planner_prompt
             assert "Thorough evidence gathering is essential" not in planner_prompt
             assert "Table of Contents" not in planner_prompt
@@ -1292,6 +1303,39 @@ class TestFinalMarkdownExtraction:
 
             assert output is None
 
+    def test_extract_final_markdown_salvages_substantive_inline_report(self, mock_llm_provider, real_tool):
+        """A substantive report emitted inline (no output file) is salvaged, unlike plain chatter."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            report = (
+                "# Quarterly CapEx Report\n\n"
+                + "NVIDIA and Samsung capital expenditure analysis across quarters. " * 12
+                + "\n\n## Sources\n[1] Example: https://example.com"
+            )
+            output = agent._extract_final_markdown({"messages": [AIMessage(content=report)], "files": {}})
+
+            assert output == report.strip()
+
+    def test_extract_final_markdown_rejects_writer_completion_marker(self, mock_llm_provider, real_tool):
+        """The short writer completion marker is never salvaged as the report."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            output = agent._extract_final_markdown(
+                {"messages": [AIMessage(content="Wrote /shared/output.md")], "files": {}}
+            )
+
+            assert output is None
+
     @pytest.mark.asyncio
     async def test_run_fails_on_missing_writer_output_before_citation_verification(
         self,
@@ -1320,6 +1364,37 @@ class TestFinalMarkdownExtraction:
             state = DeepResearchAgentState(messages=[HumanMessage(content="Write a report")])
             with pytest.raises(ValueError, match="writer-agent did not produce a final Markdown answer"):
                 await agent.run(state)
+
+    @pytest.mark.asyncio
+    async def test_run_salvages_inline_report_when_writer_output_missing(self, mock_llm_provider, real_tool):
+        """A substantive inline report is salvaged into the final message when no output file exists."""
+        report = (
+            "# CapEx Report\n\n"
+            + "Detailed multi-quarter capital expenditure narrative for the comparison [1]. " * 12
+            + "\n\n## Sources\n[1] Example: https://example.com"
+        )
+        result_messages = [
+            HumanMessage(content="Original query"),
+            AIMessage(content=report),
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value={"messages": result_messages, "files": {}})
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
+
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Original query")])
+            result = await agent.run(state)
+
+            assert "# CapEx Report" in result.messages[-1].content
 
 
 class TestDeepResearcherCitationVerification:

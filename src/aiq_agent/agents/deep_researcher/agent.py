@@ -50,6 +50,14 @@ DEFAULT_MAX_RESEARCH_CONCURRENCY = 6
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
 
+# Salvage gate: when the orchestrator synthesizes the report inline instead of delegating to
+# writer-agent, no /shared/output.md is written. We accept the final message as the report only
+# when it is clearly a substantive report (long + has a markdown heading), so workflow chatter is
+# still rejected and the strict file-first contract is preserved.
+_WRITER_COMPLETION_MARKER = "Wrote /shared/output.md"
+_MIN_INLINE_REPORT_CHARS = 400
+_MD_HEADING_RE = re.compile(r"(?m)^#{1,6}\s")
+
 
 class DeepResearcherAgent:
     """
@@ -172,7 +180,31 @@ class DeepResearcherAgent:
                     output_entry = output_entry.decode("utf-8")
                 if isinstance(output_entry, str) and output_entry.strip():
                     return output_entry.strip()
-        return None
+        return self._salvage_inline_report(result)
+
+    @staticmethod
+    def _salvage_inline_report(result: dict | Any) -> str | None:
+        """Salvage a report the orchestrator wrote inline instead of via writer-agent.
+
+        When the orchestrator skips the writer-agent delegation and emits the full report in its
+        final message, no output file exists. Accept that message only when it is clearly a
+        substantive report so plain workflow chatter is still rejected.
+        """
+        messages = result.get("messages") if isinstance(result, dict) else getattr(result, "messages", None)
+        if not messages:
+            return None
+        content = getattr(messages[-1], "content", None)
+        if not isinstance(content, str):
+            return None
+        stripped = content.strip()
+        if (
+            not stripped
+            or stripped == _WRITER_COMPLETION_MARKER
+            or len(stripped) < _MIN_INLINE_REPORT_CHARS
+            or not _MD_HEADING_RE.search(stripped)
+        ):
+            return None
+        return stripped
 
     @staticmethod
     def _replace_last_message_content(result: dict | Any, content: str) -> None:

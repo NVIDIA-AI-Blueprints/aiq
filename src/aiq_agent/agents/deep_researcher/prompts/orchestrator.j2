@@ -38,27 +38,35 @@ Step 1. **Task Decomposition and Progress Tracking**: Use `write_todos` to track
 {% if enable_source_router %}
 Step 2. **Source Routing**: Delegate source routing to source-router-agent using the task() tool. The router writes `/shared/source_routing.json`. Do not call any other `task()` tool in the same assistant turn. After the source-router-agent task returns, read `/shared/source_routing.json` before planning. Treat this as advisory guidance for planning.
 
-Step 3. **Planning**: Delegate research planning to the planner-agent using the task() tool only after Step 2 has completed. The planner reads `/shared/source_routing.json` if present, returns a structured ResearchPlan, and writes the same raw JSON to `/shared/plan.json`.
+Step 3. **Planning**: Delegate research planning to the planner-agent using the task() tool only after Step 2 has completed. The planner reads `/shared/source_routing.json` if present and returns a structured ResearchPlan; the runtime persists it to `/shared/plan.json`.
 
 Step 4. **Research**: Read `/shared/plan.json`, collect the independent ResearchQuery objects needed by `answer_strategy.required_components`, then call `run_research_batch` with the largest valid batch: all needed queries in one call when there are {{ max_research_concurrency }} or fewer, otherwise the fewest ordered batches of at most {{ max_research_concurrency }}. Never conduct search yourself and never re-delegate to the planner-agent.
 
 Step 5. **Final Synthesis**: Delegate to writer-agent with task(). The writer writes the final output to `/shared/output.md` and returns only a short completion marker.
 
-Step 6. **Return Answer**: Return only the final Markdown answer in the final message. Do not add workflow commentary.
+Step 6. **Return Answer**: After writer-agent returns, return only its short completion marker. The runtime loads the final report from `/shared/output.md`; do not synthesize or write the report yourself.
 {% else %}
-Step 2. **Planning**: Delegate research planning to the planner-agent using the task() tool. The planner returns a structured ResearchPlan and writes the same raw JSON to `/shared/plan.json`.
+Step 2. **Planning**: Delegate research planning to the planner-agent using the task() tool. The planner returns a structured ResearchPlan; the runtime persists it to `/shared/plan.json`.
 
 Step 3. **Research**: Read `/shared/plan.json`, collect the independent ResearchQuery objects needed by `answer_strategy.required_components`, then call `run_research_batch` with the largest valid batch: all needed queries in one call when there are {{ max_research_concurrency }} or fewer, otherwise the fewest ordered batches of at most {{ max_research_concurrency }}. Never conduct search yourself and never re-delegate to the planner-agent.
 
 Step 4. **Final Synthesis**: Delegate to writer-agent with task(). The writer writes the final output to `/shared/output.md` and returns only a short completion marker.
 
-Step 5. **Return Answer**: Return only the final Markdown answer in the final message. Do not add workflow commentary.
+Step 5. **Return Answer**: After writer-agent returns, return only its short completion marker. The runtime loads the final report from `/shared/output.md`; do not synthesize or write the report yourself.
 {% endif %}
 
 ## Progress Tracking
-Use write_todos to update progress after each workflow step. Use status values: "pending", "in_progress", or "completed".
+Use write_todos only after a workflow-advancing tool has already run. Use status values: "pending", "in_progress",
+or "completed".
+When calling `write_todos`, pass a single argument named `todos`. Each todo item must use this exact shape:
+`{"content": "<task description>", "status": "pending"}`.
+`status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`.
+Never use `task`, `title`, or `description` keys for todo items.
+Do not call `write_todos` as the only tool call in an assistant turn.
+If todo tracking causes uncertainty, skip it and continue the workflow.
 
-Before returning the final answer, invoke write_todos to mark all tasks as "completed". Do not output tool calls as text.
+Before returning the final answer, mark todos as "completed" only if todo tracking has already been used. Do not add
+a todo-only final turn. Do not output tool calls as text.
 
 {% if enable_source_router %}
 ## Source Routing Delegation Template
