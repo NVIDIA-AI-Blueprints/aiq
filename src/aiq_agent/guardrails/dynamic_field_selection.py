@@ -22,19 +22,29 @@ import typing
 from collections.abc import Callable
 from collections.abc import Iterator
 from typing import Any
-from typing import TypeAlias
 
 from pydantic import BaseModel
+from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import RootModel
 
-FieldSelection: TypeAlias = list[str] | dict[str, list[str]]
+from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GenerationLogOptions
+from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GenerationOptions
 
 
-class FunctionFieldSelection(RootModel[dict[str, FieldSelection]]):
+class PhaseFieldSelectionConfig(BaseModel):
+    """Phase-specific selections for a dynamically intercepted function."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    pre_invoke: dict[str, list[str] | dict[str, list[str]]] = Field(default_factory=dict)
+    post_invoke: dict[str, list[str] | dict[str, list[str]]] = Field(default_factory=dict)
+
+
+class FunctionFieldSelection(RootModel[PhaseFieldSelectionConfig | dict[str, list[str] | dict[str, list[str]]]]):
     """Field selection for one dynamically intercepted function."""
 
-    root: dict[str, FieldSelection] = Field(default_factory=dict)
+    root: PhaseFieldSelectionConfig | dict[str, list[str] | dict[str, list[str]]] = Field(default_factory=dict)
 
 
 class DynamicFieldSelectionConfigMixin(BaseModel):
@@ -48,6 +58,88 @@ class DynamicFieldSelectionConfigMixin(BaseModel):
 
 class DynamicFieldSelectionMixin:
     """Traversal extension for dynamic middleware field selections."""
+
+    async def pre_invoke(self, context: Any) -> Any:
+        """Run input rails over the configured pre-invoke field selections."""
+        await self.bind_llms_to_rail()
+
+        if not context.modified_args or context.modified_args[0] is None:
+            return None
+
+        value: Any = context.modified_args[0]
+        paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "pre_invoke")
+
+        def apply_to_value(new_value: str) -> None:
+            self._apply_modified_input(context, new_value)
+
+        modified = False
+
+        for text, apply_to_field in self._gather_guardrail_inputs(value, paths, apply_to_value):
+            response = await self._llm_rails.generate_async(
+                prompt=text,
+                options=GenerationOptions(
+                    rails=["input"],
+                    log=GenerationLogOptions(activated_rails=True),
+                    output_vars=["user_message", "bot_message"],
+                ),
+            )
+
+            if self._rail_blocked(response):
+                context.output = self._handle_blocked_rail_response(response)
+                return context
+
+            result_text = self._handle_modified_rail_response(response, fallback=text)
+
+            if result_text != text:
+                apply_to_field(result_text)
+                modified = True
+
+        return context if modified else None
+
+    async def post_invoke(self, context: Any) -> Any:
+        """Run output rails over the configured post-invoke field selections."""
+        await self.bind_llms_to_rail()
+
+        if context.output is None:
+            return None
+
+        input_text = ""
+
+        if context.original_args:
+            raw: Any = context.original_args[0]
+            input_text = getattr(raw, "input_message", None) or (raw if isinstance(raw, str) else str(raw))
+
+        value: Any = context.output
+        paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "post_invoke")
+
+        def apply_to_value(new_value: str) -> None:
+            context.output = new_value
+
+        modified = False
+
+        for text, apply_to_field in self._gather_guardrail_inputs(value, paths, apply_to_value):
+            messages = [{"role": "user", "content": input_text}] if input_text else []
+            messages.append({"role": "assistant", "content": text})
+            response = await self._llm_rails.generate_async(
+                messages=messages,
+                options=GenerationOptions(
+                    rails=["output"],
+                    log=GenerationLogOptions(activated_rails=True),
+                    output_vars=["bot_message", "user_message"],
+                ),
+            )
+
+            if self._rail_blocked(response):
+                context.output = self.on_post_invoke_blocked(context, self._handle_blocked_rail_response(response))
+                return context
+
+            result_text = self._handle_modified_rail_response(response, fallback=text)
+
+            if result_text != text:
+                apply_to_field(result_text)
+                modified = True
+
+        return context if modified else None
 
     def _path_resolves_to_string(self, schema: type[BaseModel], path: str) -> bool:
         """Return whether a dotted path resolves to a string-compatible leaf on a schema."""
@@ -131,6 +223,10 @@ class DynamicFieldSelectionMixin:
 
     def _resolve_guarded_targets(self, name: str) -> list[str]:
         """Expand configured field selections into traversal paths."""
+        return self._resolve_guarded_targets_for_phase(name, None)
+
+    def _resolve_guarded_targets_for_phase(self, name: str, phase: str | None) -> list[str]:
+        """Expand field selections for the current middleware phase."""
         config = getattr(self, "_config", None) or getattr(self, "_guardrails_config", None)
         if config is None or not isinstance(config.workflow_functions, dict):
             return []
@@ -140,7 +236,30 @@ class DynamicFieldSelectionMixin:
             return []
 
         paths: list[str] = []
-        for field, subpaths in selection.root.items():
+        seen: set[str] = set()
+        for selection_root in self._selection_roots_for_phase(selection, phase):
+            for path in self._expand_selection_root(selection_root):
+                if path not in seen:
+                    paths.append(path)
+                    seen.add(path)
+        return paths
+
+    def _selection_roots_for_phase(
+        self,
+        selection: FunctionFieldSelection,
+        phase: str | None,
+    ) -> list[dict[str, list[str] | dict[str, list[str]]]]:
+        """Return the configured selection for one phase."""
+        if isinstance(selection.root, PhaseFieldSelectionConfig):
+            if phase is not None:
+                return [getattr(selection.root, phase, {})]
+            return [getattr(selection.root, field_name) for field_name in type(selection.root).model_fields]
+        return [selection.root]
+
+    def _expand_selection_root(self, selection_root: dict[str, list[str] | dict[str, list[str]]]) -> list[str]:
+        """Expand one field-selection mapping into traversal paths."""
+        paths: list[str] = []
+        for field, subpaths in selection_root.items():
             if isinstance(subpaths, dict):
                 for model_name, model_subpaths in subpaths.items():
                     paths.extend(

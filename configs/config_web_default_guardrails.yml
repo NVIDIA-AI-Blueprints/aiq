@@ -100,11 +100,14 @@ middleware:
     _type: shallow_agent_guardrails
     workflow_functions:
       shallow_research_agent:
-        messages:
-          HumanMessage:
-            - content
-          AIMessage:
-            - content
+        pre_invoke:
+          messages:
+            HumanMessage:
+              - content
+        post_invoke:
+          messages:
+            AIMessage:
+              - content
     guardrails:
       models: []
       colang_version: "1.0"
@@ -130,11 +133,14 @@ middleware:
     _type: deep_agent_guardrails
     workflow_functions:
       deep_research_agent:
-        messages:
-          HumanMessage:
-            - content
-          AIMessage:
-            - content
+        pre_invoke:
+          messages:
+            HumanMessage:
+              - content
+        post_invoke:
+          messages:
+            AIMessage:
+              - content
     guardrails:
       models: []
       colang_version: "1.0"

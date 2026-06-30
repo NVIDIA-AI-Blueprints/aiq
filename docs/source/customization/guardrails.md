@@ -79,17 +79,22 @@ Agent-boundary guardrails can also select message fields by message type. This l
 ```yaml
 workflow_functions:
   shallow_research_agent:
-    messages:
-      HumanMessage:
-        - content
-      AIMessage:
-        - content
+    pre_invoke:
+      messages:
+        HumanMessage:
+          - content
+    post_invoke:
+      messages:
+        AIMessage:
+          - content
 ```
 
 In this example:
 
 | Entry | Meaning |
 | --- | --- |
+| `pre_invoke` | Selects fields evaluated by input rails before the agent runs. |
+| `post_invoke` | Selects fields evaluated by output rails after the agent returns. |
 | `messages` | Selects the agent state's message list. |
 | `HumanMessage` | Applies the listed field paths to user messages in that list. |
 | `AIMessage` | Applies the listed field paths to assistant messages in that list. |

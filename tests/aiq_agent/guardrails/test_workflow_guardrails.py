@@ -30,9 +30,9 @@ from unittest.mock import AsyncMock
 import pytest
 
 from aiq_agent.common import _create_chat_response
+from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
 from aiq_agent.guardrails.workflow.middleware import _WorkflowGuardrails
 from nat.middleware.middleware import FunctionMiddlewareContext
-from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware_config import GuardrailFunctionFields
 from tests.aiq_agent.guardrails._test_utils import TEST_REFUSAL
 
 _TEST_WORKFLOW_FUNCTION = "test_workflow_function"
@@ -44,7 +44,7 @@ def guardrails() -> _WorkflowGuardrails:
     guardrails = _WorkflowGuardrails.__new__(_WorkflowGuardrails)
     guardrails._guardrails_config = SimpleNamespace(
         workflow_functions={
-            _TEST_WORKFLOW_FUNCTION: GuardrailFunctionFields.model_validate({"choices": ["message.content"]})
+            _TEST_WORKFLOW_FUNCTION: FunctionFieldSelection.model_validate({"choices": ["message.content"]})
         }
     )
     return guardrails

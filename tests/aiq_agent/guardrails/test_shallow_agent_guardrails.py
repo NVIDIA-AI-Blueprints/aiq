@@ -16,7 +16,7 @@
 """Tests for shallow-agent Guardrails input and output boundary handling.
 
 These tests verify that the shallow-agent middleware can use inherited NAT
-Guardrails field selection to target ``ShallowResearchAgentState.messages[*].content``.
+Guardrails field selection to target configured shallow-agent message content.
 """
 
 from collections.abc import Callable
@@ -43,7 +43,12 @@ def guardrails() -> _ShallowAgentGuardrails:
     guardrails = _ShallowAgentGuardrails.__new__(_ShallowAgentGuardrails)
     guardrails._guardrails_config = SimpleNamespace(
         workflow_functions={
-            _TEST_SHALLOW_AGENT_FUNCTION: FunctionFieldSelection.model_validate({"messages": ["content"]})
+            _TEST_SHALLOW_AGENT_FUNCTION: FunctionFieldSelection.model_validate(
+                {
+                    "pre_invoke": {"messages": {"HumanMessage": ["content"]}},
+                    "post_invoke": {"messages": {"AIMessage": ["content"]}},
+                }
+            )
         }
     )
     return guardrails
@@ -193,11 +198,11 @@ async def test_pre_invoke_block_skips_function_invocation(guardrails: _ShallowAg
 @pytest.mark.asyncio
 async def test_post_invoke_passes_when_rail_passes(guardrails: _ShallowAgentGuardrails):
     """A passing output rail leaves configured shallow message content unchanged."""
-    user_text = "Please summarize this issue."
+    user_text = "Quickly explain why a configuration containing password=demo is unsafe."
     output_text = "The requested follow up is complete."
     output = ShallowResearchAgentState(messages=[HumanMessage(content=user_text), AIMessage(content=output_text)])
 
-    # Output rail passes each configured message content without rewriting the state.
+    # Output rails evaluate only configured assistant output content, not prior user input.
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._llm_rails = SimpleNamespace(
         generate_async=AsyncMock(side_effect=_pass_output_rail_response("detect sensitive data on output"))
@@ -209,9 +214,8 @@ async def test_post_invoke_passes_when_rail_passes(guardrails: _ShallowAgentGuar
     assert result is None
     assert output.messages[0].content == user_text
     assert output.messages[1].content == output_text
-    assert guardrails._llm_rails.generate_async.await_count == 2
-    assert guardrails._llm_rails.generate_async.await_args_list[0].kwargs["messages"][-1]["content"] == user_text
-    assert guardrails._llm_rails.generate_async.await_args_list[1].kwargs["messages"][-1]["content"] == output_text
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
 
 
 @pytest.mark.asyncio
@@ -220,7 +224,7 @@ async def test_post_invoke_targets_configured_message_models(guardrails: _Shallo
     guardrails._guardrails_config = SimpleNamespace(
         workflow_functions={
             _TEST_SHALLOW_AGENT_FUNCTION: FunctionFieldSelection.model_validate(
-                {"messages": {"AIMessage": ["content"]}}
+                {"post_invoke": {"messages": {"AIMessage": ["content"]}}}
             )
         }
     )
@@ -272,7 +276,7 @@ async def test_post_invoke_modifies_when_rail_modifies(guardrails: _ShallowAgent
     modified_output = "Please follow up with <EMAIL_ADDRESS> about this issue."
     output = ShallowResearchAgentState(messages=[HumanMessage(content=user_text), AIMessage(content=output_text)])
 
-    # Output rail rewrites only the matching message content reached by messages.content.
+    # Output rail rewrites only configured assistant output content.
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._llm_rails = SimpleNamespace(
         generate_async=AsyncMock(
@@ -290,9 +294,8 @@ async def test_post_invoke_modifies_when_rail_modifies(guardrails: _ShallowAgent
     assert result is context
     assert output.messages[0].content == user_text
     assert output.messages[1].content == modified_output
-    assert guardrails._llm_rails.generate_async.await_count == 2
-    assert guardrails._llm_rails.generate_async.await_args_list[0].kwargs["messages"][-1]["content"] == user_text
-    assert guardrails._llm_rails.generate_async.await_args_list[1].kwargs["messages"][-1]["content"] == output_text
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
 
 
 @pytest.mark.asyncio
@@ -303,10 +306,10 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _ShallowAgentGuar
     blocked_output = TEST_REFUSAL
     output = ShallowResearchAgentState(messages=[HumanMessage(content=user_text), AIMessage(content=output_text)])
 
-    # First message passes; second message blocks and replaces context.output with refusal.
+    # Assistant output blocks and replaces context.output with refusal.
     guardrails.bind_llms_to_rail = AsyncMock()
 
-    async def block_on_second_message(*, messages: list[dict[str, str]], **_kwargs: object) -> SimpleNamespace:
+    async def block_on_output_message(*, messages: list[dict[str, str]], **_kwargs: object) -> SimpleNamespace:
         content = messages[-1]["content"]
         if content == output_text:
             return _rail_response(
@@ -321,7 +324,7 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _ShallowAgentGuar
         )
 
     guardrails._llm_rails = SimpleNamespace()
-    guardrails._llm_rails.generate_async = AsyncMock(side_effect=block_on_second_message)
+    guardrails._llm_rails.generate_async = AsyncMock(side_effect=block_on_output_message)
     context = _post_invoke_context(output)
 
     result = await guardrails.post_invoke(context)
@@ -332,6 +335,5 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _ShallowAgentGuar
     assert context.output.messages[1].content == output_text
     assert isinstance(context.output.messages[-1], AIMessage)
     assert context.output.messages[-1].content == blocked_output
-    assert guardrails._llm_rails.generate_async.await_count == 2
-    assert guardrails._llm_rails.generate_async.await_args_list[0].kwargs["messages"][-1]["content"] == user_text
-    assert guardrails._llm_rails.generate_async.await_args_list[1].kwargs["messages"][-1]["content"] == output_text
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text

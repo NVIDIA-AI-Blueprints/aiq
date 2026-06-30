@@ -171,11 +171,112 @@ def test_targets_configured_union_members_and_rewrites_in_place(guardrails: Guar
     assert state.messages[3].content == "rewritten final answer"
 
 
+def test_shared_selection_applies_to_pre_and_post(guardrails: GuardrailsMixin):
+    """Field selections without phase keys apply to both pre and post rails."""
+    guardrails._guardrails_config = SimpleNamespace(
+        workflow_functions={
+            _TEST_FUNCTION: FunctionFieldSelection.model_validate({"messages": {"_HumanMessage": ["content"]}})
+        }
+    )
+
+    assert guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, "pre_invoke") == [
+        "messages._HumanMessage.content"
+    ]
+    assert guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, "post_invoke") == [
+        "messages._HumanMessage.content"
+    ]
+
+
+def test_resolves_phase_specific_targets(guardrails: GuardrailsMixin):
+    """Phase-specific field selections keep input and output targets separate."""
+    guardrails._guardrails_config = SimpleNamespace(
+        workflow_functions={
+            _TEST_FUNCTION: FunctionFieldSelection.model_validate(
+                {
+                    "pre_invoke": {"messages": {"_HumanMessage": ["content"]}},
+                    "post_invoke": {"messages": {"_AIMessage": ["content"]}},
+                }
+            )
+        }
+    )
+
+    assert guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, "pre_invoke") == [
+        "messages._HumanMessage.content"
+    ]
+    assert guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, "post_invoke") == [
+        "messages._AIMessage.content"
+    ]
+    assert guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, None) == [
+        "messages._HumanMessage.content",
+        "messages._AIMessage.content",
+    ]
+
+    state = _StateWithMessageUnion(
+        messages=[
+            _HumanMessage(content="user question"),
+            _AIMessage(content="assistant answer"),
+        ]
+    )
+
+    pre_targets = list(
+        guardrails._gather_guardrail_inputs(
+            state,
+            guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, "pre_invoke"),
+            None,
+        )
+    )
+    post_targets = list(
+        guardrails._gather_guardrail_inputs(
+            state,
+            guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, "post_invoke"),
+            None,
+        )
+    )
+
+    assert [text for text, _setter in pre_targets] == ["user question"]
+    assert [text for text, _setter in post_targets] == ["assistant answer"]
+
+
+def test_validates_phase_specific_targets(guardrails: GuardrailsMixin):
+    """Config validation checks phase-specific field selections at startup."""
+    guardrails._guardrails_config = SimpleNamespace(
+        workflow_functions={
+            _TEST_FUNCTION: FunctionFieldSelection.model_validate(
+                {
+                    "pre_invoke": {"messages": {"_HumanMessage": ["content"]}},
+                    "post_invoke": {"messages": {"_AIMessage": ["content"]}},
+                }
+            )
+        }
+    )
+
+    guardrails._validate_guarded_field_paths(_discovered_function(_StateWithMessageUnion))
+
+
+def test_missing_phase_specific_selection_returns_no_targets(guardrails: GuardrailsMixin):
+    """A phase without configured fields does not evaluate rails."""
+    guardrails._guardrails_config = SimpleNamespace(
+        workflow_functions={
+            _TEST_FUNCTION: FunctionFieldSelection.model_validate(
+                {"pre_invoke": {"messages": {"_HumanMessage": ["content"]}}}
+            )
+        }
+    )
+
+    assert guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, "pre_invoke") == [
+        "messages._HumanMessage.content"
+    ]
+    assert guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, "post_invoke") == []
+    assert guardrails._resolve_guarded_targets_for_phase(_TEST_FUNCTION, None) == ["messages._HumanMessage.content"]
+
+
 def test_rejects_invalid_union_member_selection(guardrails: GuardrailsMixin):
     """Config validation rejects model-member selections that are not in the union."""
     guardrails._guardrails_config = SimpleNamespace(
         workflow_functions={
-            _TEST_FUNCTION: FunctionFieldSelection.model_validate({"messages": {"_MissingMessage": ["content"]}})
+            _TEST_FUNCTION: FunctionFieldSelection.model_validate(
+                {"pre_invoke": {"messages": {"_MissingMessage": ["content"]}}}
+            )
         }
     )
 
