@@ -17,6 +17,15 @@
         },
         {
             "pattern": "^https://www\\.dask\\.org/$"
+        },
+        {
+            "pattern": "^https?://tavily\\.com/?$"
+        },
+        {
+            "pattern": "^https?://modal\\.com/docs/reference/modal\\.config$"
+        },
+        {
+            "pattern": "^https?://huggingface\\.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard$"
         }
     ],
     "replacementPatterns": [
