@@ -27,6 +27,7 @@ import base64
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import threading
@@ -102,13 +103,13 @@ class ContentEncryptionConfig:
 
     mode: str
     key_id: str | None = None
-    static_key: bytes | None = None
+    static_key: bytes | None = field(default=None, repr=False)
     vault_addr: str | None = None
     vault_namespace: str | None = None
     vault_transit_mount: str = DEFAULT_VAULT_TRANSIT_MOUNT
     vault_transit_key: str | None = None
-    vault_role_id: str | None = None
-    vault_secret_id: str | None = None
+    vault_role_id: str | None = field(default=None, repr=False)
+    vault_secret_id: str | None = field(default=None, repr=False)
     vault_timeout_seconds: float = DEFAULT_VAULT_TIMEOUT_SECONDS
     readiness_ttl_seconds: float = DEFAULT_READINESS_TTL_SECONDS
     dek_cache_ttl_seconds: float = DEFAULT_DEK_CACHE_TTL_SECONDS
@@ -133,13 +134,13 @@ class ContentEncryptionConfig:
         return (
             self.mode,
             self.key_id,
-            self.static_key,
+            _secret_fingerprint(self.static_key),
             self.vault_addr,
             self.vault_namespace,
             self.vault_transit_mount,
             self.vault_transit_key,
-            self.vault_role_id,
-            self.vault_secret_id,
+            _secret_fingerprint(self.vault_role_id),
+            _secret_fingerprint(self.vault_secret_id),
             self.vault_timeout_seconds,
             self.readiness_ttl_seconds,
             self.dek_cache_ttl_seconds,
@@ -987,7 +988,7 @@ def _parse_non_negative_float(value: str | None, *, default: float, name: str) -
         parsed = float(value)
     except ValueError as exc:
         raise ContentEncryptionConfigError(f"{name} must be a non-negative number") from exc
-    if parsed < 0:
+    if not math.isfinite(parsed) or parsed < 0:
         raise ContentEncryptionConfigError(f"{name} must be a non-negative number")
     return parsed
 
@@ -999,9 +1000,21 @@ def _parse_positive_float(value: str | None, *, default: float, name: str) -> fl
         parsed = float(value)
     except ValueError as exc:
         raise ContentEncryptionConfigError(f"{name} must be a positive number") from exc
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         raise ContentEncryptionConfigError(f"{name} must be a positive number")
     return parsed
+
+
+def _secret_fingerprint(value: bytes | str | None) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bytes):
+        type_tag = b"bytes\0"
+        encoded = value
+    else:
+        type_tag = b"str\0"
+        encoded = value.encode("utf-8", errors="surrogatepass")
+    return hashlib.sha256(b"aiq-content-encryption-config\0" + type_tag + encoded).hexdigest()
 
 
 def _empty_to_none(value: str | None) -> str | None:

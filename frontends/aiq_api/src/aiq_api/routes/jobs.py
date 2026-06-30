@@ -458,7 +458,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         responses={
             400: {"description": "Unknown agent type or invalid request"},
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
-            503: {"description": "Dask scheduler not available"},
+            500: {"description": "Content encryption configuration is invalid or job submission failed"},
+            503: {"description": "Content encryption is not ready"},
         },
     )
     async def submit_job(

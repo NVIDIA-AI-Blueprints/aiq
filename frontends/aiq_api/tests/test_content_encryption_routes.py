@@ -99,6 +99,7 @@ async def _build_jobs_app(monkeypatch, tmp_path, *, job_output=None, submitted_j
     monkeypatch.setattr(event_store.EventStore, "_ensure_table_exists", MagicMock())
 
     if submitted_job is not None:
+        # register_job_routes imports this helper after the patch and captures the mock.
         monkeypatch.setattr(submit, "submit_agent_job", submitted_job)
 
     agent_config = AgentConfig(
@@ -241,6 +242,32 @@ async def test_submit_rejects_when_vault_decrypt_readiness_failed(monkeypatch, t
 
     assert response.status_code == 503
     submitted_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_uses_authorized_submission_when_encryption_is_ready(monkeypatch, tmp_path):
+    _enable_static_key(monkeypatch)
+    submitted_job = AsyncMock(return_value="job-1")
+    app = await _build_jobs_app(monkeypatch, tmp_path, submitted_job=submitted_job)
+
+    with TestClient(app) as client:
+        response = client.post("/v1/jobs/async/submit", json={"agent_type": "deep_researcher", "input": "query"})
+
+    assert response.status_code == 200
+    assert response.json()["job_id"] == "job-1"
+    submitted_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_submit_openapi_documents_encryption_failures(monkeypatch, tmp_path):
+    app = await _build_jobs_app(monkeypatch, tmp_path)
+
+    responses = app.openapi()["paths"]["/v1/jobs/async/submit"]["post"]["responses"]
+
+    assert responses["400"]["description"] == "Unknown agent type or invalid request"
+    assert responses["422"]["description"] == "One or more unknown or agent-unavailable data source IDs"
+    assert responses["500"]["description"] == "Content encryption configuration is invalid or job submission failed"
+    assert responses["503"]["description"] == "Content encryption is not ready"
 
 
 @pytest.mark.asyncio

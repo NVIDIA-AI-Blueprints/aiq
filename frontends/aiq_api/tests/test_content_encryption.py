@@ -114,6 +114,117 @@ def test_content_encryption_defaults_to_off():
     assert config.encrypted is False
 
 
+def test_config_repr_and_signature_do_not_expose_credentials():
+    static_key = b"static-key-credential"
+    role_id = "vault-role-credential"
+    secret_id = "vault-secret-credential"
+    config = crypto.ContentEncryptionConfig(
+        mode="vault",
+        static_key=static_key,
+        vault_role_id=role_id,
+        vault_secret_id=secret_id,
+    )
+
+    config_repr = repr(config)
+    signature_repr = repr(config.signature)
+
+    assert "static_key=" not in config_repr
+    assert "vault_role_id=" not in config_repr
+    assert "vault_secret_id=" not in config_repr
+    for credential in (static_key.decode(), role_id, secret_id):
+        assert credential not in config_repr
+        assert credential not in signature_repr
+
+
+@pytest.mark.parametrize(
+    ("credential_name", "replacement"),
+    [
+        ("static_key", b"replacement-static-key"),
+        ("vault_role_id", "replacement-role-id"),
+        ("vault_secret_id", "replacement-secret-id"),
+    ],
+)
+def test_config_signature_changes_when_credentials_change(credential_name, replacement):
+    credentials = {
+        "static_key": b"original-static-key",
+        "vault_role_id": "original-role-id",
+        "vault_secret_id": "original-secret-id",
+    }
+    original = crypto.ContentEncryptionConfig(mode="vault", **credentials)
+    credentials[credential_name] = replacement
+    updated = crypto.ContentEncryptionConfig(mode="vault", **credentials)
+
+    assert original.signature != updated.signature
+
+
+def test_secret_fingerprint_distinguishes_bytes_from_strings():
+    assert crypto._secret_fingerprint(b"same-value") != crypto._secret_fingerprint("same-value")
+
+
+def test_secret_fingerprint_supports_surrogate_escaped_strings():
+    credential = "vault-role-\udcff"
+
+    fingerprint = crypto._secret_fingerprint(credential)
+
+    assert fingerprint == crypto._secret_fingerprint(credential)
+    assert credential not in fingerprint
+
+
+@pytest.mark.parametrize(
+    ("credential_name", "replacement"),
+    [
+        ("static_key", b"replacement-static-key"),
+        ("vault_role_id", "replacement-role-id"),
+        ("vault_secret_id", "replacement-secret-id"),
+    ],
+)
+def test_manager_cache_reuses_identical_config_and_recreates_for_changed_credentials(
+    monkeypatch, credential_name, replacement
+):
+    credentials = {
+        "static_key": b"original-static-key",
+        "vault_role_id": "original-role-id",
+        "vault_secret_id": "original-secret-id",
+    }
+    configs = iter(
+        [
+            crypto.ContentEncryptionConfig(mode="vault", **credentials),
+            crypto.ContentEncryptionConfig(mode="vault", **credentials),
+            crypto.ContentEncryptionConfig(mode="vault", **{**credentials, credential_name: replacement}),
+        ]
+    )
+    monkeypatch.setattr(crypto, "get_content_encryption_config", lambda: next(configs))
+
+    original_manager = crypto.get_content_encryption_manager()
+    reused_manager = crypto.get_content_encryption_manager()
+    replacement_manager = crypto.get_content_encryption_manager()
+
+    assert reused_manager is original_manager
+    assert replacement_manager is not original_manager
+
+
+@pytest.mark.parametrize(
+    ("env_name", "mode"),
+    [
+        ("AIQ_CONTENT_ENCRYPTION_READINESS_TTL_SECONDS", "off"),
+        ("AIQ_CONTENT_ENCRYPTION_DEK_CACHE_TTL_SECONDS", "off"),
+        ("VAULT_TIMEOUT_SECONDS", "vault"),
+    ],
+)
+@pytest.mark.parametrize("non_finite_value", ["nan", "inf", "-inf"])
+def test_non_finite_numeric_config_is_rejected(monkeypatch, env_name, mode, non_finite_value):
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", mode)
+    monkeypatch.setenv(env_name, non_finite_value)
+    if mode == "vault":
+        monkeypatch.setenv("VAULT_ADDR", "https://vault.example.com")
+        monkeypatch.setenv("VAULT_ROLE_ID", "role-id")
+        monkeypatch.setenv("VAULT_SECRET_ID", "secret-id")
+        monkeypatch.setenv("AIQ_ENCRYPTION_TRANSIT_KEY", "reports")
+
+    with pytest.raises(crypto.ContentEncryptionConfigError):
+        crypto.get_content_encryption_config()
+
+
 def test_static_key_envelope_round_trip(monkeypatch):
     _enable_static_key(monkeypatch)
 
@@ -147,6 +258,11 @@ def test_tamper_fails(monkeypatch):
 
     with pytest.raises(crypto.ContentEncryptionInvalidData):
         crypto.read_job_output("job-1", tampered)
+
+
+def test_non_ascii_envelope_is_classified_as_invalid_data():
+    with pytest.raises(crypto.ContentEncryptionInvalidData, match="envelope is malformed"):
+        crypto.decode_envelope(f"{crypto.ENVELOPE_PREFIX}\N{LATIN SMALL LETTER E WITH ACUTE}")
 
 
 def test_plaintext_job_output_is_rejected_in_encrypted_mode(monkeypatch):

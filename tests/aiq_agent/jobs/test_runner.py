@@ -597,7 +597,7 @@ class TestRunAgentJobEncryption:
         )
 
     @pytest.mark.asyncio
-    async def test_final_output_encryption_failure_marks_failure_without_plaintext_write(self):
+    async def test_final_output_encryption_failure_marks_failure_without_plaintext_write(self, tmp_path):
         from types import SimpleNamespace
 
         from aiq_api.jobs.crypto import ContentEncryptionUnavailable
@@ -636,6 +636,7 @@ class TestRunAgentJobEncryption:
         mock_job_store = MagicMock()
         mock_job_store.update_status = AsyncMock()
         update_job_output = AsyncMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
 
         with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
             with patch("nat.runtime.loader.load_config", return_value=object()):
@@ -662,7 +663,7 @@ class TestRunAgentJobEncryption:
                                                 False,
                                                 20,
                                                 "tcp://localhost:8786",
-                                                "sqlite:///./test.db",
+                                                db_url,
                                                 "config.yml",
                                                 "job-1",
                                                 "input",
