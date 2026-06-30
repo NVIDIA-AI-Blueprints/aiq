@@ -88,27 +88,27 @@ def _rail_response(
 
 
 @pytest.mark.parametrize(
-    ("raw_input", "expected_query_text"),
+    ("raw_input", "expected_query_texts"),
     [
         pytest.param(  # Plain string input.
             "Research NAT guardrails",
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Stringified JSON payload with query and data sources.
             '{"query": "Research NAT guardrails", "data_sources": ["docs"]}',
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Stringified JSON payload with text and a single data source.
             '{"text": "Research NAT guardrails", "data_sources": "docs"}',
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Dict with top-level message.
             {"message": "Research NAT guardrails"},
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Dict with top-level text.
             {"text": "Research NAT guardrails"},
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Dict with API-style message history.
             {
@@ -119,7 +119,7 @@ def _rail_response(
                     ]
                 }
             },
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Dict message history prefers the latest user message.
             {
@@ -131,7 +131,7 @@ def _rail_response(
                     ]
                 }
             },
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Dict message history falls back to the last message when no user role exists.
             {
@@ -142,7 +142,7 @@ def _rail_response(
                     ]
                 }
             },
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Dict message history can carry data sources at the content level.
             {
@@ -151,7 +151,7 @@ def _rail_response(
                     "data_sources": ["docs"],
                 }
             },
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Dict message content can be multipart text.
             {
@@ -168,7 +168,7 @@ def _rail_response(
                     ]
                 }
             },
-            "Research NAT\nguardrails",
+            ["Research NAT", "guardrails"],
         ),
         pytest.param(  # Dict message content can contain inline JSON with data sources.
             {
@@ -181,7 +181,7 @@ def _rail_response(
                     ]
                 }
             },
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Object with message attributes and data sources.
             SimpleNamespace(
@@ -191,7 +191,7 @@ def _rail_response(
                 ],
                 data_sources=["docs"],
             ),
-            "Research NAT guardrails",
+            ["Research NAT guardrails"],
         ),
         pytest.param(  # Object message content can be multipart text.
             SimpleNamespace(
@@ -207,19 +207,19 @@ def _rail_response(
                 ],
                 data_sources=None,
             ),
-            "Research NAT\nguardrails",
+            ["Research NAT", "guardrails"],
         ),
     ],
 )
-def test_input_text_can_be_extracted_to_apply_rail(
+def test_input_text_targets_can_be_extracted_to_apply_rails(
     guardrails: _WorkflowGuardrails,
     raw_input: object,
-    expected_query_text: str,
+    expected_query_texts: list[str],
 ):
-    """Supported raw workflow inputs resolve to guardable query text."""
-    query_text = guardrails._extract_guardrail_target(raw_input)
+    """Supported raw workflow inputs resolve to individual guardable string leaves."""
+    targets = guardrails._extract_guardrail_targets_for_rewrite(raw_input)
 
-    assert query_text == expected_query_text
+    assert [query_text for query_text, _replace_query in targets] == expected_query_texts
 
 
 @pytest.mark.parametrize(
@@ -423,6 +423,54 @@ async def test_pre_invoke_modifies_structured_input_in_place(
     assert result is context
     assert assert_rewrite(context.modified_args[0], modified_input)
     assert context.output is None
+
+
+@pytest.mark.asyncio
+async def test_pre_invoke_modifies_multimodal_content_text_leaf_in_place(
+    guardrails: _WorkflowGuardrails,
+):
+    """A modified input rail rewrites one multimodal text leaf without aggregating content."""
+    raw_input = {
+        "content": {
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "Please follow up with"},
+                        {"type": "image", "url": "https://example.com/image.png"},
+                        {"type": "text", "text": "customer@example.com."},
+                    ],
+                }
+            ],
+            "data_sources": ["docs"],
+        }
+    }
+
+    async def modify_email_leaf(*, prompt: str, **_kwargs: object) -> SimpleNamespace:
+        modified_text = "<EMAIL_ADDRESS>." if prompt == "customer@example.com." else prompt
+        return _rail_response(modified_text, rail_name="mask sensitive data on input")
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(generate_async=AsyncMock(side_effect=modify_email_leaf))
+    context = SimpleNamespace(modified_args=(raw_input,), output=None)
+
+    result = await guardrails.pre_invoke(context)
+
+    content = context.modified_args[0]["content"]["messages"][0]["content"]
+    assert result is context
+    assert isinstance(content, list)
+    assert content == [
+        {"type": "text", "text": "Please follow up with"},
+        {"type": "image", "url": "https://example.com/image.png"},
+        {"type": "text", "text": "<EMAIL_ADDRESS>."},
+    ]
+    assert context.modified_args[0]["content"]["data_sources"] == ["docs"]
+    assert context.output is None
+    assert guardrails._llm_rails.generate_async.await_count == 2
+    assert [call.kwargs["prompt"] for call in guardrails._llm_rails.generate_async.await_args_list] == [
+        "Please follow up with",
+        "customer@example.com.",
+    ]
 
 
 @pytest.mark.asyncio

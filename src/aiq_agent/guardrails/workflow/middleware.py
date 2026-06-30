@@ -26,10 +26,7 @@ from nemoguardrails.rails.llm.options import GenerationLogOptions
 from nemoguardrails.rails.llm.options import GenerationOptions
 from nemoguardrails.rails.llm.options import GenerationResponse
 
-from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
 from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
-from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
-from aiq_agent.agents.chat_researcher.utils import _is_text_type
 from aiq_agent.agents.chat_researcher.utils import _is_user_role
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
 from aiq_agent.guardrails.workflow.config import WorkflowGuardrailsConfig
@@ -67,35 +64,39 @@ class _WorkflowGuardrails(GuardrailsMixin):
 
         input: Any = context.modified_args[0]
 
-        target = self._extract_guardrail_target_for_rewrite(input)
-        if target is None:
+        targets = self._extract_guardrail_targets_for_rewrite(input)
+        if not targets:
             return None
-        query_text, replace_query = target
 
         try:
             await self.bind_llms_to_rail()
 
-            response: GenerationResponse = await self._llm_rails.generate_async(
-                prompt=query_text,
-                options=GenerationOptions(
-                    rails=["input"],
-                    log=GenerationLogOptions(activated_rails=True),
-                    output_vars=["user_message", "bot_message"],
-                ),
-            )
+            modified = False
+            args = list(context.modified_args)
+            for query_text, replace_query in targets:
+                response: GenerationResponse = await self._llm_rails.generate_async(
+                    prompt=query_text,
+                    options=GenerationOptions(
+                        rails=["input"],
+                        log=GenerationLogOptions(activated_rails=True),
+                        output_vars=["user_message", "bot_message"],
+                    ),
+                )
 
-            if self._rail_blocked(response):
-                context.output = self._handle_blocked_rail_response(response)
-                return context
+                if self._rail_blocked(response):
+                    context.output = self._handle_blocked_rail_response(response)
+                    return context
 
-            modified_query_text = self._handle_modified_rail_response(response, fallback=query_text)
-            if modified_query_text != query_text:
+                modified_query_text = self._handle_modified_rail_response(response, fallback=query_text)
+                if modified_query_text == query_text:
+                    continue
+
                 args = list(context.modified_args)
                 args[0] = replace_query(modified_query_text)
                 context.modified_args = tuple(args)
-                return context
+                modified = True
 
-            return None
+            return context if modified else None
         except Exception:
             logger.exception("Workflow input Guardrails failed while evaluating query text; continuing without rails")
             return None
@@ -106,86 +107,92 @@ class _WorkflowGuardrails(GuardrailsMixin):
 
     def _extract_guardrail_target(self, raw_input: object) -> str | None:
         """Extract the normalized user query text from a raw workflow input."""
-        target = self._extract_guardrail_target_for_rewrite(raw_input)
-        if target is None:
+        targets = self._extract_guardrail_targets_for_rewrite(raw_input)
+        if not targets:
             return None
-        return target[0]
+        return targets[0][0]
 
-    def _extract_guardrail_target_for_rewrite(
+    def _extract_guardrail_targets_for_rewrite(
         self,
         raw_input: object,
-    ) -> tuple[str, Callable[[str], object]] | None:
-        """Extract query text with a writer for the same input location."""
+    ) -> list[tuple[str, Callable[[str], object]]]:
+        """Extract guardrail targets that each map to one writable string leaf."""
         try:
-            target = self._extract_guardrail_target_for_rewrite_unchecked(raw_input)
+            targets = self._extract_guardrail_targets_for_rewrite_unchecked(raw_input)
         except Exception:
             logger.exception(
                 "Workflow input Guardrails could not extract query text from input type %s; continuing without rails",
                 type(raw_input).__name__,
             )
-            return None
+            return []
 
-        if target is None:
-            query_text = ""
-        else:
-            query_text = target[0]
-        if not query_text:
+        targets = [(text, replace_text) for text, replace_text in targets if text]
+        if not targets:
             logger.warning(
                 "Workflow input Guardrails could not extract query text from input type %s; continuing without rails",
                 type(raw_input).__name__,
             )
-            return None
+            return []
 
-        return target
+        return targets
 
-    def _extract_guardrail_target_for_rewrite_unchecked(
+    def _extract_guardrail_targets_for_rewrite_unchecked(
         self,
         raw_input: object,
-    ) -> tuple[str, Callable[[str], object]] | None:
-        """Extract query text and preserve the source location for rewrites."""
+    ) -> list[tuple[str, Callable[[str], object]]]:
+        """Extract query text targets and preserve their source locations."""
+        # Each target is one concrete string leaf. Input rails are applied to
+        # leaves independently, and modified text is written back to that same
+        # leaf without aggregating or redistributing text.
         if isinstance(raw_input, dict):
             content = raw_input.get("content", {}) if isinstance(raw_input.get("content"), dict) else {}
-            target = self._extract_messages_target(raw_input, content.get("messages"))
-            if target is not None:
-                return target
+            targets = self._extract_messages_targets(raw_input, content.get("messages"))
+            if targets:
+                return targets
 
-            query_text, _data_sources = _extract_query_and_sources(raw_input)
-            if query_text:
-                return self._find_matching_text_target(raw_input, raw_input, query_text)
+            for field in ("query", "message", "text"):
+                item = raw_input.get(field)
+                if isinstance(item, str) and item.strip():
+                    return [
+                        self._target_from_text(
+                            item,
+                            lambda new_text, field=field: self._set_dict_value(raw_input, raw_input, field, new_text),
+                        )
+                    ]
 
-            return None
+            return []
 
         messages = getattr(raw_input, "messages", None)
-        target = self._extract_messages_target(raw_input, messages)
-        if target is not None:
-            return target
+        targets = self._extract_messages_targets(raw_input, messages)
+        if targets:
+            return targets
         if isinstance(messages, list):
-            return None
+            return []
 
         text = str(raw_input)
-        return self._target_from_text(text, lambda new_text: new_text)
+        return [self._target_from_text(text, lambda new_text: new_text)]
 
-    def _extract_messages_target(
+    def _extract_messages_targets(
         self,
         raw_input: object,
         messages: object,
-    ) -> tuple[str, Callable[[str], object]] | None:
-        """Extract a guardrail target from a message list."""
+    ) -> list[tuple[str, Callable[[str], object]]]:
+        """Extract guardrail targets from the selected message in a list."""
         if not isinstance(messages, list) or not messages:
-            return None
+            return []
 
         for index in range(len(messages) - 1, -1, -1):
             message = messages[index]
             if self._message_has_user_role(message):
-                target = self._extract_message_target(
+                targets = self._extract_message_targets(
                     raw_input,
                     message,
                     lambda new_text, index=index: self._set_list_value(raw_input, messages, index, new_text),
                 )
-                if target is not None:
-                    return target
+                if targets:
+                    return targets
 
-        return self._extract_message_target(
+        return self._extract_message_targets(
             raw_input,
             messages[-1],
             lambda new_text: self._set_list_value(raw_input, messages, len(messages) - 1, new_text),
@@ -196,103 +203,107 @@ class _WorkflowGuardrails(GuardrailsMixin):
         role = message.get("role") if isinstance(message, dict) else getattr(message, "role", None)
         return _is_user_role(role)
 
-    def _extract_message_target(
+    def _extract_message_targets(
         self,
         raw_input: object,
         message: object,
         write_message: Callable[[str], object],
-    ) -> tuple[str, Callable[[str], object]] | None:
-        """Extract guardrail text from a message with a writer for that source."""
-        expected_text = _extract_text_from_message(message)
-        if not expected_text:
-            return None
-        return self._find_matching_text_target(raw_input, message, expected_text, fallback_writer=write_message)
-
-    def _find_matching_text_target(
-        self,
-        raw_input: object,
-        value: object,
-        expected_text: str,
-        *,
-        fallback_writer: Callable[[str], object] | None = None,
-    ) -> tuple[str, Callable[[str], object]] | None:
-        """Find the writable text value matching the extracted guardrail text."""
-        for text, write_text in self._iter_text_targets(raw_input, value, fallback_writer):
-            query_text, _data_sources = _extract_query_from_text(text)
-            if expected_text in (query_text, text):
-                return self._target_from_text(text, write_text)
-
-        return None
-
-    def _iter_text_targets(
-        self,
-        raw_input: object,
-        value: object,
-        write_value: Callable[[str], object] | None,
     ) -> list[tuple[str, Callable[[str], object]]]:
-        """Return writable text targets contained in a value."""
-        if isinstance(value, str):
-            return [(value, write_value)] if write_value is not None else []
+        """Extract guardrail targets from a message without aggregating text."""
+        if isinstance(message, str):
+            return [self._target_from_text(message, write_message)]
 
-        if isinstance(value, list):
-            targets: list[tuple[str, Callable[[str], object]]] = []
-            text_parts = self._list_text_parts(value)
-            if text_parts and write_value is not None:
-                targets.append(("\n".join(text_parts).strip(), write_value))
-
-            for index, item in enumerate(value):
-                targets.extend(
-                    self._iter_text_targets(
-                        raw_input,
-                        item,
-                        lambda new_text, index=index: self._set_list_value(raw_input, value, index, new_text),
+        if isinstance(message, dict):
+            targets = self._extract_content_targets(
+                raw_input,
+                message.get("content"),
+                lambda new_text: self._set_dict_value(raw_input, message, "content", new_text),
+            )
+            if targets:
+                return targets
+            text_value = message.get("text")
+            if isinstance(text_value, str) and text_value.strip():
+                return [
+                    self._target_from_text(
+                        text_value,
+                        lambda new_text: self._set_dict_value(raw_input, message, "text", new_text),
                     )
-                )
+                ]
             return targets
 
-        if isinstance(value, dict):
-            targets = []
-            for field, item in value.items():
-                targets.extend(
-                    self._iter_text_targets(
-                        raw_input,
-                        item,
-                        lambda new_text, field=field: self._set_dict_value(raw_input, value, field, new_text),
-                    )
-                )
+        content = getattr(message, "content", None)
+        targets = self._extract_content_targets(
+            raw_input,
+            content,
+            lambda new_text: self._set_attr_value(raw_input, message, "content", new_text),
+        )
+        if targets:
             return targets
 
-        try:
-            fields = vars(value)
-        except TypeError:
+        text_value = getattr(message, "text", None)
+        if isinstance(text_value, str) and text_value.strip():
+            return [
+                self._target_from_text(
+                    text_value,
+                    lambda new_text: self._set_attr_value(raw_input, message, "text", new_text),
+                )
+            ]
+        return []
+
+    def _extract_content_targets(
+        self,
+        raw_input: object,
+        content: object,
+        write_content: Callable[[str], object],
+    ) -> list[tuple[str, Callable[[str], object]]]:
+        """Extract guardrail targets from one message content value."""
+        if isinstance(content, str) and content.strip():
+            return [self._target_from_text(content, write_content)]
+
+        if not isinstance(content, list):
             return []
 
-        targets = []
-        for field in fields:
-            item = getattr(value, field)
+        targets: list[tuple[str, Callable[[str], object]]] = []
+        for index, item in enumerate(content):
             targets.extend(
-                self._iter_text_targets(
+                self._extract_content_item_targets(
                     raw_input,
                     item,
-                    lambda new_text, field=field: self._set_attr_value(raw_input, value, field, new_text),
+                    lambda new_text, index=index: self._set_list_value(raw_input, content, index, new_text),
                 )
             )
         return targets
 
-    def _list_text_parts(self, value: list[Any]) -> list[str]:
-        """Extract text parts from a multimodal content list."""
-        parts: list[str] = []
-        for item in value:
-            if hasattr(item, "type") and _is_text_type(getattr(item, "type")):
-                text_value = getattr(item, "text", None)
-            elif isinstance(item, dict) and _is_text_type(item.get("type")):
-                text_value = item.get("text")
-            else:
-                text_value = None
+    def _extract_content_item_targets(
+        self,
+        raw_input: object,
+        item: object,
+        write_item: Callable[[str], object],
+    ) -> list[tuple[str, Callable[[str], object]]]:
+        """Extract guardrail targets from one message content list item."""
+        if isinstance(item, str) and item.strip():
+            return [self._target_from_text(item, write_item)]
 
-            if text_value:
-                parts.append(str(text_value))
-        return parts
+        if isinstance(item, dict):
+            text_value = item.get("text")
+            if isinstance(text_value, str) and text_value.strip():
+                return [
+                    self._target_from_text(
+                        text_value,
+                        lambda new_text: self._set_dict_value(raw_input, item, "text", new_text),
+                    )
+                ]
+            return []
+
+        text_value = getattr(item, "text", None)
+        if isinstance(text_value, str) and text_value.strip():
+            return [
+                self._target_from_text(
+                    text_value,
+                    lambda new_text: self._set_attr_value(raw_input, item, "text", new_text),
+                )
+            ]
+        return []
 
     def _target_from_text(
         self,
