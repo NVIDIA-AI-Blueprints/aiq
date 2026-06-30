@@ -266,7 +266,9 @@ async def test_submit_openapi_documents_encryption_failures(monkeypatch, tmp_pat
 
     assert responses["400"]["description"] == "Unknown agent type or invalid request"
     assert responses["422"]["description"] == "One or more unknown or agent-unavailable data source IDs"
-    assert responses["500"]["description"] == "Content encryption configuration is invalid or job submission failed"
+    assert responses["500"]["description"] == (
+        "Content encryption configuration is invalid or async job authorization persistence failed"
+    )
     assert responses["503"]["description"] == "Content encryption is not ready"
 
 
