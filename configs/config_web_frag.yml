@@ -101,7 +101,7 @@ functions:
         description: "Search uploaded documents and files."
         tools:
           - knowledge_search
-      # Protected per-user MCP source: NVIDIA MaaS Google Drive. `per_user_auth`
+      # Protected per-user MCP source (example: a Google Drive MCP server). `per_user_auth`
       # makes AIQ surface connection state on the source card, gate job submission
       # until connected (409 mcp_auth_required), and own the OAuth connect/callback.
       - id: gdrive
@@ -236,8 +236,9 @@ functions:
 #     process boundary, so users Reconnect when a source shows "expired" (the UI
 #     supports this). Set a fixed (e.g. ECI public) client_id for silent refresh.
 #
-# Example below is wired for NVIDIA MaaS (MCP-as-a-Service) Google Drive.
-# Set: MCP_GDRIVE_URL=https://maas.prd.astra.nvidia.com/maas/gdrive/mcp
+# Example below wires a per-user OAuth-protected MCP server (e.g. a Google Drive
+# MCP service). Point MCP_GDRIVE_URL at your provider's MCP endpoint.
+# Set: MCP_GDRIVE_URL=https://your-mcp-server.example.com/mcp
 #      AIQ_PUBLIC_URL=<https URL where AIQ's API is reachable by the browser>
 #
 # NOTE: deliberately NO `function_groups: mcp_gdrive` here. A per_user_mcp_client

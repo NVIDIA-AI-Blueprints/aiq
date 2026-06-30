@@ -97,7 +97,7 @@ aiq:
         # be reachable from the pod; AIQ_PUBLIC_URL builds the OAuth redirect_uri
         # (<AIQ_PUBLIC_URL>/v1/auth/mcp/gdrive/callback). Uncomment and set to
         # enable; without them the gdrive card shows but connect fails.
-        # MCP_GDRIVE_URL: https://maas.prd.astra.nvidia.com/maas/gdrive/mcp
+        # MCP_GDRIVE_URL: https://your-mcp-server.example.com/mcp
         # AIQ_PUBLIC_URL: https://aiq.example.com
         # MCP_GDRIVE_CLIENT_ID: ''
         # MCP_GDRIVE_CLIENT_SECRET: ''
