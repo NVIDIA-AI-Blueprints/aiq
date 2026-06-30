@@ -43,7 +43,9 @@ policy when creating an anonymous sandbox. Per-job directories inside that sandb
 an access-control boundary: executed code can access sibling job directories allowed by the
 shared policy. Use OpenShell only for local, single-operator testing, and do not run mutually
 untrusted jobs concurrently. Physical per-job OpenShell isolation and attach-time policy
-verification are follow-up work.
+verification are follow-up work. The default policy also sets `landlock.compatibility:
+best_effort`, so on hosts without Landlock (e.g. Docker Desktop on macOS) filesystem
+confinement is silently dropped; production must use `hard_requirement` to fail closed.
 
 The agent only ever sees a `read_file`/`write_file`/`edit_file`/`execute` tool surface
 plus `/shared/` for durable text. Binary artifacts are harvested host-side via
@@ -210,15 +212,12 @@ Requires `modal` + `langchain-modal` (in `pyproject`) and `modal setup`. See
 Two ad-hoc deps (never in `pyproject`): the `openshell` SDK and the official
 `langchain-nvidia-openshell` adapter (`OpenShellSandbox`), the OpenShell partner package in
 [`langchain-ai/langchain-nvidia`](https://github.com/langchain-ai/langchain-nvidia/pull/303).
-The adapter is not yet on PyPI, so it is installed from a git spec — `./scripts/setup_openshell.sh`
-does this for you (override the source with `LANGCHAIN_NVIDIA_REPO`). Until #303 publishes, the
-adapter must include the `argv` file-transfer fix; to install it into your `.venv` manually, use
-the fork branch that carries it (without it, in-sandbox file transfer fails with a misleading
-`permission_denied`):
+The adapter is published on PyPI as `langchain-nvidia-openshell` — `./scripts/setup_openshell.sh`
+installs it for you (override the source with `LANGCHAIN_NVIDIA_REPO` to use a git spec or local
+checkout). To install it into your `.venv` manually:
 
 ```bash
-uv pip install --force-reinstall --no-deps \
-  'git+https://github.com/KyleZheng1284/langchain-nvidia.git@fix/openshell-argv-file-transfer#subdirectory=libs/openshell'
+uv pip install 'langchain-nvidia-openshell==0.1.0'
 ```
 
 One-command setup:

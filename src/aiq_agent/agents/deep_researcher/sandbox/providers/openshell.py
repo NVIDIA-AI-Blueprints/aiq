@@ -103,14 +103,10 @@ def _classify_fs_error(text: str) -> str:
 
 
 _OPENSHELL_IMPORT_HINT = (
-    "The OpenShell sandbox provider requires the `openshell>=0.0.57,<0.1` SDK and the "
-    "`langchain-nvidia-openshell` adapter (the OpenShell partner package in "
-    "`langchain-ai/langchain-nvidia`, PR #303). They are optional, ad-hoc dependencies. "
-    "Install them with `./scripts/setup_openshell.sh` (override the source via "
-    "`LANGCHAIN_NVIDIA_REPO`); until PR #303 publishes, the adapter must include the argv "
-    "file-transfer fix, e.g. `uv pip install --force-reinstall --no-deps "
-    "'git+https://github.com/KyleZheng1284/langchain-nvidia.git"
-    "@fix/openshell-argv-file-transfer#subdirectory=libs/openshell'` (see sandbox/README.md), "
+    "The OpenShell sandbox provider requires the `openshell>=0.0.72,<0.1` SDK and the "
+    "`langchain-nvidia-openshell` adapter (published on PyPI). They are optional, ad-hoc "
+    "dependencies. Install them with `./scripts/setup_openshell.sh` (which installs "
+    "`langchain-nvidia-openshell` from PyPI; override the source via `LANGCHAIN_NVIDIA_REPO`), "
     "and configure an OpenShell gateway before enabling this provider."
 )
 

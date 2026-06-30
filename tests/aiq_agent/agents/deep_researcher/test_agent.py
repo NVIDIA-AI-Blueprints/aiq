@@ -180,7 +180,15 @@ class TestDeepResearcherAgent:
 
     def test_init_with_custom_settings(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization with custom settings."""
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent),
+            # Patch backend creation so the test does not require the optional OpenShell adapter
+            # (the default sandbox provider) to be installed.
+            patch(
+                "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+                return_value=MagicMock(),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
             from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
             from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig

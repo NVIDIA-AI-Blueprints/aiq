@@ -21,6 +21,9 @@ filesystem_policy:
     - /tmp
     - /dev/null
 
+# best_effort lets the sandbox start on hosts without Landlock (e.g. Docker Desktop on
+# macOS), but there filesystem confinement is silently dropped. Acceptable only for the
+# local single-operator demo; production must use `hard_requirement` (fail closed).
 landlock:
   compatibility: best_effort
 

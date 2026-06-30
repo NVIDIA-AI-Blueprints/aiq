@@ -74,19 +74,17 @@ dotenv -f deploy/.env run .venv/bin/nat serve --config_file configs/config_opens
 Useful version examples:
 
 ```bash
-./scripts/setup_openshell.sh --openshell-version 0.0.57
+./scripts/setup_openshell.sh --openshell-version 0.0.72
 ./scripts/setup_openshell.sh --openshell-version latest
 ./scripts/setup_openshell.sh --list-openshell-versions
 ```
 
-In the interactive version prompt, pressing Enter selects `0.0.57`.
+In the interactive version prompt, pressing Enter selects `0.0.72`.
 
 The setup installs the `openshell` SDK plus the official `langchain-nvidia-openshell`
-adapter (`OpenShellSandbox`), the OpenShell partner package in
-`langchain-ai/langchain-nvidia` (PR #303).
-Until it publishes to PyPI, the script installs it from a git spec by default; set
-`LANGCHAIN_NVIDIA_REPO` or pass `--langchain-nvidia` to use another `uv pip install`
-spec or a local checkout.
+adapter (`OpenShellSandbox`), published on PyPI. The script installs it from PyPI by
+default; set `LANGCHAIN_NVIDIA_REPO` or pass `--langchain-nvidia` to use another
+`uv pip install` spec or a local checkout.
 
 Useful policy examples:
 

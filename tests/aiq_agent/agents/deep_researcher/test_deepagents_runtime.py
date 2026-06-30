@@ -138,7 +138,13 @@ class TestDeepAgentsRuntimeRouting:
             agents={"researcher-agent": ("research",)},
             require_sandbox=("research",),
         )
-        runtime = DeepAgentsRuntime(skills=skills, sandbox=DeepResearchSandboxConfig())
+        # Patch backend creation so the test does not require the optional OpenShell adapter
+        # (the default provider) to be installed.
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=MagicMock(),
+        ):
+            runtime = DeepAgentsRuntime(skills=skills, sandbox=DeepResearchSandboxConfig())
 
         assert runtime.skill_sources_for("researcher-agent") == ["/skills/research/"]
 

@@ -185,7 +185,9 @@ Paragraph 2.`} />)
 
       const img = screen.getByRole('img', { name: 'Population chart' })
       expect(img).toHaveAttribute('src', '/api/jobs/async/job/job-9/artifacts/art_abc123/content')
-      expect(screen.getByText('Population chart').tagName).toBe('FIGCAPTION')
+      // Caption renders in a phrasing-safe <span> (not <figcaption>) to keep valid
+      // nesting inside the markdown <p> wrapper.
+      expect(screen.getByText('Population chart').tagName).toBe('SPAN')
     })
 
     test('skips an artifact:// image when no job id is available', () => {

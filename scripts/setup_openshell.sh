@@ -22,10 +22,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 VENV_DIR="$REPO_ROOT/.venv"
 
-# Floor aligned with the langchain-nvidia-openshell adapter (openshell>=0.0.68).
-# Anything below this is upgraded by the adapter during its install, so do not pin under it.
-MIN_OPENSHELL_VERSION="0.0.68"
-DEFAULT_OPENSHELL_VERSION="0.0.68"
+# Floor aligned with the published langchain-nvidia-openshell 0.1.0 adapter, which is
+# tested against OpenShell 0.0.72+. Anything below this is upgraded by the adapter during
+# its install, so do not pin under it.
+MIN_OPENSHELL_VERSION="0.0.72"
+DEFAULT_OPENSHELL_VERSION="0.0.72"
 OPENSHELL_VERSION="${AIQ_OPENSHELL_VERSION:-}"
 OPENSHELL_VERSION_USER_SUPPLIED=false
 if [[ -n "$OPENSHELL_VERSION" ]]; then
@@ -35,10 +36,9 @@ OPENSHELL_LATEST_VERSION=""
 OPENSHELL_AVAILABLE_VERSIONS=""
 PYTHON_BIN=""
 # Official OpenShell deepagents adapter: the `langchain-nvidia-openshell` partner
-# package (langchain-ai/langchain-nvidia, PR #303). Until it publishes to PyPI,
-# default to the git spec from the source branch so the install resolves. Switch
-# this default to `langchain-nvidia-openshell` once the package is published.
-DEFAULT_LANGCHAIN_NVIDIA_INSTALL_SPEC="git+https://github.com/pastorsj/langchain-nvidia.git@spastoriza/openshell-sandbox#subdirectory=libs/openshell"
+# package, now published on PyPI. Override with LANGCHAIN_NVIDIA_REPO to use a git
+# spec or a local checkout (e.g. to test an unreleased adapter build).
+DEFAULT_LANGCHAIN_NVIDIA_INSTALL_SPEC="langchain-nvidia-openshell==0.1.0"
 LANGCHAIN_NVIDIA_REPO="${LANGCHAIN_NVIDIA_REPO:-$DEFAULT_LANGCHAIN_NVIDIA_INSTALL_SPEC}"
 SANDBOX_NAME="${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}"
 IMAGE_NAME="${AIQ_OPENSHELL_IMAGE:-aiq-openshell-demo:latest}"
@@ -80,8 +80,8 @@ Sets up OpenShell for AI-Q:
 
 Options:
   --openshell-version VERSION   Exact OpenShell version, or "latest".
-                                Default: asks in an interactive shell; Enter selects 0.0.68.
-                                Non-interactive default: 0.0.68.
+                                Default: asks in an interactive shell; Enter selects 0.0.72.
+                                Non-interactive default: 0.0.72.
   --policy CHOICE               Sandbox network policy.
                                 Choices: $SUPPORTED_POLICIES
                                 Default: asks in an interactive shell, offline otherwise.
@@ -105,7 +105,7 @@ Options:
   --skip-sandbox                Do not create the named sandbox.
   --list-policies               Print supported policy choices.
   --list-services               Print supported services for --allow.
-  --list-openshell-versions     Print released OpenShell versions >= 0.0.68.
+  --list-openshell-versions     Print released OpenShell versions >= 0.0.72.
   -h, --help                    Show this help.
 
 Examples:
@@ -416,13 +416,11 @@ install_openshell_python() {
         cat <<EOF
 ERROR: Could not install the langchain-nvidia-openshell adapter.
 
-The adapter is the OpenShell partner package in langchain-ai/langchain-nvidia
-(PR #303), not yet published to PyPI. Point LANGCHAIN_NVIDIA_REPO at a uv install
-spec or a local checkout, then rerun. Examples:
-  LANGCHAIN_NVIDIA_REPO='git+https://github.com/pastorsj/langchain-nvidia.git@spastoriza/openshell-sandbox#subdirectory=libs/openshell' scripts/setup_openshell.sh
-  scripts/setup_openshell.sh --langchain-nvidia /path/to/langchain-nvidia
-  # Once published:
+The adapter is published on PyPI as langchain-nvidia-openshell. The default install
+resolves from PyPI; if your environment cannot reach it, point LANGCHAIN_NVIDIA_REPO at
+an alternate uv install spec or a local checkout, then rerun. Examples:
   LANGCHAIN_NVIDIA_REPO=langchain-nvidia-openshell scripts/setup_openshell.sh
+  scripts/setup_openshell.sh --langchain-nvidia /path/to/langchain-nvidia
 EOF
         exit 1
     fi
@@ -903,6 +901,10 @@ filesystem_policy:
     - /tmp
     - /dev/null
 
+# best_effort lets the sandbox start on hosts without Landlock (e.g. Docker Desktop on
+# macOS), but on those hosts filesystem confinement is silently dropped. This is acceptable
+# only for the local single-operator demo; production must use `hard_requirement` so a
+# missing LSM fails closed instead of running unconfined.
 landlock:
   compatibility: best_effort
 

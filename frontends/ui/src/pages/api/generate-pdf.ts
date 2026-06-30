@@ -6,6 +6,7 @@ import React from 'react'
 import { renderToStream } from '@react-pdf/renderer'
 import { MarkdownPDF } from '../../lib/pdf/ReactPdfDocument'
 import { extractArtifactIds, replaceArtifactImages } from '../../shared/components/MarkdownRenderer/artifact-url'
+import { isAuthRequired } from '@/adapters/auth/config'
 
 // Cap the bytes we embed per image. Charts are tiny; this guards against base64-inflating a
 // large artifact (up to the 50 MB harvest cap) into a pathological PDF.
@@ -99,14 +100,17 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // Forward only the auth the artifact endpoint needs — the Authorization header and the
-    // idToken cookie — rather than the caller's entire cookie jar.
+    // idToken cookie — rather than the caller's entire cookie jar. Gated on isAuthRequired()
+    // so anonymous mode (REQUIRE_AUTH=false) sends no identity headers, matching the jobs proxy.
     const authHeaders: Record<string, string> = {}
-    if (req.headers.authorization) authHeaders.Authorization = req.headers.authorization
-    const idTokenCookie = req.headers.cookie
-      ?.split(';')
-      .map((c) => c.trim())
-      .find((c) => c.startsWith('idToken='))
-    if (idTokenCookie) authHeaders.Cookie = idTokenCookie
+    if (isAuthRequired()) {
+      if (req.headers.authorization) authHeaders.Authorization = req.headers.authorization
+      const idTokenCookie = req.headers.cookie
+        ?.split(';')
+        .map((c) => c.trim())
+        .find((c) => c.startsWith('idToken='))
+      if (idTokenCookie) authHeaders.Cookie = idTokenCookie
+    }
 
     const resolvedMarkdown = await inlineArtifactImages(
       markdown,

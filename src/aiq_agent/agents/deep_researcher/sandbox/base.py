@@ -298,7 +298,14 @@ class SandboxProvider(BaseSandbox, ABC):
         """
         with self._lock:
             try:
-                return fn(self._session_or_create())
+                result = fn(self._session_or_create())
+                # A concurrent terminate() can flip _terminated while the call was in
+                # flight; if the close did not interrupt it (or the call won the race),
+                # surface cancellation rather than returning a result for a terminated job.
+                with self._state_lock:
+                    if self._terminated:
+                        raise SandboxTerminatedError(f"Sandbox {self.sandbox_name} has been terminated")
+                return result
             except Exception as exc:
                 with self._state_lock:
                     terminated = self._terminated

@@ -174,7 +174,7 @@ class SqlArtifactStore(ArtifactStore):
             Column("provenance", Text, nullable=True),
             Column("status", String(16), nullable=False),
             Column("content", LargeBinary, nullable=True),
-            Column("created_at", DateTime, server_default=func.now()),
+            Column("created_at", DateTime(timezone=True), server_default=func.now()),
             Index("idx_artifacts_job_sha", "job_id", "sha256"),
         )
         inspector = inspect(self._engine)
