@@ -180,9 +180,10 @@ class DeepResearcherAgent:
             max_research_concurrency=self.max_research_concurrency,
         )
 
-    def _extract_final_markdown(self, result: dict | Any) -> str | None:
+    def _extract_final_markdown(self, result: dict | Any, files: dict[str, Any] | None = None) -> str | None:
         """Extract final Markdown from output files."""
         output_paths = ("/shared/output.md", "/output.md")
+        files = result.get("files", None) if isinstance(result, dict) else getattr(result, "files", None) or files or {}
         files = result.get("files", {}) if isinstance(result, dict) else getattr(result, "files", {})
         if isinstance(files, dict):
             for output_path in output_paths:
@@ -272,7 +273,7 @@ class DeepResearcherAgent:
         try:
             result = await agent.ainvoke(state, config={"callbacks": self.callbacks} if self.callbacks else None)
 
-            final_message = self._extract_final_markdown(result)
+            final_message = self._extract_final_markdown(result, state.files)
             if final_message is None:
                 raise ValueError("writer-agent did not produce a final Markdown answer")
 
