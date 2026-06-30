@@ -22,6 +22,7 @@ UI_DIR="$PROJECT_ROOT/frontends/ui"
 
 # Default config file
 CONFIG_FILE="configs/config_web_default_llamaindex.yml"
+PORT=8000
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -30,15 +31,20 @@ while [[ $# -gt 0 ]]; do
             CONFIG_FILE="$2"
             shift 2
             ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --config_file <path>  Path to config file (default: configs/config_web_default_llamaindex.yml)"
+            echo "  --port PORT           Backend server port (default: 8000)"
             echo "  --help, -h            Show this help message"
             echo ""
             echo "Example:"
-            echo "  $0 --config_file configs/config_web_default_llamaindex.yml"
+            echo "  $0 --config_file configs/config_web_default_llamaindex.yml --port 8000"
             exit 0
             ;;
         *)
@@ -92,9 +98,9 @@ check_env() {
     # Suppress Python warnings unless overridden by .env
     export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
 
-    # For local E2E, backend always runs on localhost:8000
-    export BACKEND_URL="http://localhost:8000"
-    export NEXT_PUBLIC_BACKEND_URL="http://localhost:8000"
+    # For local E2E, backend URL follows --port (default 8000)
+    export BACKEND_URL="http://localhost:${PORT}"
+    export NEXT_PUBLIC_BACKEND_URL="http://localhost:${PORT}"
     echo "Backend URL for e2e: $BACKEND_URL"
 }
 
@@ -143,12 +149,12 @@ start_backend() {
     echo "Starting NAT Backend Server (Hot Reload Enabled)..."
     echo "================================================"
     echo ""
-    echo "Backend will be available at: http://localhost:8000"
+    echo "Backend will be available at: http://localhost:${PORT}"
     echo "Backend will auto-reload on code changes"
     echo "Config: $CONFIG_FILE"
     echo ""
 
-    nat serve --config_file "$CONFIG_FILE" --host 0.0.0.0 --port 8000 &
+    nat serve --config_file "$CONFIG_FILE" --host 0.0.0.0 --port "$PORT" &
     BACKEND_PID=$!
     echo "Backend PID: $BACKEND_PID"
 }
@@ -159,8 +165,8 @@ wait_for_backend() {
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if curl -s -f http://localhost:8000/health > /dev/null 2>&1 || \
-           curl -s -f http://localhost:8000/docs > /dev/null 2>&1; then
+        if curl -s -f "http://localhost:${PORT}/health" > /dev/null 2>&1 || \
+           curl -s -f "http://localhost:${PORT}/docs" > /dev/null 2>&1; then
             echo "Backend is ready!"
             return 0
         fi
@@ -221,7 +227,7 @@ main() {
         echo "WARNING: Frontend will NOT be started."
         echo "   Reason: UI dependencies not available (missing npm or node_modules)"
         echo "   To fix: install Node.js 22+ and run 'npm ci' in frontends/ui/"
-        echo "   The backend will still run at http://localhost:8000"
+        echo "   The backend will still run at http://localhost:${PORT}"
         echo ""
     fi
 
@@ -230,7 +236,7 @@ main() {
     echo "Services Started"
     echo "================================================"
     echo ""
-    echo "Backend: http://localhost:8000"
+    echo "Backend: http://localhost:${PORT}"
     if [ "$HAS_UI" = true ]; then
         echo "Frontend: http://localhost:3000"
     else
