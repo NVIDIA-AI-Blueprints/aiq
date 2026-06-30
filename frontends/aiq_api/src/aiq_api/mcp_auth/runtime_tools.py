@@ -42,6 +42,41 @@ from nat.builder.framework_enum import LLMFrameworkEnum
 logger = logging.getLogger(__name__)
 
 
+async def _token_usable(builder, cfg, source_id: str) -> bool:
+    """Return whether the job owner has a usable (present, non-expired) token.
+
+    If a token exists but is expired or has no credentials, it is deleted so the
+    next ``get_status`` reports the source as disconnected (the UI then shows
+    Reconnect) instead of falsely "connected". Best-effort: any error resolving
+    the store is treated as "not usable" so we skip rather than crash the job.
+    """
+    from nat.builder.context import Context
+
+    from .factory import _resolve_token_storage
+
+    user_id = Context.get().user_id
+    if not user_id:
+        return False
+    try:
+        storage = await _resolve_token_storage(builder, cfg, source_id)
+        auth = await storage.retrieve(user_id)
+    except Exception as exc:
+        logger.warning("Source '%s': could not read token state: %s", source_id, exc)
+        return False
+
+    if auth is None or not auth.credentials:
+        return False  # nothing stored -> status is already not_connected
+    if auth.is_expired():
+        # Invalidate so the card stops showing "connected" and prompts Reconnect.
+        try:
+            await storage.delete(user_id)
+        except Exception as exc:
+            logger.debug("Source '%s': failed to delete expired token: %s", source_id, exc)
+        logger.warning("Source '%s': stored token is expired; invalidated. User must reconnect.", source_id)
+        return False
+    return True
+
+
 async def open_per_user_mcp_tools(
     *,
     builder,
@@ -93,6 +128,16 @@ async def open_per_user_mcp_tools(
                     source.id,
                     pua.auth_provider,
                 )
+                continue
+
+            # Reconcile UI status with reality: the data-source card reports
+            # "connected" from an offline token read, but the token can be expired
+            # while the card still says connected. The use-site is authoritative —
+            # if the owner's stored token is missing/expired here, invalidate it so
+            # the next get_status returns not_connected/expired (UI -> Reconnect)
+            # and skip, rather than failing the live MCP call and silently dropping
+            # the tool while the UI keeps claiming connected.
+            if not await _token_usable(builder, getattr(provider, "config", None), source.id):
                 continue
 
             # Give terse/blank MCP tools clear names + descriptions so the agent

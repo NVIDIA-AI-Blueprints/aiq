@@ -10,7 +10,7 @@
 
 'use client'
 
-import { type FC, memo, useCallback, useMemo, useState } from 'react'
+import { type FC, memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Flex, Text, SidePanel, SegmentedControl, Switch, Button, Banner } from '@/adapters/ui'
 import { createMcpAuthClient, openAuthPopupAndWait } from '@/adapters/api'
 import { useShallow } from 'zustand/react/shallow'
@@ -62,6 +62,17 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
   const toggleDataSource = useLayoutStore((s) => s.toggleDataSource)
   const setEnabledDataSources = useLayoutStore((s) => s.setEnabledDataSources)
   const fetchDataSources = useLayoutStore((s) => s.fetchDataSources)
+  const refreshDataSourceStatus = useLayoutStore((s) => s.refreshDataSourceStatus)
+
+  // Refresh per-source auth status each time the panel opens so a token that was
+  // invalidated server-side (e.g. expired and dropped at job time) shows as
+  // Reconnect instead of a stale "connected". Selection-preserving, so it won't
+  // reset the user's enabled sources.
+  useEffect(() => {
+    if (isOpen) {
+      void refreshDataSourceStatus(idToken)
+    }
+  }, [isOpen, idToken, refreshDataSourceStatus])
 
   // Check if current session is busy with operations
   const isBusy = useIsCurrentSessionBusy()

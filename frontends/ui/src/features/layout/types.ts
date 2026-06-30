@@ -75,6 +75,12 @@ export interface LayoutActions {
   setTheme: (theme: ThemeMode) => void
   /** Fetch data sources from API. Only web_search is enabled by default */
   fetchDataSources: (authToken?: string) => Promise<void>
+  /**
+   * Refresh per-source metadata/auth status WITHOUT changing the user's enabled
+   * selection. Used to pick up server-side status changes (e.g. a token that was
+   * invalidated at job time) so a stale "connected" card flips to Reconnect.
+   */
+  refreshDataSourceStatus: (authToken?: string) => Promise<void>
   /** Disable sources that require authentication */
   disableAuthRequiredSources: () => void
   /** Set available data sources (from API) */

@@ -13,6 +13,7 @@ const mockSetDataSourcesPanelTab = vi.fn()
 const mockToggleDataSource = vi.fn()
 const mockSetEnabledDataSources = vi.fn()
 const mockFetchDataSources = vi.fn()
+const mockRefreshDataSourceStatus = vi.fn()
 
 const mockDataSources = [
   { id: 'web_search', name: 'Web Search', description: 'Search the web', requires_auth: false },
@@ -35,6 +36,7 @@ vi.mock('../store', () => ({
       dataSourcesLoading: false,
       dataSourcesError: null,
       fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
     }
     return selector ? selector(state) : state
   }),
@@ -110,6 +112,7 @@ describe('DataSourcesPanel', () => {
         dataSourcesLoading: false,
         dataSourcesError: null,
         fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
       }
       return selector ? selector(state) : state
     })
@@ -166,6 +169,7 @@ describe('DataSourcesPanel', () => {
         dataSourcesLoading: false,
         dataSourcesError: null,
         fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
       }
       return selector ? selector(state) : state
     })
@@ -196,6 +200,7 @@ describe('DataSourcesPanel', () => {
         dataSourcesLoading: false,
         dataSourcesError: null,
         fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
       }
       return selector ? selector(state) : state
     })
@@ -220,6 +225,7 @@ describe('DataSourcesPanel', () => {
         dataSourcesLoading: false,
         dataSourcesError: null,
         fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
       }
       return selector ? selector(state) : state
     })
@@ -272,6 +278,7 @@ describe('DataSourcesPanel', () => {
         dataSourcesLoading: false,
         dataSourcesError: null,
         fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
       }
       return selector ? selector(state) : state
     })
@@ -309,6 +316,7 @@ describe('DataSourcesPanel', () => {
           dataSourcesLoading: false,
           dataSourcesError: 'Failed to connect to server',
           fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
         }
         return selector ? selector(state) : state
       })
@@ -334,6 +342,7 @@ describe('DataSourcesPanel', () => {
           dataSourcesLoading: false,
           dataSourcesError: 'Network error',
           fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
         }
         return selector ? selector(state) : state
       })
@@ -382,6 +391,7 @@ describe('DataSourcesPanel', () => {
           dataSourcesLoading: false,
           dataSourcesError: null,
           fetchDataSources: mockFetchDataSources,
+        refreshDataSourceStatus: mockRefreshDataSourceStatus,
         }
         return selector ? selector(state) : state
       })

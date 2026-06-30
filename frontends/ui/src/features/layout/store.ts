@@ -116,6 +116,27 @@ export const useLayoutStore = create<LayoutStore>()(
         }
       },
 
+      refreshDataSourceStatus: async (authToken?: string) => {
+        // Silent, selection-preserving refresh: update the source list/auth status
+        // only. Unlike fetchDataSources it does NOT touch enabledDataSourceIds or
+        // the loading/error flags, so calling it on panel open won't reset the
+        // user's selection or flash a spinner.
+        try {
+          const client = createDataSourcesClient({ authToken })
+          const response = await client.getDataSources()
+          set(
+            {
+              availableDataSources: response.data_sources,
+              knowledgeLayerAvailable: response.knowledge_layer,
+            },
+            false,
+            'refreshDataSourceStatus'
+          )
+        } catch {
+          // Best-effort: keep the previously loaded state on failure.
+        }
+      },
+
       disableAuthRequiredSources: () =>
         set(
           (state) => ({
