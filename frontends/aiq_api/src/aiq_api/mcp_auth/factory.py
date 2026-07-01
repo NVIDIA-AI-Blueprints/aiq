@@ -195,6 +195,16 @@ async def build_mcp_auth_provider(builder) -> NatMcpAuthProvider:
     """Construct the provider from registry metadata + NAT mcp_oauth2 config."""
     settings_by_source: dict[str, OAuthSourceSettings] = {}
     storages: dict[str, TokenStorageBase] = {}
+    # Guard against credential cross-contamination: NAT's ObjectStoreTokenStorage
+    # keys tokens by user only (``tokens/{sha256(user_id)}``), so two protected
+    # sources sharing one token-storage object store would overwrite each other's
+    # credentials for the same user. AIQ can't fix this with a per-source key
+    # prefix, because NAT's job-time per_user_mcp_client reads the token itself via
+    # the source's mcp_oauth2 provider (unprefixed) — a prefix here would desync
+    # that read. So each protected source needs its OWN token-storage bucket; fail
+    # closed (skip the later source) when one is reused rather than silently
+    # clobbering tokens.
+    claimed_stores: dict[str, str] = {}  # object_store name -> first source_id to claim it
 
     for source in get_all_sources():
         pua = source.per_user_auth
@@ -216,6 +226,23 @@ async def build_mcp_auth_provider(builder) -> NatMcpAuthProvider:
         if cfg is None:
             logger.warning("Source '%s': auth provider '%s' has no config; skipping", source.id, ref)
             continue
+
+        object_store_name = getattr(cfg, "token_storage_object_store", None)
+        if object_store_name:
+            prior = claimed_stores.get(object_store_name)
+            if prior is not None:
+                logger.error(
+                    "Source '%s' shares token_storage_object_store '%s' with source '%s'. NAT keys tokens "
+                    "per user only, so sharing one store lets these sources overwrite each other's "
+                    "credentials. Give each protected source its own token-storage object store (distinct "
+                    "bucket). Skipping '%s' — it will surface as unconfigured until this is resolved.",
+                    source.id,
+                    object_store_name,
+                    prior,
+                    source.id,
+                )
+                continue
+            claimed_stores[object_store_name] = source.id
 
         try:
             storage = await _resolve_token_storage(builder, cfg, source.id)

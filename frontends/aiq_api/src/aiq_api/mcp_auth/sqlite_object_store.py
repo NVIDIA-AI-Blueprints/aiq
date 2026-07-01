@@ -66,6 +66,32 @@ CREATE TABLE IF NOT EXISTS objects (
 """
 
 
+def _restrict_file(path: str) -> None:
+    """chmod ``path`` to owner-only (0600) if it exists; best-effort."""
+    try:
+        if os.path.exists(path):
+            os.chmod(path, 0o600)
+    except OSError as exc:  # e.g. unsupported on the platform — don't crash startup
+        logger.warning("Could not restrict permissions on %s: %s", path, exc)
+
+
+def _ensure_private_file(path: str) -> None:
+    """Ensure the token DB file exists with owner-only (0600) permissions.
+
+    Creating it ourselves with ``O_CREAT`` + ``0o600`` closes the window where
+    sqlite would otherwise create it at the umask default (0644), and we chmod
+    unconditionally so an existing 0644 file is tightened on next open.
+    """
+    if not os.path.exists(path):
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_WRONLY, 0o600)
+            os.close(fd)
+        except OSError as exc:
+            logger.warning("Could not pre-create token DB %s with private perms: %s", path, exc)
+            return
+    _restrict_file(path)
+
+
 class AiqSqliteObjectStoreConfig(ObjectStoreBaseConfig, name="aiq_sqlite"):
     """SQLite-file object store — serviceless and shared across processes.
 
@@ -107,6 +133,11 @@ class AiqSqliteObjectStore(ObjectStore):
     # ── connection / helpers ──
     async def _conn(self) -> aiosqlite.Connection:
         if self._db is None:
+            # The serialized objects hold plaintext access/refresh tokens, so the
+            # file must never be group/world-readable. Create it 0600 BEFORE sqlite
+            # opens it (default umask 022 would otherwise yield 0644), and tighten
+            # an existing file too.
+            _ensure_private_file(self._db_path)
             db = await aiosqlite.connect(self._db_path)
             # WAL allows concurrent readers across processes alongside one writer;
             # busy_timeout waits out a peer's write lock instead of failing fast.
@@ -114,6 +145,10 @@ class AiqSqliteObjectStore(ObjectStore):
             await db.execute("PRAGMA busy_timeout=5000")
             await db.execute(_SCHEMA)
             await db.commit()
+            # WAL/SHM sidecars are created by sqlite on first write and also carry
+            # token bytes; restrict them once they exist.
+            for suffix in ("-wal", "-shm"):
+                _restrict_file(self._db_path + suffix)
             self._db = db
         return self._db
 

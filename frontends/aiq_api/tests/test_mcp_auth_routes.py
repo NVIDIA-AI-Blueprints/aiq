@@ -142,6 +142,17 @@ def test_callback_provider_denied(client):
     assert "denied" in cb.text.lower()
 
 
+def test_callback_error_is_html_escaped(client):
+    """A provider-controlled `error` must not inject markup into the AIQ origin."""
+    tc, _, _ = client
+    payload = "</p><script>document.body.dataset.pwned=1</script><p>"
+    cb = tc.get("/v1/auth/mcp/gdrive/callback", params={"error": payload, "state": "whatever"})
+    assert cb.status_code == 400
+    # The raw script tag must not appear; the escaped form must.
+    assert "<script>document.body.dataset.pwned=1</script>" not in cb.text
+    assert "&lt;script&gt;" in cb.text
+
+
 def test_preflight_blocks_disconnected_with_409(client, monkeypatch):
     import asyncio
 

@@ -42,6 +42,19 @@ from nat.builder.framework_enum import LLMFrameworkEnum
 logger = logging.getLogger(__name__)
 
 
+def _resolve_type_registry(builder):
+    """Resolve NAT's type registry through dependency-tracking child builders."""
+    current = builder
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        registry = getattr(current, "_registry", None)
+        if registry is not None:
+            return registry
+        current = getattr(current, "_workflow_builder", None)
+    raise TypeError(f"Could not resolve a NAT type registry from builder {type(builder).__name__}")
+
+
 async def _token_usable(builder, cfg, source_id: str) -> bool:
     """Return whether the job owner has a usable (present, non-expired) token.
 
@@ -152,7 +165,12 @@ async def open_per_user_mcp_tools(
             )
             group = await exit_stack.enter_async_context(per_user_mcp_client_function_group(client_cfg, builder))
             fns = await group.get_accessible_functions()
-            wrapper = builder._registry.get_tool_wrapper(llm_framework=wrapper_type)
+            # Resolve the tool wrapper via the builder's type registry rather than
+            # `builder._registry` directly: in server mode `builder` is a ChildBuilder,
+            # which has no `_registry` (it delegates to its parent), so the attribute
+            # access raised AttributeError and this whole block was silently swallowed
+            # — dropping the selected source's tools and falling back to web search.
+            wrapper = _resolve_type_registry(builder).get_tool_wrapper(llm_framework=wrapper_type)
             wrapped = [wrapper.build_fn(name, fn, builder) for name, fn in fns.items()]
             tools.extend(wrapped)
 

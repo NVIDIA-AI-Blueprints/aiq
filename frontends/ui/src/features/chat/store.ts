@@ -378,17 +378,32 @@ const patchConversationMessageById = (
   return didPatch ? { ...conversation, messages, updatedAt: new Date() } : conversation
 }
 
+/**
+ * A protected per-user source (e.g. Google Drive) must be connected before it
+ * can be part of the active selection — otherwise it appears in "Selected Data
+ * Sources" and is submitted while unusable. Mirrors the card toggle, "Enable
+ * All", and the initial-fetch gate in the layout store.
+ */
+const isSelectableDataSource = (source: {
+  per_user_auth?: { required?: boolean; status?: string | null } | null
+}): boolean => !(source.per_user_auth?.required && source.per_user_auth.status !== 'connected')
+
 const getDefaultEnabledDataSourceIds = (): string[] => {
   const layoutStore = useLayoutStore.getState()
-  return layoutStore.availableDataSources?.map((source) => source.id) ?? []
+  return (layoutStore.availableDataSources ?? []).filter(isSelectableDataSource).map((source) => source.id)
 }
 
 const restoreConversationDataSources = (conversation: Conversation): void => {
   const layoutStore = useLayoutStore.getState()
 
   if (conversation.enabledDataSourceIds) {
-    const availableIds = new Set(layoutStore.availableDataSources?.map((source) => source.id) ?? [])
-    const validIds = conversation.enabledDataSourceIds.filter((id) => availableIds.has(id))
+    // Only restore sources that are still available AND currently selectable —
+    // a protected source saved as enabled must not come back while it's not
+    // connected (e.g. an old session that had Google Drive on).
+    const selectableIds = new Set(
+      (layoutStore.availableDataSources ?? []).filter(isSelectableDataSource).map((source) => source.id)
+    )
+    const validIds = conversation.enabledDataSourceIds.filter((id) => selectableIds.has(id))
     layoutStore.setEnabledDataSources(validIds)
     return
   }

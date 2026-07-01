@@ -204,5 +204,43 @@ describe('useLayoutStore', () => {
       ])
       expect(useLayoutStore.getState().knowledgeLayerAvailable).toBe(true)
     })
+
+    test('does not auto-enable a protected source that is not connected', async () => {
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          { id: 'web_search', name: 'Web Search', requires_auth: false },
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'not_connected' },
+          },
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().fetchDataSources('token-1')
+
+      // gdrive is not connected -> excluded from the initial selection.
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['web_search'])
+    })
+
+    test('auto-enables a protected source once it is connected', async () => {
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'connected' },
+          },
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().fetchDataSources('token-1')
+
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['gdrive'])
+    })
   })
 })

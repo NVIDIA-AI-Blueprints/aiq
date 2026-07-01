@@ -22,6 +22,8 @@ exchange and persists the token, then closes the popup.
 
 from __future__ import annotations
 
+import html
+import json
 import logging
 
 from fastapi import FastAPI
@@ -52,15 +54,18 @@ _CALLBACK_HTML = """<!doctype html>
 
 
 def _callback_page(source_id: str, *, ok: bool, message: str) -> HTMLResponse:
-    import json
-
-    html = _CALLBACK_HTML.format(
+    # `message` can carry a provider-controlled value (e.g. the OAuth `error`
+    # query param reflected by the callback), so HTML-escape it before it lands in
+    # the page body — otherwise a crafted `error` executes script in AIQ's origin.
+    # `source_id` is a validated registry id and json.dumps escapes it for the JS
+    # string context.
+    page = _CALLBACK_HTML.format(
         title="Connected" if ok else "Authentication failed",
-        message=message,
+        message=html.escape(message),
         source_id_js=json.dumps(source_id),
         ok_js="true" if ok else "false",
     )
-    return HTMLResponse(content=html, status_code=200 if ok else 400, headers={"Cache-Control": "no-cache"})
+    return HTMLResponse(content=page, status_code=200 if ok else 400, headers={"Cache-Control": "no-cache"})
 
 
 def _require_protected_source(source_id: str):

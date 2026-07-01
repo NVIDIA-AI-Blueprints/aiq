@@ -3,6 +3,10 @@
 
 from __future__ import annotations
 
+import os
+import stat
+import sys
+
 import pytest
 
 from aiq_api.mcp_auth.sqlite_object_store import AiqSqliteObjectStore
@@ -96,6 +100,39 @@ async def test_bucket_prefix_isolates_keys(db_path):
     assert (await b.get_object("same")).data == b"in-b"
     await a.aclose()
     await b.aclose()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes not meaningful on Windows")
+async def test_db_file_is_owner_only(db_path):
+    """The token DB (and its WAL/SHM sidecars) must not be group/world-readable.
+
+    The stored objects contain plaintext access/refresh tokens, so a 0644 file
+    would let other local users read the credential store.
+    """
+    store = AiqSqliteObjectStore(db_path, bucket_name="mcp-tokens")
+    # Force the connection (and thus file creation + WAL sidecars) to happen.
+    await store.put_object("alice", _item(b"secret"))
+
+    for path in (db_path, db_path + "-wal", db_path + "-shm"):
+        if os.path.exists(path):
+            mode = stat.S_IMODE(os.stat(path).st_mode)
+            assert mode & 0o077 == 0, f"{path} is accessible to group/other: {oct(mode)}"
+
+    await store.aclose()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX file modes not meaningful on Windows")
+async def test_existing_loose_db_is_tightened(db_path):
+    """An already-present 0644 DB file is chmod'd to 0600 on next open."""
+    # Simulate a pre-existing world-readable file left by an older build.
+    with open(db_path, "wb"):
+        pass
+    os.chmod(db_path, 0o644)
+
+    store = AiqSqliteObjectStore(db_path)
+    await store.put_object("k", _item())
+    assert stat.S_IMODE(os.stat(db_path).st_mode) & 0o077 == 0
+    await store.aclose()
 
 
 async def test_registered_with_nat():

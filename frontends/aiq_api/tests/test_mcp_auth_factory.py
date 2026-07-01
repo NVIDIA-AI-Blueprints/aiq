@@ -103,6 +103,36 @@ def test_factory_skips_source_when_discovery_fails():
     assert not provider.is_protected("gdrive")
 
 
+def test_factory_skips_second_source_sharing_token_store():
+    """Two protected sources must not share one token-storage object store.
+
+    NAT keys tokens per user only, so a shared store would let the sources
+    overwrite each other's credentials. The factory fails closed: the first
+    source claims the store, the second is skipped (left unconfigured).
+    """
+    populate_from_config(
+        [
+            {
+                "id": "gdrive",
+                "name": "Google Drive",
+                "requires_auth": True,
+                "per_user_auth": {"required": True, "mcp_server_id": "gdrive", "auth_provider": "mcp_oauth2_gdrive"},
+            },
+            {
+                "id": "notion",
+                "name": "Notion",
+                "requires_auth": True,
+                "per_user_auth": {"required": True, "mcp_server_id": "notion", "auth_provider": "mcp_oauth2_notion"},
+            },
+        ]
+    )
+    # Both auth providers resolve to a store named "mcp_token_store" (the fake's
+    # default), so the second source collides with the first.
+    provider = build_from(_FakeBuilder(_FakeProvider()))
+    assert provider.is_protected("gdrive")
+    assert not provider.is_protected("notion")
+
+
 def test_factory_ignores_unprotected_sources():
     populate_from_config([{"id": "web_search", "name": "Web", "description": "x"}])
     provider = build_from(_FakeBuilder(_FakeProvider()))

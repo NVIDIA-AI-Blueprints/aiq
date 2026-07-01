@@ -88,9 +88,18 @@ export const useLayoutStore = create<LayoutStore>()(
           const client = createDataSourcesClient({ authToken })
           const response = await client.getDataSources()
 
-          // Start with every returned source enabled. Auth-aware cleanup still
-          // runs through disableAuthRequiredSources when a user loses access.
-          const enabledIds = response.data_sources.map((source) => source.id)
+          // Start with every returned source enabled, EXCEPT protected per-user
+          // sources that aren't connected yet: enabling those would put an
+          // unusable source into the selection (shown in "Selected Data Sources"
+          // and submitted), which the card toggle and "Enable All" already refuse
+          // to do. The user connects such a source and then enables it. Auth-aware
+          // cleanup still runs through disableAuthRequiredSources on access loss.
+          const enabledIds = response.data_sources
+            .filter(
+              (source) =>
+                !(source.per_user_auth?.required && source.per_user_auth.status !== 'connected')
+            )
+            .map((source) => source.id)
 
           set(
             {
