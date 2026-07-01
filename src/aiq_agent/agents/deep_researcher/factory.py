@@ -44,6 +44,7 @@ from aiq_agent.common import render_prompt_template
 from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import SourceRegistryMiddleware
+from .custom_middleware import SourceRoutingGuardMiddleware
 from .custom_middleware import TodoSuppressionMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
@@ -219,6 +220,7 @@ def build_orchestrator_middleware(
     *,
     tool_set: DeepResearchToolSet,
     source_registry_middleware: SourceRegistryMiddleware,
+    enable_source_router: bool,
     research_batch_tool_name: str = "run_research_batch",
 ) -> list[Any]:
     """Middleware for the orchestrator.
@@ -236,6 +238,7 @@ def build_orchestrator_middleware(
     valid_tool_names.update(FILESYSTEM_TOOL_NAMES)
     return [
         EmptyContentFixMiddleware(),
+        SourceRoutingGuardMiddleware(enabled=enable_source_router, required_subagent=SOURCE_ROUTER_AGENT),
         ToolNameSanitizationMiddleware(valid_tool_names=sorted(valid_tool_names)),
         ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
         source_registry_middleware,
@@ -258,6 +261,7 @@ def build_deep_research_middleware_set(
     *,
     tool_set: DeepResearchToolSet,
     source_registry_middleware: SourceRegistryMiddleware,
+    enable_source_router: bool = True,
 ) -> DeepResearchMiddlewareSet:
     """Build researcher, writer, and orchestrator middleware stacks."""
 
@@ -276,6 +280,7 @@ def build_deep_research_middleware_set(
         orchestrator=build_orchestrator_middleware(
             tool_set=tool_set,
             source_registry_middleware=source_registry_middleware,
+            enable_source_router=enable_source_router,
         ),
     )
 
