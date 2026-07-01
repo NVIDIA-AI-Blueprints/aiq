@@ -7,7 +7,7 @@
 #   frontend               - Next.js UI (aiq-blueprint-ui)
 #   postgres               - PostgreSQL for jobs and checkpoints
 #   redis                  - Shared token store for per-user MCP auth
-#                            (config_web_frag.yml; mcp_token_store object store)
+#                            (config_web_frag_mcp_auth.yml; mcp_token_store object store)
 #
 # Build targets (backend only):
 #   dev     - Development build (includes CLI)
@@ -46,7 +46,7 @@ services:
       - NAT_JOB_STORE_DB_URL=${NAT_JOB_STORE_DB_URL:-postgresql+asyncpg://aiq:aiq_dev@postgres:5432/aiq_jobs}
       - AIQ_CHECKPOINT_DB=${AIQ_CHECKPOINT_DB:-postgresql://aiq:aiq_dev@postgres:5432/aiq_checkpoints}
       - AIQ_SUMMARY_DB=${AIQ_SUMMARY_DB:-postgresql+psycopg://aiq:aiq_dev@postgres:5432/aiq_jobs}
-      # Shared token store for per-user MCP auth (config_web_frag.yml).
+      # Shared token store for per-user MCP auth (config_web_frag_mcp_auth.yml).
       # Deploy uses redis (networked, multi-replica safe); local defaults to the
       # serviceless aiq_sqlite store. Set MCP_TOKEN_STORE_TYPE=aiq_sqlite to opt out
       # — if you do, use an ABSOLUTE MCP_TOKEN_DB on a shared volume so the API and
