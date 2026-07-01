@@ -155,6 +155,12 @@ export function openAuthPopupAndWait(
     }
 
     const onMessage = (event: MessageEvent) => {
+      // Only trust messages from the popup we opened: the callback page posts via
+      // window.opener.postMessage, so a genuine completion has event.source === popup.
+      // Reject anything else (a synthetic or cross-window message) so an unrelated
+      // page can't spoof an auth-complete. If COOP severs the opener relationship
+      // event.source won't match — the status poll below is the fallback for that.
+      if (event.source !== popup) return
       const data = event.data
       if (data && data.type === 'mcp-auth' && data.source_id === sourceId) {
         try {

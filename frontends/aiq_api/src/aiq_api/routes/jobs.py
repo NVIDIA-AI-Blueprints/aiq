@@ -227,6 +227,18 @@ async def _get_agent_available_source_ids(builder: WorkflowBuilder, agent_config
         sid = get_source_id_for_tool(name)
         if sid is not None:
             source_ids.add(sid)
+
+    # Per-user MCP sources (e.g. Google Drive) contribute NO static tools — their
+    # tools are resolved per-user at run time by open_per_user_mcp_tools, so they
+    # never appear in the loop above. Treat a configured protected source as an
+    # available runtime candidate so submit validation doesn't 422 it; connectivity
+    # is enforced separately by the MCP auth preflight (409 mcp_auth_required).
+    from aiq_agent.common.data_source_registry import get_all_sources
+
+    for source in get_all_sources():
+        pua = source.per_user_auth
+        if pua is not None and pua.required:
+            source_ids.add(source.id)
     return sorted(source_ids)
 
 
@@ -464,6 +476,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     from ..jobs.submit import JobIdConflictError
     from ..jobs.submit import submit_agent_job as submit_authorized_job
     from ..mcp_auth.factory import build_mcp_auth_provider
+    from ..mcp_auth.preflight import McpAuthRequiredError
     from ..mcp_auth.serialize import build_listing_auth_info
     from .auth import register_mcp_auth_routes
 
@@ -667,6 +680,14 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             )
         except JobIdConflictError:
             raise HTTPException(409, f"Job already exists: {req.job_id}")
+        except McpAuthRequiredError as e:
+            # submit_agent_job runs the same MCP preflight and raises if a selected
+            # protected source became disconnected between the route preflight above
+            # and enqueue. Surface the SAME 409 mcp_auth_required contract instead of
+            # letting it fall through to the generic 500 handler.
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=409, content=e.response.model_dump(mode="json"))
         except RuntimeError as e:
             # The principal is resolved above, so a RuntimeError here is an
             # availability/config failure (e.g. scheduler not configured), not an

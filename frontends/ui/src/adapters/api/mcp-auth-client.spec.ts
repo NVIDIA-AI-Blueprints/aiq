@@ -66,11 +66,27 @@ describe('openAuthPopupAndWait', () => {
     await expect(result).resolves.toEqual({})
   })
 
-  test('resolves success via callback postMessage', async () => {
+  test('resolves success via callback postMessage from the popup', async () => {
     const result = openAuthPopupAndWait('https://provider/auth', 'gdrive', {})
-    window.dispatchEvent(new MessageEvent('message', { data: { type: 'mcp-auth', source_id: 'gdrive', ok: true } }))
+    // A genuine completion is posted by the callback page via window.opener, so
+    // event.source is the popup we opened.
+    const evt = new MessageEvent('message', { data: { type: 'mcp-auth', source_id: 'gdrive', ok: true } })
+    Object.defineProperty(evt, 'source', { value: fakePopup })
+    window.dispatchEvent(evt)
     await expect(result).resolves.toEqual({ ok: true, sourceId: 'gdrive' })
     expect(fakePopup.close).toHaveBeenCalled()
+  })
+
+  test('ignores an mcp-auth message from an untrusted source', async () => {
+    const result = openAuthPopupAndWait('https://provider/auth', 'gdrive', {})
+    // No event.source (a spoofed / cross-window message) must NOT be accepted.
+    window.dispatchEvent(new MessageEvent('message', { data: { type: 'mcp-auth', source_id: 'gdrive', ok: true } }))
+    // The spoofed message is ignored; the promise only settles when the popup
+    // actually closes (empty result), and the popup is never closed by the spoof.
+    fakePopup.closed = true
+    await vi.advanceTimersByTimeAsync(700)
+    await expect(result).resolves.toEqual({})
+    expect(fakePopup.close).not.toHaveBeenCalled()
   })
 
   test('resolves empty when the popup is blocked', async () => {
