@@ -39,7 +39,7 @@ def patched(monkeypatch):
     monkeypatch.setattr(
         submit_mod,
         "get_agent_config",
-        lambda _t: SimpleNamespace(class_path="pkg.mod.Agent", config_name="deep_research_agent"),
+        lambda _t: SimpleNamespace(class_path="pkg.mod.Agent", config_name="deep_research_agent", public=True),
     )
     monkeypatch.setattr(submit_mod, "create_job_access", MagicMock())
     _FakeJobStore.last_job_args = None
@@ -58,9 +58,10 @@ def test_submit_forwards_owner_user_id_as_last_arg(patched):
     )
     job_args = _FakeJobStore.last_job_args
     assert job_args is not None
-    # Owner user_id is appended last, right after auth_token.
+    # Owner user_id is appended last. Trailing worker args are:
+    # data_sources, auth_token, initial_files, output_metadata, owner_user_id.
     assert job_args[-1] == principal_user_id(principal) == "jwt:user-1"
-    assert job_args[-2] == "token-1"
+    assert job_args[-4] == "token-1"
 
 
 def test_context_user_id_binding_mechanism():

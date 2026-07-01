@@ -89,7 +89,7 @@ def patched(monkeypatch):
     monkeypatch.setattr(
         submit_mod,
         "get_agent_config",
-        lambda _t: SimpleNamespace(class_path="pkg.mod.Agent", config_name="deep_research_agent"),
+        lambda _t: SimpleNamespace(class_path="pkg.mod.Agent", config_name="deep_research_agent", public=True),
     )
     monkeypatch.setattr(submit_mod, "create_job_access", MagicMock())
     _FakeJobStore.submitted = False
