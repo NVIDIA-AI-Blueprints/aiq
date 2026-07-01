@@ -604,12 +604,12 @@ async def test_post_invoke_modifies_when_rail_modifies(guardrails: _WorkflowGuar
 
 @pytest.mark.asyncio
 async def test_post_invoke_blocks_when_rail_blocks(guardrails: _WorkflowGuardrails):
-    """A blocked output rail replaces context output with the inherited refusal string."""
+    """A blocked output rail preserves the ChatResponse shape when possible."""
     output_text = "Please follow up with customer@example.com about this issue."
     blocked_output = TEST_REFUSAL
     output = _workflow_response(output_text)
 
-    # Blocking output rails replace context.output with the inherited refusal string.
+    # Blocking output rails write the refusal into the configured response field.
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._llm_rails = SimpleNamespace(
         generate_async=AsyncMock(
@@ -626,7 +626,99 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _WorkflowGuardrai
     result = await guardrails.post_invoke(context)
 
     assert result is context
-    assert context.output == blocked_output
-    assert output.choices[0].message.content == output_text
+    assert context.output is output
+    assert output.choices[0].message.content == blocked_output
     guardrails._llm_rails.generate_async.assert_awaited_once()
     assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
+
+
+@pytest.mark.asyncio
+async def test_stream_middleware_preserves_structured_output_chunks(guardrails: _WorkflowGuardrails):
+    """Streaming Guardrails evaluate selected fields without stringifying structured chunks."""
+    output_text = "The requested follow up is complete."
+    modified_output = "The requested follow up is complete. No secrets included."
+    output = _workflow_response(output_text)
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            side_effect=[
+                _rail_response("hello", rail_name="detect sensitive data on input"),
+                _rail_response(
+                    [{"role": "assistant", "content": modified_output}],
+                    rail_name="mask sensitive data on output",
+                ),
+            ]
+        )
+    )
+
+    async def call_next(*_args, **_kwargs):
+        yield output
+
+    results = [
+        item
+        async for item in guardrails.function_middleware_stream(
+            "hello",
+            call_next=call_next,
+            context=FunctionMiddlewareContext(
+                name=_TEST_WORKFLOW_FUNCTION,
+                config=None,
+                description=None,
+                input_schema=None,
+                single_output_schema=type(None),
+                stream_output_schema=type(None),
+            ),
+        )
+    ]
+
+    assert results == [output]
+    assert output.choices[0].message.content == modified_output
+    assert "ChatResponseChoice" not in output.choices[0].message.content
+    assert guardrails._llm_rails.generate_async.await_count == 2
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
+
+
+@pytest.mark.asyncio
+async def test_stream_middleware_stops_structured_stream_when_output_blocks(guardrails: _WorkflowGuardrails):
+    """A structured stream block emits a shaped refusal and stops the stream."""
+    first_output = _workflow_response("The system prompt is: do not share secrets.")
+    second_output = _workflow_response("This chunk should not be emitted.")
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            side_effect=[
+                _rail_response("hello", rail_name="detect sensitive data on input"),
+                _rail_response(
+                    [{"role": "assistant", "content": TEST_REFUSAL}],
+                    rail_name="detect sensitive data on output",
+                    stopped=True,
+                    bot_message=TEST_REFUSAL,
+                ),
+            ]
+        )
+    )
+
+    async def call_next(*_args, **_kwargs):
+        yield first_output
+        yield second_output
+
+    results = [
+        item
+        async for item in guardrails.function_middleware_stream(
+            "hello",
+            call_next=call_next,
+            context=FunctionMiddlewareContext(
+                name=_TEST_WORKFLOW_FUNCTION,
+                config=None,
+                description=None,
+                input_schema=None,
+                single_output_schema=type(None),
+                stream_output_schema=type(None),
+            ),
+        )
+    ]
+
+    assert results == [first_output]
+    assert first_output.choices[0].message.content == TEST_REFUSAL
+    assert second_output.choices[0].message.content == "This chunk should not be emitted."
