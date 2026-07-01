@@ -319,6 +319,22 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         """
         from aiq_agent.common import format_tool_unavailability_error
         from aiq_agent.common import validate_tool_availability
+        from aiq_agent.common.data_source_registry import get_source
+
+        # Per-user MCP sources (e.g. Google Drive) contribute NO tools to the
+        # static startup list — their tools are resolved per-user at run time by
+        # open_per_user_mcp_tools (in the async worker). So a selected, configured
+        # per-user MCP source is a valid runtime tool candidate here; rejecting it
+        # against the static list would block the job before it ever submits.
+        # Connectivity is enforced separately by the submit preflight
+        # (submit_agent_job -> evaluate_mcp_auth, which returns mcp_auth_required
+        # when not connected), and the authoritative tool check runs after
+        # resolution.
+        if data_sources:
+            for source_id in data_sources:
+                source = get_source(source_id)
+                if source and source.per_user_auth and source.per_user_auth.required:
+                    return True, ""
 
         selected_tools = filter_tools_by_sources(deep_research_tools, data_sources)
 

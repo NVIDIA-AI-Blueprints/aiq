@@ -145,8 +145,16 @@ def test_middleware_set_adds_orchestrator_batch_tool_name():
     assert "write_file" in researcher_sanitizer.valid_tool_names
     assert "run_research_batch" not in researcher_sanitizer.valid_tool_names
     assert "run_research_batch" in orchestrator_sanitizer.valid_tool_names
+    # The orchestrator allowlist matches the tools it is actually bound to: helper
+    # tools, run_research_batch, and filesystem tools — but NOT source tools, which
+    # it must reach only via run_research_batch (not call directly).
+    assert "web_search_tool" not in orchestrator_sanitizer.valid_tool_names
+    assert "think" in orchestrator_sanitizer.valid_tool_names
+    assert "get_verified_sources" in orchestrator_sanitizer.valid_tool_names
+    assert "read_file" in orchestrator_sanitizer.valid_tool_names
     assert registry in middleware_set.researcher
     assert registry in middleware_set.writer
+    assert registry in middleware_set.orchestrator
     assert tool_set.writer_tools != tool_set.researcher_tools
 
 
