@@ -222,6 +222,7 @@ class FakeAossClient:
         self.search_hits: list[dict[str, Any]] = []
         self.search_responses: list[list[dict[str, Any]]] = []
         self.search_calls = 0
+        self.search_bodies: list[dict[str, Any]] = []
         self.transport = FakeAossTransport()
 
     def ping(self) -> bool:
@@ -238,8 +239,9 @@ class FakeAossClient:
 
     def search(self, index: str, body: dict[str, Any], request_timeout: int | None = None) -> dict[str, Any]:
         """Execute a fake search, supporting composite aggregations."""
-        del index, body, request_timeout
+        del index, request_timeout
         self.search_calls += 1
+        self.search_bodies.append(body)
         if self.search_responses:
             return {"hits": {"hits": self.search_responses.pop(0)}}
         hits = self.search_hits
@@ -382,8 +384,8 @@ def test_aoss_delete_searches_then_bulk_deletes_generated_ids():
     assert fake_client.bulk_refresh is False
 
 
-def test_aoss_delete_stops_after_repeated_stale_hits():
-    """Test that aoss delete stops after repeated stale hits."""
+def test_aoss_delete_enumerates_all_pages_before_deleting():
+    """AOSS deletion must enumerate every matching page before deleting, not just the first."""
     ingestor = OpenSearchIngestor(
         {
             "auth_type": "sigv4",
@@ -393,24 +395,50 @@ def test_aoss_delete_stops_after_repeated_stale_hits():
         }
     )
     fake_client = FakeAossClient()
-    fake_client.search_responses = [[{"_id": "generated-1"}], [{"_id": "generated-1"}], [{"_id": "generated-1"}]]
+    # Full first page (2 hits) signals more pages; short second page (1 hit) ends enumeration.
+    fake_client.search_responses = [
+        [{"_id": "generated-1"}, {"_id": "generated-2"}],
+        [{"_id": "generated-3"}],
+    ]
     ingestor._client = fake_client
 
     deleted = ingestor._delete_file_documents_for_aoss(
         "aiq-aoss-test",
-        {
-            "query": {
-                "bool": {
-                    "should": [{"term": {"file_id": "file-1"}}],
-                    "minimum_should_match": 1,
-                }
-            }
-        },
+        {"query": {"bool": {"should": [{"term": {"file_id": "file-1"}}], "minimum_should_match": 1}}},
     )
 
-    assert deleted == 1
-    assert fake_client.search_calls == 3
-    assert fake_client.bulk_bodies == [[{"delete": {"_index": "aiq-aoss-test", "_id": "generated-1"}}]]
+    assert deleted == 3
+    deleted_ids = [action["delete"]["_id"] for body in fake_client.bulk_bodies for action in body]
+    assert deleted_ids == ["generated-1", "generated-2", "generated-3"]
+    # Enumeration uses a stable sort and does not fetch document sources.
+    assert fake_client.search_bodies[0]["sort"] == [{"chunk_id": "asc"}]
+    assert fake_client.search_bodies[0]["_source"] is False
+
+
+def test_aoss_delete_fails_rather_than_reporting_partial_success_when_enumeration_stalls():
+    """A stale view that keeps returning full pages must fail, never report partial deletion."""
+    ingestor = OpenSearchIngestor(
+        {
+            "auth_type": "sigv4",
+            "aws_service": "aoss",
+            "bulk_batch_size": 1,
+            "aoss_delete_max_batches": 3,
+            "aoss_delete_backoff_seconds": 0,
+        }
+    )
+    fake_client = FakeAossClient()
+    # Full pages that never shrink or empty within the batch cap -> enumeration cannot complete.
+    fake_client.search_responses = [[{"_id": "generated-1"}] for _ in range(5)]
+    ingestor._client = fake_client
+
+    with pytest.raises(RuntimeError):
+        ingestor._delete_file_documents_for_aoss(
+            "aiq-aoss-test",
+            {"query": {"bool": {"should": [{"term": {"file_id": "file-1"}}], "minimum_should_match": 1}}},
+        )
+
+    # Nothing may be deleted when the matching set could not be fully enumerated.
+    assert fake_client.bulk_body is None
 
 
 def test_index_name_helpers_are_opensearch_safe():
@@ -420,12 +448,91 @@ def test_index_name_helpers_are_opensearch_safe():
     assert len(opensearch_adapter._trim_index_name("a" * 300)) <= 255
 
 
+def test_index_name_mapping_is_collision_safe():
+    """Logical names that sanitize to the same base must map to distinct physical indexes."""
+    ingestor = OpenSearchIngestor({"start_ttl_cleanup": False})
+    names = ["Tenant A", "tenant-a", "tenant/a", "TENANT+A"]
+
+    indexes = [ingestor._index_name_for_collection(n) for n in names]
+
+    assert len(set(indexes)) == len(names)
+    # Mapping is stable: same logical name always yields the same physical index.
+    assert ingestor._index_name_for_collection("Tenant A") == ingestor._index_name_for_collection("Tenant A")
+
+
+def test_deleting_collision_collection_does_not_delete_other():
+    """Deleting one collection must not delete a different collection whose name normalizes alike."""
+    fake_client = FakeOpenSearchClient()
+    ingestor = OpenSearchIngestor({"start_ttl_cleanup": False})
+    ingestor._client = fake_client
+
+    ingestor.create_collection("Tenant A")
+    ingestor.create_collection("tenant-a")
+    a_index = ingestor._index_name_for_collection("Tenant A")
+    b_index = ingestor._index_name_for_collection("tenant-a")
+    assert a_index != b_index
+
+    assert ingestor.delete_collection("Tenant A") is True
+    assert a_index not in fake_client.indexes
+    assert b_index in fake_client.indexes
+
+
+def test_ensure_index_rejects_reuse_for_different_collection():
+    """_ensure_index must refuse a physical index already owned by another logical collection."""
+    fake_client = FakeOpenSearchClient()
+    ingestor = OpenSearchIngestor({"start_ttl_cleanup": False})
+    ingestor._client = fake_client
+
+    index_name = ingestor._index_name_for_collection("alpha")
+    fake_client.indexes[index_name] = {"mappings": {"_meta": {"backend": "opensearch", "collection_name": "beta"}}}
+
+    with pytest.raises(RuntimeError):
+        ingestor._ensure_index("alpha")
+
+
 def test_session_collection_names_are_safe_dynamic_indexes():
     """Test that session collection names are safe dynamic indexes."""
     ingestor = OpenSearchIngestor({"index_prefix": "aiq-prod", "start_ttl_cleanup": False})
     collection_name = "s_123E4567-E89B-12D3-A456-426614174000"
 
-    assert ingestor._index_name_for_collection(collection_name) == "aiq-prod-s_123e4567-e89b-12d3-a456-426614174000"
+    index_name = ingestor._index_name_for_collection(collection_name)
+
+    # Readable sanitized prefix is preserved; a stable disambiguator suffix keeps the mapping injective.
+    assert index_name.startswith("aiq-prod-s_123e4567-e89b-12d3-a456-426614174000-")
+    assert index_name == ingestor._index_name_for_collection(collection_name)
+
+
+def test_create_collection_rejects_reserved_metadata_keys():
+    """Caller metadata must not be able to overwrite adapter-owned _meta fields."""
+    fake_client = FakeOpenSearchClient()
+    ingestor = OpenSearchIngestor({"embedding_dim": 4, "start_ttl_cleanup": False})
+    ingestor._client = fake_client
+
+    ingestor.create_collection("docs")
+    index_name = ingestor._index_name_for_collection("docs")
+    original_meta = dict(fake_client.indexes[index_name]["mappings"]["_meta"])
+
+    for reserved in ("backend", "collection_name", "embedding_model", "embedding_dim", "created_at", "updated_at"):
+        with pytest.raises(ValueError):
+            ingestor.create_collection("docs", metadata={reserved: "attacker"})
+
+    # None of the rejected calls may have mutated the adapter-owned fields.
+    assert fake_client.indexes[index_name]["mappings"]["_meta"] == original_meta
+
+
+def test_create_collection_stores_non_reserved_metadata():
+    """Non-reserved caller metadata is still persisted under _meta."""
+    fake_client = FakeOpenSearchClient()
+    ingestor = OpenSearchIngestor({"embedding_dim": 4, "start_ttl_cleanup": False})
+    ingestor._client = fake_client
+
+    ingestor.create_collection("docs", metadata={"tenant": "acme", "team": "search"})
+    index_name = ingestor._index_name_for_collection("docs")
+    meta = fake_client.indexes[index_name]["mappings"]["_meta"]
+
+    assert meta["tenant"] == "acme"
+    assert meta["team"] == "search"
+    assert meta["backend"] == "opensearch"
 
 
 def test_index_mapping_keeps_metadata_strings_filterable():
@@ -679,6 +786,42 @@ def test_dask_ingestion_submits_bytes_payload_and_updates_job(tmp_path):
     assert status.chunk_count == 1
 
 
+def test_worker_config_excludes_credentials():
+    """Credentials must never be serialized into the Dask worker config."""
+    ingestor = OpenSearchIngestor({"auth_type": "none", "start_ttl_cleanup": False})
+
+    worker_config = ingestor._worker_config(
+        {
+            "username": "admin",
+            "password": "s3cret",  # pragma: allowlist secret
+            "summary_llm": "x",
+            "endpoint": "localhost:9200",
+        }
+    )
+
+    assert "username" not in worker_config
+    assert "password" not in worker_config
+    assert "s3cret" not in worker_config.values()
+    assert worker_config["endpoint"] == "localhost:9200"
+
+
+def test_worker_config_requires_env_credentials_for_basic_auth(monkeypatch):
+    """Basic-auth distributed ingestion fails fast unless workers can resolve creds from their env."""
+    monkeypatch.delenv("OPENSEARCH_USERNAME", raising=False)
+    monkeypatch.delenv("OPENSEARCH_PASSWORD", raising=False)
+    ingestor = OpenSearchIngestor(
+        {
+            "auth_type": "basic",
+            "username": "admin",
+            "password": "s3cret",  # pragma: allowlist secret
+            "start_ttl_cleanup": False,
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="worker environment"):
+        ingestor._worker_config({"username": "admin", "password": "s3cret"})  # pragma: allowlist secret
+
+
 def test_delete_file_preserves_inflight_tracking_when_nothing_deleted():
     """If delete_file finds no documents to delete (file still UPLOADING or
     INGESTING, or already gone), in-memory tracking must be left intact so
@@ -889,6 +1032,44 @@ def test_setup_backend_passes_opensearch_yaml_config(monkeypatch):
     assert backend_config["chunk_overlap"] == 20
     assert backend_config["embed_model"] == "nvidia/test-embed"
     assert backend_config["embed_base_url"] == "https://integrate.example/v1"
+
+
+def test_opensearch_password_is_secret_and_not_leaked_in_repr():
+    """The password field must redact in model representations and dumps."""
+    pytest.importorskip("nat")
+    from knowledge_layer.register import KnowledgeRetrievalConfig
+
+    config = KnowledgeRetrievalConfig(
+        backend="opensearch",
+        collection_name="docs",
+        opensearch_auth_type="basic",
+        opensearch_username="admin",
+        opensearch_password="s3cret",  # pragma: allowlist secret
+    )
+
+    assert "s3cret" not in repr(config)
+    assert "s3cret" not in str(config.model_dump())
+
+
+def test_setup_backend_resolves_secret_password_for_adapter(monkeypatch):
+    """_setup_backend must hand the adapter the plaintext password so basic auth still works."""
+    pytest.importorskip("nat")
+    from knowledge_layer.register import KnowledgeRetrievalConfig
+    from knowledge_layer.register import _setup_backend
+
+    monkeypatch.delenv("OPENSEARCH_PASSWORD", raising=False)
+    config = KnowledgeRetrievalConfig(
+        backend="opensearch",
+        collection_name="docs",
+        opensearch_auth_type="basic",
+        opensearch_username="admin",
+        opensearch_password="s3cret",  # pragma: allowlist secret
+    )
+
+    _, backend_config = _setup_backend(config)
+
+    assert backend_config["username"] == "admin"
+    assert backend_config["password"] == "s3cret"  # pragma: allowlist secret
 
 
 def test_setup_backend_uses_opensearch_environment_defaults(monkeypatch):

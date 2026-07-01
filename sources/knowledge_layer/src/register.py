@@ -26,6 +26,7 @@ import os
 from typing import Literal
 
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic import model_validator
 
 from nat.builder.builder import Builder
@@ -121,8 +122,8 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
         default_factory=lambda: _env_value("OPENSEARCH_USERNAME"),
         description="Username for OpenSearch basic auth. Falls back to OPENSEARCH_USERNAME.",
     )
-    opensearch_password: str | None = Field(
-        default_factory=lambda: _env_value("OPENSEARCH_PASSWORD"),
+    opensearch_password: SecretStr | None = Field(
+        default_factory=lambda: SecretStr(pw) if (pw := _env_value("OPENSEARCH_PASSWORD")) is not None else None,
         description="Password for OpenSearch basic auth. Falls back to OPENSEARCH_PASSWORD.",
     )
     opensearch_verify_certs: bool = Field(
@@ -351,7 +352,7 @@ def _setup_backend(config: KnowledgeRetrievalConfig, summary_llm_obj=None) -> tu
             "endpoint": config.opensearch_url,
             "auth_type": config.opensearch_auth_type,
             "username": config.opensearch_username,
-            "password": config.opensearch_password,
+            "password": (config.opensearch_password.get_secret_value() if config.opensearch_password else None),
             "verify_certs": config.opensearch_verify_certs,
             "ca_certs": config.opensearch_ca_certs,
             "aws_region": config.opensearch_aws_region,

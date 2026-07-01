@@ -98,6 +98,13 @@ DEFAULT_BULK_BATCH_SIZE = 100
 DEFAULT_EMBEDDING_BATCH_SIZE = 16
 SUPPORTED_TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".log"}
 
+# Adapter-owned `_meta` fields that caller-supplied collection metadata must never overwrite.
+# Overwriting `backend` hides the index from list_collections(); overwriting `collection_name`
+# breaks identity checks; the rest are lifecycle/embedding fields the adapter alone maintains.
+RESERVED_META_KEYS = frozenset(
+    {"backend", "collection_name", "embedding_model", "embedding_dim", "created_at", "updated_at"}
+)
+
 
 def _utc_now() -> datetime:
     """Return the current time as a timezone-aware UTC datetime."""
@@ -327,9 +334,16 @@ class _OpenSearchConfigMixin:
         self._client_lock = threading.RLock()
 
     def _index_name_for_collection(self, collection_name: str) -> str:
-        """Return the OpenSearch index name for the given collection."""
+        """Return the OpenSearch index name for the given collection.
+
+        Sanitization alone is not injective (``Tenant A``, ``tenant-a`` and ``tenant/a`` all
+        normalize to ``tenant-a``), so a stable disambiguator derived from the original name is
+        appended. This keeps the readable prefix while guaranteeing distinct logical collections
+        map to distinct physical indexes at every call site (create, read, delete).
+        """
         collection_part = _sanitize_index_part(collection_name, "default")
-        return _trim_index_name(f"{self.index_prefix}-{collection_part}")
+        disambiguator = uuid.uuid5(uuid.NAMESPACE_URL, collection_name).hex[:8]
+        return _trim_index_name(f"{self.index_prefix}-{collection_part}-{disambiguator}")
 
     def _create_client(self):
         """Create and return a new OpenSearch client configured for the selected auth mode."""
@@ -474,6 +488,12 @@ class _OpenSearchConfigMixin:
         client = self._get_client()
         index_name = self._index_name_for_collection(collection_name)
         if client.indices.exists(index=index_name):
+            existing_name = self._get_index_meta(index_name).get("collection_name")
+            if existing_name is not None and existing_name != collection_name:
+                raise RuntimeError(
+                    f"OpenSearch index {index_name} already belongs to collection {existing_name!r}; "
+                    f"refusing to reuse it for {collection_name!r}"
+                )
             return index_name
         try:
             client.indices.create(index=index_name, body=self._index_mapping(collection_name, description))
@@ -735,11 +755,28 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         thread.start()
 
     def _worker_config(self, job_config: dict[str, Any]) -> dict[str, Any]:
-        """Return a sanitized copy of job_config safe to serialize and send to Dask workers."""
+        """Return a sanitized copy of job_config safe to serialize and send to Dask workers.
+
+        Credentials are stripped so they never travel through the Dask scheduler/workers as task
+        arguments (where they could be retained or surfaced via diagnostics). Workers resolve
+        OPENSEARCH_USERNAME/OPENSEARCH_PASSWORD from their own environment, mirroring how SigV4
+        credentials are already resolved locally on the worker.
+        """
         worker_config = dict(job_config)
         worker_config.pop("summary_llm", None)
+        worker_config.pop("username", None)
+        worker_config.pop("password", None)
         worker_config["start_ttl_cleanup"] = False
         worker_config["generate_summary"] = False
+
+        if self.auth_type == "basic" and not (
+            os.environ.get("OPENSEARCH_USERNAME") and os.environ.get("OPENSEARCH_PASSWORD")
+        ):
+            raise RuntimeError(
+                "Distributed OpenSearch ingestion with basic auth requires OPENSEARCH_USERNAME and "
+                "OPENSEARCH_PASSWORD to be set in the worker environment; credentials are never sent "
+                "through the Dask scheduler as task arguments."
+            )
         return worker_config
 
     def _build_dask_file_payloads(
@@ -882,6 +919,9 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         index_name = self._ensure_index(name, description)
         meta = self._get_index_meta(index_name)
         if metadata:
+            reserved = RESERVED_META_KEYS.intersection(metadata)
+            if reserved:
+                raise ValueError(f"Collection metadata may not overwrite adapter-owned fields: {sorted(reserved)}")
             meta.update(metadata)
             self._put_index_meta(index_name, meta)
         return self._collection_info_from_index(name, index_name, meta)
@@ -1016,53 +1056,60 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
             return False
 
     def _delete_file_documents_for_aoss(self, index_name: str, query_body: dict[str, Any]) -> int:
-        """AOSS doesn't support _delete_by_query; search first, then bulk delete by generated IDs."""
-        client = self._get_client()
-        deleted = 0
+        """AOSS doesn't support _delete_by_query, so search first then bulk-delete by generated IDs.
 
+        AOSS search views are eventually consistent, so interleaving search and delete can keep
+        returning already-deleted IDs from a stale page and mask later, never-enumerated pages as
+        "done". To avoid partial deletions being reported as success, enumerate the *complete*
+        matching ID set first via stable ``search_after`` pagination (no deletes during this pass,
+        so the view isn't being mutated), then delete. If the set cannot be fully enumerated within
+        the batch cap, fail rather than delete a partial set.
+        """
+        client = self._get_client()
+
+        ids: list[str] = []
         seen_ids: set[str] = set()
-        stale_batches = 0
+        search_after: list[Any] | None = None
 
         for _ in range(self.aoss_delete_max_batches):
-            response = client.search(
-                index=index_name,
-                body={
-                    "size": self.bulk_batch_size,
-                    "_source": False,
-                    "query": query_body["query"],
-                },
-                request_timeout=self.timeout,
-            )
+            body: dict[str, Any] = {
+                "size": self.bulk_batch_size,
+                "_source": False,
+                "query": query_body["query"],
+                "sort": [{"chunk_id": "asc"}],
+            }
+            if search_after is not None:
+                body["search_after"] = search_after
+            response = client.search(index=index_name, body=body, request_timeout=self.timeout)
             hits = response.get("hits", {}).get("hits", [])
             if not hits:
-                return deleted
-
-            body = []
+                break
             for hit in hits:
                 hit_id = hit.get("_id")
                 if hit_id and hit_id not in seen_ids:
                     seen_ids.add(hit_id)
-                    body.append({"delete": {"_index": index_name, "_id": hit_id}})
+                    ids.append(hit_id)
+            search_after = hits[-1].get("sort")
+            if len(hits) < self.bulk_batch_size:
+                break
+        else:
+            raise RuntimeError(
+                f"OpenSearch AOSS file deletion could not fully enumerate matching documents within "
+                f"{self.aoss_delete_max_batches} search pages"
+            )
 
-            if not body:
-                stale_batches += 1
-                if stale_batches >= 2:
-                    return deleted
-                time.sleep(self.aoss_delete_backoff_seconds)
-                continue
-            stale_batches = 0
-
+        deleted = 0
+        for start in range(0, len(ids), self.bulk_batch_size):
+            batch = ids[start : start + self.bulk_batch_size]
+            body = [{"delete": {"_index": index_name, "_id": hit_id}} for hit_id in batch]
             result = client.bulk(body=body, refresh=self.bulk_refresh, request_timeout=self.timeout)
             if isinstance(result, dict) and result.get("errors"):
                 raise RuntimeError(f"OpenSearch bulk deletion failed: {result}")
-
-            deleted += len(body)
+            deleted += len(batch)
             if self.aoss_delete_backoff_seconds:
                 time.sleep(self.aoss_delete_backoff_seconds)
 
-        raise RuntimeError(
-            f"OpenSearch AOSS file deletion exceeded {self.aoss_delete_max_batches} search/delete batches"
-        )
+        return deleted
 
     def list_files(self, collection_name: str) -> list[FileInfo]:
         """List all files in a collection using composite aggregation pagination."""

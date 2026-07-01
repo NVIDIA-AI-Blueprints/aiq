@@ -255,7 +255,10 @@ OpenSearch ingestion runs locally by default. Set `opensearch_ingestion_mode: au
 to use Dask when `NAT_DASK_SCHEDULER_ADDRESS` is configured, falling back to local ingestion when it is not. Set
 `opensearch_ingestion_mode: dask` to require Dask. In Dask mode, each worker constructs its own OpenSearch client, so
 AWS SigV4 credentials are resolved in the worker environment. This supports EKS Pod Identity, SSO-backed local workers,
-and standard AWS SDK environment/profile credentials. `opensearch_dask_file_transfer: bytes` sends uploaded file
+and standard AWS SDK environment/profile credentials. Basic-auth credentials are never sent through the Dask scheduler
+as task arguments; with `opensearch_auth_type: basic`, each worker must resolve `OPENSEARCH_USERNAME` and
+`OPENSEARCH_PASSWORD` from its own environment, and distributed ingestion fails fast if they are not set.
+`opensearch_dask_file_transfer: bytes` sends uploaded file
 contents to workers and works without a shared volume; `paths` requires API and worker pods to share the same file path.
 
 #### Live OpenSearch Integration Tests
