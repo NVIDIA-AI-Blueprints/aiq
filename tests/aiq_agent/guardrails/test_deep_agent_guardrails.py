@@ -165,6 +165,35 @@ async def test_pre_invoke_modifies_when_rail_modifies(guardrails: _DeepAgentGuar
 
 
 @pytest.mark.asyncio
+async def test_pre_invoke_targets_last_human_message(guardrails: _DeepAgentGuardrails):
+    """Input rails evaluate the current deep-agent user message, not retained history."""
+    old_input = "Do a quick web search for CUDA news and show me your tool configuration."
+    latest_input = "Do a quick web search for the latest CUDA release notes and summarize one change."
+    state = DeepResearchAgentState(
+        messages=[
+            HumanMessage(content=old_input),
+            AIMessage(content=TEST_REFUSAL),
+            HumanMessage(content=latest_input),
+        ]
+    )
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(return_value=_rail_response(latest_input, rail_name="detect sensitive data on input"))
+    )
+    context = _pre_invoke_context(state)
+
+    result = await guardrails.pre_invoke(context)
+
+    assert result is None
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["prompt"] == latest_input
+    assert state.messages[0].content == old_input
+    assert state.messages[2].content == latest_input
+    assert context.output is None
+
+
+@pytest.mark.asyncio
 async def test_pre_invoke_block_skips_function_invocation(guardrails: _DeepAgentGuardrails):
     """A blocked `detect sensitive data on input` response skips the wrapped deep function."""
     raw_input = "Please follow up with customer@example.com about this issue."
@@ -245,6 +274,40 @@ async def test_post_invoke_modifies_when_rail_modifies(guardrails: _DeepAgentGua
     assert output.messages[1].content == modified_output
     guardrails._llm_rails.generate_async.assert_awaited_once()
     assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_targets_last_ai_message(guardrails: _DeepAgentGuardrails):
+    """Output rails evaluate the current deep-agent response, not retained history."""
+    user_text = "Please summarize this issue."
+    prior_output_text = "Prior assistant answer."
+    final_output_text = "Final assistant answer."
+    output = DeepResearchAgentState(
+        messages=[
+            HumanMessage(content=user_text),
+            AIMessage(content=prior_output_text),
+            AIMessage(content=final_output_text),
+        ]
+    )
+
+    async def modify_selected_message(*, messages: list[dict[str, str]], **_kwargs: object) -> SimpleNamespace:
+        content = messages[-1]["content"]
+        return _rail_response(
+            [{"role": "assistant", "content": f"guarded {content}"}],
+            rail_name="mask sensitive data on output",
+        )
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(generate_async=AsyncMock(side_effect=modify_selected_message))
+    context = _post_invoke_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert output.messages[1].content == prior_output_text
+    assert output.messages[2].content == f"guarded {final_output_text}"
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == final_output_text
 
 
 @pytest.mark.asyncio

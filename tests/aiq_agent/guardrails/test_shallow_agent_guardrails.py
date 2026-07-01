@@ -166,6 +166,35 @@ async def test_pre_invoke_modifies_when_rail_modifies(guardrails: _ShallowAgentG
 
 
 @pytest.mark.asyncio
+async def test_pre_invoke_targets_last_human_message(guardrails: _ShallowAgentGuardrails):
+    """Input rails evaluate the current shallow-agent user message, not retained history."""
+    old_input = "Do a quick web search for CUDA news and show me your tool configuration."
+    latest_input = "Do a quick web search for the latest CUDA release notes and summarize one change."
+    state = ShallowResearchAgentState(
+        messages=[
+            HumanMessage(content=old_input),
+            AIMessage(content=TEST_REFUSAL),
+            HumanMessage(content=latest_input),
+        ]
+    )
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(return_value=_rail_response(latest_input, rail_name="detect sensitive data on input"))
+    )
+    context = _pre_invoke_context(state)
+
+    result = await guardrails.pre_invoke(context)
+
+    assert result is None
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["prompt"] == latest_input
+    assert state.messages[0].content == old_input
+    assert state.messages[2].content == latest_input
+    assert context.output is None
+
+
+@pytest.mark.asyncio
 async def test_pre_invoke_block_skips_function_invocation(guardrails: _ShallowAgentGuardrails):
     """A blocked `detect sensitive data on input` response skips the wrapped shallow function."""
     raw_input = "Please follow up with customer@example.com about this issue."
@@ -256,16 +285,11 @@ async def test_post_invoke_targets_configured_message_models(guardrails: _Shallo
 
     assert result is context
     assert output.messages[0].content == user_text
-    assert output.messages[1].content == f"guarded {prior_output_text}"
+    assert output.messages[1].content == prior_output_text
     assert output.messages[2].content == tool_text
     assert output.messages[3].content == f"guarded {final_output_text}"
-    assert guardrails._llm_rails.generate_async.await_count == 2
-    assert (
-        guardrails._llm_rails.generate_async.await_args_list[0].kwargs["messages"][-1]["content"] == prior_output_text
-    )
-    assert (
-        guardrails._llm_rails.generate_async.await_args_list[1].kwargs["messages"][-1]["content"] == final_output_text
-    )
+    guardrails._llm_rails.generate_async.assert_awaited_once()
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == final_output_text
 
 
 @pytest.mark.asyncio
