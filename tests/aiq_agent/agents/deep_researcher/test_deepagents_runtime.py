@@ -113,7 +113,11 @@ class TestDeepAgentsRuntimeRouting:
         assert "modified_at" in files["/shared/original_report.md"]
 
     def test_prepare_state_files_normalizes_shared_paths_for_route_backend(self) -> None:
-        runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=MagicMock(),
+        ):
+            runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
 
         files = runtime.prepare_state_files(
             {
