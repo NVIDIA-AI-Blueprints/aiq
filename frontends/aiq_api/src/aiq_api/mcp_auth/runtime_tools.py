@@ -42,6 +42,25 @@ from nat.builder.framework_enum import LLMFrameworkEnum
 logger = logging.getLogger(__name__)
 
 
+class PerUserMcpSourceUnavailableError(RuntimeError):
+    """An explicitly-selected protected MCP source could not be resolved at run time.
+
+    Raised (rather than silently continuing) when the caller selected specific data
+    sources and one of them is a configured per-user MCP source whose tools cannot
+    be built — typically because the owner's token is missing or expired. Surfacing
+    this lets the client prompt a reconnect instead of returning a web-only answer
+    that misrepresents which sources were actually used.
+    """
+
+    def __init__(self, source_ids: list[str]) -> None:
+        self.source_ids = source_ids
+        names = ", ".join(source_ids)
+        super().__init__(
+            f"The following selected data source(s) are not connected (or the connection expired): {names}. "
+            "Reconnect them in the data sources panel and try again."
+        )
+
+
 def _resolve_type_registry(builder):
     """Resolve NAT's type registry through dependency-tracking child builders."""
     current = builder
@@ -109,8 +128,16 @@ async def open_per_user_mcp_tools(
         wrapper_type: Agent framework to wrap tools for.
 
     Returns:
-        Framework-wrapped tools (possibly empty). Best-effort: a failure resolving
-        one source is logged and skipped, so it never breaks the job.
+        Framework-wrapped tools (possibly empty). Best-effort for the "all" case
+        (``data_sources is None``): a failure resolving one source is logged and
+        skipped so it never breaks the job.
+
+    Raises:
+        PerUserMcpSourceUnavailableError: when ``data_sources`` is an explicit list
+            and one of the selected, configured per-user MCP sources cannot be
+            resolved (missing/expired token, unreachable server). The caller asked
+            for those sources specifically, so failing is preferable to silently
+            answering without them.
 
     Precondition: ``Context.user_id`` must already be set to the job owner.
     """
@@ -121,12 +148,15 @@ async def open_per_user_mcp_tools(
 
     selected = None if data_sources is None else {s.lower() for s in data_sources}
     tools: list = []
+    # Explicitly-selected per-user sources we couldn't resolve -> fail closed below.
+    unavailable: list[str] = []
 
     for source in get_all_sources():
         pua = source.per_user_auth
         if pua is None or not pua.required or not pua.auth_provider:
             continue
-        if selected is not None and source.id.lower() not in selected:
+        explicitly_selected = selected is not None and source.id.lower() in selected
+        if selected is not None and not explicitly_selected:
             continue
 
         try:
@@ -141,6 +171,8 @@ async def open_per_user_mcp_tools(
                     source.id,
                     pua.auth_provider,
                 )
+                if explicitly_selected:
+                    unavailable.append(source.id)
                 continue
 
             # Reconcile UI status with reality: the data-source card reports
@@ -151,6 +183,8 @@ async def open_per_user_mcp_tools(
             # and skip, rather than failing the live MCP call and silently dropping
             # the tool while the UI keeps claiming connected.
             if not await _token_usable(builder, getattr(provider, "config", None), source.id):
+                if explicitly_selected:
+                    unavailable.append(source.id)
                 continue
 
             # Give terse/blank MCP tools clear names + descriptions so the agent
@@ -187,5 +221,14 @@ async def open_per_user_mcp_tools(
                 "Failed to resolve per-user MCP tools for source '%s'; continuing without them.",
                 source.id,
             )
+            if explicitly_selected:
+                unavailable.append(source.id)
+
+    # Fail closed for sources the caller singled out but we couldn't resolve (e.g.
+    # a token that expired between submit-time preflight and job execution). For the
+    # "all" case (data_sources is None) we stay best-effort — the user didn't ask
+    # for these specifically, so a missing one shouldn't sink the whole run.
+    if unavailable:
+        raise PerUserMcpSourceUnavailableError(unavailable)
 
     return tools

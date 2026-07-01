@@ -126,17 +126,32 @@ export const useLayoutStore = create<LayoutStore>()(
       },
 
       refreshDataSourceStatus: async (authToken?: string) => {
-        // Silent, selection-preserving refresh: update the source list/auth status
-        // only. Unlike fetchDataSources it does NOT touch enabledDataSourceIds or
-        // the loading/error flags, so calling it on panel open won't reset the
-        // user's selection or flash a spinner.
+        // Selection-preserving refresh: update the source list/auth status without
+        // touching loading/error flags or resetting non-protected selections. The
+        // one exception is a protected source whose status is no longer
+        // 'connected' (e.g. the token expired since it was enabled) — it can no
+        // longer be used, so drop it from the selection here rather than leaving it
+        // shown in "Selected Data Sources" and submitted while unusable.
         try {
           const client = createDataSourcesClient({ authToken })
           const response = await client.getDataSources()
           set(
-            {
-              availableDataSources: response.data_sources,
-              knowledgeLayerAvailable: response.knowledge_layer,
+            (state) => {
+              const stillUsable = new Set(
+                response.data_sources
+                  .filter((s) => !(s.per_user_auth?.required && s.per_user_auth.status !== 'connected'))
+                  .map((s) => s.id)
+              )
+              return {
+                availableDataSources: response.data_sources,
+                knowledgeLayerAvailable: response.knowledge_layer,
+                // Only ever removes now-unusable protected ids; other selections
+                // (incl. sources absent from this response) are preserved.
+                enabledDataSourceIds: state.enabledDataSourceIds.filter((id) => {
+                  const src = response.data_sources.find((s) => s.id === id)
+                  return !(src?.per_user_auth?.required) || stillUsable.has(id)
+                }),
+              }
             },
             false,
             'refreshDataSourceStatus'

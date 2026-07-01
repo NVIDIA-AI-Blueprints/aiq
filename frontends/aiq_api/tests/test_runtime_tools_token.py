@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import AsyncExitStack
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from types import SimpleNamespace
 from unittest.mock import patch
 
+import pytest
 from pydantic import SecretStr
 
 from aiq_api.mcp_auth import runtime_tools
+from aiq_api.mcp_auth.runtime_tools import PerUserMcpSourceUnavailableError
 from nat.authentication.token_storage import InMemoryTokenStorage
 from nat.builder.context import ContextState
 from nat.data_models.authentication import AuthResult
@@ -63,3 +67,49 @@ def test_missing_token_is_not_usable():
     usable, still_there = asyncio.run(_check(None))
     assert usable is False
     assert still_there is False
+
+
+def _gdrive_source():
+    return SimpleNamespace(
+        id="gdrive",
+        per_user_auth=SimpleNamespace(required=True, auth_provider="mcp_oauth2_gdrive", tool_overrides={}),
+    )
+
+
+class _Builder:
+    async def get_auth_provider(self, name):
+        return SimpleNamespace(config=SimpleNamespace(server_url="https://mcp.example/mcp"))
+
+
+async def _open(data_sources):
+    async with AsyncExitStack() as stack:
+        return await runtime_tools.open_per_user_mcp_tools(
+            builder=_Builder(), data_sources=data_sources, exit_stack=stack
+        )
+
+
+async def _not_usable(*_args, **_kwargs):
+    return False
+
+
+def test_explicitly_selected_unusable_source_fails_closed():
+    # A source the caller named specifically that we can't resolve (expired/missing
+    # token) must raise rather than silently answering without it.
+    with (
+        patch("aiq_api.mcp_auth.runtime_tools.get_all_sources", return_value=[_gdrive_source()]),
+        patch("aiq_api.mcp_auth.runtime_tools._token_usable", _not_usable),
+    ):
+        with pytest.raises(PerUserMcpSourceUnavailableError) as exc:
+            asyncio.run(_open(["gdrive"]))
+    assert "gdrive" in str(exc.value)
+
+
+def test_all_sources_mode_skips_unusable_without_raising():
+    # When data_sources is None ("all"), stay best-effort: an unusable source is
+    # skipped, not fatal.
+    with (
+        patch("aiq_api.mcp_auth.runtime_tools.get_all_sources", return_value=[_gdrive_source()]),
+        patch("aiq_api.mcp_auth.runtime_tools._token_usable", _not_usable),
+    ):
+        tools = asyncio.run(_open(None))
+    assert tools == []

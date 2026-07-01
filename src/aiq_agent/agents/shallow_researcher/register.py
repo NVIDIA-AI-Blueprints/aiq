@@ -118,6 +118,7 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                 try:
                     from aiq_api.jobs.access import require_verified_principal
                     from aiq_api.mcp_auth.provider import principal_user_id
+                    from aiq_api.mcp_auth.runtime_tools import PerUserMcpSourceUnavailableError
                     from aiq_api.mcp_auth.runtime_tools import open_per_user_mcp_tools
                     from nat.builder.context import ContextState
 
@@ -135,6 +136,13 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                     )
                     if mcp_tools:
                         selected_tools = [*selected_tools, *mcp_tools]
+                except PerUserMcpSourceUnavailableError as exc:
+                    # The user explicitly selected a protected source we can't resolve
+                    # (e.g. token expired). Surface a reconnect message instead of
+                    # silently answering without it.
+                    from langchain_core.messages import AIMessage
+
+                    return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=str(exc))])
                 except Exception:
                     logger.exception("Failed to resolve per-user MCP tools for shallow research; continuing")
 
