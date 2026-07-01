@@ -23,6 +23,7 @@ This is the main orchestrator agent that coordinates the full research workflow:
 4. Optional escalation from shallow to deep
 """
 
+import json
 import logging
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -58,6 +59,19 @@ from .utils import trim_message_history
 logger = logging.getLogger(__name__)
 
 
+# Async-job escalation signal. The chat WebSocket frame carries only a string ``content`` field,
+# so the signal the UI consumes to start SSE streaming for a child job is encoded as a compact
+# JSON object rather than a prose sentence -- this keeps detection robust to wording/punctuation
+# changes. Mirrored by the UI parser in frontends/ui/src/features/chat/hooks/use-websocket-chat.ts.
+_ESCALATION_KIND_DEEP_RESEARCH = "deep_research"
+_ESCALATION_KIND_REPORT_EDIT = "report_edit"
+
+
+def _job_escalation_message(kind: str, job_id: str) -> str:
+    """Serialize an async-job escalation signal as a structured JSON payload."""
+    return json.dumps({"type": "job_escalation", "kind": kind, "job_id": job_id})
+
+
 class ChatResearcherAgent:
     """
     Orchestrates the full chat research workflow.
@@ -88,6 +102,10 @@ class ChatResearcherAgent:
         callbacks: list[BaseCallbackHandler] | None = None,
         max_history: int = 5,
         deep_research_job_submitter: Callable[[Any], Awaitable[str]] | None = None,
+        report_ask_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
+        report_edit_job_submitter: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
+        report_edit_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
+        report_seed_files_fn: Callable[[ChatResearcherState], Awaitable[dict[str, Any] | None]] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         validate_deep_research_tools_fn: Callable[[list[str] | None], tuple[bool, str]] | None = None,
     ) -> None:
@@ -104,6 +122,8 @@ class ChatResearcherAgent:
             callbacks: Optional list of callback handlers
             max_history: Maximum number of messages to keep in history
             deep_research_job_submitter: Optional function to submit deep research as async job
+            report_ask_fn: Optional function to answer questions against the active parent report
+            report_edit_job_submitter: Optional function to submit report edit child jobs
             checkpointer: Optional checkpointer for persistent state (defaults to MemorySaver)
         """
         self.intent_classifier_fn = intent_classifier_fn
@@ -115,6 +135,10 @@ class ChatResearcherAgent:
         self.callbacks = callbacks or []
         self.max_history = max_history
         self.deep_research_job_submitter = deep_research_job_submitter
+        self.report_ask_fn = report_ask_fn
+        self.report_edit_job_submitter = report_edit_job_submitter
+        self.report_edit_fn = report_edit_fn
+        self.report_seed_files_fn = report_seed_files_fn
         self.checkpointer = checkpointer
         self.validate_deep_research_tools_fn = validate_deep_research_tools_fn
 
@@ -277,19 +301,46 @@ class ChatResearcherAgent:
             return {"messages": [], "shallow_result": None}
 
         async def deep_research_node(state: ChatResearcherState) -> dict[str, Any]:
-            trimmed_messages: list[BaseMessage] = trim_message_history(state.messages, self.max_history)
             if self.deep_research_job_submitter is not None:
                 job_id = await self.deep_research_job_submitter(state)
-                response = f"Deep research job submitted. Job ID: {job_id}"
-                return {"messages": [AIMessage(content=response)]}
+                escalation = _job_escalation_message(_ESCALATION_KIND_DEEP_RESEARCH, job_id)
+                return {"messages": [AIMessage(content=escalation)]}
 
             research_query = state.original_query or get_latest_user_query(state.messages)
+            seed_files: dict[str, Any] = {}
+            if (
+                self.report_seed_files_fn is not None
+                and state.user_intent is not None
+                and getattr(state.user_intent, "use_parent_report_context", False)
+                and (state.active_report_job_id or state.last_report_markdown)
+            ):
+                # Delta research: seed the parent report into the deep agent's virtual filesystem so it
+                # reuses it and researches only the requested delta. Best-effort -- a seed failure falls
+                # back to fresh research rather than aborting the turn.
+                try:
+                    seed_files = await self.report_seed_files_fn(state) or {}
+                except Exception as e:
+                    logger.warning(
+                        "Parent report seed unavailable for delta (error_type=%s); running fresh research",
+                        type(e).__name__,
+                    )
+                    seed_files = {}
+            logger.info(
+                "Inline deep research: use_parent_report_context=%s has_report=%s seeded_files=%d",
+                bool(getattr(state.user_intent, "use_parent_report_context", False)) if state.user_intent else False,
+                bool(state.active_report_job_id or state.last_report_markdown),
+                len(seed_files),
+            )
+            # Mirror the async job: feed the deep researcher a clean query (plus the approved plan and any
+            # seeded parent-report files), NOT the prior chat history. Forwarding accumulated report
+            # messages bloats the writer's context and can make it fail to emit a final report.
             deep_state = DeepResearchAgentState(
-                messages=trimmed_messages + [HumanMessage(content=research_query)],
+                messages=[HumanMessage(content=research_query)],
                 data_sources=state.data_sources,
                 clarifier_result=state.clarifier_result,
                 available_documents=state.available_documents,
                 user_info=state.user_info,
+                files=seed_files,
             )
             try:
                 result = await self.deep_research_fn(deep_state)
@@ -314,19 +365,86 @@ class ChatResearcherAgent:
                 if _AuthError and isinstance(e, _AuthError):
                     logger.warning("Auth error in deep research: %s", e)
                     return {"messages": [AIMessage(content=str(e))]}
-                raise
+                # Inline (synchronous CLI) path: a raised exception would crash the whole CLI turn.
+                # Degrade to a chat message instead (the error is logged for debugging).
+                logger.error("Inline deep research failed (error_type=%s)", type(e).__name__, exc_info=True)
+                return {
+                    "messages": [
+                        AIMessage(content="I ran into an error while producing that report. Please try again.")
+                    ]
+                }
             if not result.messages:
                 error_message = "An error occurred during deep research."
                 logger.error(error_message)
                 final_message = AIMessage(content=error_message)
                 return {"messages": [final_message]}
             else:
-                return {"messages": [result.messages[-1]]}
+                report_message = result.messages[-1]
+                report_md = report_message.content
+                # Capture the inline report so follow-up turns in this (synchronous) session can
+                # reference it without an async job. Checkpointed via the keep-if-set reducer.
+                return {
+                    "messages": [report_message],
+                    "last_report_markdown": report_md if isinstance(report_md, str) else str(report_md),
+                }
+
+        async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
+            if self.report_ask_fn is None:
+                return {"messages": [AIMessage(content="Report follow-up is not available in this workflow.")]}
+            try:
+                answer = await self.report_ask_fn(state)
+            except Exception as e:
+                # The node has no HTTP scope, so a raised exception would surface as an
+                # opaque workflow error / empty completion. Degrade to a chat message.
+                logger.warning(
+                    "Report ask failed for report %s (error_type=%s)",
+                    state.active_report_job_id,
+                    type(e).__name__,
+                )
+                return {
+                    "messages": [
+                        AIMessage(content="I couldn't access that report to answer your question. Please try again.")
+                    ]
+                }
+            return {"messages": [AIMessage(content=answer)]}
+
+        async def report_edit_node(state: ChatResearcherState) -> dict[str, Any]:
+            # Async path (server): submit a report_rewriter child job; the UI streams its result.
+            if self.report_edit_job_submitter is not None:
+                try:
+                    job_id = await self.report_edit_job_submitter(state)
+                except Exception as e:
+                    logger.warning(
+                        "Report edit submission failed for report %s (error_type=%s)",
+                        state.active_report_job_id,
+                        type(e).__name__,
+                    )
+                    return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
+                escalation = _job_escalation_message(_ESCALATION_KIND_REPORT_EDIT, job_id)
+                return {"messages": [AIMessage(content=escalation)]}
+            # Inline path (synchronous CLI): rewrite the in-session report directly -- no job or
+            # scheduler. The revised report becomes the reply and replaces last_report_markdown so
+            # subsequent follow-ups operate on the edited copy.
+            if self.report_edit_fn is not None:
+                try:
+                    revised = await self.report_edit_fn(state)
+                except Exception as e:
+                    logger.warning("Inline report edit failed (error_type=%s)", type(e).__name__)
+                    return {"messages": [AIMessage(content="I couldn't edit the report. Please try again.")]}
+                return {"messages": [AIMessage(content=revised)], "last_report_markdown": revised}
+            return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
 
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
             if state.user_intent and state.user_intent.intent == "meta":
                 return "END"
+            # A report is available either as an async job (UI/server) or produced inline in this
+            # session (synchronous CLI). Either lets the router serve report follow-up.
+            has_report = bool(state.active_report_job_id or state.last_report_markdown)
+            if has_report and state.user_intent and state.user_intent.target == "report":
+                if state.user_intent.report_action == "edit":
+                    return "report_edit"
+                return "report_ask"
             if state.depth_decision and state.depth_decision.decision == "deep":
                 return "clarifier"
             return "shallow_research"
@@ -372,6 +490,8 @@ class ChatResearcherAgent:
         graph.add_node("shallow_research", shallow_research_node)
         graph.add_node("clarifier", clarifier_node)
         graph.add_node("deep_research", deep_research_node)
+        graph.add_node("report_ask", report_ask_node)
+        graph.add_node("report_edit", report_edit_node)
 
         graph.set_entry_point("intent_classifier")
 
@@ -382,6 +502,8 @@ class ChatResearcherAgent:
                 "END": END,
                 "clarifier": "clarifier",
                 "shallow_research": "shallow_research",
+                "report_ask": "report_ask",
+                "report_edit": "report_edit",
             },
         )
 
@@ -395,6 +517,8 @@ class ChatResearcherAgent:
         )
 
         graph.add_edge("deep_research", END)
+        graph.add_edge("report_ask", END)
+        graph.add_edge("report_edit", END)
 
         return graph.compile(checkpointer=self.checkpointer)
 
@@ -424,6 +548,10 @@ class ChatResearcherAgent:
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
                 "skip_clarifier": state.skip_clarifier,
+                "active_report_job_id": state.active_report_job_id,
+                # Pass through; the keep-if-set reducer preserves a prior in-session report when
+                # this turn supplies None, so report follow-up works across turns without a job.
+                "last_report_markdown": state.last_report_markdown,
             }
             messages = state.messages
 

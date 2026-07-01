@@ -16,18 +16,37 @@ Generate a direct response to the user.
 4. **Constraints**: No emojis. Do not answer research questions here.
 
 #### IF INTENT IS "RESEARCH":
-Determine the depth.
+Determine the semantic route and depth.
+- **route = "report_ask"** only when an active report is available and the user asks a question answerable from that existing report.
+- **route = "report_cosmetic_edit"** only when an active report is available and the user asks for mechanical or aesthetic edits that do not require new evidence.
+- **route = "report_delta_research"** only when an active report is available and the user asks for fresh evidence, deeper analysis, or a new analytical perspective on the same report topic.
+- **route = "standalone_research"** for generic factual questions, new topics, unrelated report requests, or when no active report is available.
+
+Route examples:
+- "what are the risks in this report?" -> route = "report_ask"
+- "summarize this report" -> route = "report_ask"
+- "make this shorter" -> route = "report_cosmetic_edit"
+- "change tone" -> route = "report_cosmetic_edit"
+- "format as bullets" -> route = "report_cosmetic_edit"
+- "rewrite this report from a player-performance POV" -> route = "report_delta_research"
+- "redo this with newer evidence" -> route = "report_delta_research"
+- "can we write a report on this from a supply-chain angle?" -> route = "report_delta_research"
+- "write a separate report on player performance" -> route = "standalone_research"
+
+Determine the depth for standalone_research.
 - **shallow**: Single main question, factual lookup, 2-3 tool calls, no complex comparison.
-- **deep**: Multi-faceted, explicit comparisons, trend analysis, strategy/roadmaps, or "comprehensive" requests.
+- **deep**: Explicit report-generation requests ("write/create/generate a report"), multi-faceted requests,
+  explicit comparisons, trend analysis, strategy/roadmaps, or "comprehensive" requests.
 - **Tie-break**: If unsure, choose "shallow".
 
 ### OUTPUT FORMAT
 You must respond ONLY with a JSON object using this schema:
 {
   "intent": "meta" | "research",
+  "route": "report_ask" | "report_cosmetic_edit" | "report_delta_research" | "standalone_research" | "meta",
   "meta_response": "The text response if intent is meta, otherwise null",
   "research_depth": "shallow" | "deep" | null,
-  "depth_reasoning": "One sentence explanation for depth if research, otherwise null"
+  "route_reasoning": "One sentence explanation for the route and depth, otherwise null"
 }
 
 {#- === KV CACHE BOUNDARY — dynamic content below === -#}
@@ -36,6 +55,13 @@ You must respond ONLY with a JSON object using this schema:
 Current Date and Time: {{ current_datetime }}
 {% if user_info and user_info.name %}
 User: **{{ user_info.name }}** ({{ user_info.email or "email not provided" }})
+{% endif %}
+
+{% if active_report_available %}
+Active report: available
+The active report is available as optional context. Do not assume the user wants report mode just because this exists.
+{% else %}
+Active report: none
 {% endif %}
 
 Available Tools:

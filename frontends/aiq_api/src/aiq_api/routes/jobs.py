@@ -32,9 +32,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 from typing import Annotated
+from typing import Any
 
 from fastapi import Body
 from fastapi import FastAPI
@@ -43,6 +45,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_validator
 
 from aiq_agent.common.data_source_registry import get_all_sources
 from aiq_agent.common.data_source_registry import get_all_tool_refs
@@ -58,6 +61,70 @@ if TYPE_CHECKING:
     from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
 
 logger = logging.getLogger(__name__)
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read a non-negative integer ops knob from the environment.
+
+    A missing, non-integer, or negative value falls back to ``default`` so a
+    misconfigured cap can never silently invert into "block all submissions".
+    """
+    try:
+        value = int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+    if value < 0:
+        logger.warning("%s=%d is negative; using default %d", name, value, default)
+        return default
+    return value
+
+
+def _sandbox_caps_configured() -> bool:
+    """Whether an operator has opted into sandbox concurrency caps via env.
+
+    Default-off so the guard never adds a function-config lookup (or behavior change)
+    to submits unless caps are explicitly configured.
+    """
+    return "AIQ_MAX_SANDBOXES_PER_PRINCIPAL" in os.environ or "AIQ_MAX_SANDBOXES_GLOBAL" in os.environ
+
+
+def _agent_uses_sandbox(builder: Any, config_name: str) -> bool:
+    """Return whether the agent's function config enables a sandbox."""
+    try:
+        fn_config = builder.get_function_config(config_name)
+    except Exception:  # noqa: BLE001 - missing/odd config means "no sandbox guard"
+        return False
+    sandbox = getattr(fn_config, "sandbox", None)
+    if sandbox is None:
+        return False
+    return bool(getattr(sandbox, "enabled", True))
+
+
+async def _enforce_sandbox_concurrency(db_url: str, principal: Any) -> None:
+    """Reject submission when per-principal or global sandbox limits are reached.
+
+    Option A: enforced at the API submit path so cost is stopped before a Dask worker
+    spins up a sandbox. Counts fail open (None) so a query mismatch never blocks submits.
+    Configurable via AIQ_MAX_SANDBOXES_PER_PRINCIPAL / AIQ_MAX_SANDBOXES_GLOBAL.
+    """
+    from ..jobs.access import count_active_jobs_for_owner
+    from ..jobs.access import count_active_jobs_global
+
+    per_principal = _int_env("AIQ_MAX_SANDBOXES_PER_PRINCIPAL", 5)
+    global_cap = _int_env("AIQ_MAX_SANDBOXES_GLOBAL", 50)
+    loop = asyncio.get_running_loop()
+
+    owner_count = await loop.run_in_executor(None, count_active_jobs_for_owner, db_url, principal)
+    if owner_count is not None and owner_count >= per_principal:
+        raise HTTPException(
+            429,
+            f"Active job limit reached for this principal ({per_principal}). "
+            "Wait for running jobs to finish before submitting more.",
+        )
+
+    global_count = await loop.run_in_executor(None, count_active_jobs_global, db_url)
+    if global_count is not None and global_count >= global_cap:
+        raise HTTPException(503, "Server is at sandbox capacity; please retry shortly.")
 
 
 class JobSubmitRequest(BaseModel):
@@ -86,6 +153,14 @@ class JobSubmitRequest(BaseModel):
             "data-source tools; unmapped utility tools remain available."
         ),
     )
+
+    @field_validator("input")
+    @classmethod
+    def _input_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Input must not be blank")
+        return stripped
 
 
 JOB_SUBMIT_EXAMPLES: dict[str, dict] = {
@@ -274,6 +349,47 @@ class JobReportResponse(BaseModel):
     job_id: str = Field(..., description="Unique job identifier")
     has_report: bool = Field(..., description="Whether the final report is available")
     report: str | None = Field(None, description="Final research report from the agent")
+    parent_job_id: str | None = Field(None, description="Parent report job ID for report follow-up outputs")
+    interaction_action: str | None = Field(None, description="Report interaction action that produced this output")
+    result_kind: str | None = Field(None, description="Kind of result returned by the child job")
+
+
+class ReportEditRequest(BaseModel):
+    """Request to create a revised report from an existing completed report job."""
+
+    input: str = Field(..., min_length=1, description="Edit instruction for the parent report")
+    job_id: str | None = Field(
+        None,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        max_length=64,
+        description="Optional custom child job ID (auto-generated if omitted)",
+    )
+    expiry_seconds: int | None = Field(
+        None,
+        ge=600,
+        le=604800,
+        description="Child job expiry in seconds (default from config, max 7 days)",
+    )
+
+    @field_validator("input")
+    @classmethod
+    def _input_not_blank(cls, value: str) -> str:
+        # min_length=1 still allows whitespace-only; the report rewriter requires a
+        # real instruction, so reject blank input at the boundary instead of
+        # creating a guaranteed-failing child job.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Edit instruction must not be blank")
+        return stripped
+
+
+class ReportEditResponse(BaseModel):
+    """Response for an accepted report edit job."""
+
+    job_id: str = Field(..., description="Child job identifier")
+    parent_job_id: str = Field(..., description="Parent report job identifier")
+    status: str = Field(..., description="Child job status")
+    agent_type: str = Field(..., description="Internal agent type used for the child job")
 
 
 class AgentInfo(BaseModel):
@@ -314,6 +430,11 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     from ..jobs.access import authorize_job_access
     from ..jobs.access import ensure_job_access_table
     from ..jobs.event_store import EventStore
+    from ..jobs.report_context import _decode_job_output
+    from ..jobs.report_context import report_output_metadata
+    from ..jobs.report_context import resolve_report_context
+    from ..jobs.report_context import to_initial_files
+    from ..jobs.submit import JobIdConflictError
     from ..jobs.submit import submit_agent_job as submit_authorized_job
 
     if not get_all_sources():
@@ -335,6 +456,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         agents = [
             AgentInfo(agent_type=agent_type, description=config.description)
             for agent_type, config in AGENT_REGISTRY.items()
+            if config.public
         ]
         return AgentListResponse(agents=agents)
 
@@ -427,7 +549,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         ),
         responses={
             400: {"description": "Unknown agent type or invalid request"},
+            409: {"description": "A custom job_id was supplied that collides with an existing job"},
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
+            500: {"description": "Failed to persist async job authorization metadata"},
             503: {"description": "Dask scheduler not available"},
         },
     )
@@ -439,6 +563,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             agent_config = get_agent_config(req.agent_type)
         except KeyError as e:
             raise HTTPException(400, str(e))
+        if not agent_config.public:
+            raise HTTPException(400, f"Agent type is internal-only and cannot be submitted directly: {req.agent_type}")
 
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
         # Authenticate the caller (raises 401/403 if unverified). The returned principal
@@ -458,6 +584,13 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             len(req.data_sources) if req.data_sources is not None else "none",
         )
 
+        # Sandbox concurrency / cost guard (Option A): cap concurrent sandbox-enabled
+        # jobs per principal and globally, enforced at submit so cost is stopped before
+        # a worker spins up. Opt-in (default-off) via AIQ_MAX_SANDBOXES_* env vars so the
+        # default submit path stays lazy; fail-open if the active-job count is unknown.
+        if _sandbox_caps_configured() and _agent_uses_sandbox(builder, agent_config.config_name):
+            await _enforce_sandbox_concurrency(db_url, principal)
+
         # Propagate auth token to Dask worker for requires_auth data sources
         from aiq_agent.auth import get_auth_token
 
@@ -473,8 +606,14 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 data_sources=req.data_sources,
                 auth_token=auth_token,
             )
+        except JobIdConflictError:
+            raise HTTPException(409, f"Job already exists: {req.job_id}")
         except RuntimeError as e:
-            raise HTTPException(403, str(e))
+            # The principal is resolved above, so a RuntimeError here is an
+            # availability/config failure (e.g. scheduler not configured), not an
+            # authorization error -- surface 503, not 403, and don't echo internals.
+            logger.warning("Async job submission unavailable: %s", e)
+            raise HTTPException(503, "Async job submission is currently unavailable")
         except Exception as e:
             logger.warning("Failed to submit authorized job: %s", e)
             raise HTTPException(500, "Failed to persist async job authorization metadata")
@@ -491,6 +630,69 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             job_id=job_id,
             status=JobStatus.SUBMITTED.value,
             agent_type=req.agent_type,
+        )
+
+    @app.post(
+        "/v1/jobs/async/job/{job_id}/report/edit",
+        response_model=ReportEditResponse,
+        tags=["async jobs"],
+        summary="Create a revised report from a completed report job",
+        description=(
+            "Authorize access to a completed parent report, reconstruct durable report context, "
+            "and submit an internal child job that emits a full revised report."
+        ),
+        responses={
+            404: {"description": "Parent job not found"},
+            409: {"description": "Parent job is incomplete, has no durable report, or the child job_id collides"},
+            422: {"description": "Request validation failed (e.g. blank edit instruction)"},
+            500: {"description": "Failed to submit the report edit job"},
+            503: {"description": "Dask scheduler not available"},
+        },
+    )
+    async def edit_job_report(job_id: str, req: ReportEditRequest) -> ReportEditResponse:
+        """Create an internal report-rewrite child job from a completed parent report."""
+        principal = require_verified_principal()
+        parent_job = await authorize_job_access(job_store, db_url, job_id, principal)
+        if getattr(parent_job, "status", None) != JobStatus.SUCCESS.value:
+            raise HTTPException(409, f"Parent job is not complete: {job_id}")
+
+        context = await resolve_report_context(parent_job, db_url, job_id)
+        expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
+
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+        try:
+            child_job_id = await submit_authorized_job(
+                agent_type="report_rewriter",
+                input_text=req.input,
+                owner=principal.email or principal.sub,
+                principal=principal,
+                job_id=req.job_id,
+                expiry_seconds=expiry,
+                data_sources=[],
+                auth_token=auth_token,
+                initial_files=to_initial_files(context, instruction=req.input),
+                output_metadata=report_output_metadata(job_id, "edit"),
+                allow_internal=True,
+            )
+        except JobIdConflictError:
+            raise HTTPException(409, f"Job already exists: {req.job_id}")
+        except RuntimeError as e:
+            # Principal is resolved above; a RuntimeError here is an availability/config
+            # failure (e.g. scheduler not configured), not an authorization error.
+            logger.warning("Report edit submission unavailable for parent %s: %s", job_id, e)
+            raise HTTPException(503, "Report edit submission is currently unavailable")
+        except Exception as e:
+            logger.warning("Failed to submit report edit job for parent %s: %s", job_id, e)
+            raise HTTPException(500, "Failed to submit report edit job")
+
+        logger.info("Submitted report edit child job %s for parent job %s", child_job_id, job_id)
+        return ReportEditResponse(
+            job_id=child_job_id,
+            parent_job_id=job_id,
+            status=JobStatus.SUBMITTED.value,
+            agent_type="report_rewriter",
         )
 
     @app.get(
@@ -608,6 +810,75 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         )
 
     @app.get(
+        "/v1/jobs/async/job/{job_id}/artifacts",
+        tags=["async jobs"],
+        summary="List durable artifacts",
+        description="List generated artifacts (charts, CSVs, notebooks) harvested from the sandbox.",
+        responses={404: {"description": "Job not found"}},
+    )
+    async def list_job_artifacts(job_id: str) -> dict:
+        """List durable artifact metadata for a job (no bytes)."""
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        store = SqlArtifactStore(db_url)
+        artifacts = await asyncio.to_thread(store.list, job_id)
+        # Exclude storage internals (storage_uri embeds the db_url, which may carry
+        # credentials/hostnames; sandbox_path is an internal layout detail) from the
+        # client-facing payload. Clients use the content endpoint, not these fields.
+        return {
+            "job_id": job_id,
+            "artifacts": [a.model_dump(mode="json", exclude={"storage_uri", "sandbox_path"}) for a in artifacts],
+        }
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/artifacts/{artifact_id}/content",
+        tags=["async jobs"],
+        summary="Download artifact content",
+        description="Stream the bytes of a single artifact. Job-ownership checks apply.",
+        responses={404: {"description": "Job or artifact not found"}},
+    )
+    async def get_job_artifact_content(job_id: str, artifact_id: str) -> StreamingResponse:
+        """Stream an artifact's bytes (auth-scoped to the owning job)."""
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        store = SqlArtifactStore(db_url)
+        artifact = await asyncio.to_thread(store.get, job_id, artifact_id)
+        if artifact is None:
+            raise HTTPException(404, f"Artifact not found: {artifact_id}")
+
+        # The filename is sandbox-controlled; strip control chars and quotes so it cannot
+        # break out of the header value (response-splitting / header injection).
+        safe_filename = "".join(c for c in artifact.filename if c.isprintable() and c not in '"\\') or "artifact"
+        # Starlette encodes header values as Latin-1, so a non-Latin-1 filename (emoji, CJK)
+        # would raise UnicodeEncodeError. Provide an ASCII-only fallback plus an RFC 5987
+        # filename* with the UTF-8 percent-encoded original for clients that support it.
+        from urllib.parse import quote
+
+        ascii_filename = safe_filename.encode("ascii", "ignore").decode() or "artifact"
+        encoded_filename = quote(safe_filename, safe="")
+        # Only magic-verified raster images may render inline; everything else (SVG, HTML,
+        # notebooks, PDFs) is forced to download with nosniff to prevent stored-XSS if a
+        # user opens the content URL directly in a browser.
+        inline_safe = artifact.mime_type in {"image/png", "image/jpeg", "image/webp"}
+        disposition = "inline" if inline_safe else "attachment"
+        return StreamingResponse(
+            store.open_bytes(job_id, artifact_id),
+            media_type=artifact.mime_type,
+            headers={
+                "Content-Disposition": (
+                    f"{disposition}; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}"
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get(
         "/v1/jobs/async/job/{job_id}/report",
         response_model=JobReportResponse,
         tags=["async jobs"],
@@ -620,15 +891,17 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         principal = require_verified_principal()
         job = await authorize_job_access(job_store, db_url, job_id, principal)
 
-        report = None
-        if job.output:
-            try:
-                output = json.loads(job.output) if isinstance(job.output, str) else job.output
-                report = output.get("report")
-            except (json.JSONDecodeError, AttributeError):
-                pass
+        output = _decode_job_output(job.output)
+        report = output.get("report")
 
-        return JobReportResponse(job_id=job_id, has_report=bool(report), report=report)
+        return JobReportResponse(
+            job_id=job_id,
+            has_report=bool(report),
+            report=report,
+            parent_job_id=output.get("parent_job_id"),
+            interaction_action=output.get("interaction_action"),
+            result_kind=output.get("result_kind"),
+        )
 
     logger.info("Registered async job routes at /v1/jobs/async")
 
@@ -868,6 +1141,7 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
     loop = asyncio.get_running_loop()
 
     def _do_cleanup() -> tuple[int, int, int]:
+        """Delete expired events/jobs/access rows synchronously; return removal counts."""
         from sqlalchemy import text
 
         engine = EventStore._get_or_create_sync_engine(db_url)
@@ -911,6 +1185,19 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
 
     time_deleted, expired_deleted, access_deleted = await loop.run_in_executor(None, _do_cleanup)
 
+    # Artifact retention shares the job expiry boundary (best-effort; the artifacts
+    # table only exists when artifact capture has been used).
+    try:
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+
+        artifacts_deleted = await loop.run_in_executor(
+            None, lambda: SqlArtifactStore(db_url).cleanup_old_artifacts(retention_seconds)
+        )
+        if artifacts_deleted:
+            logger.info("Artifact cleanup: %d old artifacts removed", artifacts_deleted)
+    except Exception as e:  # noqa: BLE001 - retention is best-effort
+        logger.debug("Artifact cleanup skipped: %s", e)
+
     if time_deleted > 0 or expired_deleted > 0 or access_deleted > 0:
         logger.info(
             "Event cleanup: %d old events removed, %d events for expired jobs removed, %d access rows removed",
@@ -929,35 +1216,21 @@ async def _cancel_dask_task(scheduler_address: str, job_id: str) -> bool:
         job_id: Job ID to cancel.
 
     Returns:
-        True if task was cancelled, False otherwise.
+        True if a Dask cancellation request was sent, False otherwise.
     """
     try:
         from distributed import Client
         from distributed import Future
-        from distributed import Variable
 
         async with Client(scheduler_address, asynchronous=True) as client:
-            var = Variable(name=job_id, client=client)
-            try:
-                # Short timeout: variable may be unset if worker hasn't started or job already finished.
-                future = await var.get(timeout=2)
-                if isinstance(future, Future):
-                    await client.cancel([future], asynchronous=True, force=True)
-                    logger.info("Cancelled Dask task for job %s", job_id)
-                    return True
-            except (TimeoutError, asyncio.CancelledError) as e:
-                logger.warning(
-                    "Could not get Dask future for job %s (variable not set or wait cancelled): %s",
-                    job_id,
-                    type(e).__name__,
-                )
-            except Exception as e:
-                logger.warning("Error getting Dask future for job %s: %s", job_id, e)
-            finally:
-                try:
-                    var.delete()
-                except (KeyError, RuntimeError):
-                    pass
+            # NAT JobStore submits job futures with key ``{job_id}-job``. Targeting
+            # the key directly avoids using Dask Variable.get as a maybe-exists
+            # check, which logs scheduler-side timeout errors when the variable is
+            # absent or slow to resolve.
+            future = Future(f"{job_id}-job", client)
+            await client.cancel([future], asynchronous=True, force=True)
+            logger.info("Sent cancellation request for Dask task %s", future.key)
+            return True
     except (ConnectionError, TimeoutError, OSError) as e:
         logger.warning("Failed to cancel Dask task for job %s: %s", job_id, e)
     except Exception as e:
@@ -985,6 +1258,7 @@ def _process_tool_start(event: dict, data: dict, metadata: dict, tool_call_map: 
         "output": None,
         "status": "running",
         "workflow": metadata.get("workflow"),
+        "is_sandbox": bool(metadata.get("sandbox")),
         "timestamp": event.get("timestamp"),
     }
 
@@ -998,6 +1272,7 @@ def _process_tool_end(event: dict, data: dict, metadata: dict, tool_call_map: di
     if tool_id in tool_call_map:
         tool_call_map[tool_id]["output"] = tool_output
         tool_call_map[tool_id]["status"] = "completed"
+        tool_call_map[tool_id]["is_sandbox"] = tool_call_map[tool_id].get("is_sandbox") or bool(metadata.get("sandbox"))
     else:
         tool_call_map[tool_id] = {
             "id": tool_id,
@@ -1006,6 +1281,7 @@ def _process_tool_end(event: dict, data: dict, metadata: dict, tool_call_map: di
             "output": tool_output,
             "status": "completed",
             "workflow": metadata.get("workflow"),
+            "is_sandbox": bool(metadata.get("sandbox")),
             "timestamp": event.get("timestamp"),
         }
 
@@ -1176,6 +1452,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     is_reconnect = start_event_id > 0
 
     def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+        """Format an SSE frame and advance (or set) the monotonic event sequence id."""
         nonlocal sequence_id
         if event_id is not None:
             sequence_id = event_id
@@ -1197,6 +1474,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     notification_queue: asyncio.Queue = asyncio.Queue()
 
     def notification_handler(connection, pid, channel_name, payload):
+        """Enqueue a Postgres LISTEN/NOTIFY payload, dropping it if the queue is full."""
         try:
             notification_queue.put_nowait(payload)
         except asyncio.QueueFull:
@@ -1362,6 +1640,7 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     replay_mode_announced = False
 
     def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+        """Format an SSE frame and advance (or set) the monotonic event sequence id."""
         nonlocal sequence_id
         if event_id is not None:
             sequence_id = event_id

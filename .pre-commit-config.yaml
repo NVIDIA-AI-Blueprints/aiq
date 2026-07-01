@@ -38,6 +38,7 @@ repos:
       - id: end-of-file-fixer
         exclude: ^skills/[^/]+/skill\.oms\.sig$
       - id: trailing-whitespace
+        exclude: ^skills/[^/]+/skill-card\.md$
 
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
@@ -48,6 +49,13 @@ repos:
 
   - repo: local
     hooks:
+      - id: validate-skills
+        name: Validate agent skills
+        entry: python scripts/validate_skills.py .agents/skills
+        language: python
+        additional_dependencies: ["pyyaml==6.0.3"]
+        files: ^\.agents/skills/
+        pass_filenames: false
       - id: clear-notebook-output-cells
         name: Clear Jupyter Notebook Output Cells
         entry: ci/scripts/clear_notebook_output_cells.sh

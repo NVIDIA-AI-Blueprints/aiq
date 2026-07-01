@@ -140,7 +140,7 @@ tokenomics:
       "azure/openai/gpt-5.2":
         input_per_1m_tokens: 2.50
         output_per_1m_tokens: 10.00
-      "nvidia/nemotron-3-nano-30b-a3b":
+      "nvidia/nemotron-3-super-120b-a12b":
         input_per_1m_tokens: 0.12
         output_per_1m_tokens: 0.50
         cached_input_per_1m_tokens: 0.10   # optional: omit to bill cached tokens at full input rate

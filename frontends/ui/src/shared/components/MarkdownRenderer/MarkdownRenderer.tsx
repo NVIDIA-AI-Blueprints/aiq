@@ -4,11 +4,18 @@
 'use client'
 
 import { type FC, type ReactNode, memo, useMemo } from 'react'
-import ReactMarkdown, { type Components, type ExtraProps } from 'react-markdown'
+import ReactMarkdown, { type Components, type ExtraProps, defaultUrlTransform } from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Text, CodeSnippet, Anchor } from '@/adapters/ui'
 import type { MarkdownRendererProps } from './types'
 import { getLanguageFromClassName } from './utils'
+import { ARTIFACT_SCHEME, isArtifactRef, resolveArtifactUrl } from './artifact-url'
+
+// react-markdown's default sanitizer strips non-standard URL schemes, which would blank the
+// src of `artifact://<id>` images before the `img` renderer can resolve them. Preserve that
+// scheme and defer to the default transform for everything else (keeps XSS protection).
+const urlTransform = (url: string): string =>
+  url.startsWith(ARTIFACT_SCHEME) ? url : defaultUrlTransform(url)
 
 function getTextFromChildren(node: ReactNode): string {
   if (typeof node === 'string') return node
@@ -38,7 +45,7 @@ function slugify(text: string): string {
  * @param compact - Use smaller text sizes for chat bubbles
  */
 export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
-  ({ content, className = '', compact = false }) => {
+  ({ content, className = '', compact = false, artifactJobId }) => {
     // Custom component mappings
     const components: Components = useMemo(
       () => ({
@@ -162,6 +169,36 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
           )
         },
 
+        // Images — resolve durable artifact:// refs to the content endpoint and render
+        // as a captioned figure; pass other images through with responsive styling.
+        img: ({ src, alt }) => {
+          const rawSrc = typeof src === 'string' ? src : ''
+          const resolved = isArtifactRef(rawSrc)
+            ? resolveArtifactUrl(rawSrc, artifactJobId)
+            : rawSrc
+          // An unresolved artifact ref (no job id) would be a broken image — skip it.
+          if (!resolved || isArtifactRef(resolved)) return null
+          const caption = alt ?? ''
+          return (
+            // react-markdown renders images inside a <p>, so use phrasing-content spans
+            // (not <figure>/<figcaption>, which are invalid inside <p>).
+            <span className="my-4 flex flex-col items-center">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={resolved}
+                alt={caption}
+                loading="lazy"
+                className="border-base max-w-full rounded-md border"
+              />
+              {caption && (
+                <Text asChild kind="body/regular/sm" className="text-subtle mt-2 block text-center">
+                  <span>{caption}</span>
+                </Text>
+              )}
+            </span>
+          )
+        },
+
         // Emphasis
         strong: ({ children }) => (
           <strong className="text-primary font-semibold">{children}</strong>
@@ -198,12 +235,12 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
           </Text>
         ),
       }),
-      [compact]
+      [compact, artifactJobId]
     )
 
     return (
       <div className={`markdown-content break-words [overflow-wrap:anywhere] [&>*:last-child]:mb-0 ${className}`}>
-        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={urlTransform}>
           {content}
         </ReactMarkdown>
       </div>

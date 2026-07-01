@@ -13,155 +13,291 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Tests for DeepAgentsRuntime, especially the StateBackend error-path wrapper.
-
-Background: deepagents' CompositeBackend strips the route prefix before
-delegating to a routed StateBackend. The success path is restored via
-``WriteResult.path``, but error messages embed the stripped key, which
-caused the failing trajectory in PR #211: a researcher subagent saw
-``Cannot write to /0_weather_data.txt`` instead of ``/shared/0_weather_data.txt``
-and chased the phantom path through the sandbox shell.
-
-StateBackend itself reads/writes via LangGraph's RunnableConfig channel API
-and cannot be exercised in isolation. We patch the two channel helpers
-(``_read_files`` / ``_send_files_update``) with a plain dict so the wrapper's
-path-rewriting behavior can be tested without spinning up a graph.
-"""
+"""Tests for DeepAgents runtime config, skill collection resolution, and backend wiring."""
 
 from __future__ import annotations
 
 from typing import Any
+from unittest.mock import MagicMock
+from unittest.mock import patch
 
+import pytest
 from deepagents.backends import CompositeBackend
+from deepagents.backends import FilesystemBackend
+from deepagents.backends import StateBackend
+from pydantic import ValidationError
 
 from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
 from aiq_agent.agents.deep_researcher.deepagents_runtime import SHARED_ROUTE
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepAgentsRuntime
-from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
-from aiq_agent.agents.deep_researcher.deepagents_runtime import _PrefixedStateBackend
+from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
+from aiq_agent.agents.deep_researcher.deepagents_runtime import discover_skill_collections
+from aiq_agent.agents.deep_researcher.deepagents_runtime import resolve_skill_collections
+
+SYNTHESIS_SKILL_SOURCE = f"{BUILTIN_SKILL_SOURCE}synthesis/"
 
 
-def _attach_dict_state(backend: _PrefixedStateBackend, state: dict[str, Any] | None = None) -> dict[str, Any]:
-    """Replace StateBackend's LangGraph channel I/O with a plain dict.
+class TestSkillCollections:
+    """Public skill config uses collection names, not DeepAgents virtual paths."""
 
-    Returns the state dict so tests can inspect or seed it directly.
-    """
-    files: dict[str, Any] = state if state is not None else {}
+    def test_builtin_skill_collections_are_discovered(self) -> None:
+        collections = discover_skill_collections()
 
-    def _read_files() -> dict[str, Any]:
-        return files
+        assert collections["research"] == "/skills/research/"
+        assert collections["synthesis"] == "/skills/synthesis/"
 
-    def _send_files_update(update: dict[str, Any]) -> None:
-        files.update(update)
+    def test_nested_skill_collections_are_discovered(self, tmp_path) -> None:
+        skill_dir = tmp_path / "finance" / "earnings" / "quarterly-summary"
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text("---\nname: quarterly-summary\n---\n", encoding="utf-8")
 
-    backend._read_files = _read_files  # type: ignore[method-assign]
-    backend._send_files_update = _send_files_update  # type: ignore[method-assign]
-    return files
+        assert discover_skill_collections(tmp_path) == {"finance/earnings": "/skills/finance/earnings/"}
 
+    def test_resolve_skill_collections_maps_names_to_sources(self) -> None:
+        assert resolve_skill_collections(("synthesis",)) == ("/skills/synthesis/",)
 
-class TestPrefixedStateBackend:
-    """The wrapper exists to keep error messages aligned with the user-visible path."""
+    def test_resolve_skill_collections_rejects_unknown_names(self) -> None:
+        with pytest.raises(ValueError, match="Unknown deep research skill collection"):
+            resolve_skill_collections(("typo",))
 
-    def test_write_then_overwrite_error_uses_full_path(self) -> None:
-        backend = _PrefixedStateBackend(SHARED_ROUTE)
-        _attach_dict_state(backend)
-
-        first = backend.write("/notes.md", "hello")
-        assert first.error is None
-        assert first.path == "/notes.md"
-
-        second = backend.write("/notes.md", "again")
-        assert second.error is not None
-        # The whole point of the wrapper: error must reference /shared/notes.md,
-        # NOT the stripped /notes.md key that vanilla StateBackend reports.
-        assert "/shared/notes.md" in second.error
-        assert second.error.startswith("Cannot write to /shared/notes.md")
-
-    def test_edit_error_uses_full_path_when_file_missing(self) -> None:
-        backend = _PrefixedStateBackend(SHARED_ROUTE)
-        _attach_dict_state(backend)
-        # File does not exist; StateBackend.edit reports the (stripped) path it received.
-        result = backend.edit("/missing.md", "old", "new")
-        assert result.error is not None
-        assert "/shared/missing.md" in result.error
-
-    def test_read_missing_file_error_uses_full_path(self) -> None:
-        # Same bug as write/edit: StateBackend.read embeds the stripped key in
-        # its "File '/X' not found" error. The wrapper must restore /shared/X.
-        backend = _PrefixedStateBackend(SHARED_ROUTE)
-        _attach_dict_state(backend)
-        result = backend.read("/missing.json")
-        assert result.error is not None
-        assert "/shared/missing.json" in result.error
-        assert result.error.startswith("File '/shared/missing.json'")
-
-    def test_read_existing_file_passes_through(self) -> None:
-        backend = _PrefixedStateBackend(SHARED_ROUTE)
-        _attach_dict_state(backend)
-        backend.write("/notes.md", "hello")
-        result = backend.read("/notes.md")
-        assert result.error is None
-        assert result.file_data is not None
-
-    def test_edit_error_without_path_is_passed_through_unchanged(self) -> None:
-        # StateBackend's "string not found" error does not embed the path, so
-        # the wrapper should be a no-op for it (vs. spuriously injecting the
-        # full path into an unrelated error string).
-        backend = _PrefixedStateBackend(SHARED_ROUTE)
-        _attach_dict_state(backend)
-        backend.write("/notes.md", "hello world")
-        result = backend.edit("/notes.md", "GOODBYE", "BYE")
-        assert result.error is not None
-        assert "GOODBYE" in result.error
-        # The wrapper does not invent a path on errors that don't reference one.
-        assert "/shared/" not in result.error
-
-    def test_skill_route_prefix(self) -> None:
-        # Same wrapper used for the skills route — confirm its prefix sticks.
-        backend = _PrefixedStateBackend(BUILTIN_SKILL_SOURCE)
-        _attach_dict_state(backend)
-        backend.write("/foo/SKILL.md", "stub")
-        result = backend.write("/foo/SKILL.md", "again")
-        assert result.error is not None
-        assert "/skills/foo/SKILL.md" in result.error
-
-    def test_successful_write_path_unchanged(self) -> None:
-        # Success case: the wrapper must not corrupt result.path
-        # (CompositeBackend rewrites it back to the full path itself).
-        backend = _PrefixedStateBackend(SHARED_ROUTE)
-        _attach_dict_state(backend)
-        result = backend.write("/notes.md", "hello")
-        assert result.error is None
-        # Wrapper passes the StateBackend-relative path through unchanged.
-        # CompositeBackend is responsible for restoring the full path.
-        assert result.path == "/notes.md"
+    def test_skills_config_forbids_old_fields(self) -> None:
+        with pytest.raises(ValidationError, match="Extra inputs are not permitted"):
+            DeepResearchSkillsConfig(enabled=True)
 
 
 class TestDeepAgentsRuntimeRouting:
-    """Confirm DeepAgentsRuntime wires the wrapper into both routes dicts."""
+    """Runtime uses stock DeepAgents backends with only the routes required."""
 
-    def test_no_sandbox_uses_prefixed_state_backend_for_routes(self) -> None:
-        runtime = DeepAgentsRuntime(skills=SkillsConfig.enabled_builtin())
+    def test_baseline_uses_plain_state_backend(self) -> None:
+        runtime = DeepAgentsRuntime()
+
+        assert isinstance(runtime.backend, StateBackend)
+        assert runtime.execution_enabled is False
+        assert runtime.skills_enabled is False
+
+    def test_skills_only_adds_skills_route(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+        )
         backend = runtime.backend
+
         assert isinstance(backend, CompositeBackend)
-        # CompositeBackend stores routes as a list of (prefix, backend) tuples.
-        routes_by_prefix = dict(backend.sorted_routes)
-        assert SHARED_ROUTE in routes_by_prefix
-        assert BUILTIN_SKILL_SOURCE in routes_by_prefix
-        assert isinstance(routes_by_prefix[SHARED_ROUTE], _PrefixedStateBackend)
-        assert isinstance(routes_by_prefix[BUILTIN_SKILL_SOURCE], _PrefixedStateBackend)
+        assert isinstance(backend.default, StateBackend)
+        assert set(backend.routes) == {BUILTIN_SKILL_SOURCE}
+        assert isinstance(backend.routes[BUILTIN_SKILL_SOURCE], FilesystemBackend)
+        assert runtime.skill_sources_for("writer-agent") == [SYNTHESIS_SKILL_SOURCE]
+
+    def test_sandbox_only_adds_shared_route(self) -> None:
+        fake_sandbox = MagicMock()
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=fake_sandbox,
+        ):
+            runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
+            backend = runtime.backend
+
+        assert isinstance(backend, CompositeBackend)
+        assert backend.default is fake_sandbox
+        assert set(backend.routes) == {SHARED_ROUTE}
+        assert runtime.execution_enabled is True
+        assert runtime.skills_enabled is False
+
+    def test_prepare_state_files_preserves_shared_paths_without_route(self) -> None:
+        runtime = DeepAgentsRuntime()
+
+        files = runtime.prepare_state_files({"/shared/original_report.md": "# Parent"})
+
+        assert "/shared/original_report.md" in files
+        assert files["/shared/original_report.md"]["content"] == "# Parent"
+        assert "modified_at" in files["/shared/original_report.md"]
+
+    def test_prepare_state_files_normalizes_shared_paths_for_route_backend(self) -> None:
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=MagicMock(),
+        ):
+            runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
+
+        files = runtime.prepare_state_files(
+            {
+                "/shared/original_report.md": "# Parent",
+                "/shared/source_summary.md": b"- src",
+            }
+        )
+
+        assert "/original_report.md" in files
+        assert "/source_summary.md" in files
+        assert "/shared/original_report.md" not in files
+        assert "/shared/source_summary.md" not in files
+        assert files["/original_report.md"]["content"] == "# Parent"
+        assert files["/source_summary.md"]["content"] == "- src"
+        assert "modified_at" in files["/original_report.md"]
+
+    def test_sandbox_and_skills_add_shared_and_skills_routes(self) -> None:
+        fake_sandbox = MagicMock()
+        skills = DeepResearchSkillsConfig(agents={"researcher-agent": ("research",)})
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=fake_sandbox,
+        ):
+            runtime = DeepAgentsRuntime(skills=skills, sandbox=DeepResearchSandboxConfig())
+            backend = runtime.backend
+
+        assert isinstance(backend, CompositeBackend)
+        assert backend.default is fake_sandbox
+        assert set(backend.routes) == {BUILTIN_SKILL_SOURCE, SHARED_ROUTE}
+        assert isinstance(backend.routes[BUILTIN_SKILL_SOURCE], FilesystemBackend)
+        assert isinstance(backend.routes[SHARED_ROUTE], StateBackend)
+        assert runtime.skill_sources_for("researcher-agent") == ["/skills/research/"]
+
+    def test_require_sandbox_collection_without_sandbox_raises(self) -> None:
+        skills = DeepResearchSkillsConfig(
+            agents={"researcher-agent": ("research",)},
+            require_sandbox=("research",),
+        )
+
+        with pytest.raises(ValueError, match="require a sandbox"):
+            DeepAgentsRuntime(skills=skills)
+
+    def test_skills_config_rejects_unknown_agent_keys(self) -> None:
+        with pytest.raises(ValidationError, match="Unknown deep research skill agent"):
+            DeepResearchSkillsConfig(agents={"researcher": ("research",)})
+
+    def test_require_sandbox_collection_with_sandbox_is_allowed(self) -> None:
+        skills = DeepResearchSkillsConfig(
+            agents={"researcher-agent": ("research",)},
+            require_sandbox=("research",),
+        )
+        # Patch backend creation so the test does not require the optional OpenShell adapter
+        # (the default provider) to be installed.
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=MagicMock(),
+        ):
+            runtime = DeepAgentsRuntime(skills=skills, sandbox=DeepResearchSandboxConfig())
+
+        assert runtime.skill_sources_for("researcher-agent") == ["/skills/research/"]
+
+    def test_require_sandbox_collection_with_sandbox_still_rejects_unknown_names(self) -> None:
+        skills = DeepResearchSkillsConfig(
+            agents={"researcher-agent": ("research",)},
+            require_sandbox=("typo",),
+        )
+
+        with pytest.raises(ValueError, match="Unknown deep research skill collection"):
+            DeepAgentsRuntime(skills=skills, sandbox=DeepResearchSandboxConfig())
+
+    def test_deepagents_skill_scanner_finds_synthesis_skills_from_nested_source(self) -> None:
+        from deepagents.middleware.skills import _list_skills
+
+        runtime = DeepAgentsRuntime(skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}))
+        backend = runtime.backend
+
+        top_level_skills = _list_skills(backend, BUILTIN_SKILL_SOURCE)
+        synthesis_skills = _list_skills(backend, SYNTHESIS_SKILL_SOURCE)
+
+        assert [skill["name"] for skill in top_level_skills] == []
+        assert [skill["name"] for skill in synthesis_skills] == [
+            "long-form-report-writer",
+            "prediction-report-writer",
+        ]
+        assert [skill["path"] for skill in synthesis_skills] == [
+            "/skills/synthesis/long-form-report-writer/SKILL.md",
+            "/skills/synthesis/prediction-report-writer/SKILL.md",
+        ]
+
+    def test_deepagents_subagent_skills_key_adds_skills_middleware(self) -> None:
+        from deepagents import create_deep_agent
+
+        fake_graph = MagicMock()
+        fake_graph.with_config.return_value = fake_graph
+        create_agent_calls: list[dict[str, Any]] = []
+
+        def fake_create_agent(*_args: Any, **kwargs: Any) -> MagicMock:
+            create_agent_calls.append(kwargs)
+            return fake_graph
+
+        fake_model = MagicMock()
+        profile = MagicMock()
+        profile.tool_description_overrides = {}
+        profile.excluded_tools = []
+        profile.excluded_middleware = []
+        profile.materialize_extra_middleware.return_value = []
+        profile.general_purpose_subagent = MagicMock(enabled=False)
+        profile.base_system_prompt = None
+        profile.system_prompt_suffix = None
+
+        with (
+            patch("deepagents.graph.resolve_model", return_value=fake_model),
+            patch("deepagents._models.resolve_model", return_value=fake_model),
+            patch("deepagents.graph._harness_profile_for_model", return_value=profile),
+            patch("deepagents.graph.create_summarization_middleware", return_value=MagicMock()),
+            patch("deepagents.graph.create_agent", side_effect=fake_create_agent),
+            patch("deepagents.middleware.subagents.create_agent", side_effect=fake_create_agent),
+        ):
+            create_deep_agent(
+                model=fake_model,
+                tools=[],
+                subagents=[
+                    {
+                        "name": "writer-agent",
+                        "description": "Writes the final answer.",
+                        "system_prompt": "Write.",
+                        "skills": [SYNTHESIS_SKILL_SOURCE],
+                    }
+                ],
+                backend=StateBackend(),
+                skills=[BUILTIN_SKILL_SOURCE],
+            )
+
+        writer_middleware = create_agent_calls[0]["middleware"]
+        writer_skills = [m for m in writer_middleware if m.__class__.__name__ == "SkillsMiddleware"]
+        assert len(writer_skills) == 1
+        assert writer_skills[0].sources == [SYNTHESIS_SKILL_SOURCE]
 
 
 class TestDeepAgentsRuntimeJobId:
     """job_id should drive the sandbox name; a missing one falls back to uuid."""
 
+    def test_default_sandbox_provider_is_openshell(self) -> None:
+        sandbox = DeepResearchSandboxConfig()
+
+        assert sandbox.provider == "openshell"
+        assert sandbox.workdir is None
+
     def test_explicit_job_id_is_kept(self) -> None:
-        runtime = DeepAgentsRuntime(job_id="job-abc-123")
-        assert runtime.job_id == "job-abc-123"
+        sandbox = DeepResearchSandboxConfig()
+        with patch("aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend") as create_backend:
+            runtime = DeepAgentsRuntime(sandbox=sandbox, job_id="job-abc-123")
+            _ = runtime.backend
+
+        create_backend.assert_called_once_with(sandbox, "job-abc-123")
 
     def test_missing_job_id_generates_uuid(self) -> None:
-        runtime_a = DeepAgentsRuntime()
-        runtime_b = DeepAgentsRuntime()
-        # uuid4 strings are 36 chars, distinct between instances.
-        assert len(runtime_a.job_id) == 36
-        assert runtime_a.job_id != runtime_b.job_id
+        sandbox_a = DeepResearchSandboxConfig()
+        sandbox_b = DeepResearchSandboxConfig()
+        with patch("aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend") as create_backend:
+            runtime_a = DeepAgentsRuntime(sandbox=sandbox_a)
+            runtime_b = DeepAgentsRuntime(sandbox=sandbox_b)
+            _ = runtime_a.backend
+            _ = runtime_b.backend
+
+        job_id_a = create_backend.call_args_list[0].args[1]
+        job_id_b = create_backend.call_args_list[1].args[1]
+        assert len(job_id_a) == 36
+        assert job_id_a != job_id_b
+
+    def test_modal_sandbox_config_requires_provider_dependencies(self) -> None:
+        def find_spec(module_name: str):
+            if module_name == "langchain_modal":
+                return None
+            return object()
+
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.deepagents_runtime.importlib.util.find_spec", side_effect=find_spec
+            ),
+            pytest.raises(ImportError, match="langchain-modal"),
+        ):
+            _ = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig(provider="modal")).backend

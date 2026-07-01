@@ -34,7 +34,28 @@ class TestIntentResult:
         """Test creating IntentResult with research intent."""
         result = IntentResult(intent="research")
         assert result.intent == "research"
+        assert result.target == "new_research"
+        assert result.report_action is None
+        assert result.use_parent_report_context is False
         assert result.raw is None
+
+    def test_intent_result_report_route(self):
+        """Test creating IntentResult with report-aware route fields."""
+        result = IntentResult(
+            intent="research",
+            target="report",
+            report_action="edit",
+            use_parent_report_context=False,
+        )
+
+        assert result.target == "report"
+        assert result.report_action == "edit"
+        assert result.use_parent_report_context is False
+
+    def test_intent_result_invalid_report_action(self):
+        """Test invalid report actions are rejected."""
+        with pytest.raises(ValidationError):
+            IntentResult(intent="research", report_action="delete")
 
     def test_intent_result_with_raw_data(self):
         """Test creating IntentResult with raw classification data."""

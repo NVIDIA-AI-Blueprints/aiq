@@ -89,6 +89,8 @@ export async function GET(
     const { path } = await params
     const backendUrl = buildBackendUrl(path)
     const isStreamRequest = path.includes('stream')
+    // Artifact bytes (.../artifacts/{id}/content) are binary — never JSON-parse them.
+    const isArtifactContent = path.includes('artifacts') && path[path.length - 1] === 'content'
 
     console.log('[Deep Research API] GET:', backendUrl, isStreamRequest ? '(SSE)' : '')
 
@@ -97,11 +99,16 @@ export async function GET(
     console.log('[Deep Research API] idToken cookie present:', !!authHeaders.Cookie)
 
     // Forward the request to the backend
+    const acceptHeader = isStreamRequest
+      ? 'text/event-stream'
+      : isArtifactContent
+        ? '*/*'
+        : 'application/json'
     const response = await fetch(backendUrl, {
       method: 'GET',
       headers: {
         ...authHeaders,
-        Accept: isStreamRequest ? 'text/event-stream' : 'application/json',
+        Accept: acceptHeader,
       },
       ...(isStreamRequest ? { signal: req.signal } : {}),
     })
@@ -152,6 +159,26 @@ export async function GET(
           'X-Accel-Buffering': 'no', // Disable nginx buffering
         },
       })
+    }
+
+    // For artifact content, stream the raw bytes through with the upstream content type
+    // (JSON-parsing here would corrupt binary payloads like PNGs).
+    if (isArtifactContent) {
+      if (!response.body) {
+        return new NextResponse(
+          JSON.stringify({
+            error: { code: 'NO_RESPONSE_BODY', message: 'Backend returned no artifact content' },
+          }),
+          { status: 502, headers: { 'Content-Type': 'application/json' } }
+        )
+      }
+      const passthroughHeaders: Record<string, string> = {
+        'Content-Type': response.headers.get('Content-Type') ?? 'application/octet-stream',
+        'Cache-Control': 'private, max-age=3600',
+      }
+      const disposition = response.headers.get('Content-Disposition')
+      if (disposition) passthroughHeaders['Content-Disposition'] = disposition
+      return new NextResponse(response.body, { status: response.status, headers: passthroughHeaders })
     }
 
     // For regular JSON responses

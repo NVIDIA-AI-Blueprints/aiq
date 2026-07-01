@@ -8,6 +8,15 @@
         },
         {
             "pattern": "^https?://www\\.npmjs\\.com/package/@nvidia/foundations-react-core$"
+        },
+        {
+            "pattern": "^https://www\\.postgresql\\.org/$"
+        },
+        {
+            "pattern": "^https://fastapi\\.tiangolo\\.com/$"
+        },
+        {
+            "pattern": "^https://www\\.dask\\.org/$"
         }
     ],
     "replacementPatterns": [

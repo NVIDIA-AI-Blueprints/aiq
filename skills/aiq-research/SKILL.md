@@ -74,6 +74,8 @@ The helper script has no third-party Python package dependencies; it uses Python
 5. Poll asynchronous deep research jobs when AI-Q returns a job ID.
 6. Present returned reports with citations and source URLs intact.
 7. Stop on failed jobs and show the returned error; do not retry automatically.
+8. After presenting a report, support follow-up: answer questions about it
+   (ask) or run a refined research pass (redo) using the same commands.
 
 ### Step 1 - Resolve the backend
 
@@ -149,11 +151,56 @@ python3 $SKILL_DIR/scripts/aiq.py research_poll <JOB_ID>
 Use `status` to inspect job status and saved artifacts. Use `report` when the job has already finished and you only need
 the final output. Use `research_poll` to keep waiting for completion.
 
+The final report may reference generated artifacts (charts, CSVs) as `artifact://<id>` links. To materialize them as local
+files, run `python3 $SKILL_DIR/scripts/aiq.py artifacts <JOB_ID> --download-dir ./aiq-artifacts`; it downloads each artifact
+and prints the local path. Do not expect base64 image data in the report itself.
+
+For a self-contained, shareable report, run `python3 $SKILL_DIR/scripts/aiq.py report <JOB_ID> --out-dir ./my-report`. It writes `report.md` plus an
+`artifacts/` folder and rewrites each `artifact://<id>` link to the matching local file, so the report renders (charts and
+all) in any markdown viewer without a running backend.
+
 ### Step 5 - Present the report
 
 When `research_poll` completes successfully, fetch and present the full report. Keep citations and source URLs intact.
 If the job status is `failed`, `failure`, or `cancelled`, show the error from the status response and ask whether the
 user wants to retry with a narrower query or different approach.
+
+### Step 6 - Follow up: ask about or redo a report
+
+After a report is presented, the user often wants to go deeper or adjust scope.
+Reuse the existing backend flow — the same auth boundary, polling, and report
+retrieval from Steps 1-5 apply; there is no separate follow-up endpoint.
+
+**Ask** — a follow-up question about a report already in hand:
+
+- For a question answerable from the report you already have, answer directly
+  from its content and citations; do not call the backend again.
+- For a question that needs new investigation, send a fresh request that carries
+  the needed context from the prior question and report into the new query
+  text, then present the new result:
+
+  ```bash
+  python3 $SKILL_DIR/scripts/aiq.py chat "<FOLLOW_UP_QUESTION> (context: <PRIOR_TOPIC>)"
+  ```
+
+  If this returns a `deep_research_running` job ID, poll it with `research_poll`
+  exactly as in Step 3.
+
+**Redo** — re-run research with adjusted scope (a narrower query, a corrected
+question, or a different depth):
+
+```bash
+python3 $SKILL_DIR/scripts/aiq.py research "<REFINED_QUERY>" [agent_type]
+```
+
+- Choose `agent_type` to match the desired depth (for example a deep agent for a
+  thorough pass, or `shallow_researcher` for a quick one); list options with
+  `agents` if unsure.
+- Treat a redo as a new job: state the target endpoint again before sending
+  (Step 2), then poll and present as in Steps 3-5.
+
+Do not send credentials or secret values in follow-up query text, and keep
+citations and source URLs intact in every follow-up answer.
 
 ## Version Compatibility
 
@@ -198,7 +245,8 @@ If your Blueprint version is not compatible:
 | `scripts/aiq.py research_poll` | Resume polling an existing async job | `<job_id>` |
 | `scripts/aiq.py status` | Fetch job status plus `/state` artifacts | `<job_id>` |
 | `scripts/aiq.py state` | Fetch event-store artifacts only | `<job_id>` |
-| `scripts/aiq.py report` | Fetch the final report for a completed job | `<job_id>` |
+| `scripts/aiq.py report` | Fetch the final report; with `--out-dir DIR`, export a portable `report.md` + `artifacts/` folder with links rewritten to local files | `<job_id> [--out-dir DIR]` |
+| `scripts/aiq.py artifacts` | List durable artifacts; with `--download-dir DIR`, download them and print local paths | `<job_id> [--download-dir DIR]` |
 | `scripts/aiq.py stream` | Stream SSE events from a job | `<job_id>` |
 | `scripts/aiq.py cancel` | Cancel a running job | `<job_id>` |
 
@@ -254,6 +302,20 @@ python3 $SKILL_DIR/scripts/aiq.py research_poll <JOB_ID>
 
 Replace `<JOB_ID>` with the UUID returned by AI-Q. Expected output: status JSON followed by the report JSON when the
 job completes. If the job failed, show the returned status and do not retry automatically.
+
+### Example 3: Ask a follow-up or redo with a refined query
+
+```bash
+# Ask: a follow-up that needs new investigation, carrying prior context.
+python3 $SKILL_DIR/scripts/aiq.py chat "How does that compare on cost? (context: local AIQ deep research vs web search)"
+
+# Redo: re-run research with a narrower query and explicit depth.
+python3 $SKILL_DIR/scripts/aiq.py research "AIQ deep research cost on a single workstation" shallow_researcher
+```
+
+Expected output: a routed chat response or a new `deep_research_running` job ID
+to poll with `research_poll`. Present the follow-up answer with citations and
+source URLs intact.
 
 ## References
 

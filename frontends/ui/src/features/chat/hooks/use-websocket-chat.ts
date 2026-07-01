@@ -61,6 +61,35 @@ const EMPTY_MESSAGES: ChatMessage[] = []
 const EMPTY_CONVERSATIONS: Conversation[] = []
 
 /**
+ * Structured async-job escalation signal parsed from a system_response `content` string.
+ *
+ * The backend (chat_researcher/agent.py `_job_escalation_message`) emits a compact JSON
+ * payload rather than a prose sentence so escalation detection is immune to wording or
+ * punctuation changes:
+ *   {"type":"job_escalation","kind":"deep_research"|"report_edit","job_id":"<id>"}
+ */
+interface JobEscalation {
+  kind: 'deep_research' | 'report_edit'
+  jobId: string
+}
+
+function parseJobEscalation(content?: string): JobEscalation | null {
+  if (!content) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const obj = parsed as Record<string, unknown>
+  if (obj.type !== 'job_escalation') return null
+  if (obj.kind !== 'deep_research' && obj.kind !== 'report_edit') return null
+  if (typeof obj.job_id !== 'string' || obj.job_id.length === 0) return null
+  return { kind: obj.kind, jobId: obj.job_id }
+}
+
+/**
  * Buffer entry for an outgoing payload that has to bridge a socket
  * rotation. Discriminated by `kind` because both chat messages and HITL
  * interaction responses can hit `auth_expired` at the backend, and the
@@ -68,7 +97,13 @@ const EMPTY_CONVERSATIONS: Conversation[] = []
  * right `NATWebSocketClient` method.
  */
 type PendingOutgoing =
-  | { kind: 'message'; content: string; dataSources: string[]; deliveryRetryCount?: number }
+  | {
+      kind: 'message'
+      content: string
+      dataSources: string[]
+      activeReportJobId?: string
+      deliveryRetryCount?: number
+    }
   | { kind: 'interaction'; interactionId: string; parentId: string; response: string; deliveryRetryCount?: number }
 
 type UnacknowledgedOutgoing = {
@@ -116,6 +151,18 @@ const WS_REFRESH_SOFT_GUARD_SECONDS = 60
  * because a single passing message proves the post-rotation auth is alive.
  */
 const MAX_CONSECUTIVE_AUTH_EXPIRED = 3
+
+export const getActiveReportJobId = (conversation: Conversation | null): string | undefined => {
+  if (!conversation) return undefined
+  const reportMessage = [...conversation.messages].reverse().find(
+    (message) =>
+      message.messageType === 'agent_response' &&
+      Boolean(message.deepResearchJobId) &&
+      !message.deepResearchReportExpired &&
+      (message.showViewReport || Boolean(message.reportContent?.trim()))
+  )
+  return reportMessage?.deepResearchJobId
+}
 
 /**
  * One silent replay is enough to cover the stale-open socket race observed in
@@ -537,13 +584,18 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       const client = wsClientRef.current
       if (!client?.isConnected()) return false
 
-      const outboundId = payload.kind === 'message'
-        ? client.sendMessage(payload.content, payload.dataSources)
-        : client.sendInteractionResponse(
+      let outboundId: string | null
+      if (payload.kind === 'message') {
+        outboundId = payload.activeReportJobId
+          ? client.sendMessage(payload.content, payload.dataSources, payload.activeReportJobId)
+          : client.sendMessage(payload.content, payload.dataSources)
+      } else {
+        outboundId = client.sendInteractionResponse(
           payload.interactionId,
           payload.parentId,
           payload.response,
         )
+      }
 
       if (!outboundId) return false
       trackSentOutgoing(payload, outboundId)
@@ -593,22 +645,27 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         }
         acknowledgeOutgoingDelivery(parentId)
 
-        // Check for deep research escalation signal
-        // Backend sends: "Deep research job submitted. Job ID: {uuid}"
-        const deepResearchMatch = content?.match(
-          /Deep research job submitted\. Job ID: ([a-f0-9-]+)/i
-        )
+        // Check for an async-job escalation signal. Two backend paths produce a
+        // pollable child job whose report is fetched over the same SSE/report
+        // endpoints, so both escalate the same way. The backend emits a structured
+        // JSON payload (see _job_escalation_message in chat_researcher/agent.py)
+        // rather than a prose sentence, so detection is robust to wording/punctuation:
+        //   {"type":"job_escalation","kind":"deep_research"|"report_edit","job_id":"<id>"}
+        const escalation = parseJobEscalation(content)
 
-        if (deepResearchMatch) {
-          const jobId = deepResearchMatch[1]
+        if (escalation) {
+          const isReportEdit = escalation.kind === 'report_edit'
+          const jobId = escalation.jobId
           // Get current state for plan messages and conversation
           const state = useChatStore.getState()
           const currentPlanMessages = state.planMessages
           const currentConversation = state.currentConversation
 
           // Derive a conversation title from the plan (preferred) or fall
-          // back to the last user message.
-          if (currentConversation) {
+          // back to the last user message. Report edits run inside an existing
+          // report conversation, so they must NOT rename it to the edit
+          // instruction -- only new deep-research runs derive a title.
+          if (currentConversation && !isReportEdit) {
             let extractedTitle: string | null = null
 
             // First, look at all plan messages for a title
@@ -1158,6 +1215,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         kind: 'message',
         content,
         dataSources: dataSourcesForMessage,
+        activeReportJobId: getActiveReportJobId(storeState.currentConversation),
       }
 
       // Helper to actually send the message

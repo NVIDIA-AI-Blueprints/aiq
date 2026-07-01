@@ -15,15 +15,23 @@
 
 """Tests for custom middleware."""
 
+import logging
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
+from aiq_agent.agents.deep_researcher.custom_middleware import PlanPersistenceMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
+from aiq_agent.agents.deep_researcher.tools.source_registry import build_get_verified_sources_tool
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
 
@@ -119,6 +127,120 @@ class TestToolNameSanitizationMiddleware:
 
         assert result.result[0].content == "Just text, no tools"
         assert not result.result[0].tool_calls
+
+
+class TestToolVisibilityMiddleware:
+    """Tests for hiding tools from model requests."""
+
+    def test_wrap_model_call_filters_hidden_tools(self):
+        middleware = ToolVisibilityMiddleware(hidden_tool_names={"execute"})
+        execute_tool = SimpleNamespace(name="execute")
+        read_file_tool = SimpleNamespace(name="read_file")
+        mock_request = MagicMock()
+        mock_request.tools = [execute_tool, read_file_tool, {"function": {"name": "execute"}}]
+        filtered_request = MagicMock()
+        mock_request.override.return_value = filtered_request
+        mock_handler = MagicMock(return_value="ok")
+
+        result = middleware.wrap_model_call(mock_request, mock_handler)
+
+        assert result == "ok"
+        mock_request.override.assert_called_once_with(tools=[read_file_tool])
+        mock_handler.assert_called_once_with(filtered_request)
+
+    @pytest.mark.asyncio
+    async def test_awrap_model_call_filters_hidden_tools(self):
+        middleware = ToolVisibilityMiddleware(hidden_tool_names={"execute"})
+        execute_tool = SimpleNamespace(name="execute")
+        read_file_tool = SimpleNamespace(name="read_file")
+        mock_request = MagicMock()
+        mock_request.tools = [execute_tool, read_file_tool, {"function": {"name": "execute"}}]
+        filtered_request = MagicMock()
+        mock_request.override.return_value = filtered_request
+        mock_handler = AsyncMock(return_value="ok")
+
+        result = await middleware.awrap_model_call(mock_request, mock_handler)
+
+        assert result == "ok"
+        mock_request.override.assert_called_once_with(tools=[read_file_tool])
+        mock_handler.assert_awaited_once_with(filtered_request)
+
+
+class TestTodoSuppressionMiddleware:
+    """Tests for stripping the framework's write_todos tool and its injected prompt."""
+
+    @staticmethod
+    def _request_with_todos():
+        todo_block = {"type": "text", "text": "\n\n## `write_todos`\nYou have access to the write_todos tool."}
+        base_block = {"type": "text", "text": "You are the planner."}
+        request = MagicMock()
+        request.tools = [SimpleNamespace(name="write_todos"), SimpleNamespace(name="think")]
+        request.system_message = SimpleNamespace(content_blocks=[base_block, todo_block])
+        request.override.return_value = "overridden"
+        return request
+
+    def test_strips_write_todos_tool_and_prompt_block(self):
+        request = self._request_with_todos()
+        handler = MagicMock(return_value="ok")
+
+        result = TodoSuppressionMiddleware().wrap_model_call(request, handler)
+
+        assert result == "ok"
+        kwargs = request.override.call_args.kwargs
+        assert [tool.name for tool in kwargs["tools"]] == ["think"]
+        new_system = kwargs["system_message"]
+        assert isinstance(new_system, SystemMessage)
+        assert "## `write_todos`" not in str(new_system.content)
+        assert "You are the planner." in str(new_system.content)
+        handler.assert_called_once_with("overridden")
+
+    @pytest.mark.asyncio
+    async def test_awrap_strips_write_todos(self):
+        request = self._request_with_todos()
+        handler = AsyncMock(return_value="ok")
+
+        result = await TodoSuppressionMiddleware().awrap_model_call(request, handler)
+
+        assert result == "ok"
+        assert [tool.name for tool in request.override.call_args.kwargs["tools"]] == ["think"]
+        handler.assert_awaited_once_with("overridden")
+
+    def test_noop_when_no_todos_present(self):
+        """Only tools are overridden (unchanged) when no write_todos tool or prompt exists."""
+        request = MagicMock()
+        request.tools = [SimpleNamespace(name="think")]
+        request.system_message = SimpleNamespace(content_blocks=[{"type": "text", "text": "You are the planner."}])
+        request.override.return_value = "overridden"
+
+        TodoSuppressionMiddleware().wrap_model_call(request, MagicMock(return_value="ok"))
+
+        kwargs = request.override.call_args.kwargs
+        assert [tool.name for tool in kwargs["tools"]] == ["think"]
+        assert "system_message" not in kwargs
+
+    def test_suppresses_real_langchain_todo_injection(self):
+        """Guard against drift: strip the ACTUAL langchain write_todos tool + prompt.
+
+        Builds the request the way TodoListMiddleware does - the real ``write_todos``
+        tool and the real ``WRITE_TODOS_SYSTEM_PROMPT`` block. If a langchain upgrade
+        renames the tool or changes the prompt header so our matcher misses it, this
+        test fails loudly instead of silently leaking todos back into the planner.
+        """
+        from langchain.agents.middleware import TodoListMiddleware
+        from langchain.agents.middleware.todo import WRITE_TODOS_SYSTEM_PROMPT
+
+        base_block = {"type": "text", "text": "You are the planner."}
+        todo_block = {"type": "text", "text": f"\n\n{WRITE_TODOS_SYSTEM_PROMPT}"}
+        request = MagicMock()
+        request.tools = [*TodoListMiddleware().tools, SimpleNamespace(name="think")]
+        request.system_message = SimpleNamespace(content_blocks=[base_block, todo_block])
+        request.override.return_value = "overridden"
+
+        TodoSuppressionMiddleware().wrap_model_call(request, MagicMock(return_value="ok"))
+
+        kwargs = request.override.call_args.kwargs
+        assert all(getattr(tool, "name", None) != "write_todos" for tool in kwargs["tools"])
+        assert "write_todos" not in str(kwargs["system_message"].content)
 
 
 class TestSourceRegistryMiddleware:
@@ -335,6 +457,47 @@ class TestSourceRegistryMiddleware:
         assert "https://a.com" in urls
         assert "https://b.com" in urls
 
+    def test_get_verified_sources_defaults_to_research_note_compact_subset(self, middleware):
+        """The writer-facing source list prefers sources carried forward by ResearchNotes."""
+        middleware.registry.add(SourceEntry(url="https://used.example/report", title="Used Report"))
+        middleware.registry.add(SourceEntry(url="https://unused.example/report", title="Unused Report"))
+        middleware.register_research_note_sources(
+            [SimpleNamespace(sources=[SimpleNamespace(locator="https://used.example/report")])]
+        )
+        tool = build_get_verified_sources_tool(middleware)
+
+        compact = tool.invoke({})
+        full = tool.invoke({"mode": "full"})
+        compact_entries = middleware.get_source_entries()
+        full_entries = middleware.get_source_entries(mode="full")
+
+        assert "https://used.example/report" in compact
+        assert "https://unused.example/report" not in compact
+        assert [entry.url for entry in compact_entries] == ["https://used.example/report"]
+        assert "https://used.example/report" in full
+        assert "https://unused.example/report" in full
+        assert {entry.url for entry in full_entries} == {
+            "https://used.example/report",
+            "https://unused.example/report",
+        }
+
+    def test_get_verified_sources_compact_matches_internal_citation_keys(self, middleware):
+        """Compact source filtering also works for URL-less internal citation keys."""
+        middleware.registry.add(SourceEntry(citation_key="report.pdf, p.5", title="report.pdf"))
+        middleware.registry.add(SourceEntry(citation_key="other.pdf, p.9", title="other.pdf"))
+        middleware.register_research_note_sources(
+            [SimpleNamespace(sources=[SimpleNamespace(locator="report.pdf, p.5")])]
+        )
+        tool = build_get_verified_sources_tool(middleware)
+
+        compact = tool.invoke({})
+        full = tool.invoke({"mode": "full"})
+
+        assert "report.pdf, p.5" in compact
+        assert "other.pdf, p.9" not in compact
+        assert "report.pdf, p.5" in full
+        assert "other.pdf, p.9" in full
+
     # -- Edge cases --
 
     @pytest.mark.asyncio
@@ -381,3 +544,88 @@ class TestSourceRegistryMiddleware:
         result = await middleware.awrap_tool_call(request, handler)
 
         assert result.content == content
+
+
+class _RecordingBackend:
+    """Minimal backend stub capturing upload_files calls (overwrite-safe)."""
+
+    def __init__(self):
+        self.uploads: list[tuple[str, bytes]] = []
+
+    def upload_files(self, files):
+        self.uploads.extend(files)
+        return [SimpleNamespace(path=path, error=None) for path, _ in files]
+
+
+class TestPlanPersistenceMiddleware:
+    """Tests for PlanPersistenceMiddleware."""
+
+    @pytest.mark.asyncio
+    async def test_persists_structured_plan(self):
+        """A structured ResearchPlan in state is serialized and uploaded once."""
+        import json
+
+        backend = _RecordingBackend()
+        mw = PlanPersistenceMiddleware(backend=backend)
+        plan = SimpleNamespace(model_dump=lambda **_: {"answer_strategy": {"answer_type": "table"}})
+
+        result = await mw.aafter_agent({"structured_response": plan}, runtime=None)
+
+        assert result is None
+        assert len(backend.uploads) == 1
+        path, content = backend.uploads[0]
+        assert path == "/shared/plan.json"
+        assert json.loads(content.decode("utf-8")) == {"answer_strategy": {"answer_type": "table"}}
+
+    @pytest.mark.asyncio
+    async def test_no_structured_response_is_noop(self):
+        """Missing structured_response writes nothing rather than erroring."""
+        backend = _RecordingBackend()
+        mw = PlanPersistenceMiddleware(backend=backend)
+
+        await mw.aafter_agent({"structured_response": None}, runtime=None)
+        await mw.aafter_agent({}, runtime=None)
+
+        assert backend.uploads == []
+
+    def test_sync_after_agent_persists(self):
+        """The synchronous hook persists via the same path (dict payloads supported)."""
+        import json
+
+        backend = _RecordingBackend()
+        mw = PlanPersistenceMiddleware(backend=backend)
+
+        mw.after_agent({"structured_response": {"title": "Plan"}}, runtime=None)
+
+        assert len(backend.uploads) == 1
+        assert json.loads(backend.uploads[0][1].decode("utf-8")) == {"title": "Plan"}
+
+    @pytest.mark.asyncio
+    async def test_backend_failure_propagates(self):
+        """Upload failures abort the planner task with the backend error."""
+
+        class _BoomBackend:
+            def upload_files(self, files):
+                raise RuntimeError("boom")
+
+        mw = PlanPersistenceMiddleware(backend=_BoomBackend())
+
+        with pytest.raises(RuntimeError, match="boom"):
+            await mw.aafter_agent({"structured_response": {"title": "Plan"}}, runtime=None)
+
+    @pytest.mark.asyncio
+    async def test_upload_error_response_propagates(self, caplog):
+        """Non-empty upload errors abort the task; backend detail stays in logs only."""
+
+        class _ErrorBackend:
+            def upload_files(self, files):
+                return [SimpleNamespace(path="/shared/plan.json", error="disk full")]
+
+        mw = PlanPersistenceMiddleware(backend=_ErrorBackend())
+
+        with caplog.at_level(logging.ERROR):
+            with pytest.raises(RuntimeError, match="Failed to persist the research plan") as exc:
+                await mw.aafter_agent({"structured_response": {"title": "Plan"}}, runtime=None)
+
+        assert "disk full" not in str(exc.value)  # sanitized out of the raised error
+        assert "disk full" in caplog.text  # but preserved in logs

@@ -67,7 +67,7 @@ general:
 llms:
   nemotron_llm_intent:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.5    # Moderate: needs to reason about intent
     top_p: 0.9
@@ -76,9 +76,9 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_nano_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.1    # Low: factual research output
     top_p: 0.3
@@ -86,20 +86,6 @@ llms:
     num_retries: 5
     chat_template_kwargs:
       enable_thinking: true
-
-  # Nemotron Super is compatible and tested with AIQ but has limited availability
-  # on the Build API due to high demand.
-  # Uncomment nemotron_super_llm below if the endpoint is accessible.
-  # nemotron_super_llm:
-  #   _type: nim
-  #   model_name: nvidia/nemotron-3-super-120b-a12b
-  #   base_url: "https://integrate.api.nvidia.com/v1"
-  #   temperature: 1.0    # High: diverse research planning
-  #   top_p: 1.0
-  #   max_tokens: 128000  # Large context for multi-loop orchestration
-  #   num_retries: 5
-  #   chat_template_kwargs:
-  #     enable_thinking: true
 
 # ===========================================================================
 # Functions (tools and agents)
@@ -157,8 +143,8 @@ functions:
   # plan that the user can approve or modify before execution.
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_nano_llm
-    planner_llm: nemotron_nano_llm
+    llm: nemotron_super_llm
+    planner_llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -173,7 +159,7 @@ functions:
   # Single-turn ReAct agent for quick queries.
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_nano_llm
+    llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -187,8 +173,7 @@ functions:
   # and synthesizes comprehensive reports.
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    max_loops: 2                  # Research iteration loops
+    orchestrator_llm: nemotron_super_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool

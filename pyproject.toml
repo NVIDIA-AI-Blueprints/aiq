@@ -93,6 +93,7 @@ aiq_data_source_registry = "aiq_agent.common.data_source_registry"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
+addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
 markers = [
@@ -195,6 +196,8 @@ dev = [
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
+    "duckduckgo-news-search",
+    "polymarket-prediction-market",
     "knowledge-layer[all]",
     "aiq-api",
     "aiq-research-cli",
@@ -236,6 +239,8 @@ aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }
+duckduckgo-news-search = { workspace = true }
+polymarket-prediction-market = { workspace = true }
 knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }

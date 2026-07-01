@@ -298,6 +298,11 @@ export const AgentCard: FC<AgentCardProps> = ({ agent, defaultExpanded = true })
                           ) : (
                             <>
                               <span className="font-medium">{getToolDisplayName(toolCall.name)}</span>
+                              {toolCall.isSandbox && (
+                                <span className="ml-1 rounded border border-base px-1 text-[10px] uppercase text-subtle">
+                                  Sandbox
+                                </span>
+                              )}
                               {description !== toolCall.name && (
                                 <span className="text-subtle">: {description}</span>
                               )}

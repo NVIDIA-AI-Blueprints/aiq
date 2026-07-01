@@ -38,6 +38,43 @@ from .event_store import EventStore
 logger = logging.getLogger(__name__)
 
 
+_DEEP_RESEARCH_AGENT_KWARGS = frozenset(
+    {
+        "domain_catalog_path",
+        "enable_source_router",
+        "enable_citation_verification",
+        "skills",
+        "sandbox",
+        "job_id",
+        "max_research_concurrency",
+        "max_concurrent_source_tool_calls",
+        "max_source_tool_batch_size",
+    }
+)
+_CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
+_JOB_SCOPED_AGENT_KWARGS = frozenset({"job_id"})
+
+
+def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset[str]) -> bool:
+    """Return true when a class constructor explicitly declares all requested kwargs."""
+    import inspect
+
+    try:
+        signature = inspect.signature(agent_cls)
+    except (TypeError, ValueError):
+        try:
+            signature = inspect.signature(agent_cls.__init__)
+        except (TypeError, ValueError):
+            return False
+
+    accepted_kwargs = {
+        name
+        for name, param in signature.parameters.items()
+        if param.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    }
+    return kwarg_names.issubset(accepted_kwargs)
+
+
 def _normalize_trace_id(trace_id: int | str | None) -> int | None:
     """Convert trace ID to integer format.
 
@@ -72,6 +109,14 @@ class CancellationMonitor:
         job_id: str,
         poll_interval: float = 1.0,
     ):
+        """Configure the job-status poller used to detect interruption.
+
+        Args:
+            scheduler_address: Dask scheduler address (unused by polling, kept for context).
+            db_url: Database URL of the job store to poll.
+            job_id: Job whose status is monitored.
+            poll_interval: Seconds between status polls.
+        """
         self.scheduler_address = scheduler_address
         self.db_url = db_url
         self.job_id = job_id
@@ -81,6 +126,7 @@ class CancellationMonitor:
 
     @property
     def is_cancelled(self) -> bool:
+        """Return whether the monitored job has been interrupted."""
         return self._cancelled.is_set()
 
     async def _poll_job_status(self) -> None:
@@ -189,6 +235,44 @@ def _load_agent_class(agent_class_path: str) -> type:
     return getattr(module, class_name)
 
 
+async def _create_llm_provider(builder: Any, fn_config: Any) -> tuple[Any, Any]:
+    """Create a role-aware LLM provider from a NAT function config."""
+    from aiq_agent.common import LLMProvider
+    from aiq_agent.common import LLMRole
+    from nat.builder.framework_enum import LLMFrameworkEnum
+
+    role_config_attrs = (
+        (LLMRole.ORCHESTRATOR, "orchestrator_llm"),
+        (LLMRole.ROUTER, "source_router_llm"),
+        (LLMRole.PLANNER, "planner_llm"),
+        (LLMRole.RESEARCHER, "researcher_llm"),
+        (LLMRole.REPORT_WRITER, "writer_llm"),
+    )
+    llm_cache: dict[Any, Any] = {}
+    role_llms = {}
+    for role, config_attr in role_config_attrs:
+        llm_ref = getattr(fn_config, config_attr, None)
+        if llm_ref:
+            if llm_ref not in llm_cache:
+                llm_cache[llm_ref] = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            role_llms[role] = llm_cache[llm_ref]
+
+    default_llm = role_llms.get(LLMRole.ORCHESTRATOR)
+    if default_llm is None:
+        llm_ref = getattr(fn_config, "llm", None)
+        if llm_ref:
+            if llm_ref not in llm_cache:
+                llm_cache[llm_ref] = await builder.get_llm(llm_ref, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            default_llm = llm_cache[llm_ref]
+
+    provider = LLMProvider()
+    provider.set_default(default_llm)
+    for role, llm in role_llms.items():
+        provider.configure(role, llm)
+
+    return provider, default_llm
+
+
 async def run_agent_job(
     configure_logging: bool,
     log_level: int,
@@ -209,6 +293,8 @@ async def run_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    initial_files: dict[str, Any] | None = None,
+    output_metadata: dict[str, Any] | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -240,6 +326,8 @@ async def run_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token propagated from the HTTP request for
             data sources that require authentication (requires_auth: true).
+        initial_files: Optional DeepAgents virtual filesystem files to seed into state.
+        output_metadata: Optional metadata to persist alongside the final report.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -256,8 +344,6 @@ async def run_agent_job(
 
     install_request_trace_span_injection()
 
-    from aiq_agent.common import LLMProvider
-    from aiq_agent.common import LLMRole
     from aiq_agent.common import VerboseTraceCallback
     from aiq_agent.common import is_verbose
     from nat.builder.framework_enum import LLMFrameworkEnum
@@ -279,6 +365,9 @@ async def run_agent_job(
     job_store: JobStore | None = None
     cancellation_monitor: CancellationMonitor | None = None
     event_store: EventStore | BatchingEventStore | None = None
+    # Sandbox runtime is released on the terminal path; interrupted forces terminate() over close().
+    sandbox_runtime: Any | None = None
+    interrupted = False
     logger.info(
         "Dask worker received: agent=%s, config=%s, job_id=%s",
         agent_class_path,
@@ -304,25 +393,15 @@ async def run_agent_job(
 
         async with WorkflowBuilder.from_config(config=config) as builder:
             fn_config = builder.get_function_config(agent_config_name)
+            if getattr(fn_config, "type", None) == "deep_research_agent":
+                from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+                from aiq_agent.agents.deep_researcher.register import resolve_deep_research_runtime_config
 
-            # Get LLMs - handle both deep_researcher (orchestrator_llm) and shallow/other agents (llm)
-            orchestrator_llm = None
-            if hasattr(fn_config, "orchestrator_llm") and fn_config.orchestrator_llm:
-                orchestrator_llm = await builder.get_llm(
-                    fn_config.orchestrator_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-                )
-            planner_llm = None
-            researcher_llm = None
-            if hasattr(fn_config, "planner_llm") and fn_config.planner_llm:
-                planner_llm = await builder.get_llm(fn_config.planner_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-            if hasattr(fn_config, "researcher_llm") and fn_config.researcher_llm:
-                researcher_llm = await builder.get_llm(
-                    fn_config.researcher_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN
-                )
+                if isinstance(fn_config, DeepResearchAgentConfig):
+                    skills_config, sandbox_config = resolve_deep_research_runtime_config(fn_config, builder)
+                    fn_config = fn_config.model_copy(update={"skills": skills_config, "sandbox": sandbox_config})
 
-            llm = orchestrator_llm
-            if llm is None and hasattr(fn_config, "llm") and fn_config.llm:
-                llm = await builder.get_llm(fn_config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+            provider, llm = await _create_llm_provider(builder, fn_config)
 
             # Resolve tools: use explicit list or auto-inherit from data_source_registry
             tool_refs = fn_config.tools
@@ -437,16 +516,6 @@ async def run_agent_job(
                     # Create profiler callback AFTER workflow starts (ensures correct parent)
                     nat_profiler_callback = LangchainProfilerHandler()
 
-                    # Set up LLM provider
-                    provider = LLMProvider()
-                    provider.set_default(llm)
-                    if orchestrator_llm:
-                        provider.configure(LLMRole.ORCHESTRATOR, orchestrator_llm)
-                    if planner_llm:
-                        provider.configure(LLMRole.PLANNER, planner_llm)
-                    if researcher_llm:
-                        provider.configure(LLMRole.RESEARCHER, researcher_llm)
-
                     verbose = is_verbose(getattr(fn_config, "verbose", False))
                     callbacks = [VerboseTraceCallback()] if verbose else []
 
@@ -465,7 +534,16 @@ async def run_agent_job(
                         verbose=verbose,
                         callbacks=callbacks,
                         job_id=job_id,
+                        # Artifact harvesting rides 284's job store + event stream: the same db_url
+                        # backs the SqlArtifactStore, and event_store.store carries artifact SSE
+                        # events. Inert unless sandbox.artifact_capture is enabled in config.
+                        artifact_db_url=db_url,
+                        artifact_emit=event_store.store,
                     )
+
+                    # Capture the runtime so the terminal path can release the sandbox. None for
+                    # agents without a sandbox runtime; close()/terminate() are then no-ops.
+                    sandbox_runtime = getattr(agent, "deepagents_runtime", None)
 
                     # Run agent - LLM/tool events will be nested under workflow span
                     result = await _run_agent(
@@ -475,6 +553,7 @@ async def run_agent_job(
                         available_documents=available_documents,
                         data_sources=data_sources,
                         event_store=event_store,
+                        initial_files=initial_files,
                     )
 
                     # Emit WORKFLOW_END event for Phoenix
@@ -508,11 +587,15 @@ async def run_agent_job(
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
-                    await job_store.update_status(job_id, JobStatus.SUCCESS, output={"report": report})
+                    # Apply caller metadata first, then set the canonical report last so a
+                    # stray "report" key in output_metadata can never overwrite the real report.
+                    output = {**(output_metadata or {}), "report": report}
+                    await job_store.update_status(job_id, JobStatus.SUCCESS, output=output)
                     logger.info("Job %s completed (report: %d chars)", job_id, len(report))
 
     except asyncio.CancelledError:
         logger.info("Job %s cancelled", job_id)
+        interrupted = True
         if job_store:
             try:
                 job = await job_store.get_job(job_id)
@@ -559,11 +642,35 @@ async def run_agent_job(
             event_store.flush()
         if cancellation_monitor:
             cancellation_monitor.stop()
+        # Release the sandbox off the event loop so the SDK session close never blocks the Dask
+        # worker. The single artifact harvest already ran in agent.run() before this point, so
+        # teardown only closes/terminates; interrupted jobs terminate() to preempt a live execute.
+        await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=interrupted)
         # Clean up job-scoped auth token
         if _auth_token_reset is not None:
             from ._auth_context import job_auth_token
 
             job_auth_token.reset(_auth_token_reset)
+
+
+def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
+    """Release sandbox resources on a terminal path (best-effort, never raises).
+
+    Interrupted jobs (cancel/timeout) call ``terminate()`` so a still-running ``execute`` is
+    forcibly preempted; normal paths call ``close()`` gracefully. Both are idempotent. This runs
+    off the event loop (``asyncio.to_thread``) so the SDK session close cannot block the worker.
+    """
+    if sandbox_runtime is None:
+        return
+    teardown = getattr(sandbox_runtime, "terminate", None) if interrupted else None
+    if teardown is None:
+        teardown = getattr(sandbox_runtime, "close", None)
+    if teardown is None:
+        return
+    try:
+        teardown()
+    except Exception:  # noqa: BLE001 - cleanup must never raise on the terminal path
+        logger.warning("Sandbox cleanup failed for job %s", job_id, exc_info=True)
 
 
 def _create_agent_instance(
@@ -575,35 +682,72 @@ def _create_agent_instance(
     verbose: bool,
     callbacks: list,
     job_id: str | None = None,
+    artifact_db_url: str | None = None,
+    artifact_emit=None,
 ):
     """
     Create an agent instance, supporting different constructor patterns.
 
     Tries in order:
-    1. llm_provider + tools pattern (DeepResearcherAgent style)
-    2. llm + tools pattern (simpler agents)
+    1. DeepResearcherAgent explicit config pattern
+    2. llm_provider + tools + config/job_id pattern
+    3. llm_provider + tools + job_id pattern
+    4. llm_provider + tools pattern
+    5. llm + tools pattern (simpler agents)
     """
-    # Try async deep_researcher pattern with generic function config and job-scoped runtime state.
-    try:
+    from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+
+    if isinstance(fn_config, DeepResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
+        agent_cls, _DEEP_RESEARCH_AGENT_KWARGS
+    ):
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            max_loops=getattr(fn_config, "max_loops", 3),
             verbose=verbose,
             callbacks=callbacks,
-            config=fn_config,
+            domain_catalog_path=fn_config.domain_catalog_path,
+            enable_source_router=fn_config.enable_source_router,
+            enable_citation_verification=fn_config.enable_citation_verification,
+            skills=fn_config.skills,
+            sandbox=fn_config.sandbox,
             job_id=job_id,
+            artifact_db_url=artifact_db_url,
+            artifact_emit=artifact_emit,
+            max_research_concurrency=fn_config.max_research_concurrency,
+            max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
+            max_source_tool_batch_size=fn_config.max_source_tool_batch_size,
         )
-    except TypeError as exc:
-        if "unexpected keyword argument" not in str(exc):
-            raise
 
-    # Try original deep_researcher pattern (llm_provider + tools + max_loops + verbose)
+    if _constructor_accepts_explicit_kwargs(agent_cls, _CONFIGURABLE_AGENT_KWARGS):
+        try:
+            return agent_cls(
+                llm_provider=llm_provider,
+                tools=tools,
+                verbose=verbose,
+                callbacks=callbacks,
+                config=fn_config,
+                job_id=job_id,
+            )
+        except TypeError:
+            pass
+
+    if _constructor_accepts_explicit_kwargs(agent_cls, _JOB_SCOPED_AGENT_KWARGS):
+        try:
+            return agent_cls(
+                llm_provider=llm_provider,
+                tools=tools,
+                verbose=verbose,
+                callbacks=callbacks,
+                job_id=job_id,
+            )
+        except TypeError:
+            pass
+
+    # Try original deep_researcher pattern (llm_provider + tools + verbose)
     try:
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            max_loops=getattr(fn_config, "max_loops", 3),
             verbose=verbose,
             callbacks=callbacks,
         )
@@ -642,6 +786,7 @@ async def _run_agent(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     event_store: EventStore | None = None,
+    initial_files: dict[str, Any] | None = None,
 ) -> Any:
     """
     Run the agent, supporting different run() signatures.
@@ -673,8 +818,13 @@ async def _run_agent(
         if state_cls:
             # Build state with available_documents if the class supports it
             state_kwargs = {"messages": [HumanMessage(content=input_text)]}
-            if data_sources is not None:
+            # Only pass optional fields the state actually declares. data_sources also
+            # flows to non-Pydantic states (legacy behavior); files needs a model field.
+            has_fields = hasattr(state_cls, "model_fields")
+            if data_sources is not None and (not has_fields or "data_sources" in state_cls.model_fields):
                 state_kwargs["data_sources"] = data_sources
+            if initial_files and has_fields and "files" in state_cls.model_fields:
+                state_kwargs["files"] = initial_files
             if available_documents:
                 # Convert dicts to AvailableDocument if the state class expects them
                 try:
@@ -694,6 +844,8 @@ async def _run_agent(
             state = {"messages": [HumanMessage(content=input_text)]}
             if data_sources is not None:
                 state["data_sources"] = data_sources
+            if initial_files:
+                state["files"] = initial_files
             if available_documents:
                 state["available_documents"] = available_documents
 
