@@ -577,7 +577,7 @@ class TestVerifyCitations:
         report = "Finding one [1]. Missing source [3]. Finding two [2]."
         result = verify_citations(report, registry, reference_sources=registry.all_sources()[:2])
 
-        assert "Missing source ." in result.verified_report
+        assert "Missing source." in result.verified_report
         assert "[3]" not in result.verified_report
         assert "[1] Article 1: https://valid.com/article1" in result.verified_report
         assert "[2] Article 2: https://valid.com/article2" in result.verified_report
@@ -735,7 +735,7 @@ class TestVerifyCitations:
         assert len(result.removed_citations) == 1
         assert result.removed_citations[0]["number"] == 2
         assert result.removed_citations[0]["reason"] == "url_not_in_registry"
-        assert "Good finding [1]. Bad finding ." in result.verified_report
+        assert "Good finding [1]. Bad finding." in result.verified_report
         assert "Fake Source" not in result.verified_report
 
     def test_ordered_list_parenthesis_references_are_normalized_and_verified(self, registry):
@@ -783,7 +783,7 @@ class TestVerifyCitations:
         report = "Good finding [1]. Missing reference [3].\n\n## Sources\n[1] Article 1: https://valid.com/article1"
         result = verify_citations(report, registry)
 
-        assert "Missing reference ." in result.verified_report
+        assert "Missing reference." in result.verified_report
         assert "[3]" not in result.verified_report
         assert len(result.valid_citations) == 1
         assert not result.removed_citations
@@ -797,8 +797,8 @@ class TestVerifyCitations:
         )
         result = verify_citations(report, registry)
 
-        assert "Bad finding ." in result.verified_report
-        assert "Missing reference ." in result.verified_report
+        assert "Bad finding." in result.verified_report
+        assert "Missing reference." in result.verified_report
         assert "[2]" not in result.verified_report
         assert "[3]" not in result.verified_report
         assert len(result.valid_citations) == 1

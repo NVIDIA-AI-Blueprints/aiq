@@ -22,6 +22,8 @@ from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
+from aiq_agent.common.citation_verification import extract_source_entries_from_report
+from aiq_agent.common.citation_verification import report_has_citations
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
 
@@ -77,6 +79,19 @@ def _source_entries_from_parent_context(parent_context: str) -> list[SourceEntry
     return entries
 
 
+def _effective_parent_sources(original_report: str, parent_context: str) -> list[SourceEntry]:
+    """Build the rewrite allowlist from the canonical report and durable context."""
+    report_sources = extract_source_entries_from_report(original_report)
+    context_sources = _source_entries_from_parent_context(parent_context)
+    if report_has_citations(original_report) and not (report_sources or context_sources):
+        raise ValueError("Cannot rewrite a cited parent report because it cannot reconstruct its source registry")
+
+    registry = SourceRegistry()
+    for source in [*report_sources, *context_sources]:
+        registry.add(source)
+    return registry.all_sources()
+
+
 def _post_process_revised_report(revised_report: str, parent_sources: Sequence[SourceEntry]) -> str:
     if parent_sources:
         registry = SourceRegistry()
@@ -89,6 +104,8 @@ def _post_process_revised_report(revised_report: str, parent_sources: Sequence[S
                 len(verification.removed_citations),
             )
         revised_report = verification.verified_report
+    elif report_has_citations(revised_report):
+        raise ValueError("Cannot publish a rewritten report with citations without a verified parent source registry")
 
     return sanitize_report(revised_report).sanitized_report
 
@@ -132,7 +149,7 @@ async def rewrite_report(
         raise ValueError("Report writer returned an empty revised report")
     return _post_process_revised_report(
         revised_report,
-        parent_sources=_source_entries_from_parent_context(parent_context),
+        parent_sources=_effective_parent_sources(original_report, parent_context),
     )
 
 

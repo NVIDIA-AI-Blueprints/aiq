@@ -115,7 +115,83 @@ async def test_report_rewriter_verifies_and_sanitizes_revised_report_against_par
     assert "https://valid.example/source" in revised_report
     assert "https://fabricated.example/source" not in revised_report
     assert "[2]" not in revised_report
+    assert "Unsupported claim." in revised_report
     assert result.messages[-1].content == revised_report
+
+
+@pytest.mark.asyncio
+async def test_rewrite_report_reconstructs_registry_from_original_report_when_parent_context_is_malformed():
+    from aiq_agent.agents.report_rewriter.agent import rewrite_report
+
+    revised = await rewrite_report(
+        llm=FakeWriterLLM(
+            content=(
+                "# Revised Report\n\n"
+                "Supported claim [1]. Unsupported claim [2].\n\n"
+                "## Sources\n"
+                "[1] Valid Source: https://valid.example/source\n"
+                "[2] Fabricated Source: https://fabricated.example/source"
+            )
+        ),
+        original_report=(
+            "# Parent Report\n\nSupported claim [1].\n\n## Sources\n[1] Valid Source: https://valid.example/source"
+        ),
+        edit_instruction="Make it clearer.",
+        parent_context="{not valid JSON",
+    )
+
+    assert "https://valid.example/source" in revised
+    assert "https://fabricated.example/source" not in revised
+    assert "[2]" not in revised
+
+
+@pytest.mark.asyncio
+async def test_rewrite_report_preserves_sources_missing_from_parent_context():
+    from aiq_agent.agents.report_rewriter.agent import rewrite_report
+
+    revised = await rewrite_report(
+        llm=FakeWriterLLM(
+            content=(
+                "# Revised Report\n\n"
+                "First claim [1]. Second claim [2]. Unsupported claim [3].\n\n"
+                "## Sources\n"
+                "[1] First Source: https://first.example/source\n"
+                "[2] Second Source: https://second.example/source\n"
+                "[3] Fabricated Source: https://fabricated.example/source"
+            )
+        ),
+        original_report=(
+            "# Parent Report\n\nFirst claim [1]. Second claim [2].\n\n"
+            "## Sources\n"
+            "[1] First Source: https://first.example/source\n"
+            "[2] Second Source: https://second.example/source"
+        ),
+        edit_instruction="Make it clearer.",
+        parent_context=json.dumps(
+            {
+                "parent_job_id": "parent-job",
+                "sources": [{"url": "https://first.example/source"}],
+            }
+        ),
+    )
+
+    assert "https://first.example/source" in revised
+    assert "https://second.example/source" in revised
+    assert "https://fabricated.example/source" not in revised
+    assert "[3]" not in revised
+
+
+@pytest.mark.asyncio
+async def test_rewrite_report_rejects_cited_parent_without_reconstructable_sources():
+    from aiq_agent.agents.report_rewriter.agent import rewrite_report
+
+    with pytest.raises(ValueError, match="cannot reconstruct its source registry"):
+        await rewrite_report(
+            llm=FakeWriterLLM(content="# Revised Report\n\nUpdated body."),
+            original_report="# Parent Report\n\nSupported claim [1].\n\n## Sources\n[1] Missing locator",
+            edit_instruction="Make it clearer.",
+            parent_context="{}",
+        )
 
 
 @pytest.mark.asyncio
