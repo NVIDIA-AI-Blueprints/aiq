@@ -17,9 +17,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from aiq_agent.guardrails.dynamic_field_selection import DynamicFieldSelectionMixin
 from nat.middleware.middleware import InvocationContext
 from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GuardrailsMiddleware
+
+logger = logging.getLogger(__name__)
+
+_GUARDRAILS_FAILURE_REFUSAL = "I'm sorry, I can't help with that."
 
 
 class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
@@ -32,7 +38,13 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
 
     async def pre_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run input rails and adapt blocked outputs for the intercepted boundary."""
-        result = await super().pre_invoke(context)
+        try:
+            result = await super().pre_invoke(context)
+        except Exception:
+            logger.exception("Input Guardrails failed while evaluating selected fields; refusing request")
+            context.output = self._on_pre_invoke_blocked(context, _GUARDRAILS_FAILURE_REFUSAL)
+            return context
+
         current_context = result or context
         # NAT returns a context for both input rewrites and blocks; only blocks populate output with a refusal.
         blocked = result is not None and current_context.output is not None

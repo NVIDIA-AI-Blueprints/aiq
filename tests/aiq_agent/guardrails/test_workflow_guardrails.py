@@ -31,6 +31,7 @@ import pytest
 
 from aiq_agent.common import _create_chat_response
 from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
+from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
 from aiq_agent.guardrails.workflow.middleware import _WorkflowGuardrails
 from nat.middleware.middleware import FunctionMiddlewareContext
 from tests.aiq_agent.guardrails._test_utils import TEST_REFUSAL
@@ -517,6 +518,34 @@ async def test_pre_invoke_block_skips_function_invocation(
     )
 
     assert result == blocked_output
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pre_invoke_refuses_when_rail_evaluation_fails(
+    guardrails: _WorkflowGuardrails,
+):
+    """A Guardrails runtime failure refuses instead of running the workflow unguarded."""
+    raw_input = "Please follow up with customer@example.com about this issue."
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(generate_async=AsyncMock(side_effect=RuntimeError("rail backend failed")))
+    call_next = AsyncMock(return_value="workflow result")
+
+    result = await guardrails.function_middleware_invoke(
+        raw_input,
+        call_next=call_next,
+        context=FunctionMiddlewareContext(
+            name=_TEST_WORKFLOW_FUNCTION,
+            config=None,
+            description=None,
+            input_schema=None,
+            single_output_schema=type(None),
+            stream_output_schema=type(None),
+        ),
+    )
+
+    assert result == _GUARDRAILS_FAILURE_REFUSAL
     call_next.assert_not_awaited()
 
 

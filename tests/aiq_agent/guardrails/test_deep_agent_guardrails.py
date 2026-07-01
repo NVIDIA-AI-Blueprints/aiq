@@ -30,6 +30,7 @@ from langchain_core.messages import HumanMessage
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.guardrails.deep_agent.middleware import _DeepAgentGuardrails
 from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
+from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
 from nat.middleware.middleware import FunctionMiddlewareContext
 from tests.aiq_agent.guardrails._test_utils import TEST_REFUSAL
 
@@ -220,6 +221,25 @@ async def test_pre_invoke_block_skips_function_invocation(guardrails: _DeepAgent
     assert result.messages[0].content == raw_input
     assert isinstance(result.messages[-1], AIMessage)
     assert result.messages[-1].content == blocked_output
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_pre_invoke_refuses_when_rail_evaluation_fails(guardrails: _DeepAgentGuardrails):
+    """A Guardrails runtime failure returns a refusal in deep-agent state."""
+    raw_input = "Please follow up with customer@example.com about this issue."
+    state = DeepResearchAgentState(messages=[HumanMessage(content=raw_input)])
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(generate_async=AsyncMock(side_effect=RuntimeError("rail backend failed")))
+    call_next = AsyncMock(return_value=DeepResearchAgentState(messages=[AIMessage(content="workflow result")]))
+
+    result = await guardrails.function_middleware_invoke(state, call_next=call_next, context=_function_context())
+
+    assert isinstance(result, DeepResearchAgentState)
+    assert result.messages[0].content == raw_input
+    assert isinstance(result.messages[-1], AIMessage)
+    assert result.messages[-1].content == _GUARDRAILS_FAILURE_REFUSAL
     call_next.assert_not_awaited()
 
 

@@ -28,6 +28,7 @@ from nemoguardrails.rails.llm.options import GenerationResponse
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
 from aiq_agent.agents.chat_researcher.utils import _is_user_role
+from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
 from aiq_agent.guardrails.workflow.config import WorkflowGuardrailsConfig
 from nat.builder.builder import Builder
@@ -98,8 +99,9 @@ class _WorkflowGuardrails(GuardrailsMixin):
 
             return context if modified else None
         except Exception:
-            logger.exception("Workflow input Guardrails failed while evaluating query text; continuing without rails")
-            return None
+            logger.exception("Workflow input Guardrails failed while evaluating query text; refusing request")
+            context.output = self._on_pre_invoke_blocked(context, _GUARDRAILS_FAILURE_REFUSAL)
+            return context
 
     async def post_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run output rails for the configured workflow result fields."""
