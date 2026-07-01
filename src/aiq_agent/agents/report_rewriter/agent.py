@@ -54,6 +54,19 @@ def _effective_parent_sources(original_report: str, parent_context: str) -> list
     return registry.all_sources()
 
 
+def _effective_parent_sources(original_report: str, parent_context: str) -> list[SourceEntry]:
+    """Build the rewrite allowlist from the canonical report and durable context."""
+    report_sources = extract_source_entries_from_report(original_report)
+    context_sources = _source_entries_from_parent_context(parent_context)
+    if report_has_citations(original_report) and not (report_sources or context_sources):
+        raise ValueError("Cannot rewrite a cited parent report because it cannot reconstruct its source registry")
+
+    registry = SourceRegistry()
+    for source in [*report_sources, *context_sources]:
+        registry.add(source)
+    return registry.all_sources()
+
+
 def _post_process_revised_report(revised_report: str, parent_sources: Sequence[SourceEntry]) -> str:
     if parent_sources:
         registry = SourceRegistry()
