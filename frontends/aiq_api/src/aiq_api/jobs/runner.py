@@ -29,6 +29,8 @@ import asyncio
 import importlib
 import logging
 import uuid
+from collections.abc import Awaitable
+from collections.abc import Callable
 from typing import Any
 
 from .callbacks import AgentEventCallback
@@ -36,6 +38,8 @@ from .event_store import BatchingEventStore
 from .event_store import EventStore
 
 logger = logging.getLogger(__name__)
+
+_DEEP_RESEARCH_FUNCTION_TYPE = "deep_research_agent"
 
 
 _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
@@ -235,6 +239,156 @@ def _load_agent_class(agent_class_path: str) -> type:
     return getattr(module, class_name)
 
 
+def _get_worker_function_type(config: Any) -> str | None:
+    """Return the NAT function type represented by this worker execution path.
+
+    The async worker executes an agent instance directly, but the workflow
+    config still describes that work as a NAT function. This helper maps the
+    enabled async workflow mode back to the function type whose middleware
+    boundary should be preserved in the worker.
+    """
+    if config.workflow is None:
+        return None
+
+    if config.workflow.use_async_deep_research:
+        return _DEEP_RESEARCH_FUNCTION_TYPE
+    return None
+
+
+def _get_middleware_for_listed_function(config: Any, function_name: str) -> list[str]:
+    """Return middleware directly assigned to a configured NAT function.
+
+    This reads only the function's explicit ``middleware`` list. Middleware that
+    targets functions through its own config, such as ``workflow_functions``, is
+    resolved separately because the Dask worker does not execute the registered
+    NAT function. The worker adapter must explicitly translate those configured
+    function targets into middleware around the direct agent call.
+    """
+    middleware_names: list[str] = []
+    function_config = config.functions.get(function_name)
+    if function_config is not None:
+        middleware_names.extend(function_config.middleware or [])
+
+    duplicates = {name for name in middleware_names if middleware_names.count(name) > 1}
+    if duplicates:
+        duplicate_list = ", ".join(sorted(duplicates))
+        raise ValueError(
+            f"Middleware configured multiple times for worker function `{function_name}`: {duplicate_list}"
+        )
+
+    return middleware_names
+
+
+def _validate_worker_middleware_names(config: Any, function_name: str, middleware_names: list[str]) -> None:
+    """Ensure worker-selected middleware names exist in the loaded config."""
+    missing_middleware = [name for name in middleware_names if name not in config.middleware]
+    if missing_middleware:
+        missing_list = ", ".join(sorted(missing_middleware))
+        raise ValueError(f"Middleware configured for worker function `{function_name}` is not defined: {missing_list}")
+
+
+def _get_middleware_for_worker_function(config: Any, function_name: str) -> list[str]:
+    """Return all middleware that should apply to a worker-executed function.
+
+    The Dask worker does not call the registered NAT function directly, so it
+    must reconstruct the same middleware boundary from config. This includes
+    middleware listed on the function itself and middleware that targets the
+    function by name through ``workflow_functions``.
+    """
+    middleware_names = _get_middleware_for_listed_function(config, function_name)
+
+    # Dask does not use the normal builder-created function callable, so
+    # workflow_functions targets must be translated into worker middleware here.
+    for middleware_name, middleware_config in config.middleware.items():
+        workflow_functions = getattr(middleware_config, "workflow_functions", None)
+        if isinstance(workflow_functions, dict) and function_name in workflow_functions:
+            middleware_names.append(middleware_name)
+        elif isinstance(workflow_functions, list) and function_name in workflow_functions:
+            middleware_names.append(middleware_name)
+
+    duplicates = {name for name in middleware_names if middleware_names.count(name) > 1}
+    if duplicates:
+        duplicate_list = ", ".join(sorted(duplicates))
+        raise ValueError(
+            f"Middleware configured multiple times for worker function `{function_name}`: {duplicate_list}"
+        )
+
+    _validate_worker_middleware_names(config, function_name, middleware_names)
+    return middleware_names
+
+
+async def _register_middleware(builder: Any, config: Any, middleware_names: list[str]) -> None:
+    """Ensure the worker builder can instantiate the selected middleware.
+
+    The worker has its own builder instance. Registering middleware here makes
+    the configured middleware available to the worker without changing which
+    function call is wrapped.
+    """
+    for middleware_name in middleware_names:
+        middleware_config = config.middleware[middleware_name]
+        try:
+            await builder.get_middleware(middleware_name)
+        except ValueError:
+            await builder.add_middleware(middleware_name, middleware_config)
+
+
+async def _attach_middleware_to_function(builder: Any, config: Any, agent_config_name: str) -> None:
+    """Register middleware needed by the async function this worker represents.
+
+    This prepares middleware for the configured async NAT function, such as
+    ``deep_research_agent``. Actual invocation wrapping happens later, when the
+    worker adapts the direct ``agent.run`` call into a NAT middleware chain.
+    """
+    function_type = _get_worker_function_type(config)
+    function_config = config.functions.get(agent_config_name)
+    if function_type is None or function_config is None or function_config.type != function_type:
+        return
+
+    middleware_names = _get_middleware_for_worker_function(config, agent_config_name)
+    await _register_middleware(builder, config, middleware_names)
+
+
+async def _run_with_configured_function_middleware(
+    *,
+    builder: Any,
+    config: Any,
+    function_name: str,
+    function_config: Any,
+    input_value: Any,
+    call_next: Callable[[Any], Awaitable[Any]],
+) -> Any:
+    """Apply NAT function middleware to the callable executed by the Dask worker.
+
+    The async worker runs the agent instance directly instead of invoking the
+    registered NAT function. This adapter preserves the configured function
+    boundary by wrapping the worker callable with the middleware configured for
+    that function name.
+    """
+    worker_function_type = _get_worker_function_type(config)
+    function_type = getattr(function_config, "type", None)
+    if worker_function_type is None or function_type != worker_function_type:
+        return await call_next(input_value)
+
+    middleware_names = _get_middleware_for_worker_function(config, function_name)
+    if not middleware_names:
+        return await call_next(input_value)
+
+    from nat.middleware.function_middleware import FunctionMiddlewareChain
+    from nat.middleware.middleware import FunctionMiddlewareContext
+
+    middleware = await builder.get_middleware_list(middleware_names)
+    context = FunctionMiddlewareContext(
+        name=function_name,
+        config=function_config,
+        description=None,
+        input_schema=type(input_value),
+        single_output_schema=type(input_value),
+        stream_output_schema=type(None),
+    )
+    wrapped_call = FunctionMiddlewareChain(middleware=middleware, context=context).build_single(call_next)
+    return await wrapped_call(input_value)
+
+
 async def _create_llm_provider(builder: Any, fn_config: Any) -> tuple[Any, Any]:
     """Create a role-aware LLM provider from a NAT function config."""
     from aiq_agent.common import LLMProvider
@@ -392,6 +546,8 @@ async def run_agent_job(
         agent_cls = _load_agent_class(agent_class_path)
 
         async with WorkflowBuilder.from_config(config=config) as builder:
+            await _attach_middleware_to_function(builder, config, agent_config_name)
+
             fn_config = builder.get_function_config(agent_config_name)
             if getattr(fn_config, "type", None) == "deep_research_agent":
                 from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
@@ -549,6 +705,10 @@ async def run_agent_job(
                     result = await _run_agent(
                         agent=agent,
                         input_text=input_text,
+                        builder=builder,
+                        config=config,
+                        function_name=agent_config_name,
+                        function_config=fn_config,
                         monitor=cancellation_monitor,
                         available_documents=available_documents,
                         data_sources=data_sources,
@@ -782,6 +942,10 @@ def _create_agent_instance(
 async def _run_agent(
     agent,
     input_text: str,
+    builder: Any,
+    config: Any,
+    function_name: str,
+    function_config: Any,
     monitor: CancellationMonitor,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
@@ -849,10 +1013,20 @@ async def _run_agent(
             if available_documents:
                 state["available_documents"] = available_documents
 
-        return await run_with_cancellation(
-            agent.run(state),
-            monitor,
-            event_store=event_store,
+        async def call_next(current_state: Any) -> Any:
+            return await run_with_cancellation(
+                agent.run(current_state),
+                monitor,
+                event_store=event_store,
+            )
+
+        return await _run_with_configured_function_middleware(
+            builder=builder,
+            config=config,
+            function_name=function_name,
+            function_config=function_config,
+            input_value=state,
+            call_next=call_next,
         )
 
     raise TypeError(f"Agent {type(agent).__name__} does not have a run method")

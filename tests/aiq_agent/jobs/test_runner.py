@@ -65,6 +65,7 @@ Test coverage:
 
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
+from unittest.mock import call
 from unittest.mock import patch
 
 import pytest
@@ -851,6 +852,210 @@ class TestToolArtifactMapping:
         assert mapping.is_artifact_tool("custom_tool")
         custom = mapping.get_mapping("custom_tool")
         assert custom["artifact_type"] == ArtifactType.OUTPUT
+
+
+def test_get_worker_function_type_maps_async_deep_research_flag():
+    """Async deep research selects the deep research function type."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_worker_function_type
+
+    enabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=True))
+    disabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=False))
+    no_workflow_config = SimpleNamespace(workflow=None)
+
+    assert _get_worker_function_type(enabled_config) == "deep_research_agent"
+    assert _get_worker_function_type(disabled_config) is None
+    assert _get_worker_function_type(no_workflow_config) is None
+
+
+@pytest.mark.asyncio
+async def test_attach_middleware_to_function_registers_middleware_for_async_deep_function():
+    """The Dask worker registers middleware configured for the async deep function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _attach_middleware_to_function
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={
+            "renamed_deep_agent": SimpleNamespace(type="deep_research_agent", middleware=["direct_deep_middleware"])
+        },
+        middleware={
+            "direct_deep_middleware": SimpleNamespace(),
+            "deep_agent_guardrails": SimpleNamespace(workflow_functions={"renamed_deep_agent": {}}),
+            "shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}}),
+        },
+    )
+    builder = MagicMock()
+    builder.get_middleware = AsyncMock(side_effect=ValueError("missing"))
+    builder.add_middleware = AsyncMock()
+
+    await _attach_middleware_to_function(builder, config, "renamed_deep_agent")
+
+    assert builder.get_middleware.await_args_list == [
+        call("direct_deep_middleware"),
+        call("deep_agent_guardrails"),
+    ]
+    assert builder.add_middleware.await_args_list == [
+        call("direct_deep_middleware", config.middleware["direct_deep_middleware"]),
+        call("deep_agent_guardrails", config.middleware["deep_agent_guardrails"]),
+    ]
+
+
+def test_get_middleware_for_listed_function_rejects_duplicate_middleware():
+    """Worker setup fails if the same middleware is configured twice for one worker function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_listed_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["direct_middleware", "direct_middleware"])},
+        middleware={"direct_middleware": SimpleNamespace()},
+    )
+
+    with pytest.raises(ValueError, match="Middleware configured multiple times"):
+        _get_middleware_for_listed_function(config, "deep_research_agent")
+
+
+def test_get_middleware_for_worker_function_includes_workflow_function_middleware():
+    """Worker middleware discovery includes middleware targeting the configured function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_worker_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["direct_middleware"])},
+        middleware={
+            "direct_middleware": SimpleNamespace(),
+            "deep_agent_guardrails": SimpleNamespace(workflow_functions={"deep_research_agent": {}}),
+            "shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}}),
+        },
+    )
+
+    assert _get_middleware_for_worker_function(config, "deep_research_agent") == [
+        "direct_middleware",
+        "deep_agent_guardrails",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_wraps_dask_callable():
+    """Configured worker middleware wraps the callable that Dask actually executes."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    captured = {}
+
+    class BlockingMiddleware:
+        enabled = True
+
+        async def middleware_invoke(self, *args, call_next, context, **kwargs):
+            captured["context"] = context
+            captured["args"] = args
+            return "blocked"
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"deep_research_agent": SimpleNamespace(type="deep_research_agent", middleware=[])},
+        middleware={"deep_agent_guardrails": SimpleNamespace(workflow_functions={"deep_research_agent": {}})},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock(return_value=[BlockingMiddleware()])
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="deep_research_agent",
+        function_config=config.functions["deep_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "blocked"
+    assert captured["context"].name == "deep_research_agent"
+    assert captured["args"] == (state,)
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_runs_callable_without_middleware():
+    """Worker callable runs directly when no middleware targets the function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"deep_research_agent": SimpleNamespace(type="deep_research_agent", middleware=[])},
+        middleware={},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock()
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="deep_research_agent",
+        function_config=config.functions["deep_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "ran"
+    call_next.assert_awaited_once_with(state)
+    builder.get_middleware_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_ignores_non_worker_function():
+    """Non-worker functions run directly even if the full config contains unrelated middleware."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"shallow_research_agent": SimpleNamespace(type="shallow_research_agent", middleware=[])},
+        middleware={"shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}})},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock()
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="shallow_research_agent",
+        function_config=config.functions["shallow_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "ran"
+    call_next.assert_awaited_once_with(state)
+    builder.get_middleware_list.assert_not_awaited()
+
+
+def test_get_middleware_for_worker_function_rejects_missing_middleware_config():
+    """Active worker middleware discovery fails clearly when a listed middleware is undefined."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_worker_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["missing_guardrails"])},
+        middleware={},
+    )
+
+    with pytest.raises(ValueError, match="not defined: missing_guardrails"):
+        _get_middleware_for_worker_function(config, "deep_research_agent")
 
 
 class TestDeepResearchEventCallbackAdvanced:
