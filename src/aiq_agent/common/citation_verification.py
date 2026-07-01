@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import re
 import threading
@@ -61,6 +62,38 @@ class SourceEntry:
     citation_key: str | None = None
     source_type: str = ""
     tool_name: str = ""
+
+
+def source_entries_from_parent_context(parent_context: str) -> list[SourceEntry]:
+    """Parse durable parent-report source metadata into verification entries."""
+    try:
+        payload = json.loads(parent_context)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict) or not isinstance(payload.get("sources"), list):
+        return []
+
+    entries: list[SourceEntry] = []
+    for source in payload["sources"]:
+        if not isinstance(source, dict):
+            continue
+        url = source.get("url")
+        citation_key = source.get("citation_key")
+        url = url.strip() if isinstance(url, str) and url.strip() else None
+        citation_key = citation_key.strip() if isinstance(citation_key, str) and citation_key.strip() else None
+        if not (url or citation_key):
+            continue
+        title = source.get("title")
+        entries.append(
+            SourceEntry(
+                url=url,
+                citation_key=citation_key,
+                title=title.strip() if isinstance(title, str) and title.strip() else None,
+                source_type=str(source.get("source_type") or "parent_report"),
+                tool_name=str(source.get("tool_name") or "parent_report"),
+            )
+        )
+    return entries
 
 
 @dataclass

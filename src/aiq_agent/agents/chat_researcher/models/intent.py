@@ -31,6 +31,9 @@ class IntentResult(BaseModel):
     Attributes:
         intent: Classified intent - either 'meta' (greetings, chit-chat, capabilities)
                 or 'research' (queries requiring data lookup and sources).
+        target: Python-derived workflow target for the selected semantic route.
+        report_action: Python-derived report interaction action, when target is ``report``.
+        use_parent_report_context: Whether a deep-research route should seed the active report.
         raw: Optional raw classification response from the LLM.
     """
 

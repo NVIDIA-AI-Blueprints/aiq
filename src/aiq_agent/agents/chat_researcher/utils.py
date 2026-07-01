@@ -105,16 +105,6 @@ def _extract_text_from_message(message: Any) -> str | None:
     return None
 
 
-def _extract_query_from_text(text: str) -> tuple[str, list[str] | None]:
-    """Extract query text and data sources from a text payload.
-
-    Thin wrapper over :func:`_extract_context_from_text` (single source of truth) for
-    consumers that only need the (query, data_sources) pair. Currently exercised by tests.
-    """
-    context = _extract_context_from_text(text)
-    return (context.query_text, context.data_sources)
-
-
 def _clean_optional_string(value: Any) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 

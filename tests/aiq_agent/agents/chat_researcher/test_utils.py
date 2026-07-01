@@ -23,7 +23,6 @@ from langchain_core.messages import SystemMessage
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
 from aiq_agent.agents.chat_researcher.utils import _extract_query_context
-from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
 from aiq_agent.agents.chat_researcher.utils import trim_message_history
 
@@ -133,36 +132,6 @@ class TestExtractTextFromMessage:
         """Test extracting text from dict message."""
         message = {"content": [{"type": "text", "text": "Hello"}]}
         assert _extract_text_from_message(message) == "Hello"
-
-
-class TestExtractQueryFromText:
-    """Tests for _extract_query_from_text."""
-
-    def test_extract_simple_text(self):
-        """Test extracting from plain text."""
-        query, sources = _extract_query_from_text("What is CUDA?")
-        assert query == "What is CUDA?"
-        assert sources is None
-
-    def test_extract_empty_text(self):
-        """Test extracting from empty string."""
-        query, sources = _extract_query_from_text("")
-        assert query == ""
-        assert sources is None
-
-    def test_extract_json_payload(self):
-        """Test extracting from JSON payload."""
-        text = '{"query": "Test query", "data_sources": ["web_search"]}'
-        query, sources = _extract_query_from_text(text)
-        assert query == "Test query"
-        assert sources == ["web_search"]
-
-    def test_extract_invalid_json(self):
-        """Test invalid JSON returns original text."""
-        text = '{"invalid json'
-        query, sources = _extract_query_from_text(text)
-        assert query == text
-        assert sources is None
 
 
 class TestExtractQueryAndSources:

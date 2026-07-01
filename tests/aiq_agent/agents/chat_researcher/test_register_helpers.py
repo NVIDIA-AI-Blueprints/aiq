@@ -22,7 +22,6 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
-from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
 
 
@@ -200,64 +199,6 @@ class TestExtractTextFromMessageDict:
         message = {"content": "Content value", "text": "Text value"}
         result = _extract_text_from_message(message)
         assert result == "Content value"
-
-
-class TestExtractQueryFromText:
-    """Tests for _extract_query_from_text function."""
-
-    def test_extract_plain_text(self):
-        """Test that plain text is returned as-is."""
-        query, sources = _extract_query_from_text("What is CUDA?")
-        assert query == "What is CUDA?"
-        assert sources is None
-
-    def test_extract_empty_text(self):
-        """Test extracting from empty text."""
-        query, sources = _extract_query_from_text("")
-        assert query == ""
-        assert sources is None
-
-    def test_extract_json_payload_with_query(self):
-        """Test extracting from JSON payload with query key."""
-        text = '{"query": "What is CUDA?", "data_sources": ["web_search"]}'
-        query, sources = _extract_query_from_text(text)
-        assert query == "What is CUDA?"
-        assert sources == ["web_search"]
-
-    def test_extract_json_payload_with_text_key(self):
-        """Test extracting from JSON payload with text key."""
-        text = '{"text": "Hello world", "data_sources": "confluence"}'
-        query, sources = _extract_query_from_text(text)
-        assert query == "Hello world"
-        assert sources == ["confluence"]
-
-    def test_extract_json_payload_no_data_sources(self):
-        """Test extracting from JSON without data_sources."""
-        text = '{"query": "Simple query"}'
-        query, sources = _extract_query_from_text(text)
-        assert query == "Simple query"
-        assert sources is None
-
-    def test_extract_invalid_json_returns_original(self):
-        """Test that invalid JSON returns original text."""
-        text = '{"invalid json'
-        query, sources = _extract_query_from_text(text)
-        assert query == '{"invalid json'
-        assert sources is None
-
-    def test_extract_json_with_whitespace(self):
-        """Test extracting from JSON with surrounding whitespace."""
-        text = '  {"query": "Test"}  '
-        query, sources = _extract_query_from_text(text)
-        assert query == "Test"
-        assert sources is None
-
-    def test_extract_json_missing_query_returns_none_text(self):
-        """Test JSON without query or text returns None query."""
-        text = '{"data_sources": ["web_search"]}'
-        query, sources = _extract_query_from_text(text)
-        assert query == '{"data_sources": ["web_search"]}'
-        assert sources is None
 
 
 class TestExtractQueryAndSourcesDict:

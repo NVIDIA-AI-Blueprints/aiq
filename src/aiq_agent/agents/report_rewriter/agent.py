@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -14,7 +13,6 @@ from typing import Any
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
-from langchain_core.tools import BaseTool
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
@@ -25,6 +23,7 @@ from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_source_entries_from_report
 from aiq_agent.common.citation_verification import report_has_citations
 from aiq_agent.common.citation_verification import sanitize_report
+from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
 
 from .models import ReportRewriterAgentState
@@ -41,48 +40,10 @@ OUTPUT_REPORT_PATH = "/shared/output.md"
 _DEFAULT_SOURCE_SUMMARY = "No durable source metadata was found for the parent report."
 
 
-def _source_text(value: Any) -> str | None:
-    if isinstance(value, str):
-        stripped = value.strip()
-        return stripped or None
-    return None
-
-
-def _source_entries_from_parent_context(parent_context: str) -> list[SourceEntry]:
-    try:
-        payload = json.loads(parent_context)
-    except json.JSONDecodeError:
-        return []
-    if not isinstance(payload, dict):
-        return []
-    raw_sources = payload.get("sources")
-    if not isinstance(raw_sources, list):
-        return []
-
-    entries: list[SourceEntry] = []
-    for raw_source in raw_sources:
-        if not isinstance(raw_source, dict):
-            continue
-        url = _source_text(raw_source.get("url"))
-        citation_key = _source_text(raw_source.get("citation_key"))
-        if not (url or citation_key):
-            continue
-        entries.append(
-            SourceEntry(
-                url=url,
-                citation_key=citation_key,
-                title=_source_text(raw_source.get("title")),
-                source_type=_source_text(raw_source.get("source_type")) or "parent_report",
-                tool_name=_source_text(raw_source.get("tool_name")) or "parent_report",
-            )
-        )
-    return entries
-
-
 def _effective_parent_sources(original_report: str, parent_context: str) -> list[SourceEntry]:
     """Build the rewrite allowlist from the canonical report and durable context."""
     report_sources = extract_source_entries_from_report(original_report)
-    context_sources = _source_entries_from_parent_context(parent_context)
+    context_sources = source_entries_from_parent_context(parent_context)
     if report_has_citations(original_report) and not (report_sources or context_sources):
         raise ValueError("Cannot rewrite a cited parent report because it cannot reconstruct its source registry")
 
@@ -159,14 +120,13 @@ class ReportRewriterAgent:
     def __init__(
         self,
         llm_provider: LLMProvider,
-        tools: Sequence[BaseTool] | None = None,
+        tools: Sequence[Any] | None = None,
         *,
         verbose: bool = False,
         callbacks: list[Any] | None = None,
         job_id: str | None = None,
     ) -> None:
         self.llm_provider = llm_provider
-        self.tools = list(tools or [])
         self.verbose = verbose
         self.callbacks = callbacks or []
         self.job_id = job_id
