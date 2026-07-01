@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -19,6 +20,10 @@ from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import SourceEntry
+from aiq_agent.common.citation_verification import SourceRegistry
+from aiq_agent.common.citation_verification import sanitize_report
+from aiq_agent.common.citation_verification import verify_citations
 
 from .models import ReportRewriterAgentState
 
@@ -32,6 +37,60 @@ EDIT_INSTRUCTION_PATH = "/shared/edit_instruction.txt"
 OUTPUT_REPORT_PATH = "/shared/output.md"
 
 _DEFAULT_SOURCE_SUMMARY = "No durable source metadata was found for the parent report."
+
+
+def _source_text(value: Any) -> str | None:
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped or None
+    return None
+
+
+def _source_entries_from_parent_context(parent_context: str) -> list[SourceEntry]:
+    try:
+        payload = json.loads(parent_context)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    raw_sources = payload.get("sources")
+    if not isinstance(raw_sources, list):
+        return []
+
+    entries: list[SourceEntry] = []
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, dict):
+            continue
+        url = _source_text(raw_source.get("url"))
+        citation_key = _source_text(raw_source.get("citation_key"))
+        if not (url or citation_key):
+            continue
+        entries.append(
+            SourceEntry(
+                url=url,
+                citation_key=citation_key,
+                title=_source_text(raw_source.get("title")),
+                source_type=_source_text(raw_source.get("source_type")) or "parent_report",
+                tool_name=_source_text(raw_source.get("tool_name")) or "parent_report",
+            )
+        )
+    return entries
+
+
+def _post_process_revised_report(revised_report: str, parent_sources: Sequence[SourceEntry]) -> str:
+    if parent_sources:
+        registry = SourceRegistry()
+        for source in parent_sources:
+            registry.add(source)
+        verification = verify_citations(revised_report, registry, reference_sources=parent_sources)
+        if verification.removed_citations:
+            logger.info(
+                "Report rewrite citation verification removed %d invalid citation(s)",
+                len(verification.removed_citations),
+            )
+        revised_report = verification.verified_report
+
+    return sanitize_report(revised_report).sanitized_report
 
 
 async def rewrite_report(
@@ -71,7 +130,10 @@ async def rewrite_report(
     revised_report = revised_report.strip()
     if not revised_report:
         raise ValueError("Report writer returned an empty revised report")
-    return revised_report
+    return _post_process_revised_report(
+        revised_report,
+        parent_sources=_source_entries_from_parent_context(parent_context),
+    )
 
 
 class ReportRewriterAgent:

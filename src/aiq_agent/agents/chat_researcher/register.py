@@ -416,6 +416,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             original_report=report_context.report_markdown,
             edit_instruction=instruction,
             source_summary=report_context.source_summary_markdown,
+            parent_context=report_context.model_dump_json(indent=2, exclude={"report_markdown"}),
         )
 
     async def _build_report_seed_files(state: ChatResearcherState) -> dict[str, str]:

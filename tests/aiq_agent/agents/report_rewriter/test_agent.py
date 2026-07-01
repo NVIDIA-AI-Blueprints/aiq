@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
@@ -67,6 +69,53 @@ async def test_rewrite_report_core_returns_revised_markdown_and_renders_prompt()
     rendered_prompt = writer_llm.seen_messages[0].content
     assert "# Parent" in rendered_prompt
     assert "Add a Messi-Ronaldo joke under the title." in rendered_prompt
+
+
+@pytest.mark.asyncio
+async def test_report_rewriter_verifies_and_sanitizes_revised_report_against_parent_sources():
+    from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
+    from aiq_agent.agents.report_rewriter.models import ReportRewriterAgentState
+
+    writer_llm = FakeWriterLLM(
+        content=(
+            "# Revised Report\n\n"
+            "Supported claim [1]. Unsupported claim [2].\n\n"
+            "## Sources\n"
+            "[1] Valid Source: https://valid.example/source\n"
+            "[2] Fabricated Source: https://fabricated.example/source"
+        )
+    )
+    provider = LLMProvider()
+    provider.configure(LLMRole.REPORT_WRITER, writer_llm)
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+
+    parent_context = {
+        "parent_job_id": "parent-job",
+        "sources": [
+            {
+                "url": "https://valid.example/source",
+                "title": "Valid Source",
+                "source_type": "parent_report",
+                "tool_name": "parent_report",
+            }
+        ],
+    }
+    state = ReportRewriterAgentState(
+        messages=[HumanMessage(content="Make it clearer.")],
+        files={
+            "/shared/original_report.md": "# Parent\n\nSupported claim [1].\n\n## Sources\n[1] Valid Source: https://valid.example/source",
+            "/shared/source_summary.md": "- [1] Valid Source: https://valid.example/source",
+            "/shared/parent_report_context.json": json.dumps(parent_context),
+        },
+    )
+
+    result = await agent.run(state)
+
+    revised_report = result.files["/shared/output.md"]
+    assert "https://valid.example/source" in revised_report
+    assert "https://fabricated.example/source" not in revised_report
+    assert "[2]" not in revised_report
+    assert result.messages[-1].content == revised_report
 
 
 @pytest.mark.asyncio
