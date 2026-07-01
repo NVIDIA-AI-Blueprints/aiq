@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Sequence
 from pathlib import Path
@@ -57,7 +56,7 @@ def _effective_parent_sources(original_report: str, parent_context: str) -> list
 def _effective_parent_sources(original_report: str, parent_context: str) -> list[SourceEntry]:
     """Build the rewrite allowlist from the canonical report and durable context."""
     report_sources = extract_source_entries_from_report(original_report)
-    context_sources = _source_entries_from_parent_context(parent_context)
+    context_sources = source_entries_from_parent_context(parent_context)
     if report_has_citations(original_report) and not (report_sources or context_sources):
         raise ValueError("Cannot rewrite a cited parent report because it cannot reconstruct its source registry")
 
