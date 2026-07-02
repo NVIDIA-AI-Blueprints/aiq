@@ -30,3 +30,8 @@ aiq:
         OPENSEARCH_DASK_FILE_TRANSFER: bytes
         DASK_NWORKERS: "1"
         DASK_NTHREADS: "4"
+    frontend:
+      # The frontend image also comes from nvcr.io, so it needs the same NGC pull
+      # secret; without it the frontend lands in ImagePullBackOff on a fresh cluster.
+      imagePullSecrets:
+        - name: ngc-image-pull-secret

@@ -350,8 +350,8 @@ aiq:
 ### 1. Pod is running and Pod Identity is attached
 
 ```bash
-kubectl -n ns-aiq get pods -l app.kubernetes.io/name=aiq-agent
-kubectl -n ns-aiq describe pod -l app.kubernetes.io/name=aiq-agent | grep -A2 'AWS_CONTAINER_CREDENTIALS'
+kubectl -n ns-aiq get pods -l app=aiq-backend
+kubectl -n ns-aiq describe pod -l app=aiq-backend | grep -A2 'AWS_CONTAINER_CREDENTIALS'
 ```
 
 Expected: pod is `Running`, the describe output shows
@@ -362,7 +362,7 @@ and service-account triple in the previous section.
 ### 2. Backend health check
 
 ```bash
-kubectl -n ns-aiq port-forward svc/aiq-agent 8000:8000 &
+kubectl -n ns-aiq port-forward svc/aiq-backend 8000:8000 &
 curl -sf http://localhost:8000/health
 ```
 
@@ -380,10 +380,10 @@ curl -sf -X POST http://localhost:8000/v1/collections/smoke/documents \
 ```
 
 Expected: a `job_id` is returned. Poll `GET /v1/documents/{job_id}/status` until `status` is
-`SUCCESS`. If it stalls in `INGESTING`, check the Dask worker logs for SigV4 errors:
+`completed`. If it stalls in `processing`, check the Dask worker logs for SigV4 errors:
 
 ```bash
-kubectl -n ns-aiq logs -l app.kubernetes.io/name=aiq-agent --tail=200 | grep -i opensearch
+kubectl -n ns-aiq logs -l app=aiq-backend --tail=200 | grep -i opensearch
 ```
 
 ### 4. Confirm the index appears in AOSS
@@ -396,7 +396,8 @@ aws opensearchserverless list-collections --region "$REGION"
 curl -sf "http://localhost:8000/v1/collections" | jq
 ```
 
-Expected: `aiq-smoke` index visible in the AOSS console under the collection's index browser,
+Expected: an `aiq-smoke-<hash>` index visible in the AOSS console under the collection's index browser
+(the physical index name appends a stable disambiguator to the logical `smoke` collection),
 and the `smoke` collection listed by the AIQ API.
 
 ```{note}
@@ -411,8 +412,12 @@ populate. This is also why the live-test suite includes a polling visibility wai
 ```bash
 curl -sf -X POST http://localhost:8000/v1/chat/completions \
   -H 'Content-Type: application/json' \
+  -H 'conversation-id: smoke' \
   -d '{"messages":[{"role":"user","content":"what is in the smoke document"}]}'
 ```
+
+The `conversation-id` header selects the collection to search (the backend maps `conversation-id`
+to the collection name), so it must match the `smoke` collection created above.
 
 Expected: response includes content from `README.md` with citations.
 

@@ -761,12 +761,21 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         arguments (where they could be retained or surfaced via diagnostics). Workers resolve
         OPENSEARCH_USERNAME/OPENSEARCH_PASSWORD from their own environment, mirroring how SigV4
         credentials are already resolved locally on the worker.
+
+        Document summaries are not generated in distributed mode: the summary LLM object is not
+        worker-serializable, so ``generate_summary`` is forced off here and a request that asked
+        for summaries is logged so callers understand why none are produced.
         """
         worker_config = dict(job_config)
         worker_config.pop("summary_llm", None)
         worker_config.pop("username", None)
         worker_config.pop("password", None)
         worker_config["start_ttl_cleanup"] = False
+        if job_config.get("generate_summary"):
+            logger.warning(
+                "Distributed (Dask) OpenSearch ingestion does not generate document summaries; "
+                "generate_summary is ignored for this job. Use local ingestion mode if summaries are required."
+            )
         worker_config["generate_summary"] = False
 
         if self.auth_type == "basic" and not (

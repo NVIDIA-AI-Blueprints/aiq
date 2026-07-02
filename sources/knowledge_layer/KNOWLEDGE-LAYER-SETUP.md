@@ -501,6 +501,10 @@ Summaries are generated for the following file types:
 
 Other file types are ingested normally but do not receive summaries.
 
+> **Note:** Summaries are only generated during **local** ingestion. In distributed (Dask) OpenSearch
+> ingestion the summary LLM is not worker-serializable, so `generate_summary` is forced off and a
+> warning is logged; use `opensearch_ingestion_mode: local` if you require summaries.
+
 > **Frontend file types:** The frontend file picker defaults to `.pdf,.docx,.txt,.md` (matching LlamaIndex). Set `FILE_UPLOAD_ACCEPTED_TYPES` to match your backend:
 >
 > | Deployment | Where to set |

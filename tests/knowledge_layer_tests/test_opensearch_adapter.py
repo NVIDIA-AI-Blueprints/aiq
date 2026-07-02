@@ -16,6 +16,7 @@
 """Tests for the OpenSearch Knowledge Layer adapter."""
 
 import asyncio
+import logging
 import threading
 import time
 from datetime import UTC
@@ -803,6 +804,17 @@ def test_worker_config_excludes_credentials():
     assert "password" not in worker_config
     assert "s3cret" not in worker_config.values()
     assert worker_config["endpoint"] == "localhost:9200"
+
+
+def test_worker_config_warns_when_summary_requested_in_distributed_mode(caplog):
+    """Distributed ingestion cannot produce summaries; a request that asked for them must warn, not silently drop."""
+    ingestor = OpenSearchIngestor({"auth_type": "none", "start_ttl_cleanup": False})
+
+    with caplog.at_level(logging.WARNING):
+        worker_config = ingestor._worker_config({"generate_summary": True})
+
+    assert worker_config["generate_summary"] is False
+    assert any("does not generate document summaries" in r.message for r in caplog.records)
 
 
 def test_worker_config_requires_env_credentials_for_basic_auth(monkeypatch):
