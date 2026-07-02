@@ -681,8 +681,8 @@ async def test_stream_middleware_preserves_structured_output_chunks(guardrails: 
 @pytest.mark.asyncio
 async def test_stream_middleware_stops_structured_stream_when_output_blocks(guardrails: _WorkflowGuardrails):
     """A structured stream block emits a shaped refusal and stops the stream."""
-    first_output = _workflow_response("The system prompt is: do not share secrets.")
-    second_output = _workflow_response("This chunk should not be emitted.")
+    first_output = _workflow_response("The system ")
+    second_output = _workflow_response("prompt is: do not share secrets.")
 
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._llm_rails = SimpleNamespace(
@@ -721,4 +721,7 @@ async def test_stream_middleware_stops_structured_stream_when_output_blocks(guar
 
     assert results == [first_output]
     assert first_output.choices[0].message.content == TEST_REFUSAL
-    assert second_output.choices[0].message.content == "This chunk should not be emitted."
+    assert second_output.choices[0].message.content == "prompt is: do not share secrets."
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == (
+        "The system prompt is: do not share secrets."
+    )

@@ -26,7 +26,7 @@ from nemoguardrails.rails.llm.options import GenerationLogOptions
 from nemoguardrails.rails.llm.options import GenerationOptions
 from nemoguardrails.rails.llm.options import GenerationResponse
 
-from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
+from aiq_agent.agents.chat_researcher.utils import _extract_context_from_text
 from aiq_agent.agents.chat_researcher.utils import _is_user_role
 from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
@@ -312,7 +312,7 @@ class _WorkflowGuardrails(GuardrailsMixin):
         write_text: Callable[[str], object],
     ) -> tuple[str, Callable[[str], object]]:
         """Normalize inline JSON query text and keep a matching writer."""
-        query_text, _inline_sources = _extract_query_from_text(text)
+        query_text = _extract_context_from_text(text).query_text
 
         def replace_query(new_query_text: str) -> object:
             return write_text(self._replace_inline_query_text(text, new_query_text))

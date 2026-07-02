@@ -51,9 +51,9 @@ class _DeepAgentGuardrails(GuardrailsMixin):
         """Return a deep-agent response that preserves the agent state schema.
 
         When a deep-agent state is available, the refusal is appended as the
-        next assistant message so downstream callers still receive
-        ``DeepResearchAgentState``. If no state can be resolved, return the raw
-        refusal text.
+        next assistant message for input blocks so downstream callers still
+        receive ``DeepResearchAgentState``. If no state can be resolved, return
+        the raw refusal text.
         """
         state = self._get_deep_agent_state_from_invocation_context(context, original_output)
         if state is None:
@@ -131,8 +131,8 @@ class _DeepAgentGuardrails(GuardrailsMixin):
         block_message: str,
         original_output: object,
     ) -> DeepResearchAgentState | str:
-        """Return a deep-agent state when output rails block."""
-        return self._build_blocked_agent_state(context, block_message, original_output)
+        """Replace blocked deep-agent output content with the refusal."""
+        return super()._on_post_invoke_blocked(context, block_message, original_output)
 
     def _iter_targets_at_path(self, value: Any, path: str) -> Iterator[tuple[str, Callable[[str], None]]]:
         """Yield the latest deep-agent message for the inherited field-selection hook."""

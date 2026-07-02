@@ -344,11 +344,18 @@ async def test_post_invoke_modifies_when_rail_modifies(guardrails: _ShallowAgent
 
 @pytest.mark.asyncio
 async def test_post_invoke_blocks_when_rail_blocks(guardrails: _ShallowAgentGuardrails):
-    """A blocked output rail returns the refusal inside shallow-agent state."""
+    """A blocked output rail replaces the rejected shallow-agent message."""
     user_text = "Please summarize this issue."
+    prior_output_text = "Prior safe answer."
     output_text = "Please follow up with customer@example.com about this issue."
     blocked_output = TEST_REFUSAL
-    output = ShallowResearchAgentState(messages=[HumanMessage(content=user_text), AIMessage(content=output_text)])
+    output = ShallowResearchAgentState(
+        messages=[
+            HumanMessage(content=user_text),
+            AIMessage(content=prior_output_text),
+            AIMessage(content=output_text),
+        ]
+    )
 
     # Assistant output blocks and replaces context.output with refusal.
     guardrails.bind_llms_to_rail = AsyncMock()
@@ -376,8 +383,10 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _ShallowAgentGuar
     assert result is context
     assert isinstance(context.output, ShallowResearchAgentState)
     assert context.output.messages[0].content == user_text
-    assert context.output.messages[1].content == output_text
-    assert isinstance(context.output.messages[-1], AIMessage)
-    assert context.output.messages[-1].content == blocked_output
+    assert context.output.messages[1].content == prior_output_text
+    assert isinstance(context.output.messages[2], AIMessage)
+    assert context.output.messages[2].content == blocked_output
+    assert len(context.output.messages) == 3
+    assert output_text not in [message.content for message in context.output.messages]
     guardrails._llm_rails.generate_async.assert_awaited_once()
     assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text

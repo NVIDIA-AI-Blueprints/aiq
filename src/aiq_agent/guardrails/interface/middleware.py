@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from collections.abc import Callable
 from typing import Any
 
 from nemoguardrails.rails.llm.options import GenerationLogOptions
@@ -106,22 +107,24 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
             yield ctx.output
             return
 
-        for chunk in buffered:
-            output, blocked = await self._apply_output_rails_to_stream_chunk(ctx, chunk)
+        output, blocked = await self._apply_output_rails_to_structured_stream(ctx, buffered)
+        if blocked:
             yield output
-            if blocked:
-                return
+            return
 
-    async def _apply_output_rails_to_stream_chunk(
+        for chunk in buffered:
+            yield chunk
+
+    async def _apply_output_rails_to_structured_stream(
         self,
         context: InvocationContext,
-        chunk: object,
+        buffered: list[object],
     ) -> tuple[object, bool]:
-        """Evaluate output rails for one structured stream chunk.
+        """Evaluate output rails against buffered structured assistant output.
 
-        Returns the chunk in its original shape and a flag indicating whether a
-        rail blocked, allowing the stream caller to stop after emitting the
-        shaped refusal.
+        Structured stream chunks are already buffered before emission. Evaluate
+        the logical assistant text reconstructed from selected fields so rails
+        can catch content split across chunk boundaries.
         """
         await self.bind_llms_to_rail()
 
@@ -130,34 +133,47 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
             raw: Any = context.original_args[0]
             input_text = getattr(raw, "input_message", None) or (raw if isinstance(raw, str) else str(raw))
 
-        context.output = chunk
         paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "post_invoke")
+        selections = self._structured_stream_output_selections(buffered, paths)
+        if not selections:
+            return buffered[0], False
 
-        def apply_to_value(new_value: str) -> None:
-            context.output = new_value
+        text = "".join(selection[0] for selection in selections)
+        messages = [{"role": "user", "content": input_text}] if input_text else []
+        messages.append({"role": "assistant", "content": text})
+        response: GenerationResponse = await self._llm_rails.generate_async(
+            messages=messages,
+            options=GenerationOptions(
+                rails=["output"],
+                log=GenerationLogOptions(activated_rails=True),
+                output_vars=["bot_message", "user_message"],
+            ),
+        )
 
-        for text, apply_to_field in self._gather_guardrail_inputs(chunk, paths, apply_to_value):
-            messages = [{"role": "user", "content": input_text}] if input_text else []
-            messages.append({"role": "assistant", "content": text})
-            response: GenerationResponse = await self._llm_rails.generate_async(
-                messages=messages,
-                options=GenerationOptions(
-                    rails=["output"],
-                    log=GenerationLogOptions(activated_rails=True),
-                    output_vars=["bot_message", "user_message"],
-                ),
-            )
+        if self._rail_blocked(response):
+            context.output = buffered[0]
+            block_message = self._handle_blocked_rail_response(response)
+            context.output = self._on_post_invoke_blocked(context, block_message, context.output)
+            return context.output, True
 
-            if self._rail_blocked(response):
-                block_message = self._handle_blocked_rail_response(response)
-                context.output = self._on_post_invoke_blocked(context, block_message, context.output)
-                return context.output, True
+        result_text = self._handle_modified_rail_response(response, fallback=text)
+        if result_text != text:
+            selections[0][1](result_text)
+            for _text, apply_to_field in selections[1:]:
+                apply_to_field("")
 
-            result_text = self._handle_modified_rail_response(response, fallback=text)
-            if result_text != text:
-                apply_to_field(result_text)
+        return buffered[0], False
 
-        return context.output, False
+    def _structured_stream_output_selections(
+        self,
+        buffered: list[object],
+        paths: list[str],
+    ) -> list[tuple[str, Callable[[str], None]]]:
+        """Return selected text fields from buffered structured stream chunks."""
+        selections: list[tuple[str, Callable[[str], None]]] = []
+        for chunk in buffered:
+            selections.extend(self._gather_guardrail_inputs(chunk, paths, lambda _value: None))
+        return selections
 
     def on_post_invoke_blocked(self, context: InvocationContext, block_message: str) -> object:
         """Adapt blocked output before the intercepted result is returned."""
