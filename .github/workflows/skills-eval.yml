@@ -269,14 +269,30 @@ jobs:
           python3 .github/skill-eval/skills_eval_agent.py $SCOPE --run-harbor \
             --output-dir /tmp/aiq-skill-eval/datasets
 
+      - name: Package Harbor results (scrub agent tree)
+        if: always()
+        run: |
+          # Tar this job's results into a single .tar.gz, excluding the per-trial
+          # agent/ subtree. Those agent/ dirs hold live trajectories that can carry
+          # session credentials/tokens/API keys; shipping them raw leaked an NGC
+          # key in VSS (PR #516). Mirror VSS's `--exclude='agent'` so no secrets
+          # leave CI, and match the RAG/VSS single-tarball artifact convention.
+          RESULTS=/tmp/aiq-skill-eval/results/${{ github.run_id }}-${{ github.run_attempt }}
+          if [ -d "$RESULTS" ]; then
+            tar --exclude='agent' -czf /tmp/aiq-skill-eval/results.tar.gz -C "$RESULTS" .
+          else
+            echo "no results dir for this run — nothing to archive (expected if blocked before a trial)"
+          fi
+
       - name: Upload Harbor results
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: aiq-skill-eval-results-${{ github.run_id }}
-          # Only this job's results (skills_eval_agent.py isolates output under
-          # <results>/<run_id>-<attempt>/), not the shared root's accumulated history.
-          path: /tmp/aiq-skill-eval/results/${{ github.run_id }}-${{ github.run_attempt }}
+          # Single scrubbed tarball (agent/ trajectories stripped by the packaging
+          # step above); isolates this job's run (skills_eval_agent.py writes under
+          # <results>/<run_id>-<attempt>/), matching the RAG/VSS one-.tar.gz convention.
+          path: /tmp/aiq-skill-eval/results.tar.gz
           if-no-files-found: ignore
           retention-days: 7
 
