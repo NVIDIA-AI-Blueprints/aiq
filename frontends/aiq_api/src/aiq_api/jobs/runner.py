@@ -942,11 +942,11 @@ def _create_agent_instance(
 async def _run_agent(
     agent,
     input_text: str,
-    builder: Any,
-    config: Any,
-    function_name: str,
-    function_config: Any,
     monitor: CancellationMonitor,
+    builder: Any | None = None,
+    config: Any | None = None,
+    function_name: str | None = None,
+    function_config: Any | None = None,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     event_store: EventStore | None = None,
@@ -1019,6 +1019,9 @@ async def _run_agent(
                 monitor,
                 event_store=event_store,
             )
+
+        if builder is None or config is None or function_name is None or function_config is None:
+            return await call_next(state)
 
         return await _run_with_configured_function_middleware(
             builder=builder,
