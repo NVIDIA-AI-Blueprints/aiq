@@ -17,6 +17,10 @@
 
 from __future__ import annotations
 
+from .blob_store import ArtifactBlobStore
+from .blob_store import S3ArtifactBlobStore
+from .blob_store import SqlArtifactBlobStore
+from .factory import build_artifact_store
 from .manager import ArtifactManager
 from .manifest import Manifest
 from .manifest import ManifestEntry
@@ -38,6 +42,10 @@ __all__ = [
     "ManifestEntry",
     "parse_manifest",
     "ArtifactStore",
+    "ArtifactBlobStore",
+    "SqlArtifactBlobStore",
+    "S3ArtifactBlobStore",
+    "build_artifact_store",
     "LocalArtifactStore",
     "SqlArtifactStore",
     "ArtifactManager",

@@ -689,12 +689,12 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     )
     async def list_job_artifacts(job_id: str) -> dict:
         """List durable artifact metadata for a job (no bytes)."""
-        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
 
         principal = require_verified_principal()
         await authorize_job_access(job_store, db_url, job_id, principal)
 
-        store = SqlArtifactStore(db_url)
+        store = build_artifact_store(db_url)
         artifacts = await asyncio.to_thread(store.list, job_id)
         # Exclude storage internals (storage_uri embeds the db_url, which may carry
         # credentials/hostnames; sandbox_path is an internal layout detail) from the
@@ -713,12 +713,12 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     )
     async def get_job_artifact_content(job_id: str, artifact_id: str) -> StreamingResponse:
         """Stream an artifact's bytes (auth-scoped to the owning job)."""
-        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
 
         principal = require_verified_principal()
         await authorize_job_access(job_store, db_url, job_id, principal)
 
-        store = SqlArtifactStore(db_url)
+        store = build_artifact_store(db_url)
         artifact = await asyncio.to_thread(store.get, job_id, artifact_id)
         if artifact is None:
             raise HTTPException(404, f"Artifact not found: {artifact_id}")
@@ -1057,10 +1057,10 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
     # Artifact retention shares the job expiry boundary (best-effort; the artifacts
     # table only exists when artifact capture has been used).
     try:
-        from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
 
         artifacts_deleted = await loop.run_in_executor(
-            None, lambda: SqlArtifactStore(db_url).cleanup_old_artifacts(retention_seconds)
+            None, lambda: build_artifact_store(db_url).cleanup_old_artifacts(retention_seconds)
         )
         if artifacts_deleted:
             logger.info("Artifact cleanup: %d old artifacts removed", artifacts_deleted)

@@ -100,6 +100,30 @@ AIQ_CHECKPOINT_DB=/app/data/checkpoints.db
 
 When using SQLite, you can optionally remove the `depends_on` block for the `aiq-agent` service since the `postgres` container is no longer needed.
 
+### Artifact Storage
+
+Artifact metadata always uses the job database. Artifact bytes use SQL BLOB storage
+by default. To store bytes in AWS S3, set:
+
+```bash
+AIQ_ARTIFACT_BLOB_PROVIDER=s3
+AIQ_ARTIFACT_S3_BUCKET=aiq-artifacts
+AIQ_ARTIFACT_S3_REGION=us-west-2
+AIQ_ARTIFACT_S3_PREFIX=artifacts/v1
+```
+
+For MinIO or another S3-compatible service, use the same provider and add its endpoint:
+
+```bash
+AIQ_ARTIFACT_S3_ENDPOINT_URL=http://minio:9000
+```
+
+The bucket is required when the provider is `s3`. Endpoint, region, and prefix are
+optional; leave the endpoint unset for AWS S3, and the prefix defaults to
+`artifacts/v1`. Configure credentials through workload identity, deployment secrets, or
+the standard AWS credential chain. When the provider is `s3`, artifact bytes are stored
+in the configured bucket and SQL stores artifact metadata only.
+
 ### Frontend Runtime Settings
 
 | Variable | Default | Description |

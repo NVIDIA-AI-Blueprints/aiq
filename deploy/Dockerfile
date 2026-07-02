@@ -69,8 +69,9 @@ COPY configs/ ./configs/
 # to avoid leaking .env, Helm charts, compose files, or other dev artifacts.
 COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
 
-# Install dependencies using uv sync
-RUN uv sync --frozen --no-dev --no-install-workspace
+# Install dependencies using uv sync. The image includes the optional S3 SDK so
+# deployments can opt into object storage through configuration at runtime.
+RUN uv sync --frozen --no-dev --no-install-workspace --extra s3
 
 # Install workspace packages (without CLI for base)
 RUN uv pip install --no-deps -e . \
