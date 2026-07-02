@@ -196,6 +196,7 @@ The backend loads a workflow config at startup. Switch configs with `--set`:
 |-------------|-------------|
 | `configs/config_web_default_llamaindex.yml` | Default — LlamaIndex backend (no external RAG required) |
 | `configs/config_web_frag.yml` | Foundational RAG mode (requires a running RAG service) |
+| `configs/config_web_frag_mcp_auth.yml` | Foundational RAG with optional per-user MCP authentication |
 
 ```bash
 helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
@@ -205,6 +206,36 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml
 ```
+
+### Per-user MCP authentication with external Redis
+
+The chart does not install Redis. When selecting the per-user authentication config, provide a Redis service that the backend and its workers can both reach. The deployer owns its availability, persistence, networking, and backup.
+
+Add `REDIS_PASSWORD` to the existing `aiq-credentials` Secret when the Redis service requires authentication, then create a values file:
+
+```yaml
+# aiq-per-user-auth-values.yaml
+aiq:
+  apps:
+    backend:
+      env:
+        CONFIG_FILE: configs/config_web_frag_mcp_auth.yml
+        MCP_TOKEN_STORE_TYPE: redis
+        REDIS_HOST: redis.example.com
+        REDIS_PORT: "6379"
+      secretEnv:
+        REDIS_PASSWORD: REDIS_PASSWORD
+```
+
+Apply it to either the downloaded chart or a source-chart installation:
+
+```bash
+helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
+  --wait --timeout 10m \
+  -f aiq-per-user-auth-values.yaml
+```
+
+Configure `MCP_GDRIVE_URL`, `AIQ_PUBLIC_URL`, and any OAuth client credentials required by the protected MCP source through the same `env` and `secretEnv` maps. NAT 1.8's Redis object store in this image supports host, port, database, and optional password; this example does not support TLS, ACL usernames, Sentinel, or Redis Cluster.
 
 ## FRAG Integration
 

@@ -286,7 +286,7 @@ object_stores:
     # redis (S3/MySQL also available via their NAT packages):
     host: ${REDIS_HOST:-localhost}
     port: ${REDIS_PORT:-6379}
-    # password: ${REDIS_PASSWORD}
+    password: ${REDIS_PASSWORD}
     # ttl: 2592000        # optional, seconds (both modes)
 
 workflow:
