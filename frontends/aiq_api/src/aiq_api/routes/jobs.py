@@ -64,6 +64,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _validate_artifact_store(db_url: str) -> None:
+    """Validate configured artifact storage during API startup."""
+    from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
+
+    build_artifact_store(db_url).validate()
+
+
 def _int_env(name: str, default: int) -> int:
     """Read a non-negative integer ops knob from the environment.
 
@@ -569,18 +576,18 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         db_url[:50],
         default_expiry_seconds,
     )
-    await asyncio.get_running_loop().run_in_executor(None, ensure_job_access_table, db_url)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, ensure_job_access_table, db_url)
+    await loop.run_in_executor(None, _validate_artifact_store, db_url)
 
     @app.get("/health", tags=["health"], summary="Health check")
     async def health_check():
-        """Health check endpoint that validates DB and artifact storage connectivity."""
+        """Health check endpoint that validates DB connectivity."""
         from sqlalchemy import text
-
-        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
 
         from ..jobs.event_store import EventStore
 
-        result = {"status": "ok", "dask_available": dask_available, "db": "ok", "artifact_store": "ok"}
+        result = {"status": "ok", "dask_available": dask_available, "db": "ok"}
 
         # Check DB connectivity using any cached async engine
         try:
@@ -595,17 +602,6 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             logger.warning("Health check DB ping failed", exc_info=True)
             result["status"] = "degraded"
             result["db"] = "unreachable"
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse(status_code=503, content=result)
-
-        try:
-            store = build_artifact_store(db_url)
-            await asyncio.wait_for(asyncio.to_thread(store.validate), timeout=3.0)
-        except Exception:
-            logger.warning("Health check artifact storage validation failed", exc_info=True)
-            result["status"] = "degraded"
-            result["artifact_store"] = "unreachable"
             from fastapi.responses import JSONResponse
 
             return JSONResponse(status_code=503, content=result)

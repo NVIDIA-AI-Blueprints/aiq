@@ -65,6 +65,7 @@ async def submit_app(monkeypatch):
 
     submitted_job = AsyncMock(return_value="job-1")
     monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
+    monkeypatch.setattr(jobs_routes, "_validate_artifact_store", MagicMock())
 
     agent_config = AgentConfig(
         class_path="aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
@@ -125,6 +126,27 @@ async def submit_app(monkeypatch):
     app = FastAPI()
     await jobs_routes.register_job_routes(app, builder, worker)
     return app, submitted_job, builder
+
+
+@pytest.mark.asyncio
+async def test_route_registration_validates_artifact_store(submit_app):
+    import aiq_api.routes.jobs as jobs_routes
+
+    _app, _submitted_job, _builder = submit_app
+
+    jobs_routes._validate_artifact_store.assert_called_once_with("sqlite:///./test.db")
+
+
+def test_artifact_store_validation_propagates_failure(monkeypatch):
+    import aiq_api.routes.jobs as jobs_routes
+    from aiq_agent.agents.deep_researcher.sandbox import artifacts
+
+    store = MagicMock()
+    store.validate.side_effect = RuntimeError("storage unavailable")
+    monkeypatch.setattr(artifacts, "build_artifact_store", MagicMock(return_value=store))
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        jobs_routes._validate_artifact_store("sqlite:///./test.db")
 
 
 @pytest.mark.asyncio
