@@ -167,13 +167,15 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
+    enable_citation_verification: true
     orchestrator_llm: nemotron_super_llm
+    source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_super_llm
     planner_llm: nemotron_super_llm
+    writer_llm: nemotron_super_llm
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:
       - web_search_tool
-    max_loops: 2
 
 workflow:
   _type: chat_deepresearcher_agent
