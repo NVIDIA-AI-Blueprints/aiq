@@ -380,10 +380,12 @@ curl -sf -X POST http://localhost:8000/v1/collections/smoke/documents \
 ```
 
 Expected: a `job_id` is returned. Poll `GET /v1/documents/{job_id}/status` until `status` is
-`completed`. If it stalls in `processing`, check the Dask worker logs for SigV4 errors:
+`completed`. If it stalls in `processing`, check the backend pod logs for SigV4/credential errors.
+The Dask scheduler and workers run embedded in the backend pod, so ingestion errors surface there.
+Read the raw tail rather than filtering it, so an auth failure that doesn't mention "opensearch" is not hidden:
 
 ```bash
-kubectl -n ns-aiq logs -l app=aiq-backend --tail=200 | grep -i opensearch
+kubectl -n ns-aiq logs -l app=aiq-backend --tail=200
 ```
 
 ### 4. Confirm the index appears in AOSS
