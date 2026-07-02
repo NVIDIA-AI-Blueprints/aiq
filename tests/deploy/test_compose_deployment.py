@@ -38,7 +38,7 @@ def test_default_compose_does_not_provision_or_configure_redis():
     assert backend_env.isdisjoint({"MCP_TOKEN_STORE_TYPE", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD"})
 
 
-def test_per_user_auth_compose_adds_private_redis_token_store():
+def test_per_user_auth_compose_adds_private_redis_token_store(tmp_path: Path):
     if shutil.which("docker") is None:
         pytest.skip("docker is required to validate Compose merge behavior")
 
@@ -51,6 +51,13 @@ def test_per_user_auth_compose_adds_private_redis_token_store():
     if compose_version.returncode != 0:
         pytest.skip("docker compose is required to validate Compose merge behavior")
 
+    # The runtime env file is intentionally untracked. Render from a temporary
+    # copy so this merge test works in a clean checkout without developer secrets.
+    base_compose = load_compose()
+    base_compose["services"]["aiq-agent"].pop("env_file", None)
+    test_compose_path = tmp_path / "docker-compose.yaml"
+    test_compose_path.write_text(yaml.safe_dump(base_compose), encoding="utf-8")
+
     result = subprocess.run(
         [
             "docker",
@@ -58,7 +65,7 @@ def test_per_user_auth_compose_adds_private_redis_token_store():
             "--env-file",
             str(REPO_ROOT / "deploy" / ".env.example"),
             "-f",
-            str(COMPOSE_PATH),
+            str(test_compose_path),
             "-f",
             str(PER_USER_AUTH_COMPOSE_PATH),
             "config",
