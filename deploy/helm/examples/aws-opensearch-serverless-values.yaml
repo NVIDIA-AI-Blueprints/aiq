@@ -17,7 +17,7 @@ aiq:
       imagePullSecrets:
         - name: ngc-image-pull-secret
       secretEnv:
-        NVIDIA_API_KEY: NVIDIA_API_KEY
+        NVIDIA_API_KEY: NVIDIA_API_KEY  # pragma: allowlist secret
       env:
         CONFIG_FILE: configs/config_web_opensearch.yml
         COLLECTION_NAME: default_collection
