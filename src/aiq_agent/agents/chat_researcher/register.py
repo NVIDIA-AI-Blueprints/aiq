@@ -319,6 +319,22 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         """
         from aiq_agent.common import format_tool_unavailability_error
         from aiq_agent.common import validate_tool_availability
+        from aiq_agent.common.data_source_registry import get_source
+
+        # Per-user MCP sources (e.g. Google Drive) contribute NO tools to the
+        # static startup list — their tools are resolved per-user at run time by
+        # open_per_user_mcp_tools (in the async worker). So a selected, configured
+        # per-user MCP source is a valid runtime tool candidate here; rejecting it
+        # against the static list would block the job before it ever submits.
+        # Connectivity is enforced separately by the submit preflight
+        # (submit_agent_job -> evaluate_mcp_auth, which returns mcp_auth_required
+        # when not connected), and the authoritative tool check runs after
+        # resolution.
+        if data_sources:
+            for source_id in data_sources:
+                source = get_source(source_id)
+                if source and source.per_user_auth and source.per_user_auth.required:
+                    return True, ""
 
         selected_tools = filter_tools_by_sources(deep_research_tools, data_sources)
 
@@ -433,12 +449,17 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
         if scheduler_address:
             from aiq_agent.auth import get_auth_token
-            from aiq_agent.auth import get_current_principal
+            from aiq_api.jobs.access import require_verified_principal
             from aiq_api.jobs.submit import submit_agent_job
 
             async def _submit_deep_job(state: ChatResearcherState) -> str:
-                principal = get_current_principal()
-                owner = principal.email if principal and principal.email else "anonymous"
+                # Resolve the principal the same way the connect/status routes do, so the
+                # job's per-user MCP token key (principal_user_id) matches where the token
+                # was stored at connect time. Keying off `owner` (email) instead would
+                # mismatch the connect key ("{type}:{sub}") and trigger interactive re-auth
+                # for an already-connected source.
+                principal = require_verified_principal()
+                owner = principal.email or principal.sub
                 query = state.original_query
                 if not query:
                     if not state.messages:
@@ -471,7 +492,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                     agent_type="deep_researcher",
                     input_text=input_text,
                     owner=owner,
-                    principal=principal,
+                    principal=principal,  # ensures worker token key == connect-time key
                     available_documents=available_docs,
                     data_sources=state.data_sources,
                     auth_token=get_auth_token(),

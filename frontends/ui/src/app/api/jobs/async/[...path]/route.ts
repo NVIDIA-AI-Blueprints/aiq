@@ -43,6 +43,27 @@ const buildBackendUrl = (path: string[]): string => {
 }
 
 /**
+ * Forward a non-2xx backend response to the browser.
+ *
+ * If the backend returned a JSON body (e.g. the 409 `mcp_auth_required` payload
+ * with its `sources`/`auth_url` details), pass it through verbatim with the
+ * original status so the client can act on the structure. Only fall back to the
+ * BACKEND_ERROR envelope for non-JSON error bodies, where there is nothing
+ * structured to preserve.
+ */
+const forwardBackendError = (status: number, errorText: string): NextResponse => {
+  try {
+    const parsed = JSON.parse(errorText)
+    return NextResponse.json(parsed, { status })
+  } catch {
+    return NextResponse.json(
+      { error: { code: 'BACKEND_ERROR', message: `Backend returned ${status}: ${errorText}` } },
+      { status }
+    )
+  }
+}
+
+/**
  * Get auth headers from request, including idToken cookie.
  * Returns empty object when REQUIRE_AUTH=false to prevent user identification.
  *
@@ -117,19 +138,7 @@ export async function GET(
     if (!response.ok) {
       const errorText = await response.text()
       console.error('[Deep Research API] Backend error:', response.status, errorText)
-
-      return new NextResponse(
-        JSON.stringify({
-          error: {
-            code: 'BACKEND_ERROR',
-            message: `Backend returned ${response.status}: ${errorText}`,
-          },
-        }),
-        {
-          status: response.status,
-          headers: { 'Content-Type': 'application/json' },
-        }
-      )
+      return forwardBackendError(response.status, errorText)
     }
 
     // For SSE streams, pass through the response body
@@ -245,19 +254,7 @@ export async function POST(
     if (!response.ok) {
       const errorText = await response.text()
       console.error('[Deep Research API] Backend error:', response.status, errorText)
-
-      return new NextResponse(
-        JSON.stringify({
-          error: {
-            code: 'BACKEND_ERROR',
-            message: `Backend returned ${response.status}: ${errorText}`,
-          },
-        }),
-        {
-          status: response.status,
-          headers: { 'Content-Type': 'application/json' },
-        }
-      )
+      return forwardBackendError(response.status, errorText)
     }
 
     // Return JSON response

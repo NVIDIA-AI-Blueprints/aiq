@@ -27,6 +27,7 @@ from langchain_core.messages import ToolMessage
 
 from aiq_agent.agents.deep_researcher.custom_middleware import PlanPersistenceMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
@@ -34,6 +35,72 @@ from aiq_agent.agents.deep_researcher.tools.source_registry import build_get_ver
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
+
+
+class TestSourceRoutingGuardMiddleware:
+    """Tests for the orchestrator's required source-routing transition."""
+
+    @staticmethod
+    def _request(tool_name: str, *, args: dict | None = None, files: dict | None = None) -> MagicMock:
+        request = MagicMock()
+        request.tool_call = {
+            "name": tool_name,
+            "args": args or {},
+            "id": "tc1",
+        }
+        request.state = {"files": files or {}}
+        return request
+
+    @pytest.mark.asyncio
+    async def test_blocks_other_tools_before_source_routing(self):
+        """An orchestrator cannot infer source absence from filesystem inspection before routing."""
+        middleware = SourceRoutingGuardMiddleware(enabled=True)
+        handler = AsyncMock(return_value=ToolMessage(content="[]", tool_call_id="tc1"))
+
+        result = await middleware.awrap_tool_call(self._request("ls", args={"path": "/shared"}), handler)
+
+        handler.assert_not_awaited()
+        assert result.status == "error"
+        assert "source-router-agent" in str(result.content)
+
+    @pytest.mark.asyncio
+    async def test_allows_source_router_task_before_routing(self):
+        """The required source-router task remains executable while the gate is closed."""
+        middleware = SourceRoutingGuardMiddleware(enabled=True)
+        expected = ToolMessage(content="Source routing complete.", tool_call_id="tc1")
+        handler = AsyncMock(return_value=expected)
+        request = self._request("task", args={"subagent_type": "source-router-agent"})
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        handler.assert_awaited_once_with(request)
+        assert result is expected
+
+    @pytest.mark.asyncio
+    async def test_allows_normal_tools_after_routing_file_exists(self):
+        """The gate opens once the source-router output is present in virtual state."""
+        middleware = SourceRoutingGuardMiddleware(enabled=True)
+        expected = ToolMessage(content="[]", tool_call_id="tc1")
+        handler = AsyncMock(return_value=expected)
+        request = self._request("ls", files={"/shared/source_routing.json": {"content": "{}"}})
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        handler.assert_awaited_once_with(request)
+        assert result is expected
+
+    @pytest.mark.asyncio
+    async def test_disabled_guard_is_noop(self):
+        """Workflows with source routing disabled preserve their existing tool behavior."""
+        middleware = SourceRoutingGuardMiddleware(enabled=False)
+        expected = ToolMessage(content="[]", tool_call_id="tc1")
+        handler = AsyncMock(return_value=expected)
+        request = self._request("ls")
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        handler.assert_awaited_once_with(request)
+        assert result is expected
 
 
 class TestToolNameSanitizationMiddleware:

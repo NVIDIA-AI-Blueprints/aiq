@@ -204,5 +204,86 @@ describe('useLayoutStore', () => {
       ])
       expect(useLayoutStore.getState().knowledgeLayerAvailable).toBe(true)
     })
+
+    test('does not auto-enable a protected source that is not connected', async () => {
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          { id: 'web_search', name: 'Web Search', requires_auth: false },
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'not_connected' },
+          },
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().fetchDataSources('token-1')
+
+      // gdrive is not connected -> excluded from the initial selection.
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['web_search'])
+    })
+
+    test('auto-enables a protected source once it is connected', async () => {
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'connected' },
+          },
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().fetchDataSources('token-1')
+
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['gdrive'])
+    })
+  })
+
+  describe('refreshDataSourceStatus', () => {
+    test('drops a protected source that is no longer connected from the selection', async () => {
+      useLayoutStore.setState({ enabledDataSourceIds: ['web_search', 'gdrive'] })
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          { id: 'web_search', name: 'Web Search', requires_auth: false },
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'expired' },
+          },
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().refreshDataSourceStatus('token-1')
+
+      // gdrive's token expired -> reconciled out; web_search preserved.
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['web_search'])
+    })
+
+    test('keeps a still-connected protected source and preserves other selections', async () => {
+      useLayoutStore.setState({ enabledDataSourceIds: ['gdrive', 'confluence'] })
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'connected' },
+          },
+          // 'confluence' is absent from this response -> must be preserved, not dropped.
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().refreshDataSourceStatus('token-1')
+
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['gdrive', 'confluence'])
+    })
   })
 })

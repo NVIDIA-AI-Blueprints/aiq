@@ -21,6 +21,9 @@ Import the plugin registration to make it discoverable.
 """
 
 # Import the plugin registration - this makes it discoverable by NAT
+# Importing the module runs its @register_object_store decorator, adding the
+# serviceless SQLite token store (_type: aiq_sqlite) to NAT's object-store registry.
+from .mcp_auth import sqlite_object_store as _sqlite_object_store  # noqa: F401
 from .plugin import register_aiq_api
 
 __all__ = ["register_aiq_api"]

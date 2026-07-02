@@ -193,10 +193,22 @@ EXTERNAL_ALLOWED_PATHS: list[str] = [
     "/v1/jobs/async/agents",
     "/v1/jobs/async/submit",
     "/v1/jobs/async/job/",  # prefix — matches /v1/jobs/async/job/{id}/*
+    "/v1/auth/mcp/",  # prefix — per-user MCP auth: {id}/status, {id}/connect, {id}/callback
 ]
 
 # External paths that require no token (monitoring, etc.)
 AUTH_EXEMPT_PATHS: set[str] = {"/health", "/docs", "/redoc", "/openapi.json"}
+
+
+def _is_oauth_callback_path(path: str) -> bool:
+    """The MCP OAuth redirect callback (``/v1/auth/mcp/{source_id}/callback``).
+
+    It must be auth-exempt: the provider redirects the user's browser here with no
+    AIQ token. It is secured by the unguessable OAuth ``state`` (bound to the
+    principal + source when the flow was started via /connect), not by a request
+    token. ``/status`` and ``/connect`` are NOT exempt — they need the principal.
+    """
+    return path.startswith("/v1/auth/mcp/") and path.endswith("/callback")
 
 
 def _load_external_hostnames() -> set[str]:
@@ -388,7 +400,7 @@ class AuthMiddleware:
             await self._send_json(send, 404, {"detail": "Not found"})
             return
 
-        if is_external and path in AUTH_EXEMPT_PATHS:
+        if is_external and (path in AUTH_EXEMPT_PATHS or _is_oauth_callback_path(path)):
             user = {"type": "anonymous", "skip_clarifier": True}
             await self._call_app(scope, receive, send, headers, user)
             return

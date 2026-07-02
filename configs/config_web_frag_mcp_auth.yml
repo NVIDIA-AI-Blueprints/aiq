@@ -1,0 +1,297 @@
+# Web mode with Foundational RAG PLUS a protected per-user OAuth MCP data source
+# (example: Google Drive). This is config_web_frag.yml with the per-user MCP auth
+# wiring added, kept as a separate config so the base web config stays minimal.
+#
+# Features:
+# - Web search enabled by default
+# - Knowledge retrieval using Foundational RAG.
+#    Requires a RAG server and ingest server to be running (not deployed by this
+#    blueprint). Example RAG deployment: https://github.com/NVIDIA-AI-Blueprints/rag/tree/main
+# - Protected per-user MCP source (`gdrive`): AIQ surfaces connection state on the
+#    source card, gates job submission until connected (409 mcp_auth_required), and
+#    owns the OAuth connect/callback. See the `authentication` / `object_stores`
+#    sections below for setup (MCP_GDRIVE_URL, AIQ_PUBLIC_URL, MCP_TOKEN_STORE_TYPE).
+
+general:
+  use_uvloop: true
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+    # tracing:
+    #   langsmith: # Optional: LangSmith tracing - requires langsmith API key. Set using `export LANGSMITH_API_KEY=<your-langsmith-api-key>`
+    #     _type: langsmith
+    #     project: nvidia-aiq
+
+  front_end:
+    _type: aiq_api
+    runner_class: aiq_api.plugin.AIQAPIWorker
+    # =========================================================================
+    # Knowledge API is automatically enabled when knowledge_retrieval function
+    # is configured
+    # =========================================================================
+    # Async Job API Settings
+    # =========================================================================
+    # Async job infrastructure database (NAT JobStore + EventStore)
+    # Used by: /v1/jobs/async routes, SSE streaming, job status persistence
+    # Requires async driver for SQLite (aiosqlite) or PostgreSQL (asyncpg)
+    # Environment overrides:
+    # - NAT_JOB_STORE_DB_URL (direct override)
+    # - NAT_JOB_STORE_DB_URL_DEV / NAT_JOB_STORE_DB_URL_PROD (via NAT_ENV)
+    db_url: ${NAT_JOB_STORE_DB_URL:-sqlite+aiosqlite:///./jobs.db}
+    # Job expiry - how long completed jobs stay in database before cleanup
+    expiry_seconds: 86400  # 24 hours (min: 600, max: 604800/7 days)
+    cors:
+      allow_origin_regex: 'http://localhost(:\d+)?|http://127.0.0.1(:\d+)?'
+      allow_methods:
+        - GET
+        - POST
+        - DELETE
+        - OPTIONS
+      allow_headers:
+        - "*"
+      allow_credentials: true
+      expose_headers:
+        - "*"
+
+llms:
+  nemotron_llm_intent:
+    _type: nim
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.5
+    top_p: 0.9
+    max_tokens: 4096
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+
+  nemotron_super_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.7
+    top_p: 0.7
+    max_tokens: 65536
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+
+functions:
+  # =========================================================================
+  # Data Source Registry
+  # =========================================================================
+  # Central registry that controls:
+  #   1. UI toggles — each source appears as an on/off switch in the frontend
+  #   2. Per-message filtering — users can select active sources per request
+  #   3. Tool auto-inheritance — agents with no explicit `tools` list receive
+  #      every tool listed here (use `exclude_tools` on agents to specialize)
+  #
+  # Source entry fields:
+  #   id, name, description, tools, requires_auth (default: false),
+  #   default_enabled (default: true)
+  #
+  # See docs/source/customization/tools-and-sources.md for full details.
+  # =========================================================================
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+          - advanced_web_search_tool
+      - id: knowledge_layer
+        name: "Knowledge Base"
+        description: "Search uploaded documents and files."
+        tools:
+          - knowledge_search
+      # Protected per-user MCP source (example: a Google Drive MCP server). `per_user_auth`
+      # makes AIQ surface connection state on the source card, gate job submission
+      # until connected (409 mcp_auth_required), and own the OAuth connect/callback.
+      - id: gdrive
+        name: "Google Drive"
+        description: "Search and read your authorized Google Drive files."
+        default_enabled: false
+        # requires_auth (the old AIQ-login gate) is left false so the source card
+        # is visible/Connectable in no-auth local runs; per_user_auth is the gate.
+        requires_auth: false
+        per_user_auth:
+          required: true
+          provider: google
+          mcp_server_id: gdrive
+          auth_provider: mcp_oauth2_gdrive   # -> the `authentication` entry below
+          # Clean names + descriptions so the research agent recognizes these as the
+          # way to access the user's Drive (the raw MCP tools are terse/blank, which
+          # made the small model fall back to web search / "no access").
+          tool_overrides:
+            gdrive_search:
+              alias: google_drive_search
+              description: >-
+                Search the USER'S connected Google Drive for files by name or content.
+                Use this whenever the user asks to find or look up a document in their
+                Google Drive. Returns matching files with their URLs/ids.
+            gdrive_get_file:
+              alias: google_drive_read_file
+              description: >-
+                Read the full text contents of a specific Google Drive file given its
+                URL or id (from google_drive_search). Use this to read or summarize a
+                document the user referenced in their Google Drive.
+            gdrive_get_metadata:
+              alias: google_drive_file_metadata
+              description: >-
+                Get metadata (name, type, owner, last modified) for a Google Drive file
+                by URL or id.
+        # NOTE: no `tools:` here, and intentionally NO config-declared function group.
+        # A per_user_mcp_client declared in config gets built by NAT's per-user
+        # interactive (WebSocket) session builder, which crashes for a user with no
+        # token. Instead the async-job worker builds the MCP client IN CODE per-job
+        # (from this source's auth_provider) with the owner's token — see
+        # aiq_api.mcp_auth.runtime_tools. This keeps the interactive WS path untouched.
+
+  web_search_tool:
+    _type: tavily_web_search
+    max_results: 5
+    max_content_length: 1000
+
+  advanced_web_search_tool:
+    _type: tavily_web_search
+    max_results: 2
+    advanced_search: true
+
+  # Knowledge Retrieval (see sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md)
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: foundational_rag
+    collection_name: ${COLLECTION_NAME:-test_collection}
+    top_k: 5
+    rag_url: ${RAG_SERVER_URL:-http://localhost:8081}
+    ingest_url: ${RAG_INGEST_URL:-http://localhost:8082}
+    timeout: 300
+
+  # Paper Search (optional - requires SERPER_API_KEY)
+  # Uncomment the block below and set SERPER_API_KEY to enable academic paper search.
+  # paper_search_tool:
+  #   _type: paper_search
+  #   max_results: 5
+  #   serper_api_key: ${SERPER_API_KEY}
+
+  # =========================================================================
+  # Agents — inherit all registry tools; use exclude_tools to specialize
+  # =========================================================================
+  intent_classifier:
+    _type: intent_classifier
+    llm: nemotron_llm_intent
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
+
+  clarifier_agent:
+    _type: clarifier_agent
+    llm: nemotron_super_llm
+    planner_llm: nemotron_super_llm
+    # tools: omitted -> inherits all from data_source_registry
+    # exclude_tools: []
+    max_turns: 3
+    enable_plan_approval: true
+    log_response_max_chars: 2000
+    verbose: true
+
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: nemotron_super_llm
+    # tools: omitted -> inherits all from data_source_registry
+    exclude_tools:
+      - advanced_web_search_tool
+    max_llm_turns: 10
+    max_tool_iterations: 5
+
+  deep_research_agent:
+    _type: deep_research_agent
+    enable_citation_verification: true
+    orchestrator_llm: nemotron_super_llm
+    source_router_llm: nemotron_super_llm
+    researcher_llm: nemotron_super_llm
+    planner_llm: nemotron_super_llm
+    writer_llm: nemotron_super_llm
+    # tools: omitted -> inherits all from data_source_registry
+    exclude_tools:
+      - web_search_tool
+
+# =========================================================================
+# Protected per-user MCP source wiring (example: Google Drive) — OPTIONAL
+# =========================================================================
+# Uncomment together with the `gdrive` data_sources entry above to enable a
+# per-user OAuth-protected MCP source.
+#
+# How it fits together:
+#   - `mcp_oauth2_gdrive` (authentication): standard NAT MCP OAuth provider. AIQ
+#     treats this as the single source of truth — it derives the shared token
+#     storage, redirect_uri, scopes and client_id from here, and reuses NAT's
+#     well-known discovery for the authorize/token endpoints.
+#   - `mcp_gdrive` (function_groups): the job-time per_user_mcp_client. It reads
+#     the same token AIQ wrote at connect time from the same object store.
+#
+# Requirements (see frontends/aiq_api/src/aiq_api/mcp_auth/factory.py):
+#   * token_storage_object_store MUST be a shared, persistent object store — the
+#     API process writes the token and a separate worker process reads it.
+#   * redirect_uri MUST point at AIQ's callback: <public-url>/v1/auth/mcp/gdrive/callback
+#     and be reachable by the user's browser (i.e. AIQ's public URL).
+#   * client_id is OPTIONAL. Omitted -> NAT dynamic client registration (DCR):
+#     connect works, but silent token refresh won't survive the API->worker
+#     process boundary, so users Reconnect when a source shows "expired" (the UI
+#     supports this). Set a fixed (e.g. ECI public) client_id for silent refresh.
+#
+# Example below wires a per-user OAuth-protected MCP server (e.g. a Google Drive
+# MCP service). Point MCP_GDRIVE_URL at your provider's MCP endpoint.
+# Set: MCP_GDRIVE_URL=https://your-mcp-server.example.com/mcp
+#      AIQ_PUBLIC_URL=<https URL where AIQ's API is reachable by the browser>
+#
+# NOTE: deliberately NO `function_groups: mcp_gdrive` here. A per_user_mcp_client
+# declared in config is built by NAT's per-user interactive (WebSocket) session
+# builder, which fails for a user with no token and breaks interactive chat. The
+# async-job worker instead builds the per-user MCP client IN CODE, per job, from
+# the `mcp_oauth2_gdrive` auth provider below (its server_url) + the job owner's
+# token. See aiq_api.mcp_auth.runtime_tools.open_per_user_mcp_tools.
+
+authentication:
+  mcp_oauth2_gdrive:
+    _type: mcp_oauth2
+    server_url: ${MCP_GDRIVE_URL:-https://your-mcp-server.example.com/mcp}
+    redirect_uri: ${AIQ_PUBLIC_URL:-http://localhost:8000}/v1/auth/mcp/gdrive/callback
+    token_storage_object_store: mcp_token_store
+    # scopes are discovered from MaaS protected-resource metadata; pin only to override.
+    # client_id: ${MCP_GDRIVE_CLIENT_ID}        # optional — see note above
+    # client_secret: ${MCP_GDRIVE_CLIENT_SECRET}
+
+# A shared object store is required so the API process (connect) and the worker
+# process (job) see the same token. Two modes, selected by MCP_TOKEN_STORE_TYPE:
+#   * aiq_sqlite (default) — a SQLite file, serviceless and shared across the API
+#     and worker processes on the same host. Works locally with nothing deployed.
+#   * redis — a networked store for multi-replica / multi-host deployments
+#     (requires nvidia-nat-redis; deploy sets MCP_TOKEN_STORE_TYPE=redis).
+# Fields not used by the active _type are ignored, so both sets can coexist here.
+#
+# aiq_sqlite requirement: the API and worker processes must resolve db_path to the
+# SAME file, so they must share a filesystem (single host / shared volume). Prefer
+# an ABSOLUTE path — a relative path only works if both processes share a working
+# directory. Separate hosts/pods do NOT share a filesystem; use redis there.
+object_stores:
+  mcp_token_store:
+    _type: ${MCP_TOKEN_STORE_TYPE:-aiq_sqlite}
+    bucket_name: mcp-tokens
+    # aiq_sqlite (use an absolute path in any multi-process deployment):
+    db_path: ${MCP_TOKEN_DB:-./mcp_tokens.db}
+    # redis (S3/MySQL also available via their NAT packages):
+    host: ${REDIS_HOST:-localhost}
+    port: ${REDIS_PORT:-6379}
+    password: ${REDIS_PASSWORD}
+    # ttl: 2592000        # optional, seconds (both modes)
+
+workflow:
+  _type: chat_deepresearcher_agent
+  enable_escalation: true
+  enable_clarifier: true
+  use_async_deep_research: true
+  checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}

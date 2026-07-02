@@ -11,6 +11,20 @@
 /** Category types for organizing data sources */
 export type DataSourceCategory = 'web' | 'enterprise' | 'storage' | 'collaboration'
 
+/** Per-user MCP auth status for a protected source. */
+export type PerUserAuthStatus = 'connected' | 'not_connected' | 'expired' | 'error'
+
+/** Per-user MCP OAuth state attached to a protected data source (UI shape). */
+export interface PerUserAuth {
+  required: boolean
+  provider?: string | null
+  mcpServerId?: string | null
+  status?: PerUserAuthStatus | null
+  connectUrl?: string | null
+  expiresAt?: string | null
+  lastError?: string | null
+}
+
 /** Data source configuration interface */
 export interface DataSource {
   /** Unique identifier matching backend source IDs */
@@ -25,4 +39,6 @@ export interface DataSource {
   defaultEnabled: boolean
   /** Whether the source requires user authentication */
   requiresAuth: boolean
+  /** Per-user MCP OAuth state (present only for protected MCP sources) */
+  perUserAuth?: PerUserAuth
 }

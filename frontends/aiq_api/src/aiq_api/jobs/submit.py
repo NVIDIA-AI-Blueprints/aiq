@@ -31,6 +31,7 @@ from sqlalchemy.exc import IntegrityError
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
 from aiq_api.auth import get_current_trace_tags
+from aiq_api.mcp_auth.provider import principal_user_id
 
 from ..registry import get_agent_config
 from .access import _make_no_auth_principal
@@ -252,6 +253,21 @@ async def submit_agent_job(
     if principal is None:
         raise RuntimeError("Verified current principal required for async job submission")
 
+    # Preflight protected MCP sources before enqueue. The REST submit route also
+    # does this (returning 409), but programmatic submitters — notably the chat
+    # researcher's async deep-research path — call this directly and would otherwise
+    # bypass the check, so this is the single chokepoint both paths share. Skipped
+    # when no MCP auth provider is active in this process (nothing to enforce).
+    from aiq_api.mcp_auth.active import get_active_mcp_auth_provider
+    from aiq_api.mcp_auth.preflight import McpAuthRequiredError
+    from aiq_api.mcp_auth.preflight import evaluate_mcp_auth
+
+    mcp_provider = get_active_mcp_auth_provider()
+    if mcp_provider is not None:
+        block = await evaluate_mcp_auth(mcp_provider, principal, data_sources)
+        if block is not None:
+            raise McpAuthRequiredError(block)
+
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
     loop = asyncio.get_running_loop()
@@ -293,6 +309,7 @@ async def submit_agent_job(
                 auth_token,
                 initial_files,
                 output_metadata,
+                principal_user_id(principal),
             ],
         )
     except IntegrityError as e:
