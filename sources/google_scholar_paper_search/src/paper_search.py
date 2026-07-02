@@ -34,8 +34,11 @@ SERPER_API_URL = "https://google.serper.dev/scholar"
 SERPAPI_API_URL = "https://serpapi.com/search"
 SEARCHAPI_API_URL = "https://www.searchapi.io/api/v1/search"
 
-# Matches a 4-digit year (19xx or 20xx) inside a publication summary string.
-_YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+# Matches a 4-digit publication year (1500-2099). The window is wide enough to
+# cover pre-1900 scholarly works while excluding arXiv-style identifiers, and
+# the negative lookahead prevents matching the leading digits of an id such as
+# ``1910.12345``.
+_YEAR_RE = re.compile(r"\b(1[5-9]\d{2}|20\d{2})\b(?!\.\d)")
 
 
 class PaperSearchProvider(StrEnum):
@@ -201,16 +204,23 @@ class PaperSearchTool:
 
     @staticmethod
     def _extract_year(publication_info: Any) -> str:
-        """Extract a 4-digit year from a publication summary string.
+        """Extract the publication year from a publication summary string.
 
         SerpAPI and SearchAPI embed the year inside the publication summary
-        (e.g. ``"JL Harper - ..., 1977 - cabdirect.org"``). Serper returns
-        a clean ``year`` field, so this is only used for the other two.
+        (e.g. ``"JL Harper - ..., 1977 - cabdirect.org"``). The publication
+        year is the final year token before the trailing source suffix, not the
+        first one: ``"... (1919-1933 …, 1926 - JSTOR"`` yields ``1926``, not
+        ``1919``. Serper returns a clean ``year`` field, so this is only used
+        for the other two providers.
         """
         if not isinstance(publication_info, str):
             return "Unknown Year"
-        match = _YEAR_RE.search(publication_info)
-        return match.group(1) if match else "Unknown Year"
+        # Drop the trailing source/host suffix (" - cabdirect.org") so its
+        # tokens (e.g. arXiv identifiers) can't be mistaken for a year, then
+        # take the final year-shaped token in the remaining summary.
+        summary = publication_info.rsplit(" - ", 1)[0]
+        matches = _YEAR_RE.findall(summary)
+        return matches[-1] if matches else "Unknown Year"
 
     # ── Serper (POST, X-API-KEY header) ──
     async def _fetch_serper_page(

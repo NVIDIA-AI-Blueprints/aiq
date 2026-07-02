@@ -123,7 +123,12 @@ async def paper_search(tool_config: PaperSearchToolConfig, builder: Builder):
 
         yield FunctionInfo.from_fn(
             _paper_search_stub,
-            description=_paper_search_stub.__doc__,
+            description=(
+                f"Search for academic papers and peer-reviewed scientific publications "
+                f"on Google Scholar via the {provider.value} backend. This tool is "
+                f"registered in a degraded state because {env_var} is not configured; "
+                f"calling it returns setup instructions instead of search results."
+            ),
         )
         return
 

@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
+import google_scholar_paper_search.register as register_module
 import pytest
 from google_scholar_paper_search.paper_search import PaperSearchProvider
 from google_scholar_paper_search.paper_search import PaperSearchTool
@@ -440,7 +441,7 @@ class TestExtractYear:
         assert PaperSearchTool._extract_year(summary) == "1977"  # noqa: SLF001
 
     def test_extract_year_multiple_numbers(self):
-        """Test that first valid year is extracted."""
+        """Test that the year before the source suffix is extracted."""
         summary = "A Author - Journal published 2020, vol 123 - host.com"
         assert PaperSearchTool._extract_year(summary) == "2020"  # noqa: SLF001
 
@@ -457,9 +458,25 @@ class TestExtractYear:
         assert PaperSearchTool._extract_year(None) == "Unknown Year"  # noqa: SLF001
         assert PaperSearchTool._extract_year(123) == "Unknown Year"  # noqa: SLF001
 
-    def test_extract_year_rejects_1800s(self):
-        """Test that years before 1900 are not matched."""
-        assert PaperSearchTool._extract_year("published in 1899") == "Unknown Year"  # noqa: SLF001
+    def test_extract_year_supports_pre_1900(self):
+        """Pre-1900 publication years are extracted, not forced to Unknown."""
+        summary = "J Smith - An early treatise on chemistry, 1859 - jstor.org"
+        assert PaperSearchTool._extract_year(summary) == "1859"  # noqa: SLF001
+
+    def test_extract_year_date_range_picks_publication_year(self):
+        """Final year before the source suffix wins, not a range start."""
+        summary = "Science Progress in the Twentieth Century (1919-1933 \u2026, 1926 - JSTOR"
+        assert PaperSearchTool._extract_year(summary) == "1926"  # noqa: SLF001
+
+    def test_extract_year_ignores_arxiv_identifier(self):
+        """An arXiv id prefix is not mistaken for the publication year."""
+        summary = "Vaswani et al., Attention Is All You Need, arXiv:1706.03762, 2017 - arxiv.org"
+        assert PaperSearchTool._extract_year(summary) == "2017"  # noqa: SLF001
+
+    def test_extract_year_arxiv_id_only_is_unknown(self):
+        """A summary carrying only an arXiv id (no year) yields Unknown Year."""
+        summary = "Some Author - A preprint, arXiv:1910.12345 - arxiv.org"
+        assert PaperSearchTool._extract_year(summary) == "Unknown Year"  # noqa: SLF001
 
     def test_extract_year_21st_century(self):
         """Test that 21st century years are matched."""
@@ -879,3 +896,31 @@ class TestProviderDispatch:
 
         assert "Paper search failed" in result
         assert "SerpAPI Error" not in result
+
+
+class TestRegisterMissingKeyStub:
+    """Registration-level tests for the missing-API-key stub function."""
+
+    @pytest.mark.parametrize(
+        ("provider", "env_var"),
+        [
+            (PaperSearchProvider.SERPER, "SERPER_API_KEY"),
+            (PaperSearchProvider.SERPAPI, "SERPAPI_API_KEY"),
+            (PaperSearchProvider.SEARCHAPI, "SEARCHAPI_API_KEY"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_stub_description_is_meaningful(self, provider, env_var, monkeypatch):
+        """Missing-key FunctionInfo exposes a non-None, provider-aware description."""
+        monkeypatch.delenv(env_var, raising=False)
+        # Reset the module-level warn guard so prior runs cannot alter behavior.
+        monkeypatch.setattr(register_module, "_missing_key_warned", False)
+
+        tool_config = register_module.PaperSearchToolConfig(provider=provider)
+
+        async with register_module.paper_search(tool_config, MagicMock()) as fn:
+            description = fn.description
+
+        assert description is not None
+        assert provider.value in description
+        assert env_var in description
