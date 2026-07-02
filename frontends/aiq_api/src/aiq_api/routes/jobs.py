@@ -573,12 +573,14 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     @app.get("/health", tags=["health"], summary="Health check")
     async def health_check():
-        """Health check endpoint that validates DB connectivity."""
+        """Health check endpoint that validates DB and artifact storage connectivity."""
         from sqlalchemy import text
+
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
 
         from ..jobs.event_store import EventStore
 
-        result = {"status": "ok", "dask_available": dask_available, "db": "ok"}
+        result = {"status": "ok", "dask_available": dask_available, "db": "ok", "artifact_store": "ok"}
 
         # Check DB connectivity using any cached async engine
         try:
@@ -593,6 +595,17 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             logger.warning("Health check DB ping failed", exc_info=True)
             result["status"] = "degraded"
             result["db"] = "unreachable"
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=503, content=result)
+
+        try:
+            store = build_artifact_store(db_url)
+            await asyncio.wait_for(asyncio.to_thread(store.validate), timeout=3.0)
+        except Exception:
+            logger.warning("Health check artifact storage validation failed", exc_info=True)
+            result["status"] = "degraded"
+            result["artifact_store"] = "unreachable"
             from fastapi.responses import JSONResponse
 
             return JSONResponse(status_code=503, content=result)

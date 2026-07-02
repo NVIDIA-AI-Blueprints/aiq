@@ -40,6 +40,10 @@ class ArtifactBlobStore(ABC):
     def delete(self, artifact: Artifact) -> None:
         """Delete artifact bytes. Missing bytes must be treated as success."""
 
+    @abstractmethod
+    def validate(self) -> None:
+        """Raise when the configured byte storage is unavailable."""
+
 
 class SqlArtifactBlobStore(ArtifactBlobStore):
     """Store artifact bytes in the existing SQL ``content`` column."""
@@ -75,6 +79,9 @@ class SqlArtifactBlobStore(ArtifactBlobStore):
         # Inline bytes are deleted with their SQL metadata row.
         pass
 
+    def validate(self) -> None:
+        pass
+
 
 class S3ArtifactBlobStore(ArtifactBlobStore):
     """Store bytes in AWS S3 or an S3-compatible service such as MinIO."""
@@ -105,6 +112,8 @@ class S3ArtifactBlobStore(ArtifactBlobStore):
                 endpoint_url=endpoint_url or None,
                 region_name=region or None,
                 config=Config(
+                    connect_timeout=10,
+                    read_timeout=30,
                     retries={"max_attempts": 3, "mode": "standard"},
                     # MinIO and other custom endpoints do not necessarily provide
                     # bucket-name DNS. Path style works consistently for them.
@@ -143,6 +152,9 @@ class S3ArtifactBlobStore(ArtifactBlobStore):
     def delete(self, artifact: Artifact) -> None:
         bucket, key = self._location(artifact.storage_uri)
         self._client.delete_object(Bucket=bucket, Key=key)
+
+    def validate(self) -> None:
+        self._client.head_bucket(Bucket=self.bucket)
 
     @staticmethod
     def _location(storage_uri: str) -> tuple[str, str]:

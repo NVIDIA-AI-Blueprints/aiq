@@ -91,6 +91,10 @@ class ArtifactStore(ABC):
     def cleanup_old_artifacts(self, retention_seconds: int) -> int:
         """Delete artifacts older than the retention period. Returns count removed."""
 
+    @abstractmethod
+    def validate(self) -> None:
+        """Raise when the configured artifact storage is unavailable."""
+
 
 class SqlArtifactStore(ArtifactStore):
     """SQL-backed metadata store (SQLite/Postgres) on the shared job ``db_url``.
@@ -354,6 +358,10 @@ class SqlArtifactStore(ArtifactStore):
                 )
         return sum(self._delete_artifact(_row_to_artifact(row)) for row in rows)
 
+    def validate(self) -> None:
+        """Validate the configured byte storage."""
+        self._blob_store.validate()
+
     def _delete_artifact(self, artifact: Artifact) -> int:
         """Delete one artifact's bytes and then its metadata row."""
         from sqlalchemy import text
@@ -363,13 +371,19 @@ class SqlArtifactStore(ArtifactStore):
         except Exception:
             logger.exception("Artifact byte deletion failed; retaining metadata for %s", artifact.artifact_id)
             return 0
-        with self._engine.connect() as conn:
-            result = conn.execute(
-                text("DELETE FROM artifacts WHERE job_id = :job_id AND artifact_id = :artifact_id"),
-                {"job_id": artifact.job_id, "artifact_id": artifact.artifact_id},
+        try:
+            with self._engine.connect() as conn:
+                result = conn.execute(
+                    text("DELETE FROM artifacts WHERE job_id = :job_id AND artifact_id = :artifact_id"),
+                    {"job_id": artifact.job_id, "artifact_id": artifact.artifact_id},
+                )
+                conn.commit()
+                return result.rowcount
+        except Exception:
+            logger.exception(
+                "Artifact metadata deletion failed; retaining metadata for retry: %s", artifact.artifact_id
             )
-            conn.commit()
-            return result.rowcount
+            return 0
 
 
 # Backwards-friendly alias; local development and single-node use the same SQL store.

@@ -286,6 +286,7 @@ class _FakeS3Client:
         self.objects: dict[tuple[str, str], bytes] = {}
         self.fail_put = False
         self.fail_delete = False
+        self.head_bucket_calls: list[str] = []
 
     def put_object(self, **kwargs: Any) -> None:
         if self.fail_put:
@@ -301,6 +302,9 @@ class _FakeS3Client:
             raise RuntimeError("delete failed")
         location = (kwargs["Bucket"], kwargs["Key"])
         self.objects.pop(location, None)
+
+    def head_bucket(self, **kwargs: Any) -> None:
+        self.head_bucket_calls.append(kwargs["Bucket"])
 
 
 class TestS3Store:
@@ -343,6 +347,14 @@ class TestS3Store:
         assert client.objects == {}
         assert store.get("job-1", stored.artifact_id) is None
 
+    def test_validate_checks_configured_bucket(self, tmp_path: Any) -> None:
+        client = _FakeS3Client()
+        store = self._store(tmp_path, client)
+
+        store.validate()
+
+        assert client.head_bucket_calls == ["aiq-artifacts"]
+
     def test_s3_bytes_leave_sql_content_null(self, tmp_path: Any) -> None:
         from sqlalchemy import text
 
@@ -375,6 +387,23 @@ class TestS3Store:
 
         assert store.delete_job(stored.job_id) == 0
         assert store.get(stored.job_id, stored.artifact_id) is not None
+
+    def test_failed_metadata_delete_is_retried(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _FakeS3Client()
+        store = self._store(tmp_path, client)
+        stored = store.put(self._artifact(), _PNG)
+
+        def fail_connect() -> None:
+            raise RuntimeError("database unavailable")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(store._engine, "connect", fail_connect)
+            assert store._delete_artifact(stored) == 0
+
+        assert client.objects == {}
+        assert store.get(stored.job_id, stored.artifact_id) is not None
+        assert store._delete_artifact(stored) == 1
+        assert store.get(stored.job_id, stored.artifact_id) is None
 
 
 class TestArtifactStoreFactory:
