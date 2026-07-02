@@ -94,7 +94,6 @@ class S3ArtifactBlobStore(ArtifactBlobStore):
         endpoint_url: str | None = None,
         region: str | None = None,
         client: Any | None = None,
-        health_client: Any | None = None,
     ) -> None:
         if not bucket:
             raise ValueError("AIQ_ARTIFACT_S3_BUCKET is required when the artifact blob provider is s3")
@@ -108,13 +107,10 @@ class S3ArtifactBlobStore(ArtifactBlobStore):
                 raise RuntimeError(
                     "S3 artifact storage requires the optional 's3' dependency: install aiq-agent[s3]"
                 ) from exc
-            client_kwargs = {
-                "endpoint_url": endpoint_url or None,
-                "region_name": region or None,
-            }
             client = boto3.client(
                 "s3",
-                **client_kwargs,
+                endpoint_url=endpoint_url or None,
+                region_name=region or None,
                 config=Config(
                     connect_timeout=10,
                     read_timeout=30,
@@ -124,18 +120,7 @@ class S3ArtifactBlobStore(ArtifactBlobStore):
                     s3={"addressing_style": "path"} if endpoint_url else {},
                 ),
             )
-            health_client = boto3.client(
-                "s3",
-                **client_kwargs,
-                config=Config(
-                    connect_timeout=1,
-                    read_timeout=1,
-                    retries={"total_max_attempts": 1, "mode": "standard"},
-                    s3={"addressing_style": "path"} if endpoint_url else {},
-                ),
-            )
         self._client = client
-        self._health_client = health_client or client
 
     @property
     def scheme(self) -> str:
@@ -169,7 +154,7 @@ class S3ArtifactBlobStore(ArtifactBlobStore):
         self._client.delete_object(Bucket=bucket, Key=key)
 
     def validate(self) -> None:
-        self._health_client.head_bucket(Bucket=self.bucket)
+        self._client.head_bucket(Bucket=self.bucket)
 
     @staticmethod
     def _location(storage_uri: str) -> tuple[str, str]:
