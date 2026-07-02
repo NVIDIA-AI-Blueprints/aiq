@@ -144,6 +144,33 @@ async def test_submit_job_forwards_selected_data_sources(submit_app):
 
 
 @pytest.mark.asyncio
+async def test_submit_job_rejects_internal_agent(submit_app, monkeypatch):
+    app, submitted_job, _builder = submit_app
+    import aiq_api.routes.jobs as jobs_routes
+
+    monkeypatch.setattr(
+        jobs_routes,
+        "get_agent_config",
+        lambda _agent_type: AgentConfig(
+            class_path="aiq_agent.agents.report_rewriter.agent.ReportRewriterAgent",
+            config_name="report_rewriter_agent",
+            description="Internal report rewriter",
+            public=False,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "report_rewriter", "input": "revise"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Agent type is internal-only and cannot be submitted directly: report_rewriter"
+    submitted_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_submit_job_omitted_data_sources_keeps_all_sources(submit_app):
     app, submitted_job, builder = submit_app
 

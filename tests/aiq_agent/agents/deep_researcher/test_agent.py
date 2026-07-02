@@ -570,6 +570,51 @@ class TestDeepResearcherAgent:
                 not in (create.call_args.kwargs["system_prompt"])
             )
 
+    def test_build_orchestrator_uses_parent_report_delta_prompt_when_seeded(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Parent-report delta runs are governed by deep researcher synthesis prompts, not chat query rewriting."""
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+                return_value=mock_create_deep_agent,
+            ) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
+                return_value=mock_create_deep_agent,
+            ),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="Add a Codex vs Claude Code comparison")],
+                files={
+                    "/shared/original_report.md": "# Parent report",
+                    "/shared/source_summary.md": "- source",
+                },
+            )
+
+            agent._build_orchestrator_agent(state)
+
+            kwargs = create.call_args.kwargs
+            orchestrator_prompt = kwargs["system_prompt"]
+            subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
+            writer_prompt = subagents["writer-agent"]["system_prompt"]
+
+            assert "Parent Report Delta Mode" in orchestrator_prompt
+            assert "/shared/original_report.md" in orchestrator_prompt
+            assert "/shared/source_summary.md" in orchestrator_prompt
+            assert "complete standalone revised report" in orchestrator_prompt
+            assert "Do not return a research plan" in orchestrator_prompt
+            assert "Parent Report Delta Mode" in writer_prompt
+            assert "/shared/original_report.md" in writer_prompt
+            assert "complete standalone revised report" in writer_prompt
+            assert "Do not return a research plan" in writer_prompt
+
     def test_build_orchestrator_can_disable_source_router(
         self,
         mock_llm_provider,
@@ -1355,6 +1400,59 @@ class TestFinalMarkdownExtraction:
             result = await agent.run(state)
 
             assert "# CapEx Report" in result.messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_run_seeds_parent_sources_for_delta_citation_verification(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Delta reports may preserve parent citations that must be valid in the child registry."""
+        parent_url = "https://parent.example/source"
+        report = f"Preserved parent claim [1].\n\n## Sources\n[1] Parent: {parent_url}"
+        parent_context = {
+            "parent_job_id": "parent-job-1",
+            "source_summary_markdown": f"- [1] Parent: {parent_url}",
+            "sources": [
+                {
+                    "url": parent_url,
+                    "title": "Parent",
+                    "source_type": "parent_report",
+                    "tool_name": "parent_report",
+                }
+            ],
+        }
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [AIMessage(content="Wrote /shared/output.md")],
+                "files": {
+                    **output_markdown_file(report),
+                    "/shared/parent_report_context.json": {"content": json.dumps(parent_context)},
+                },
+            }
+        )
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="Add OpenShell")],
+                files={
+                    "/shared/parent_report_context.json": json.dumps(parent_context),
+                },
+            )
+
+            result = await agent.run(state)
+
+            assert "[1] Parent: https://parent.example/source" in result.messages[-1].content
+            assert agent.source_registry_middleware.active_registry().has_url(parent_url)
+            assert agent.source_registry_middleware.get_source_entries(mode="compact")[0].url == parent_url
 
 
 class TestDeepResearcherCitationVerification:

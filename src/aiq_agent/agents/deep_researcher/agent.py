@@ -32,6 +32,7 @@ from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import sanitize_report
+from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
 
 from .custom_middleware import SourceRegistryMiddleware
@@ -48,6 +49,7 @@ from .tools.source_tool_batching import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_RESEARCH_CONCURRENCY = 6
+PARENT_REPORT_CONTEXT_PATH = "/shared/parent_report_context.json"
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
@@ -217,6 +219,25 @@ class DeepResearcherAgent:
         return stripped
 
     @staticmethod
+    def _read_seed_file_text(files: dict[str, Any], path: str) -> str | None:
+        entry = files.get(path)
+        if isinstance(entry, dict):
+            entry = entry.get("content")
+        if isinstance(entry, bytes):
+            entry = entry.decode("utf-8")
+        return entry if isinstance(entry, str) and entry.strip() else None
+
+    def _seed_parent_sources(self, files: dict[str, Any]) -> None:
+        """Register parent report sources so preserved citations verify in delta reports."""
+        context_text = self._read_seed_file_text(files, PARENT_REPORT_CONTEXT_PATH)
+        if not context_text:
+            return
+        parent_sources = source_entries_from_parent_context(context_text)
+        seeded = self.source_registry_middleware.register_compact_sources(parent_sources)
+        if seeded:
+            logger.info("Seeded %d parent report source(s) into citation registry", seeded)
+
+    @staticmethod
     def _replace_last_message_content(result: dict | Any, content: str) -> None:
         """Overwrite the final message content in-place with post-processed Markdown."""
         messages = result.get("messages") if isinstance(result, dict) else getattr(result, "messages", None)
@@ -232,6 +253,10 @@ class DeepResearcherAgent:
         """
         Execute deep research with multi-phase workflow.
         """
+        prepared_files = self.deepagents_runtime.prepare_state_files(dict(state.files))
+        if prepared_files != state.files:
+            state = state.model_copy(update={"files": prepared_files})
+        self._seed_parent_sources(state.files)
         agent = self._build_orchestrator_agent(state)
 
         messages = state.messages

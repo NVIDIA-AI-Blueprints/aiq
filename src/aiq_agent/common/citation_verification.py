@@ -31,6 +31,7 @@ Usage:
 from __future__ import annotations
 
 import contextvars
+import json
 import logging
 import re
 import threading
@@ -61,6 +62,38 @@ class SourceEntry:
     citation_key: str | None = None
     source_type: str = ""
     tool_name: str = ""
+
+
+def source_entries_from_parent_context(parent_context: str) -> list[SourceEntry]:
+    """Parse durable parent-report source metadata into verification entries."""
+    try:
+        payload = json.loads(parent_context)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(payload, dict) or not isinstance(payload.get("sources"), list):
+        return []
+
+    entries: list[SourceEntry] = []
+    for source in payload["sources"]:
+        if not isinstance(source, dict):
+            continue
+        url = source.get("url")
+        citation_key = source.get("citation_key")
+        url = url.strip() if isinstance(url, str) and url.strip() else None
+        citation_key = citation_key.strip() if isinstance(citation_key, str) and citation_key.strip() else None
+        if not (url or citation_key):
+            continue
+        title = source.get("title")
+        entries.append(
+            SourceEntry(
+                url=url,
+                citation_key=citation_key,
+                title=title.strip() if isinstance(title, str) and title.strip() else None,
+                source_type=str(source.get("source_type") or "parent_report"),
+                tool_name=str(source.get("tool_name") or "parent_report"),
+            )
+        )
+    return entries
 
 
 @dataclass
@@ -821,6 +854,50 @@ def _normalize_source_section_layout(ref_section: str) -> str:
     return "\n".join(_split_collapsed_source_line(line) for line in ref_section.split("\n"))
 
 
+def extract_source_entries_from_report(report_text: str) -> list[SourceEntry]:
+    """Extract verifiable source identities from a report's source section.
+
+    A report source can anchor verification only when it has a URL or a
+    recognizable knowledge-layer citation key.
+    """
+    report_text = _normalize_citation_syntax(report_text)
+    ref_match = _REFERENCE_SECTION_RE.search(report_text)
+    if ref_match is None:
+        return []
+
+    entries: list[SourceEntry] = []
+    ref_section = _normalize_source_section_layout(report_text[ref_match.start() :])
+    for line_match in _CITATION_LINE_RE.finditer(ref_section):
+        ref_text = line_match.group(2).strip()
+        url_match = _URL_IN_LINE_RE.search(ref_text)
+        if url_match:
+            entries.append(
+                SourceEntry(
+                    url=url_match.group(0).rstrip(_URL_TRIM_CHARS),
+                    source_type="parent_report",
+                    tool_name="parent_report",
+                )
+            )
+            continue
+
+        is_knowledge, citation_key = _is_knowledge_citation(ref_text)
+        if is_knowledge and citation_key:
+            entries.append(
+                SourceEntry(
+                    citation_key=citation_key,
+                    source_type="parent_report",
+                    tool_name="parent_report",
+                )
+            )
+    return entries
+
+
+def report_has_citations(report_text: str) -> bool:
+    """Return whether a report claims to contain numbered citations."""
+    report_text = _normalize_citation_syntax(report_text)
+    return bool(_REFERENCE_SECTION_RE.search(report_text) or _INLINE_CITATION_RE.search(report_text))
+
+
 def _inline_citation_numbers(text: str) -> set[int]:
     """Return numeric inline citation labels present in text."""
     return {int(match.group(1)) for match in _INLINE_CITATION_RE.finditer(text)}
@@ -828,10 +905,11 @@ def _inline_citation_numbers(text: str) -> set[int]:
 
 def _strip_inline_citations_not_in(text: str, valid_numbers: set[int]) -> str:
     """Remove inline citations whose labels are not in valid_numbers."""
-    return _INLINE_CITATION_RE.sub(
+    stripped = _INLINE_CITATION_RE.sub(
         lambda match: match.group(0) if int(match.group(1)) in valid_numbers else "",
         text,
     )
+    return re.sub(r"[ \t]+(?=[,.;:!?])", "", stripped)
 
 
 def _renumber_citations(body: str, ref_section: str) -> tuple[str, str, dict[int, int]]:

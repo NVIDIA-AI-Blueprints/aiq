@@ -34,7 +34,6 @@ from aiq_agent.common import render_prompt_template
 from ..models import ChatResearcherState
 from ..models import DepthDecision
 from ..models import IntentResult
-from ..utils import trim_message_history
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +43,12 @@ _LLM_UNAVAILABLE_MESSAGE = (
     "Please check your LLM API key and that the configured model is available for your account."
 )
 _LLM_TIMEOUT_MESSAGE = "The model service took too long to respond and the request timed out. "
+_REPAIR_TIMEOUT_SECONDS = 15
+_ROUTE_REPORT_ASK = "report_ask"
+_ROUTE_REPORT_COSMETIC_EDIT = "report_cosmetic_edit"
+_ROUTE_REPORT_DELTA_RESEARCH = "report_delta_research"
+_ROUTE_STANDALONE_RESEARCH = "standalone_research"
+_ROUTE_META = "meta"
 
 
 def _is_llm_api_unavailable(err: BaseException) -> bool:
@@ -112,9 +117,11 @@ class IntentClassifier:
             current_datetime=current_datetime,
             user_info=user_info,
             tools=self.tools_info,
+            active_report_available=bool(state.active_report_job_id or state.last_report_markdown),
         )
-        trimmed_conversation = trim_message_history(list(state.messages), max_tokens=self.max_history)
-        messages: list[BaseMessage] = [SystemMessage(content=system_content)] + trimmed_conversation
+        # Keep the router isolated from prior assistant report bodies. The prompt already contains
+        # the latest query and report availability, which is the bounded context needed here.
+        messages: list[BaseMessage] = [SystemMessage(content=system_content)]
 
         try:
             config = {"callbacks": self.callbacks} if self.callbacks else {}
@@ -125,21 +132,56 @@ class IntentClassifier:
 
             response_text = (response.content or "").strip()
             parsed = extract_json(response_text)
+            if not parsed or not isinstance(parsed, dict):
+                parsed = await self._repair_json_response(
+                    system_content=system_content,
+                    invalid_response=response_text,
+                    config=config,
+                )
 
             if not parsed or not isinstance(parsed, dict):
                 return {
                     "user_intent": IntentResult(intent="research", raw=None),
-                    "depth_decision": DepthDecision(decision="shallow", raw_reasoning="Parse failed"),
+                    "depth_decision": DepthDecision(decision="deep", raw_reasoning="Parse failed"),
                 }
 
             raw_intent = (parsed.get("intent") or "research").strip().lower()
-            intent = raw_intent if raw_intent in ("meta", "research") else "research"
+            route = _normalize_route(parsed.get("route"))
+            if route == _ROUTE_META:
+                intent = "meta"
+            elif route is not None:
+                intent = "research"
+            else:
+                intent = raw_intent if raw_intent in ("meta", "research") else "research"
             meta_response = parsed.get("meta_response")
             research_depth = (parsed.get("research_depth") or "shallow").strip().lower()
-            depth_reasoning = parsed.get("depth_reasoning") or ""
+            depth_reasoning = parsed.get("route_reasoning") or parsed.get("depth_reasoning") or ""
+            active_report = bool(state.active_report_job_id or state.last_report_markdown)
+
+            if intent == "meta":
+                target = "meta"
+                report_action = None
+                use_parent_report_context = False
+            elif route is not None:
+                target, report_action, use_parent_report_context, research_depth, depth_reasoning = _route_to_fields(
+                    route=route,
+                    active_report=active_report,
+                    research_depth=research_depth,
+                    depth_reasoning=str(depth_reasoning),
+                )
+            else:
+                target = "new_research"
+                report_action = None
+                use_parent_report_context = False
 
             update: dict[str, Any] = {
-                "user_intent": IntentResult(intent=intent, raw=parsed),
+                "user_intent": IntentResult(
+                    intent=intent,
+                    target=target,
+                    report_action=report_action,
+                    use_parent_report_context=use_parent_report_context,
+                    raw=parsed,
+                ),
             }
 
             if intent == "meta":
@@ -147,7 +189,7 @@ class IntentClassifier:
                     meta_response if isinstance(meta_response, str) and meta_response.strip() else "I'm here to help."
                 )
                 update["messages"] = [AIMessage(content=meta_text)]
-            else:
+            elif target != "report":
                 update["depth_decision"] = DepthDecision(
                     decision=research_depth if research_depth in ("shallow", "deep") else "shallow",
                     raw_reasoning=str(depth_reasoning),
@@ -186,3 +228,73 @@ class IntentClassifier:
                 "user_intent": IntentResult(intent="meta", raw=None),
                 "messages": [AIMessage(content=err_msg)],
             }
+
+    async def _repair_json_response(
+        self,
+        *,
+        system_content: str,
+        invalid_response: str,
+        config: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        repair_prompt = (
+            f"{system_content}\n\n"
+            "The previous classifier response was invalid because it was not one valid JSON object.\n"
+            "Return only one valid JSON object matching the schema above. Do not include markdown, prose, "
+            "analysis, code fences, or a rewritten report.\n\n"
+            f"Invalid response:\n{invalid_response[:4000]}"
+        )
+        try:
+            response = await asyncio.wait_for(
+                self.llm.ainvoke([SystemMessage(content=repair_prompt)], config=config),
+                timeout=min(self.llm_timeout, _REPAIR_TIMEOUT_SECONDS),
+            )
+        except TimeoutError:
+            logger.warning("Intent classifier JSON repair timed out.")
+            return None
+        except Exception as e:
+            logger.warning("Intent classifier JSON repair failed: %s", e)
+            return None
+
+        repaired = extract_json((response.content or "").strip())
+        return repaired if isinstance(repaired, dict) else None
+
+
+def _normalize_route(raw_route: Any) -> str | None:
+    route = raw_route.strip().lower() if isinstance(raw_route, str) else None
+    if route in (
+        _ROUTE_REPORT_ASK,
+        _ROUTE_REPORT_COSMETIC_EDIT,
+        _ROUTE_REPORT_DELTA_RESEARCH,
+        _ROUTE_STANDALONE_RESEARCH,
+        _ROUTE_META,
+    ):
+        return route
+    return None
+
+
+def _route_to_fields(
+    *,
+    route: str,
+    active_report: bool,
+    research_depth: str,
+    depth_reasoning: str,
+) -> tuple[str, str | None, bool, str, str]:
+    """Map the LLM-owned semantic route onto the existing workflow fields."""
+    if route == _ROUTE_REPORT_ASK:
+        if active_report:
+            return "report", "ask", False, research_depth, depth_reasoning
+        return "new_research", None, False, research_depth, depth_reasoning
+
+    if route == _ROUTE_REPORT_COSMETIC_EDIT:
+        if active_report:
+            return "report", "edit", False, research_depth, depth_reasoning
+        return "new_research", None, False, research_depth, depth_reasoning
+
+    if route == _ROUTE_REPORT_DELTA_RESEARCH:
+        reasoning = depth_reasoning or "Requires fresh evidence against the active report."
+        return "new_research", None, active_report, "deep", reasoning
+
+    if route == _ROUTE_STANDALONE_RESEARCH:
+        return "new_research", None, False, research_depth, depth_reasoning
+
+    raise ValueError(f"Unsupported research route: {route}")

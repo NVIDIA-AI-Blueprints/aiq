@@ -103,6 +103,37 @@ class TestDeepAgentsRuntimeRouting:
         assert runtime.execution_enabled is True
         assert runtime.skills_enabled is False
 
+    def test_prepare_state_files_preserves_shared_paths_without_route(self) -> None:
+        runtime = DeepAgentsRuntime()
+
+        files = runtime.prepare_state_files({"/shared/original_report.md": "# Parent"})
+
+        assert "/shared/original_report.md" in files
+        assert files["/shared/original_report.md"]["content"] == "# Parent"
+        assert "modified_at" in files["/shared/original_report.md"]
+
+    def test_prepare_state_files_normalizes_shared_paths_for_route_backend(self) -> None:
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=MagicMock(),
+        ):
+            runtime = DeepAgentsRuntime(sandbox=DeepResearchSandboxConfig())
+
+        files = runtime.prepare_state_files(
+            {
+                "/shared/original_report.md": "# Parent",
+                "/shared/source_summary.md": b"- src",
+            }
+        )
+
+        assert "/original_report.md" in files
+        assert "/source_summary.md" in files
+        assert "/shared/original_report.md" not in files
+        assert "/shared/source_summary.md" not in files
+        assert files["/original_report.md"]["content"] == "# Parent"
+        assert files["/source_summary.md"]["content"] == "- src"
+        assert "modified_at" in files["/original_report.md"]
+
     def test_sandbox_and_skills_add_shared_and_skills_routes(self) -> None:
         fake_sandbox = MagicMock()
         skills = DeepResearchSkillsConfig(agents={"researcher-agent": ("research",)})

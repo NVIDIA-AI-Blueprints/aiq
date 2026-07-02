@@ -22,7 +22,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
-from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
+from aiq_agent.agents.chat_researcher.utils import _extract_query_context
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
 from aiq_agent.agents.chat_researcher.utils import trim_message_history
 
@@ -134,36 +134,6 @@ class TestExtractTextFromMessage:
         assert _extract_text_from_message(message) == "Hello"
 
 
-class TestExtractQueryFromText:
-    """Tests for _extract_query_from_text."""
-
-    def test_extract_simple_text(self):
-        """Test extracting from plain text."""
-        query, sources = _extract_query_from_text("What is CUDA?")
-        assert query == "What is CUDA?"
-        assert sources is None
-
-    def test_extract_empty_text(self):
-        """Test extracting from empty string."""
-        query, sources = _extract_query_from_text("")
-        assert query == ""
-        assert sources is None
-
-    def test_extract_json_payload(self):
-        """Test extracting from JSON payload."""
-        text = '{"query": "Test query", "data_sources": ["web_search"]}'
-        query, sources = _extract_query_from_text(text)
-        assert query == "Test query"
-        assert sources == ["web_search"]
-
-    def test_extract_invalid_json(self):
-        """Test invalid JSON returns original text."""
-        text = '{"invalid json'
-        query, sources = _extract_query_from_text(text)
-        assert query == text
-        assert sources is None
-
-
 class TestExtractQueryAndSources:
     """Tests for _extract_query_and_sources."""
 
@@ -196,3 +166,60 @@ class TestExtractQueryAndSources:
         query, sources = _extract_query_and_sources("Plain query string")
         assert query == "Plain query string"
         assert sources is None
+
+
+class TestExtractQueryContext:
+    """Tests for report-aware chat request context extraction."""
+
+    def test_extract_active_report_job_id_from_top_level_payload(self):
+        payload = {
+            "active_report_job_id": "job-1",
+            "content": {
+                "messages": [{"role": "user", "content": "What are the risks?"}],
+                "data_sources": ["web_search"],
+            },
+        }
+
+        context = _extract_query_context(payload)
+
+        assert context.query_text == "What are the risks?"
+        assert context.data_sources == ["web_search"]
+        assert context.active_report_job_id == "job-1"
+
+    def test_extract_active_report_job_id_from_nested_content(self):
+        payload = {
+            "content": {
+                "active_report_job_id": "job-2",
+                "messages": [{"role": "user", "content": "Summarize this report"}],
+            }
+        }
+
+        context = _extract_query_context(payload)
+
+        assert context.query_text == "Summarize this report"
+        assert context.active_report_job_id == "job-2"
+
+    def test_extract_active_report_job_id_from_json_string(self):
+        context = _extract_query_context('{"query": "Update this with latest data", "active_report_job_id": "job-3"}')
+
+        assert context.query_text == "Update this with latest data"
+        assert context.active_report_job_id == "job-3"
+
+    def test_explicit_empty_data_sources_preserved_dict_payload(self):
+        """An explicit empty data_sources list ('no data-source tools') must survive."""
+        payload = {
+            "data_sources": [],
+            "content": {"messages": [{"role": "user", "content": "hello"}]},
+        }
+        context = _extract_query_context(payload)
+        assert context.data_sources == []
+
+    def test_explicit_empty_data_sources_preserved_object_payload(self):
+        from types import SimpleNamespace
+
+        payload = SimpleNamespace(
+            data_sources=[],
+            messages=[SimpleNamespace(role="user", content="hello")],
+        )
+        context = _extract_query_context(payload)
+        assert context.data_sources == []

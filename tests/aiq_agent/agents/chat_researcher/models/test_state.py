@@ -106,6 +106,7 @@ class TestChatResearcherState:
         assert state.final_report is None
         assert state.shallow_result is None
         assert state.data_sources is None
+        assert state.active_report_job_id is None
 
     def test_state_with_data_sources(self):
         """Test state with data_sources."""
@@ -124,6 +125,40 @@ class TestChatResearcherState:
         )
 
         assert state.data_sources == ["sharepoint"]
+
+    def test_state_with_active_report_job_id(self):
+        """Test state can carry an active report job id."""
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="What are the risks in this report?")],
+            active_report_job_id="job-1",
+        )
+
+        assert state.active_report_job_id == "job-1"
+
+    def test_state_with_last_report_markdown(self):
+        """State can carry the in-session report markdown for jobless follow-up."""
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Test")],
+            last_report_markdown="# Report\n\nFindings.",
+        )
+        assert state.last_report_markdown == "# Report\n\nFindings."
+        assert ChatResearcherState(messages=[]).last_report_markdown is None
+
+
+class TestKeepIfSetReducer:
+    """last_report_markdown must survive a fresh per-turn state (keep-if-set, not clobber)."""
+
+    def test_keep_prior_when_new_is_empty(self):
+        from aiq_agent.agents.chat_researcher.models.state import _keep_if_set
+
+        assert _keep_if_set("# prior report", None) == "# prior report"
+        assert _keep_if_set("# prior report", "") == "# prior report"
+
+    def test_overwrite_when_new_is_set(self):
+        from aiq_agent.agents.chat_researcher.models.state import _keep_if_set
+
+        assert _keep_if_set("# prior report", "# revised report") == "# revised report"
+        assert _keep_if_set(None, "# first report") == "# first report"
 
     def test_state_with_empty_data_sources(self):
         """Test state with empty data sources list."""

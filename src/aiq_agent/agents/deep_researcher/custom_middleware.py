@@ -352,6 +352,19 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 if isinstance(locator, str) and locator.strip():
                     self._compact_source_keys.add(self._locator_key(locator))
 
+    def register_compact_sources(self, sources: list[SourceEntry]) -> int:
+        """Register seeded sources and expose them in the compact citation source list."""
+        registry = self.active_registry()
+        registered = 0
+        for source in sources:
+            key = self._entry_key(source)
+            if not key:
+                continue
+            registry.add(source)
+            self._compact_source_keys.add(key)
+            registered += 1
+        return registered
+
     async def awrap_tool_call(self, request, handler):
         """Capture sources from tool results after execution.
 

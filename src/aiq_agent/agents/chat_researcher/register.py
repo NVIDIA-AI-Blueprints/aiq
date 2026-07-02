@@ -15,6 +15,7 @@
 
 """NAT register function for chat researcher agent."""
 
+import asyncio
 import logging
 from typing import Any
 
@@ -45,11 +46,97 @@ from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
 from .models import ChatResearcherState
-from .utils import _extract_query_and_sources
+from .utils import _extract_query_context
 
 logger = logging.getLogger(__name__)
 
+# Upper bound on the single bounded report-ask LLM call so a stalled provider
+# degrades to a graceful message instead of blocking the whole chat turn.
+_REPORT_ASK_TIMEOUT_S = 120
+
 _ensure_otel_redaction_registered()
+
+
+def _build_report_ask_prompt(
+    *,
+    question: str,
+    report_markdown: str,
+    source_summary_markdown: str,
+) -> str:
+    """Build a bounded QA prompt for questions against an existing report."""
+
+    return (
+        "Answer using only the parent report and source summary below. "
+        "If the answer is not supported by the parent report, say that the report does not contain enough "
+        "information to answer. Keep the answer concise and preserve citations when referencing report claims.\n\n"
+        f"Question:\n{question}\n\n"
+        f"Parent source summary:\n{source_summary_markdown}\n\n"
+        f"Parent report:\n{report_markdown}"
+    )
+
+
+async def _answer_from_report_context(
+    llm: Any,
+    *,
+    question: str,
+    report_markdown: str,
+    source_summary_markdown: str,
+) -> str:
+    """Answer a question strictly from parent report context with one bounded LLM call.
+
+    This deliberately does NOT use the shallow/deep research agents or any data-source
+    tools: report ask must stay bounded to the parent report and never trigger live
+    research (Core Invariant: "answer from parent report context only").
+    """
+    prompt = _build_report_ask_prompt(
+        question=question,
+        report_markdown=report_markdown,
+        source_summary_markdown=source_summary_markdown,
+    )
+    try:
+        response = await asyncio.wait_for(llm.ainvoke([HumanMessage(content=prompt)]), timeout=_REPORT_ASK_TIMEOUT_S)
+    except TimeoutError:
+        logger.warning("Report ask LLM call timed out after %ss", _REPORT_ASK_TIMEOUT_S)
+        return "The report service took too long to respond. Please try again."
+    content = response.content if hasattr(response, "content") else response
+    answer = content if isinstance(content, str) else str(content)
+    if not answer.strip():
+        return "The report does not contain enough information to answer."
+    return answer
+
+
+async def _resolve_effective_report_job_id(
+    request_active_id: str | None,
+    conversation_id: str | None,
+    principal: Any,
+    *,
+    is_input_mode: bool,
+) -> str | None:
+    """Resolve which report a follow-up turn should target.
+
+    A client-supplied ``active_report_job_id`` always wins. Otherwise default to the most recent
+    completed report in THIS conversation, so any client (CLI, API, UI on reload) gets report
+    follow-up without having to track the id. Only falls back for a real, client-supplied
+    conversation id — never for --input or server-generated thread ids. Any lookup failure
+    degrades silently to None (fresh research).
+    """
+    if request_active_id:
+        return request_active_id
+    if is_input_mode or not conversation_id:
+        return None
+    try:
+        import os
+
+        from aiq_api.jobs.access import get_latest_report_job_for_conversation
+
+        db_url = os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(
+            None, get_latest_report_job_for_conversation, conversation_id, principal, db_url
+        )
+    except Exception as e:
+        logger.debug("Report-job fallback lookup failed: %s", type(e).__name__)
+        return None
 
 
 ########################################################
@@ -248,13 +335,104 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     verbose = is_verbose(config.verbose)
     callbacks = [VerboseTraceCallback()] if verbose else []
 
+    # LLM for inline report Q&A: prefer the report writer model, fall back to the
+    # deep researcher's orchestrator LLM (always configured). Report ask is a single
+    # bounded LLM call and must never run the tool-enabled research agents.
+    report_qa_llm = await builder.get_llm(
+        deep_research_config.writer_llm or deep_research_config.orchestrator_llm,
+        wrapper_type=LLMFrameworkEnum.LANGCHAIN,
+    )
+
     deep_research_job_submitter = None
+    # Wired to the async submitter only when a Dask scheduler is available; otherwise edit runs
+    # inline via report_edit_fn (synchronous CLI).
+    report_edit_job_submitter = None
+
+    async def _resolve_report_context_for_state(state: ChatResearcherState):
+        from aiq_api.jobs.access import require_verified_principal
+        from aiq_api.jobs.report_context import report_context_from_markdown
+        from aiq_api.jobs.report_context import resolve_authorized_report_context
+
+        # Precedence: an explicit job id (UI/server) wins; otherwise use the report produced
+        # inline in this session (synchronous CLI), which needs no job store / scheduler.
+        if state.active_report_job_id:
+            # Same auth contract as the HTTP report endpoints: synthesizes a no-auth principal
+            # when REQUIRE_AUTH=false (the public default), a verified principal otherwise.
+            principal = require_verified_principal()
+            return await resolve_authorized_report_context(state.active_report_job_id, principal)
+        if state.last_report_markdown:
+            return report_context_from_markdown(state.last_report_markdown)
+        raise RuntimeError("Report follow-up requires an active report")
+
+    async def _answer_report_question(state: ChatResearcherState) -> str:
+        from aiq_agent.common import get_latest_user_query
+
+        report_context = await _resolve_report_context_for_state(state)
+        question = get_latest_user_query(state.messages)
+        return await _answer_from_report_context(
+            report_qa_llm,
+            question=question,
+            report_markdown=report_context.report_markdown,
+            source_summary_markdown=report_context.source_summary_markdown,
+        )
+
+    async def _submit_report_edit_job(state: ChatResearcherState) -> str:
+        from aiq_agent.auth import get_auth_token
+        from aiq_agent.common import get_latest_user_query
+        from aiq_api.jobs.access import require_verified_principal
+        from aiq_api.jobs.report_context import report_output_metadata
+        from aiq_api.jobs.report_context import to_initial_files
+        from aiq_api.jobs.submit import submit_agent_job
+
+        report_context = await _resolve_report_context_for_state(state)
+        instruction = get_latest_user_query(state.messages)
+        principal = require_verified_principal()
+        return await submit_agent_job(
+            agent_type="report_rewriter",
+            input_text=instruction,
+            owner=principal.email or principal.sub,
+            principal=principal,
+            data_sources=[],
+            auth_token=get_auth_token(),
+            initial_files=to_initial_files(report_context, instruction=instruction),
+            output_metadata=report_output_metadata(report_context.parent_job_id, "edit"),
+            allow_internal=True,
+        )
+
+    async def _inline_report_edit(state: ChatResearcherState) -> str:
+        """Rewrite the in-session report inline (synchronous CLI, no scheduler/job).
+
+        Mirrors the report_rewriter job's single bounded LLM call, sourced from the in-session
+        report (or, if present, the explicit job-backed report) resolved by the same precedence
+        as report ask.
+        """
+        from aiq_agent.agents.report_rewriter.agent import rewrite_report
+        from aiq_agent.common import get_latest_user_query
+
+        report_context = await _resolve_report_context_for_state(state)
+        instruction = get_latest_user_query(state.messages)
+        return await rewrite_report(
+            llm=report_qa_llm,
+            original_report=report_context.report_markdown,
+            edit_instruction=instruction,
+            source_summary=report_context.source_summary_markdown,
+            parent_context=report_context.model_dump_json(indent=2, exclude={"report_markdown"}),
+        )
+
+    async def _build_report_seed_files(state: ChatResearcherState) -> dict[str, str]:
+        """Seed files for an inline delta: the parent report context as DeepAgents FS files."""
+        from aiq_api.jobs.report_context import to_initial_files
+
+        report_context = await _resolve_report_context_for_state(state)
+        return to_initial_files(report_context)
+
     if config.use_async_deep_research:
         import os
 
         # Check if Dask scheduler is available
         scheduler_address = os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
         if scheduler_address:
+            from aiq_agent.auth import get_auth_token
             from aiq_agent.auth import get_current_principal
             from aiq_api.jobs.submit import submit_agent_job
 
@@ -279,15 +457,30 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                         len(available_docs),
                     )
 
+                initial_files = None
+                output_metadata = None
+                if state.active_report_job_id and state.user_intent and state.user_intent.use_parent_report_context:
+                    from aiq_api.jobs.report_context import report_output_metadata
+                    from aiq_api.jobs.report_context import to_initial_files
+
+                    report_context = await _resolve_report_context_for_state(state)
+                    initial_files = to_initial_files(report_context)
+                    output_metadata = report_output_metadata(report_context.parent_job_id, "research")
+
                 return await submit_agent_job(
                     agent_type="deep_researcher",
                     input_text=input_text,
                     owner=owner,
+                    principal=principal,
                     available_documents=available_docs,
                     data_sources=state.data_sources,
+                    auth_token=get_auth_token(),
+                    initial_files=initial_files,
+                    output_metadata=output_metadata,
                 )
 
             deep_research_job_submitter = _submit_deep_job
+            report_edit_job_submitter = _submit_report_edit_job
         else:
             logger.info(
                 "use_async_deep_research is enabled but NAT_DASK_SCHEDULER_ADDRESS is not set. "
@@ -306,6 +499,10 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         callbacks=callbacks,
         max_history=config.max_history,
         deep_research_job_submitter=deep_research_job_submitter,
+        report_ask_fn=_answer_report_question,
+        report_edit_job_submitter=report_edit_job_submitter,
+        report_edit_fn=_inline_report_edit,
+        report_seed_files_fn=_build_report_seed_files,
         checkpointer=checkpointer,
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
@@ -369,7 +566,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 pass
         logger.info("skip_clarifier=%s", skip_clarifier)
 
-        query_text, data_sources = _extract_query_and_sources(query)
+        request_context = _extract_query_context(query)
+        query_text = request_context.query_text
+        data_sources = request_context.data_sources
         logger.info("ChatDeepResearcherAgent: %s", query_text)
         logger.info("ChatDeepResearcherAgent: Data sources: %s", data_sources)
 
@@ -398,6 +597,19 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 logger.debug("No session context - cannot determine collection")
         except Exception as e:
             logger.warning("Could not fetch available documents: %s", e)
+        # Resolve the report to follow up on: client-supplied id wins, else default to the last
+        # completed report in this conversation (server-side, so any client gets follow-up).
+        _ctx = Context.get()
+        client_conversation_id = _ctx.conversation_id if _ctx else None
+        effective_report_job_id = await _resolve_effective_report_job_id(
+            request_context.active_report_job_id,
+            client_conversation_id,
+            principal,
+            is_input_mode="--input" in sys.argv,
+        )
+        if effective_report_job_id and not request_context.active_report_job_id:
+            logger.info("Defaulting report follow-up to last report %s in conversation", effective_report_job_id)
+
         # Set session-scoped source registry for citation verification across turns.
         # When no conversation ID is available, get_or_create_session_registry returns a
         # fresh per-request registry to prevent anonymous sessions from sharing state.
@@ -410,6 +622,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 data_sources=data_sources,
                 available_documents=available_documents,
                 skip_clarifier=skip_clarifier,
+                active_report_job_id=effective_report_job_id,
             )
             result = await agent.run(state, thread_id=nat_context_conversation_id)
         finally:

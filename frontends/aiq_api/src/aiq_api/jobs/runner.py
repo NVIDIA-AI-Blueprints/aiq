@@ -38,6 +38,43 @@ from .event_store import EventStore
 logger = logging.getLogger(__name__)
 
 
+_DEEP_RESEARCH_AGENT_KWARGS = frozenset(
+    {
+        "domain_catalog_path",
+        "enable_source_router",
+        "enable_citation_verification",
+        "skills",
+        "sandbox",
+        "job_id",
+        "max_research_concurrency",
+        "max_concurrent_source_tool_calls",
+        "max_source_tool_batch_size",
+    }
+)
+_CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
+_JOB_SCOPED_AGENT_KWARGS = frozenset({"job_id"})
+
+
+def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset[str]) -> bool:
+    """Return true when a class constructor explicitly declares all requested kwargs."""
+    import inspect
+
+    try:
+        signature = inspect.signature(agent_cls)
+    except (TypeError, ValueError):
+        try:
+            signature = inspect.signature(agent_cls.__init__)
+        except (TypeError, ValueError):
+            return False
+
+    accepted_kwargs = {
+        name
+        for name, param in signature.parameters.items()
+        if param.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
+    }
+    return kwarg_names.issubset(accepted_kwargs)
+
+
 def _normalize_trace_id(trace_id: int | str | None) -> int | None:
     """Convert trace ID to integer format.
 
@@ -256,6 +293,8 @@ async def run_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    initial_files: dict[str, Any] | None = None,
+    output_metadata: dict[str, Any] | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -287,6 +326,8 @@ async def run_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token propagated from the HTTP request for
             data sources that require authentication (requires_auth: true).
+        initial_files: Optional DeepAgents virtual filesystem files to seed into state.
+        output_metadata: Optional metadata to persist alongside the final report.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -512,6 +553,7 @@ async def run_agent_job(
                         available_documents=available_documents,
                         data_sources=data_sources,
                         event_store=event_store,
+                        initial_files=initial_files,
                     )
 
                     # Emit WORKFLOW_END event for Phoenix
@@ -545,7 +587,10 @@ async def run_agent_job(
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
-                    await job_store.update_status(job_id, JobStatus.SUCCESS, output={"report": report})
+                    # Apply caller metadata first, then set the canonical report last so a
+                    # stray "report" key in output_metadata can never overwrite the real report.
+                    output = {**(output_metadata or {}), "report": report}
+                    await job_store.update_status(job_id, JobStatus.SUCCESS, output=output)
                     logger.info("Job %s completed (report: %d chars)", job_id, len(report))
 
     except asyncio.CancelledError:
@@ -644,12 +689,17 @@ def _create_agent_instance(
     Create an agent instance, supporting different constructor patterns.
 
     Tries in order:
-    1. llm_provider + tools pattern (DeepResearcherAgent style)
-    2. llm + tools pattern (simpler agents)
+    1. DeepResearcherAgent explicit config pattern
+    2. llm_provider + tools + config/job_id pattern
+    3. llm_provider + tools + job_id pattern
+    4. llm_provider + tools pattern
+    5. llm + tools pattern (simpler agents)
     """
     from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
 
-    if isinstance(fn_config, DeepResearchAgentConfig):
+    if isinstance(fn_config, DeepResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
+        agent_cls, _DEEP_RESEARCH_AGENT_KWARGS
+    ):
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
@@ -667,6 +717,31 @@ def _create_agent_instance(
             max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
             max_source_tool_batch_size=fn_config.max_source_tool_batch_size,
         )
+
+    if _constructor_accepts_explicit_kwargs(agent_cls, _CONFIGURABLE_AGENT_KWARGS):
+        try:
+            return agent_cls(
+                llm_provider=llm_provider,
+                tools=tools,
+                verbose=verbose,
+                callbacks=callbacks,
+                config=fn_config,
+                job_id=job_id,
+            )
+        except TypeError:
+            pass
+
+    if _constructor_accepts_explicit_kwargs(agent_cls, _JOB_SCOPED_AGENT_KWARGS):
+        try:
+            return agent_cls(
+                llm_provider=llm_provider,
+                tools=tools,
+                verbose=verbose,
+                callbacks=callbacks,
+                job_id=job_id,
+            )
+        except TypeError:
+            pass
 
     # Try original deep_researcher pattern (llm_provider + tools + verbose)
     try:
@@ -711,6 +786,7 @@ async def _run_agent(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     event_store: EventStore | None = None,
+    initial_files: dict[str, Any] | None = None,
 ) -> Any:
     """
     Run the agent, supporting different run() signatures.
@@ -742,8 +818,13 @@ async def _run_agent(
         if state_cls:
             # Build state with available_documents if the class supports it
             state_kwargs = {"messages": [HumanMessage(content=input_text)]}
-            if data_sources is not None:
+            # Only pass optional fields the state actually declares. data_sources also
+            # flows to non-Pydantic states (legacy behavior); files needs a model field.
+            has_fields = hasattr(state_cls, "model_fields")
+            if data_sources is not None and (not has_fields or "data_sources" in state_cls.model_fields):
                 state_kwargs["data_sources"] = data_sources
+            if initial_files and has_fields and "files" in state_cls.model_fields:
+                state_kwargs["files"] = initial_files
             if available_documents:
                 # Convert dicts to AvailableDocument if the state class expects them
                 try:
@@ -763,6 +844,8 @@ async def _run_agent(
             state = {"messages": [HumanMessage(content=input_text)]}
             if data_sources is not None:
                 state["data_sources"] = data_sources
+            if initial_files:
+                state["files"] = initial_files
             if available_documents:
                 state["available_documents"] = available_documents
 

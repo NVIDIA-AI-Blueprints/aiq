@@ -435,8 +435,41 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        # data_sources is second-to-last (auth_token is last)
-        assert job_args[-2] == ["web_search"]
+        assert ["web_search"] in job_args
+
+    @pytest.mark.asyncio
+    async def test_submit_agent_job_passes_initial_files_and_output_metadata(self):
+        """Test submit_agent_job forwards report context files and output metadata into worker args."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+        initial_files = {"/shared/original_report.md": "# Report"}
+        output_metadata = {"parent_job_id": "parent-job", "interaction_action": "edit"}
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        result = await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                            initial_files=initial_files,
+                            output_metadata=output_metadata,
+                        )
+
+        assert result == "test-job-id"
+        job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
+        assert job_args[-2] == initial_files
+        assert job_args[-1] == output_metadata
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):
@@ -1452,6 +1485,92 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
 
+    def test_create_agent_instance_allows_non_deep_agent_to_reuse_deep_config(self):
+        """Async workers should not treat shared DeepResearchAgentConfig as a constructor contract."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeReportRewriterAgent:
+            def __init__(
+                self,
+                llm_provider,
+                tools=None,
+                *,
+                verbose=False,
+                callbacks=None,
+                config=None,
+                job_id=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.verbose = verbose
+                self.callbacks = callbacks
+                self.config = config
+                self.job_id = job_id
+
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            enable_citation_verification=False,
+        )
+
+        agent = _create_agent_instance(
+            agent_cls=FakeReportRewriterAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=fn_config,
+            verbose=True,
+            callbacks=["callback"],
+            job_id="job-123",
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.verbose is True
+        assert agent.callbacks == ["callback"]
+        assert agent.config is fn_config
+        assert agent.job_id == "job-123"
+
+    def test_create_agent_instance_passes_job_id_to_agent_without_config_arg(self):
+        """Async workers should preserve job_id for non-deep agents that do not need config."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeReportRewriterAgent:
+            def __init__(
+                self,
+                llm_provider,
+                tools=None,
+                *,
+                verbose=False,
+                callbacks=None,
+                job_id=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.verbose = verbose
+                self.callbacks = callbacks
+                self.job_id = job_id
+
+        agent = _create_agent_instance(
+            agent_cls=FakeReportRewriterAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=DeepResearchAgentConfig(orchestrator_llm="llm"),
+            verbose=True,
+            callbacks=["callback"],
+            job_id="job-123",
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.verbose is True
+        assert agent.callbacks == ["callback"]
+        assert agent.job_id == "job-123"
+
     def test_async_deep_researcher_constructor_applies_config_tuning(self):
         """Async construction preserves catalog and concurrency settings."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
@@ -1489,6 +1608,106 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_research_concurrency == 2
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
+
+    @pytest.mark.asyncio
+    async def test_run_agent_seeds_initial_files_when_state_supports_files(self):
+        """Async runner seeds DeepAgents virtual filesystem files into stateful agents."""
+        from typing import Annotated
+        from typing import Any
+
+        from langchain_core.messages import AnyMessage
+        from langgraph.graph.message import add_messages
+        from pydantic import BaseModel
+        from pydantic import Field
+
+        from aiq_api.jobs import runner
+
+        class FakeState(BaseModel):
+            messages: Annotated[list[AnyMessage], add_messages]
+            files: dict[str, Any] = Field(default_factory=dict)
+
+        class FakeAgent:
+            def __init__(self):
+                self.seen_state = None
+
+            async def run(self, state):
+                self.seen_state = state
+                return {"report": state.files["/shared/original_report.md"]}
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        agent = FakeAgent()
+        initial_files = {"/shared/original_report.md": "# Parent"}
+
+        with patch("aiq_api.jobs.runner._get_agent_state_class", return_value=FakeState):
+            result = await runner._run_agent(
+                agent=agent,
+                input_text="revise",
+                monitor=FakeMonitor(),
+                initial_files=initial_files,
+            )
+
+        assert result == {"report": "# Parent"}
+        assert agent.seen_state.files == initial_files
+
+    @pytest.mark.asyncio
+    async def test_run_agent_skips_data_sources_when_state_lacks_field(self):
+        """Runner must not inject data_sources into states that don't declare the field.
+
+        report_rewriter's state omits data_sources; with Pydantic's default (extra
+        ignored) that is currently harmless, but the runner should not pass fields a
+        state does not model. This uses an extra=forbid state to prove the guard
+        actually prevents the injection (without it, state construction would raise).
+        """
+        from typing import Annotated
+
+        from langchain_core.messages import AnyMessage
+        from langgraph.graph.message import add_messages
+        from pydantic import BaseModel
+        from pydantic import ConfigDict
+
+        from aiq_api.jobs import runner
+
+        class StrictState(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            messages: Annotated[list[AnyMessage], add_messages]
+
+        class FakeAgent:
+            def __init__(self):
+                self.seen_state = None
+
+            async def run(self, state):
+                self.seen_state = state
+                return "ok"
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        agent = FakeAgent()
+
+        with patch("aiq_api.jobs.runner._get_agent_state_class", return_value=StrictState):
+            result = await runner._run_agent(
+                agent=agent,
+                input_text="revise",
+                monitor=FakeMonitor(),
+                data_sources=["web_search"],
+            )
+
+        assert result == "ok"
+        assert not hasattr(agent.seen_state, "data_sources")
 
     def test_async_deep_researcher_constructor_preserves_writer_skills(self):
         """Async job construction preserves writer-only skills and sandbox job scoping."""
