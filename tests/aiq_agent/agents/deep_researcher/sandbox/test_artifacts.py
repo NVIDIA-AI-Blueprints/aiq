@@ -349,11 +349,18 @@ class TestS3Store:
 
     def test_validate_checks_configured_bucket(self, tmp_path: Any) -> None:
         client = _FakeS3Client()
-        store = self._store(tmp_path, client)
+        health_client = _FakeS3Client()
+        blob_store = S3ArtifactBlobStore(
+            bucket="aiq-artifacts",
+            client=client,
+            health_client=health_client,
+        )
+        store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db", blob_store=blob_store)
 
         store.validate()
 
-        assert client.head_bucket_calls == ["aiq-artifacts"]
+        assert health_client.head_bucket_calls == ["aiq-artifacts"]
+        assert client.head_bucket_calls == []
 
     def test_s3_bytes_leave_sql_content_null(self, tmp_path: Any) -> None:
         from sqlalchemy import text
