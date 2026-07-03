@@ -291,9 +291,10 @@ def configure_summary_db(db_url: str) -> None:
     """Initialize summary store with given DB URL."""
     global _summary_store
     from .summary_store import SummaryStore
+    from .summary_store import _redact_db_url
 
     _summary_store = SummaryStore(db_url)
-    logger.info("Summary store configured: %s", db_url[:50])
+    logger.info("Summary store configured: %s", _redact_db_url(db_url))
 
 
 def _get_summary_store() -> "SummaryStore":
