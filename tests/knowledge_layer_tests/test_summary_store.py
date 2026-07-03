@@ -47,6 +47,13 @@ def test_redact_db_url():
         _redact_db_url("postgresql+psycopg://alice:p%40ss%3Aword@db.internal:5432/aiq")
         == "postgresql+psycopg://alice:***@db.internal:5432/aiq"
     )
+    assert (
+        _redact_db_url(
+            "postgresql://alice:plain_password@db.internal:5432/aiq"
+            "?password=query_password&sslpassword=tls_password&token=query_token"
+        )
+        == "postgresql://alice:***@db.internal:5432/aiq"
+    )
     assert _redact_db_url("sqlite+aiosqlite:///./summaries.db") == "sqlite+aiosqlite:///./summaries.db"
 
 

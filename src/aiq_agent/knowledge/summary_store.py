@@ -37,10 +37,10 @@ ENGINE_CACHE_MAX_SIZE = 10
 
 
 def _redact_db_url(db_url: str) -> str:
-    """Redact the password from a database URL for safe logging."""
+    """Redact credentials and query parameters from a database URL for safe logging."""
     from sqlalchemy.engine import make_url
 
-    return make_url(db_url).render_as_string(hide_password=True)
+    return make_url(db_url).set(query={}).render_as_string(hide_password=True)
 
 
 def _normalize_db_url(db_url: str, async_mode: bool = True) -> str:
