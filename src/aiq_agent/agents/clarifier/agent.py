@@ -641,7 +641,9 @@ class ClarifierAgent:
             # The guard is one-shot: iteration == 0 and no tool call yet for the
             # current request (scoped to the latest user turn). Return only the
             # retry so the skipped first response can't leave two adjacent
-            # assistant messages in history.
+            # assistant messages in history. The guidance is folded into the
+            # leading system prompt (a trailing SystemMessage is rejected by
+            # providers that only accept a leading one).
             if (
                 self.tools
                 and state.iteration == 0
@@ -650,7 +652,8 @@ class ClarifierAgent:
                 and self._is_needed(response.content)
             ):
                 logger.info("Clarifier: model skipped search before clarifying; injecting guidance and retrying once")
-                retry_messages = messages + [response, SystemMessage(content=FORCE_SEARCH_GUIDANCE)]
+                retry_system = SystemMessage(content=f"{rendered_system_prompt}\n\n{FORCE_SEARCH_GUIDANCE}")
+                retry_messages = [retry_system, *messages[1:], response]
                 retry_response = await bound_llm.ainvoke(retry_messages)
                 return {"messages": [retry_response]}
 

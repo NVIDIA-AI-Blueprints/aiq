@@ -1005,11 +1005,14 @@ class TestClarifierForceSearch:
         assert mock_llm.ainvoke.call_count == 3
         # The user was never prompted because the search-then-complete path was taken.
         user_callback.assert_not_called()
-        # The 2nd LLM call (after force_search guidance) should have received the
-        # guidance as a trailing SystemMessage (scaffolding, not a user turn).
+        # The 2nd LLM call (after force_search guidance) must carry the guidance
+        # folded into a single LEADING SystemMessage — providers that only accept
+        # a leading system message reject a trailing one.
         second_call_messages = mock_llm.ainvoke.call_args_list[1].args[0]
-        latest_system = next(m for m in reversed(second_call_messages) if isinstance(m, SystemMessage))
-        assert FORCE_SEARCH_GUIDANCE in latest_system.content
+        system_messages = [m for m in second_call_messages if isinstance(m, SystemMessage)]
+        assert len(system_messages) == 1, "retry must contain exactly one system message"
+        assert isinstance(second_call_messages[0], SystemMessage), "system message must lead the list"
+        assert FORCE_SEARCH_GUIDANCE in second_call_messages[0].content
 
     @pytest.mark.asyncio
     async def test_force_search_skipped_when_no_tools(self, mock_llm_provider, mock_llm):
@@ -1109,18 +1112,17 @@ class TestClarifierForceSearch:
         assert result is not None
         assert mock_llm.ainvoke.call_count == 2
         user_callback.assert_not_called()
-        # No HumanMessage with the force_search guidance should have been added.
-        second_call_messages = mock_llm.ainvoke.call_args_list[1].args[0]
-        for m in second_call_messages:
-            if isinstance(m, HumanMessage):
-                assert FORCE_SEARCH_GUIDANCE not in m.content
+        # The guidance must not appear in ANY message of ANY call — the model
+        # searched voluntarily, so the nudge path must never have fired.
+        for call in mock_llm.ainvoke.call_args_list:
+            assert not any(FORCE_SEARCH_GUIDANCE in str(m.content) for m in call.args[0])
 
     @pytest.mark.asyncio
     async def test_force_search_guidance_not_in_state_messages(self, mock_llm_provider, mock_llm):
         """The force_search guidance must be injected ephemerally only; it must
         never end up in state.messages, otherwise helpers like
         get_latest_user_query would surface internal scaffolding back to the
-        user in fallback text. Regression test for Codex review feedback."""
+        user in fallback text."""
         # The LLM ignores the nudge and returns invalid JSON, triggering the
         # invalid-format fallback path inside ask_clarification. The user then
         # replies "skip", which forces completion - so only two LLM calls
@@ -1149,8 +1151,13 @@ class TestClarifierForceSearch:
 
         original_query = "Research Project Foo at Acme"
         state = ClarifierAgentState(messages=[HumanMessage(content=original_query)])
-        await agent.run(state)
+        final = await agent.graph.ainvoke(state, config={"callbacks": []})
 
+        # The guidance must never be persisted into state.messages.
+        final_messages = final["messages"] if isinstance(final, dict) else final.messages
+        assert not any(FORCE_SEARCH_GUIDANCE in str(m.content) for m in final_messages), (
+            "force_search guidance leaked into persisted state"
+        )
         # The user was prompted exactly once - with a fallback derived from
         # their actual query (the full topic survives), never from the
         # force-search guidance.
@@ -1168,7 +1175,7 @@ class TestClarifierForceSearch:
         NOT re-inject the search-first nudge on the next LLM call. Otherwise
         the model would receive 'issue a tool call now' immediately after the
         user provided clarifying answer, causing a gratuitous search instead
-        of synthesizing the answer. Regression test for Greptile P1 finding."""
+        of synthesizing the answer."""
         clarif_msg_1 = AIMessage(
             content=ClarificationResponse(
                 needs_clarification=True, clarification_question="What aspect?"
@@ -1203,11 +1210,9 @@ class TestClarifierForceSearch:
         # that call's message list.
         assert mock_llm.ainvoke.call_count == 3
         third_call_messages = mock_llm.ainvoke.call_args_list[2].args[0]
-        for m in third_call_messages:
-            if isinstance(m, HumanMessage):
-                assert FORCE_SEARCH_GUIDANCE not in m.content, (
-                    "force_search guidance must not be re-injected after the user replies"
-                )
+        assert not any(FORCE_SEARCH_GUIDANCE in str(m.content) for m in third_call_messages), (
+            "force_search guidance must not be re-injected after the user replies"
+        )
 
     @pytest.mark.asyncio
     async def test_forced_retry_does_not_emit_consecutive_assistant_messages(self, mock_llm_provider, mock_llm):
@@ -1216,8 +1221,7 @@ class TestClarifierForceSearch:
         consecutive assistant (AIMessage) turns. Two adjacent assistant
         messages with no interleaved user/tool message are rejected with a 400
         by the OpenAI Chat Completions and Anthropic Messages APIs; mocked LLMs
-        don't enforce this, so we assert the invariant explicitly. Regression
-        test for the Greptile P1 finding on PR #245."""
+        don't enforce this, so we assert the invariant explicitly."""
         clarif_msg = AIMessage(
             content=ClarificationResponse(
                 needs_clarification=True, clarification_question="What aspect?"
@@ -1549,7 +1553,8 @@ class TestClarifierReviewRegressions:
 
         # Run only the agent node against this state.
         result = await agent.graph.nodes["agent"].ainvoke(state)
-        new_messages = result.get("messages", []) if isinstance(result, dict) else []
+        assert isinstance(result, dict), f"agent node must return a state-update dict, got {type(result)}"
+        new_messages = result.get("messages", [])
         # No completion AIMessage may be appended on top of the pending tool call.
         assert not any(isinstance(m, AIMessage) and not getattr(m, "tool_calls", None) for m in new_messages), (
             "must not append a completion on top of a pending tool call"
