@@ -106,6 +106,16 @@ class PaperSearchTool:
         self.timeout = timeout
         self.max_results = max_results
 
+    def _selected_api_key(self) -> str | None:
+        """Return the API key for the active provider, or ``None`` if unset."""
+        if self.provider is PaperSearchProvider.SERPER:
+            return self.serper_api_key
+        if self.provider is PaperSearchProvider.SERPAPI:
+            return self.serpapi_api_key
+        if self.provider is PaperSearchProvider.SEARCHAPI:
+            return self.searchapi_api_key
+        return None  # pragma: no cover - exhausted by enum
+
     # ── Public API ──
     async def search(
         self,
@@ -133,6 +143,16 @@ class PaperSearchTool:
         if year is not None and not isinstance(year, str):
             year = str(year)
 
+        if not self._selected_api_key():
+            logger.warning(
+                "Paper search unavailable: no API key configured for provider '%s'",
+                self.provider.value,
+            )
+            return (
+                f"Error: Paper search is unavailable because no API key is configured "
+                f"for provider '{self.provider.value}'."
+            )
+
         logger.info(f"Paper search ({self.provider.value}) for: {query}")
 
         try:
@@ -147,8 +167,8 @@ class PaperSearchTool:
             return self.format_results(results)
 
         except TimeoutError:
-            logger.error(f"Paper search timed out for query: {query}")
-            return f"Paper search timed out after {self.timeout}s for query: {query}"
+            logger.error("Paper search timed out after %ss for provider '%s'", self.timeout, self.provider.value)
+            return f"Paper search timed out after {self.timeout}s. Try again or narrow the query."
         except Exception:
             logger.error("Paper search failed for provider '%s'", self.provider.value)
             return f"Paper search failed: unable to fetch results from {self.provider.value}."

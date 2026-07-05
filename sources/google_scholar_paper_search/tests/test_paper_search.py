@@ -177,6 +177,7 @@ class TestSearch:
 
         assert "Paper search timed out" in result
         assert "30s" in result
+        assert "test query" not in result
 
     @pytest.mark.asyncio
     async def test_search_general_exception(self, paper_search_tool):
@@ -200,6 +201,37 @@ class TestSearch:
             await paper_search_tool.search("transformers", year=2023)
 
         mock_search.assert_called_once_with("transformers", "2023", 10)
+
+    @pytest.mark.parametrize(
+        "provider",
+        [
+            PaperSearchProvider.SERPER,
+            PaperSearchProvider.SERPAPI,
+            PaperSearchProvider.SEARCHAPI,
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_search_short_circuits_when_provider_key_missing(self, provider):
+        """Direct construction with the selected provider's key missing short-circuits."""
+        tool = PaperSearchTool(provider=provider)
+        result = await tool.search("transformers")
+
+        assert "unavailable" in result.lower()
+        assert provider.value in result
+
+    @pytest.mark.asyncio
+    async def test_search_missing_key_does_not_dispatch(self, paper_search_tool):
+        """A missing provider key short-circuits before any provider call."""
+        paper_search_tool.serper_api_key = None
+        with patch.object(
+            paper_search_tool,
+            "_search_serper",
+            new_callable=AsyncMock,
+        ) as mock_search:
+            result = await paper_search_tool.search("transformers")
+
+        assert "unavailable" in result.lower()
+        mock_search.assert_not_called()
 
 
 class TestSearchSerper:
