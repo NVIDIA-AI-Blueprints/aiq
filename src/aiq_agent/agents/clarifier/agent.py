@@ -590,10 +590,15 @@ class ClarifierAgent:
             """
             if state.remaining_questions <= 0:
                 # Clarification budget is exhausted — emit a completion signal,
-                # but never create two consecutive assistant messages (the
-                # OpenAI/Anthropic APIs reject them, and the history can reach
-                # plan_preview's planner).
+                # but never create an invalid history (two adjacent assistant
+                # messages, or a pending tool call left unresolved), since it can
+                # reach plan_preview's planner.
                 last_message = state.messages[-1] if state.messages else None
+                if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
+                    # A pending tool call must be resolved before we complete;
+                    # let decide_route route to the tools node, after which the
+                    # tool result re-enters here as the last turn.
+                    return {}
                 if isinstance(last_message, AIMessage) and self._is_complete(getattr(last_message, "content", "")):
                     # A prior node (e.g. the skip-command branch) already emitted
                     # the completion; don't duplicate it. Let decide_route end.

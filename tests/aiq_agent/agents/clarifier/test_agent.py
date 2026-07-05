@@ -1526,3 +1526,31 @@ class TestClarifierReviewRegressions:
             sent = call.args[0]
             offenders = _adjacent_assistant_pairs(sent)
             assert not offenders, f"planner ainvoke #{call_idx} had consecutive assistant messages at {offenders}"
+
+    @pytest.mark.asyncio
+    async def test_exhausted_entry_with_pending_tool_call_is_not_completed_directly(self, mock_llm_provider, mock_llm):
+        """At exhaustion, if the last message is an AIMessage with pending tool
+        calls, agent_node must not stack a completion on top of it (which would
+        leave the tool call unresolved / produce invalid history). It returns no
+        new message so the graph can route the tool call to the tools node."""
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=AsyncMock(),
+        )
+
+        pending_tool = AIMessage(
+            content="", tool_calls=[{"name": "web_search_tool", "args": {"query": "x"}, "id": "c1"}]
+        )
+        state = ClarifierAgentState(
+            messages=[HumanMessage(content="Research AI"), pending_tool],
+            max_turns=0,
+        )
+
+        # Run only the agent node against this state.
+        result = await agent.graph.nodes["agent"].ainvoke(state)
+        new_messages = result.get("messages", []) if isinstance(result, dict) else []
+        # No completion AIMessage may be appended on top of the pending tool call.
+        assert not any(isinstance(m, AIMessage) and not getattr(m, "tool_calls", None) for m in new_messages), (
+            "must not append a completion on top of a pending tool call"
+        )
