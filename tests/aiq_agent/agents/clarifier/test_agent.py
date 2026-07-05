@@ -24,6 +24,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import BaseMessage
 from langchain_core.messages import HumanMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
@@ -41,6 +42,15 @@ from aiq_agent.common import LLMRole
 def web_search_tool(query: str) -> str:
     """Search the web for information."""
     return f"Results for: {query}"
+
+
+def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
+    """Return index pairs of any two consecutive AIMessages (the invalid shape)."""
+    return [
+        (i, i + 1)
+        for i in range(len(messages) - 1)
+        if isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], AIMessage)
+    ]
 
 
 class TestClarifierAgentInit:
@@ -996,10 +1006,10 @@ class TestClarifierForceSearch:
         # The user was never prompted because the search-then-complete path was taken.
         user_callback.assert_not_called()
         # The 2nd LLM call (after force_search guidance) should have received the
-        # guidance string as the latest HumanMessage.
+        # guidance as a trailing SystemMessage (scaffolding, not a user turn).
         second_call_messages = mock_llm.ainvoke.call_args_list[1].args[0]
-        latest_human = next(m for m in reversed(second_call_messages) if isinstance(m, HumanMessage))
-        assert FORCE_SEARCH_GUIDANCE in latest_human.content
+        latest_system = next(m for m in reversed(second_call_messages) if isinstance(m, SystemMessage))
+        assert FORCE_SEARCH_GUIDANCE in latest_system.content
 
     @pytest.mark.asyncio
     async def test_force_search_skipped_when_no_tools(self, mock_llm_provider, mock_llm):
@@ -1233,14 +1243,6 @@ class TestClarifierForceSearch:
 
         # Inspect every message list that was actually sent to the LLM and assert
         # no two consecutive AIMessages appear (the API-invalid shape).
-        def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
-            """Return index pairs of any two consecutive AIMessages (the invalid shape)."""
-            pairs = []
-            for i in range(len(messages) - 1):
-                if isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], AIMessage):
-                    pairs.append((i, i + 1))
-            return pairs
-
         for call_idx, call in enumerate(mock_llm.ainvoke.call_args_list):
             sent_messages = call.args[0]
             offenders = _adjacent_assistant_pairs(sent_messages)
@@ -1287,15 +1289,6 @@ class TestClarifierSkipMessageOrdering:
         provider.get = MagicMock(return_value=mock_llm)
         return provider
 
-    @staticmethod
-    def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
-        """Return index pairs of any two consecutive AIMessages (the invalid shape)."""
-        return [
-            (i, i + 1)
-            for i in range(len(messages) - 1)
-            if isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], AIMessage)
-        ]
-
     @pytest.mark.asyncio
     async def test_skip_persists_reply_and_no_consecutive_assistants(self, mock_llm_provider, mock_llm):
         """User skips after one clarification: final history must interleave the
@@ -1324,7 +1317,7 @@ class TestClarifierSkipMessageOrdering:
         # Inspect persisted message ordering from the final graph state.
         final = await agent.graph.ainvoke(state, config={"callbacks": []})
         msgs = final["messages"] if isinstance(final, dict) else final.messages
-        offenders = self._adjacent_assistant_pairs(msgs)
+        offenders = _adjacent_assistant_pairs(msgs)
         assert not offenders, f"persisted history has consecutive assistant messages at {offenders}: {msgs}"
         # The skip reply must be persisted as a HumanMessage.
         assert any(isinstance(m, HumanMessage) and m.content == "skip" for m in msgs), (
@@ -1384,7 +1377,7 @@ class TestClarifierSkipMessageOrdering:
         assert planner_llm.ainvoke.call_count == 1
         for call_idx, call in enumerate(planner_llm.ainvoke.call_args_list):
             sent = call.args[0]
-            offenders = self._adjacent_assistant_pairs(sent)
+            offenders = _adjacent_assistant_pairs(sent)
             assert not offenders, f"planner ainvoke #{call_idx} had consecutive assistant messages at {offenders}"
 
     @pytest.mark.asyncio
@@ -1452,15 +1445,6 @@ class TestClarifierReviewRegressions:
         provider.get = MagicMock(return_value=mock_llm)
         return provider
 
-    @staticmethod
-    def _adjacent_assistant_pairs(messages: list[BaseMessage]) -> list[tuple[int, int]]:
-        """Return index pairs of any two consecutive AIMessages (the invalid shape)."""
-        return [
-            (i, i + 1)
-            for i in range(len(messages) - 1)
-            if isinstance(messages[i], AIMessage) and isinstance(messages[i + 1], AIMessage)
-        ]
-
     @pytest.mark.asyncio
     async def test_force_search_fires_despite_prior_turn_tool_calls(self, mock_llm_provider, mock_llm):
         """A tool call from an earlier conversation turn must not suppress the
@@ -1501,7 +1485,7 @@ class TestClarifierReviewRegressions:
         # the FORCE_SEARCH_GUIDANCE (it is not suppressed by the prior tool call).
         assert mock_llm.ainvoke.call_count == 3
         second_call_messages = mock_llm.ainvoke.call_args_list[1].args[0]
-        assert any(isinstance(m, HumanMessage) and FORCE_SEARCH_GUIDANCE in m.content for m in second_call_messages)
+        assert any(isinstance(m, SystemMessage) and FORCE_SEARCH_GUIDANCE in m.content for m in second_call_messages)
 
     @pytest.mark.asyncio
     async def test_exhausted_entry_with_clarification_last_no_adjacent_assistants(self, mock_llm_provider, mock_llm):
@@ -1540,5 +1524,5 @@ class TestClarifierReviewRegressions:
         assert planner_llm.ainvoke.call_count == 1
         for call_idx, call in enumerate(planner_llm.ainvoke.call_args_list):
             sent = call.args[0]
-            offenders = self._adjacent_assistant_pairs(sent)
+            offenders = _adjacent_assistant_pairs(sent)
             assert not offenders, f"planner ainvoke #{call_idx} had consecutive assistant messages at {offenders}"

@@ -630,32 +630,13 @@ class ClarifierAgent:
 
             response = await bound_llm.ainvoke(messages)
 
-            # Search-before-clarify (issue #234): if, on the first turn, the model
-            # asks for clarification without first using its bound search tools,
-            # nudge it once to search and retry inline. This keeps the behavior
-            # model-agnostic without adding graph nodes or extra state. A model
-            # that ignores the single nudge falls through to asking the user
-            # (we don't force deterministic tool execution).
-            #
-            # The guard is one-shot by construction:
-            #   * iteration == 0 — only on the first turn; once the user replies,
-            #     iteration advances and this never fires again.
-            #   * not _searched_since_last_user_turn(state.messages) — once a tool
-            #     call has occurred for the current request (e.g. after a
-            #     successful forced search, even while iteration is still 0), we
-            #     never re-nudge. Scoped to the latest user turn so tool calls
-            #     from earlier conversation turns don't suppress the nudge.
-            # FORCE_SEARCH_GUIDANCE is sent only in the local retry_messages and is
-            # never returned to state, so it cannot leak into get_latest_user_query.
-            #
-            # We return ONLY retry_response, not the first (search-skipping)
-            # response. The first attempt was already shown to the model inside
-            # retry_messages; persisting it would put two consecutive
-            # assistant-role messages in history once retry_response carries a
-            # tool call (… AIMessage(clarif), AIMessage(tool_call), ToolMessage …),
-            # which the OpenAI Chat Completions and Anthropic Messages APIs reject
-            # with a 400. Keeping only retry_response preserves a valid sequence
-            # regardless of whether it is a tool call or another clarification.
+            # Search-before-clarify (issue #234): on the first turn, if the model
+            # asks for clarification without searching, nudge it once (guidance as
+            # ephemeral scaffolding, never persisted to state) and retry inline.
+            # The guard is one-shot: iteration == 0 and no tool call yet for the
+            # current request (scoped to the latest user turn). Return only the
+            # retry so the skipped first response can't leave two adjacent
+            # assistant messages in history.
             if (
                 self.tools
                 and state.iteration == 0
@@ -664,7 +645,7 @@ class ClarifierAgent:
                 and self._is_needed(response.content)
             ):
                 logger.info("Clarifier: model skipped search before clarifying; injecting guidance and retrying once")
-                retry_messages = messages + [response, HumanMessage(content=FORCE_SEARCH_GUIDANCE)]
+                retry_messages = messages + [response, SystemMessage(content=FORCE_SEARCH_GUIDANCE)]
                 retry_response = await bound_llm.ainvoke(retry_messages)
                 return {"messages": [retry_response]}
 
