@@ -180,7 +180,15 @@ class TestDeepResearcherAgent:
 
     def test_init_with_custom_settings(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization with custom settings."""
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent),
+            # Patch backend creation so the test does not require the optional OpenShell adapter
+            # (the default sandbox provider) to be installed.
+            patch(
+                "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+                return_value=MagicMock(),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
             from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
             from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
@@ -213,13 +221,13 @@ class TestDeepResearcherAgent:
             assert agent.deepagents_runtime.skill_sources_for("researcher-agent") == ["/skills/research/"]
 
     def test_sandbox_config_rejects_unsupported_provider(self):
-        """Unsupported sandbox providers fail early with a clear error."""
+        """Unsupported sandbox providers fail validation at config load (registry-backed)."""
         from pydantic import ValidationError
 
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.sandbox.config import SandboxConfig
 
-        with pytest.raises(ValidationError, match="Input should be 'modal'"):
-            DeepResearchSandboxConfig(provider="not-modal")
+        with pytest.raises(ValidationError, match="Unsupported sandbox provider"):
+            SandboxConfig(provider="not-a-real-provider")
 
     def test_register_uses_runtime_config_models(self):
         """NAT config uses the same skills and sandbox models as runtime."""
@@ -252,7 +260,7 @@ class TestDeepResearcherAgent:
         assert config.max_source_tool_batch_size == 4
         assert config.enable_source_router is False
         assert config.sandbox is not None
-        assert config.sandbox.provider == "modal"
+        assert config.sandbox.provider == "openshell"
         assert config.sandbox.app_name == "custom-aiq"
         assert config.sandbox.packages == ("matplotlib", "pillow")
 
@@ -283,13 +291,13 @@ class TestDeepResearcherAgent:
 
     def test_modal_sandbox_name_is_job_id(self):
         """Modal sandbox names use the resolved job ID directly."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
+        from aiq_agent.agents.deep_researcher.sandbox.providers.modal import _validate_modal_sandbox_name
 
         assert _validate_modal_sandbox_name("job-123") == "job-123"
 
     def test_modal_sandbox_name_rejects_invalid_job_id(self):
         """Invalid custom job IDs fail before creating a Modal sandbox."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
+        from aiq_agent.agents.deep_researcher.sandbox.providers.modal import _validate_modal_sandbox_name
 
         with pytest.raises(ValueError, match="valid Modal sandbox name"):
             _validate_modal_sandbox_name("bad/job/id")
@@ -561,6 +569,51 @@ class TestDeepResearcherAgent:
                 "When available skills apply during planning, research, or synthesis"
                 not in (create.call_args.kwargs["system_prompt"])
             )
+
+    def test_build_orchestrator_uses_parent_report_delta_prompt_when_seeded(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+    ):
+        """Parent-report delta runs are governed by deep researcher synthesis prompts, not chat query rewriting."""
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+                return_value=mock_create_deep_agent,
+            ) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
+                return_value=mock_create_deep_agent,
+            ),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="Add a Codex vs Claude Code comparison")],
+                files={
+                    "/shared/original_report.md": "# Parent report",
+                    "/shared/source_summary.md": "- source",
+                },
+            )
+
+            agent._build_orchestrator_agent(state)
+
+            kwargs = create.call_args.kwargs
+            orchestrator_prompt = kwargs["system_prompt"]
+            subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
+            writer_prompt = subagents["writer-agent"]["system_prompt"]
+
+            assert "Parent Report Delta Mode" in orchestrator_prompt
+            assert "/shared/original_report.md" in orchestrator_prompt
+            assert "/shared/source_summary.md" in orchestrator_prompt
+            assert "complete standalone revised report" in orchestrator_prompt
+            assert "Do not return a research plan" in orchestrator_prompt
+            assert "Parent Report Delta Mode" in writer_prompt
+            assert "/shared/original_report.md" in writer_prompt
+            assert "complete standalone revised report" in writer_prompt
+            assert "Do not return a research plan" in writer_prompt
 
     def test_build_orchestrator_can_disable_source_router(
         self,
@@ -960,86 +1013,38 @@ class TestDeepResearcherAgent:
         from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
 
         sandbox = DeepResearchSandboxConfig()
-        agent = DeepResearcherAgent(
-            llm_provider=mock_llm_provider,
-            tools=[real_tool],
-            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
-            sandbox=sandbox,
-            job_id="job-123",
-        )
         fake_modal_backend = MagicMock()
 
-        with (
-            patch(
-                "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
-                return_value=fake_modal_backend,
-            ) as create_backend,
-        ):
+        # The runtime now builds the sandbox provider eagerly in __init__, so the patch
+        # must wrap construction, not just the later .backend access.
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=fake_modal_backend,
+        ) as create_backend:
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+                sandbox=sandbox,
+                job_id="job-123",
+            )
             backend_one = agent.deepagents_runtime.backend
             backend_two = agent.deepagents_runtime.backend
 
         assert backend_one is backend_two
         assert backend_one.default is fake_modal_backend
-        create_backend.assert_called_once_with(
-            sandbox,
-            "job-123",
-        )
+        create_backend.assert_called_once_with(sandbox, "job-123")
         assert isinstance(backend_one.routes[BUILTIN_SKILL_SOURCE], FilesystemBackend)
         assert isinstance(backend_one.routes[SHARED_ROUTE], StateBackend)
         fake_modal_backend.ls.assert_not_called()
         fake_modal_backend.read.assert_not_called()
 
-    def test_modal_backend_creates_sandbox_lazily(self):
-        """Modal sandbox lifetime starts on first sandbox operation, not agent construction."""
-        from deepagents.backends.protocol import ExecuteResponse
-
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
-
-        fake_modal_backend = MagicMock()
-        fake_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_modal_backend_now",
-            return_value=fake_modal_backend,
-        ) as create_modal:
-            backend = _create_sandbox_backend(DeepResearchSandboxConfig(), "job-123")
-
-            create_modal.assert_not_called()
-            result = backend.execute("echo ok", timeout=5)
-
-        assert result.output == "ok"
-        create_modal.assert_called_once()
-        fake_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
-
-    def test_modal_backend_recreates_and_retries_once_on_not_found(self):
-        """A disappeared Modal container is recreated once for the same job-scoped name."""
-        import modal
-        from deepagents.backends.protocol import ExecuteResponse
-
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
-
-        first_modal_backend = MagicMock()
-        first_modal_backend.execute.side_effect = modal.exception.NotFoundError("gone")
-        second_modal_backend = MagicMock()
-        second_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
-        config = DeepResearchSandboxConfig()
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_modal_backend_now",
-            side_effect=[first_modal_backend, second_modal_backend],
-        ) as create_modal:
-            backend = _create_sandbox_backend(config, "job-123")
-            result = backend.execute("echo ok", timeout=5)
-
-        assert result.output == "ok"
-        assert create_modal.call_args_list[0].args == (config, "job-123")
-        assert create_modal.call_args_list[0].kwargs == {}
-        assert create_modal.call_args_list[1].args == (config, "job-123")
-        assert create_modal.call_args_list[1].kwargs == {"force_new": True}
-        first_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
-        second_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
+    # NOTE: the former test_modal_backend_creates_sandbox_lazily and
+    # test_modal_backend_recreates_and_retries_once_on_not_found tested 284's inline
+    # _create_modal_backend_now / _LazyModalSandboxBackend internals, which are now
+    # replaced by the provider-neutral sandbox package. Lazy session creation and
+    # idempotency-gated retry are covered by tests/.../sandbox/test_sandbox_runtime.py
+    # (note: our provider intentionally does NOT retry the non-idempotent execute()).
 
     def test_load_prompts_raises_when_missing(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Missing prompts fail fast instead of silently using inline defaults."""
@@ -1395,6 +1400,59 @@ class TestFinalMarkdownExtraction:
             result = await agent.run(state)
 
             assert "# CapEx Report" in result.messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_run_seeds_parent_sources_for_delta_citation_verification(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Delta reports may preserve parent citations that must be valid in the child registry."""
+        parent_url = "https://parent.example/source"
+        report = f"Preserved parent claim [1].\n\n## Sources\n[1] Parent: {parent_url}"
+        parent_context = {
+            "parent_job_id": "parent-job-1",
+            "source_summary_markdown": f"- [1] Parent: {parent_url}",
+            "sources": [
+                {
+                    "url": parent_url,
+                    "title": "Parent",
+                    "source_type": "parent_report",
+                    "tool_name": "parent_report",
+                }
+            ],
+        }
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [AIMessage(content="Wrote /shared/output.md")],
+                "files": {
+                    **output_markdown_file(report),
+                    "/shared/parent_report_context.json": {"content": json.dumps(parent_context)},
+                },
+            }
+        )
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="Add OpenShell")],
+                files={
+                    "/shared/parent_report_context.json": json.dumps(parent_context),
+                },
+            )
+
+            result = await agent.run(state)
+
+            assert "[1] Parent: https://parent.example/source" in result.messages[-1].content
+            assert agent.source_registry_middleware.active_registry().has_url(parent_url)
+            assert agent.source_registry_middleware.get_source_entries(mode="compact")[0].url == parent_url
 
 
 class TestDeepResearcherCitationVerification:

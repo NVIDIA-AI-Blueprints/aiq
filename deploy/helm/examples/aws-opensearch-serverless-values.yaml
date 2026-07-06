@@ -1,0 +1,37 @@
+# Example values for AI-Q with Amazon OpenSearch Serverless.
+#
+# Before applying this file:
+# - Create an OpenSearch Serverless vector collection and note its data endpoint.
+# - Create an AOSS data access policy for the service account IAM role.
+# - Create an EKS Pod Identity association that maps the backend service account
+#   for this release (default name: aiq-backend in namespace ns-aiq) to that role.
+
+aiq:
+  apps:
+    backend:
+      image:
+        # Override this when testing a custom image that includes unreleased changes.
+        repository: nvcr.io/nvidia/blueprint/aiq-agent
+        tag: "2.0.0"
+        pullPolicy: IfNotPresent
+      imagePullSecrets:
+        - name: ngc-image-pull-secret
+      secretEnv:
+        NVIDIA_API_KEY: NVIDIA_API_KEY  # pragma: allowlist secret
+      env:
+        CONFIG_FILE: configs/config_web_opensearch.yml
+        COLLECTION_NAME: default_collection
+        OPENSEARCH_URL: https://abc123.us-west-2.aoss.amazonaws.com
+        OPENSEARCH_AUTH_TYPE: sigv4
+        OPENSEARCH_AWS_SERVICE: aoss
+        OPENSEARCH_INDEX_PREFIX: aiq
+        AWS_REGION: us-west-2
+        OPENSEARCH_INGESTION_MODE: auto
+        OPENSEARCH_DASK_FILE_TRANSFER: bytes
+        DASK_NWORKERS: "1"
+        DASK_NTHREADS: "4"
+    frontend:
+      # The frontend image also comes from nvcr.io, so it needs the same NGC pull
+      # secret; without it the frontend lands in ImagePullBackOff on a fresh cluster.
+      imagePullSecrets:
+        - name: ngc-image-pull-secret

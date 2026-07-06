@@ -32,9 +32,11 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 from typing import Annotated
+from typing import Any
 
 from fastapi import Body
 from fastapi import FastAPI
@@ -44,6 +46,7 @@ from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import field_validator
 
 from aiq_agent.common.data_source_registry import get_all_sources
 from aiq_agent.common.data_source_registry import get_all_tool_refs
@@ -51,6 +54,7 @@ from aiq_agent.common.data_source_registry import get_source_id_for_tool
 from nat.builder.framework_enum import LLMFrameworkEnum
 
 from ..jobs.access import require_verified_principal
+from ..mcp_auth.models import PerUserAuthInfo
 from ..registry import AGENT_REGISTRY
 from ..registry import get_agent_config
 
@@ -74,6 +78,77 @@ def _remove_existing_health_routes(app: FastAPI) -> int:
         logger.info("Replacing %d existing GET /health route(s) with AI-Q readiness", len(existing_routes))
     app.openapi_schema = None
     return len(existing_routes)
+
+
+def _validate_artifact_store(db_url: str) -> None:
+    """Validate configured artifact storage during API startup."""
+    from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
+
+    build_artifact_store(db_url).validate()
+
+
+def _int_env(name: str, default: int) -> int:
+    """Read a non-negative integer ops knob from the environment.
+
+    A missing, non-integer, or negative value falls back to ``default`` so a
+    misconfigured cap can never silently invert into "block all submissions".
+    """
+    try:
+        value = int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
+    if value < 0:
+        logger.warning("%s=%d is negative; using default %d", name, value, default)
+        return default
+    return value
+
+
+def _sandbox_caps_configured() -> bool:
+    """Whether an operator has opted into sandbox concurrency caps via env.
+
+    Default-off so the guard never adds a function-config lookup (or behavior change)
+    to submits unless caps are explicitly configured.
+    """
+    return "AIQ_MAX_SANDBOXES_PER_PRINCIPAL" in os.environ or "AIQ_MAX_SANDBOXES_GLOBAL" in os.environ
+
+
+def _agent_uses_sandbox(builder: Any, config_name: str) -> bool:
+    """Return whether the agent's function config enables a sandbox."""
+    try:
+        fn_config = builder.get_function_config(config_name)
+    except Exception:  # noqa: BLE001 - missing/odd config means "no sandbox guard"
+        return False
+    sandbox = getattr(fn_config, "sandbox", None)
+    if sandbox is None:
+        return False
+    return bool(getattr(sandbox, "enabled", True))
+
+
+async def _enforce_sandbox_concurrency(db_url: str, principal: Any) -> None:
+    """Reject submission when per-principal or global sandbox limits are reached.
+
+    Option A: enforced at the API submit path so cost is stopped before a Dask worker
+    spins up a sandbox. Counts fail open (None) so a query mismatch never blocks submits.
+    Configurable via AIQ_MAX_SANDBOXES_PER_PRINCIPAL / AIQ_MAX_SANDBOXES_GLOBAL.
+    """
+    from ..jobs.access import count_active_jobs_for_owner
+    from ..jobs.access import count_active_jobs_global
+
+    per_principal = _int_env("AIQ_MAX_SANDBOXES_PER_PRINCIPAL", 5)
+    global_cap = _int_env("AIQ_MAX_SANDBOXES_GLOBAL", 50)
+    loop = asyncio.get_running_loop()
+
+    owner_count = await loop.run_in_executor(None, count_active_jobs_for_owner, db_url, principal)
+    if owner_count is not None and owner_count >= per_principal:
+        raise HTTPException(
+            429,
+            f"Active job limit reached for this principal ({per_principal}). "
+            "Wait for running jobs to finish before submitting more.",
+        )
+
+    global_count = await loop.run_in_executor(None, count_active_jobs_global, db_url)
+    if global_count is not None and global_count >= global_cap:
+        raise HTTPException(503, "Server is at sandbox capacity; please retry shortly.")
 
 
 class JobSubmitRequest(BaseModel):
@@ -102,6 +177,14 @@ class JobSubmitRequest(BaseModel):
             "data-source tools; unmapped utility tools remain available."
         ),
     )
+
+    @field_validator("input")
+    @classmethod
+    def _input_not_blank(cls, value: str) -> str:
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Input must not be blank")
+        return stripped
 
 
 JOB_SUBMIT_EXAMPLES: dict[str, dict] = {
@@ -167,6 +250,18 @@ async def _get_agent_available_source_ids(builder: WorkflowBuilder, agent_config
         sid = get_source_id_for_tool(name)
         if sid is not None:
             source_ids.add(sid)
+
+    # Per-user MCP sources (e.g. Google Drive) contribute NO static tools — their
+    # tools are resolved per-user at run time by open_per_user_mcp_tools, so they
+    # never appear in the loop above. Treat a configured protected source as an
+    # available runtime candidate so submit validation doesn't 422 it; connectivity
+    # is enforced separately by the MCP auth preflight (409 mcp_auth_required).
+    from aiq_agent.common.data_source_registry import get_all_sources
+
+    for source in get_all_sources():
+        pua = source.per_user_auth
+        if pua is not None and pua.required:
+            source_ids.add(source.id)
     return sorted(source_ids)
 
 
@@ -248,6 +343,24 @@ async def _validate_data_sources_for_agent(
     )
 
 
+async def _preflight_mcp_auth(provider, principal, data_sources: list[str] | None):
+    """Return a 409 JSONResponse if any selected protected source is not connected, else None.
+
+    Thin HTTP wrapper over the shared :func:`evaluate_mcp_auth`; the same check
+    runs inside ``submit_agent_job`` (raising instead) so programmatic submitters
+    cannot bypass it. Source existence is validated earlier by
+    ``_validate_data_sources_for_agent``.
+    """
+    from fastapi.responses import JSONResponse
+
+    from ..mcp_auth.preflight import evaluate_mcp_auth
+
+    body = await evaluate_mcp_auth(provider, principal, data_sources)
+    if body is None:
+        return None
+    return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
+
+
 class JobStatusResponse(BaseModel):
     """Job status response."""
 
@@ -290,6 +403,47 @@ class JobReportResponse(BaseModel):
     job_id: str = Field(..., description="Unique job identifier")
     has_report: bool = Field(..., description="Whether the final report is available")
     report: str | None = Field(None, description="Final research report from the agent")
+    parent_job_id: str | None = Field(None, description="Parent report job ID for report follow-up outputs")
+    interaction_action: str | None = Field(None, description="Report interaction action that produced this output")
+    result_kind: str | None = Field(None, description="Kind of result returned by the child job")
+
+
+class ReportEditRequest(BaseModel):
+    """Request to create a revised report from an existing completed report job."""
+
+    input: str = Field(..., min_length=1, description="Edit instruction for the parent report")
+    job_id: str | None = Field(
+        None,
+        pattern=r"^[a-zA-Z0-9_-]+$",
+        max_length=64,
+        description="Optional custom child job ID (auto-generated if omitted)",
+    )
+    expiry_seconds: int | None = Field(
+        None,
+        ge=600,
+        le=604800,
+        description="Child job expiry in seconds (default from config, max 7 days)",
+    )
+
+    @field_validator("input")
+    @classmethod
+    def _input_not_blank(cls, value: str) -> str:
+        # min_length=1 still allows whitespace-only; the report rewriter requires a
+        # real instruction, so reject blank input at the boundary instead of
+        # creating a guaranteed-failing child job.
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Edit instruction must not be blank")
+        return stripped
+
+
+class ReportEditResponse(BaseModel):
+    """Response for an accepted report edit job."""
+
+    job_id: str = Field(..., description="Child job identifier")
+    parent_job_id: str = Field(..., description="Parent report job identifier")
+    status: str = Field(..., description="Child job status")
+    agent_type: str = Field(..., description="Internal agent type used for the child job")
 
 
 class AgentInfo(BaseModel):
@@ -311,7 +465,15 @@ class DataSource(BaseModel):
     id: str = Field(..., description="Unique identifier for the data source")
     name: str = Field(..., description="Display name")
     description: str | None = Field(default=None, description="Human-readable description")
+    default_enabled: bool = Field(
+        default=True,
+        description="Whether the source is toggled on by default in the UI (from registry metadata)",
+    )
     requires_auth: bool = Field(default=False, description="Whether user authentication is required")
+    per_user_auth: PerUserAuthInfo | None = Field(
+        default=None,
+        description="Per-user MCP OAuth state for a protected source (omitted for unprotected sources)",
+    )
 
 
 async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: FastApiFrontEndPluginWorker) -> None:
@@ -337,7 +499,26 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     from ..jobs.crypto import require_content_encryption_ready_for_submission_async
     from ..jobs.crypto import validate_content_encryption_startup_async
     from ..jobs.event_store import EventStore
+    from ..jobs.report_context import report_output_metadata
+    from ..jobs.report_context import resolve_report_context
+    from ..jobs.report_context import to_initial_files
+    from ..jobs.submit import JobIdConflictError
     from ..jobs.submit import submit_agent_job as submit_authorized_job
+    from ..mcp_auth.factory import build_mcp_auth_provider
+    from ..mcp_auth.preflight import McpAuthRequiredError
+    from ..mcp_auth.serialize import build_listing_auth_info
+    from .auth import register_mcp_auth_routes
+
+    # Per-user MCP auth control plane. The provider is shared by the data-source
+    # listing, the status/connect/callback routes, and submit preflight so a flow
+    # started via /connect can be completed by /callback in the same process.
+    mcp_auth_provider = await build_mcp_auth_provider(builder)
+    # Publish the provider process-wide so submit_agent_job() can run the same
+    # connect-state preflight for programmatic submitters, not just this REST route.
+    from ..mcp_auth.active import set_active_mcp_auth_provider
+
+    set_active_mcp_auth_provider(mcp_auth_provider)
+    register_mcp_auth_routes(app, mcp_auth_provider)
 
     await validate_content_encryption_startup_async()
 
@@ -360,6 +541,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         agents = [
             AgentInfo(agent_type=agent_type, description=config.description)
             for agent_type, config in AGENT_REGISTRY.items()
+            if config.public
         ]
         return AgentListResponse(agents=agents)
 
@@ -370,16 +552,22 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         summary="List data sources",
     )
     async def list_data_sources() -> list[DataSource]:
-        """List available data sources dynamically from the registry."""
-        return [
-            DataSource(
-                id=source.id,
-                name=source.name,
-                description=source.description,
-                requires_auth=source.requires_auth,
+        """List available data sources, including the current user's per-source auth state."""
+        principal = require_verified_principal()
+        sources = []
+        for source in get_all_sources():
+            per_user_auth = await build_listing_auth_info(mcp_auth_provider, principal, source)
+            sources.append(
+                DataSource(
+                    id=source.id,
+                    name=source.name,
+                    description=source.description,
+                    default_enabled=source.default_enabled,
+                    requires_auth=source.requires_auth,
+                    per_user_auth=per_user_auth,
+                )
             )
-            for source in get_all_sources()
-        ]
+        return sources
 
     logger.info("Registered /v1/data_sources and /v1/jobs/async/agents routes")
 
@@ -412,7 +600,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         db_url[:50],
         default_expiry_seconds,
     )
-    await asyncio.get_running_loop().run_in_executor(None, ensure_job_access_table, db_url)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, ensure_job_access_table, db_url)
+    await loop.run_in_executor(None, _validate_artifact_store, db_url)
 
     # NAT registers its generic liveness route first. Replace it so runtime
     # dispatch and OpenAPI both use AI-Q's DB and encryption readiness checks.
@@ -477,13 +667,19 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         ),
         responses={
             400: {"description": "Unknown agent type or invalid request"},
+            409: {
+                "description": (
+                    "A custom job_id was supplied that collides with an existing job, or a selected "
+                    "protected data source requires per-user OAuth connection"
+                )
+            },
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
             500: {
                 "description": (
                     "Content encryption configuration is invalid or async job authorization persistence failed"
                 )
             },
-            503: {"description": "Content encryption is not ready"},
+            503: {"description": "Content encryption, Dask scheduler, or sandbox capacity is unavailable"},
         },
     )
     async def submit_job(
@@ -494,6 +690,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             agent_config = get_agent_config(req.agent_type)
         except KeyError as e:
             raise HTTPException(400, str(e))
+        if not agent_config.public:
+            raise HTTPException(400, f"Agent type is internal-only and cannot be submitted directly: {req.agent_type}")
 
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
         # Authenticate the caller (raises 401/403 if unverified). The returned principal
@@ -528,6 +726,20 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             len(req.data_sources) if req.data_sources is not None else "none",
         )
 
+        # Sandbox concurrency / cost guard (Option A): cap concurrent sandbox-enabled
+        # jobs per principal and globally, enforced at submit so cost is stopped before
+        # a worker spins up. Opt-in (default-off) via AIQ_MAX_SANDBOXES_* env vars so the
+        # default submit path stays lazy; fail-open if the active-job count is unknown.
+        if _sandbox_caps_configured() and _agent_uses_sandbox(builder, agent_config.config_name):
+            await _enforce_sandbox_concurrency(db_url, principal)
+
+        # Preflight protected MCP sources: block before enqueue if a selected
+        # protected source is not connected. When data_sources is None the job
+        # may use any tool, so every protected source must be connected.
+        mcp_block = await _preflight_mcp_auth(mcp_auth_provider, principal, req.data_sources)
+        if mcp_block is not None:
+            return mcp_block
+
         # Propagate auth token to Dask worker for requires_auth data sources
         from aiq_agent.auth import get_auth_token
 
@@ -556,8 +768,22 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 e.__class__.__name__,
             )
             raise HTTPException(500, "Content encryption configuration is invalid")
+        except JobIdConflictError:
+            raise HTTPException(409, f"Job already exists: {req.job_id}")
+        except McpAuthRequiredError as e:
+            # submit_agent_job runs the same MCP preflight and raises if a selected
+            # protected source became disconnected between the route preflight above
+            # and enqueue. Surface the SAME 409 mcp_auth_required contract instead of
+            # letting it fall through to the generic 500 handler.
+            from fastapi.responses import JSONResponse
+
+            return JSONResponse(status_code=409, content=e.response.model_dump(mode="json"))
         except RuntimeError as e:
-            raise HTTPException(403, str(e))
+            # The principal is resolved above, so a RuntimeError here is an
+            # availability/config failure (e.g. scheduler not configured), not an
+            # authorization error -- surface 503, not 403, and don't echo internals.
+            logger.warning("Async job submission unavailable: %s", e)
+            raise HTTPException(503, "Async job submission is currently unavailable")
         except Exception as e:
             logger.warning("Failed to submit authorized job: %s", e)
             raise HTTPException(500, "Failed to persist async job authorization metadata")
@@ -574,6 +800,84 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             job_id=job_id,
             status=JobStatus.SUBMITTED.value,
             agent_type=req.agent_type,
+        )
+
+    @app.post(
+        "/v1/jobs/async/job/{job_id}/report/edit",
+        response_model=ReportEditResponse,
+        tags=["async jobs"],
+        summary="Create a revised report from a completed report job",
+        description=(
+            "Authorize access to a completed parent report, reconstruct durable report context, "
+            "and submit an internal child job that emits a full revised report."
+        ),
+        responses={
+            404: {"description": "Parent job not found"},
+            409: {"description": "Parent job is incomplete, has no durable report, or the child job_id collides"},
+            422: {"description": "Request validation failed (e.g. blank edit instruction)"},
+            500: {"description": "Parent report data is invalid or report edit submission failed"},
+            503: {"description": "Content encryption or Dask scheduler is unavailable"},
+        },
+    )
+    async def edit_job_report(job_id: str, req: ReportEditRequest) -> ReportEditResponse:
+        """Create an internal report-rewrite child job from a completed parent report."""
+        principal = require_verified_principal()
+        parent_job = await authorize_job_access(job_store, db_url, job_id, principal)
+        if getattr(parent_job, "status", None) != JobStatus.SUCCESS.value:
+            raise HTTPException(409, f"Parent job is not complete: {job_id}")
+
+        try:
+            context = await resolve_report_context(parent_job, db_url, job_id)
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Parent report decrypt unavailable job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is unavailable")
+        except ContentEncryptionInvalidData as e:
+            logger.warning(
+                "Parent report persisted output invalid job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Parent report data is invalid")
+        expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
+
+        from aiq_agent.auth import get_auth_token
+
+        auth_token = get_auth_token()
+        try:
+            child_job_id = await submit_authorized_job(
+                agent_type="report_rewriter",
+                input_text=req.input,
+                owner=principal.email or principal.sub,
+                principal=principal,
+                job_id=req.job_id,
+                expiry_seconds=expiry,
+                data_sources=[],
+                auth_token=auth_token,
+                initial_files=to_initial_files(context, instruction=req.input),
+                output_metadata=report_output_metadata(job_id, "edit"),
+                allow_internal=True,
+            )
+        except JobIdConflictError:
+            raise HTTPException(409, f"Job already exists: {req.job_id}")
+        except RuntimeError as e:
+            # Principal is resolved above; a RuntimeError here is an availability/config
+            # failure (e.g. scheduler not configured), not an authorization error.
+            logger.warning("Report edit submission unavailable for parent %s: %s", job_id, e)
+            raise HTTPException(503, "Report edit submission is currently unavailable")
+        except Exception as e:
+            logger.warning("Failed to submit report edit job for parent %s: %s", job_id, e)
+            raise HTTPException(500, "Failed to submit report edit job")
+
+        logger.info("Submitted report edit child job %s for parent job %s", child_job_id, job_id)
+        return ReportEditResponse(
+            job_id=child_job_id,
+            parent_job_id=job_id,
+            status=JobStatus.SUBMITTED.value,
+            agent_type="report_rewriter",
         )
 
     @app.get(
@@ -706,6 +1010,75 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         )
 
     @app.get(
+        "/v1/jobs/async/job/{job_id}/artifacts",
+        tags=["async jobs"],
+        summary="List durable artifacts",
+        description="List generated artifacts (charts, CSVs, notebooks) harvested from the sandbox.",
+        responses={404: {"description": "Job not found"}},
+    )
+    async def list_job_artifacts(job_id: str) -> dict:
+        """List durable artifact metadata for a job (no bytes)."""
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
+
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        store = build_artifact_store(db_url)
+        artifacts = await asyncio.to_thread(store.list, job_id)
+        # Exclude storage internals (storage_uri embeds the db_url, which may carry
+        # credentials/hostnames; sandbox_path is an internal layout detail) from the
+        # client-facing payload. Clients use the content endpoint, not these fields.
+        return {
+            "job_id": job_id,
+            "artifacts": [a.model_dump(mode="json", exclude={"storage_uri", "sandbox_path"}) for a in artifacts],
+        }
+
+    @app.get(
+        "/v1/jobs/async/job/{job_id}/artifacts/{artifact_id}/content",
+        tags=["async jobs"],
+        summary="Download artifact content",
+        description="Stream the bytes of a single artifact. Job-ownership checks apply.",
+        responses={404: {"description": "Job or artifact not found"}},
+    )
+    async def get_job_artifact_content(job_id: str, artifact_id: str) -> StreamingResponse:
+        """Stream an artifact's bytes (auth-scoped to the owning job)."""
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
+
+        principal = require_verified_principal()
+        await authorize_job_access(job_store, db_url, job_id, principal)
+
+        store = build_artifact_store(db_url)
+        artifact = await asyncio.to_thread(store.get, job_id, artifact_id)
+        if artifact is None:
+            raise HTTPException(404, f"Artifact not found: {artifact_id}")
+
+        # The filename is sandbox-controlled; strip control chars and quotes so it cannot
+        # break out of the header value (response-splitting / header injection).
+        safe_filename = "".join(c for c in artifact.filename if c.isprintable() and c not in '"\\') or "artifact"
+        # Starlette encodes header values as Latin-1, so a non-Latin-1 filename (emoji, CJK)
+        # would raise UnicodeEncodeError. Provide an ASCII-only fallback plus an RFC 5987
+        # filename* with the UTF-8 percent-encoded original for clients that support it.
+        from urllib.parse import quote
+
+        ascii_filename = safe_filename.encode("ascii", "ignore").decode() or "artifact"
+        encoded_filename = quote(safe_filename, safe="")
+        # Only magic-verified raster images may render inline; everything else (SVG, HTML,
+        # notebooks, PDFs) is forced to download with nosniff to prevent stored-XSS if a
+        # user opens the content URL directly in a browser.
+        inline_safe = artifact.mime_type in {"image/png", "image/jpeg", "image/webp"}
+        disposition = "inline" if inline_safe else "attachment"
+        return StreamingResponse(
+            store.open_bytes(job_id, artifact_id),
+            media_type=artifact.mime_type,
+            headers={
+                "Content-Disposition": (
+                    f"{disposition}; filename=\"{ascii_filename}\"; filename*=UTF-8''{encoded_filename}"
+                ),
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.get(
         "/v1/jobs/async/job/{job_id}/report",
         response_model=JobReportResponse,
         tags=["async jobs"],
@@ -718,10 +1091,10 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         principal = require_verified_principal()
         job = await authorize_job_access(job_store, db_url, job_id, principal)
 
-        report = None
-        if job.output:
+        output: dict[str, Any] = {}
+        if job.output is not None:
             try:
-                output = await read_job_output_async(job_id, job.output)
+                decoded_output = await read_job_output_async(job_id, job.output)
             except ContentEncryptionUnavailable as e:
                 logger.warning(
                     "Final report decrypt unavailable job_id=%s exception=%s",
@@ -736,10 +1109,18 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                     e.__class__.__name__,
                 )
                 raise HTTPException(500, "Final report data is invalid")
-            if isinstance(output, dict):
-                report = output.get("report")
+            if isinstance(decoded_output, dict):
+                output = decoded_output
+        report = output.get("report")
 
-        return JobReportResponse(job_id=job_id, has_report=bool(report), report=report)
+        return JobReportResponse(
+            job_id=job_id,
+            has_report=bool(report),
+            report=report,
+            parent_job_id=output.get("parent_job_id"),
+            interaction_action=output.get("interaction_action"),
+            result_kind=output.get("result_kind"),
+        )
 
     logger.info("Registered async job routes at /v1/jobs/async")
 
@@ -979,6 +1360,7 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
     loop = asyncio.get_running_loop()
 
     def _do_cleanup() -> tuple[int, int, int]:
+        """Delete expired events/jobs/access rows synchronously; return removal counts."""
         from sqlalchemy import text
 
         engine = EventStore._get_or_create_sync_engine(db_url)
@@ -1021,6 +1403,19 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
             return (time_deleted, expired_deleted, access_deleted)
 
     time_deleted, expired_deleted, access_deleted = await loop.run_in_executor(None, _do_cleanup)
+
+    # Artifact retention shares the job expiry boundary (best-effort; the artifacts
+    # table only exists when artifact capture has been used).
+    try:
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
+
+        artifacts_deleted = await loop.run_in_executor(
+            None, lambda: build_artifact_store(db_url).cleanup_old_artifacts(retention_seconds)
+        )
+        if artifacts_deleted:
+            logger.info("Artifact cleanup: %d old artifacts removed", artifacts_deleted)
+    except Exception as e:  # noqa: BLE001 - retention is best-effort
+        logger.debug("Artifact cleanup skipped: %s", e)
 
     if time_deleted > 0 or expired_deleted > 0 or access_deleted > 0:
         logger.info(
@@ -1082,6 +1477,7 @@ def _process_tool_start(event: dict, data: dict, metadata: dict, tool_call_map: 
         "output": None,
         "status": "running",
         "workflow": metadata.get("workflow"),
+        "is_sandbox": bool(metadata.get("sandbox")),
         "timestamp": event.get("timestamp"),
     }
 
@@ -1095,6 +1491,7 @@ def _process_tool_end(event: dict, data: dict, metadata: dict, tool_call_map: di
     if tool_id in tool_call_map:
         tool_call_map[tool_id]["output"] = tool_output
         tool_call_map[tool_id]["status"] = "completed"
+        tool_call_map[tool_id]["is_sandbox"] = tool_call_map[tool_id].get("is_sandbox") or bool(metadata.get("sandbox"))
     else:
         tool_call_map[tool_id] = {
             "id": tool_id,
@@ -1103,6 +1500,7 @@ def _process_tool_end(event: dict, data: dict, metadata: dict, tool_call_map: di
             "output": tool_output,
             "status": "completed",
             "workflow": metadata.get("workflow"),
+            "is_sandbox": bool(metadata.get("sandbox")),
             "timestamp": event.get("timestamp"),
         }
 
@@ -1268,6 +1666,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     Achieves sub-10ms latency compared to 500ms polling interval.
     """
     import asyncio
+    import time
 
     import asyncpg
 
@@ -1284,8 +1683,15 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     sequence_id = start_event_id
     terminal_statuses = {JobStatus.SUCCESS.value, JobStatus.FAILURE.value, JobStatus.INTERRUPTED.value}
     is_reconnect = start_event_id > 0
+    # Emit an SSE keepalive comment after this many seconds of silence so an
+    # upstream idle timeout (OpenShift router / edge / proxy) never closes the
+    # connection. job.heartbeat only starts once the worker runs, so it does not
+    # cover worker cold-start on the first request — this keepalive does.
+    SSE_KEEPALIVE_INTERVAL = 15.0
+    last_keepalive = time.monotonic()
 
     def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+        """Format an SSE frame and advance (or set) the monotonic event sequence id."""
         nonlocal sequence_id
         if event_id is not None:
             sequence_id = event_id
@@ -1307,6 +1713,7 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     notification_queue: asyncio.Queue = asyncio.Queue()
 
     def notification_handler(connection, pid, channel_name, payload):
+        """Enqueue a Postgres LISTEN/NOTIFY payload, dropping it if the queue is full."""
         try:
             notification_queue.put_nowait(payload)
         except asyncio.QueueFull:
@@ -1392,6 +1799,13 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
                                 last_event_id = db_event_id
                             event_type = event.pop("type", "event")
                             yield format_sse(event_type, event, db_event_id)
+                        # Keepalive during silent periods (e.g. worker cold-start) so an
+                        # upstream idle timeout never closes the connection.
+                        if fallback_events:
+                            last_keepalive = time.monotonic()
+                        elif (time.monotonic() - last_keepalive) >= SSE_KEEPALIVE_INTERVAL:
+                            last_keepalive = time.monotonic()
+                            yield ": keepalive\n\n"
 
                     job = await job_store.get_job(job_id)
                     if not job:
@@ -1472,6 +1886,7 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     Supports graceful shutdown via the SSE connection manager.
     """
     import asyncio
+    import time
 
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
@@ -1488,8 +1903,14 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     is_reconnect = start_event_id > 0
     in_replay_mode = True
     replay_mode_announced = False
+    # Emit an SSE keepalive comment after this many seconds of silent live polling
+    # so an upstream idle timeout never closes the connection (e.g. during worker
+    # cold-start, before the first event or 30s heartbeat arrives).
+    SSE_KEEPALIVE_INTERVAL = 15.0
+    last_keepalive = time.monotonic()
 
     def format_sse(event_type: str, data: dict, event_id: int | None = None) -> str:
+        """Format an SSE frame and advance (or set) the monotonic event sequence id."""
         nonlocal sequence_id
         if event_id is not None:
             sequence_id = event_id
@@ -1526,6 +1947,7 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
                 events = await EventStore.get_events_async(db_url, job_id, last_event_id, limit)
 
                 if events:
+                    last_keepalive = time.monotonic()
                     logger.info(f"SSE: Fetched {len(events)} events for job {job_id} (after_id={last_event_id})")
                 elif job.status in terminal_statuses:
                     logger.warning(f"SSE: No events found for completed job {job_id} (after_id={last_event_id})")
@@ -1580,6 +2002,12 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
                 if not in_replay_mode and not replay_mode_announced:
                     replay_mode_announced = True
                     yield format_sse("stream.mode", {"mode": "live"})
+
+                # Keepalive during silent live periods (e.g. worker cold-start) so the
+                # idle-looking connection isn't closed by an upstream idle timeout.
+                if (time.monotonic() - last_keepalive) >= SSE_KEEPALIVE_INTERVAL:
+                    last_keepalive = time.monotonic()
+                    yield ": keepalive\n\n"
 
                 shutdown_signaled = await connection_manager.wait_or_shutdown(0.5)
                 if shutdown_signaled:

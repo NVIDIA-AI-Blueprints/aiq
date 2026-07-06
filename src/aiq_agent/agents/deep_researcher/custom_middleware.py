@@ -37,6 +37,45 @@ logger = logging.getLogger(__name__)
 
 # Path to this agent's prompts directory
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+_SOURCE_ROUTING_PATH = "/shared/source_routing.json"
+# When a sandbox provider is configured, CompositeBackend strips the /shared/ route
+# before delegating to StateBackend, so the router's file is stored under the
+# route-local key. The guard reads raw state, so it must accept both forms or it
+# blocks the orchestrator forever on sandboxed runs.
+_SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
+
+
+class SourceRoutingGuardMiddleware(AgentMiddleware):
+    """Require the source-router handoff before other orchestrator tool calls."""
+
+    def __init__(self, *, enabled: bool, required_subagent: str = "source-router-agent") -> None:
+        self.enabled = enabled
+        self.required_subagent = required_subagent
+
+    @staticmethod
+    def _routing_complete(state: object) -> bool:
+        files = state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+        return isinstance(files, dict) and any(key in files for key in _SOURCE_ROUTING_STATE_KEYS)
+
+    async def awrap_tool_call(self, request, handler):
+        """Block out-of-order calls until the source router writes its route file."""
+        if not self.enabled or self._routing_complete(request.state):
+            return await handler(request)
+
+        tool_call = request.tool_call
+        args = tool_call.get("args") or {}
+        if tool_call.get("name") == "task" and args.get("subagent_type") == self.required_subagent:
+            return await handler(request)
+
+        return ToolMessage(
+            content=(
+                "Source routing is required before any other tool call. "
+                f"Call task with subagent_type={self.required_subagent!r}."
+            ),
+            tool_call_id=tool_call.get("id", "source-routing-guard"),
+            name=tool_call.get("name"),
+            status="error",
+        )
 
 
 class EmptyContentFixMiddleware(AgentMiddleware):
@@ -96,6 +135,7 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
     """
 
     def __init__(self, valid_tool_names: list[str]):
+        """Store the set of valid tool names used to correct malformed tool calls."""
         self.valid_tool_names = set(valid_tool_names)
 
     def _sanitize_tool_name(self, name: str) -> str:
@@ -184,9 +224,11 @@ class ToolVisibilityMiddleware(AgentMiddleware):
     """Hide selected tools from model requests without removing scaffolding middleware."""
 
     def __init__(self, hidden_tool_names: set[str]) -> None:
+        """Store the tool names to hide from model requests."""
         self.hidden_tool_names = hidden_tool_names
 
     def _filter_tools(self, tools: list[object]) -> list[object]:
+        """Return the tool list with hidden tools removed."""
         if not self.hidden_tool_names:
             return tools
         return [tool for tool in tools if _request_tool_name(tool) not in self.hidden_tool_names]
@@ -255,6 +297,7 @@ class ToolRetryMiddleware(AgentMiddleware):
         backoff_factor: float = 2.0,
         initial_delay: float = 1.0,
     ):
+        """Configure retry count and exponential backoff for failed tool calls."""
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.initial_delay = initial_delay
@@ -304,6 +347,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
     """
 
     def __init__(self, source_tool_names: set[str] | None = None) -> None:
+        """Create a source registry scoped to the given source-producing tool names."""
         self.registry = SourceRegistry()
         self._source_tool_names = source_tool_names or set()
         self._compact_source_keys: set[str] = set()
@@ -346,6 +390,19 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 locator = getattr(source, "locator", "")
                 if isinstance(locator, str) and locator.strip():
                     self._compact_source_keys.add(self._locator_key(locator))
+
+    def register_compact_sources(self, sources: list[SourceEntry]) -> int:
+        """Register seeded sources and expose them in the compact citation source list."""
+        registry = self.active_registry()
+        registered = 0
+        for source in sources:
+            key = self._entry_key(source)
+            if not key:
+                continue
+            registry.add(source)
+            self._compact_source_keys.add(key)
+            registered += 1
+        return registered
 
     async def awrap_tool_call(self, request, handler):
         """Capture sources from tool results after execution.
@@ -519,6 +576,7 @@ class ToolResultPruningMiddleware(AgentMiddleware):
     """
 
     def __init__(self, keep_last_n: int = 3, max_chars: int = 500):
+        """Configure how many recent tool results to keep intact and the truncation cap."""
         self.keep_last_n = keep_last_n
         self.max_chars = max_chars
 

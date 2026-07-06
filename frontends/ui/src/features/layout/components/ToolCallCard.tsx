@@ -33,6 +33,8 @@ export interface ToolCallInfo {
   timestamp?: Date | string
   /** Parent agent that invoked the tool */
   workflow?: string
+  /** Whether this tool call executed against the sandbox runtime */
+  isSandbox?: boolean
   /** Error message if status is error */
   error?: string
 }
@@ -139,9 +141,16 @@ export const ToolCallCard: FC<ToolCallCardProps> = ({ toolCall }) => {
 
           {/* Tool Info */}
           <Flex direction="col" gap="0" className="flex-1 min-w-0">
-            <Text kind="label/semibold/sm" style={{ color: textColor }}>
-              {toolCall.name}
-            </Text>
+            <Flex align="center" gap="2">
+              <Text kind="label/semibold/sm" style={{ color: textColor }}>
+                {toolCall.name}
+              </Text>
+              {toolCall.isSandbox && (
+                <Text kind="body/regular/xs" className="rounded border border-base px-1 uppercase text-subtle">
+                  Sandbox
+                </Text>
+              )}
+            </Flex>
             {toolCall.workflow && (
               <Text kind="body/regular/xs" className="text-subtle truncate">
                 via {toolCall.workflow}

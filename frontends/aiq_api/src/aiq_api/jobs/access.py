@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -29,11 +30,44 @@ from sqlalchemy.engine import Connection
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
 
+logger = logging.getLogger(__name__)
+
 _job_access_schema_initialized: set[str] = set()
 
+# Statuses that mean a job no longer holds a live sandbox. Anything else (running,
+# pending, submitted, etc.) counts as active for the concurrency guard.
+_TERMINAL_STATUS_SQL = "('success','failure','failed','interrupted','cancelled','completed','error')"
+
 _JOB_ACCESS_INDEX_SQL = "CREATE INDEX IF NOT EXISTS idx_job_access_owner ON job_access(owner_auth_type, owner_subject)"
+_JOB_ACCESS_CONVERSATION_INDEX_SQL = (
+    "CREATE INDEX IF NOT EXISTS idx_job_access_conversation ON job_access(conversation_id)"
+)
 _JOB_ACCESS_SELECT_SQL = text(
-    "SELECT job_id, owner_auth_type, owner_subject, owner_email, created_at FROM job_access WHERE job_id = :job_id"
+    "SELECT job_id, owner_auth_type, owner_subject, owner_email, conversation_id, created_at "
+    "FROM job_access WHERE job_id = :job_id"
+)
+# Most recent completed, non-expired report job for a conversation. The owner predicate is
+# applied only when REQUIRE_AUTH=true, mirroring authorize_job_access (which skips ownership
+# under REQUIRE_AUTH=false). This keeps the fallback consistent with the auth gate and avoids
+# brittle owner-subject matching for the synthesized no-auth principal.
+# Agent types whose successful output is a full report eligible for follow-up. Excludes
+# non-report agents (e.g. shallow_researcher); legacy rows with NULL agent_type are allowed.
+_REPORT_PRODUCING_AGENTS = ("deep_researcher", "report_rewriter")
+_REPORT_AGENT_FILTER = (
+    "AND (ja.agent_type IS NULL OR ja.agent_type IN (" + ", ".join(f"'{a}'" for a in _REPORT_PRODUCING_AGENTS) + ")) "
+)
+_LATEST_REPORT_JOB_BASE = (
+    "SELECT ja.job_id FROM job_access ja "
+    "JOIN job_info ji ON ja.job_id = ji.job_id "
+    "WHERE ja.conversation_id = :conversation_id "
+    "AND ji.status = 'success' "
+    "AND ji.is_expired IS NOT TRUE " + _REPORT_AGENT_FILTER
+)
+_LATEST_REPORT_JOB_SQL_ANY = text(_LATEST_REPORT_JOB_BASE + "ORDER BY ji.created_at DESC LIMIT 1")
+_LATEST_REPORT_JOB_SQL_OWNED = text(
+    _LATEST_REPORT_JOB_BASE
+    + "AND ja.owner_auth_type = :owner_auth_type AND ja.owner_subject = :owner_subject "
+    + "ORDER BY ji.created_at DESC LIMIT 1"
 )
 _JOB_ACCESS_DELETE_SQL = text("DELETE FROM job_access WHERE job_id = :job_id")
 _JOB_ACCESS_CLEANUP_SQL = text(
@@ -44,6 +78,7 @@ _JOB_EVENTS_DELETE_SQL = text("DELETE FROM job_events WHERE job_id = :job_id")
 
 
 def _is_postgres(db_url: str) -> bool:
+    """Return whether the database URL targets PostgreSQL."""
     return db_url.startswith("postgres")
 
 
@@ -54,12 +89,49 @@ def ensure_job_access_table(db_url: str) -> None:
         conn.commit()
 
 
-def create_job_access(job_id: str, principal: Principal, db_url: str) -> None:
-    """Persist the verified owner for a newly created job."""
+def create_job_access(
+    job_id: str,
+    principal: Principal,
+    db_url: str,
+    conversation_id: str | None = None,
+    agent_type: str | None = None,
+) -> None:
+    """Persist the verified owner (and originating conversation + agent type) for a new job."""
     with _job_access_connection(db_url) as conn:
         _ensure_job_access_schema(conn, db_url)
-        conn.execute(_job_access_upsert_sql(db_url), _principal_params(job_id, principal))
+        conn.execute(_job_access_upsert_sql(db_url), _principal_params(job_id, principal, conversation_id, agent_type))
         conn.commit()
+
+
+def get_latest_report_job_for_conversation(
+    conversation_id: str | None, principal: Principal, db_url: str
+) -> str | None:
+    """Return the most recent completed report job submitted in this conversation by this caller.
+
+    Used as the server-side default for report follow-up when the client does not supply an
+    explicit ``active_report_job_id``. Returns None (degrade to fresh research) for an empty
+    conversation id, no match, or any storage error — it must never raise into the request path.
+    """
+    if not conversation_id:
+        return None
+    enforce_owner = os.environ.get("REQUIRE_AUTH", "false").lower() == "true"
+    if enforce_owner and principal is None:
+        return None
+    params: dict[str, str] = {"conversation_id": conversation_id}
+    if enforce_owner:
+        sql = _LATEST_REPORT_JOB_SQL_OWNED
+        params["owner_auth_type"] = principal.type
+        params["owner_subject"] = principal.sub
+    else:
+        sql = _LATEST_REPORT_JOB_SQL_ANY
+    try:
+        with _job_access_connection(db_url) as conn:
+            _ensure_job_access_schema(conn, db_url)
+            row = conn.execute(sql, params).first()
+            return row[0] if row else None
+    except Exception as e:
+        logger.debug("Conversation report-job lookup failed for %s: %s", conversation_id, type(e).__name__)
+        return None
 
 
 def get_job_access(job_id: str, db_url: str) -> dict[str, Any] | None:
@@ -108,6 +180,50 @@ def rollback_job_submission(job_id: str, db_url: str) -> None:
         conn.execute(_JOB_EVENTS_DELETE_SQL, {"job_id": job_id})
         conn.execute(_JOB_INFO_DELETE_SQL, {"job_id": job_id})
         conn.commit()
+
+
+def count_active_jobs_for_owner(db_url: str, principal: Principal) -> int | None:
+    """Count an owner's non-terminal, non-expired jobs.
+
+    Returns ``None`` if the count cannot be computed (e.g. the NAT ``job_info``
+    schema differs); callers should fail open so a query mismatch never blocks
+    legitimate submissions. Used by the submit-path sandbox concurrency guard.
+    """
+    try:
+        with _job_access_connection(db_url) as conn:
+            _ensure_job_access_schema(conn, db_url)
+            row = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM job_access ja JOIN job_info ji ON ja.job_id = ji.job_id "
+                    "WHERE ja.owner_auth_type = :t AND ja.owner_subject = :s "
+                    "AND (ji.is_expired IS NOT TRUE) "
+                    f"AND lower(ji.status) NOT IN {_TERMINAL_STATUS_SQL}"
+                ),
+                {"t": principal.type, "s": principal.sub},
+            ).scalar()
+            return int(row or 0)
+    except Exception as exc:  # noqa: BLE001 - guard must fail open, never block submits
+        logger.warning("Could not count active jobs for owner; allowing submit: %s", exc)
+        return None
+
+
+def count_active_jobs_global(db_url: str) -> int | None:
+    """Count all non-terminal, non-expired jobs (global capacity guard).
+
+    Returns ``None`` on query failure so callers fail open.
+    """
+    try:
+        with _job_access_connection(db_url) as conn:
+            row = conn.execute(
+                text(
+                    "SELECT COUNT(*) FROM job_info "
+                    f"WHERE (is_expired IS NOT TRUE) AND lower(status) NOT IN {_TERMINAL_STATUS_SQL}"
+                )
+            ).scalar()
+            return int(row or 0)
+    except Exception as exc:  # noqa: BLE001 - guard must fail open, never block submits
+        logger.warning("Could not count active jobs globally; allowing submit: %s", exc)
+        return None
 
 
 def _make_no_auth_principal(owner: str | None = None) -> Principal:
@@ -173,10 +289,12 @@ async def authorize_job_access(job_store: Any, db_url: str, job_id: str, princip
 
 
 def _principal_matches_access(principal: Principal, access: Mapping[str, Any]) -> bool:
+    """Return whether a principal matches a job-access row's owner identity."""
     return principal.type == access.get("owner_auth_type") and principal.sub == access.get("owner_subject")
 
 
 def _job_access_connection(db_url: str):
+    """Open a sync connection on the shared event-store engine for the URL."""
     from .event_store import EventStore
 
     engine = EventStore._get_or_create_sync_engine(db_url)
@@ -184,14 +302,38 @@ def _job_access_connection(db_url: str):
 
 
 def _ensure_job_access_schema(conn: Connection, db_url: str) -> None:
+    """Create the ``job_access`` table and index once per database URL."""
     if db_url in _job_access_schema_initialized:
         return
     conn.execute(text(_job_access_table_sql(db_url)))
+    _ensure_extra_columns(conn, db_url)
     conn.execute(text(_JOB_ACCESS_INDEX_SQL))
+    conn.execute(text(_JOB_ACCESS_CONVERSATION_INDEX_SQL))
     _job_access_schema_initialized.add(db_url)
 
 
+def _ensure_extra_columns(conn: Connection, db_url: str) -> None:
+    """Add conversation_id / agent_type to a pre-existing job_access table.
+
+    CREATE TABLE IF NOT EXISTS won't add columns to an existing table. Idempotent across upgrades:
+    Postgres supports ADD COLUMN IF NOT EXISTS; SQLite does not, so check PRAGMA table_info first.
+    Best-effort — a concurrent add or older engine degrades cleanly.
+    """
+    try:
+        if _is_postgres(db_url):
+            for col in ("conversation_id", "agent_type"):
+                conn.execute(text(f"ALTER TABLE job_access ADD COLUMN IF NOT EXISTS {col} VARCHAR"))
+        else:
+            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(job_access)")).fetchall()}
+            for col in ("conversation_id", "agent_type"):
+                if col not in cols:
+                    conn.execute(text(f"ALTER TABLE job_access ADD COLUMN {col} VARCHAR"))
+    except Exception as e:
+        logger.debug("Could not ensure job_access extra columns: %s", type(e).__name__)
+
+
 def _job_access_table_sql(db_url: str) -> str:
+    """Return the ``CREATE TABLE`` SQL for ``job_access``, dialect-aware for the URL."""
     created_at_type = (
         "TIMESTAMP WITH TIME ZONE DEFAULT NOW()" if _is_postgres(db_url) else "DATETIME DEFAULT CURRENT_TIMESTAMP"
     )
@@ -201,31 +343,39 @@ def _job_access_table_sql(db_url: str) -> str:
         "  owner_auth_type VARCHAR NOT NULL,"
         "  owner_subject VARCHAR NOT NULL,"
         "  owner_email VARCHAR,"
+        "  conversation_id VARCHAR,"
+        "  agent_type VARCHAR,"
         f"  created_at {created_at_type}"
         ")"
     )
 
 
 def _job_access_upsert_sql(db_url: str):
+    """Return the dialect-appropriate upsert statement for ``job_access``."""
+    cols = "job_id, owner_auth_type, owner_subject, owner_email, conversation_id, agent_type"
+    vals = ":job_id, :owner_auth_type, :owner_subject, :owner_email, :conversation_id, :agent_type"
     postgres_upsert = (
-        "INSERT INTO job_access (job_id, owner_auth_type, owner_subject, owner_email) "
-        "VALUES (:job_id, :owner_auth_type, :owner_subject, :owner_email) "
+        f"INSERT INTO job_access ({cols}) VALUES ({vals}) "
         "ON CONFLICT(job_id) DO UPDATE SET "
         "owner_auth_type = excluded.owner_auth_type, "
         "owner_subject = excluded.owner_subject, "
-        "owner_email = excluded.owner_email"
+        "owner_email = excluded.owner_email, "
+        "conversation_id = excluded.conversation_id, "
+        "agent_type = excluded.agent_type"
     )
-    sqlite_upsert = (
-        "INSERT OR REPLACE INTO job_access (job_id, owner_auth_type, owner_subject, owner_email) "
-        "VALUES (:job_id, :owner_auth_type, :owner_subject, :owner_email)"
-    )
+    sqlite_upsert = f"INSERT OR REPLACE INTO job_access ({cols}) VALUES ({vals})"
     return text(postgres_upsert if _is_postgres(db_url) else sqlite_upsert)
 
 
-def _principal_params(job_id: str, principal: Principal) -> dict[str, str | None]:
+def _principal_params(
+    job_id: str, principal: Principal, conversation_id: str | None = None, agent_type: str | None = None
+) -> dict[str, str | None]:
+    """Return SQL bind params for a job's owner identity, conversation, and agent type."""
     return {
         "job_id": job_id,
         "owner_auth_type": principal.type,
         "owner_subject": principal.sub,
         "owner_email": principal.email,
+        "conversation_id": conversation_id,
+        "agent_type": agent_type,
     }

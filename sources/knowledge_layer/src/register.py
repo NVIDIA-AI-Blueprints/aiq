@@ -26,6 +26,7 @@ import os
 from typing import Literal
 
 from pydantic import Field
+from pydantic import SecretStr
 from pydantic import model_validator
 
 from nat.builder.builder import Builder
@@ -38,7 +39,43 @@ logger = logging.getLogger(__name__)
 
 
 # Type-safe backend selection - Pydantic validates at config load time
-BackendType = Literal["llamaindex", "foundational_rag"]
+BackendType = Literal["llamaindex", "foundational_rag", "opensearch"]
+OpenSearchAuthType = Literal["none", "basic", "sigv4"]
+OpenSearchAwsService = Literal["aoss", "es"]
+OpenSearchIngestionMode = Literal["local", "dask", "auto"]
+OpenSearchDaskFileTransfer = Literal["bytes", "paths"]
+
+
+def _env_value(*names: str, default: str | None = None) -> str | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value is not None and value != "":
+            return value
+    return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_optional_bool(name: str) -> bool | None:
+    value = os.environ.get(name)
+    if value is None or value == "":
+        return None
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.environ.get(name)
+    return int(value) if value is not None and value != "" else default
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.environ.get(name)
+    return float(value) if value is not None and value != "" else default
 
 
 class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
@@ -72,6 +109,147 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
     verify_ssl: bool = Field(
         default=True, description="Verify SSL certificates (foundational_rag only). Set false for self-signed certs."
     )
+    # OpenSearch-specific options
+    opensearch_url: str = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_URL", default="http://localhost:9200"),
+        description="OpenSearch endpoint URL (OpenSearch only).",
+    )
+    opensearch_auth_type: OpenSearchAuthType = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_AUTH_TYPE", default="none"),
+        description="OpenSearch auth mode: none, basic, or sigv4.",
+    )
+    opensearch_username: str | None = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_USERNAME"),
+        description="Username for OpenSearch basic auth. Falls back to OPENSEARCH_USERNAME.",
+    )
+    opensearch_password: SecretStr | None = Field(
+        default_factory=lambda: SecretStr(pw) if (pw := _env_value("OPENSEARCH_PASSWORD")) is not None else None,
+        description="Password for OpenSearch basic auth. Falls back to OPENSEARCH_PASSWORD.",
+    )
+    opensearch_verify_certs: bool = Field(
+        default_factory=lambda: _env_bool("OPENSEARCH_VERIFY_CERTS", True),
+        description="Verify OpenSearch TLS certificates. Set false only for trusted development clusters.",
+    )
+    opensearch_ca_certs: str | None = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_CA_CERTS"),
+        description="Path to a custom CA bundle for OpenSearch TLS verification.",
+    )
+    opensearch_aws_region: str = Field(
+        default_factory=lambda: _env_value("AWS_REGION", "AWS_DEFAULT_REGION", default="us-east-1"),
+        description="AWS region for OpenSearch SigV4 auth.",
+    )
+    opensearch_aws_service: OpenSearchAwsService = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_AWS_SERVICE", default="aoss"),
+        description="SigV4 service name: aoss for Amazon OpenSearch Serverless, es for Amazon OpenSearch Service.",
+    )
+    opensearch_index_prefix: str = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_INDEX_PREFIX", default="aiq"),
+        description="Prefix for OpenSearch collection indexes.",
+    )
+    opensearch_vector_field: str = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_VECTOR_FIELD", default="embedding"),
+        description="Vector field name in OpenSearch documents.",
+    )
+    opensearch_text_field: str = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_TEXT_FIELD", default="content"),
+        description="Text field name in OpenSearch documents.",
+    )
+    opensearch_embedding_dim: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_EMBEDDING_DIM", 2048),
+        gt=0,
+        description="Embedding vector dimension for OpenSearch knn_vector mappings.",
+    )
+    opensearch_engine: str = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_ENGINE", default="faiss"),
+        description="OpenSearch k-NN engine.",
+    )
+    opensearch_space_type: str = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_SPACE_TYPE", default="cosinesimil"),
+        description="OpenSearch k-NN space type.",
+    )
+    opensearch_m: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_M", 16),
+        gt=0,
+        description="HNSW m parameter for OpenSearch indexes.",
+    )
+    opensearch_ef_construction: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_EF_CONSTRUCTION", 512),
+        gt=0,
+        description="HNSW ef_construction parameter for OpenSearch indexes.",
+    )
+    opensearch_ef_search: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_EF_SEARCH", 512),
+        gt=0,
+        description="OpenSearch ef_search query parameter.",
+    )
+    opensearch_timeout: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_TIMEOUT", 120),
+        gt=0,
+        description="OpenSearch request timeout in seconds.",
+    )
+    opensearch_max_retries: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_MAX_RETRIES", 3),
+        ge=0,
+        description="OpenSearch client max retries.",
+    )
+    opensearch_bulk_batch_size: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_BULK_BATCH_SIZE", 100),
+        gt=0,
+        description="Number of documents per OpenSearch bulk indexing request.",
+    )
+    opensearch_embedding_batch_size: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_EMBEDDING_BATCH_SIZE", 16),
+        gt=0,
+        description="Number of texts per embedding request for OpenSearch ingestion.",
+    )
+    opensearch_chunk_size: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_CHUNK_SIZE", 1024),
+        gt=0,
+        description="Approximate words per OpenSearch text chunk.",
+    )
+    opensearch_chunk_overlap: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_CHUNK_OVERLAP", 128),
+        ge=0,
+        description="Approximate overlapping words between OpenSearch text chunks.",
+    )
+    opensearch_allow_document_ids: bool | None = Field(
+        default_factory=lambda: _env_optional_bool("OPENSEARCH_ALLOW_DOCUMENT_IDS"),
+        description="Whether to set explicit document IDs in bulk index requests. Defaults off for AOSS.",
+    )
+    opensearch_bulk_refresh: bool | None = Field(
+        default_factory=lambda: _env_optional_bool("OPENSEARCH_BULK_REFRESH"),
+        description="Refresh policy for OpenSearch bulk writes. Defaults off for AOSS.",
+    )
+    opensearch_aoss_delete_max_batches: int = Field(
+        default_factory=lambda: _env_int("OPENSEARCH_AOSS_DELETE_MAX_BATCHES", 100),
+        gt=0,
+        description="Maximum search/delete batches for AOSS file deletion.",
+    )
+    opensearch_aoss_delete_backoff_seconds: float = Field(
+        default_factory=lambda: _env_float("OPENSEARCH_AOSS_DELETE_BACKOFF_SECONDS", 0.25),
+        ge=0,
+        description="Backoff between AOSS delete batches to account for eventual search visibility.",
+    )
+    opensearch_ingestion_mode: OpenSearchIngestionMode = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_INGESTION_MODE", default="local"),
+        description="OpenSearch ingestion execution mode: local, dask, or auto.",
+    )
+    opensearch_dask_scheduler_address: str | None = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_DASK_SCHEDULER_ADDRESS", "NAT_DASK_SCHEDULER_ADDRESS"),
+        description="Dask scheduler address for OpenSearch distributed ingestion.",
+    )
+    opensearch_dask_file_transfer: OpenSearchDaskFileTransfer = Field(
+        default_factory=lambda: _env_value("OPENSEARCH_DASK_FILE_TRANSFER", default="bytes"),
+        description="How Dask ingestion workers receive files: bytes or paths.",
+    )
+    embed_model: str = Field(
+        default_factory=lambda: _env_value("AIQ_EMBED_MODEL", default="nvidia/llama-nemotron-embed-vl-1b-v2"),
+        description="Embedding model for OpenSearch vector ingestion and retrieval.",
+    )
+    embed_base_url: str = Field(
+        default_factory=lambda: _env_value("AIQ_EMBED_BASE_URL", default="https://integrate.api.nvidia.com/v1"),
+        description="OpenAI-compatible embeddings endpoint base URL.",
+    )
 
     @model_validator(mode="after")
     def validate_backend_config(self):
@@ -91,13 +269,35 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
                 logger.warning("rag_url is ignored for llamaindex backend")
             if self.ingest_url != "http://localhost:8082/v1":
                 logger.warning("ingest_url is ignored for llamaindex backend")
+            if self.opensearch_url != "http://localhost:9200":
+                logger.warning("opensearch_url is ignored for llamaindex backend")
 
         elif backend == "foundational_rag":
             # Foundational RAG uses rag_url/ingest_url, warn if others are set
             if self.chroma_dir != "/tmp/chroma_data":
                 logger.warning("chroma_dir is ignored for foundational_rag backend")
+            if self.opensearch_url != "http://localhost:9200":
+                logger.warning("opensearch_url is ignored for foundational_rag backend")
             if not self.verify_ssl:
                 logger.warning("SSL verification disabled for foundational_rag. Use only in trusted environments.")
+
+        elif backend == "opensearch":
+            if self.chroma_dir != "/tmp/chroma_data":
+                logger.warning("chroma_dir is ignored for opensearch backend")
+            if self.rag_url != "http://localhost:8081/v1":
+                logger.warning("rag_url is ignored for opensearch backend")
+            if self.ingest_url != "http://localhost:8082/v1":
+                logger.warning("ingest_url is ignored for opensearch backend")
+            if self.opensearch_auth_type == "basic":
+                has_username = self.opensearch_username or os.environ.get("OPENSEARCH_USERNAME")
+                has_password = self.opensearch_password or os.environ.get("OPENSEARCH_PASSWORD")
+                if not has_username or not has_password:
+                    logger.warning(
+                        "OpenSearch basic auth selected but username/password are not fully configured. "
+                        "Set opensearch_username/opensearch_password or OPENSEARCH_USERNAME/OPENSEARCH_PASSWORD."
+                    )
+            if not self.opensearch_verify_certs:
+                logger.warning("TLS verification disabled for opensearch. Use only in trusted environments.")
 
         return self
 
@@ -144,8 +344,48 @@ def _setup_backend(config: KnowledgeRetrievalConfig, summary_llm_obj=None) -> tu
             **summary_config,
         }
 
+    elif backend == "opensearch":
+        import knowledge_layer.opensearch.adapter  # noqa: F401
+
+        os.environ.setdefault("OPENSEARCH_URL", config.opensearch_url)
+        backend_config = {
+            "endpoint": config.opensearch_url,
+            "auth_type": config.opensearch_auth_type,
+            "username": config.opensearch_username,
+            "password": (config.opensearch_password.get_secret_value() if config.opensearch_password else None),
+            "verify_certs": config.opensearch_verify_certs,
+            "ca_certs": config.opensearch_ca_certs,
+            "aws_region": config.opensearch_aws_region,
+            "aws_service": config.opensearch_aws_service,
+            "index_prefix": config.opensearch_index_prefix,
+            "vector_field": config.opensearch_vector_field,
+            "text_field": config.opensearch_text_field,
+            "embedding_dim": config.opensearch_embedding_dim,
+            "engine": config.opensearch_engine,
+            "space_type": config.opensearch_space_type,
+            "m": config.opensearch_m,
+            "ef_construction": config.opensearch_ef_construction,
+            "ef_search": config.opensearch_ef_search,
+            "timeout": config.opensearch_timeout,
+            "max_retries": config.opensearch_max_retries,
+            "bulk_batch_size": config.opensearch_bulk_batch_size,
+            "embedding_batch_size": config.opensearch_embedding_batch_size,
+            "chunk_size": config.opensearch_chunk_size,
+            "chunk_overlap": config.opensearch_chunk_overlap,
+            "allow_document_ids": config.opensearch_allow_document_ids,
+            "bulk_refresh": config.opensearch_bulk_refresh,
+            "aoss_delete_max_batches": config.opensearch_aoss_delete_max_batches,
+            "aoss_delete_backoff_seconds": config.opensearch_aoss_delete_backoff_seconds,
+            "ingestion_mode": config.opensearch_ingestion_mode,
+            "dask_scheduler_address": config.opensearch_dask_scheduler_address,
+            "dask_file_transfer": config.opensearch_dask_file_transfer,
+            "embed_model": config.embed_model,
+            "embed_base_url": config.embed_base_url,
+            **summary_config,
+        }
+
     else:
-        raise ValueError(f"Unknown backend: {backend}. Use 'llamaindex' or 'foundational_rag'.")
+        raise ValueError(f"Unknown backend: {backend}. Use 'llamaindex', 'foundational_rag', or 'opensearch'.")
 
     os.environ["KNOWLEDGE_RETRIEVER_BACKEND"] = backend
     os.environ["KNOWLEDGE_INGESTOR_BACKEND"] = backend
@@ -237,7 +477,7 @@ async def knowledge_retrieval(config: KnowledgeRetrievalConfig, _builder: Builde
 
     This function provides semantic search over documents that have been
     previously ingested into the knowledge layer. It supports multiple
-    backends (LlamaIndex, Foundational RAG) and returns formatted results
+    backends (LlamaIndex, Foundational RAG, OpenSearch) and returns formatted results
     suitable for LLM consumption.
 
     The retriever and ingestor are initialized once when the function is

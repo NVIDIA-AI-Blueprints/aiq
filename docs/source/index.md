@@ -51,6 +51,7 @@ Configuration Reference <./customization/configuration-reference.md>
 Swapping Models <./customization/swapping-models.md>
 Tools and Sources <./customization/tools-and-sources.md>
 MCP Tools <./customization/mcp-tools.md>
+Guardrails <./customization/guardrails.md>
 Knowledge Layer <./customization/knowledge-layer.md>
 Prompts <./customization/prompts.md>
 Human-in-the-Loop <./customization/hitl.md>
@@ -101,6 +102,7 @@ Async Job Content Encryption <./deployment/content-encryption.md>
 Observability <./deployment/observability.md>
 Production <./deployment/production.md>
 Kubernetes <./deployment/kubernetes.md>
+Amazon OpenSearch Serverless <./deployment/aws-opensearch-serverless.md>
 ```
 
 ```{toctree}

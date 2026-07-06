@@ -15,6 +15,7 @@ let mockChatState: Record<string, unknown> = {
   isDeepResearchStreaming: false,
   deepResearchStatus: null as 'submitted' | 'running' | 'success' | 'failure' | 'interrupted' | null,
   currentConversation: { title: 'AI Market Trends' },
+  deepResearchJobId: 'job-123',
 }
 
 vi.mock('@/features/chat', () => ({
@@ -25,6 +26,7 @@ vi.mock('@/features/chat', () => ({
     return mockChatState
   },
   useIsCurrentSessionBusy: () => mockIsBusy,
+  selectResolvedDeepResearchJobId: (state: any) => state?.deepResearchJobId,
 }))
 
 // Mock the download utilities
@@ -75,7 +77,7 @@ describe('ExportFooter', () => {
 
     await user.click(screen.getByRole('button', { name: /pdf/i }))
 
-    expect(mockDownloadPdf).toHaveBeenCalledWith('Some report content', 'AI Market Trends')
+    expect(mockDownloadPdf).toHaveBeenCalledWith('Some report content', 'AI Market Trends', 'job-123')
   })
 
   test('disables buttons when disabled prop is true', () => {

@@ -2,10 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import React from 'react'
-import { Document, Page, Text, View, StyleSheet, Font, Link } from '@react-pdf/renderer'
+import { Document, Page, Text, View, StyleSheet, Font, Link, Image } from '@react-pdf/renderer'
 import { marked } from 'marked'
 
 type Token = ReturnType<typeof marked.lexer>[number]
+type ImageToken = { type: 'image'; href: string; text?: string; title?: string }
 type HeadingToken = Extract<Token, { type: 'heading' }>
 type ParagraphToken = Extract<Token, { type: 'paragraph' }>
 type ListToken = Extract<Token, { type: 'list' }>
@@ -140,6 +141,25 @@ const styles = StyleSheet.create({
     color: '#0066cc',
     textDecoration: 'underline',
   },
+  figure: {
+    marginTop: 10,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  image: {
+    // Explicit width is required: react-pdf renders an Image at intrinsic pixel size when
+    // width is unset, so a large chart overflows the page. '100%' fits the parent and scales
+    // height by aspect ratio.
+    width: '100%',
+    objectFit: 'contain',
+  },
+  imageCaption: {
+    fontSize: 9,
+    color: '#555555',
+    marginTop: 4,
+    textAlign: 'center',
+    fontStyle: 'italic',
+  },
 })
 
 interface MarkdownPDFProps {
@@ -197,11 +217,78 @@ function renderHeading(token: HeadingToken, index: number): React.ReactNode {
   )
 }
 
+// Matches markdown image syntax so it can be stripped from inline text (the image is rendered
+// as a block figure instead of leaking through the inline link parser as a stray link).
+const IMAGE_MD_RE = /!\[[^\]]*\]\([^)]*\)/g
+
+// Only embed raster image data URIs within a bounded decoded size — the markdown may carry an
+// arbitrary `data:` URI (e.g. one the report wrote directly), which we must not feed unchecked
+// into the PDF renderer.
+const MAX_PDF_EMBED_BYTES = 8 * 1024 * 1024
+// @react-pdf/renderer supports PNG and JPEG only; a WebP data URI would pass the size
+// guard and then fail silently during PDF rendering, so it is excluded here.
+const DATA_IMAGE_RE = /^data:image\/(?:png|jpe?g);base64,([A-Za-z0-9+/=]+)$/
+
+function isEmbeddableDataImage(href: string): boolean {
+  const match = DATA_IMAGE_RE.exec(href)
+  if (!match) return false
+  const b64 = match[1]
+  const padding = b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0
+  const decodedBytes = Math.floor((b64.length * 3) / 4) - padding
+  return decodedBytes <= MAX_PDF_EMBED_BYTES
+}
+
+/**
+ * Recursively collect embeddable image tokens. Only bounded raster `data:` URIs are embeddable
+ * (artifact refs are pre-resolved to data URIs server-side); remote/unresolved/oversized images
+ * are skipped so the PDF never shows a broken figure or blows up memory. Walks nested `tokens`
+ * so images inside list items, blockquotes, etc. are found, not just top-level paragraphs.
+ */
+function collectEmbeddableImages(tokens: unknown): ImageToken[] {
+  if (!Array.isArray(tokens)) return []
+  const found: ImageToken[] = []
+  for (const token of tokens) {
+    const t = token as { type?: string; href?: string; tokens?: unknown }
+    if (t.type === 'image' && typeof t.href === 'string' && isEmbeddableDataImage(t.href)) {
+      found.push(t as ImageToken)
+    } else if (Array.isArray(t.tokens)) {
+      found.push(...collectEmbeddableImages(t.tokens))
+    }
+  }
+  return found
+}
+
+/** Render embeddable images as centered block figures with optional captions. */
+function renderFigures(images: ImageToken[], keyPrefix: string): React.ReactNode[] {
+  return images.map((img, imgIndex) => (
+    <View key={`${keyPrefix}-img-${imgIndex}`} style={styles.figure} wrap={false}>
+      <Image src={img.href} style={styles.image} />
+      {(img.text || img.title) && <Text style={styles.imageCaption}>{img.text || img.title}</Text>}
+    </View>
+  ))
+}
+
 function renderParagraph(token: ParagraphToken, index: number): React.ReactNode {
+  const images = collectEmbeddableImages((token as ParagraphToken & { tokens?: Token[] }).tokens)
+  // Strip image markdown so a standalone `![alt](data:...)` does not also render as a link.
+  const textWithoutImages = token.text.replace(IMAGE_MD_RE, '').trim()
+
+  if (images.length === 0) {
+    if (!textWithoutImages) return null
+    return (
+      <Text key={index} style={styles.paragraph}>
+        {parseInlineFormatting(textWithoutImages)}
+      </Text>
+    )
+  }
+
   return (
-    <Text key={index} style={styles.paragraph}>
-      {parseInlineFormatting(token.text)}
-    </Text>
+    <View key={index}>
+      {textWithoutImages && (
+        <Text style={styles.paragraph}>{parseInlineFormatting(textWithoutImages)}</Text>
+      )}
+      {renderFigures(images, String(index))}
+    </View>
   )
 }
 
@@ -221,7 +308,7 @@ function renderList(token: ListToken, index: number, _nested: boolean = false): 
       })
     }
 
-    const mainText = textTokens.length
+    const rawText = textTokens.length
       ? textTokens
           .map((t: any) => {
             if ('text' in t) {
@@ -235,7 +322,12 @@ function renderList(token: ListToken, index: number, _nested: boolean = false): 
           .join(' ')
       : stripHtml(preserveHtmlLinks(item.text))
 
-    const hasNestedContent = nestedLists.length > 0
+    // A bullet may carry an embedded figure (e.g. "- The chart: ![alt](data:...)"). Collect
+    // only from this item's own text tokens (not nestedLists, which render their own images)
+    // so images in nested list items aren't rendered twice.
+    const images = collectEmbeddableImages(textTokens)
+    const mainText = rawText.replace(IMAGE_MD_RE, '').trim()
+    const hasNestedContent = nestedLists.length > 0 || images.length > 0
 
     return (
       <View
@@ -245,7 +337,8 @@ function renderList(token: ListToken, index: number, _nested: boolean = false): 
       >
         <Text style={styles.listItemBullet}>{bullet}</Text>
         <View style={styles.listItemText}>
-          <Text>{parseInlineFormatting(mainText)}</Text>
+          {mainText && <Text>{parseInlineFormatting(mainText)}</Text>}
+          {renderFigures(images, `${index}-${itemIndex}`)}
           {nestedLists.map((nestedList: any, nlIndex: number) =>
             renderList(nestedList as ListToken, nlIndex, true)
           )}

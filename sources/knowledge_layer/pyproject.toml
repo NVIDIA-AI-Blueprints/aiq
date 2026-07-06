@@ -18,7 +18,7 @@ build-backend = "setuptools.build_meta"
 requires = ["setuptools >= 64", "setuptools-scm>=8"]
 
 [tool.setuptools]
-packages = ["knowledge_layer", "knowledge_layer.llamaindex", "knowledge_layer.foundational_rag"]
+packages = ["knowledge_layer", "knowledge_layer.llamaindex", "knowledge_layer.foundational_rag", "knowledge_layer.opensearch"]
 package-dir = {"knowledge_layer" = "src"}
 
 [project]
@@ -52,8 +52,17 @@ foundational_rag = [
     "docx2txt>=0.8",
     "python-pptx>=0.6.21",
 ]
+opensearch = [
+    "opensearch-py>=2.4.0",
+    "boto3>=1.28.0",
+    "openai>=1.0.0",
+    "pypdf>=4.0.0",
+    "docx2txt>=0.8",
+    "python-pptx>=0.6.21",
+    "distributed>=2024.1.0",
+]
 all = [
-    "knowledge-layer[llamaindex,foundational_rag]",
+    "knowledge-layer[llamaindex,foundational_rag,opensearch]",
 ]
 
 [project.entry-points."nat.plugins"]

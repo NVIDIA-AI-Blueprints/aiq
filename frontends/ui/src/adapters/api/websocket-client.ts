@@ -223,12 +223,18 @@ export class NATWebSocketClient {
    * Send a user chat message
    * @param content - The message text content (query)
    * @param enabledDataSources - Optional array of enabled data source IDs to include in the query
+   * @param activeReportJobId - Optional completed report job ID for report-aware follow-up
    */
-  sendMessage = (content: string, enabledDataSources?: string[]): string | null => {
+  sendMessage = (
+    content: string,
+    enabledDataSources?: string[],
+    activeReportJobId?: string
+  ): string | null => {
     // Format the text content as JSON with query and data_sources
     const textContent = JSON.stringify({
       query: content,
       data_sources: enabledDataSources ?? [],
+      ...(activeReportJobId ? { active_report_job_id: activeReportJobId } : {}),
     })
 
     const messageId = this.generateMessageId()

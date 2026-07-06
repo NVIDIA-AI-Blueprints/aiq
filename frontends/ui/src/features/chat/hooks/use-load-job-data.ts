@@ -281,11 +281,12 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           const { tools, outputs } = stateResponse.artifacts
 
           tools?.forEach(
-            (tool: { name: string; input?: Record<string, unknown>; output?: string }) => {
+            (tool: { name: string; input?: Record<string, unknown>; output?: string; is_sandbox?: boolean }) => {
               const toolCallId = addDeepResearchToolCall({
                 name: tool.name,
                 input: tool.input,
                 workflow: undefined,
+                isSandbox: tool.is_sandbox,
               })
               if (tool.output) {
                 completeDeepResearchToolCall(toolCallId, tool.output)
@@ -365,6 +366,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               output?: string
               workflow?: string
               agentId?: string
+              isSandbox?: boolean
             }
           >(),
           todos: null as TodoItem[] | null,
@@ -412,6 +414,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             output: t.output,
             workflow: t.workflow,
             agentId: t.agentId,
+            isSandbox: t.isSandbox,
             status: 'complete' as const,
             timestamp: now,
           }))
@@ -538,10 +541,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               }
             },
 
-            onToolStart: (name, input, workflow, _eventId, agentId) => {
+            onToolStart: (name, input, workflow, _eventId, agentId, isSandbox) => {
               if (name === 'task') return
               const uniqueId = `tool-${idCounter++}`
-              buffer.toolCalls.set(uniqueId, { name, input, workflow, agentId })
+              buffer.toolCalls.set(uniqueId, { name, input, workflow, agentId, isSandbox })
               let stack = activeToolStacks.get(name)
               if (!stack) {
                 stack = []

@@ -385,7 +385,7 @@ async def test_submit_openapi_documents_encryption_failures(monkeypatch, tmp_pat
     assert responses["500"]["description"] == (
         "Content encryption configuration is invalid or async job authorization persistence failed"
     )
-    assert responses["503"]["description"] == "Content encryption is not ready"
+    assert responses["503"]["description"] == ("Content encryption, Dask scheduler, or sandbox capacity is unavailable")
 
 
 @pytest.mark.asyncio
@@ -404,6 +404,19 @@ async def test_report_authorizes_before_decrypting(monkeypatch, tmp_path):
 async def test_report_returns_500_for_plaintext_violation(monkeypatch, tmp_path):
     _enable_static_key(monkeypatch)
     app = await _build_jobs_app(monkeypatch, tmp_path, job_output='{"report":"plaintext"}')
+
+    with TestClient(app) as client:
+        response = client.get("/v1/jobs/async/job/job-1/report")
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Final report data is invalid"
+
+
+@pytest.mark.parametrize("job_output", ["", {}])
+@pytest.mark.asyncio
+async def test_report_returns_500_for_falsey_plaintext_violation(monkeypatch, tmp_path, job_output):
+    _enable_static_key(monkeypatch)
+    app = await _build_jobs_app(monkeypatch, tmp_path, job_output=job_output)
 
     with TestClient(app) as client:
         response = client.get("/v1/jobs/async/job/job-1/report")
@@ -464,14 +477,30 @@ async def test_report_returns_503_when_vault_decrypt_is_unavailable(monkeypatch,
 @pytest.mark.asyncio
 async def test_report_decrypts_encrypted_final_output(monkeypatch, tmp_path):
     _enable_static_key(monkeypatch)
-    stored = crypto.create_job_content_cipher("job-1").encrypt_output_json(json.dumps({"report": "secret"}))
+    stored = crypto.create_job_content_cipher("job-1").encrypt_output_json(
+        json.dumps(
+            {
+                "report": "secret",
+                "parent_job_id": "parent-job",
+                "interaction_action": "edit",
+                "result_kind": "report",
+            }
+        )
+    )
     app = await _build_jobs_app(monkeypatch, tmp_path, job_output=stored)
 
     with TestClient(app) as client:
         response = client.get("/v1/jobs/async/job/job-1/report")
 
     assert response.status_code == 200
-    assert response.json() == {"job_id": "job-1", "has_report": True, "report": "secret"}
+    assert response.json() == {
+        "job_id": "job-1",
+        "has_report": True,
+        "report": "secret",
+        "parent_job_id": "parent-job",
+        "interaction_action": "edit",
+        "result_kind": "report",
+    }
 
 
 @pytest.mark.asyncio

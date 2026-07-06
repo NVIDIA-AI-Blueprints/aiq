@@ -18,11 +18,27 @@ To ensure the calculation is reproducible and useful, you MUST:
 5. **Return Text Outputs:** Include the markdown, CSV, or JSON output in your returned `ResearchNotes` (e.g. a `ResearchFinding`'s `evidence` and/or `narrative_notes`). Do not call `write_file`; `run_research_batch` persists your returned notes.
 6. **Report Caveats:** Include assumptions, missing values, restatements, estimated figures, or non-comparable metrics in the output notes.
 
+## Data honesty
+
+The table is the trustworthy, gap-aware deliverable that any downstream chart depends on,
+so it must be honest about what is and isn't known:
+
+1. **Per-cell status:** treat each value as reported, estimate, or not disclosed. Leave
+   undisclosed cells explicitly empty (e.g. `—`); never fabricate or infer a number to
+   fill a gap, and never carry a prior period forward to hide one.
+2. **One metric definition:** compare like with like. If sources use different definitions
+   (e.g. "cash paid for property and equipment" vs "capital expenditures including finance
+   leases"), keep them in separate rows/columns or pick one and label it - do not silently
+   blend definitions into a single series.
+3. **Surface coverage:** in the notes, state how many cells are reported vs estimated vs
+   undisclosed, so the reader (and any chart built from this table) can judge how much
+   weight it bears.
+
 ## Execution Flow
 
 1. Gather candidate facts from researcher outputs, user-provided data, or source excerpts.
 
-2. Create a normalized input table with one row per comparable observation. Prefer explicit CSV or JSON records embedded in the Python script. If the source rows are in `/shared/...`, call `read_file` first and embed the returned content in the script, or write a sandbox-local input file under `/workspace`. Sandbox code cannot open `/shared/...` directly.
+2. Create a normalized input table with one row per comparable observation. Prefer explicit CSV or JSON records embedded in the Python script. If the source rows are in `/shared/...`, call `read_file` first and embed the returned content in the script, or write a sandbox-local input file under your sandbox working directory (`sandbox_workdir`; e.g. `/sandbox` on OpenShell or `/workspace` on Modal). Sandbox code cannot open `/shared/...` directly.
 
 3. Call the `execute` tool with a Python command or script that:
    - imports pandas,
@@ -31,7 +47,7 @@ To ensure the calculation is reproducible and useful, you MUST:
    - standardizes units and period labels,
    - computes the requested metrics,
    - prints markdown, CSV, JSON, and data-quality notes as text.
-   - uses `/workspace` for any sandbox-local input or output files.
+   - uses your sandbox working directory (`sandbox_workdir`) for any sandbox-local input or output files, and writes any script file at the job-unique path your instructions specify (the `<job_id>_<name>.py` form) so a shared sandbox never reuses a stale leftover from another job.
    - does not read from or write to `/shared/...` inside the sandbox process.
 
 4. Inspect the `execute` output. If the code fails, fix the code and call `execute` again. Do not continue with hand-computed fallback tables unless the sandbox or pandas is unavailable.
