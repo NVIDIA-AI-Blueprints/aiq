@@ -12,7 +12,7 @@ export const useDownloadPdfRoute = () => {
     setError(null)
   }, [])
 
-  const downloadPdf = async (markdown: string, filename?: string) => {
+  const downloadPdf = async (markdown: string, filename?: string, jobId?: string) => {
     setIsLoading(true)
     setError(null)
 
@@ -20,7 +20,7 @@ export const useDownloadPdfRoute = () => {
       const response = await fetch('/api/generate-pdf', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ markdown }),
+        body: JSON.stringify({ markdown, jobId }),
       })
 
       if (!response.ok) {

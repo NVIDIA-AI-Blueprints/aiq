@@ -478,6 +478,7 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
         payload: Any,
         user_message_id: str | None = None,
         conversation_id: str | None = None,
+        streaming: bool = True,
         result_type: type | None = None,
         output_type: type | None = None,
     ) -> None:
@@ -497,7 +498,7 @@ class ReconnectableWebSocketMessageHandler(WebSocketMessageHandler):
                     async for value in generate_streaming_response(
                         payload,
                         session=session,
-                        streaming=True,
+                        streaming=streaming,
                         step_adaptor=self._step_adaptor,
                         result_type=result_type,
                         output_type=output_type,

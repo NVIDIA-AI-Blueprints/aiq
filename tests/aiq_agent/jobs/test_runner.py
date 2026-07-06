@@ -65,6 +65,7 @@ Test coverage:
 
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
+from unittest.mock import call
 from unittest.mock import patch
 
 import pytest
@@ -435,8 +436,42 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        # data_sources is second-to-last (auth_token is last)
-        assert job_args[-2] == ["web_search"]
+        assert ["web_search"] in job_args
+
+    @pytest.mark.asyncio
+    async def test_submit_agent_job_passes_initial_files_and_output_metadata(self):
+        """Test submit_agent_job forwards report context files and output metadata into worker args."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+        initial_files = {"/shared/original_report.md": "# Report"}
+        output_metadata = {"parent_job_id": "parent-job", "interaction_action": "edit"}
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        result = await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                            initial_files=initial_files,
+                            output_metadata=output_metadata,
+                        )
+
+        assert result == "test-job-id"
+        job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
+        # Trailing worker args: data_sources, auth_token, initial_files, output_metadata, principal_user_id
+        assert job_args[-3] == initial_files
+        assert job_args[-2] == output_metadata
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):
@@ -818,6 +853,210 @@ class TestToolArtifactMapping:
         assert mapping.is_artifact_tool("custom_tool")
         custom = mapping.get_mapping("custom_tool")
         assert custom["artifact_type"] == ArtifactType.OUTPUT
+
+
+def test_get_worker_function_type_maps_async_deep_research_flag():
+    """Async deep research selects the deep research function type."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_worker_function_type
+
+    enabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=True))
+    disabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=False))
+    no_workflow_config = SimpleNamespace(workflow=None)
+
+    assert _get_worker_function_type(enabled_config) == "deep_research_agent"
+    assert _get_worker_function_type(disabled_config) is None
+    assert _get_worker_function_type(no_workflow_config) is None
+
+
+@pytest.mark.asyncio
+async def test_attach_middleware_to_function_registers_middleware_for_async_deep_function():
+    """The Dask worker registers middleware configured for the async deep function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _attach_middleware_to_function
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={
+            "renamed_deep_agent": SimpleNamespace(type="deep_research_agent", middleware=["direct_deep_middleware"])
+        },
+        middleware={
+            "direct_deep_middleware": SimpleNamespace(),
+            "deep_agent_guardrails": SimpleNamespace(workflow_functions={"renamed_deep_agent": {}}),
+            "shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}}),
+        },
+    )
+    builder = MagicMock()
+    builder.get_middleware = AsyncMock(side_effect=ValueError("missing"))
+    builder.add_middleware = AsyncMock()
+
+    await _attach_middleware_to_function(builder, config, "renamed_deep_agent")
+
+    assert builder.get_middleware.await_args_list == [
+        call("direct_deep_middleware"),
+        call("deep_agent_guardrails"),
+    ]
+    assert builder.add_middleware.await_args_list == [
+        call("direct_deep_middleware", config.middleware["direct_deep_middleware"]),
+        call("deep_agent_guardrails", config.middleware["deep_agent_guardrails"]),
+    ]
+
+
+def test_get_middleware_for_listed_function_rejects_duplicate_middleware():
+    """Worker setup fails if the same middleware is configured twice for one worker function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_listed_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["direct_middleware", "direct_middleware"])},
+        middleware={"direct_middleware": SimpleNamespace()},
+    )
+
+    with pytest.raises(ValueError, match="Middleware configured multiple times"):
+        _get_middleware_for_listed_function(config, "deep_research_agent")
+
+
+def test_get_middleware_for_worker_function_includes_workflow_function_middleware():
+    """Worker middleware discovery includes middleware targeting the configured function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_worker_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["direct_middleware"])},
+        middleware={
+            "direct_middleware": SimpleNamespace(),
+            "deep_agent_guardrails": SimpleNamespace(workflow_functions={"deep_research_agent": {}}),
+            "shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}}),
+        },
+    )
+
+    assert _get_middleware_for_worker_function(config, "deep_research_agent") == [
+        "direct_middleware",
+        "deep_agent_guardrails",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_wraps_dask_callable():
+    """Configured worker middleware wraps the callable that Dask actually executes."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    captured = {}
+
+    class BlockingMiddleware:
+        enabled = True
+
+        async def middleware_invoke(self, *args, call_next, context, **kwargs):
+            captured["context"] = context
+            captured["args"] = args
+            return "blocked"
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"deep_research_agent": SimpleNamespace(type="deep_research_agent", middleware=[])},
+        middleware={"deep_agent_guardrails": SimpleNamespace(workflow_functions={"deep_research_agent": {}})},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock(return_value=[BlockingMiddleware()])
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="deep_research_agent",
+        function_config=config.functions["deep_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "blocked"
+    assert captured["context"].name == "deep_research_agent"
+    assert captured["args"] == (state,)
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_runs_callable_without_middleware():
+    """Worker callable runs directly when no middleware targets the function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"deep_research_agent": SimpleNamespace(type="deep_research_agent", middleware=[])},
+        middleware={},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock()
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="deep_research_agent",
+        function_config=config.functions["deep_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "ran"
+    call_next.assert_awaited_once_with(state)
+    builder.get_middleware_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_ignores_non_worker_function():
+    """Non-worker functions run directly even if the full config contains unrelated middleware."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"shallow_research_agent": SimpleNamespace(type="shallow_research_agent", middleware=[])},
+        middleware={"shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}})},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock()
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="shallow_research_agent",
+        function_config=config.functions["shallow_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "ran"
+    call_next.assert_awaited_once_with(state)
+    builder.get_middleware_list.assert_not_awaited()
+
+
+def test_get_middleware_for_worker_function_rejects_missing_middleware_config():
+    """Active worker middleware discovery fails clearly when a listed middleware is undefined."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_worker_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["missing_guardrails"])},
+        middleware={},
+    )
+
+    with pytest.raises(ValueError, match="not defined: missing_guardrails"):
+        _get_middleware_for_worker_function(config, "deep_research_agent")
 
 
 class TestDeepResearchEventCallbackAdvanced:
@@ -1394,6 +1633,8 @@ class TestAsyncJobRunnerAgentFactory:
                 skills=None,
                 sandbox=None,
                 job_id=None,
+                artifact_db_url=None,
+                artifact_emit=None,
                 max_research_concurrency=None,
                 max_concurrent_source_tool_calls=None,
                 max_source_tool_batch_size=None,
@@ -1408,6 +1649,8 @@ class TestAsyncJobRunnerAgentFactory:
                 self.skills = skills
                 self.sandbox = sandbox
                 self.job_id = job_id
+                self.artifact_db_url = artifact_db_url
+                self.artifact_emit = artifact_emit
                 self.max_research_concurrency = max_research_concurrency
                 self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
                 self.max_source_tool_batch_size = max_source_tool_batch_size
@@ -1448,6 +1691,92 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
 
+    def test_create_agent_instance_allows_non_deep_agent_to_reuse_deep_config(self):
+        """Async workers should not treat shared DeepResearchAgentConfig as a constructor contract."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeReportRewriterAgent:
+            def __init__(
+                self,
+                llm_provider,
+                tools=None,
+                *,
+                verbose=False,
+                callbacks=None,
+                config=None,
+                job_id=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.verbose = verbose
+                self.callbacks = callbacks
+                self.config = config
+                self.job_id = job_id
+
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            enable_citation_verification=False,
+        )
+
+        agent = _create_agent_instance(
+            agent_cls=FakeReportRewriterAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=fn_config,
+            verbose=True,
+            callbacks=["callback"],
+            job_id="job-123",
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.verbose is True
+        assert agent.callbacks == ["callback"]
+        assert agent.config is fn_config
+        assert agent.job_id == "job-123"
+
+    def test_create_agent_instance_passes_job_id_to_agent_without_config_arg(self):
+        """Async workers should preserve job_id for non-deep agents that do not need config."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeReportRewriterAgent:
+            def __init__(
+                self,
+                llm_provider,
+                tools=None,
+                *,
+                verbose=False,
+                callbacks=None,
+                job_id=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.verbose = verbose
+                self.callbacks = callbacks
+                self.job_id = job_id
+
+        agent = _create_agent_instance(
+            agent_cls=FakeReportRewriterAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=DeepResearchAgentConfig(orchestrator_llm="llm"),
+            verbose=True,
+            callbacks=["callback"],
+            job_id="job-123",
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.verbose is True
+        assert agent.callbacks == ["callback"]
+        assert agent.job_id == "job-123"
+
     def test_async_deep_researcher_constructor_applies_config_tuning(self):
         """Async construction preserves catalog and concurrency settings."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
@@ -1485,6 +1814,106 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_research_concurrency == 2
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
+
+    @pytest.mark.asyncio
+    async def test_run_agent_seeds_initial_files_when_state_supports_files(self):
+        """Async runner seeds DeepAgents virtual filesystem files into stateful agents."""
+        from typing import Annotated
+        from typing import Any
+
+        from langchain_core.messages import AnyMessage
+        from langgraph.graph.message import add_messages
+        from pydantic import BaseModel
+        from pydantic import Field
+
+        from aiq_api.jobs import runner
+
+        class FakeState(BaseModel):
+            messages: Annotated[list[AnyMessage], add_messages]
+            files: dict[str, Any] = Field(default_factory=dict)
+
+        class FakeAgent:
+            def __init__(self):
+                self.seen_state = None
+
+            async def run(self, state):
+                self.seen_state = state
+                return {"report": state.files["/shared/original_report.md"]}
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        agent = FakeAgent()
+        initial_files = {"/shared/original_report.md": "# Parent"}
+
+        with patch("aiq_api.jobs.runner._get_agent_state_class", return_value=FakeState):
+            result = await runner._run_agent(
+                agent=agent,
+                input_text="revise",
+                monitor=FakeMonitor(),
+                initial_files=initial_files,
+            )
+
+        assert result == {"report": "# Parent"}
+        assert agent.seen_state.files == initial_files
+
+    @pytest.mark.asyncio
+    async def test_run_agent_skips_data_sources_when_state_lacks_field(self):
+        """Runner must not inject data_sources into states that don't declare the field.
+
+        report_rewriter's state omits data_sources; with Pydantic's default (extra
+        ignored) that is currently harmless, but the runner should not pass fields a
+        state does not model. This uses an extra=forbid state to prove the guard
+        actually prevents the injection (without it, state construction would raise).
+        """
+        from typing import Annotated
+
+        from langchain_core.messages import AnyMessage
+        from langgraph.graph.message import add_messages
+        from pydantic import BaseModel
+        from pydantic import ConfigDict
+
+        from aiq_api.jobs import runner
+
+        class StrictState(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            messages: Annotated[list[AnyMessage], add_messages]
+
+        class FakeAgent:
+            def __init__(self):
+                self.seen_state = None
+
+            async def run(self, state):
+                self.seen_state = state
+                return "ok"
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        agent = FakeAgent()
+
+        with patch("aiq_api.jobs.runner._get_agent_state_class", return_value=StrictState):
+            result = await runner._run_agent(
+                agent=agent,
+                input_text="revise",
+                monitor=FakeMonitor(),
+                data_sources=["web_search"],
+            )
+
+        assert result == "ok"
+        assert not hasattr(agent.seen_state, "data_sources")
 
     def test_async_deep_researcher_constructor_preserves_writer_skills(self):
         """Async job construction preserves writer-only skills and sandbox job scoping."""
@@ -1649,6 +2078,8 @@ class TestAsyncJobRunnerAgentFactory:
                 skills=None,
                 sandbox=None,
                 job_id=None,
+                artifact_db_url=None,
+                artifact_emit=None,
                 max_research_concurrency=None,
                 max_concurrent_source_tool_calls=None,
                 max_source_tool_batch_size=None,
@@ -1672,3 +2103,56 @@ class TestAsyncJobRunnerAgentFactory:
                 callbacks=["callback"],
                 job_id="job-123",
             )
+
+
+class TestTerminalTeardown:
+    """_teardown_sandbox routes close()/terminate() and never raises on the terminal path."""
+
+    def test_none_runtime_is_noop(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        # Must not raise when no sandbox runtime is present (non-sandbox agents).
+        _teardown_sandbox(None, job_id="job-1", interrupted=False)
+
+    def test_normal_path_calls_close(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        runtime.close.assert_called_once_with()
+        runtime.terminate.assert_not_called()
+
+    def test_interrupted_path_calls_terminate(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.terminate.assert_called_once_with()
+        runtime.close.assert_not_called()
+
+    def test_interrupted_without_terminate_falls_back_to_close(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close"])  # no terminate attribute
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.close.assert_called_once_with()
+
+    def test_never_raises_when_teardown_fails(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        runtime.close.side_effect = RuntimeError("sdk session close failed")
+        # Must swallow the error; teardown is best-effort on the terminal path.
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+    def test_does_not_harvest(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        # The single harvest happens in agent.run(); teardown must not call final_harvest.
+        runtime = MagicMock(spec=["close", "terminate", "final_harvest"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        runtime.final_harvest.assert_not_called()

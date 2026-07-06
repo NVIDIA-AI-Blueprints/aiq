@@ -203,8 +203,8 @@ export interface DeepResearchCallbacks {
     usage?: { input_tokens: number; output_tokens: number }
   ) => void
   /** Called on tool events */
-  onToolStart?: (name: string, input?: Record<string, unknown>, workflow?: string, eventId?: string, agentId?: string) => void
-  onToolEnd?: (name: string, output?: string, eventId?: string, agentId?: string) => void
+  onToolStart?: (name: string, input?: Record<string, unknown>, workflow?: string, eventId?: string, agentId?: string, isSandbox?: boolean) => void
+  onToolEnd?: (name: string, output?: string, eventId?: string, agentId?: string, isSandbox?: boolean) => void
   /** Called on artifact updates */
   onTodoUpdate?: (todos: TodoItem[], workflow?: string) => void
   onCitationUpdate?: (url: string, content: string, isCited?: boolean) => void
@@ -463,22 +463,22 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
       }
 
       case 'tool.start': {
-        // tool events have nested structure: { id, name, timestamp, data: { input }, metadata: { workflow, agent_id } }
+        // tool events have nested structure: { id, name, timestamp, data: { input }, metadata: { workflow, agent_id, sandbox } }
         // Note: data.input may be a Python repr string when the backend trims large inputs via str()
         const toolData = rawData as {
           id?: string
           name: string
           data?: { input?: unknown }
-          metadata?: { workflow?: string; agent_id?: string }
+          metadata?: { workflow?: string; agent_id?: string; sandbox?: boolean }
         }
         const normalizedInput = normalizeToolInput(toolData.data?.input)
-        callbacks.onToolStart?.(toolData.name, normalizedInput, toolData.metadata?.workflow, toolData.id, toolData.metadata?.agent_id)
+        callbacks.onToolStart?.(toolData.name, normalizedInput, toolData.metadata?.workflow, toolData.id, toolData.metadata?.agent_id, Boolean(toolData.metadata?.sandbox))
         break
       }
 
       case 'tool.end': {
-        const toolData = rawData as { id?: string; name: string; data?: { output?: string }; metadata?: { agent_id?: string } }
-        callbacks.onToolEnd?.(toolData.name, toolData.data?.output, toolData.id, toolData.metadata?.agent_id)
+        const toolData = rawData as { id?: string; name: string; data?: { output?: string }; metadata?: { agent_id?: string; sandbox?: boolean } }
+        callbacks.onToolEnd?.(toolData.name, toolData.data?.output, toolData.id, toolData.metadata?.agent_id, Boolean(toolData.metadata?.sandbox))
         break
       }
 

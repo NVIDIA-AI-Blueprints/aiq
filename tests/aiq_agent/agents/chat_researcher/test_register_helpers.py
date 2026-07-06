@@ -17,12 +17,79 @@
 
 from unittest.mock import MagicMock
 
+import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
-from aiq_agent.agents.chat_researcher.utils import _extract_query_from_text
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
+
+
+class TestReportFollowUpHelpers:
+    """Tests for report follow-up helper prompt shaping."""
+
+    def test_build_report_ask_prompt_anchors_answer_to_parent_report(self):
+        from aiq_agent.agents.chat_researcher.register import _build_report_ask_prompt
+
+        prompt = _build_report_ask_prompt(
+            question="What is the main risk?",
+            report_markdown="# Report\n\nRisk is rollout complexity.",
+            source_summary_markdown="- [1] https://example.com",
+        )
+
+        assert "What is the main risk?" in prompt
+        assert "# Report" in prompt
+        assert "Risk is rollout complexity." in prompt
+        assert "- [1] https://example.com" in prompt
+        assert "Answer using only the parent report" in prompt
+
+    @pytest.mark.asyncio
+    async def test_answer_from_report_context_uses_single_bounded_llm_call(self):
+        """Report Q&A answers with one direct LLM call over the bounded prompt.
+
+        It must NOT route through the shallow/deep research agents or any tools —
+        report ask is bounded to parent report context and never triggers live research.
+        """
+        from aiq_agent.agents.chat_researcher.register import _answer_from_report_context
+
+        captured = {}
+
+        class FakeLLM:
+            async def ainvoke(self, messages):
+                captured["messages"] = messages
+                return AIMessage(content="Bounded answer from report.")
+
+        answer = await _answer_from_report_context(
+            FakeLLM(),
+            question="What is the main risk?",
+            report_markdown="# Report\n\nRisk is rollout complexity.",
+            source_summary_markdown="- [1] https://example.com",
+        )
+
+        assert answer == "Bounded answer from report."
+        sent = captured["messages"][0].content
+        assert "What is the main risk?" in sent
+        assert "Risk is rollout complexity." in sent
+        assert "Answer using only the parent report" in sent
+
+    @pytest.mark.asyncio
+    async def test_answer_from_report_context_falls_back_on_empty_response(self):
+        """An empty/whitespace LLM completion yields a bounded fallback, never a blank answer."""
+        from aiq_agent.agents.chat_researcher.register import _answer_from_report_context
+
+        class EmptyLLM:
+            async def ainvoke(self, messages):
+                return AIMessage(content="   ")
+
+        answer = await _answer_from_report_context(
+            EmptyLLM(),
+            question="What is the risk?",
+            report_markdown="# Report",
+            source_summary_markdown="",
+        )
+
+        assert answer.strip()
+        assert "does not contain enough information" in answer.lower()
 
 
 class TestExtractTextFromMessageString:
@@ -132,64 +199,6 @@ class TestExtractTextFromMessageDict:
         message = {"content": "Content value", "text": "Text value"}
         result = _extract_text_from_message(message)
         assert result == "Content value"
-
-
-class TestExtractQueryFromText:
-    """Tests for _extract_query_from_text function."""
-
-    def test_extract_plain_text(self):
-        """Test that plain text is returned as-is."""
-        query, sources = _extract_query_from_text("What is CUDA?")
-        assert query == "What is CUDA?"
-        assert sources is None
-
-    def test_extract_empty_text(self):
-        """Test extracting from empty text."""
-        query, sources = _extract_query_from_text("")
-        assert query == ""
-        assert sources is None
-
-    def test_extract_json_payload_with_query(self):
-        """Test extracting from JSON payload with query key."""
-        text = '{"query": "What is CUDA?", "data_sources": ["web_search"]}'
-        query, sources = _extract_query_from_text(text)
-        assert query == "What is CUDA?"
-        assert sources == ["web_search"]
-
-    def test_extract_json_payload_with_text_key(self):
-        """Test extracting from JSON payload with text key."""
-        text = '{"text": "Hello world", "data_sources": "confluence"}'
-        query, sources = _extract_query_from_text(text)
-        assert query == "Hello world"
-        assert sources == ["confluence"]
-
-    def test_extract_json_payload_no_data_sources(self):
-        """Test extracting from JSON without data_sources."""
-        text = '{"query": "Simple query"}'
-        query, sources = _extract_query_from_text(text)
-        assert query == "Simple query"
-        assert sources is None
-
-    def test_extract_invalid_json_returns_original(self):
-        """Test that invalid JSON returns original text."""
-        text = '{"invalid json'
-        query, sources = _extract_query_from_text(text)
-        assert query == '{"invalid json'
-        assert sources is None
-
-    def test_extract_json_with_whitespace(self):
-        """Test extracting from JSON with surrounding whitespace."""
-        text = '  {"query": "Test"}  '
-        query, sources = _extract_query_from_text(text)
-        assert query == "Test"
-        assert sources is None
-
-    def test_extract_json_missing_query_returns_none_text(self):
-        """Test JSON without query or text returns None query."""
-        text = '{"data_sources": ["web_search"]}'
-        query, sources = _extract_query_from_text(text)
-        assert query == '{"data_sources": ["web_search"]}'
-        assert sources is None
 
 
 class TestExtractQueryAndSourcesDict:
@@ -413,3 +422,58 @@ class TestExtractQueryAndSourcesEdgeCases:
         query, sources = _extract_query_and_sources(payload)
         assert query == "Query"
         assert sources == ["web_search", "confluence"]
+
+
+class TestResolveEffectiveReportJobId:
+    """Precedence + conversation-scoped fallback for the active report job."""
+
+    @pytest.mark.asyncio
+    async def test_client_supplied_id_wins_without_lookup(self, monkeypatch):
+        from aiq_agent.agents.chat_researcher.register import _resolve_effective_report_job_id
+        from aiq_api.jobs import access
+
+        lookup = MagicMock(return_value="from-db")
+        monkeypatch.setattr(access, "get_latest_report_job_for_conversation", lookup)
+
+        result = await _resolve_effective_report_job_id(
+            "client-id", conversation_id="conv-A", principal=None, is_input_mode=False
+        )
+        assert result == "client-id"
+        lookup.assert_not_called()  # precedence short-circuits the DB query
+
+    @pytest.mark.asyncio
+    async def test_falls_back_to_conversation_last_report(self, monkeypatch):
+        from aiq_agent.agents.chat_researcher.register import _resolve_effective_report_job_id
+        from aiq_api.jobs import access
+
+        monkeypatch.setattr(access, "get_latest_report_job_for_conversation", MagicMock(return_value="last-report"))
+
+        result = await _resolve_effective_report_job_id(
+            None, conversation_id="conv-A", principal=None, is_input_mode=False
+        )
+        assert result == "last-report"
+
+    @pytest.mark.asyncio
+    async def test_no_fallback_for_input_mode_or_missing_conversation(self, monkeypatch):
+        from aiq_agent.agents.chat_researcher.register import _resolve_effective_report_job_id
+        from aiq_api.jobs import access
+
+        lookup = MagicMock(return_value="should-not-be-used")
+        monkeypatch.setattr(access, "get_latest_report_job_for_conversation", lookup)
+
+        # --input mode: deliberately discards continuity
+        assert await _resolve_effective_report_job_id(None, "conv-A", None, is_input_mode=True) is None
+        # no client conversation id (generated thread): no fallback
+        assert await _resolve_effective_report_job_id(None, None, None, is_input_mode=False) is None
+        lookup.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_lookup_error_degrades_to_none(self, monkeypatch):
+        from aiq_agent.agents.chat_researcher.register import _resolve_effective_report_job_id
+        from aiq_api.jobs import access
+
+        monkeypatch.setattr(
+            access, "get_latest_report_job_for_conversation", MagicMock(side_effect=RuntimeError("db down"))
+        )
+        result = await _resolve_effective_report_job_id(None, "conv-A", None, is_input_mode=False)
+        assert result is None

@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+FROM python:3.13-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Optional OpenShell sandbox log verbosity. Defaults to `warn` (OpenShell's stock
+# sandbox level, so default behavior is unchanged). Rebuild with
+# `--build-arg OPENSHELL_SANDBOX_LOG_LEVEL=debug` (or `setup_openshell.sh
+# --sandbox-log-level debug`) to surface process/relay detail (`OCSF PROC:` etc.)
+# in the container logs (`/var/log/openshell.*.log`, `openshell logs <name>`).
+ARG OPENSHELL_SANDBOX_LOG_LEVEL=warn
+ENV RUST_LOG=${OPENSHELL_SANDBOX_LOG_LEVEL}
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        bash \
+        ca-certificates \
+        curl \
+        iproute2 \
+        iptables \
+        procps \
+    && python -m pip install --no-cache-dir numpy pandas matplotlib pillow tabulate requests \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -r sandbox \
+    && useradd -r -g sandbox -d /sandbox -s /bin/bash sandbox \
+    && mkdir -p /sandbox /workspace /tmp \
+    && chown -R sandbox:sandbox /sandbox /workspace
+
+WORKDIR /workspace
+USER sandbox
+ENTRYPOINT ["/bin/bash"]

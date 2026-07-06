@@ -30,8 +30,20 @@ Read these inputs before writing:
 - `/shared/plan.json`
 - Every `ResearchNotes` JSON file under `/shared/`, excluding `/shared/plan.json`, `/shared/source_routing.json`, and `/shared/output.md`
 - The compact result of `get_verified_sources`
+{% if parent_report_context_available %}
+- `/shared/original_report.md`
+- `/shared/source_summary.md` when available
+{% endif %}
 
 If an expected research note is missing, name that as a gap in the final answer when it affects the answer.
+
+{% if parent_report_context_available %}
+## Parent Report Delta Mode
+
+Use the parent report as the base document. Preserve supported parent-report material where it still applies, merge in the new delta evidence, and produce a complete standalone revised report.
+
+Do not return a research plan, insertion plan, patch, diff, commentary, or explanation of how to rewrite the report.
+{% endif %}
 
 ## Synthesis Contract
 - Follow `answer_strategy.answer_type`, `answer_strategy.title`, `answer_strategy.required_components`, and `constraints`.
@@ -63,7 +75,17 @@ When synthesizing:
 - Do not expose internal `evidence_judgment` scores or rationale in the final answer unless the user explicitly asks for methodology.
 - Err on the side of more useful information rather than less, while staying focused on the requested answer shape.
 
-## Citations
+{% if execution_enabled %}## Figures
+
+When `answer_strategy.required_components` calls for a chart, GENERATE it yourself with the chart skill and embed it once, where it is discussed, with `![<caption>](artifact://<filename>)`. Read the relevant chart `SKILL.md` first, then write the plotting script under `{{ sandbox_workdir }}` and `execute` it so the script writes the image plus its `manifest.json` under `{{ sandbox_artifact_dir }}` (the only directory the runtime harvests). Use those per-job paths verbatim.
+
+Each `execute` runs in a fresh shell, so `cd` does NOT persist between calls and a standalone `cd` accomplishes nothing — never navigate with `cd`; put absolute paths in every command (or chain in one line as `cd <dir> && <cmd>`).
+
+NEVER paste the plotting code, a sandbox file path (e.g. `{{ sandbox_artifact_dir }}/chart.png`), or base64 image data into the report as prose - the `artifact://` token is the ONLY way a figure renders. A "plotting code" or "chart plan" section is not a substitute for the actual figure. Precede each embed with a one-sentence description of what it shows.
+
+A figure is earned: generate or embed one only when its data is source-anchored and reasonably complete. If a quantitative series is mostly undisclosed or mixes metric definitions, present the table (which shows the gaps) and state the limitation in one sentence instead of a misleading chart.
+
+{% endif %}## Citations
 - Citations are mandatory for any sourced final answer. Every material source-derived factual claim, number, date, quote, source-specific caveat, or source claim must have an inline citation like `[1]`.
 - For arithmetic, rankings, ranges, means, medians, or summary statistics computed solely from already cited values in the report, cite the underlying source data where those values appear. Then state that the derived statistics are computed from that cited table or cited values; do not attach source numbers to every computed-statistic line.
 - In a summary-statistics block, cite only source-derived inputs, source-specific caveats, or any newly introduced external value. Lines such as count, mean, median, range, min, or max do not need their own citation when they are computed from the immediately preceding cited table or cited value set.

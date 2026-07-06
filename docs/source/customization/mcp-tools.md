@@ -8,22 +8,20 @@ Model Context Protocol (MCP) is an open protocol that standardizes how applicati
 context to LLM applications. The AIQ Blueprint is built on the NVIDIA NeMo Agent toolkit (NAT), so
 AIQ can use MCP servers as data sources through NAT function groups.
 
-This guide is written for AIQ 2.1 deployments running NAT `1.6.0` or later. Verify your installed
-version with `uv pip show nvidia-nat`.
+This guide targets AIQ deployments pinned to NAT `1.8.0`. Verify your installed version with
+`uv pip show nvidia-nat`.
 
 ## What this guide covers
 
-**Supported in AIQ 2.1:**
+**Supported:**
 
 - Connect AIQ to an unauthenticated MCP server.
 - Connect AIQ to an MCP server with backend service-account credentials.
+- Connect each signed-in user to a protected MCP server through the AIQ UI using MCP OAuth.
 - Forward the signed-in AIQ user's identity to a downstream service from a custom AIQ tool.
 
-**Planned for AIQ 2.2 / 2.3:**
+**Not yet first-party:**
 
-- Native per-user MCP OAuth driven by the AIQ UI. NAT 1.6 ships the protocol-level support
-  (`mcp_oauth2`, `per_user_mcp_client`); the AIQ UI cannot yet drive per-MCP consent. See the
-  short [planning note](#per-user-mcp-oauth-planned) below.
 - A first-party AIQ-token pass-through MCP auth provider. Today, if your MCP server trusts the AIQ
   user's bearer token, you must implement and register a custom NAT auth provider in your
   deployment package.
@@ -41,14 +39,14 @@ For the full NAT MCP reference:
 | MCP server has no per-user auth | `mcp_client` function group | [Connect AIQ to an MCP Server](#connect-aiq-to-an-mcp-server) |
 | MCP server uses backend / app credentials | `mcp_client` + `mcp_service_account` | [Service-Account MCP Servers](#service-account-mcp-servers) |
 | Downstream API trusts the AIQ user's bearer token | Custom AIQ tool using `get_auth_token()` | [Forwarding AIQ User Identity](#forwarding-aiq-user-identity-from-a-tool) |
-| MCP server requires per-user OAuth consent | Planned for AIQ 2.2 / 2.3 | [Per-User MCP OAuth (planned)](#per-user-mcp-oauth-planned) |
+| MCP server requires per-user OAuth consent | `per_user_mcp_client` + `mcp_oauth2` | [Per-User MCP OAuth](#per-user-mcp-oauth) |
 
 ## Prerequisites
 
 Install NAT and the MCP package on the same release line as your AIQ deployment:
 
 ```bash
-uv pip install "nvidia-nat[mcp]==1.6.0" nvidia-nat-mcp==1.6.0
+uv pip install "nvidia-nat[mcp]==1.8.0" nvidia-nat-mcp==1.8.0 nvidia-nat-redis==1.8.0
 ```
 
 Keep `nvidia-nat`, `nvidia-nat-core`, `nvidia-nat-eval`, and `nvidia-nat-mcp` on the same release
@@ -276,34 +274,59 @@ functions:
     endpoint: ${INTERNAL_SEARCH_URL}
 ```
 
-This is the AIQ-user-identity MCP pattern fully supported in 2.1. The two alternatives —
+This is the supported AIQ-user-identity MCP pattern. The two alternatives —
 protocol-level pass-through via a custom NAT auth provider, and an auth-forwarding MCP proxy — are
-viable in NAT but are not first-class in AIQ 2.1; treat them as deployment-side extensions.
+viable in NAT but are not first-class in AIQ; treat them as deployment-side extensions.
 
 For the broader auth context (UI sign-in flow, validator registration, headless API callers), see
 [Authentication](../deployment/authentication.md).
 
-## Per-User MCP OAuth (planned)
+## Per-User MCP OAuth
 
-NAT 1.6 ships the protocol-level building blocks for per-user MCP OAuth — `mcp_oauth2` (auth
-provider for MCP OAuth flows) and `per_user_mcp_client` (function group with per-user token
-storage). What AIQ 2.1 **does not yet** ship is the UI integration that drives this flow: the
-data-source API does not return per-MCP auth status, connect / disconnect URLs, scopes, or token
-expiry, and the UI has no per-source "Connect" / "Reconnect" controls.
+Use per-user MCP OAuth when each AIQ user must authorize the upstream MCP server with their own
+identity. The reference configuration is
+[`configs/config_web_frag_mcp_auth.yml`](../../../configs/config_web_frag_mcp_auth.yml). It combines
+an OAuth-protected data source, NAT's `per_user_mcp_client`, an `mcp_oauth2` provider, and a shared
+token object store.
 
-Until that lands, the recommended patterns for AIQ deployments remain:
+Set these values before starting AIQ:
 
-- **Service-account MCP** when the access can be shared at the application level.
-- **AIQ user-identity tools** (the section above) when the downstream service trusts the AIQ
-  bearer token.
+- `MCP_GDRIVE_URL`: protected streamable-HTTP MCP endpoint. The example calls the source `gdrive`,
+  but the mechanism is not Google Drive-specific.
+- `AIQ_PUBLIC_URL`: externally reachable AIQ origin used to construct the OAuth callback URL.
+- `MCP_GDRIVE_CLIENT_ID` and `MCP_GDRIVE_CLIENT_SECRET`: only when the MCP authorization server
+  requires a pre-registered OAuth client rather than dynamic client registration.
+- `MCP_TOKEN_STORE_TYPE`: `aiq_sqlite` for a single-host example or `redis` for multi-process and
+  multi-host deployments.
 
-Beyond the UI, two further gaps exist in 2.1: AIQ's `/v1/data_sources` does not surface per-MCP
-auth status (connect URL, scopes, token expiry, error state), and async deep research jobs cannot
-yet resolve per-user MCP tokens inside Dask workers. The full per-user MCP OAuth integration —
-backend status APIs, UI controls, and worker-side token resolution — is tracked on the AIQ 2.2 /
-2.3 roadmap. Refer to the
+The UI reads connection status from `/v1/data_sources` and presents Connect, Reconnect, and
+Disconnect actions for the protected source. AIQ owns the OAuth callback and stores the resulting
+token under the current AIQ user identity. Submitting a job with a disconnected protected source
+fails with `409 mcp_auth_required`; AIQ does not silently run the job without that source.
+
+Both interactive WebSocket sessions and REST-submitted async jobs resolve the user's MCP tools.
+Async workers open their own MCP client for the job and read the same token store as the API, so
+the API and workers must share that store:
+
+- `aiq_sqlite` requires the API and worker processes to share the same absolute database path on
+  one host.
+- `redis` is the supported example for multiple processes, hosts, or Kubernetes pods. Each
+  protected source must reference an object store with a distinct bucket or namespace;
+  configuration fails closed when two sources reference the same object-store configuration.
+
+This example targets the AIQ web/API deployment, which owns the connect and callback routes and
+supplies user identity to jobs. Raw NAT CLI runs do not provide that browser OAuth lifecycle; use
+an unauthenticated or service-account MCP configuration for standalone CLI execution.
+
+For a local Redis-backed stack, use the
+[per-user-auth Compose override](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/deploy/compose/README.md#per-user-mcp-authentication).
+For a released chart, provide an external Redis service as described in the
+[Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/deploy/helm/README.md#per-user-mcp-authentication-with-external-redis).
+The default Compose and Helm deployments remain Redis-free when this example is not selected.
+
+See the
 [NAT MCP authentication guide](https://docs.nvidia.com/nemo/agent-toolkit/latest/components/auth/mcp-auth/index.html)
-if you want to follow NAT's MCP OAuth surface directly.
+for protocol details.
 
 ## Security Guidance
 
@@ -312,9 +335,11 @@ if you want to follow NAT's MCP OAuth surface directly.
 - Store secrets in environment variables or a secret manager, not in YAML checked into source
   control.
 - Use service-account MCP auth only when shared app-level access is acceptable.
+- Use `per_user_auth: true` for upstream MCP OAuth; `requires_auth: true` only gates a source on
+  AIQ sign-in and does not authorize the upstream MCP server.
 - Keep token forwarding scoped to trusted internal services and HTTPS endpoints.
-- Mark user-authenticated data sources with `requires_auth: true` so the UI can prevent
-  unauthenticated use.
+- Use `requires_auth: true` for sources that depend on AIQ sign-in but do not have a separate
+  upstream OAuth connection.
 
 ## Troubleshooting
 
