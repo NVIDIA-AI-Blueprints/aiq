@@ -191,7 +191,10 @@ a worker configured with `off`.
 
 If final-report encryption, artifact event-content encryption, or encrypted
 persistence fails after an agent has completed, the job is marked `FAILURE`.
-The worker does not fall back to writing plaintext output.
+Timer-triggered event flush failures are surfaced before the worker can mark
+the job `SUCCESS`. The worker does not fall back to writing plaintext output.
+When encryption is `off`, event persistence retains its legacy best-effort
+behavior: database write failures are logged without changing the job status.
 
 Report reads fail closed:
 

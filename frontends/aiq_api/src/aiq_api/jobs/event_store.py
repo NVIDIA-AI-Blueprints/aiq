@@ -113,6 +113,7 @@ class EventStore:
         self.db_url = db_url
         self.job_id = job_id
         self._content_cipher = content_cipher
+        self._fail_closed = bool(content_cipher is not None and content_cipher.manager.config.encrypted)
         self._is_postgres = db_url.startswith("postgresql")
         self._sync_engine = self._get_or_create_sync_engine(db_url)
         self._ensure_table_sync()
@@ -441,6 +442,8 @@ class EventStore:
                 logger.debug("Stored event %s for job %s", event_type, self.job_id)
         except Exception as e:
             logger.warning("Failed to store event %s for job %s: %s", event_type, self.job_id, e)
+            if self._fail_closed:
+                raise
 
     def store_batch(self, events: list[dict]):
         """
@@ -498,6 +501,8 @@ class EventStore:
                 logger.debug("Stored batch of %d events for job %s", len(events), self.job_id)
         except Exception as e:
             logger.warning("Failed to store batch of %d events for job %s: %s", len(events), self.job_id, e)
+            if self._fail_closed:
+                raise
 
     @classmethod
     def _ensure_table_exists(cls, db_url: str):
@@ -810,6 +815,7 @@ class BatchingEventStore:
         self._buffer: list[dict] = []
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
+        self._flush_error: Exception | None = None
 
     @property
     def job_id(self) -> str | None:
@@ -819,30 +825,50 @@ class BatchingEventStore:
     def store(self, event: dict):
         """Buffer an event; flush when batch is full or timer fires."""
         with self._lock:
+            self._raise_flush_error_locked()
             self._buffer.append(event)
             if len(self._buffer) >= self.MAX_BATCH_SIZE:
                 self._flush_locked()
             elif self._timer is None:
-                self._timer = threading.Timer(self.FLUSH_INTERVAL_MS / 1000, self._flush)
+                self._timer = threading.Timer(self.FLUSH_INTERVAL_MS / 1000, self._flush_from_timer)
                 self._timer.daemon = True
                 self._timer.start()
+
+    def _raise_flush_error_locked(self):
+        """Raise a previously captured background flush failure."""
+        if self._flush_error is not None:
+            raise self._flush_error
 
     def _flush_locked(self):
         """Flush while already holding the lock."""
         if self._timer:
             self._timer.cancel()
             self._timer = None
+        self._raise_flush_error_locked()
         if not self._buffer:
             return
         batch = self._buffer[:]
         self._buffer.clear()
-        self._store.store_batch(batch)
+        try:
+            self._store.store_batch(batch)
+        except Exception as exc:
+            if self._flush_error is None:
+                self._flush_error = exc
+            raise
 
-    def _flush(self):
-        """Flush from timer callback (acquires lock)."""
+    def _flush_from_timer(self):
+        """Capture timer-thread failures for the owning job to observe."""
         with self._lock:
-            self._flush_locked()
+            try:
+                self._flush_locked()
+            except Exception as exc:
+                logger.warning(
+                    "Background event flush failed for job %s exception=%s",
+                    self.job_id,
+                    exc.__class__.__name__,
+                )
 
     def flush(self):
         """Force flush all buffered events. Call before job completion."""
-        self._flush()
+        with self._lock:
+            self._flush_locked()

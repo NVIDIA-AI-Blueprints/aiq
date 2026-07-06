@@ -27,6 +27,7 @@ import pytest
 from sqlalchemy import text
 
 from aiq_api.jobs import crypto
+from aiq_api.jobs.event_store import BatchingEventStore
 from aiq_api.jobs.event_store import EventStore
 
 
@@ -142,6 +143,76 @@ def test_file_artifact_content_is_encrypted_in_batch(monkeypatch, db_url):
 
     events = EventStore.get_events(db_url, "job-1")
     assert events[0]["data"]["content"] == "secret file content"
+
+
+@pytest.mark.parametrize("use_batch", [False, True])
+def test_encrypted_event_persistence_failure_is_raised(monkeypatch, db_url, use_batch):
+    _enable_static_key(monkeypatch)
+    cipher = crypto.create_job_content_cipher("job-1")
+    store = EventStore(db_url, "job-1", content_cipher=cipher)
+
+    def fail_connect():
+        raise RuntimeError("transient database failure")
+
+    monkeypatch.setattr(store._sync_engine, "connect", fail_connect)
+    event = {"type": "test.event", "data": {"value": "test"}}
+
+    with pytest.raises(RuntimeError, match="transient database failure"):
+        if use_batch:
+            store.store_batch([event])
+        else:
+            store.store(event)
+
+
+@pytest.mark.parametrize("use_batch", [False, True])
+def test_off_mode_event_persistence_failure_remains_best_effort(monkeypatch, db_url, use_batch):
+    store = EventStore(db_url, "job-1", content_cipher=crypto.create_job_content_cipher("job-1"))
+
+    def fail_connect():
+        raise RuntimeError("transient database failure")
+
+    monkeypatch.setattr(store._sync_engine, "connect", fail_connect)
+    event = {"type": "test.event", "data": {"value": "test"}}
+
+    if use_batch:
+        store.store_batch([event])
+    else:
+        store.store(event)
+
+
+def test_background_encrypted_batch_failure_is_raised_by_foreground_flush(monkeypatch, db_url):
+    _enable_static_key(monkeypatch)
+    cipher = crypto.create_job_content_cipher("job-1")
+    raw_store = EventStore(db_url, "job-1", content_cipher=cipher)
+    flush_attempted = threading.Event()
+    attempts = 0
+    original_connect = raw_store._sync_engine.connect
+
+    def fail_once_connect():
+        nonlocal attempts
+        attempts += 1
+        flush_attempted.set()
+        if attempts == 1:
+            raise RuntimeError("transient database failure")
+        return original_connect()
+
+    monkeypatch.setattr(raw_store._sync_engine, "connect", fail_once_connect)
+    store = BatchingEventStore(raw_store)
+    store.FLUSH_INTERVAL_MS = 1
+
+    store.store(
+        {
+            "type": "artifact.update",
+            "data": {"type": "output", "content": "secret report"},
+        }
+    )
+
+    assert flush_attempted.wait(timeout=1)
+    with pytest.raises(RuntimeError, match="transient database failure"):
+        store.flush()
+    with pytest.raises(RuntimeError, match="transient database failure"):
+        store.store({"type": "test.event", "data": {"value": "later"}})
+    assert attempts == 1
 
 
 def test_non_sensitive_artifact_content_remains_plaintext(monkeypatch, db_url):

@@ -588,14 +588,13 @@ async def run_agent_job(
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
-        event_store.store(
+        _store_terminal_event_best_effort(
+            event_store,
             {
                 "type": "job.cancelled",
                 "data": {"reason": "cancelled by user"},
-            }
+            },
         )
-        if hasattr(event_store, "flush"):
-            event_store.flush()
 
     except Exception as e:
         logger.exception("Job %s failed: %s", job_id, type(e).__name__)
@@ -605,22 +604,28 @@ async def run_agent_job(
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
-        event_store.store(
+        _store_terminal_event_best_effort(
+            event_store,
             {
                 "type": "job.error",
                 "data": {
                     "error": str(e),
                     "error_type": type(e).__name__,
                 },
-            }
+            },
         )
-        if hasattr(event_store, "flush"):
-            event_store.flush()
 
     finally:
         # Ensure terminal-path events are not left in the batch buffer.
         if event_store is not None and hasattr(event_store, "flush"):
-            event_store.flush()
+            try:
+                event_store.flush()
+            except Exception as exc:
+                logger.warning(
+                    "Final event flush failed for job %s exception=%s",
+                    job_id,
+                    exc.__class__.__name__,
+                )
         if cancellation_monitor:
             cancellation_monitor.stop()
         # Clean up job-scoped auth token
@@ -628,6 +633,21 @@ async def run_agent_job(
             from ._auth_context import job_auth_token
 
             job_auth_token.reset(_auth_token_reset)
+
+
+def _store_terminal_event_best_effort(event_store, event: dict) -> None:
+    """Persist a terminal event without masking the job's terminal status."""
+    try:
+        event_store.store(event)
+        if hasattr(event_store, "flush"):
+            event_store.flush()
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist terminal event %s for job %s exception=%s",
+            event.get("type", "unknown"),
+            event_store.job_id,
+            exc.__class__.__name__,
+        )
 
 
 def _create_agent_instance(

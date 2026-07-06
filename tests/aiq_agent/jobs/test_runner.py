@@ -731,6 +731,117 @@ class TestRunAgentJobEncryption:
         update_job_output.assert_awaited_once()
         assert update_job_output.await_args.kwargs["output"] == {"report": "secret report"}
 
+    @pytest.mark.asyncio
+    async def test_encrypted_event_flush_failure_marks_failure_before_success(self, tmp_path):
+        import base64
+        from types import SimpleNamespace
+
+        from aiq_api.jobs import crypto
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            def __init__(self, value=None):
+                self.value = value
+
+            async def __aenter__(self):
+                return self.value
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):
+                return AsyncContext()
+
+        async def run_agent_with_event(*, event_store, **_kwargs):
+            event_store.store(
+                {
+                    "type": "artifact.update",
+                    "data": {"type": "output", "content": "secret report"},
+                }
+            )
+            return "secret report"
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+        update_job_output = AsyncMock()
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+        encryption_env = {
+            "AIQ_CONTENT_ENCRYPTION": "key",
+            "AIQ_CONTENT_ENCRYPTION_KEY": base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
+            "AIQ_CONTENT_ENCRYPTION_KEY_ID": "test-key",
+        }
+
+        with patch.dict("os.environ", encryption_env):
+            crypto.reset_content_encryption_manager_for_tests()
+            policy = crypto.get_content_encryption_policy_identity()
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("nat.runtime.loader.load_config", return_value=object()):
+                    with patch(
+                        "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                        return_value=FakeWorkflowBuilder(),
+                    ):
+                        with patch(
+                            "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                            return_value=FakeExporterManager(),
+                        ):
+                            with patch("aiq_api.jobs.runner._load_agent_class", return_value=object):
+                                with patch(
+                                    "aiq_api.jobs.runner._create_llm_provider",
+                                    AsyncMock(return_value=(object(), object())),
+                                ):
+                                    with patch("aiq_api.jobs.runner._create_agent_instance", return_value=object()):
+                                        with patch(
+                                            "aiq_api.jobs.runner._run_agent",
+                                            side_effect=run_agent_with_event,
+                                        ):
+                                            with patch(
+                                                "aiq_api.jobs.event_store.EventStore.store_batch",
+                                                side_effect=RuntimeError("transient database failure"),
+                                            ):
+                                                with patch(
+                                                    "aiq_api.jobs.crypto.update_job_output",
+                                                    update_job_output,
+                                                ):
+                                                    await run_agent_job(
+                                                        False,
+                                                        20,
+                                                        "tcp://localhost:8786",
+                                                        db_url,
+                                                        "config.yml",
+                                                        "job-1",
+                                                        "input",
+                                                        "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                                                        "deep_research_agent",
+                                                        content_encryption_policy=policy,
+                                                    )
+            crypto.reset_content_encryption_manager_for_tests()
+
+        statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
+        assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        mock_job_store.update_status.assert_awaited_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="transient database failure",
+        )
+        update_job_output.assert_not_awaited()
+
 
 class TestEventStore:
     """Tests for the EventStore class."""
