@@ -69,12 +69,10 @@ functions:
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_super_llm
-    planner_llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search
     max_turns: 3
-    enable_plan_approval: true
 
   shallow_research_agent:
     _type: shallow_research_agent

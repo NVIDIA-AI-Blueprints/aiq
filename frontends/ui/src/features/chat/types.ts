@@ -61,7 +61,7 @@ export type ErrorCode =
   | 'system.unknown'
 
 /** Prompt types for agent prompts requiring user response */
-export type PromptType = 'clarification' | 'approval' | 'choice' | 'text-input' | 'plan_approval'
+export type PromptType = 'clarification' | 'approval' | 'choice' | 'text-input'
 
 /** File card data for file messages */
 export interface FileCardData {

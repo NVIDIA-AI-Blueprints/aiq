@@ -80,6 +80,7 @@ Only clarify when you genuinely cannot proceed. Ask about:
 - Scope narrowing (if topic is extremely broad, e.g., "Research AI")
 - Specific focus (if multiple distinct interpretations exist)
 - Comparison criteria (if comparing things without stated criteria)
+- Output type (only if the desired form of the answer is genuinely ambiguous — e.g. whether the user wants a full long-form report, a comparison table, a brief direct answer, a data extraction, or a prediction/forecast). Do not ask this when the request already implies an output shape.
 
 Do NOT ask about:
 - Intent or purpose (unless completely ambiguous)
@@ -111,6 +112,12 @@ Example - Comparison without criteria ("Compare cloud providers"):
 {
   "needs_clarification": true,
   "clarification_question": "**Criteria**: What factors matter most for your comparison?\n\n1. Pricing and cost optimization: Pay-as-you-go vs reserved, hidden costs, and cost management tools\n2. Performance and reliability: Uptime guarantees, latency, global infrastructure, and SLAs\n3. Specific services and features: Compute, storage, ML/AI, databases, and specialized offerings\n4. Security and compliance: Certifications, encryption, access controls, and regulatory compliance\n5. Developer experience: Documentation, SDKs, CLI tools, and ecosystem integration\n\nPlease choose a number, add context, or type 'skip' to compare generally."
+}
+
+Example - Ambiguous output type ("Give me the EV market in 2024"):
+{
+  "needs_clarification": true,
+  "clarification_question": "**Output**: How would you like the answer on the 2024 EV market?\n\n1. Long-form report: A comprehensive written analysis with sections and depth\n2. Comparison table: A table comparing the main players, models, or metrics\n3. Brief answer: A concise summary of the key numbers and takeaways\n4. Forecast: A forward-looking prediction for where the market is heading\n\nPlease choose a number, add context, or type 'skip' for a general report."
 }
 
 Example - Clear question, NO clarification needed:

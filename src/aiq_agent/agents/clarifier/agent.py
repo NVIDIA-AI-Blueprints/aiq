@@ -81,19 +81,6 @@ DEFAULT_CLARIFICATION_PROMPT = (
 )
 """Fallback prompt used when the prompt file cannot be loaded."""
 
-DEFAULT_PLAN_GENERATION_PROMPT = (
-    "/no_think\n\n"
-    "Generate a research plan with a title and 5-8 sections. "
-    'Respond with JSON: {"title": "...", "sections": ["...", "..."]}'
-)
-"""Fallback prompt for plan generation."""
-
-APPROVAL_KEYWORDS = {"approve", "approved", "yes", "ok", "proceed", "continue", "go ahead", "looks good", "y", "accept"}
-"""Keywords that indicate the user approves the plan."""
-
-REJECTION_KEYWORDS = {"reject", "rejected", "no", "cancel", "stop", "abort", "n"}
-"""Keywords that indicate the user rejects the plan."""
-
 JSON_REMINDER_AFTER_TOOLS = (
     "Based on the search results above, now make your clarification decision. "
     "IMPORTANT: You must respond with ONLY a valid JSON object, nothing else. "
@@ -132,6 +119,10 @@ class ClarifierAgent:
     - tools: Executes tool calls for context gathering (e.g., web search)
     - ask_for_clarification: Prompts the user and processes their response
 
+    It gathers context and, when the request is vague, may clarify the scope or
+    the type of output the user wants (e.g. report, table, comparison, prediction)
+    before research begins. It does not produce or approve a research plan.
+
     Attributes:
         llm_provider: Provider for obtaining LLM instances.
         tools: List of tools available for context gathering.
@@ -163,9 +154,6 @@ class ClarifierAgent:
         *,
         user_prompt_callback: Callable[[str], Awaitable[str]],
         max_turns: int = 3,
-        enable_plan_approval: bool = False,
-        max_plan_iterations: int = 10,
-        planner_llm: BaseChatModel | None = None,
         log_response_max_chars: int = 2000,
         verbose: bool = False,
         callbacks: list[Any] | None = None,
@@ -181,12 +169,6 @@ class ClarifierAgent:
                 Takes a question string and returns the user's response string.
             max_turns: Maximum number of clarification Q&A turns before
                 automatically completing clarification. Defaults to 3.
-            enable_plan_approval: Whether to enable plan preview and approval
-                after clarification completes. Defaults to False.
-            max_plan_iterations: Maximum number of plan feedback iterations
-                before auto-approving. Defaults to 10.
-            planner_llm: Optional LLM to use for plan generation. If not provided,
-                uses the default clarifier LLM.
             log_response_max_chars: Maximum characters to log from LLM responses.
                 Used for debugging. Defaults to 2000.
             verbose: Whether to enable detailed logging. Defaults to False.
@@ -197,15 +179,11 @@ class ClarifierAgent:
         self.tools = list(tools) if tools else []
         self.user_prompt_callback = user_prompt_callback
         self.max_turns = max_turns
-        self.enable_plan_approval = enable_plan_approval
-        self.max_plan_iterations = max_plan_iterations
-        self.planner_llm = planner_llm
         self.log_response_max_chars = log_response_max_chars
         self.verbose = verbose
         self.callbacks = callbacks or []
 
         self.system_prompt = self._load_default_prompt()
-        self.plan_generation_prompt = self._load_plan_generation_prompt()
 
         self._graph = self._build_graph()
 
@@ -224,101 +202,6 @@ class ClarifierAgent:
         except Exception:
             logger.warning("Clarifier prompt not found, using inline default")
             return DEFAULT_CLARIFICATION_PROMPT
-
-    def _load_plan_generation_prompt(self) -> str:
-        """
-        Load the plan generation prompt from file.
-
-        Returns:
-            The loaded prompt string, or the default fallback prompt.
-        """
-        try:
-            return load_prompt(AGENT_DIR / "prompts", "plan_generation")
-        except Exception:
-            logger.warning("Plan generation prompt not found, using inline default")
-            return DEFAULT_PLAN_GENERATION_PROMPT
-
-    def _parse_plan_response(self, text: str) -> tuple[str | None, list[str]]:
-        """
-        Parse plan generation response from LLM.
-
-        Args:
-            text: Raw JSON text response from the LLM.
-
-        Returns:
-            Tuple of (title, sections) or (None, []) if parsing fails.
-        """
-        if not text:
-            return None, []
-
-        text = text.strip()
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-        if json_match:
-            text = json_match.group(1).strip()
-
-        try:
-            data = json.loads(text)
-            title = data.get("title")
-            sections = data.get("sections", [])
-            if isinstance(sections, list) and all(isinstance(s, str) for s in sections):
-                return title, sections
-        except (json.JSONDecodeError, Exception) as e:
-            logger.warning("Failed to parse plan response as JSON: %s", e)
-
-        return None, []
-
-    def _parse_approval(self, response: str) -> tuple[bool, bool, str | None]:
-        """
-        Parse user's approval response.
-
-        Args:
-            response: User's response text (may be JSON wrapped).
-
-        Returns:
-            Tuple of (approved, rejected, feedback).
-            - If approved: (True, False, None)
-            - If rejected: (False, True, None)
-            - If feedback: (False, False, feedback_text)
-        """
-        # Extract query from JSON if wrapped (e.g., {"query": "approve", ...})
-        text = response.strip()
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict) and "query" in data:
-                text = data["query"]
-        except (json.JSONDecodeError, TypeError):
-            pass  # Not JSON, use original text
-
-        normalized = text.strip().lower()
-
-        if normalized in APPROVAL_KEYWORDS:
-            return True, False, None
-
-        if normalized in REJECTION_KEYWORDS:
-            return False, True, None
-
-        # Treat as feedback for plan revision
-        return False, False, text.strip()
-
-    def _format_plan_for_user(self, title: str, sections: list[str]) -> str:
-        """
-        Format the plan for user display.
-
-        Args:
-            title: Plan title.
-            sections: List of section titles.
-
-        Returns:
-            Formatted string for user display.
-        """
-        sections_text = "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(sections))
-        return (
-            f"**Research Plan Preview**\n\n"
-            f"**Title:** {title}\n\n"
-            f"**Sections:**\n{sections_text}\n\n"
-            f"---\n"
-            f"Reply **approve** to proceed, **reject** to cancel, or provide feedback to revise the plan."
-        )
 
     def _parse_response(self, text: str) -> ClarificationResponse | None:
         """
@@ -563,13 +446,12 @@ class ClarifierAgent:
           the model once and retries inline.
         - tools: Executes tool calls (e.g., web search) for context
         - ask_for_clarification: Prompts user and processes response
-        - plan_preview: Optional plan approval flow
 
         The graph flow:
         1. agent generates a response (question, tool call, or completion);
            on turn 0 it may force one search-and-retry before yielding
         2. If tool call → tools node → back to agent
-        3. If complete → end (or plan_preview if enabled)
+        3. If complete → end
         4. Otherwise → ask_for_clarification → back to agent
 
         Returns:
@@ -577,8 +459,6 @@ class ClarifierAgent:
         """
         llm = self._get_llm()
         bound_llm = llm.bind_tools(self.tools, parallel_tool_calls=True) if self.tools else llm
-        # Use planner_llm for plan generation if provided, otherwise use default llm
-        planner_llm = self.planner_llm if self.planner_llm is not None else llm
 
         graph = StateGraph(ClarifierAgentState)
 
@@ -592,8 +472,8 @@ class ClarifierAgent:
             if state.remaining_questions <= 0:
                 # Clarification budget is exhausted — emit a completion signal,
                 # but never create an invalid history (two adjacent assistant
-                # messages, or a pending tool call left unresolved), since it can
-                # reach plan_preview's planner.
+                # messages, or a pending tool call left unresolved), since the
+                # message list is replayed to the LLM on later turns.
                 last_message = state.messages[-1] if state.messages else None
                 if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
                     # A pending tool call must be resolved before we complete;
@@ -743,8 +623,6 @@ class ClarifierAgent:
                 return "tools"
 
             if self._is_complete(ai_message.content):
-                if self.enable_plan_approval:
-                    return "plan_preview"
                 return "__end__"
 
             # The search-before-clarify nudge (issue #234) is handled inline in
@@ -753,76 +631,9 @@ class ClarifierAgent:
             # already happened, so we route straight to the user.
             return "ask_for_clarification"
 
-        async def plan_preview_node(state: ClarifierAgentState):
-            """Generate plan preview and handle approval/feedback loop."""
-            clarifier_log = state.clarifier_log
-            feedback_history: list[str] = list(state.plan_feedback_history)
-
-            # Initialize with fallback values in case loop doesn't execute (max_plan_iterations <= 0)
-            title: str = "Research Report"
-            sections: list[str] = ["Introduction", "Background", "Analysis", "Findings", "Conclusion"]
-
-            for iteration in range(self.max_plan_iterations):
-                rendered_prompt = render_prompt_template(
-                    self.plan_generation_prompt,
-                    clarifier_context=clarifier_log,
-                    feedback_history=feedback_history if feedback_history else None,
-                )
-
-                # Generate plan using planner LLM
-                messages_for_plan = state.messages + [HumanMessage(content="Generate a research plan.")]
-                response = await planner_llm.ainvoke([SystemMessage(content=rendered_prompt)] + messages_for_plan)
-                title, sections = self._parse_plan_response(response.content)
-
-                if not title or not sections:
-                    logger.warning("Failed to generate valid plan, using fallback")
-                    title = "Research Report"
-                    sections = ["Introduction", "Background", "Analysis", "Findings", "Conclusion"]
-
-                # Present plan to user
-                plan_display = self._format_plan_for_user(title, sections)
-                user_response = await self.user_prompt_callback(plan_display)
-
-                approved, rejected, feedback = self._parse_approval(user_response)
-
-                if approved:
-                    logger.info("Clarifier: Plan approved by user")
-                    return {
-                        "plan_title": title,
-                        "plan_sections": sections,
-                        "plan_approved": True,
-                        "plan_rejected": False,
-                        "plan_feedback_history": feedback_history,
-                    }
-
-                if rejected:
-                    logger.info("Clarifier: Plan rejected by user")
-                    return {
-                        "plan_title": title,
-                        "plan_sections": sections,
-                        "plan_approved": False,
-                        "plan_rejected": True,
-                        "plan_feedback_history": feedback_history,
-                    }
-
-                # User provided feedback, add to history and continue loop
-                logger.info("Clarifier: User provided feedback, regenerating plan")
-                feedback_history.append(feedback)
-
-            # Max iterations reached, auto-approve
-            logger.warning("Clarifier: Max plan iterations reached, auto-approving")
-            return {
-                "plan_title": title,
-                "plan_sections": sections,
-                "plan_approved": True,
-                "plan_rejected": False,
-                "plan_feedback_history": feedback_history,
-            }
-
         graph.add_node("agent", agent_node)
         graph.add_node("tools", ToolNode(self.tools))
         graph.add_node("ask_for_clarification", ask_clarification)
-        graph.add_node("plan_preview", plan_preview_node)
 
         graph.set_entry_point("agent")
 
@@ -832,14 +643,12 @@ class ClarifierAgent:
             {
                 "tools": "tools",
                 "ask_for_clarification": "ask_for_clarification",
-                "plan_preview": "plan_preview",
                 "__end__": "__end__",
             },
         )
 
         graph.add_edge("tools", "agent")
         graph.add_edge("ask_for_clarification", "agent")
-        graph.add_edge("plan_preview", "__end__")
 
         return graph.compile()
 
@@ -851,20 +660,14 @@ class ClarifierAgent:
             state: Initial state of the clarifier agent.
 
         Returns:
-            ClarifierResult with clarification log and plan approval details.
+            ClarifierResult with the clarification log.
         """
         logger.info("Clarifier: Starting (max %d turns)", self.max_turns)
         query = get_latest_user_query(state.messages)
         logger.info("User's query: %s...", str(query)[:100] if query else "")
         result = await self._graph.ainvoke(state, config={"callbacks": self.callbacks})
         final_state = ClarifierAgentState.model_validate(result)
-        return ClarifierResult(
-            clarifier_log=final_state.clarifier_log,
-            plan_title=final_state.plan_title,
-            plan_sections=final_state.plan_sections,
-            plan_approved=final_state.plan_approved,
-            plan_rejected=final_state.plan_rejected,
-        )
+        return ClarifierResult(clarifier_log=final_state.clarifier_log)
 
     @property
     def graph(self) -> CompiledStateGraph:

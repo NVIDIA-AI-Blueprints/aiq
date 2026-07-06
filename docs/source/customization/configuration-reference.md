@@ -293,12 +293,9 @@ functions:
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_llm
-    planner_llm: nemotron_llm
     tools:
       - web_search_tool
     max_turns: 3
-    enable_plan_approval: true
-    max_plan_iterations: 10
     log_response_max_chars: 2000
     verbose: true
 ```
@@ -306,11 +303,9 @@ functions:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `llm` | `str` | **required** | LLM for generating clarification questions. |
-| `planner_llm` | `str` | `None` | LLM for plan generation. Falls back to `llm` if not specified. |
 | `tools` | `list[str]` | `[]` | Tools available for gathering context during clarification. |
+| `exclude_tools` | `list[str]` | `[]` | Tool names to exclude when inheriting from the data source registry. |
 | `max_turns` | `int` | `3` | Maximum number of clarification Q&A turns before auto-completing. |
-| `enable_plan_approval` | `bool` | `false` | Show research plan to the user for approval after clarification. |
-| `max_plan_iterations` | `int` | `10` | Maximum plan feedback iterations before auto-approving. |
 | `log_response_max_chars` | `int` | `2000` | Maximum characters to log from LLM responses. |
 | `verbose` | `bool` | `false` | Enable verbose logging. |
 
@@ -475,11 +470,9 @@ functions:
   clarifier_agent:                     # Asks clarifying questions for deep research
     _type: clarifier_agent
     llm: research_llm
-    planner_llm: research_llm
     tools:
       - web_search_tool
     max_turns: 3
-    enable_plan_approval: true
     verbose: true
 
   shallow_research_agent:              # Fast single-pass research
@@ -514,7 +507,7 @@ The repository includes several pre-built configurations:
 
 | File | Mode | Features |
 |------|------|----------|
-| `configs/config_cli_default.yml` | CLI | Web search, paper search, clarifier with plan approval |
+| `configs/config_cli_default.yml` | CLI | Web search, paper search, clarifier |
 | `configs/config_web_default_llamaindex.yml` | Web API | LlamaIndex knowledge retrieval, web search, paper search |
 | `configs/config_web_frag.yml` | Web API | Foundational RAG knowledge retrieval, web search, paper search |
 

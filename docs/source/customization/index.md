@@ -18,4 +18,4 @@ SPDX-License-Identifier: Apache-2.0
 - **[Guardrails](./guardrails.md)** — Configure NeMo Guardrails at workflow and agent boundaries
 - **[Knowledge Layer](./knowledge-layer.md)** — Add document retrieval (LlamaIndex or Foundational RAG)
 - **[Prompts](./prompts.md)** — Modify agent behavior through Jinja2 prompt templates
-- **[Human-in-the-Loop](./hitl.md)** — Configure the clarifier and plan approval workflow
+- **[Human-in-the-Loop](./hitl.md)** — Configure the clarifier

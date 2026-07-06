@@ -30,9 +30,9 @@ Not for running the blueprint itself — it calls cloud-hosted LLM APIs. You onl
 
 The [Intent Classifier](../architecture/agents/intent-classifier.md) automatically routes queries to the appropriate depth.
 
-**Can I disable the clarifier / plan approval step?**
+**Can I disable the clarifier step?**
 
-Yes. Refer to [Human-in-the-Loop](../customization/hitl.md) for configuration options. You can disable the clarifier entirely or keep it but skip plan approval.
+Yes. Refer to [Human-in-the-Loop](../customization/hitl.md) for configuration options. You can disable the clarifier entirely or limit how many clarification questions it asks.
 
 **What happens when shallow research escalates to deep?**
 

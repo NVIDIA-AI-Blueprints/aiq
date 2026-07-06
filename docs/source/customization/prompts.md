@@ -17,7 +17,6 @@ Each agent in the AI-Q blueprint uses [Jinja2](https://jinja.palletsprojects.com
 | `src/aiq_agent/agents/deep_researcher/prompts/planner.j2` | Deep Research Planner | Generates evidence-grounded research plans with TOC structure and search queries |
 | `src/aiq_agent/agents/deep_researcher/prompts/researcher.j2` | Deep Research Researcher | Gathers and synthesizes information from search tools with inline citations |
 | `src/aiq_agent/agents/clarifier/prompts/research_clarification.j2` | Clarifier | Determines whether a research request needs clarification, asks focused follow-up questions |
-| `src/aiq_agent/agents/clarifier/prompts/plan_generation.j2` | Clarifier (Plan) | Generates a lightweight research plan after clarification is complete |
 
 ## Template Directory Structure
 
@@ -35,7 +34,6 @@ src/aiq_agent/agents/
             researcher.j2              # Sub-researcher prompt
     clarifier/
         prompts/
-            plan_generation.j2         # Research plan generation
             research_clarification.j2  # Clarification prompt
     chat_researcher/
         prompts/
@@ -177,7 +175,6 @@ Each template has well-defined sections you can target:
 - **Deep Research Planner** (`planner.j2`) — TOC structure, query generation guidelines, research cycle instructions, output JSON schema
 - **Deep Research Researcher** (`researcher.j2`) — Research protocol, source prioritization, tool call budget, citation format
 - **Clarifier** (`research_clarification.j2`) — What counts as "sufficiently specified", question style, multi-turn policy
-- **Plan Generation** (`plan_generation.j2`) — Plan structure, section naming rules, output JSON format
 
 ### Creating a New Template
 
