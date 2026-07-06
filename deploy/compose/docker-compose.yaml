@@ -140,7 +140,6 @@ volumes:
     driver: local
   postgres-data:
     driver: local
-
 networks:
   aiq-network:
     driver: bridge

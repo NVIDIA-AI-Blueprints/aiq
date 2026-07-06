@@ -44,6 +44,7 @@ from aiq_agent.common import render_prompt_template
 from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import SourceRegistryMiddleware
+from .custom_middleware import SourceRoutingGuardMiddleware
 from .custom_middleware import TodoSuppressionMiddleware
 from .custom_middleware import ToolNameSanitizationMiddleware
 from .custom_middleware import ToolResultPruningMiddleware
@@ -215,6 +216,37 @@ def build_common_middleware(
     ]
 
 
+def build_orchestrator_middleware(
+    *,
+    tool_set: DeepResearchToolSet,
+    source_registry_middleware: SourceRegistryMiddleware,
+    enable_source_router: bool,
+    research_batch_tool_name: str = "run_research_batch",
+) -> list[Any]:
+    """Middleware for the orchestrator.
+
+    Unlike the shared stack, the tool-name sanitizer allowlist here is restricted
+    to the tools the orchestrator is actually bound to — helper tools,
+    ``run_research_batch``, and the filesystem tools — deliberately excluding the
+    source tools. The orchestrator routes all source access through
+    ``run_research_batch`` (which runs the researcher, where the source tools
+    live), so a source-tool name emitted by the orchestrator must not be treated
+    as a valid direct call.
+    """
+    valid_tool_names = {tool.name for tool in tool_set.helper_tools}
+    valid_tool_names.add(research_batch_tool_name)
+    valid_tool_names.update(FILESYSTEM_TOOL_NAMES)
+    return [
+        EmptyContentFixMiddleware(),
+        SourceRoutingGuardMiddleware(enabled=enable_source_router, required_subagent=SOURCE_ROUTER_AGENT),
+        ToolNameSanitizationMiddleware(valid_tool_names=sorted(valid_tool_names)),
+        ToolRetryMiddleware(max_retries=3, backoff_factor=2.0, initial_delay=1.0),
+        source_registry_middleware,
+        ToolResultPruningMiddleware(keep_last_n=10, max_chars=2000),
+        ModelRetryMiddleware(max_retries=2, backoff_factor=2.0, initial_delay=1.0),
+    ]
+
+
 def build_source_router_middleware(*, extra_valid_tool_names: Sequence[str] = ()) -> list[Any]:
     """Build minimal middleware for the source-router-agent."""
     return [
@@ -229,6 +261,7 @@ def build_deep_research_middleware_set(
     *,
     tool_set: DeepResearchToolSet,
     source_registry_middleware: SourceRegistryMiddleware,
+    enable_source_router: bool = True,
 ) -> DeepResearchMiddlewareSet:
     """Build researcher, writer, and orchestrator middleware stacks."""
 
@@ -244,7 +277,11 @@ def build_deep_research_middleware_set(
         researcher=common(),
         planner=common(),
         writer=common(),
-        orchestrator=common(["run_research_batch"]),
+        orchestrator=build_orchestrator_middleware(
+            tool_set=tool_set,
+            source_registry_middleware=source_registry_middleware,
+            enable_source_router=enable_source_router,
+        ),
     )
 
 
@@ -484,13 +521,21 @@ def build_deep_research_graph(
         source_registry_middleware=source_registry_middleware,
     )
 
+    orchestrator_tools = [*context.tool_set.helper_tools, research_batch_tool]
     agent = create_deep_agent(
         model=context.llm_provider.get(LLMRole.ORCHESTRATOR),
-        tools=[*context.tool_set.helper_tools, research_batch_tool],
+        tools=orchestrator_tools,
         system_prompt=context.render_prompt(
             "orchestrator",
             clarifier_result=context.state.clarifier_result,
-            tools=context.tool_set.tools_info,
+            # Advertise only the tools the orchestrator can actually call. Source
+            # tools (incl. per-user MCP tools like Google Drive) are NOT directly
+            # callable here — the orchestrator delegates all source access through
+            # run_research_batch to the researcher, which holds those tools. Listing
+            # them under "Available Tools" made the orchestrator call them directly
+            # (e.g. per_user_mcp_client__google_drive_read_file), which the runtime
+            # rejects since they aren't bound to this agent.
+            tools=[{"name": t.name, "description": t.description} for t in orchestrator_tools],
             enable_source_router=context.enable_source_router,
             max_research_concurrency=context.max_research_concurrency,
             execution_enabled=context.runtime.execution_enabled,

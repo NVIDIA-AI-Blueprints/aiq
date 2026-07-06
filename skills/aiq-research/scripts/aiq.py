@@ -88,6 +88,20 @@ _STREAM_TERMINAL_EVENTS = frozenset({"complete", "error", "done"})
 _CHAT_JOB_ID_RE = re.compile(rf"Job ID:\s*([0-9a-f-]{{{JOB_ID_HEX_DASH_LENGTH}}})", re.IGNORECASE)
 
 
+class McpAuthRequiredError(RuntimeError):
+    """The API returned 409 ``mcp_auth_required``.
+
+    One or more selected protected data sources must be connected (per-user MCP
+    OAuth) before the job can run. Carries the structured ``sources`` list so the
+    caller can surface each source's status and connect/auth URL.
+    """
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.sources: list[dict[str, Any]] = payload.get("sources") or []
+        super().__init__(payload.get("message") or "Data source connection required")
+
+
 def _validate_base_url(url: str) -> str:
     """Validate and normalize the configured AI-Q server base URL."""
     raw = (url or "").strip()
@@ -137,6 +151,13 @@ def _validate_agent_type(agent_type: str) -> str:
     return value
 
 
+def _validate_source_id(source_id: str) -> str:
+    value = source_id.strip()
+    if not _AGENT_TYPE_RE.fullmatch(value):  # same charset: [A-Za-z0-9_.-]
+        raise RuntimeError("Invalid source_id")
+    return value
+
+
 def _api_request(
     method: str,
     path: str,
@@ -162,6 +183,15 @@ def _api_request(
             payload = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
+        # A 409 mcp_auth_required carries a structured body listing the protected
+        # sources to connect; surface it rather than collapsing to "HTTP 409".
+        if exc.code == 409:
+            try:
+                parsed = json.loads(error_body)
+            except json.JSONDecodeError:
+                parsed = None
+            if isinstance(parsed, dict) and parsed.get("error") == "mcp_auth_required":
+                raise McpAuthRequiredError(parsed) from exc
         print(f"HTTP {exc.code}: {error_body[:ERROR_BODY_PREVIEW_CHARS]}", file=sys.stderr)
         raise RuntimeError(f"HTTP {exc.code}") from exc
     except urllib.error.URLError as exc:
@@ -274,6 +304,39 @@ def cancel_job(job_id: str) -> dict[str, Any]:
     return _api_request("POST", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/cancel")
 
 
+def list_data_sources() -> Any:
+    """GET /v1/data_sources — available sources + this user's per-source auth state."""
+    return _api_request("GET", "/v1/data_sources")
+
+
+def source_auth_status(source_id: str) -> dict[str, Any]:
+    """GET /v1/auth/mcp/{id}/status — per-user MCP auth status for one source."""
+    return _api_request("GET", f"/v1/auth/mcp/{_validate_source_id(source_id)}/status")
+
+
+def connect_source(source_id: str) -> dict[str, Any]:
+    """POST /v1/auth/mcp/{id}/connect — start the OAuth flow; returns an auth_url."""
+    return _api_request("POST", f"/v1/auth/mcp/{_validate_source_id(source_id)}/connect")
+
+
+def _print_mcp_auth_required(err: McpAuthRequiredError) -> None:
+    """Render a 409 mcp_auth_required as actionable connect guidance on stderr."""
+    base = _validate_base_url(AIQ_SERVER_URL)
+    print(f"\n{err}\n", file=sys.stderr)
+    for src in err.sources:
+        sid = src.get("source_id", "?")
+        status = src.get("status", "?")
+        print(f"  - {sid} ({status})", file=sys.stderr)
+        auth_url = src.get("auth_url")
+        connect_url = src.get("connect_url")
+        if auth_url:
+            print(f"      Sign in: open this URL in a browser -> {auth_url}", file=sys.stderr)
+        elif connect_url:
+            print(f"      Start the connect flow: aiq.py connect {sid}", file=sys.stderr)
+            print(f"      (POST {base}{connect_url} returns the sign-in URL)", file=sys.stderr)
+    print("\nConnect the source(s) above, then re-run the command.", file=sys.stderr)
+
+
 def stream_job(job_id: str) -> None:
     """Print server-sent event payloads for an async AI-Q job."""
     for line in _stream_request(f"/v1/jobs/async/job/{_validate_job_id(job_id)}/stream"):
@@ -362,6 +425,9 @@ def _print_usage() -> None:
     print("  research <query> [agent_type] Submit async job, poll, and return report")
     print("  research_poll <job_id>        Resume polling an existing async job")
     print("  cancel <job_id>               Cancel a running async job")
+    print("  data_sources                  List data sources + per-user auth state")
+    print("  source_status <source_id>     Per-user MCP auth status for one source")
+    print("  connect <source_id>           Start MCP OAuth; prints the sign-in URL")
     print()
     print(f"Environment: AIQ_SERVER_URL defaults to {DEFAULT_SERVER_URL}")
 
@@ -586,6 +652,27 @@ def _command_cancel(args: list[str]) -> None:
     print(json.dumps(cancel_job(job_id), indent=JSON_INDENT_SPACES))
 
 
+def _command_data_sources(_args: list[str]) -> None:
+    print(json.dumps(list_data_sources(), indent=JSON_INDENT_SPACES))
+
+
+def _command_source_status(args: list[str]) -> None:
+    source_id = _require_arg(args, "Usage: aiq.py source_status <source_id>")
+    print(json.dumps(source_auth_status(source_id), indent=JSON_INDENT_SPACES))
+
+
+def _command_connect(args: list[str]) -> None:
+    source_id = _require_arg(args, "Usage: aiq.py connect <source_id>")
+    result = connect_source(source_id)
+    auth_url = result.get("auth_url")
+    if result.get("status") == "connected":
+        print(f"{source_id} is already connected.", file=sys.stderr)
+    elif auth_url:
+        print("Open this URL in a browser to sign in, then re-run your command:", file=sys.stderr)
+        print(auth_url)
+    print(json.dumps(result, indent=JSON_INDENT_SPACES), file=sys.stderr)
+
+
 def main() -> None:
     """Dispatch the command-line interface."""
     if len(sys.argv) < MIN_COMMAND_ARG_COUNT:
@@ -606,6 +693,9 @@ def main() -> None:
         "research": _command_research,
         "research_poll": _command_research_poll,
         "cancel": _command_cancel,
+        "data_sources": _command_data_sources,
+        "source_status": _command_source_status,
+        "connect": _command_connect,
     }
     handler = commands.get(cmd)
     if handler is None:
@@ -620,4 +710,8 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except McpAuthRequiredError as err:
+        _print_mcp_auth_required(err)
+        sys.exit(2)

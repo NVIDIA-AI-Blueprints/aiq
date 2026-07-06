@@ -643,3 +643,25 @@ async def test_validation_does_not_call_get_all_tool_refs_when_fn_config_tools_i
     _, kwargs = builder.get_tools.await_args
     assert kwargs["tool_names"] == ["knowledge_search_tool"]
     submitted_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_data_sources_exposes_default_enabled(submit_app):
+    """GET /v1/data_sources must surface the registry's default_enabled (not hardcode True)."""
+    app, _submitted_job, _builder = submit_app
+    # Re-populate at request time: list_data_sources() reads the registry per request.
+    reset_registry()
+    populate_from_config(
+        [
+            {"id": "web_search", "name": "Web Search", "description": "x"},  # default_enabled -> True
+            {"id": "off_by_default", "name": "Off", "description": "y", "default_enabled": False},
+        ]
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/v1/data_sources")
+
+    assert response.status_code == 200
+    by_id = {s["id"]: s for s in response.json()}
+    assert by_id["web_search"]["default_enabled"] is True
+    assert by_id["off_by_default"]["default_enabled"] is False

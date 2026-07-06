@@ -19,6 +19,29 @@ const getBaseUrl = (): string => {
 // Types
 // ============================================================================
 
+/** Per-user MCP auth status for a protected source. */
+export type PerUserAuthStatus = 'connected' | 'not_connected' | 'expired' | 'error'
+
+/** Per-user MCP OAuth block attached to a protected data source (mirrors the API). */
+export interface PerUserAuthInfoFromAPI {
+  required: boolean
+  /** Auth mechanism (only mcp_oauth2 today) */
+  type?: 'mcp_oauth2'
+  /** Provider identifier, e.g. 'google' */
+  provider?: string | null
+  /** MCP server/auth-provider key */
+  mcp_server_id?: string | null
+  status?: PerUserAuthStatus | null
+  /** Stable URL to (re)start the connect flow */
+  connect_url?: string | null
+  /** Short-lived provider login URL (only present when an auth challenge was started) */
+  auth_url?: string | null
+  /** Token expiry (ISO timestamp) */
+  expires_at?: string | null
+  /** Last error detail, if status is 'error' */
+  last_error?: string | null
+}
+
 export interface DataSourceFromAPI {
   /** Unique identifier for the data source */
   id: string
@@ -32,6 +55,8 @@ export interface DataSourceFromAPI {
   default_enabled?: boolean
   /** Whether the source requires user authentication */
   requires_auth?: boolean
+  /** Per-user MCP OAuth state (present only for protected MCP sources) */
+  per_user_auth?: PerUserAuthInfoFromAPI | null
 }
 
 export interface DataSourcesResponse {

@@ -302,7 +302,16 @@ class ChatResearcherAgent:
 
         async def deep_research_node(state: ChatResearcherState) -> dict[str, Any]:
             if self.deep_research_job_submitter is not None:
-                job_id = await self.deep_research_job_submitter(state)
+                try:
+                    job_id = await self.deep_research_job_submitter(state)
+                except Exception as e:
+                    # Surface auth failures to the user verbatim instead of failing the
+                    # turn — submit_agent_job raises McpAuthRequiredError (an AuthError)
+                    # before enqueue when a selected source isn't connected.
+                    if _AuthError and isinstance(e, _AuthError):
+                        logger.warning("Auth required before deep research submit: %s", e)
+                        return {"messages": [AIMessage(content=str(e))]}
+                    raise
                 escalation = _job_escalation_message(_ESCALATION_KIND_DEEP_RESEARCH, job_id)
                 return {"messages": [AIMessage(content=escalation)]}
 

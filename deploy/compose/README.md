@@ -120,6 +120,29 @@ Services started:
 - `aiq-blueprint-ui` (port 3000)
 - `postgres` (port 5432)
 
+### Per-user MCP authentication
+
+Per-user MCP authentication is optional. To try it locally, set the MCP source and OAuth variables documented in `deploy/.env.example`, then apply the dedicated override with the default stack:
+
+```bash
+cd deploy/compose
+docker compose --env-file ../.env \
+  -f docker-compose.yaml \
+  -f docker-compose.per-user-auth.yaml \
+  up -d --build
+```
+
+The override selects `config_web_frag_mcp_auth.yml` and starts a persistent Redis service on the private Compose network. Redis is not published on a host port and has no password, so this stack is for local development only. Production deployments should use a managed Redis service and set `BACKEND_CONFIG`, `MCP_TOKEN_STORE_TYPE=redis`, `REDIS_HOST`, `REDIS_PORT`, and, when required, `REDIS_PASSWORD` in `deploy/.env` without applying the local override.
+
+Stop the local per-user-auth stack with the same file set:
+
+```bash
+docker compose --env-file ../.env \
+  -f docker-compose.yaml \
+  -f docker-compose.per-user-auth.yaml \
+  down
+```
+
 ## Foundational RAG (FRAG) prerequisites
 
 If you switch the backend to `configs/config_web_frag.yml`, you must run a compatible RAG server and ingest server separately and set:

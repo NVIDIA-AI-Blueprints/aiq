@@ -10,8 +10,9 @@
 
 'use client'
 
-import { type FC, memo, useCallback, useMemo } from 'react'
+import { type FC, memo, useCallback, useEffect, useMemo, useState } from 'react'
 import { Flex, Text, SidePanel, SegmentedControl, Switch, Button, Banner } from '@/adapters/ui'
+import { createMcpAuthClient, openAuthPopupAndWait } from '@/adapters/api'
 import { useShallow } from 'zustand/react/shallow'
 import { Globe, LoadingSpinner } from '@/adapters/ui/icons'
 import { useAuth } from '@/adapters/auth'
@@ -61,9 +62,23 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
   const toggleDataSource = useLayoutStore((s) => s.toggleDataSource)
   const setEnabledDataSources = useLayoutStore((s) => s.setEnabledDataSources)
   const fetchDataSources = useLayoutStore((s) => s.fetchDataSources)
+  const refreshDataSourceStatus = useLayoutStore((s) => s.refreshDataSourceStatus)
+
+  // Refresh per-source auth status each time the panel opens so a token that was
+  // invalidated server-side (e.g. expired and dropped at job time) shows as
+  // Reconnect instead of a stale "connected". Selection-preserving, so it won't
+  // reset the user's enabled sources.
+  useEffect(() => {
+    if (isOpen) {
+      void refreshDataSourceStatus(idToken)
+    }
+  }, [isOpen, idToken, refreshDataSourceStatus])
 
   // Check if current session is busy with operations
   const isBusy = useIsCurrentSessionBusy()
+
+  // Error surfaced when a protected-source connect attempt fails.
+  const [connectError, setConnectError] = useState<string | null>(null)
 
   // Check if user has valid auth token
   const hasValidToken = !!idToken
@@ -81,8 +96,19 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
       name: source.name,
       description: source.description ?? '',
       category: source.category ?? 'enterprise',
-      defaultEnabled: true,
+      defaultEnabled: source.default_enabled ?? true,
       requiresAuth: source.requires_auth ?? false,
+      perUserAuth: source.per_user_auth
+        ? {
+            required: source.per_user_auth.required,
+            provider: source.per_user_auth.provider,
+            mcpServerId: source.per_user_auth.mcp_server_id,
+            status: source.per_user_auth.status,
+            connectUrl: source.per_user_auth.connect_url,
+            expiresAt: source.per_user_auth.expires_at,
+            lastError: source.per_user_auth.last_error,
+          }
+        : undefined,
     }))
   }, [availableDataSources])
 
@@ -114,6 +140,40 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     [toggleDataSource, enabledDataSourceIds, saveDataSourcesToConversation, onSourceToggle]
   )
 
+  // Start (or resume) the per-user OAuth flow for a protected source: get a
+  // provider login URL, open it in a popup, then refresh statuses. On failure
+  // (network/popup errors) surface a banner and still resync in `finally`, so
+  // the card never sticks in "Connecting…".
+  const handleConnect = useCallback(
+    async (sourceId: string) => {
+      setConnectError(null)
+      const sourceName = displaySources.find((s) => s.id === sourceId)?.name ?? sourceId
+      try {
+        const client = createMcpAuthClient({ authToken: idToken })
+        const { status, auth_url } = await client.connect(sourceId)
+        if (status === 'auth_required' && auth_url) {
+          // Pass a status probe so the popup resolves once the backend records
+          // the connection, even when the provider's COOP headers sever the
+          // opener and the postMessage / popup-close signals never arrive.
+          await openAuthPopupAndWait(auth_url, sourceId, {
+            pollStatus: () => client.getStatus(sourceId).then((s) => s.status),
+          })
+        }
+      } catch (err) {
+        console.error('[DataSourcesPanel] Failed to connect data source', sourceId, err)
+        const detail = err instanceof Error ? err.message : 'Please try again.'
+        setConnectError(`Couldn't connect ${sourceName}. ${detail}`)
+      } finally {
+        try {
+          await fetchDataSources(idToken)
+        } catch (err) {
+          console.error('[DataSourcesPanel] Failed to refresh data sources', err)
+        }
+      }
+    },
+    [idToken, fetchDataSources, displaySources]
+  )
+
   const handleTabChange = useCallback(
     (value: string) => {
       setDataSourcesPanelTab(value as DataSourcesPanelTab)
@@ -142,13 +202,22 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     availableSources.some((s) => s.id === id)
   ).length
   const availableCount = availableSources.length
-  const allAvailableEnabled = enabledAvailableCount === availableCount && availableCount > 0
+  // Treat this as a master on/off switch: it stays on while any available source
+  // is enabled, and turns everything off when clicked.
+  const anyAvailableEnabled = enabledAvailableCount > 0
 
   const handleToggleAll = useCallback(() => {
-    const updatedIds = allAvailableEnabled ? [] : availableSources.map((s) => s.id)
+    // Mirror DataConnectionCard's per-card gate: a protected source must be
+    // connected before it can be enabled. "Enable All" must skip protected
+    // sources that aren't connected, otherwise it bypasses that gate.
+    const updatedIds = anyAvailableEnabled
+      ? []
+      : availableSources
+          .filter((s) => !(s.perUserAuth?.required && s.perUserAuth.status !== 'connected'))
+          .map((s) => s.id)
     setEnabledDataSources(updatedIds)
     saveDataSourcesToConversation(updatedIds)
-  }, [allAvailableEnabled, setEnabledDataSources, availableSources, saveDataSourcesToConversation])
+  }, [anyAvailableEnabled, setEnabledDataSources, availableSources, saveDataSourcesToConversation])
 
   return (
     <SidePanel
@@ -213,6 +282,13 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
             </Banner>
           )}
 
+          {/* Connect failure feedback so a failed attempt isn't silent */}
+          {connectError && (
+            <Banner kind="inline" status="error" className="mb-6 px-4 py-3">
+              {connectError}
+            </Banner>
+          )}
+
           {/* All Connections Toggle */}
           <Text kind="label/semibold/xs" className="text-subtle mb-3 uppercase">
             All Connections
@@ -232,12 +308,12 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
             className={`border-base mb-4 rounded-lg border p-3 transition-colors ${
               isBusy ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-surface-raised-50'
             }`}
-            aria-pressed={allAvailableEnabled}
+            aria-pressed={anyAvailableEnabled}
             aria-disabled={isBusy}
             aria-label={
               isBusy
                 ? 'All available connections (disabled during operations)'
-                : `All available connections: ${allAvailableEnabled ? 'enabled' : 'disabled'}`
+                : `All available connections: ${anyAvailableEnabled ? 'enabled' : 'disabled'}`
             }
             title={isBusy ? 'Data source changes disabled during active operations' : undefined}
           >
@@ -248,13 +324,13 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
             <div onClick={(e) => e.stopPropagation()}>
               <Switch
                 size="small"
-                checked={allAvailableEnabled}
+                checked={anyAvailableEnabled}
                 onCheckedChange={handleToggleAll}
                 disabled={isBusy}
                 aria-label={
                   isBusy
                     ? 'Toggle all connections (disabled)'
-                    : allAvailableEnabled
+                    : anyAvailableEnabled
                       ? 'Disable all connections'
                       : 'Enable all connections'
                 }
@@ -309,6 +385,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
                       !isSourceAvailable ? 'Sign in required to access this data source' : undefined
                     }
                     onToggle={handleToggle}
+                    onConnect={handleConnect}
                   />
                 )
               })}

@@ -380,7 +380,7 @@ For development, contribution, and documentation, refer to:
 
 - [ ] **[NeMo Guardrails](https://github.com/NVIDIA-NeMo/Guardrails) Integration:** Enhance safety and security guardrails.
 - [ ] **[NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) Integration:** Reduce latency via priority scheduling at scale.
-- [ ] **MCP Authentication:** Implement secure login/auth for MCP connections.
+- [x] **Per-user MCP OAuth:** Connect each signed-in user to protected MCP data sources through the UI.
 - [x] **Skills & Sandboxing:** Support built-in deep research skills with job-scoped sandbox execution.
 - [ ] **Custom Skill Management:** Add UI and lifecycle controls for user-provided skill bundles.
 - [ ] **Dynamic Model Routing:** Allow sub-agents to automatically select the optimal model per task.

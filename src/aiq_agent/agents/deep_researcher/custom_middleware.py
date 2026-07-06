@@ -37,6 +37,40 @@ logger = logging.getLogger(__name__)
 
 # Path to this agent's prompts directory
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+_SOURCE_ROUTING_PATH = "/shared/source_routing.json"
+
+
+class SourceRoutingGuardMiddleware(AgentMiddleware):
+    """Require the source-router handoff before other orchestrator tool calls."""
+
+    def __init__(self, *, enabled: bool, required_subagent: str = "source-router-agent") -> None:
+        self.enabled = enabled
+        self.required_subagent = required_subagent
+
+    @staticmethod
+    def _routing_complete(state: object) -> bool:
+        files = state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+        return isinstance(files, dict) and _SOURCE_ROUTING_PATH in files
+
+    async def awrap_tool_call(self, request, handler):
+        """Block out-of-order calls until the source router writes its route file."""
+        if not self.enabled or self._routing_complete(request.state):
+            return await handler(request)
+
+        tool_call = request.tool_call
+        args = tool_call.get("args") or {}
+        if tool_call.get("name") == "task" and args.get("subagent_type") == self.required_subagent:
+            return await handler(request)
+
+        return ToolMessage(
+            content=(
+                "Source routing is required before any other tool call. "
+                f"Call task with subagent_type={self.required_subagent!r}."
+            ),
+            tool_call_id=tool_call.get("id", "source-routing-guard"),
+            name=tool_call.get("name"),
+            status="error",
+        )
 
 
 class EmptyContentFixMiddleware(AgentMiddleware):
