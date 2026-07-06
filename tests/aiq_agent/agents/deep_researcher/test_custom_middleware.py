@@ -90,6 +90,19 @@ class TestSourceRoutingGuardMiddleware:
         assert result is expected
 
     @pytest.mark.asyncio
+    async def test_allows_normal_tools_after_routing_file_exists_sandbox_key(self):
+        """Under a sandbox provider the /shared/ route is stripped; the route-local key must also open the gate."""
+        middleware = SourceRoutingGuardMiddleware(enabled=True)
+        expected = ToolMessage(content="[]", tool_call_id="tc1")
+        handler = AsyncMock(return_value=expected)
+        request = self._request("ls", files={"/source_routing.json": {"content": "{}"}})
+
+        result = await middleware.awrap_tool_call(request, handler)
+
+        handler.assert_awaited_once_with(request)
+        assert result is expected
+
+    @pytest.mark.asyncio
     async def test_disabled_guard_is_noop(self):
         """Workflows with source routing disabled preserve their existing tool behavior."""
         middleware = SourceRoutingGuardMiddleware(enabled=False)

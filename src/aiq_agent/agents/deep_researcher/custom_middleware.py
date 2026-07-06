@@ -38,6 +38,11 @@ logger = logging.getLogger(__name__)
 # Path to this agent's prompts directory
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
 _SOURCE_ROUTING_PATH = "/shared/source_routing.json"
+# When a sandbox provider is configured, CompositeBackend strips the /shared/ route
+# before delegating to StateBackend, so the router's file is stored under the
+# route-local key. The guard reads raw state, so it must accept both forms or it
+# blocks the orchestrator forever on sandboxed runs.
+_SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
 
 
 class SourceRoutingGuardMiddleware(AgentMiddleware):
@@ -50,7 +55,7 @@ class SourceRoutingGuardMiddleware(AgentMiddleware):
     @staticmethod
     def _routing_complete(state: object) -> bool:
         files = state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
-        return isinstance(files, dict) and _SOURCE_ROUTING_PATH in files
+        return isinstance(files, dict) and any(key in files for key in _SOURCE_ROUTING_STATE_KEYS)
 
     async def awrap_tool_call(self, request, handler):
         """Block out-of-order calls until the source router writes its route file."""
