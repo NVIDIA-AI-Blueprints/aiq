@@ -40,6 +40,7 @@ from fastapi import Body
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
@@ -58,6 +59,21 @@ if TYPE_CHECKING:
     from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
 
 logger = logging.getLogger(__name__)
+
+
+def _remove_existing_health_routes(app: FastAPI) -> int:
+    """Remove existing GET /health routes before installing AI-Q readiness."""
+    existing_routes = [
+        route
+        for route in app.router.routes
+        if isinstance(route, APIRoute) and route.path == "/health" and "GET" in route.methods
+    ]
+    for route in existing_routes:
+        app.router.routes.remove(route)
+    if existing_routes:
+        logger.info("Replacing %d existing GET /health route(s) with AI-Q readiness", len(existing_routes))
+    app.openapi_schema = None
+    return len(existing_routes)
 
 
 class JobSubmitRequest(BaseModel):
@@ -398,6 +414,10 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     )
     await asyncio.get_running_loop().run_in_executor(None, ensure_job_access_table, db_url)
 
+    # NAT registers its generic liveness route first. Replace it so runtime
+    # dispatch and OpenAPI both use AI-Q's DB and encryption readiness checks.
+    _remove_existing_health_routes(app)
+
     @app.get("/health", tags=["health"], summary="Health check")
     async def health_check():
         """Health check endpoint that validates DB connectivity."""
@@ -405,7 +425,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
         from ..jobs.event_store import EventStore
 
-        result = {"status": "ok", "dask_available": dask_available, "db": "ok"}
+        result = {"status": "healthy", "dask_available": dask_available, "db": "ok"}
 
         # Check DB connectivity using any cached async engine
         try:

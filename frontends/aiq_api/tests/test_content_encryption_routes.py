@@ -25,6 +25,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi import FastAPI
+from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from aiq_agent.auth import Principal
@@ -139,6 +140,75 @@ async def _build_jobs_app(monkeypatch, tmp_path, *, job_output=None, submitted_j
     return app
 
 
+def _build_assembled_worker_app(monkeypatch, tmp_path) -> FastAPI:
+    """Build the AI-Q worker app while preserving NAT-before-AIQ route ordering."""
+    import aiq_api.routes.jobs as jobs_routes
+    from aiq_api import plugin
+    from aiq_api.jobs import access
+    from nat.builder.workflow_builder import WorkflowBuilder
+    from nat.data_models.config import Config
+    from nat.data_models.config import GeneralConfig
+    from nat.front_ends.fastapi import fastapi_front_end_plugin_worker as worker_module
+    from nat.plugins.eval.fastapi import routes as eval_routes
+    from nat.plugins.mcp.client import fastapi_routes as mcp_routes
+
+    monkeypatch.setenv("NAT_CONFIG_FILE", "config.yml")
+    monkeypatch.delenv("NAT_DASK_SCHEDULER_ADDRESS", raising=False)
+    monkeypatch.setattr(plugin, "_load_validators_from_entry_points", lambda: [])
+    monkeypatch.setattr(plugin.AIQAPIWorker, "_install_signal_handlers", lambda _self: None)
+    monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
+    monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())
+    monkeypatch.setattr(
+        worker_module.FastApiFrontEndPluginWorker,
+        "_create_session_manager",
+        AsyncMock(return_value=MagicMock()),
+    )
+    monkeypatch.setattr(worker_module.FastApiFrontEndPluginWorker, "add_default_route", AsyncMock())
+    for route_helper in (
+        "add_authorization_route",
+        "add_execution_routes",
+        "add_monitor_route",
+        "add_static_files_route",
+    ):
+        monkeypatch.setattr(worker_module, route_helper, AsyncMock())
+    monkeypatch.setattr(eval_routes, "add_evaluate_routes", AsyncMock())
+    monkeypatch.setattr(mcp_routes, "add_mcp_client_tool_list_route", AsyncMock())
+
+    async def _no_op_reaper(*_args, **_kwargs):
+        return None
+
+    monkeypatch.setattr(jobs_routes, "_reap_ghost_jobs", _no_op_reaper)
+
+    builder = MagicMock()
+    builder.get_function_config.return_value = SimpleNamespace(tools=[], exclude_tools=[])
+    builder.get_tools = AsyncMock(return_value=[])
+
+    class BuilderContext:
+        async def __aenter__(self):
+            return builder
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(WorkflowBuilder, "from_config", lambda _config: BuilderContext())
+
+    front_end = plugin.AIQAPIConfig(db_url=f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
+    worker = plugin.AIQAPIWorker(Config(general=GeneralConfig(front_end=front_end)))
+    worker._dask_available = True
+    worker._job_store = object()
+    worker._scheduler_address = "tcp://localhost:8786"
+    worker._db_url = front_end.db_url
+    return worker.build_app()
+
+
+def _get_health_routes(app: FastAPI) -> list[APIRoute]:
+    return [
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/health" and "GET" in route.methods
+    ]
+
+
 @pytest.mark.asyncio
 async def test_health_returns_503_when_vault_readiness_failed(monkeypatch, tmp_path):
     _enable_vault(monkeypatch)
@@ -162,6 +232,52 @@ async def test_health_returns_503_when_vault_readiness_failed(monkeypatch, tmp_p
     assert body["encryption"]["ready"] is False
     assert body["encryption"]["encrypt_ready"] is False
     assert body["encryption"]["decrypt_ready"] is False
+
+
+def test_assembled_worker_serves_encryption_health_route(monkeypatch, tmp_path):
+    _enable_vault(monkeypatch)
+
+    class FailingVault:
+        def __init__(self, _config):
+            pass
+
+        def generate_data_key(self, *, operation):
+            raise crypto.ContentEncryptionUnavailable("vault down")
+
+    monkeypatch.setattr(crypto, "_VaultTransitClient", FailingVault)
+    app = _build_assembled_worker_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+        health_routes = _get_health_routes(app)
+
+    assert len(health_routes) == 1
+    assert health_routes[0].endpoint.__module__ == "aiq_api.routes.jobs"
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["encryption"]["mode"] == "vault"
+    assert body["encryption"]["ready"] is False
+
+
+@pytest.mark.parametrize("mode", ["off", "key"])
+def test_assembled_worker_health_route_reports_ready_encryption(monkeypatch, tmp_path, mode):
+    if mode == "key":
+        _enable_static_key(monkeypatch)
+    app = _build_assembled_worker_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+        openapi = client.get("/openapi.json").json()
+        health_routes = _get_health_routes(app)
+
+    assert len(health_routes) == 1
+    assert health_routes[0].endpoint.__module__ == "aiq_api.routes.jobs"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "healthy"
+    assert body["encryption"] == {"mode": mode, "ready": True}
+    assert list(openapi["paths"]["/health"]) == ["get"]
 
 
 @pytest.mark.asyncio

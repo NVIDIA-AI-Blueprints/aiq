@@ -388,7 +388,7 @@ curl http://localhost:8000/health
 
 ```json
 {
-  "status": "ok",
+  "status": "healthy",
   "dask_available": true
 }
 ```
