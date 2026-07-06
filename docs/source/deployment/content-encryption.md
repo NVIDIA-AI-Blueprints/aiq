@@ -182,6 +182,13 @@ Workers independently validate encryption before marking a job `RUNNING`. If
 encryption is unavailable at worker startup, the job is marked `FAILURE` and
 the agent does not run.
 
+Each submission also carries a non-secret encryption policy identity from the
+API process to the worker. The identity covers the mode and key id, a static-key
+fingerprint in `key` mode, or the Vault address, namespace, Transit mount, and
+Transit key in `vault` mode. The worker fails the job before `RUNNING` if its
+local policy does not match, including `key` or `vault` submissions received by
+a worker configured with `off`.
+
 If final-report encryption, artifact event-content encryption, or encrypted
 persistence fails after an agent has completed, the job is marked `FAILURE`.
 The worker does not fall back to writing plaintext output.

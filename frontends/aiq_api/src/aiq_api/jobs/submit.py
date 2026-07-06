@@ -159,6 +159,7 @@ async def submit_agent_job(
     """
     from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
+    from .crypto import get_content_encryption_policy_identity
     from .crypto import require_content_encryption_ready_for_submission_async
 
     # Get agent configuration from registry
@@ -207,6 +208,7 @@ async def submit_agent_job(
 
     if not skip_encryption_readiness_check:
         await require_content_encryption_ready_for_submission_async()
+    content_encryption_policy = get_content_encryption_policy_identity()
 
     # Auto-capture auth token if not explicitly provided
     if auth_token is None:
@@ -242,6 +244,7 @@ async def submit_agent_job(
                 available_documents,
                 data_sources,
                 auth_token,
+                content_encryption_policy,
             ],
         )
         await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)

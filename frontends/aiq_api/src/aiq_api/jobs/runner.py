@@ -29,11 +29,15 @@ import asyncio
 import importlib
 import logging
 import uuid
+from typing import TYPE_CHECKING
 from typing import Any
 
 from .callbacks import AgentEventCallback
 from .event_store import BatchingEventStore
 from .event_store import EventStore
+
+if TYPE_CHECKING:
+    from .crypto import ContentEncryptionPolicyIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -247,6 +251,7 @@ async def run_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    content_encryption_policy: ContentEncryptionPolicyIdentity | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -278,6 +283,8 @@ async def run_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token propagated from the HTTP request for
             data sources that require authentication (requires_auth: true).
+        content_encryption_policy: Non-secret policy identity captured by the
+            submitting API process and required to match the worker configuration.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -327,16 +334,24 @@ async def run_agent_job(
         job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
         try:
             from .crypto import ContentEncryptionError
+            from .crypto import ContentEncryptionPolicyMismatch
             from .crypto import create_job_content_cipher
+            from .crypto import require_content_encryption_policy
 
+            require_content_encryption_policy(content_encryption_policy)
             job_output_cipher = create_job_content_cipher(job_id)
         except ContentEncryptionError as exc:
             logger.warning(
-                "Job %s failed encryption readiness before running mode=encrypted exception=%s",
+                "Job %s failed encryption policy/readiness before running exception=%s",
                 job_id,
                 exc.__class__.__name__,
             )
-            await job_store.update_status(job_id, JobStatus.FAILURE, error="content encryption unavailable")
+            error = (
+                "content encryption policy mismatch"
+                if isinstance(exc, ContentEncryptionPolicyMismatch)
+                else "content encryption unavailable"
+            )
+            await job_store.update_status(job_id, JobStatus.FAILURE, error=error)
             return
 
         await job_store.update_status(job_id, JobStatus.RUNNING)
@@ -843,6 +858,8 @@ async def run_deep_research(
 
     Preserved for backwards compatibility. New code should use run_agent_job directly.
     """
+    from .crypto import get_content_encryption_policy_identity
+
     await run_agent_job(
         configure_logging=configure_logging,
         log_level=log_level,
@@ -853,4 +870,5 @@ async def run_deep_research(
         input_text=input_text,
         agent_class_path="aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
         agent_config_name="deep_research_agent",
+        content_encryption_policy=get_content_encryption_policy_identity(),
     )

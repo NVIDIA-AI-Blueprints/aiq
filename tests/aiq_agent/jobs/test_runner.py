@@ -420,6 +420,7 @@ class TestSubmitDeepResearchJob:
             {
                 "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
                 "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+                "AIQ_CONTENT_ENCRYPTION": "off",
             },
         ):
             with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
@@ -435,8 +436,9 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        # data_sources is second-to-last (auth_token is last)
-        assert job_args[-2] == ["web_search"]
+        # The policy identity is last so it crosses the same Dask boundary as the job.
+        assert job_args[-3] == ["web_search"]
+        assert job_args[-1].mode == "off"
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):
@@ -564,6 +566,7 @@ class TestRunAgentJobEncryption:
 
     @pytest.mark.asyncio
     async def test_encryption_preflight_failure_marks_failure_before_running(self):
+        from aiq_api.jobs.crypto import ContentEncryptionConfig
         from aiq_api.jobs.crypto import ContentEncryptionUnavailable
         from aiq_api.jobs.runner import run_agent_job
         from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
@@ -586,6 +589,7 @@ class TestRunAgentJobEncryption:
                     "input",
                     "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
                     "deep_research_agent",
+                    content_encryption_policy=ContentEncryptionConfig(mode="off").policy_identity,
                 )
 
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
@@ -597,9 +601,56 @@ class TestRunAgentJobEncryption:
         )
 
     @pytest.mark.asyncio
+    async def test_worker_rejects_submission_policy_mismatch_before_running(self):
+        import base64
+
+        from aiq_api.jobs import crypto
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        with patch.dict(
+            "os.environ",
+            {
+                "AIQ_CONTENT_ENCRYPTION": "key",
+                "AIQ_CONTENT_ENCRYPTION_KEY": base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
+                "AIQ_CONTENT_ENCRYPTION_KEY_ID": "api-key",
+            },
+        ):
+            crypto.reset_content_encryption_manager_for_tests()
+            api_policy = crypto.get_content_encryption_policy_identity()
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+
+        with patch.dict("os.environ", {"AIQ_CONTENT_ENCRYPTION": "off"}):
+            crypto.reset_content_encryption_manager_for_tests()
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.crypto.create_job_content_cipher") as create_job_content_cipher:
+                    await run_agent_job(
+                        False,
+                        20,
+                        "tcp://localhost:8786",
+                        "sqlite:///./test.db",
+                        "config.yml",
+                        "job-1",
+                        "input",
+                        "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                        "deep_research_agent",
+                        content_encryption_policy=api_policy,
+                    )
+            crypto.reset_content_encryption_manager_for_tests()
+
+        create_job_content_cipher.assert_not_called()
+        mock_job_store.update_status.assert_awaited_once_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="content encryption policy mismatch",
+        )
+
+    @pytest.mark.asyncio
     async def test_final_output_encryption_failure_marks_failure_without_plaintext_write(self, tmp_path):
         from types import SimpleNamespace
 
+        from aiq_api.jobs.crypto import ContentEncryptionConfig
         from aiq_api.jobs.crypto import ContentEncryptionUnavailable
         from aiq_api.jobs.runner import run_agent_job
         from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
@@ -669,6 +720,9 @@ class TestRunAgentJobEncryption:
                                                 "input",
                                                 "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
                                                 "deep_research_agent",
+                                                content_encryption_policy=ContentEncryptionConfig(
+                                                    mode="off"
+                                                ).policy_identity,
                                             )
 
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]

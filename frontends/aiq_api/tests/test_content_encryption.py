@@ -157,6 +157,52 @@ def test_config_signature_changes_when_credentials_change(credential_name, repla
     assert original.signature != updated.signature
 
 
+def test_static_key_policy_identity_is_non_secret_and_key_specific():
+    static_key = b"a" * crypto.DEK_BYTES
+    replacement_key = b"b" * crypto.DEK_BYTES
+    original = crypto.ContentEncryptionConfig(mode="key", key_id="reports", static_key=static_key).policy_identity
+    replacement = crypto.ContentEncryptionConfig(
+        mode="key",
+        key_id="reports",
+        static_key=replacement_key,
+    ).policy_identity
+
+    assert original.mode == "key"
+    assert original.key_id == "reports"
+    assert original.static_key_fingerprint == crypto._secret_fingerprint(static_key)
+    assert original != replacement
+    assert static_key.decode() not in repr(original)
+
+
+def test_vault_policy_identity_changes_with_transit_key_location():
+    original = _vault_config().policy_identity
+    same_key_with_different_credentials = crypto.ContentEncryptionConfig(
+        mode="vault",
+        vault_addr="https://vault.example.com",
+        vault_transit_key="reports",
+        vault_role_id="different-role-id",
+        vault_secret_id="different-secret-id",
+    ).policy_identity
+    replacement = crypto.ContentEncryptionConfig(
+        mode="vault",
+        vault_addr="https://other-vault.example.com",
+        vault_transit_key="reports",
+    ).policy_identity
+
+    assert original == same_key_with_different_credentials
+    assert original != replacement
+    assert not hasattr(original, "vault_role_id")
+    assert not hasattr(original, "vault_secret_id")
+
+
+def test_worker_policy_identity_is_required_and_accepts_an_exact_match():
+    expected = crypto.get_content_encryption_policy_identity()
+
+    crypto.require_content_encryption_policy(expected)
+    with pytest.raises(crypto.ContentEncryptionPolicyMismatch, match="does not match"):
+        crypto.require_content_encryption_policy(None)
+
+
 def test_secret_fingerprint_distinguishes_bytes_from_strings():
     assert crypto._secret_fingerprint(b"same-value") != crypto._secret_fingerprint("same-value")
 

@@ -48,6 +48,7 @@ ENCRYPTED_FIELD_MARKER = "_aiq_encrypted"
 ENCRYPTED_FIELD_VALUE = "value"
 ENVELOPE_VERSION = 1
 CONTENT_ALGORITHM = "AES-256-GCM"
+CONTENT_ENCRYPTION_POLICY_VERSION = 1
 DEK_BYTES = 32
 GCM_NONCE_BYTES = 12
 GCM_TAG_BYTES = 16
@@ -95,6 +96,24 @@ class ContentEncryptionInvalidData(ContentEncryptionError):
 
 class ContentEncryptionPlaintextViolation(ContentEncryptionInvalidData):
     """Encrypted mode encountered plaintext where an envelope is required."""
+
+
+class ContentEncryptionPolicyMismatch(ContentEncryptionError):
+    """API and worker content-encryption policies do not match."""
+
+
+@dataclass(frozen=True)
+class ContentEncryptionPolicyIdentity:
+    """Non-secret encryption identity propagated from the API to a worker."""
+
+    version: int
+    mode: str
+    key_id: str | None = None
+    static_key_fingerprint: str | None = field(default=None, repr=False)
+    vault_addr: str | None = None
+    vault_namespace: str | None = None
+    vault_transit_mount: str | None = None
+    vault_transit_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -145,6 +164,32 @@ class ContentEncryptionConfig:
             self.readiness_ttl_seconds,
             self.dek_cache_ttl_seconds,
             self.dek_cache_max_entries,
+        )
+
+    @property
+    def policy_identity(self) -> ContentEncryptionPolicyIdentity:
+        """Return the non-secret identity workers must match for submitted jobs."""
+
+        if self.mode == "key":
+            return ContentEncryptionPolicyIdentity(
+                version=CONTENT_ENCRYPTION_POLICY_VERSION,
+                mode=self.mode,
+                key_id=self.effective_key_id,
+                static_key_fingerprint=_secret_fingerprint(self.static_key),
+            )
+        if self.mode == "vault":
+            return ContentEncryptionPolicyIdentity(
+                version=CONTENT_ENCRYPTION_POLICY_VERSION,
+                mode=self.mode,
+                key_id=self.effective_key_id,
+                vault_addr=self.vault_addr,
+                vault_namespace=self.vault_namespace,
+                vault_transit_mount=self.vault_transit_mount,
+                vault_transit_key=self.vault_transit_key,
+            )
+        return ContentEncryptionPolicyIdentity(
+            version=CONTENT_ENCRYPTION_POLICY_VERSION,
+            mode="off",
         )
 
 
@@ -796,6 +841,19 @@ async def require_content_encryption_ready_for_submission_async() -> None:
     """Check submission readiness without blocking the FastAPI event loop."""
 
     await asyncio.to_thread(require_content_encryption_ready_for_submission)
+
+
+def get_content_encryption_policy_identity() -> ContentEncryptionPolicyIdentity:
+    """Return the process-local policy identity safe to send to a worker."""
+
+    return get_content_encryption_manager().config.policy_identity
+
+
+def require_content_encryption_policy(expected: ContentEncryptionPolicyIdentity | None) -> None:
+    """Fail closed unless the worker policy exactly matches the submitter policy."""
+
+    if expected is None or get_content_encryption_policy_identity() != expected:
+        raise ContentEncryptionPolicyMismatch("worker content encryption policy does not match submission policy")
 
 
 def create_job_content_cipher(job_id: str) -> JobContentCipher:
