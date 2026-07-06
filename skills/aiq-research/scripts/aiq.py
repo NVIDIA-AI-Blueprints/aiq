@@ -29,7 +29,6 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import uuid
 from collections.abc import Iterator
 from typing import Any
 
@@ -54,12 +53,6 @@ DEFAULT_SERVER_URL = "http://localhost:8000"
 AIQ_SERVER_URL = os.environ.get("AIQ_SERVER_URL", DEFAULT_SERVER_URL)
 
 _HEADLESS_HEADERS = {"Content-Type": "application/json", "X-AIQ-Mode": "headless"}
-
-# Stable conversation id so the backend can default report follow-up to "the last report in this
-# conversation" without the client managing active_report_job_id. Each `python3 aiq.py ...` call is
-# a separate process, so a per-process UUID only links turns within one invocation; export
-# AIQ_CONVERSATION_ID once to link a multi-command follow-up sequence (see SKILL.md Step 6).
-_SESSION_CONVERSATION_ID = os.environ.get("AIQ_CONVERSATION_ID") or str(uuid.uuid4())
 DEFAULT_AGENT_TYPE = "shallow_researcher"
 _LOCAL_BACKEND_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 
@@ -180,8 +173,7 @@ def _api_request(
     url = f"{_validate_base_url(AIQ_SERVER_URL)}{path}"
     data = None if body is None else json.dumps(body).encode("utf-8")
     if method == "POST":
-        headers = {**_HEADLESS_HEADERS, "conversation-id": _SESSION_CONVERSATION_ID}
-        request_payload = {"url": url, "headers": headers, "method": method, "data": data}
+        request_payload = {"url": url, "headers": dict(_HEADLESS_HEADERS), "method": method, "data": data}
     else:
         request_payload = {"url": url, "method": method}
     req = urllib.request.Request(**request_payload)
@@ -310,6 +302,12 @@ def download_artifact(job_id: str, artifact_id: str) -> bytes:
 def cancel_job(job_id: str) -> dict[str, Any]:
     """Request cancellation for a running async AI-Q job."""
     return _api_request("POST", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/cancel")
+
+
+def edit_report(job_id: str, edit_instruction: str) -> dict[str, Any]:
+    """Edit the final report for a completed async AI-Q job."""
+    body = {"input": edit_instruction, "job_id": job_id}
+    return _api_request("POST", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/report/edit", body=body)
 
 
 def list_data_sources() -> Any:
@@ -608,6 +606,18 @@ def _command_artifacts(args: list[str]) -> None:
     print(json.dumps({"job_id": job_id, "downloaded": saved}, indent=JSON_INDENT_SPACES))
 
 
+def _command_report_edit(args: list[str]) -> None:
+    job_id = _require_arg(args, "Usage: aiq.py report_edit <job_id> <new focus>")
+    edit_instruction = _require_arg(args, "Usage: aiq.py report_edit <job_id> <new focus>", position=1)
+    result = edit_report(job_id, edit_instruction)
+    child_job_id = result.get("job_id")
+    if not child_job_id:
+        print(f"ERROR: No child_job_id in response: {result}", file=sys.stderr)
+        sys.exit(EXIT_FAILURE)
+    print(f"job submitted: {child_job_id}", file=sys.stderr)
+    _poll_until_success_or_exit(child_job_id)
+
+
 def _command_research(args: list[str]) -> None:
     query = _require_arg(args, "Usage: aiq.py research <query> [agent_type]")
     agent_type = args[OPTIONAL_AGENT_TYPE_POSITION] if len(args) > OPTIONAL_AGENT_TYPE_POSITION else DEFAULT_AGENT_TYPE
@@ -698,6 +708,7 @@ def main() -> None:
         "stream": _command_stream,
         "report": _command_report,
         "artifacts": _command_artifacts,
+        "report_edit": _command_report_edit,
         "research": _command_research,
         "research_poll": _command_research_poll,
         "cancel": _command_cancel,

@@ -26,27 +26,6 @@ from langchain_core.messages import SystemMessage
 
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.nodes.intent_classifier import IntentClassifier
-from aiq_agent.agents.chat_researcher.nodes.intent_classifier import _normalize_bool
-
-
-class TestNormalizeBool:
-    """LLM output can contain string booleans; bool('false') would wrongly be True."""
-
-    def test_string_false_is_false(self):
-        assert _normalize_bool("false") is False
-        assert _normalize_bool("False") is False
-        assert _normalize_bool("no") is False
-        assert _normalize_bool("") is False
-
-    def test_string_true_is_true(self):
-        assert _normalize_bool("true") is True
-        assert _normalize_bool("True") is True
-        assert _normalize_bool("yes") is True
-
-    def test_real_bools_and_none(self):
-        assert _normalize_bool(True) is True
-        assert _normalize_bool(False) is False
-        assert _normalize_bool(None) is False
 
 
 class TestIntentClassifier:

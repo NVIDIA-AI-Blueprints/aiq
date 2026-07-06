@@ -139,11 +139,6 @@ def _sources_from_events(events: list[dict[str, Any]]) -> list[ReportContextSour
     return sources
 
 
-async def _extract_sources_from_events(db_url: str, job_id: str) -> list[ReportContextSource]:
-    events = await EventStore.get_events_async(db_url, job_id, 0, _EVENT_SCAN_LIMIT)
-    return _sources_from_events(events)
-
-
 def _sources_section(report_markdown: str) -> str:
     match = _SOURCES_HEADING_RE.search(report_markdown)
     if not match:

@@ -79,43 +79,6 @@ def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset
     return kwarg_names.issubset(accepted_kwargs)
 
 
-_DEEP_RESEARCH_AGENT_KWARGS = frozenset(
-    {
-        "domain_catalog_path",
-        "enable_source_router",
-        "enable_citation_verification",
-        "skills",
-        "sandbox",
-        "job_id",
-        "max_research_concurrency",
-        "max_concurrent_source_tool_calls",
-        "max_source_tool_batch_size",
-    }
-)
-_CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
-_JOB_SCOPED_AGENT_KWARGS = frozenset({"job_id"})
-
-
-def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset[str]) -> bool:
-    """Return true when a class constructor explicitly declares all requested kwargs."""
-    import inspect
-
-    try:
-        signature = inspect.signature(agent_cls)
-    except (TypeError, ValueError):
-        try:
-            signature = inspect.signature(agent_cls.__init__)
-        except (TypeError, ValueError):
-            return False
-
-    accepted_kwargs = {
-        name
-        for name, param in signature.parameters.items()
-        if param.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
-    }
-    return kwarg_names.issubset(accepted_kwargs)
-
-
 def _normalize_trace_id(trace_id: int | str | None) -> int | None:
     """Convert trace ID to integer format.
 

@@ -443,41 +443,6 @@ class ChatResearcherAgent:
                 return {"messages": [AIMessage(content=revised)], "last_report_markdown": revised}
             return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
 
-        async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
-            if self.report_ask_fn is None:
-                return {"messages": [AIMessage(content="Report follow-up is not available in this workflow.")]}
-            try:
-                answer = await self.report_ask_fn(state)
-            except Exception as e:
-                # The node has no HTTP scope, so a raised exception would surface as an
-                # opaque workflow error / empty completion. Degrade to a chat message.
-                logger.warning(
-                    "Report ask failed for report %s (error_type=%s)",
-                    state.active_report_job_id,
-                    type(e).__name__,
-                )
-                return {
-                    "messages": [
-                        AIMessage(content="I couldn't access that report to answer your question. Please try again.")
-                    ]
-                }
-            return {"messages": [AIMessage(content=answer)]}
-
-        async def report_edit_node(state: ChatResearcherState) -> dict[str, Any]:
-            if self.report_edit_job_submitter is None:
-                return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
-            try:
-                job_id = await self.report_edit_job_submitter(state)
-            except Exception as e:
-                logger.warning(
-                    "Report edit submission failed for report %s (error_type=%s)",
-                    state.active_report_job_id,
-                    type(e).__name__,
-                )
-                return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
-            escalation = _job_escalation_message(_ESCALATION_KIND_REPORT_EDIT, job_id)
-            return {"messages": [AIMessage(content=escalation)]}
-
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
             if state.user_intent and state.user_intent.intent == "meta":
