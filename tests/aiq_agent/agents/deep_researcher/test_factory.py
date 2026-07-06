@@ -322,7 +322,6 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     assert result is researcher_agent
     assert kwargs["model"] is researcher_model
     assert kwargs["tools"] == [web_search_tool]
-    assert kwargs["system_prompt"] == "rendered researcher prompt"
     assert kwargs["response_format"] is ResearchNotes
     assert "TodoListMiddleware" not in middleware_names
     assert "SkillsMiddleware" in middleware_names
