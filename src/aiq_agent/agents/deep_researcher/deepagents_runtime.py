@@ -273,12 +273,12 @@ def _maybe_build_artifact_manager(
     if capture is None or not getattr(capture, "enabled", False):
         return None
     from .sandbox.artifacts import ArtifactManager
-    from .sandbox.artifacts import SqlArtifactStore
+    from .sandbox.artifacts import build_artifact_store
 
     return ArtifactManager(
         job_id=job_id,
         backend=provider,
-        store=SqlArtifactStore(artifact_db_url),
+        store=build_artifact_store(artifact_db_url),
         config=capture,
         artifact_dir=artifact_dir,
         emit=artifact_emit,

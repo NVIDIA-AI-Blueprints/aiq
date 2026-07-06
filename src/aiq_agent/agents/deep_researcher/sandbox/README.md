@@ -63,7 +63,9 @@ plus `/shared/` for durable text. Binary artifacts are harvested host-side via
 | `providers/openshell.py` | OpenShell provider (enterprise/on-prem). Lazy, ad-hoc deps; policy requires a named sandbox. |
 | `artifacts/models.py` | `Artifact` record (id, mime, sha256, size, provenance, status). Metadata only. |
 | `artifacts/manifest.py` | `manifest.json` schema + parser. |
-| `artifacts/store.py` | `SqlArtifactStore` on the shared job `db_url` (metadata table + capped BLOB; pluggable to S3). |
+| `artifacts/store.py` | `SqlArtifactStore` coordinates SQL metadata with the configured byte provider. |
+| `artifacts/blob_store.py` | Byte adapters for SQL BLOBs and S3-compatible object storage. |
+| `artifacts/factory.py` | Builds the application store from `AIQ_ARTIFACT_*` environment variables. |
 | `artifacts/manager.py` | Harvest pipeline: manifest-first + scan, path-traversal confinement, MIME-from-bytes, SVG sanitize, render-gate, quotas, dedup, store-then-emit, `artifact://` resolution. |
 
 ## Adding a provider (the whole surface)
@@ -154,7 +156,7 @@ is lifted into `providers.modal`.
 - Once at the end of the agent run (`agent.run()` -> `ArtifactManager.final_harvest`),
   the `ArtifactManager` pulls bytes via `download_files`, runs the validation pipeline
   (path-traversal confinement -> extension allowlist -> size cap -> MIME-from-bytes/spoof
-  reject -> quota -> SVG sanitize -> sha256), stores via `SqlArtifactStore`, then emits an
+  reject -> quota -> SVG sanitize -> sha256), stores via `ArtifactStore`, then emits an
   `artifact` SSE event (`to_sse_payload`, metadata + `content_url`, never bytes).
 - Failed or cancelled runs are not harvested in the current implementation.
 - Reports reference artifacts as `![caption](artifact://<filename-or-id>)`; the report
@@ -248,13 +250,52 @@ to delegate uploads to the official adapter and validate the upstream argv fix
 always use AI-Q's bounded shim so realpath confinement and pre-transfer size checks remain
 in force. Once the upstream adapter provides equivalent guards, drop the shim and toggle.
 
+## Artifact byte storage
+
+SQL BLOB storage remains the default when `AIQ_ARTIFACT_BLOB_PROVIDER` is unset or
+set to `sql`. Production deployments can set it to `s3` to store bytes in AWS S3 or
+an S3-compatible service while retaining artifact metadata in the job database.
+
+AWS S3:
+
+```bash
+AIQ_ARTIFACT_BLOB_PROVIDER=s3
+AIQ_ARTIFACT_S3_BUCKET=aiq-artifacts
+AIQ_ARTIFACT_S3_REGION=us-west-2
+AIQ_ARTIFACT_S3_PREFIX=artifacts/v1
+```
+
+MinIO or another S3-compatible service uses the same provider and additionally sets
+the custom endpoint:
+
+```bash
+AIQ_ARTIFACT_BLOB_PROVIDER=s3
+AIQ_ARTIFACT_S3_BUCKET=aiq-artifacts
+AIQ_ARTIFACT_S3_ENDPOINT_URL=http://minio:9000
+AIQ_ARTIFACT_S3_REGION=us-east-1
+AIQ_ARTIFACT_S3_PREFIX=artifacts/v1
+```
+
+`AIQ_ARTIFACT_S3_BUCKET` is required for S3 storage. The endpoint is optional: leave
+it unset for AWS S3 and set it for MinIO, Ceph, R2, or another compatible endpoint.
+The region and prefix are optional; the prefix defaults to `artifacts/v1`. Credentials
+come from workload identity, deployment secrets, or the standard AWS credential chain.
+For local MinIO, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` can hold the local
+MinIO credentials. Install the optional dependency with `uv sync --extra s3`.
+
+Selecting `s3` does not automatically fall back to SQL if object storage fails. The selected
+provider applies to the whole application. Artifact cleanup follows the retention period and
+removes object bytes before SQL metadata.
+
+Custom endpoints use path-style bucket addressing for MinIO compatibility.
+
 ## Operational knobs
 
 - `AIQ_MAX_SANDBOXES_PER_PRINCIPAL` / `AIQ_MAX_SANDBOXES_GLOBAL` (default-off): submit-path
   concurrency/cost caps for sandbox-enabled jobs.
 - `AIQ_OPENSHELL_ADAPTER_FILE_TRANSFER` (default-off): route OpenShell uploads through the
   official adapter instead of the env-free shim (see OpenShell gotcha above).
-- Artifact retention reuses the job-expiry periodic cleanup (`expiry_seconds`).
+- Artifact retention reuses the existing periodic cleanup (`expiry_seconds`).
 - In-container OpenShell log verbosity (opt-in): `agent.execute()` calls and their output are
   already logged on the AI-Q side (the `execute` tool-call events). To also see what runs
   inside the OpenShell container, rebuild the sandbox image with a higher `RUST_LOG`:

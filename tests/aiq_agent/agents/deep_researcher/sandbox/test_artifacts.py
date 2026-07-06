@@ -14,18 +14,25 @@
 # limitations under the License.
 
 """Tests for the artifact runtime: manifest parsing, MIME sniffing, the harvest
-validation pipeline (traversal/extension/size/quota/dedup/scan), and the SQL store."""
+validation pipeline (traversal/extension/size/quota/dedup/scan), and SQL or S3-compatible stores."""
 
 from __future__ import annotations
 
 import json
+from hashlib import sha256
+from io import BytesIO
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from aiq_agent.agents.deep_researcher.sandbox.artifacts import Artifact
 from aiq_agent.agents.deep_researcher.sandbox.artifacts import ArtifactKind
 from aiq_agent.agents.deep_researcher.sandbox.artifacts import ArtifactManager
+from aiq_agent.agents.deep_researcher.sandbox.artifacts import ArtifactStatus
+from aiq_agent.agents.deep_researcher.sandbox.artifacts import S3ArtifactBlobStore
 from aiq_agent.agents.deep_researcher.sandbox.artifacts import SqlArtifactStore
+from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
 from aiq_agent.agents.deep_researcher.sandbox.artifacts import parse_manifest
 from aiq_agent.agents.deep_researcher.sandbox.artifacts.manager import _normalize_posix
 from aiq_agent.agents.deep_researcher.sandbox.artifacts.manager import _sniff_mime
@@ -33,6 +40,7 @@ from aiq_agent.agents.deep_researcher.sandbox.config import ArtifactCaptureConfi
 
 _ARTIFACT_DIR = "/workspace/aiq-artifacts"
 _PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
+_PNG_SHA256 = sha256(_PNG).hexdigest()
 
 
 class _FakeBackend:
@@ -55,7 +63,7 @@ def _manifest_bytes(path: str, kind: str = "image") -> bytes:
     return json.dumps({"version": 1, "artifacts": [{"path": path, "kind": kind, "inline": True}]}).encode("utf-8")
 
 
-def _make_manager(store: SqlArtifactStore, files: dict[str, bytes], **capture: Any) -> tuple[ArtifactManager, list]:
+def _make_manager(store: Any, files: dict[str, bytes], **capture: Any) -> tuple[ArtifactManager, list]:
     emitted: list = []
     config = ArtifactCaptureConfig(enabled=True, **capture)
     manager = ArtifactManager(
@@ -220,7 +228,7 @@ class TestStore:
             filename="chart.png",
             sandbox_path=f"{_ARTIFACT_DIR}/chart.png",
             storage_uri="",
-            sha256="d" * 64,
+            sha256=_PNG_SHA256,
             size_bytes=len(_PNG),
         )
 
@@ -242,6 +250,200 @@ class TestStore:
         again = store.put(duplicate, _PNG)
         assert again.artifact_id == first.artifact_id
         assert len(store.list("job-1")) == 1
+
+    def test_cleanup_removes_old_artifacts(self, tmp_path: Any) -> None:
+        from sqlalchemy import text
+
+        store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
+        stored = store.put(self._artifact(), _PNG)
+        with store._engine.connect() as conn:
+            conn.execute(
+                text("UPDATE artifacts SET created_at = datetime('now', '-2 seconds') WHERE artifact_id = :id"),
+                {"id": stored.artifact_id},
+            )
+            conn.commit()
+
+        assert store.cleanup_old_artifacts(1) == 1
+        assert store.get(stored.job_id, stored.artifact_id) is None
+
+
+class _FakeStreamingBody:
+    def __init__(self, data: bytes) -> None:
+        self._stream = BytesIO(data)
+        self.closed = False
+
+    def iter_chunks(self, chunk_size: int) -> Any:
+        while chunk := self._stream.read(chunk_size):
+            yield chunk
+
+    def close(self) -> None:
+        self.closed = True
+        self._stream.close()
+
+
+class _FakeS3Client:
+    def __init__(self) -> None:
+        self.objects: dict[tuple[str, str], bytes] = {}
+        self.fail_put = False
+        self.fail_delete = False
+        self.head_bucket_calls: list[str] = []
+
+    def put_object(self, **kwargs: Any) -> None:
+        if self.fail_put:
+            raise RuntimeError("upload failed")
+        location = (kwargs["Bucket"], kwargs["Key"])
+        self.objects[location] = kwargs["Body"]
+
+    def get_object(self, **kwargs: Any) -> dict[str, Any]:
+        return {"Body": _FakeStreamingBody(self.objects[(kwargs["Bucket"], kwargs["Key"])])}
+
+    def delete_object(self, **kwargs: Any) -> None:
+        if self.fail_delete:
+            raise RuntimeError("delete failed")
+        location = (kwargs["Bucket"], kwargs["Key"])
+        self.objects.pop(location, None)
+
+    def head_bucket(self, **kwargs: Any) -> None:
+        self.head_bucket_calls.append(kwargs["Bucket"])
+
+
+class TestS3Store:
+    def _artifact(self) -> Artifact:
+        return Artifact(
+            artifact_id="art_" + "a" * 32,
+            job_id="job-1",
+            kind=ArtifactKind.IMAGE,
+            mime_type="image/png",
+            filename="chart.png",
+            sandbox_path=f"{_ARTIFACT_DIR}/chart.png",
+            storage_uri="",
+            sha256=_PNG_SHA256,
+            size_bytes=len(_PNG),
+        )
+
+    def _store(
+        self,
+        tmp_path: Any,
+        client: _FakeS3Client,
+    ) -> SqlArtifactStore:
+        blob_store = S3ArtifactBlobStore(
+            bucket="aiq-artifacts",
+            prefix="artifacts/v1",
+            endpoint_url="http://minio:9000",
+            client=client,
+        )
+        return SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db", blob_store=blob_store)
+
+    def test_put_open_and_delete(self, tmp_path: Any) -> None:
+        client = _FakeS3Client()
+        store = self._store(tmp_path, client)
+
+        stored = store.put(self._artifact(), _PNG)
+
+        assert stored.storage_uri == f"s3://aiq-artifacts/artifacts/v1/job-1/{stored.artifact_id}"
+        assert stored.status == ArtifactStatus.AVAILABLE
+        assert b"".join(store.open_bytes("job-1", stored.artifact_id)) == _PNG
+        assert store.delete_job("job-1") == 1
+        assert client.objects == {}
+        assert store.get("job-1", stored.artifact_id) is None
+
+    def test_validate_checks_configured_bucket(self, tmp_path: Any) -> None:
+        client = _FakeS3Client()
+        store = self._store(tmp_path, client)
+
+        store.validate()
+
+        assert client.head_bucket_calls == ["aiq-artifacts"]
+
+    def test_s3_bytes_leave_sql_content_null(self, tmp_path: Any) -> None:
+        from sqlalchemy import text
+
+        store = self._store(tmp_path, _FakeS3Client())
+        stored = store.put(self._artifact(), _PNG)
+        with store._engine.connect() as conn:
+            content = conn.execute(
+                text("SELECT content FROM artifacts WHERE artifact_id = :artifact_id"),
+                {"artifact_id": stored.artifact_id},
+            ).scalar_one()
+        assert content is None
+
+    def test_failed_upload_removes_metadata(self, tmp_path: Any) -> None:
+        client = _FakeS3Client()
+        client.fail_put = True
+        store = self._store(tmp_path, client)
+        artifact = self._artifact()
+
+        with pytest.raises(RuntimeError, match="upload failed"):
+            store.put(artifact, _PNG)
+
+        assert store.get(artifact.job_id, artifact.artifact_id) is None
+        assert b"".join(store.open_bytes(artifact.job_id, artifact.artifact_id)) == b""
+
+    def test_failed_delete_retains_metadata_for_retry(self, tmp_path: Any) -> None:
+        client = _FakeS3Client()
+        store = self._store(tmp_path, client)
+        stored = store.put(self._artifact(), _PNG)
+        client.fail_delete = True
+
+        assert store.delete_job(stored.job_id) == 0
+        assert store.get(stored.job_id, stored.artifact_id) is not None
+
+    def test_failed_metadata_delete_is_retried(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        client = _FakeS3Client()
+        store = self._store(tmp_path, client)
+        stored = store.put(self._artifact(), _PNG)
+
+        def fail_connect() -> None:
+            raise RuntimeError("database unavailable")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(store._engine, "connect", fail_connect)
+            assert store._delete_artifact(stored) == 0
+
+        assert client.objects == {}
+        assert store.get(stored.job_id, stored.artifact_id) is not None
+        assert store._delete_artifact(stored) == 1
+        assert store.get(stored.job_id, stored.artifact_id) is None
+
+
+class TestArtifactStoreFactory:
+    def test_sql_is_the_default_provider(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("AIQ_ARTIFACT_BLOB_PROVIDER", raising=False)
+
+        store = build_artifact_store(f"sqlite:///{tmp_path}/jobs.db")
+
+        assert isinstance(store, SqlArtifactStore)
+        assert store._blob_store.scheme == "db"
+
+    def test_s3_provider_uses_configured_blob_store(
+        self,
+        tmp_path: Any,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import factory
+
+        fake_blob_store = S3ArtifactBlobStore(bucket="aiq-artifacts", client=_FakeS3Client())
+        monkeypatch.setenv("AIQ_ARTIFACT_BLOB_PROVIDER", "s3")
+        monkeypatch.setenv("AIQ_ARTIFACT_S3_BUCKET", "aiq-artifacts")
+        monkeypatch.setattr(factory, "S3ArtifactBlobStore", lambda **_kwargs: fake_blob_store)
+        factory._build_artifact_store.cache_clear()
+
+        store = build_artifact_store(f"sqlite:///{tmp_path}/jobs.db")
+
+        assert isinstance(store, SqlArtifactStore)
+        assert store._blob_store is fake_blob_store
+        factory._build_artifact_store.cache_clear()
+
+    def test_rejects_unknown_provider(self, tmp_path: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import factory
+
+        monkeypatch.setenv("AIQ_ARTIFACT_BLOB_PROVIDER", "unknown")
+        factory._build_artifact_store.cache_clear()
+
+        with pytest.raises(ValueError, match="Unsupported AIQ_ARTIFACT_BLOB_PROVIDER"):
+            build_artifact_store(f"sqlite:///{tmp_path}/jobs.db")
+
+        factory._build_artifact_store.cache_clear()
 
 
 class TestEnsureInlineArtifactsEmbedded:

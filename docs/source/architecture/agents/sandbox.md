@@ -34,6 +34,16 @@ runtime (`.../job/{job_id}/artifacts`), which is also auth-scoped to the job.
   be written through DeepAgents virtual paths such as `/shared/`; durable binaries
   (charts, CSVs) are captured by the artifact runtime.
 
+## Artifact Storage
+
+Metadata for generated files such as charts and CSVs is stored in SQL. File content can
+also be stored in SQL, but object storage such as AWS S3 or MinIO is recommended for
+production deployments. The selected artifact storage provider determines where the file
+content is stored.
+
+For configuration variables and examples, see [Docker Compose](../../deployment/docker-compose.md#artifact-storage)
+and [Production Considerations](../../deployment/production.md#artifact-storage).
+
 ## Operational Notes
 
 - High-concurrency Modal runs create one sandbox per job. OpenShell runs share the named

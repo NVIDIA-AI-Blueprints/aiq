@@ -239,6 +239,9 @@ docs = [
     { name = "sphinx-rtd-theme" },
     { name = "sphinxcontrib-mermaid" },
 ]
+s3 = [
+    { name = "boto3" },
+]
 viz = [
     { name = "pygraphviz" },
 ]
@@ -270,6 +273,7 @@ requires-dist = [
     { name = "aiofiles", specifier = ">=23.0.0" },
     { name = "aiosqlite", specifier = ">=0.19.0" },
     { name = "asyncpg", specifier = ">=0.29.0" },
+    { name = "boto3", marker = "extra == 's3'", specifier = ">=1.35.0,<2" },
     { name = "cryptography", specifier = ">=46.0.6,<47" },
     { name = "deepagents", specifier = ">=0.6.5" },
     { name = "knowledge-layer", extras = ["all"], editable = "sources/knowledge_layer" },
@@ -305,7 +309,7 @@ requires-dist = [
     { name = "sphinxcontrib-mermaid", marker = "extra == 'docs'", specifier = ">=2.0.1" },
     { name = "yapf", marker = "extra == 'dev'", specifier = ">=0.40.0" },
 ]
-provides-extras = ["dev", "docs", "viz"]
+provides-extras = ["dev", "docs", "s3", "viz"]
 
 [package.metadata.requires-dev]
 dev = [

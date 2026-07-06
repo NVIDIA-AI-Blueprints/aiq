@@ -76,7 +76,7 @@ COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
 # import-fail at runtime. Syncing with the dev group installs those deps from the
 # frozen lock (still pinned, no re-resolve). TODO(deploy): move the source
 # packages to a dedicated non-dev group to keep test-only tooling out of the image.
-RUN uv sync --frozen
+RUN uv sync --frozen --extra s3
 
 # Install workspace packages (without CLI for base)
 RUN uv pip install --no-deps -e . \

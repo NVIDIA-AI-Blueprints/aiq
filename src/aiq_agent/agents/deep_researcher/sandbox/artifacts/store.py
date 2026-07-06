@@ -15,15 +15,16 @@
 
 """Durable artifact storage.
 
-Metadata and bytes are stored together in an ``artifacts`` table on the shared job
-``db_url`` (the same database used by the job/event stores), keyed by
-``artifact_id``. This is the byte-locality fix: the Dask worker (writer) and the API
-process (reader) both reach artifacts with no shared filesystem.
+Artifact metadata is stored in an ``artifacts`` table on the shared job ``db_url``
+(the same database used by the job/event stores), keyed by ``artifact_id``. Artifact
+bytes are stored either in the table's ``content`` BLOB column or in the configured
+S3-compatible object store. The Dask worker (writer) and API process (reader) use the
+same configured storage provider, so no shared filesystem is required.
 
 - Metadata columns are queryable and listed in the UI/CLI.
-- Bytes live in a size-capped ``content`` BLOB column for milestone 1.
-- ``storage_uri`` stays abstract so a production deployment can move bytes to
-  object storage (S3) without changing callers.
+- SQL BLOB storage remains the default for local development.
+- Production deployments can store bytes in S3-compatible object storage without
+  changing callers.
 """
 
 from __future__ import annotations
@@ -36,13 +37,13 @@ from abc import abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
+from .blob_store import ArtifactBlobStore
+from .blob_store import SqlArtifactBlobStore
 from .models import Artifact
 from .models import ArtifactProvenance
 from .models import ArtifactStatus
 
 logger = logging.getLogger(__name__)
-
-_READ_CHUNK_BYTES = 1 << 20  # 1 MiB streaming chunk
 
 
 def _normalize_db_url(db_url: str) -> str:
@@ -90,11 +91,15 @@ class ArtifactStore(ABC):
     def cleanup_old_artifacts(self, retention_seconds: int) -> int:
         """Delete artifacts older than the retention period. Returns count removed."""
 
+    @abstractmethod
+    def validate(self) -> None:
+        """Raise when the configured artifact storage is unavailable."""
+
 
 class SqlArtifactStore(ArtifactStore):
-    """SQL-backed store (SQLite/Postgres) on the shared job ``db_url``.
+    """SQL-backed metadata store (SQLite/Postgres) on the shared job ``db_url``.
 
-    Bytes live in a capped BLOB column. Dedup is per-job by content digest so
+    Bytes use the configured blob store. Dedup is per-job by content digest so
     harvest is idempotent across job retries.
     """
 
@@ -102,7 +107,12 @@ class SqlArtifactStore(ArtifactStore):
     _initialized: set[str] = set()
     _lock = threading.Lock()
 
-    def __init__(self, db_url: str = "sqlite+aiosqlite:///./jobs.db") -> None:
+    def __init__(
+        self,
+        db_url: str = "sqlite+aiosqlite:///./jobs.db",
+        *,
+        blob_store: ArtifactBlobStore | None = None,
+    ) -> None:
         """Bind to the shared job database and ensure the artifacts table exists.
 
         Args:
@@ -111,6 +121,7 @@ class SqlArtifactStore(ArtifactStore):
         self.db_url = db_url
         self._engine = self._get_engine(db_url)
         self._ensure_table()
+        self._blob_store = blob_store or SqlArtifactBlobStore(self._engine)
 
     @classmethod
     def _get_engine(cls, db_url: str) -> Any:
@@ -198,15 +209,30 @@ class SqlArtifactStore(ArtifactStore):
             logger.debug("Artifact dedup hit for job=%s sha=%s", artifact.job_id, artifact.sha256[:12])
             return existing
 
-        from sqlalchemy import text
-
-        stored = artifact.model_copy(
+        prepared = artifact.model_copy(
             update={
                 # Logical location only — never embed db_url (it may carry credentials).
-                "storage_uri": f"db://artifacts/{artifact.artifact_id}",
-                "status": ArtifactStatus.AVAILABLE,
+                "storage_uri": self._blob_store.make_uri(artifact),
             }
         )
+        try:
+            content = self._blob_store.put(prepared, data)
+            stored = prepared.model_copy(update={"status": ArtifactStatus.AVAILABLE})
+            self._insert_metadata(stored, content=content)
+        except Exception:
+            logger.exception("Artifact storage failed for artifact=%s", prepared.artifact_id)
+            try:
+                self._blob_store.delete(prepared)
+            except Exception:
+                logger.warning("Failed to remove artifact bytes after storage failure: %s", prepared.storage_uri)
+            raise
+
+        return stored
+
+    def _insert_metadata(self, artifact: Artifact, *, content: bytes | None) -> None:
+        """Insert one artifact metadata row and optional SQL-backed content."""
+        from sqlalchemy import text
+
         with self._engine.connect() as conn:
             conn.execute(
                 text(
@@ -217,42 +243,33 @@ class SqlArtifactStore(ArtifactStore):
                     ":source_tool_call_id, :provenance, :status, :content)"
                 ),
                 {
-                    "artifact_id": stored.artifact_id,
-                    "job_id": stored.job_id,
-                    "kind": stored.kind.value,
-                    "mime_type": stored.mime_type,
-                    "filename": stored.filename,
-                    "sandbox_path": stored.sandbox_path,
-                    "storage_uri": stored.storage_uri,
-                    "sha256": stored.sha256,
-                    "size_bytes": stored.size_bytes,
-                    "title": stored.title,
-                    "caption": stored.caption,
-                    "inline": stored.inline,
-                    "workflow": stored.workflow,
-                    "source_tool_call_id": stored.source_tool_call_id,
-                    "provenance": stored.provenance.model_dump_json(),
-                    "status": stored.status.value,
-                    "content": data,
+                    "artifact_id": artifact.artifact_id,
+                    "job_id": artifact.job_id,
+                    "kind": artifact.kind.value,
+                    "mime_type": artifact.mime_type,
+                    "filename": artifact.filename,
+                    "sandbox_path": artifact.sandbox_path,
+                    "storage_uri": artifact.storage_uri,
+                    "sha256": artifact.sha256,
+                    "size_bytes": artifact.size_bytes,
+                    "title": artifact.title,
+                    "caption": artifact.caption,
+                    "inline": artifact.inline,
+                    "workflow": artifact.workflow,
+                    "source_tool_call_id": artifact.source_tool_call_id,
+                    "provenance": artifact.provenance.model_dump_json(),
+                    "status": artifact.status.value,
+                    "content": content,
                 },
             )
             conn.commit()
-        return stored
 
     def open_bytes(self, job_id: str, artifact_id: str) -> Iterator[bytes]:
-        """Yield an artifact's bytes in 1 MiB chunks, or nothing if not found."""
-        from sqlalchemy import text
-
-        with self._engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT content FROM artifacts WHERE job_id = :job_id AND artifact_id = :artifact_id"),
-                {"job_id": job_id, "artifact_id": artifact_id},
-            ).fetchone()
-        if row is None or row[0] is None:
+        """Yield an artifact's bytes from the configured provider, or nothing if not found."""
+        artifact = self.get(job_id, artifact_id)
+        if artifact is None:
             return
-        data: bytes = row[0]
-        for start in range(0, len(data), _READ_CHUNK_BYTES):
-            yield data[start : start + _READ_CHUNK_BYTES]
+        yield from self._blob_store.open_bytes(artifact)
 
     def get(self, job_id: str, artifact_id: str) -> Artifact | None:
         """Return artifact metadata for the job, or ``None`` if not found."""
@@ -302,13 +319,8 @@ class SqlArtifactStore(ArtifactStore):
         return [_row_to_artifact(row) for row in rows]
 
     def delete_job(self, job_id: str) -> int:
-        """Delete all artifacts for the job and return the number removed."""
-        from sqlalchemy import text
-
-        with self._engine.connect() as conn:
-            result = conn.execute(text("DELETE FROM artifacts WHERE job_id = :job_id"), {"job_id": job_id})
-            conn.commit()
-            return result.rowcount
+        """Delete a job's bytes first and remove metadata after each success."""
+        return sum(self._delete_artifact(artifact) for artifact in self.list(job_id))
 
     def cleanup_old_artifacts(self, retention_seconds: int) -> int:
         """Delete artifacts older than the retention window and return the count.
@@ -324,17 +336,54 @@ class SqlArtifactStore(ArtifactStore):
         is_postgres = _normalize_db_url(self.db_url).startswith("postgresql")
         with self._engine.connect() as conn:
             if is_postgres:
-                result = conn.execute(
-                    text("DELETE FROM artifacts WHERE created_at < NOW() - :seconds * INTERVAL '1 second'"),
-                    {"seconds": retention_seconds},
+                rows = (
+                    conn.execute(
+                        text(
+                            f"SELECT {_META_COLUMNS} FROM artifacts "
+                            "WHERE created_at < NOW() - :seconds * INTERVAL '1 second'"
+                        ),
+                        {"seconds": retention_seconds},
+                    )
+                    .mappings()
+                    .fetchall()
                 )
             else:
-                result = conn.execute(
-                    text("DELETE FROM artifacts WHERE created_at < datetime('now', :interval)"),
-                    {"interval": f"-{retention_seconds} seconds"},
+                rows = (
+                    conn.execute(
+                        text(f"SELECT {_META_COLUMNS} FROM artifacts WHERE created_at < datetime('now', :interval)"),
+                        {"interval": f"-{retention_seconds} seconds"},
+                    )
+                    .mappings()
+                    .fetchall()
                 )
-            conn.commit()
-            return result.rowcount
+        return sum(self._delete_artifact(_row_to_artifact(row)) for row in rows)
+
+    def validate(self) -> None:
+        """Validate the configured byte storage."""
+        self._blob_store.validate()
+
+    def _delete_artifact(self, artifact: Artifact) -> int:
+        """Delete one artifact's bytes and then its metadata row."""
+        from sqlalchemy import text
+
+        try:
+            self._blob_store.delete(artifact)
+        except Exception:
+            logger.exception("Artifact byte deletion failed; retaining metadata for %s", artifact.artifact_id)
+            return 0
+        try:
+            with self._engine.connect() as conn:
+                result = conn.execute(
+                    text("DELETE FROM artifacts WHERE job_id = :job_id AND artifact_id = :artifact_id"),
+                    {"job_id": artifact.job_id, "artifact_id": artifact.artifact_id},
+                )
+                conn.commit()
+                return result.rowcount
+        except Exception:
+            logger.exception(
+                "Artifact metadata deletion failed; retaining metadata for retry: %s", artifact.artifact_id
+            )
+            return 0
 
 
 # Backwards-friendly alias; local development and single-node use the same SQL store.
