@@ -426,9 +426,12 @@ class TestDeepResearcherAgent:
                 '`status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`'
                 in kwargs["system_prompt"]
             )
-            assert "Never use `task`, `title`, or `description` keys for todo items" in kwargs["system_prompt"]
-            assert "Do not call `write_todos` as the only tool call in an assistant turn" in kwargs["system_prompt"]
-            assert "If todo tracking causes uncertainty, skip it and continue the workflow" in kwargs["system_prompt"]
+            assert "never use `task`, `title`, or `description` keys for todo items" in kwargs["system_prompt"]
+            assert "do not call `write_todos` as the only tool call in an assistant turn" in kwargs["system_prompt"]
+            assert "initialize todos at the beginning of the workflow" in kwargs["system_prompt"]
+            assert "update them at each major phase transition" in kwargs["system_prompt"]
+            assert "mark them completed before final return" in kwargs["system_prompt"]
+            assert "never delegate todo ownership to subagents" in kwargs["system_prompt"]
             assert "max_batch_research_queries" not in kwargs["system_prompt"]
             assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
@@ -448,6 +451,9 @@ class TestDeepResearcherAgent:
             assert all(m in subagents["writer-agent"]["middleware"] for m in agent.writer_middleware)
             assert any(
                 m.__class__.__name__ == "ToolVisibilityMiddleware" for m in subagents["writer-agent"]["middleware"]
+            )
+            assert any(
+                m.__class__.__name__ == "TodoSuppressionMiddleware" for m in subagents["writer-agent"]["middleware"]
             )
             assert subagents["writer-agent"]["skills"] == [synthesis_skill_source]
             assert "/skills/synthesis/" not in subagents["writer-agent"]["system_prompt"]
@@ -564,6 +570,9 @@ class TestDeepResearcherAgent:
             assert all(m in subagents["writer-agent"]["middleware"] for m in agent.writer_middleware)
             assert any(
                 m.__class__.__name__ == "ToolVisibilityMiddleware" for m in subagents["writer-agent"]["middleware"]
+            )
+            assert any(
+                m.__class__.__name__ == "TodoSuppressionMiddleware" for m in subagents["writer-agent"]["middleware"]
             )
             assert (
                 "When available skills apply during planning, research, or synthesis"
