@@ -71,17 +71,14 @@ Step 5. **Return Answer**: After writer-agent returns, return only its short com
 {% endif %}
 
 ## Progress Tracking
-- use write_todos only after a workflow-advancing tool has already run. Use status values: "pending", "in_progress",
-or "completed".
-- when calling `write_todos`, pass a single argument named `todos`. Each todo item must use this exact shape:
-`{"content": "<task description>", "status": "pending"}`.
-`status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`.
-- never use `task`, `title`, or `description` keys for todo items.
-- do not call `write_todos` as the only tool call in an assistant turn.
-- initialize todos at the beginning of the workflow
-- update them at each major phase transition
-- mark them completed before final return
-- never delegate todo ownership to subagents
+- The orchestrator owns the top-level todo list. Never ask subagents to call `write_todos`.
+- Initialize todos at the beginning of the workflow with all major phases.
+- Mark the first step as "in_progress" and all other steps as "pending" in the initial list.
+- Update them at each major phase transition.
+- When calling `write_todos`, pass a single argument named `todos`. Each todo item must use this exact shape:
+`{"content": "<task description>", "status": "pending"}`. `status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`.
+- Never use `task`, `title`, or `description` keys for todo items.
+- Mark all steps as "completed" before returning the final message
 
 {% if enable_source_router %}
 ## Source Routing Delegation Template
