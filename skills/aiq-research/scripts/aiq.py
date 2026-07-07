@@ -306,7 +306,7 @@ def cancel_job(job_id: str) -> dict[str, Any]:
 
 def edit_report(job_id: str, edit_instruction: str) -> dict[str, Any]:
     """Edit the final report for a completed async AI-Q job."""
-    body = {"input": edit_instruction, "job_id": job_id}
+    body = {"input": edit_instruction}
     return _api_request("POST", f"/v1/jobs/async/job/{_validate_job_id(job_id)}/report/edit", body=body)
 
 
