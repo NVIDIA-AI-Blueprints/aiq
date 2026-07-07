@@ -140,7 +140,9 @@ async def _build_jobs_app(monkeypatch, tmp_path, *, job_output=None, submitted_j
     return app
 
 
-def _build_assembled_worker_app(monkeypatch, tmp_path, *, dask_available: bool = True) -> FastAPI:
+def _build_assembled_worker_app(
+    monkeypatch, tmp_path, *, dask_available: bool = True, db_url: str | None = None
+) -> FastAPI:
     """Build the AI-Q worker app while preserving NAT-before-AIQ route ordering."""
     import aiq_api.routes.jobs as jobs_routes
     from aiq_api import plugin
@@ -192,7 +194,7 @@ def _build_assembled_worker_app(monkeypatch, tmp_path, *, dask_available: bool =
 
     monkeypatch.setattr(WorkflowBuilder, "from_config", lambda _config: BuilderContext())
 
-    front_end = plugin.AIQAPIConfig(db_url=f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
+    front_end = plugin.AIQAPIConfig(db_url=db_url or f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
     worker = plugin.AIQAPIWorker(Config(general=GeneralConfig(front_end=front_end)))
     worker._dask_available = dask_available
     worker._job_store = object() if dask_available else None
@@ -319,6 +321,42 @@ def test_assembled_worker_health_route_reports_ready_encryption(monkeypatch, tmp
     assert body["encryption"] == {"mode": mode, "ready": True}
     assert list(openapi["paths"]["/live"]) == ["get"]
     assert list(openapi["paths"]["/health"]) == ["get"]
+
+
+def test_assembled_worker_health_returns_503_when_db_unreachable_on_fresh_process(monkeypatch, tmp_path):
+    """A fresh process with an empty async-engine cache must still ping the DB.
+
+    Regression: the health check previously reported ``db: no_engine`` (HTTP 200)
+    whenever no async engine happened to be cached yet, so a fresh pod could pass
+    Helm readiness straight through a database outage.
+    """
+    from sqlalchemy.exc import OperationalError
+
+    from aiq_api.jobs.event_store import EventStore
+
+    app = _build_assembled_worker_app(monkeypatch, tmp_path)
+
+    with TestClient(app) as client:
+        # The process started cleanly, but by the time the readiness probe runs
+        # no async engine has been cached (fresh process) and the database has
+        # become unavailable.
+        EventStore._async_engine_cache.clear()
+
+        def _unreachable(_db_url):
+            raise OperationalError("SELECT 1", {}, Exception("database is unavailable"))
+
+        monkeypatch.setattr(EventStore, "_get_or_create_async_engine", _unreachable)
+
+        response = client.get("/health")
+        liveness_response = client.get("/live")
+
+    assert response.status_code == 503
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["db"] == "unreachable"
+    # Liveness must stay decoupled from dependency health.
+    assert liveness_response.status_code == 200
+    assert liveness_response.json() == {"status": "alive"}
 
 
 @pytest.mark.asyncio
