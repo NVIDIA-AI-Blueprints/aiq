@@ -757,6 +757,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 input_text=req.input,
                 owner=principal.email or principal.sub,
                 principal=principal,
+                job_id=req.job_id,
                 expiry_seconds=expiry,
                 data_sources=[],
                 auth_token=auth_token,
