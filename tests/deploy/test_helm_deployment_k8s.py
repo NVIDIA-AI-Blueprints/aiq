@@ -94,3 +94,38 @@ aiq:
     assert backend_deployment["spec"]["template"]["spec"]["hostAliases"] == [
         {"ip": "127.0.0.1", "hostnames": ["aiq.local"]}
     ]
+
+
+def test_default_chart_does_not_provision_or_configure_redis():
+    manifests = render_chart()
+
+    redis_resources = {
+        (manifest.get("kind"), manifest.get("metadata", {}).get("name"))
+        for manifest in manifests
+        if manifest.get("metadata", {}).get("name", "").startswith("aiq-redis")
+    }
+    assert redis_resources == set()
+
+    backend_deployment = next(
+        manifest
+        for manifest in manifests
+        if manifest.get("kind") == "Deployment" and manifest["metadata"]["name"] == "aiq-backend"
+    )
+    backend_env = {
+        item["name"] for item in backend_deployment["spec"]["template"]["spec"]["containers"][0].get("env", [])
+    }
+    assert backend_env.isdisjoint({"MCP_TOKEN_STORE_TYPE", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD"})
+
+
+def test_backend_uses_separate_liveness_and_readiness_endpoints():
+    manifests = render_chart()
+
+    backend_deployment = next(
+        manifest
+        for manifest in manifests
+        if manifest.get("kind") == "Deployment" and manifest["metadata"]["name"] == "aiq-backend"
+    )
+    backend_container = backend_deployment["spec"]["template"]["spec"]["containers"][0]
+
+    assert backend_container["livenessProbe"]["httpGet"]["path"] == "/live"
+    assert backend_container["readinessProbe"]["httpGet"]["path"] == "/health"

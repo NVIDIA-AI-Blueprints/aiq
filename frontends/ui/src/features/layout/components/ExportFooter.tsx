@@ -12,9 +12,10 @@
 
 import { type FC, useCallback, useState } from 'react'
 import { Banner, Flex, Button } from '@/adapters/ui'
-import { useChatStore, useIsCurrentSessionBusy } from '@/features/chat'
+import { useChatStore, useIsCurrentSessionBusy, selectResolvedDeepResearchJobId } from '@/features/chat'
 import { downloadAsMarkdown } from '@/utils/download-as-markdown'
 import { useDownloadPdfRoute } from '@/hooks/use-download-pdf'
+import { rewriteArtifactRefs } from '@/shared/components/MarkdownRenderer'
 import { Download } from '@/adapters/ui/icons'
 
 interface ExportFooterProps {
@@ -29,6 +30,8 @@ interface ExportFooterProps {
 export const ExportFooter: FC<ExportFooterProps> = ({ disabled }) => {
   const reportContent = useChatStore((state) => state.reportContent)
   const conversationTitle = useChatStore((state) => state.currentConversation?.title)
+  // Active job id, or the latest finished deep-research job, so export can resolve artifacts.
+  const deepResearchJobId = useChatStore(selectResolvedDeepResearchJobId)
   const { downloadPdf, isLoading: isPdfLoading, error: pdfError, clearError: clearPdfError } = useDownloadPdfRoute()
   const [mdError, setMdError] = useState<string | null>(null)
 
@@ -52,16 +55,22 @@ export const ExportFooter: FC<ExportFooterProps> = ({ disabled }) => {
   const handleExportMarkdown = useCallback(() => {
     if (isExportDisabled) return
     setMdError(null)
-    const result = downloadAsMarkdown(reportContentStr, conversationTitle ?? undefined)
+    // Rewrite artifact:// refs to absolute content URLs so the downloaded .md renders
+    // images while the backend is reachable.
+    const origin = typeof window !== 'undefined' ? window.location.origin : ''
+    const markdown = deepResearchJobId
+      ? rewriteArtifactRefs(reportContentStr, deepResearchJobId, origin)
+      : reportContentStr
+    const result = downloadAsMarkdown(markdown, conversationTitle ?? undefined)
     if (!result.success && result.error) {
       setMdError(result.error)
     }
-  }, [isExportDisabled, reportContentStr, conversationTitle])
+  }, [isExportDisabled, reportContentStr, conversationTitle, deepResearchJobId])
 
   const handleExportPDF = useCallback(() => {
     if (isExportDisabled || isPdfLoading) return
-    downloadPdf(reportContentStr, conversationTitle ?? undefined)
-  }, [isExportDisabled, isPdfLoading, reportContentStr, downloadPdf, conversationTitle])
+    downloadPdf(reportContentStr, conversationTitle ?? undefined, deepResearchJobId ?? undefined)
+  }, [isExportDisabled, isPdfLoading, reportContentStr, downloadPdf, conversationTitle, deepResearchJobId])
 
   const exportError = mdError || pdfError
   const clearExportError = useCallback(() => {

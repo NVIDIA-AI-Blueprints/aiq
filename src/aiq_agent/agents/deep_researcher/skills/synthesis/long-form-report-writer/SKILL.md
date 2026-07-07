@@ -65,7 +65,9 @@ The report must read as if written by a professional human researcher.
 
 - Number sources sequentially with inline citations like `[1]`, `[2]`, etc.
 - Place citations immediately following the relevant claim.
-- Citations are required for every material factual claim, number, date, sourced comparison, source-specific caveat, or analytical conclusion grounded in evidence.
+- Citations are required for every material source-derived factual claim, number, date, sourced comparison, source-specific caveat, or analytical conclusion grounded in evidence.
+- For arithmetic, rankings, ranges, means, medians, or summary statistics computed solely from already cited values in the report, cite the underlying source data where those values appear. Then state that the derived statistics are computed from that cited table or cited values; do not attach source numbers to every computed-statistic line.
+- In a summary-statistics block, cite only source-derived inputs, source-specific caveats, or any newly introduced external value. Lines such as count, mean, median, range, min, or max do not need their own citation when they are computed from the immediately preceding cited table or cited value set.
 - Never place bare URLs or hyperlinks in the report body; use only `[N]` citations inline. URLs belong exclusively in the Sources section.
 - For information supported by multiple sources, use adjacent citations like `[1][4][7]`.
 - Include the full source list at the end of the document.

@@ -27,9 +27,13 @@ All containerized deployments run the same three services:
 
 - **[Kubernetes (Helm)](./kubernetes.md)** -- Helm chart deployment for Kubernetes clusters, including NGC image pull secrets, configuration switching, FRAG integration, and troubleshooting.
 
+- **[Amazon OpenSearch Serverless](./aws-opensearch-serverless.md)** -- EKS and OpenSearch Serverless deployment notes for the built-in OpenSearch knowledge backend.
+
 - **[Docker Build System](./docker-build.md)** -- Multi-stage Dockerfile architecture, build targets (dev vs. release), base images, and startup scripts (`entrypoint.py` and `start_web.py`).
 
 - **[Authentication](./authentication.md)** -- Enable OAuth/OIDC sign-in, configure backend JWT validation, and use AIQ user tokens in tools and MCP pass-through integrations.
+
+- **[Async Job Content Encryption](./content-encryption.md)** -- Configure encryption at rest for async final reports and selected artifact event content, including Vault Transit and static-key modes.
 
 - **[Observability](./observability.md)** -- Tracing and monitoring with Phoenix, LangSmith, Weave, and OpenTelemetry.
 

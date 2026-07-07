@@ -20,6 +20,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+RouteTarget = Literal["meta", "report", "new_research"]
+ReportAction = Literal["ask", "edit"]
+
 
 class IntentResult(BaseModel):
     """
@@ -28,8 +31,14 @@ class IntentResult(BaseModel):
     Attributes:
         intent: Classified intent - either 'meta' (greetings, chit-chat, capabilities)
                 or 'research' (queries requiring data lookup and sources).
+        target: Python-derived workflow target for the selected semantic route.
+        report_action: Python-derived report interaction action, when target is ``report``.
+        use_parent_report_context: Whether a deep-research route should seed the active report.
         raw: Optional raw classification response from the LLM.
     """
 
     intent: Literal["meta", "research"]
+    target: RouteTarget = "new_research"
+    report_action: ReportAction | None = None
+    use_parent_report_context: bool = False
     raw: dict[str, Any] | None = None

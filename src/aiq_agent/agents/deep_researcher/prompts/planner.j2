@@ -4,13 +4,11 @@ Your final response is validated against the ResearchPlan schema. Return the fin
 ## Other Tools
 - `think`: record your thoughts for downstream steps
 {% if enable_source_router %}
-- `ls`: filesystem tool to see if `/shared/source_routing.json` or `/shared/plan.json` exists
+- `ls`: filesystem tool to see if `/shared/source_routing.json` exists
 - `read_file`: filesystem tool to read `/shared/source_routing.json` only after a previous filesystem tool result shows it exists
-{% else %}
-- `ls`: filesystem tool to see if `/shared/plan.json` exists
 {% endif %}
-- `write_file`: filesystem tool to write plan to `/shared/plan.json` if it doesn't exist
-- `edit_file`: filesystem tool to edit the plan at `/shared/plan.json` if it exists
+
+Do not call `write_file` or `edit_file`. The runtime persists your returned `ResearchPlan` to `/shared/plan.json` automatically after you return.
 
 ## Task Analysis
 Before generating the research plan, deeply analyze the user's request:
@@ -22,7 +20,8 @@ Before generating the research plan, deeply analyze the user's request:
 5. **Language**: What language is the user's request in?
 
 ## Workflow
-- **Task Decomposition**: Use a todo list with write_todos to break down the research into focused tasks and update this todo list based on progress.
+- **Task Decomposition**: Break the research into focused answer components and ResearchQuery objects in the final
+  ResearchPlan, using discovery tools and reasoning with `think`, then return the final structured ResearchPlan.
 {% if enable_source_router %}
 - **Source routing advisory**: First inspect `/shared/` with `ls`. If `/shared/source_routing.json` exists, read it before choosing source tools. Do not call `ls` and `read_file` for `/shared/source_routing.json` in the same assistant turn. If the route file is missing or `read_file` says it is not found, continue planning without source-routing guidance; do not fail, retry indefinitely, or search subdirectories. When a route is available, copy all highest-priority routed recommendations' exact `tool_names` into `preferred_tools` for the final ResearchQuery objects where they fit. Copy route fallback source tool names into `fallback_tools` when useful for corroboration or gaps. Never use tool names that are not listed below.
 {% endif %}
@@ -34,7 +33,7 @@ Before generating the research plan, deeply analyze the user's request:
    - What routing, coverage, or query-shaping gaps remain?
    - What constraints or answer components should I add based on these findings?
 - **Evolve**: Refine answer_strategy and constraints based on findings.
-- **Output**: Write the raw ResearchPlan JSON object to `/shared/plan.json` with the `write_file` filesystem tool and return the same plan as your final structured response.
+- **Output**: Return the refined `ResearchPlan` as your final structured response. Do not write it to a file yourself; the runtime persists it to `/shared/plan.json` automatically.
 
 ## Dynamic Discovery Budget
 
@@ -130,11 +129,7 @@ Before returning the final research plan, verify:
 
 ## Final Output
 
-Return a `ResearchPlan` structured response.
-
-Before returning, write the same ResearchPlan object as raw JSON to `/shared/plan.json` using `write_file`.
-
-Do not wrap the file content in markdown fences or add prose outside the JSON.
+Return a `ResearchPlan` structured response. The runtime persists it to `/shared/plan.json` automatically; do not call `write_file` or `edit_file`.
 
 **Important**:
 - You MUST match the language of the task for all outputs e.g if the task is in Chinese, the outputs should be in Chinese.

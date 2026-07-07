@@ -1,7 +1,7 @@
 ---
 name: forecast-analysis
 description: >
-  Use this skill during research for lightweight forecast evidence analysis: base-rate checks, prediction-market anchors, scenario ranges, directional factor summaries, implied probabilities, and monitoring indicators. Triggers: "forecast", "prediction", "probability", "odds", "base rate", "scenario", "Polymarket", "prediction market", "will happen", "market-implied", "confidence interval", "price target", "expected value". Outputs: forecast evidence notes or compact forecast inputs saved under /shared/ for writer synthesis.
+  Use this skill during research for lightweight forecast evidence analysis: base-rate checks, prediction-market anchors, scenario ranges, directional factor summaries, implied probabilities, and monitoring indicators. Triggers: "forecast", "prediction", "probability", "odds", "base rate", "scenario", "Polymarket", "prediction market", "will happen", "market-implied", "confidence interval", "price target", "expected value". Outputs: forecast evidence notes or compact forecast inputs returned in your ResearchNotes for writer synthesis.
 ---
 
 # Forecast Analysis Skill
@@ -14,7 +14,7 @@ Use this skill when a researcher worker needs to prepare forecast evidence, not 
 2. Prefer explicit anchors from sources, such as prediction-market prices, base rates, latest measured values, official projections, analyst forecasts, or recent trend data.
 3. Use `execute` for any arithmetic: probability conversion, expected value, weighted scenario averages, interval arithmetic, or base-rate adjustments.
 4. Do not invent a final forecast when the assigned ResearchQuery only asks for evidence. Capture what the evidence implies and preserve uncertainty.
-5. Save compact forecast inputs to `/shared/...` only after any calculation has succeeded.
+5. Include compact forecast inputs in your `ResearchNotes` only after any calculation has succeeded.
 6. In `ResearchNotes`, cite original source IDs for every forecast anchor and material factor.
 
 ## Forecast Evidence Map

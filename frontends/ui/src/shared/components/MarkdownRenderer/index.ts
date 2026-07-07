@@ -3,3 +3,13 @@
 
 export { MarkdownRenderer } from './MarkdownRenderer'
 export type { MarkdownRendererProps, SupportedLanguage } from './types'
+export {
+  ARTIFACT_SCHEME,
+  isArtifactRef,
+  artifactIdFromRef,
+  artifactContentPath,
+  resolveArtifactUrl,
+  replaceArtifactImages,
+  extractArtifactIds,
+  rewriteArtifactRefs,
+} from './artifact-url'

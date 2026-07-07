@@ -22,6 +22,7 @@ across multiple applications.
 Available Backends:
 - llamaindex: LlamaIndex + ChromaDB (lightweight, local)
 - foundational_rag: Hosted NVIDIA RAG Blueprint (production, multi-user)
+- opensearch: OpenSearch vector search for self-hosted clusters and Amazon OpenSearch Serverless
 
 Note: NAT tool registrations require NAT to be installed.
 The adapter modules can be used standalone without NAT.

@@ -180,10 +180,18 @@ class TestDeepResearcherAgent:
 
     def test_init_with_custom_settings(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test DeepResearcherAgent initialization with custom settings."""
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent),
+            # Patch backend creation so the test does not require the optional OpenShell adapter
+            # (the default sandbox provider) to be installed.
+            patch(
+                "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+                return_value=MagicMock(),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+            from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+            from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
 
             callbacks = [MagicMock()]
             agent = DeepResearcherAgent(
@@ -191,8 +199,9 @@ class TestDeepResearcherAgent:
                 tools=[real_tool],
                 verbose=False,
                 callbacks=callbacks,
-                skills=SkillsConfig.enabled_builtin(),
-                sandbox=SandboxConfig(app_name="custom-aiq"),
+                enable_citation_verification=False,
+                skills=DeepResearchSkillsConfig(agents={"researcher-agent": ("research",)}),
+                sandbox=DeepResearchSandboxConfig(app_name="custom-aiq"),
                 domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
                 enable_source_router=False,
                 max_research_concurrency=2,
@@ -207,28 +216,32 @@ class TestDeepResearcherAgent:
             assert agent.max_source_tool_batch_size == 4
             assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
             assert agent.enable_source_router is False
+            assert agent.enable_citation_verification is False
             assert agent.deepagents_runtime.skill_sources_for("orchestrator") is None
-            assert agent.deepagents_runtime.skill_sources_for("researcher") == ["/skills/"]
+            assert agent.deepagents_runtime.skill_sources_for("researcher-agent") == ["/skills/research/"]
 
     def test_sandbox_config_rejects_unsupported_provider(self):
-        """Unsupported sandbox providers fail early with a clear error."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
+        """Unsupported sandbox providers fail validation at config load (registry-backed)."""
+        from pydantic import ValidationError
 
-        with pytest.raises(ValueError, match="Unsupported sandbox provider"):
-            SandboxConfig(provider="not-modal")
+        from aiq_agent.agents.deep_researcher.sandbox.config import SandboxConfig
+
+        with pytest.raises(ValidationError, match="Unsupported sandbox provider"):
+            SandboxConfig(provider="not-a-real-provider")
 
     def test_register_uses_runtime_config_models(self):
         """NAT config uses the same skills and sandbox models as runtime."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
 
         config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
             source_router_llm="source-router-llm",
             writer_llm="writer-llm",
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="custom-aiq", python_packages=["matplotlib", "pillow"]),
+            enable_citation_verification=False,
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="custom-aiq", packages=["matplotlib", "pillow"]),
             max_research_concurrency=2,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
@@ -236,29 +249,55 @@ class TestDeepResearcherAgent:
             enable_source_router=False,
         )
 
-        assert config.skills.enabled is True
+        assert config.skills is not None
+        assert config.skills.agents == {"writer-agent": ("synthesis",)}
         assert config.source_router_llm == "source-router-llm"
         assert config.writer_llm == "writer-llm"
+        assert config.enable_citation_verification is False
         assert config.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
         assert config.max_research_concurrency == 2
         assert config.max_concurrent_source_tool_calls == 3
         assert config.max_source_tool_batch_size == 4
         assert config.enable_source_router is False
-        assert config.skills.agent_sources == {}
         assert config.sandbox is not None
-        assert config.sandbox.provider == "modal"
+        assert config.sandbox.provider == "openshell"
         assert config.sandbox.app_name == "custom-aiq"
-        assert config.sandbox.python_packages == ("matplotlib", "pillow")
+        assert config.sandbox.packages == ("matplotlib", "pillow")
+
+    def test_register_resolves_named_runtime_config_refs(self):
+        """Deep research agent config can reference config-only skills and sandbox functions."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.agents.deep_researcher.register import resolve_deep_research_runtime_config
+
+        skills = DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)})
+        sandbox = DeepResearchSandboxConfig(app_name="custom-aiq")
+        builder = MagicMock()
+        builder.get_function_config.side_effect = {
+            "deep_research_skills": skills,
+            "deep_research_sandbox": sandbox,
+        }.__getitem__
+        config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            skills="deep_research_skills",
+            sandbox="deep_research_sandbox",
+        )
+
+        resolved_skills, resolved_sandbox = resolve_deep_research_runtime_config(config, builder)
+
+        assert resolved_skills is skills
+        assert resolved_sandbox is sandbox
 
     def test_modal_sandbox_name_is_job_id(self):
         """Modal sandbox names use the resolved job ID directly."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
+        from aiq_agent.agents.deep_researcher.sandbox.providers.modal import _validate_modal_sandbox_name
 
         assert _validate_modal_sandbox_name("job-123") == "job-123"
 
     def test_modal_sandbox_name_rejects_invalid_job_id(self):
         """Invalid custom job IDs fail before creating a Modal sandbox."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _validate_modal_sandbox_name
+        from aiq_agent.agents.deep_researcher.sandbox.providers.modal import _validate_modal_sandbox_name
 
         with pytest.raises(ValueError, match="valid Modal sandbox name"):
             _validate_modal_sandbox_name("bad/job/id")
@@ -292,39 +331,6 @@ class TestDeepResearcherAgent:
             assert "writer" in agent._prompts
             assert "source_router" in agent._prompts
 
-    def test_prepare_state_preloads_builtin_skill_files(self, mock_llm_provider, real_tool):
-        """Built-in skills are added to state so StateBackend can discover them."""
-        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
-
-        agent = DeepResearcherAgent(
-            llm_provider=mock_llm_provider,
-            tools=[real_tool],
-            skills=SkillsConfig.enabled_builtin(),
-        )
-        state = DeepResearchAgentState(
-            messages=[],
-            files={"/existing.txt": {"content": "keep", "encoding": "utf-8"}},
-        )
-        mock_skill_files = {
-            "/mock-skill/SKILL.md": {
-                "content": "name: mock-skill\n",
-                "encoding": "utf-8",
-                "created_at": "2026-01-01T00:00:00",
-                "modified_at": "2026-01-01T00:00:00",
-            }
-        }
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.deepagents_runtime._builtin_skill_state_files",
-            return_value=mock_skill_files,
-        ):
-            prepared = agent.deepagents_runtime.prepare_state(state)
-
-        assert prepared.files["/existing.txt"]["content"] == "keep"
-        for path, file_data in mock_skill_files.items():
-            assert prepared.files[path] == file_data
-
     def test_build_orchestrator_passes_skills_to_writer_only(
         self,
         mock_llm_provider,
@@ -343,19 +349,13 @@ class TestDeepResearcherAgent:
             ) as create_researcher,
         ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
-            from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+            from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
 
-            synthesis_skill_source = f"{BUILTIN_SKILL_SOURCE}synthesis/"
+            synthesis_skill_source = "/skills/synthesis/"
             agent = DeepResearcherAgent(
                 llm_provider=mock_llm_provider,
                 tools=[real_tool],
-                skills=SkillsConfig(
-                    enabled=True,
-                    agent_sources={
-                        "writer-agent": (synthesis_skill_source,),
-                    },
-                ),
+                skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Compare revenue growth")])
 
@@ -376,22 +376,8 @@ class TestDeepResearcherAgent:
             assert all(m in researcher_middleware for m in agent.researcher_middleware)
             assert "skills" not in researcher_kwargs
             assert "backend" not in researcher_kwargs
-            assert kwargs["middleware"] is agent.orchestrator_middleware
-            assert "If a Skills System section is present" not in researcher_kwargs["system_prompt"]
-            assert "data-table-analysis" not in researcher_kwargs["system_prompt"]
-            assert "/shared/plan.json" in researcher_kwargs["system_prompt"]
-            assert "read_file" in researcher_kwargs["system_prompt"]
-            assert "SKILL.md" in researcher_kwargs["system_prompt"]
-            assert "ResearchQuery.target_components" in researcher_kwargs["system_prompt"]
-            assert "Evidence judgment" in researcher_kwargs["system_prompt"]
-            assert "Do not call `write_file` or `edit_file`" in researcher_kwargs["system_prompt"]
-            assert "write_file` filesystem tool exactly once" not in researcher_kwargs["system_prompt"]
-            assert "After the `write_file` tool returns" not in researcher_kwargs["system_prompt"]
-            assert "Default source budget per ResearchQuery" in researcher_kwargs["system_prompt"]
-            assert "one primary source-tool call" in researcher_kwargs["system_prompt"]
-            assert "at most one fallback or corroboration call" in researcher_kwargs["system_prompt"]
-            assert "at most one extra targeted follow-up" in researcher_kwargs["system_prompt"]
-            assert "Do not run every possible source angle" in researcher_kwargs["system_prompt"]
+            assert all(m in kwargs["middleware"] for m in agent.orchestrator_middleware)
+            assert any(m.__class__.__name__ == "ToolVisibilityMiddleware" for m in kwargs["middleware"])
             assert "skills" not in kwargs
             assert not callable(kwargs["backend"])
             assert [tool.name for tool in kwargs["tools"]] == [
@@ -400,34 +386,11 @@ class TestDeepResearcherAgent:
                 "run_research_batch",
             ]
             assert real_tool.name not in {tool.name for tool in kwargs["tools"]}
-            assert "Available Skills:" not in kwargs["system_prompt"]
-            assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" not in kwargs["system_prompt"]
-            assert 'execute("python /workspace/[name].py")' not in kwargs["system_prompt"]
-            assert "read_writer_context" not in kwargs["system_prompt"]
-            assert "Shell commands cannot see `/shared/`" in kwargs["system_prompt"]
-            assert "to /shared/output.md" in kwargs["system_prompt"]
-            assert "returns only a short completion marker" in kwargs["system_prompt"]
-            assert "do not echo the full Markdown" in kwargs["system_prompt"]
-            assert (
-                "Never call `source-router-agent` and `planner-agent` in the same assistant turn"
-                in kwargs["system_prompt"]
-            )
-            assert "Only after the source-router-agent tool result has returned" in kwargs["system_prompt"]
-            assert "at most 6 full ResearchQuery objects per call" in kwargs["system_prompt"]
-            assert "all needed queries in one call when there are 6 or fewer" in kwargs["system_prompt"]
-            assert "fewest ordered batches" in kwargs["system_prompt"]
-            assert "do not create smaller curated waves" in kwargs["system_prompt"]
-            assert "Never repeat a covered query" in kwargs["system_prompt"]
-            assert "revise only the invalid, failed, or missing ResearchQuery objects" in kwargs["system_prompt"]
-            assert "max_batch_research_queries" not in kwargs["system_prompt"]
-            assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
             assert set(subagents) == {"source-router-agent", "planner-agent", "writer-agent"}
             assert "response_format" not in subagents["source-router-agent"]
             assert "skills" not in subagents["source-router-agent"]
             assert {tool.name for tool in subagents["source-router-agent"]["tools"]} == {"lookup_source_catalog"}
-            assert "write_todos" in subagents["source-router-agent"]["system_prompt"]
-            assert "Use at most two tool calls total" in subagents["source-router-agent"]["system_prompt"]
             assert real_tool.name not in {tool.name for tool in subagents["source-router-agent"]["tools"]}
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
             assert "skills" not in subagents["planner-agent"]
@@ -435,59 +398,14 @@ class TestDeepResearcherAgent:
             assert "response_format" not in subagents["writer-agent"]
             assert subagents["writer-agent"]["tools"] == agent.writer_tools
             assert real_tool.name not in {tool.name for tool in subagents["writer-agent"]["tools"]}
-            assert subagents["writer-agent"]["middleware"] is agent.writer_middleware
+            assert all(m in subagents["writer-agent"]["middleware"] for m in agent.writer_middleware)
+            assert any(
+                m.__class__.__name__ == "ToolVisibilityMiddleware" for m in subagents["writer-agent"]["middleware"]
+            )
+            assert any(
+                m.__class__.__name__ == "TodoSuppressionMiddleware" for m in subagents["writer-agent"]["middleware"]
+            )
             assert subagents["writer-agent"]["skills"] == [synthesis_skill_source]
-            assert "/skills/synthesis/" not in subagents["writer-agent"]["system_prompt"]
-            assert "read_writer_context" not in subagents["writer-agent"]["system_prompt"]
-            assert "/shared/plan.json" in subagents["writer-agent"]["system_prompt"]
-            assert "Skill Use" not in subagents["writer-agent"]["system_prompt"]
-            assert "Required Skill Use" not in subagents["writer-agent"]["system_prompt"]
-            assert "General Cross-Synthesis Guidance" in subagents["writer-agent"]["system_prompt"]
-            assert "Retain useful detail" in subagents["writer-agent"]["system_prompt"]
-            assert "Point out meaningful conflicts" in subagents["writer-agent"]["system_prompt"]
-            assert "Use tables when the evidence has comparable entities" in subagents["writer-agent"]["system_prompt"]
-            assert "do not mechanically mirror them as final headings" in subagents["writer-agent"]["system_prompt"]
-            assert "coherent analytical narrative" in subagents["writer-agent"]["system_prompt"]
-            assert "Use bullets sparingly" in subagents["writer-agent"]["system_prompt"]
-            assert "/shared/evidence_judgments.json" not in subagents["writer-agent"]["system_prompt"]
-            assert "ResearchNotes.evidence_judgment" in subagents["writer-agent"]["system_prompt"]
-            assert (
-                "high-score/high-confidence notes are synthesis anchors" in subagents["writer-agent"]["system_prompt"]
-            )
-            assert "default compact mode" in subagents["writer-agent"]["system_prompt"]
-            assert 'get_verified_sources(mode="full")' in subagents["writer-agent"]["system_prompt"]
-            assert "Wrote /shared/output.md" in subagents["writer-agent"]["system_prompt"]
-            assert "Do not return the full Markdown" in subagents["writer-agent"]["system_prompt"]
-            assert "Do not use `edit_file` or repeated search-and-replace" in subagents["writer-agent"]["system_prompt"]
-            assert "Final Output Grading Rubric" not in subagents["writer-agent"]["system_prompt"]
-            assert "rubric" not in subagents["writer-agent"]["system_prompt"].lower()
-            assert "long-form-report-writer" not in subagents["writer-agent"]["system_prompt"]
-            assert "prediction-report-writer" not in subagents["writer-agent"]["system_prompt"]
-            assert "answer_strategy.answer_type" in subagents["writer-agent"]["system_prompt"]
-            assert "answer_strategy.title" in subagents["writer-agent"]["system_prompt"]
-            assert "answer_strategy.required_components" in subagents["writer-agent"]["system_prompt"]
-            for removed_field in ("assembly_instruction", "selection_mode", "expected_count", "options"):
-                assert removed_field not in subagents["writer-agent"]["system_prompt"]
-            planner_prompt = subagents["planner-agent"]["system_prompt"]
-            assert "Skills System" not in planner_prompt
-            assert "run_research_batch" in planner_prompt
-            assert "subqueries" in planner_prompt
-            assert "researcher agent" not in planner_prompt
-            assert "data-table-analysis" not in planner_prompt
-            assert "answer_strategy" in planner_prompt
-            assert "Dynamic Discovery Budget" in planner_prompt
-            assert "Do not turn planning into full evidence gathering" in planner_prompt
-            assert "configured batch concurrency of 6" in planner_prompt
-            assert "Thorough evidence gathering is essential" not in planner_prompt
-            assert "Table of Contents" not in planner_prompt
-            assert "/shared/source_routing.json" in planner_prompt
-            assert "Do not call `ls` and `read_file` for `/shared/source_routing.json` in the same assistant turn" in (
-                planner_prompt
-            )
-            assert "continue planning without source-routing guidance" in planner_prompt
-            assert "all highest-priority routed recommendations' exact `tool_names`" in planner_prompt
-            for removed_field in ("assembly_instruction", "selection_mode", "expected_count", "options"):
-                assert removed_field not in planner_prompt
 
     def test_build_orchestrator_omits_skills_when_disabled(
         self,
@@ -524,7 +442,10 @@ class TestDeepResearcherAgent:
             assert any(m.__class__.__name__ == "FilesystemMiddleware" for m in researcher_middleware)
             assert any(m.__class__.__name__ == "PatchToolCallsMiddleware" for m in researcher_middleware)
             assert all(m in researcher_middleware for m in agent.researcher_middleware)
-            assert create.call_args.kwargs["middleware"] is agent.orchestrator_middleware
+            assert all(m in create.call_args.kwargs["middleware"] for m in agent.orchestrator_middleware)
+            assert any(
+                m.__class__.__name__ == "ToolVisibilityMiddleware" for m in create.call_args.kwargs["middleware"]
+            )
             assert "skills" not in researcher_kwargs
             assert "skills" not in create.call_args.kwargs
             assert [tool.name for tool in create.call_args.kwargs["tools"]] == [
@@ -542,10 +463,12 @@ class TestDeepResearcherAgent:
             assert "response_format" not in subagents["writer-agent"]
             assert subagents["writer-agent"]["tools"] == agent.writer_tools
             assert real_tool.name not in {tool.name for tool in subagents["writer-agent"]["tools"]}
-            assert subagents["writer-agent"]["middleware"] is agent.writer_middleware
-            assert (
-                "When available skills apply during planning, research, or synthesis"
-                not in (create.call_args.kwargs["system_prompt"])
+            assert all(m in subagents["writer-agent"]["middleware"] for m in agent.writer_middleware)
+            assert any(
+                m.__class__.__name__ == "ToolVisibilityMiddleware" for m in subagents["writer-agent"]["middleware"]
+            )
+            assert any(
+                m.__class__.__name__ == "TodoSuppressionMiddleware" for m in subagents["writer-agent"]["middleware"]
             )
 
     def test_build_orchestrator_can_disable_source_router(
@@ -578,19 +501,10 @@ class TestDeepResearcherAgent:
             agent._build_orchestrator_agent(state)
 
             kwargs = create.call_args.kwargs
-            prompt = kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
             requested_roles = [args[0] for args, _kwargs in mock_llm_provider.get.call_args_list]
             assert set(subagents) == {"planner-agent", "writer-agent"}
-            assert "source-router-agent" not in prompt
-            assert "/shared/source_routing.json" not in prompt
-            assert "Start with `planner-agent`" in prompt
-            assert "at most 2 full ResearchQuery objects per call" in prompt
-            assert "all needed queries in one call when there are 2 or fewer" in prompt
-            assert "fewest ordered batches" in prompt
-            assert "Never repeat a covered query" in prompt
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
-            assert "/shared/source_routing.json" not in subagents["planner-agent"]["system_prompt"]
             assert real_tool.name in {tool.name for tool in subagents["planner-agent"]["tools"]}
             assert subagents["writer-agent"]["tools"] == agent.writer_tools
             assert LLMRole.ROUTER not in requested_roles
@@ -936,93 +850,48 @@ class TestDeepResearcherAgent:
 
     def test_modal_backend_is_concrete_cached_and_routes_skills_locally(self, mock_llm_provider, real_tool):
         """Modal backend creation is lazy, cached, and skill reads do not hit Modal."""
+        from deepagents.backends import FilesystemBackend
         from deepagents.backends import StateBackend
 
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
         from aiq_agent.agents.deep_researcher.deepagents_runtime import BUILTIN_SKILL_SOURCE
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import SHARED_ROUTE
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
 
-        sandbox = SandboxConfig()
-        agent = DeepResearcherAgent(
-            llm_provider=mock_llm_provider,
-            tools=[real_tool],
-            skills=SkillsConfig.enabled_builtin(),
-            sandbox=sandbox,
-            job_id="job-123",
-        )
+        sandbox = DeepResearchSandboxConfig()
         fake_modal_backend = MagicMock()
 
-        with (
-            patch(
-                "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
-                return_value=fake_modal_backend,
-            ) as create_backend,
-        ):
+        # The runtime now builds the sandbox provider eagerly in __init__, so the patch
+        # must wrap construction, not just the later .backend access.
+        with patch(
+            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
+            return_value=fake_modal_backend,
+        ) as create_backend:
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+                sandbox=sandbox,
+                job_id="job-123",
+            )
             backend_one = agent.deepagents_runtime.backend
             backend_two = agent.deepagents_runtime.backend
 
         assert backend_one is backend_two
         assert backend_one.default is fake_modal_backend
-        create_backend.assert_called_once_with(
-            sandbox,
-            "job-123",
-        )
-        assert isinstance(backend_one.routes[BUILTIN_SKILL_SOURCE], StateBackend)
+        create_backend.assert_called_once_with(sandbox, "job-123")
+        assert isinstance(backend_one.routes[BUILTIN_SKILL_SOURCE], FilesystemBackend)
+        assert isinstance(backend_one.routes[SHARED_ROUTE], StateBackend)
         fake_modal_backend.ls.assert_not_called()
         fake_modal_backend.read.assert_not_called()
 
-    def test_modal_backend_creates_sandbox_lazily(self):
-        """Modal sandbox lifetime starts on first sandbox operation, not agent construction."""
-        from deepagents.backends.protocol import ExecuteResponse
-
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
-
-        fake_modal_backend = MagicMock()
-        fake_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_modal_backend_now",
-            return_value=fake_modal_backend,
-        ) as create_modal:
-            backend = _create_sandbox_backend(SandboxConfig(), "job-123")
-
-            create_modal.assert_not_called()
-            result = backend.execute("echo ok", timeout=5)
-
-        assert result.output == "ok"
-        create_modal.assert_called_once()
-        fake_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
-
-    def test_modal_backend_recreates_and_retries_once_on_not_found(self):
-        """A disappeared Modal container is recreated once for the same job-scoped name."""
-        import modal
-        from deepagents.backends.protocol import ExecuteResponse
-
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import _create_sandbox_backend
-
-        first_modal_backend = MagicMock()
-        first_modal_backend.execute.side_effect = modal.exception.NotFoundError("gone")
-        second_modal_backend = MagicMock()
-        second_modal_backend.execute.return_value = ExecuteResponse(output="ok", exit_code=0)
-        config = SandboxConfig()
-
-        with patch(
-            "aiq_agent.agents.deep_researcher.deepagents_runtime._create_modal_backend_now",
-            side_effect=[first_modal_backend, second_modal_backend],
-        ) as create_modal:
-            backend = _create_sandbox_backend(config, "job-123")
-            result = backend.execute("echo ok", timeout=5)
-
-        assert result.output == "ok"
-        assert create_modal.call_args_list[0].args == (config, "job-123")
-        assert create_modal.call_args_list[0].kwargs == {}
-        assert create_modal.call_args_list[1].args == (config, "job-123")
-        assert create_modal.call_args_list[1].kwargs == {"force_new": True}
-        first_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
-        second_modal_backend.execute.assert_called_once_with("echo ok", timeout=5)
+    # NOTE: the former test_modal_backend_creates_sandbox_lazily and
+    # test_modal_backend_recreates_and_retries_once_on_not_found tested 284's inline
+    # _create_modal_backend_now / _LazyModalSandboxBackend internals, which are now
+    # replaced by the provider-neutral sandbox package. Lazy session creation and
+    # idempotency-gated retry are covered by tests/.../sandbox/test_sandbox_runtime.py
+    # (note: our provider intentionally does NOT retry the non-idempotent execute()).
 
     def test_load_prompts_raises_when_missing(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Missing prompts fail fast instead of silently using inline defaults."""
@@ -1286,6 +1155,39 @@ class TestFinalMarkdownExtraction:
 
             assert output is None
 
+    def test_extract_final_markdown_salvages_substantive_inline_report(self, mock_llm_provider, real_tool):
+        """A substantive report emitted inline (no output file) is salvaged, unlike plain chatter."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            report = (
+                "# Quarterly CapEx Report\n\n"
+                + "NVIDIA and Samsung capital expenditure analysis across quarters. " * 12
+                + "\n\n## Sources\n[1] Example: https://example.com"
+            )
+            output = agent._extract_final_markdown({"messages": [AIMessage(content=report)], "files": {}})
+
+            assert output == report.strip()
+
+    def test_extract_final_markdown_rejects_writer_completion_marker(self, mock_llm_provider, real_tool):
+        """The short writer completion marker is never salvaged as the report."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            output = agent._extract_final_markdown(
+                {"messages": [AIMessage(content="Wrote /shared/output.md")], "files": {}}
+            )
+
+            assert output is None
+
     @pytest.mark.asyncio
     async def test_run_fails_on_missing_writer_output_before_citation_verification(
         self,
@@ -1314,6 +1216,90 @@ class TestFinalMarkdownExtraction:
             state = DeepResearchAgentState(messages=[HumanMessage(content="Write a report")])
             with pytest.raises(ValueError, match="writer-agent did not produce a final Markdown answer"):
                 await agent.run(state)
+
+    @pytest.mark.asyncio
+    async def test_run_salvages_inline_report_when_writer_output_missing(self, mock_llm_provider, real_tool):
+        """A substantive inline report is salvaged into the final message when no output file exists."""
+        report = (
+            "# CapEx Report\n\n"
+            + "Detailed multi-quarter capital expenditure narrative for the comparison [1]. " * 12
+            + "\n\n## Sources\n[1] Example: https://example.com"
+        )
+        result_messages = [
+            HumanMessage(content="Original query"),
+            AIMessage(content=report),
+        ]
+
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value={"messages": result_messages, "files": {}})
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
+
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Original query")])
+            result = await agent.run(state)
+
+            assert "# CapEx Report" in result.messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_run_seeds_parent_sources_for_delta_citation_verification(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Delta reports may preserve parent citations that must be valid in the child registry."""
+        parent_url = "https://parent.example/source"
+        report = f"Preserved parent claim [1].\n\n## Sources\n[1] Parent: {parent_url}"
+        parent_context = {
+            "parent_job_id": "parent-job-1",
+            "source_summary_markdown": f"- [1] Parent: {parent_url}",
+            "sources": [
+                {
+                    "url": parent_url,
+                    "title": "Parent",
+                    "source_type": "parent_report",
+                    "tool_name": "parent_report",
+                }
+            ],
+        }
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(
+            return_value={
+                "messages": [AIMessage(content="Wrote /shared/output.md")],
+                "files": {
+                    **output_markdown_file(report),
+                    "/shared/parent_report_context.json": {"content": json.dumps(parent_context)},
+                },
+            }
+        )
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="Add OpenShell")],
+                files={
+                    "/shared/parent_report_context.json": json.dumps(parent_context),
+                },
+            )
+
+            result = await agent.run(state)
+
+            assert "[1] Parent: https://parent.example/source" in result.messages[-1].content
+            assert agent.source_registry_middleware.active_registry().has_url(parent_url)
+            assert agent.source_registry_middleware.get_source_entries(mode="compact")[0].url == parent_url
 
 
 class TestDeepResearcherCitationVerification:

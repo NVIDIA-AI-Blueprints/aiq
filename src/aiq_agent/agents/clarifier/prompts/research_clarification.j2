@@ -151,6 +151,14 @@ The user has uploaded the following file(s); they are ingested and will be inclu
 If the user's request refers to "the paper", "my file", "the document", or a filename (e.g. {{ available_documents[0].file_name }}), treat it as referring to these uploaded files. Do NOT ask which paper or which file — proceed with the understanding that the uploaded file(s) are the subject. Only ask for clarification on other missing dimensions (e.g. comparison criteria), not the document identity.
 {% endif %}
 
+{% if connected_sources and connected_sources | length > 0 %}
+## Connected data sources (IMPORTANT)
+The research phase has tools for these connected sources; it CAN access them even though you cannot read them yourself:{% for s in connected_sources %}
+- **{{ s.name }}**: {{ s.description }}{% endfor %}
+
+If the user references a resource served by a connected source (e.g. a Google Drive link or file when Google Drive is connected), treat it as accessible — the research tools will fetch it. Do NOT refuse, claim you cannot access it, or ask the user to paste its contents. Only ask for clarification on genuine research-scope gaps (e.g. what to focus on), not on access.
+{% endif %}
+
 {% if clarifier_result is defined and clarifier_result %}
 ## Clarification Context So Far
 {{ clarifier_result }}

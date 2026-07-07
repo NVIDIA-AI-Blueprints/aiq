@@ -351,7 +351,7 @@ functions:
     source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_super_llm
     planner_llm: nemotron_super_llm
-    writer_llm: gpt_oss_llm
+    writer_llm: nemotron_super_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool

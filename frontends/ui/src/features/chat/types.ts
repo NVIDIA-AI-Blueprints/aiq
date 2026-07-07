@@ -346,6 +346,8 @@ export interface DeepResearchToolCall {
   workflow?: string
   /** Parent agent ID that invoked the tool (for grouping under agents) */
   agentId?: string
+  /** Whether this tool call executed against the sandbox runtime */
+  isSandbox?: boolean
   /** Current execution status */
   status: 'running' | 'complete' | 'error'
   /** When tool was called */

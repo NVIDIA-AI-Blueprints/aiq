@@ -15,6 +15,7 @@ vi.mock('@/features/chat', () => ({
     }
     return selector ? selector(state) : state
   }),
+  selectResolvedDeepResearchJobId: (state: any) => state?.deepResearchJobId,
 }))
 
 // Mock MarkdownRenderer

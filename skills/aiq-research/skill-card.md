@@ -9,10 +9,16 @@ NVIDIA <br>
 ### License/Terms of Use: <br>
 Apache 2.0 <br>
 ## Use Case: <br>
-Developers and engineers who need to run deep research queries through a locally running or self-hosted NVIDIA AI-Q Blueprint backend. <br>
+Developers and engineers use this skill to submit deep research queries to a locally or self-hosted NVIDIA AI-Q Blueprint backend and retrieve comprehensive research reports with citations. <br>
 
 ### Deployment Geography for Use: <br>
 Global <br>
+
+## Requirements / Dependencies: <br>
+**Requires API Key or External Credential:** [No] <br>
+**Credential Type(s):** [None] <br>
+
+Do not include secrets in prompts/logs/output; use least-privilege credentials; rotate keys as appropriate. <br>
 
 ## Known Risks and Mitigations: <br>
 Risk: Review before execution as proposals could introduce incorrect or misleading guidance into skills. <br>
@@ -20,14 +26,14 @@ Mitigation: Review and scan skill before deployment. <br>
 
 ## Reference(s): <br>
 - [NVIDIA AI-Q Blueprint Repository](https://github.com/NVIDIA-AI-Blueprints/aiq) <br>
-- [DeepResearch Bench Leaderboard](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) <br>
 - [DeepResearch Bench Paper](https://arxiv.org/pdf/2506.11763) <br>
+- [DeepResearch Bench Leaderboard](https://huggingface.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard) <br>
 - [Helper script](scripts/aiq.py) <br>
 
 
 ## Skill Output: <br>
 **Output Type(s):** [Analysis, API Calls] <br>
-**Output Format:** [JSON] <br>
+**Output Format:** [JSON and Markdown research reports with citations] <br>
 **Output Parameters:** [1D] <br>
 **Other Properties Related to Output:** [None] <br>
 
@@ -38,7 +44,7 @@ Mitigation: Review and scan skill before deployment. <br>
 
 
 ## Evaluation Tasks: <br>
-Evaluated against 3 internal evaluation tasks (all positive skill-activation cases) with 2 attempts per task. Pass threshold: 50%. <br>
+Evaluated against 3 evaluation tasks from NVSkills-Eval external profile (3 positive skill-activation cases). <br>
 
 ## Evaluation Metrics Used: <br>
 Reported benchmark dimensions: <br>
@@ -62,11 +68,11 @@ Underlying evaluation signals used in this run: <br>
 ## Evaluation Results: <br>
 | Dimension | Num | `claude-code` | `codex` |
 |---|---:|---:|---:|
-| Security | 6 | 100% (+0%) | 92% (+8%) |
-| Correctness | 6 | 73% (+18%) | 77% (+3%) |
-| Discoverability | 6 | 69% (+27%) | 52% (-7%) |
-| Effectiveness | 6 | 58% (+3%) | 68% (+3%) |
-| Efficiency | 6 | 63% (+18%) | 49% (-7%) |
+| Security | 3 | 67% (-33%) | 100% (+17%) |
+| Correctness | 3 | 93% (+6%) | 80% (+17%) |
+| Discoverability | 3 | 100% (-0%) | 54% (+16%) |
+| Effectiveness | 3 | 65% (-1%) | 69% (+14%) |
+| Efficiency | 3 | 85% (-3%) | 56% (+14%) |
 
 ## Skill Version(s): <br>
 2.1.0 (source: frontmatter) <br>

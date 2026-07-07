@@ -31,10 +31,12 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat-core==1.7.0",
-    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.7.0",
-    "nvidia-nat-eval==1.7.0",
-    "nvidia-nat-profiler==1.7.0",
+    "nvidia-nat-core==1.8.0",
+    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.8.0",
+    "nvidia-nat-eval==1.8.0",
+    "nvidia-nat-profiler==1.8.0",
+    "nvidia-nat-redis==1.8.0",
+    "nvidia-nat-security[guardrails]==1.8.0",
     "deepagents>=0.6.5",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
@@ -52,6 +54,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+s3 = [
+    "boto3>=1.35.0,<2",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -90,12 +95,18 @@ aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
 aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
 aiq_clarifier = "aiq_agent.agents.clarifier.register"
 aiq_data_source_registry = "aiq_agent.common.data_source_registry"
+aiq_guardrails = "aiq_agent.guardrails.register"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+markers = [
+    "aws: tests that require AWS resources",
+    "integration: tests that require external services",
+    "opensearch_serverless: tests that require Amazon OpenSearch Serverless",
+]
 
 
 [tool.ruff]
@@ -200,7 +211,7 @@ dev = [
 ]
 
 [tool.uv]
-prerelease = "if-necessary-or-explicit"
+prerelease = "allow"
 override-dependencies = [
     "authlib>=1.6.11,<2",
     "cryptography>=46.0.6,<47",

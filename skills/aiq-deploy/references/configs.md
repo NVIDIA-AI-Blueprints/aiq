@@ -27,7 +27,7 @@ Use these repository docs as the source of truth:
 | `configs/config_web_frag.yml` | Foundational RAG / FRAG mode | Requires reachable `RAG_SERVER_URL` and `RAG_INGEST_URL`. Read `frag.md` before using. |
 | `configs/config_cli_default.yml` | Interactive terminal CLI mode | Not enough for `aiq-research`, because it does not provide the web/API backend expected by the skill. |
 | `configs/config_frontier_models.yml` | Hybrid model experiments | Advanced. May require additional provider keys or model access beyond the default NIM-backed path. |
-| `configs/config_skills.yml` | AI-Q runtime DeepAgents skills and sandbox behavior | Advanced. This is not the external Agent Skill packaging mechanism and should not be selected only because the user says "AI-Q as a skill." |
+| `configs/config_domain_routing_and_skills.yml` | AI-Q runtime DeepAgents skills and sandbox behavior | Advanced. This is not the external Agent Skill packaging mechanism and should not be selected only because the user says "AI-Q as a skill." |
 
 Default to `config_web_default_llamaindex.yml` unless the user explicitly chooses CLI, FRAG, or an advanced example.
 If no existing config matches the request, stop and explain the customization gap instead of inventing a config.

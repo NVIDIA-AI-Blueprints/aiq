@@ -54,7 +54,7 @@ functions:
     source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_super_llm
     planner_llm: gpt_oss_llm
-    writer_llm: gpt_oss_llm
+    writer_llm: nemotron_super_llm
     max_loops: 2
     tools:
       - web_search_tool

@@ -49,6 +49,23 @@ pg_dump -U aiq -d aiq_jobs > aiq_jobs_$(date +%Y%m%d).sql
 pg_dump -U aiq -d aiq_checkpoints > aiq_checkpoints_$(date +%Y%m%d).sql
 ```
 
+## Artifact Storage
+
+Keep artifact metadata in PostgreSQL and use S3-compatible object storage for artifact
+bytes in production. SQL BLOB storage remains the default when the provider is unset.
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AIQ_ARTIFACT_BLOB_PROVIDER` | No | `sql` by default; set to `s3` for object storage. |
+| `AIQ_ARTIFACT_S3_BUCKET` | With S3 | Destination bucket. |
+| `AIQ_ARTIFACT_S3_ENDPOINT_URL` | No | Leave unset for AWS S3; set for MinIO, Ceph, R2, or another compatible endpoint. |
+| `AIQ_ARTIFACT_S3_REGION` | No | S3 region when required by the provider. |
+| `AIQ_ARTIFACT_S3_PREFIX` | No | Object-key prefix; defaults to `artifacts/v1`. |
+
+Configure credentials through workload identity, deployment secrets, or the standard
+AWS credential chain. When the provider is `s3`, artifact bytes are stored in the
+configured bucket and SQL stores artifact metadata only.
+
 ## Scaling
 
 ### Horizontal Backend Scaling
@@ -98,11 +115,18 @@ Store API keys in `deploy/.env` and ensure the file is not committed to version 
 
 ## Monitoring
 
-### Health Endpoint
+### Liveness and Readiness Endpoints
 
-The backend exposes a health endpoint at `/health` for liveness and readiness probes.
+The backend exposes separate probe endpoints:
+
+- `/live` checks only that the API process can respond. Use it for liveness probes.
+- `/health` checks database and content-encryption dependencies. Use it for readiness probes.
+
+This separation keeps a temporary dependency outage from restarting a live API process while still removing an
+unready instance from service traffic.
 
 ```bash
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
 

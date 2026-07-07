@@ -204,8 +204,18 @@ class TestRegisterRoutes:
 
         await register_job_routes(mock_app, mock_builder, mock_worker)
 
-        mock_app.post.assert_not_called()
-        assert mock_app.get.call_count == 2
+        # Async job submission/control routes require Dask + a job store and must
+        # NOT be registered. The always-on control-plane routes (data sources,
+        # agent list, and per-user MCP auth status/connect/callback) are still
+        # registered regardless of Dask availability.
+        post_paths = [c.args[0] for c in mock_app.post.call_args_list if c.args]
+        assert "/v1/jobs/async/submit" not in post_paths
+        assert "/v1/auth/mcp/{source_id}/connect" in post_paths
+        get_paths = [c.args[0] for c in mock_app.get.call_args_list if c.args]
+        assert "/v1/jobs/async/agents" in get_paths
+        assert "/v1/data_sources" in get_paths
+        assert "/v1/auth/mcp/{source_id}/status" in get_paths
+        assert "/v1/auth/mcp/{source_id}/callback" in get_paths
 
     @pytest.mark.asyncio
     async def test_routes_not_registered_without_job_store(self):
@@ -221,8 +231,18 @@ class TestRegisterRoutes:
 
         await register_job_routes(mock_app, mock_builder, mock_worker)
 
-        mock_app.post.assert_not_called()
-        assert mock_app.get.call_count == 2
+        # Async job submission/control routes require Dask + a job store and must
+        # NOT be registered. The always-on control-plane routes (data sources,
+        # agent list, and per-user MCP auth status/connect/callback) are still
+        # registered regardless of Dask availability.
+        post_paths = [c.args[0] for c in mock_app.post.call_args_list if c.args]
+        assert "/v1/jobs/async/submit" not in post_paths
+        assert "/v1/auth/mcp/{source_id}/connect" in post_paths
+        get_paths = [c.args[0] for c in mock_app.get.call_args_list if c.args]
+        assert "/v1/jobs/async/agents" in get_paths
+        assert "/v1/data_sources" in get_paths
+        assert "/v1/auth/mcp/{source_id}/status" in get_paths
+        assert "/v1/auth/mcp/{source_id}/callback" in get_paths
 
     @pytest.mark.asyncio
     async def test_routes_registered_with_dask(self):

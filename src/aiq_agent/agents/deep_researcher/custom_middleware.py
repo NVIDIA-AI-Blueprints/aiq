@@ -16,12 +16,14 @@
 """Custom middleware for the deep research agent."""
 
 import asyncio
+import json
 import logging
 from pathlib import Path
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
 from aiq_agent.common import get_source_id_for_tool
@@ -35,6 +37,45 @@ logger = logging.getLogger(__name__)
 
 # Path to this agent's prompts directory
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+_SOURCE_ROUTING_PATH = "/shared/source_routing.json"
+# When a sandbox provider is configured, CompositeBackend strips the /shared/ route
+# before delegating to StateBackend, so the router's file is stored under the
+# route-local key. The guard reads raw state, so it must accept both forms or it
+# blocks the orchestrator forever on sandboxed runs.
+_SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
+
+
+class SourceRoutingGuardMiddleware(AgentMiddleware):
+    """Require the source-router handoff before other orchestrator tool calls."""
+
+    def __init__(self, *, enabled: bool, required_subagent: str = "source-router-agent") -> None:
+        self.enabled = enabled
+        self.required_subagent = required_subagent
+
+    @staticmethod
+    def _routing_complete(state: object) -> bool:
+        files = state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+        return isinstance(files, dict) and any(key in files for key in _SOURCE_ROUTING_STATE_KEYS)
+
+    async def awrap_tool_call(self, request, handler):
+        """Block out-of-order calls until the source router writes its route file."""
+        if not self.enabled or self._routing_complete(request.state):
+            return await handler(request)
+
+        tool_call = request.tool_call
+        args = tool_call.get("args") or {}
+        if tool_call.get("name") == "task" and args.get("subagent_type") == self.required_subagent:
+            return await handler(request)
+
+        return ToolMessage(
+            content=(
+                "Source routing is required before any other tool call. "
+                f"Call task with subagent_type={self.required_subagent!r}."
+            ),
+            tool_call_id=tool_call.get("id", "source-routing-guard"),
+            name=tool_call.get("name"),
+            status="error",
+        )
 
 
 class EmptyContentFixMiddleware(AgentMiddleware):
@@ -94,6 +135,7 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
     """
 
     def __init__(self, valid_tool_names: list[str]):
+        """Store the set of valid tool names used to correct malformed tool calls."""
         self.valid_tool_names = set(valid_tool_names)
 
     def _sanitize_tool_name(self, name: str) -> str:
@@ -161,6 +203,86 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
         return ModelResponse(result=new_result, structured_response=response.structured_response)
 
 
+def _request_tool_name(tool: object) -> str | None:
+    """Return a LangChain model-request tool name across common tool shapes."""
+    name = getattr(tool, "name", None)
+    if isinstance(name, str):
+        return name
+    if isinstance(tool, dict):
+        dict_name = tool.get("name")
+        if isinstance(dict_name, str):
+            return dict_name
+        function = tool.get("function")
+        if isinstance(function, dict):
+            function_name = function.get("name")
+            if isinstance(function_name, str):
+                return function_name
+    return None
+
+
+class ToolVisibilityMiddleware(AgentMiddleware):
+    """Hide selected tools from model requests without removing scaffolding middleware."""
+
+    def __init__(self, hidden_tool_names: set[str]) -> None:
+        """Store the tool names to hide from model requests."""
+        self.hidden_tool_names = hidden_tool_names
+
+    def _filter_tools(self, tools: list[object]) -> list[object]:
+        """Return the tool list with hidden tools removed."""
+        if not self.hidden_tool_names:
+            return tools
+        return [tool for tool in tools if _request_tool_name(tool) not in self.hidden_tool_names]
+
+    def wrap_model_call(self, request, handler):
+        """Filter hidden tools before a synchronous model call."""
+        return handler(request.override(tools=self._filter_tools(request.tools)))
+
+    async def awrap_model_call(self, request, handler):
+        """Filter hidden tools before an asynchronous model call."""
+        return await handler(request.override(tools=self._filter_tools(request.tools)))
+
+
+class TodoSuppressionMiddleware(AgentMiddleware):
+    """Strip the framework's ``write_todos`` tool and its injected prompt for a subagent.
+
+    deepagents attaches ``TodoListMiddleware`` to every subagent, which adds the
+    ``write_todos`` tool plus a system-prompt block telling the agent to use it.
+    Agents that own no progress list - e.g. the planner, which returns a single
+    structured ``ResearchPlan`` - should not have it. Placed after the framework's
+    ``TodoListMiddleware`` in the stack, this removes both the tool and the injected
+    prompt block from the model request, keeping todo tracking solely with the
+    orchestrator. It is a no-op when neither is present.
+    """
+
+    _TODO_TOOL = "write_todos"
+    _TODO_PROMPT_MARKER = "## `write_todos`"
+
+    def _clean_request(self, request: object) -> object:
+        """Return the request with the write_todos tool and its prompt block removed."""
+        overrides: dict[str, object] = {
+            "tools": [tool for tool in request.tools if _request_tool_name(tool) != self._TODO_TOOL]
+        }
+        system_message = getattr(request, "system_message", None)
+        if system_message is not None:
+            blocks = system_message.content_blocks
+            kept = [
+                block
+                for block in blocks
+                if not (isinstance(block, dict) and self._TODO_PROMPT_MARKER in str(block.get("text", "")))
+            ]
+            if len(kept) != len(blocks):
+                overrides["system_message"] = SystemMessage(content=kept)
+        return request.override(**overrides)
+
+    def wrap_model_call(self, request, handler):
+        """Strip write_todos and its prompt before a synchronous model call."""
+        return handler(self._clean_request(request))
+
+    async def awrap_model_call(self, request, handler):
+        """Strip write_todos and its prompt before an asynchronous model call."""
+        return await handler(self._clean_request(request))
+
+
 class ToolRetryMiddleware(AgentMiddleware):
     """Retries failed tool calls with exponential backoff.
 
@@ -175,6 +297,7 @@ class ToolRetryMiddleware(AgentMiddleware):
         backoff_factor: float = 2.0,
         initial_delay: float = 1.0,
     ):
+        """Configure retry count and exponential backoff for failed tool calls."""
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.initial_delay = initial_delay
@@ -224,6 +347,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
     """
 
     def __init__(self, source_tool_names: set[str] | None = None) -> None:
+        """Create a source registry scoped to the given source-producing tool names."""
         self.registry = SourceRegistry()
         self._source_tool_names = source_tool_names or set()
         self._compact_source_keys: set[str] = set()
@@ -266,6 +390,19 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 locator = getattr(source, "locator", "")
                 if isinstance(locator, str) and locator.strip():
                     self._compact_source_keys.add(self._locator_key(locator))
+
+    def register_compact_sources(self, sources: list[SourceEntry]) -> int:
+        """Register seeded sources and expose them in the compact citation source list."""
+        registry = self.active_registry()
+        registered = 0
+        for source in sources:
+            key = self._entry_key(source)
+            if not key:
+                continue
+            registry.add(source)
+            self._compact_source_keys.add(key)
+            registered += 1
+        return registered
 
     async def awrap_tool_call(self, request, handler):
         """Capture sources from tool results after execution.
@@ -369,6 +506,67 @@ class SourceRegistryMiddleware(AgentMiddleware):
         return self._render_source_list_text(self.get_source_entries(mode=mode))
 
 
+class PlanPersistenceMiddleware(AgentMiddleware):
+    """Persists the planner's structured ResearchPlan to the shared filesystem.
+
+    The planner returns a schema-validated ``ResearchPlan`` (``response_format``).
+    This middleware writes that plan to ``/shared/plan.json`` deterministically via
+    the overwrite-safe ``backend.upload_files`` (the same state-channel write
+    ``run_research_batch`` uses for ResearchNotes), so the planner never performs
+    file I/O itself. Keeping the write off the LLM removes the ``write_file`` /
+    ``edit_file`` loop the planner otherwise hits when ``/shared/plan.json`` already
+    exists, since the LLM ``write_file`` tool refuses to overwrite while
+    ``upload_files`` overwrites in place.
+
+    Persistence failures propagate so the planner task fails before the
+    orchestrator reads a missing or stale ``/shared/plan.json``.
+    """
+
+    def __init__(self, backend: object, *, path: str = "/shared/plan.json") -> None:
+        """Initialize the middleware.
+
+        Args:
+            backend: Shared filesystem backend exposing ``upload_files``.
+            path: Shared path the serialized plan is written to.
+        """
+        self.backend = backend
+        self.path = path
+
+    @staticmethod
+    def _plan_from_state(state: object) -> object:
+        """Extract the planner's ``structured_response`` from dict or attribute state."""
+        if isinstance(state, dict):
+            return state.get("structured_response")
+        return getattr(state, "structured_response", None)
+
+    def _persist_plan(self, plan: object) -> None:
+        """Serialize a structured ResearchPlan and upload it to shared state."""
+        if plan is None:
+            return
+        if hasattr(plan, "model_dump"):
+            payload = plan.model_dump(mode="json", exclude_none=True)
+        elif isinstance(plan, dict):
+            payload = plan
+        else:
+            return
+        content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        responses = self.backend.upload_files([(self.path, content)])
+        errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
+        if errors:
+            # Raw backend detail stays in logs; the raised error reaches the job status /
+            # caller, so it must not echo backend-internal strings (hostnames, paths, etc.).
+            logger.error("Failed to persist plan to %s: %s", self.path, "; ".join(errors))
+            raise RuntimeError(f"Failed to persist the research plan to {self.path}")
+
+    def after_agent(self, state, runtime):
+        """Persist the plan once the synchronous planner run completes."""
+        self._persist_plan(self._plan_from_state(state))
+
+    async def aafter_agent(self, state, runtime):
+        """Persist the plan once the asynchronous planner run completes."""
+        await asyncio.to_thread(self._persist_plan, self._plan_from_state(state))
+
+
 class ToolResultPruningMiddleware(AgentMiddleware):
     """Truncates older tool results to keep context manageable.
 
@@ -378,6 +576,7 @@ class ToolResultPruningMiddleware(AgentMiddleware):
     """
 
     def __init__(self, keep_last_n: int = 3, max_chars: int = 500):
+        """Configure how many recent tool results to keep intact and the truncation cap."""
         self.keep_last_n = keep_last_n
         self.max_chars = max_chars
 

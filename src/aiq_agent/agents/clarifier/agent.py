@@ -59,6 +59,7 @@ from langgraph.prebuilt import ToolNode
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
@@ -531,10 +532,15 @@ class ClarifierAgent:
             tools_info = [
                 {"name": getattr(t, "name", ""), "description": getattr(t, "description", "")} for t in self.tools
             ]
+            # Selected data sources (e.g. Google Drive) become tools in the research
+            # phase but are NOT bound to the clarifier, so surface them explicitly —
+            # otherwise the LLM refuses Drive/URL requests it thinks it can't access.
+            connected_sources = format_data_source_tools(state.data_sources) if state.data_sources else []
             rendered_system_prompt = render_prompt_template(
                 self.system_prompt,
                 clarifier_result=state.clarifier_log,
                 available_documents=state.available_documents or [],
+                connected_sources=connected_sources,
                 tools=tools_info,
                 tool_names=[t["name"] for t in tools_info],
             )

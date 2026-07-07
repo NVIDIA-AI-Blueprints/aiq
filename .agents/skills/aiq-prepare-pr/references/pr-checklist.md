@@ -72,4 +72,3 @@ branch directly:
 Address feedback until required checks pass and code-owner review is approved.
 Keep new commits signed; re-run the relevant `aiq-release-qa` checks after
 substantive changes and update the Validation section if results change.
-</content>

@@ -65,6 +65,7 @@ async def submit_app(monkeypatch):
 
     submitted_job = AsyncMock(return_value="job-1")
     monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
+    monkeypatch.setattr(jobs_routes, "_validate_artifact_store", MagicMock())
 
     agent_config = AgentConfig(
         class_path="aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
@@ -128,6 +129,27 @@ async def submit_app(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_route_registration_validates_artifact_store(submit_app):
+    import aiq_api.routes.jobs as jobs_routes
+
+    _app, _submitted_job, _builder = submit_app
+
+    jobs_routes._validate_artifact_store.assert_called_once_with("sqlite:///./test.db")
+
+
+def test_artifact_store_validation_propagates_failure(monkeypatch):
+    import aiq_api.routes.jobs as jobs_routes
+    from aiq_agent.agents.deep_researcher.sandbox import artifacts
+
+    store = MagicMock()
+    store.validate.side_effect = RuntimeError("storage unavailable")
+    monkeypatch.setattr(artifacts, "build_artifact_store", MagicMock(return_value=store))
+
+    with pytest.raises(RuntimeError, match="storage unavailable"):
+        jobs_routes._validate_artifact_store("sqlite:///./test.db")
+
+
+@pytest.mark.asyncio
 async def test_submit_job_forwards_selected_data_sources(submit_app):
     app, submitted_job, builder = submit_app
 
@@ -141,6 +163,33 @@ async def test_submit_job_forwards_selected_data_sources(submit_app):
     assert response.json()["job_id"] == "job-1"
     submitted_job.assert_awaited_once()
     assert submitted_job.await_args.kwargs["data_sources"] == ["web_search"]
+
+
+@pytest.mark.asyncio
+async def test_submit_job_rejects_internal_agent(submit_app, monkeypatch):
+    app, submitted_job, _builder = submit_app
+    import aiq_api.routes.jobs as jobs_routes
+
+    monkeypatch.setattr(
+        jobs_routes,
+        "get_agent_config",
+        lambda _agent_type: AgentConfig(
+            class_path="aiq_agent.agents.report_rewriter.agent.ReportRewriterAgent",
+            config_name="report_rewriter_agent",
+            description="Internal report rewriter",
+            public=False,
+        ),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "report_rewriter", "input": "revise"},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == "Agent type is internal-only and cannot be submitted directly: report_rewriter"
+    submitted_job.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -616,3 +665,25 @@ async def test_validation_does_not_call_get_all_tool_refs_when_fn_config_tools_i
     _, kwargs = builder.get_tools.await_args
     assert kwargs["tool_names"] == ["knowledge_search_tool"]
     submitted_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_list_data_sources_exposes_default_enabled(submit_app):
+    """GET /v1/data_sources must surface the registry's default_enabled (not hardcode True)."""
+    app, _submitted_job, _builder = submit_app
+    # Re-populate at request time: list_data_sources() reads the registry per request.
+    reset_registry()
+    populate_from_config(
+        [
+            {"id": "web_search", "name": "Web Search", "description": "x"},  # default_enabled -> True
+            {"id": "off_by_default", "name": "Off", "description": "y", "default_enabled": False},
+        ]
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/v1/data_sources")
+
+    assert response.status_code == 200
+    by_id = {s["id"]: s for s in response.json()}
+    assert by_id["web_search"]["default_enabled"] is True
+    assert by_id["off_by_default"]["default_enabled"] is False
