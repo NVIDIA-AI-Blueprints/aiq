@@ -101,6 +101,131 @@ async def test_report_edit_authorizes_parent_and_submits_internal_child(report_e
 
 
 @pytest.mark.asyncio
+async def test_report_edit_decrypts_parent_output_before_submitting_child(report_edit_app, monkeypatch):
+    """Encrypted parent reports remain available to the report-follow-up workflow."""
+    import base64
+
+    from aiq_api.jobs import crypto
+
+    app, parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "key")
+    monkeypatch.setenv(
+        "AIQ_CONTENT_ENCRYPTION_KEY",
+        base64.urlsafe_b64encode(b"k" * crypto.DEK_BYTES).decode(),
+    )
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY_ID", "test-key")
+    crypto.reset_content_encryption_manager_for_tests()
+    parent_report = "# Encrypted parent\n\n## Sources\n\n[1] https://example.com/source\n"
+    parent_job.output = crypto.create_job_content_cipher("parent-job-1").encrypt_output_json(
+        json.dumps({"report": parent_report})
+    )
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/jobs/async/job/parent-job-1/report/edit",
+                json={"input": "Shorten it."},
+            )
+    finally:
+        crypto.reset_content_encryption_manager_for_tests()
+
+    assert response.status_code == 200
+    assert submit_agent_job.await_args.kwargs["initial_files"]["/shared/original_report.md"] == parent_report.strip()
+
+
+@pytest.mark.asyncio
+async def test_report_edit_rejects_plaintext_parent_in_encrypted_mode(report_edit_app, monkeypatch):
+    """Report follow-up fails closed when encrypted mode encounters plaintext parent output."""
+    import base64
+
+    from aiq_api.jobs import crypto
+
+    app, parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "key")
+    monkeypatch.setenv(
+        "AIQ_CONTENT_ENCRYPTION_KEY",
+        base64.urlsafe_b64encode(b"k" * crypto.DEK_BYTES).decode(),
+    )
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY_ID", "test-key")
+    crypto.reset_content_encryption_manager_for_tests()
+    parent_job.output = {"report": "# Plaintext parent"}
+
+    try:
+        with TestClient(app) as client:
+            response = client.post(
+                "/v1/jobs/async/job/parent-job-1/report/edit",
+                json={"input": "Shorten it."},
+            )
+    finally:
+        crypto.reset_content_encryption_manager_for_tests()
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Parent report data is invalid"
+    submit_agent_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_report_edit_returns_503_when_parent_decrypt_is_unavailable(report_edit_app, monkeypatch):
+    from aiq_api.jobs import crypto
+    from aiq_api.jobs import report_context
+
+    app, _parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    monkeypatch.setattr(
+        report_context,
+        "read_job_output_async",
+        AsyncMock(side_effect=crypto.ContentEncryptionUnavailable("vault unavailable")),
+    )
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Shorten it."},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Content encryption is unavailable"
+    submit_agent_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_report_edit_returns_503_when_submit_encryption_is_unavailable(report_edit_app, caplog):
+    from aiq_api.jobs.crypto import ContentEncryptionUnavailable
+
+    app, _parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    submit_agent_job.side_effect = ContentEncryptionUnavailable("vault unavailable")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Shorten it."},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Content encryption is not ready"
+    assert "vault unavailable" not in caplog.text
+    submit_agent_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_report_edit_returns_500_when_submit_encryption_config_is_invalid(report_edit_app, caplog):
+    from aiq_api.jobs.crypto import ContentEncryptionConfigError
+
+    app, _parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    submit_agent_job.side_effect = ContentEncryptionConfigError("sensitive configuration detail")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Shorten it."},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Content encryption configuration is invalid"
+    assert "sensitive configuration detail" not in caplog.text
+    submit_agent_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_report_edit_rejects_incomplete_parent(report_edit_app):
     app, parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
     parent_job.status = "running"

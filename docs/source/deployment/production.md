@@ -115,11 +115,18 @@ Store API keys in `deploy/.env` and ensure the file is not committed to version 
 
 ## Monitoring
 
-### Health Endpoint
+### Liveness and Readiness Endpoints
 
-The backend exposes a health endpoint at `/health` for liveness and readiness probes.
+The backend exposes separate probe endpoints:
+
+- `/live` checks only that the API process can respond. Use it for liveness probes.
+- `/health` checks database and content-encryption dependencies. Use it for readiness probes.
+
+This separation keeps a temporary dependency outage from restarting a live API process while still removing an
+unready instance from service traffic.
 
 ```bash
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
 

@@ -17,6 +17,7 @@ from pydantic import Field
 from aiq_agent.auth import Principal
 
 from .access import authorize_job_access
+from .crypto import read_job_output_async
 from .event_store import EventStore
 
 _EVENT_SCAN_LIMIT = 10000
@@ -58,8 +59,8 @@ def _decode_job_output(output: Any) -> dict[str, Any]:
     return {}
 
 
-def _extract_report_from_job_output(job: Any) -> str | None:
-    output = _decode_job_output(getattr(job, "output", None))
+def _extract_report_from_output(output: Any) -> str | None:
+    output = _decode_job_output(output)
     report = output.get("report")
     return report.strip() if isinstance(report, str) and report.strip() else None
 
@@ -183,7 +184,8 @@ def _source_summary_markdown(sources: list[ReportContextSource]) -> str:
 async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> ReportContext:
     """Build report context from a previously authorized parent job."""
 
-    report = _extract_report_from_job_output(job)
+    output = await read_job_output_async(parent_job_id, getattr(job, "output", None))
+    report = _extract_report_from_output(output)
     # Durable events are only needed when the report isn't already in job output,
     # or to reconstruct sources. Fetch the (potentially large) event log at most once.
     events: list[dict[str, Any]] | None = None

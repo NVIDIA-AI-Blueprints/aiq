@@ -893,6 +893,7 @@ class TestAuthMiddlewareHelpers:
 
     def test_path_allowed_exact_and_prefix(self) -> None:
         mw = AuthMiddleware(MagicMock(), external_hostnames=set())
+        assert mw._path_allowed("/live") is True
         assert mw._path_allowed("/health") is True
         assert mw._path_allowed("/v1/jobs/async/job/abc/result") is True
         assert mw._path_allowed("/v1/jobs/async/job") is True
@@ -941,6 +942,19 @@ class TestAuthMiddlewareHelpers:
 
 
 class TestAuthMiddlewareExempt:
+    @pytest.mark.asyncio
+    async def test_liveness_exempt_without_auth(self, capture_asgi, external_host):
+        app, state = capture_asgi
+        mw = AuthMiddleware(app, require_auth=True, external_hostnames={external_host.decode()})
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope("/live", host=external_host)
+        await mw(scope, AsyncMock(), send)
+
+        assert state["user"]["type"] == "anonymous"
+
     @pytest.mark.asyncio
     async def test_health_exempt_without_auth(self, capture_asgi, external_host):
         app, state = capture_asgi

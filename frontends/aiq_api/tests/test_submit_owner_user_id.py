@@ -59,9 +59,10 @@ def test_submit_forwards_owner_user_id_as_last_arg(patched):
     job_args = _FakeJobStore.last_job_args
     assert job_args is not None
     # Owner user_id is appended last. Trailing worker args are:
-    # data_sources, auth_token, initial_files, output_metadata, owner_user_id.
+    # data_sources, auth_token, encryption policy, initial_files, output_metadata, owner_user_id.
     assert job_args[-1] == principal_user_id(principal) == "jwt:user-1"
-    assert job_args[-4] == "token-1"
+    assert job_args[-5] == "token-1"
+    assert job_args[-4].mode == "off"
 
 
 def test_context_user_id_binding_mechanism():

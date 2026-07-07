@@ -152,6 +152,7 @@ async def submit_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    skip_encryption_readiness_check: bool = False,
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
     allow_internal: bool = False,
@@ -173,8 +174,11 @@ async def submit_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
+        skip_encryption_readiness_check: Skip the internal readiness check when
+            the caller already performed it off the event loop.
         initial_files: Optional DeepAgents virtual filesystem files to seed into worker state.
         output_metadata: Optional metadata persisted with the final job output.
+        allow_internal: Allow trusted callers to submit an internal-only agent.
 
     Returns:
         The job ID.
@@ -192,6 +196,9 @@ async def submit_agent_job(
         )
     """
     from nat.front_ends.fastapi.async_jobs.job_store import JobStore
+
+    from .crypto import get_content_encryption_policy_identity
+    from .crypto import require_content_encryption_ready_for_submission_async
 
     # Get agent configuration from registry
     agent_config = get_agent_config(agent_type)
@@ -241,6 +248,10 @@ async def submit_agent_job(
 
     if not scheduler_address:
         raise RuntimeError("Async job submission requires NAT_DASK_SCHEDULER_ADDRESS to be set")
+
+    if not skip_encryption_readiness_check:
+        await require_content_encryption_ready_for_submission_async()
+    content_encryption_policy = get_content_encryption_policy_identity()
 
     # Auto-capture auth token if not explicitly provided
     if auth_token is None:
@@ -307,6 +318,7 @@ async def submit_agent_job(
                 available_documents,
                 data_sources,
                 auth_token,
+                content_encryption_policy,
                 initial_files,
                 output_metadata,
                 principal_user_id(principal),

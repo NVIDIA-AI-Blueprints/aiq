@@ -7,12 +7,10 @@ import pytest
 from fastapi import HTTPException
 
 
-def test_extract_report_from_job_output_prefers_job_output():
-    from aiq_api.jobs.report_context import _extract_report_from_job_output
+def test_extract_report_from_output_prefers_job_output():
+    from aiq_api.jobs.report_context import _extract_report_from_output
 
-    job = type("Job", (), {"output": {"report": "# Stored report"}})()
-
-    assert _extract_report_from_job_output(job) == "# Stored report"
+    assert _extract_report_from_output({"report": "# Stored report"}) == "# Stored report"
 
 
 def test_report_from_events_prefers_final_report():
@@ -182,6 +180,40 @@ async def test_resolve_report_context_skips_event_scan_when_output_has_inline_so
 
     assert calls["n"] == 0
     assert [s.url for s in ctx.sources] == ["https://example.com/path"]
+
+
+@pytest.mark.asyncio
+async def test_resolve_report_context_decrypts_encrypted_parent_output(monkeypatch):
+    """Report follow-up reads the encrypted parent output instead of relying on event fallback."""
+    import base64
+    import json
+    from unittest.mock import AsyncMock
+
+    from aiq_api.jobs import crypto
+    from aiq_api.jobs import report_context
+
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "key")
+    monkeypatch.setenv(
+        "AIQ_CONTENT_ENCRYPTION_KEY",
+        base64.urlsafe_b64encode(b"k" * crypto.DEK_BYTES).decode(),
+    )
+    monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY_ID", "test-key")
+    crypto.reset_content_encryption_manager_for_tests()
+
+    report = "# Encrypted report\n\n## Sources\n\n[1] https://example.com/encrypted\n"
+    stored_output = crypto.create_job_content_cipher("job-1").encrypt_output_json(json.dumps({"report": report}))
+    job = type("Job", (), {"output": stored_output})()
+    get_events = AsyncMock(return_value=[])
+    monkeypatch.setattr(report_context.EventStore, "get_events_async", get_events)
+
+    try:
+        context = await report_context.resolve_report_context(job, "sqlite:///unused.db", "job-1")
+    finally:
+        crypto.reset_content_encryption_manager_for_tests()
+
+    assert context.report_markdown == report.strip()
+    assert [source.url for source in context.sources] == ["https://example.com/encrypted"]
+    get_events.assert_not_awaited()
 
 
 @pytest.mark.asyncio

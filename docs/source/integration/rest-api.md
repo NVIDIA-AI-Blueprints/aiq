@@ -35,7 +35,8 @@ Base path: `/v1/jobs/async`
 | `GET` | `/v1/jobs/async/job/{job_id}/state` | Get accumulated job artifacts |
 | `GET` | `/v1/jobs/async/job/{job_id}/report` | Get final research report |
 | `GET` | `/v1/data_sources` | List available data sources |
-| `GET` | `/health` | Health check (includes Dask status) |
+| `GET` | `/live` | Process liveness check (no dependency checks) |
+| `GET` | `/health` | Dependency readiness check (database, Dask, and content encryption) |
 
 ### List Available Agents
 
@@ -451,7 +452,23 @@ curl http://localhost:8000/v1/data_sources
 
 The `knowledge_layer` entry only appears when a knowledge retrieval function is configured.
 
-### Health Check
+### Liveness and Readiness Checks
+
+Use `/live` for process liveness probes. It returns success without checking the
+database, Dask, or content-encryption dependencies.
+
+```bash
+curl http://localhost:8000/live
+```
+
+```json
+{
+  "status": "alive"
+}
+```
+
+Use `/health` for readiness checks. It returns HTTP 503 when a required
+dependency is unavailable.
 
 ```bash
 curl http://localhost:8000/health
@@ -461,8 +478,13 @@ curl http://localhost:8000/health
 
 ```json
 {
-  "status": "ok",
-  "dask_available": true
+  "status": "healthy",
+  "dask_available": true,
+  "db": "ok",
+  "encryption": {
+    "mode": "off",
+    "ready": true
+  }
 }
 ```
 
