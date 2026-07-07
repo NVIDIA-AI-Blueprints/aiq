@@ -458,7 +458,10 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
             prompt_name="writer",
             role=LLMRole.REPORT_WRITER,
             tools=context.tool_set.writer_tools,
-            middleware=context.middleware_set.writer,
+            middleware=[
+                *context.middleware_set.writer,
+                TodoSuppressionMiddleware(),
+            ],
             prompt_values={"parent_report_context_available": context.parent_report_context_available},
             skills=context.skill_sources(WRITER_AGENT),
         ),
