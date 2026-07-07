@@ -68,8 +68,13 @@ aiq-postgres-xxx                1/1     Running   0          30s
 
 ```bash
 kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000 &
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
+
+The backend liveness probe uses `/live`, which checks only that the API process
+responds. The readiness probe uses `/health`, so database or content-encryption
+outages remove the pod from service without triggering a restart loop.
 
 ## Configuration, FRAG, Secrets, and Access
 

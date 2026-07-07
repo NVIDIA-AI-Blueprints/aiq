@@ -522,6 +522,90 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     await validate_content_encryption_startup_async()
 
+    @app.get(
+        "/live",
+        tags=["health"],
+        summary="Liveness check",
+        description="Returns success while the API process is running; does not check external dependencies.",
+    )
+    async def liveness_check() -> dict[str, str]:
+        """Report process liveness without coupling restarts to dependency health."""
+
+        return {"status": "alive"}
+
+    dask_available = getattr(worker, "_dask_available", False)
+    job_store = getattr(worker, "_job_store", None)
+    scheduler_address = getattr(worker, "_scheduler_address", None) or os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
+    db_url = getattr(worker, "_db_url", None) or os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
+    config_path = getattr(worker, "_config_file_path", None) or os.environ.get("NAT_CONFIG_FILE", "")
+    log_level = getattr(worker, "_log_level", std_logging.INFO)
+    use_threads = getattr(worker, "_use_dask_threads", False)
+    front_end_config = getattr(worker, "_front_end_config", None)
+    default_expiry_seconds = getattr(front_end_config, "expiry_seconds", 86400) if front_end_config else 86400
+
+    # NAT registers its generic /health route first. Replace it before any
+    # async-job prerequisite early return so /health always means readiness.
+    _remove_existing_health_routes(app)
+
+    @app.get(
+        "/health",
+        tags=["health"],
+        summary="Readiness check",
+        responses={503: {"description": "Async-job, database, or content-encryption dependency is unavailable"}},
+    )
+    async def health_check():
+        """Readiness endpoint that validates async-job, DB, and encryption dependencies."""
+        from fastapi.responses import JSONResponse
+        from sqlalchemy import text
+
+        from ..jobs.event_store import EventStore
+
+        result = {"status": "healthy", "dask_available": bool(dask_available), "db": "ok"}
+        if not dask_available or not job_store:
+            result["status"] = "degraded"
+            result["db"] = "unchecked"
+            result["reason"] = "async_jobs_unavailable"
+            return JSONResponse(status_code=503, content=result)
+        if not config_path:
+            result["status"] = "degraded"
+            result["db"] = "unchecked"
+            result["reason"] = "configuration_missing"
+            return JSONResponse(status_code=503, content=result)
+
+        # Check DB connectivity using any cached async engine
+        try:
+            cache = EventStore._async_engine_cache
+            if cache:
+                engine = next(iter(cache.values()))[0]
+                async with engine.connect() as conn:
+                    await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3.0)
+            else:
+                result["db"] = "no_engine"
+        except Exception:
+            logger.warning("Health check DB ping failed", exc_info=True)
+            result["status"] = "degraded"
+            result["db"] = "unreachable"
+            return JSONResponse(status_code=503, content=result)
+
+        try:
+            encryption = await get_content_encryption_health_async()
+            result["encryption"] = encryption.to_health_dict()
+            if encryption.mode != "off" and not encryption.ready:
+                result["status"] = "degraded"
+                return JSONResponse(status_code=503, content=result)
+        except ContentEncryptionConfigError as exc:
+            logger.warning("Health check encryption config failed exception=%s", exc.__class__.__name__)
+            result["status"] = "degraded"
+            result["encryption"] = {
+                "mode": "invalid",
+                "ready": False,
+                "reason": "configuration_invalid",
+                "exception_type": exc.__class__.__name__,
+            }
+            return JSONResponse(status_code=503, content=result)
+
+        return result
+
     if not get_all_sources():
         logger.warning(
             "No data sources registered. Add a 'data_sources' function with "
@@ -571,9 +655,6 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     logger.info("Registered /v1/data_sources and /v1/jobs/async/agents routes")
 
-    dask_available = getattr(worker, "_dask_available", False)
-    job_store = getattr(worker, "_job_store", None)
-
     if not dask_available or not job_store:
         logger.warning(
             "Dask not available - async job submission routes require NAT_DASK_SCHEDULER_ADDRESS"
@@ -581,18 +662,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         )
         return
 
-    scheduler_address = getattr(worker, "_scheduler_address", None) or os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
-    db_url = getattr(worker, "_db_url", None) or os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
-    config_path = getattr(worker, "_config_file_path", None) or os.environ.get("NAT_CONFIG_FILE", "")
-    log_level = getattr(worker, "_log_level", std_logging.INFO)
-    use_threads = getattr(worker, "_use_dask_threads", False)
-
     if not config_path:
         logger.error("Config file path not available - NAT_CONFIG_FILE not set")
         return
-
-    front_end_config = getattr(worker, "_front_end_config", None)
-    default_expiry_seconds = getattr(front_end_config, "expiry_seconds", 86400) if front_end_config else 86400
 
     logger.info(
         "Registering async job routes: scheduler=%s, db=%s, expiry=%ds",
@@ -603,59 +675,6 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, ensure_job_access_table, db_url)
     await loop.run_in_executor(None, _validate_artifact_store, db_url)
-
-    # NAT registers its generic liveness route first. Replace it so runtime
-    # dispatch and OpenAPI both use AI-Q's DB and encryption readiness checks.
-    _remove_existing_health_routes(app)
-
-    @app.get("/health", tags=["health"], summary="Health check")
-    async def health_check():
-        """Health check endpoint that validates DB connectivity."""
-        from sqlalchemy import text
-
-        from ..jobs.event_store import EventStore
-
-        result = {"status": "healthy", "dask_available": dask_available, "db": "ok"}
-
-        # Check DB connectivity using any cached async engine
-        try:
-            cache = EventStore._async_engine_cache
-            if cache:
-                engine = next(iter(cache.values()))[0]
-                async with engine.connect() as conn:
-                    await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3.0)
-            else:
-                result["db"] = "no_engine"
-        except Exception:
-            logger.warning("Health check DB ping failed", exc_info=True)
-            result["status"] = "degraded"
-            result["db"] = "unreachable"
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse(status_code=503, content=result)
-
-        try:
-            encryption = await get_content_encryption_health_async()
-            result["encryption"] = encryption.to_health_dict()
-            if encryption.mode != "off" and not encryption.ready:
-                result["status"] = "degraded"
-                from fastapi.responses import JSONResponse
-
-                return JSONResponse(status_code=503, content=result)
-        except ContentEncryptionConfigError as exc:
-            logger.warning("Health check encryption config failed exception=%s", exc.__class__.__name__)
-            result["status"] = "degraded"
-            result["encryption"] = {
-                "mode": "invalid",
-                "ready": False,
-                "reason": "configuration_invalid",
-                "exception_type": exc.__class__.__name__,
-            }
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse(status_code=503, content=result)
-
-        return result
 
     @app.post(
         "/v1/jobs/async/submit",
@@ -861,6 +880,21 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 output_metadata=report_output_metadata(job_id, "edit"),
                 allow_internal=True,
             )
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Report edit submission rejected because content encryption is unready parent_job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is not ready")
+        except ContentEncryptionConfigError as e:
+            logger.warning(
+                "Report edit submission rejected because content encryption config is invalid "
+                "parent_job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Content encryption configuration is invalid")
         except JobIdConflictError:
             raise HTTPException(409, f"Job already exists: {req.job_id}")
         except RuntimeError as e:

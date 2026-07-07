@@ -174,9 +174,11 @@ encryption configuration to read those jobs.
 
 ## Health and Failure Behavior
 
-`/health` includes encryption readiness. When encryption is configured but
-unready, `/health` returns HTTP 503 and new async submissions are rejected with
-HTTP 503.
+`/live` reports process liveness without calling Vault or the database. `/health`
+reports dependency readiness and includes encryption status. When encryption is
+configured but unready, `/health` returns HTTP 503 and new async submissions are
+rejected with HTTP 503, while `/live` remains successful so an orchestrator does
+not restart an otherwise live API process during a dependency outage.
 
 Workers independently validate encryption before marking a job `RUNNING`. If
 encryption is unavailable at worker startup, the job is marked `FAILURE` and

@@ -188,6 +188,44 @@ async def test_report_edit_returns_503_when_parent_decrypt_is_unavailable(report
 
 
 @pytest.mark.asyncio
+async def test_report_edit_returns_503_when_submit_encryption_is_unavailable(report_edit_app, caplog):
+    from aiq_api.jobs.crypto import ContentEncryptionUnavailable
+
+    app, _parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    submit_agent_job.side_effect = ContentEncryptionUnavailable("vault unavailable")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Shorten it."},
+        )
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "Content encryption is not ready"
+    assert "vault unavailable" not in caplog.text
+    submit_agent_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_report_edit_returns_500_when_submit_encryption_config_is_invalid(report_edit_app, caplog):
+    from aiq_api.jobs.crypto import ContentEncryptionConfigError
+
+    app, _parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
+    submit_agent_job.side_effect = ContentEncryptionConfigError("sensitive configuration detail")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/job/parent-job-1/report/edit",
+            json={"input": "Shorten it."},
+        )
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == "Content encryption configuration is invalid"
+    assert "sensitive configuration detail" not in caplog.text
+    submit_agent_job.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_report_edit_rejects_incomplete_parent(report_edit_app):
     app, parent_job, _authorize_job_access, submit_agent_job, _principal, _job_store = report_edit_app
     parent_job.status = "running"

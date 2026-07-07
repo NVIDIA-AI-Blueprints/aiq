@@ -182,6 +182,7 @@ def build_request_trace_tags(
 # Paths reachable from outside the cluster.  Any external request whose path
 # does NOT match one of these receives 404.  Prefix entries must end with "/".
 EXTERNAL_ALLOWED_PATHS: list[str] = [
+    "/live",
     "/health",
     "/docs",
     "/redoc",
@@ -197,7 +198,7 @@ EXTERNAL_ALLOWED_PATHS: list[str] = [
 ]
 
 # External paths that require no token (monitoring, etc.)
-AUTH_EXEMPT_PATHS: set[str] = {"/health", "/docs", "/redoc", "/openapi.json"}
+AUTH_EXEMPT_PATHS: set[str] = {"/live", "/health", "/docs", "/redoc", "/openapi.json"}
 
 
 def _is_oauth_callback_path(path: str) -> bool:

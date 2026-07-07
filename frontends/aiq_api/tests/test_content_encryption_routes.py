@@ -140,7 +140,7 @@ async def _build_jobs_app(monkeypatch, tmp_path, *, job_output=None, submitted_j
     return app
 
 
-def _build_assembled_worker_app(monkeypatch, tmp_path) -> FastAPI:
+def _build_assembled_worker_app(monkeypatch, tmp_path, *, dask_available: bool = True) -> FastAPI:
     """Build the AI-Q worker app while preserving NAT-before-AIQ route ordering."""
     import aiq_api.routes.jobs as jobs_routes
     from aiq_api import plugin
@@ -194,8 +194,8 @@ def _build_assembled_worker_app(monkeypatch, tmp_path) -> FastAPI:
 
     front_end = plugin.AIQAPIConfig(db_url=f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
     worker = plugin.AIQAPIWorker(Config(general=GeneralConfig(front_end=front_end)))
-    worker._dask_available = True
-    worker._job_store = object()
+    worker._dask_available = dask_available
+    worker._job_store = object() if dask_available else None
     worker._scheduler_address = "tcp://localhost:8786"
     worker._db_url = front_end.db_url
     return worker.build_app()
@@ -206,6 +206,14 @@ def _get_health_routes(app: FastAPI) -> list[APIRoute]:
         route
         for route in app.routes
         if isinstance(route, APIRoute) and route.path == "/health" and "GET" in route.methods
+    ]
+
+
+def _get_liveness_routes(app: FastAPI) -> list[APIRoute]:
+    return [
+        route
+        for route in app.routes
+        if isinstance(route, APIRoute) and route.path == "/live" and "GET" in route.methods
     ]
 
 
@@ -225,6 +233,7 @@ async def test_health_returns_503_when_vault_readiness_failed(monkeypatch, tmp_p
 
     with TestClient(app) as client:
         response = client.get("/health")
+        liveness_response = client.get("/live")
 
     assert response.status_code == 503
     body = response.json()
@@ -232,6 +241,8 @@ async def test_health_returns_503_when_vault_readiness_failed(monkeypatch, tmp_p
     assert body["encryption"]["ready"] is False
     assert body["encryption"]["encrypt_ready"] is False
     assert body["encryption"]["decrypt_ready"] is False
+    assert liveness_response.status_code == 200
+    assert liveness_response.json() == {"status": "alive"}
 
 
 def test_assembled_worker_serves_encryption_health_route(monkeypatch, tmp_path):
@@ -249,15 +260,44 @@ def test_assembled_worker_serves_encryption_health_route(monkeypatch, tmp_path):
 
     with TestClient(app) as client:
         response = client.get("/health")
+        liveness_response = client.get("/live")
         health_routes = _get_health_routes(app)
+        liveness_routes = _get_liveness_routes(app)
 
     assert len(health_routes) == 1
     assert health_routes[0].endpoint.__module__ == "aiq_api.routes.jobs"
+    assert len(liveness_routes) == 1
+    assert liveness_routes[0].endpoint.__module__ == "aiq_api.routes.jobs"
+    assert liveness_response.status_code == 200
+    assert liveness_response.json() == {"status": "alive"}
     assert response.status_code == 503
     body = response.json()
     assert body["status"] == "degraded"
     assert body["encryption"]["mode"] == "vault"
     assert body["encryption"]["ready"] is False
+
+
+def test_assembled_worker_keeps_liveness_when_async_jobs_are_unavailable(monkeypatch, tmp_path):
+    app = _build_assembled_worker_app(monkeypatch, tmp_path, dask_available=False)
+
+    with TestClient(app) as client:
+        liveness_response = client.get("/live")
+        readiness_response = client.get("/health")
+        openapi = client.get("/openapi.json").json()
+
+    assert liveness_response.status_code == 200
+    assert liveness_response.json() == {"status": "alive"}
+    assert readiness_response.status_code == 503
+    assert readiness_response.json() == {
+        "status": "degraded",
+        "dask_available": False,
+        "db": "unchecked",
+        "reason": "async_jobs_unavailable",
+    }
+    assert len(_get_liveness_routes(app)) == 1
+    assert len(_get_health_routes(app)) == 1
+    assert list(openapi["paths"]["/live"]) == ["get"]
+    assert list(openapi["paths"]["/health"]) == ["get"]
 
 
 @pytest.mark.parametrize("mode", ["off", "key"])
@@ -277,6 +317,7 @@ def test_assembled_worker_health_route_reports_ready_encryption(monkeypatch, tmp
     body = response.json()
     assert body["status"] == "healthy"
     assert body["encryption"] == {"mode": mode, "ready": True}
+    assert list(openapi["paths"]["/live"]) == ["get"]
     assert list(openapi["paths"]["/health"]) == ["get"]
 
 
