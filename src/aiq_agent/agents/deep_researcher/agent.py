@@ -31,7 +31,6 @@ from langchain_core.tools import BaseTool
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
-from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
@@ -185,7 +184,6 @@ class DeepResearcherAgent:
         """Extract final Markdown from output files."""
         output_paths = ("/shared/output.md", "/output.md")
         files = result.get("files", None) if isinstance(result, dict) else getattr(result, "files", None) or files or {}
-        files = result.get("files", {}) if isinstance(result, dict) else getattr(result, "files", {})
         if isinstance(files, dict):
             for output_path in output_paths:
                 output_entry = files.get(output_path)
