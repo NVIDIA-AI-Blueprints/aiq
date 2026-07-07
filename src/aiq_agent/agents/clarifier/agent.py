@@ -105,6 +105,19 @@ JSON_REMINDER_AFTER_TOOLS = (
 )
 """Reminder prompt added after tool results to reinforce JSON-only output."""
 
+FORCE_SEARCH_GUIDANCE = (
+    "You attempted to ask the user for clarification before gathering any context. "
+    "Before asking the user a question, you MUST first use the available search tools "
+    "to look up unfamiliar entities, acronyms, products, or terms in their request. "
+    "Issue one focused tool call now with a query derived from the user's request. "
+    "Only after reviewing the tool results should you decide whether clarification is still needed."
+)
+"""Guidance prompt injected when the LLM tries to clarify without having searched first."""
+
+SKIPPED_CLARIFICATION_SENTINEL = "[skipped clarification]"
+"""Stand-in user turn persisted when a skip reply is blank, so an empty
+HumanMessage is never written to state (some chat APIs reject empty content)."""
+
 
 class ClarifierAgent:
     """
@@ -485,6 +498,45 @@ class ClarifierAgent:
     SKIP_COMMANDS = {"skip", "done", "exit", "quit", "proceed", "continue", "no", "n", ""}
     """Set of commands that indicate the user wants to skip clarification."""
 
+    @staticmethod
+    def _has_tool_invocations(messages: Sequence[Any]) -> bool:
+        """
+        Check whether any prior assistant message in the conversation issued tool calls.
+
+        Args:
+            messages: The conversation message history.
+
+        Returns:
+            True if any AIMessage in the history carries non-empty tool_calls,
+            False otherwise.
+        """
+        for msg in messages:
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls:
+                return True
+        return False
+
+    @staticmethod
+    def _searched_since_last_user_turn(messages: Sequence[Any]) -> bool:
+        """Check whether a tool call has occurred since the latest user message.
+
+        Scopes the search-before-clarify guard to the *current* request: tool
+        calls from earlier conversation turns must not suppress the nudge for a
+        fresh user query.
+
+        Args:
+            messages: The conversation message history.
+
+        Returns:
+            True if any message after the most recent HumanMessage carries tool
+            calls, False otherwise.
+        """
+        last_user_idx = -1
+        for idx, msg in enumerate(messages):
+            if isinstance(msg, HumanMessage):
+                last_user_idx = idx
+        return ClarifierAgent._has_tool_invocations(messages[last_user_idx + 1 :])
+
     def _is_skip_command(self, user_reply: str) -> bool:
         """
         Check if the user's reply indicates they want to skip clarification.
@@ -504,16 +556,21 @@ class ClarifierAgent:
         """
         Build the LangGraph StateGraph for the clarification workflow.
 
-        Creates a graph with three nodes:
-        - agent: Generates clarification questions using the LLM
+        Creates a graph with the following nodes:
+        - agent: Generates clarification questions using the LLM. On the first
+          turn it also enforces search-before-clarify (issue #234): if the model
+          asks for clarification without using its bound search tools, it nudges
+          the model once and retries inline.
         - tools: Executes tool calls (e.g., web search) for context
         - ask_for_clarification: Prompts user and processes response
+        - plan_preview: Optional plan approval flow
 
         The graph flow:
-        1. agent generates a response (question, tool call, or completion)
+        1. agent generates a response (question, tool call, or completion);
+           on turn 0 it may force one search-and-retry before yielding
         2. If tool call → tools node → back to agent
-        3. If question → ask_for_clarification → back to agent
-        4. If complete → end
+        3. If complete → end (or plan_preview if enabled)
+        4. Otherwise → ask_for_clarification → back to agent
 
         Returns:
             Compiled LangGraph StateGraph ready for execution.
@@ -526,9 +583,38 @@ class ClarifierAgent:
         graph = StateGraph(ClarifierAgentState)
 
         async def agent_node(state: ClarifierAgentState):
+            """Run the LLM for one turn and apply the search-before-clarify nudge.
+
+            Emits a completion when the clarification budget is exhausted, and on
+            the first turn forces one search-and-retry if the model tries to ask
+            for clarification without using its bound tools.
+            """
             if state.remaining_questions <= 0:
-                complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
-                return {"messages": [AIMessage(content=complete_response.model_dump_json())]}
+                # Clarification budget is exhausted — emit a completion signal,
+                # but never create an invalid history (two adjacent assistant
+                # messages, or a pending tool call left unresolved), since it can
+                # reach plan_preview's planner.
+                last_message = state.messages[-1] if state.messages else None
+                if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
+                    # A pending tool call must be resolved before we complete;
+                    # let decide_route route to the tools node, after which the
+                    # tool result re-enters here as the last turn.
+                    return {}
+                if isinstance(last_message, AIMessage) and self._is_complete(getattr(last_message, "content", "")):
+                    # A prior node (e.g. the skip-command branch) already emitted
+                    # the completion; don't duplicate it. Let decide_route end.
+                    return {}
+                complete = AIMessage(
+                    content=ClarificationResponse(
+                        needs_clarification=False, clarification_question=None
+                    ).model_dump_json()
+                )
+                if isinstance(last_message, AIMessage):
+                    # The last turn is a non-complete assistant message (e.g. an
+                    # unanswered clarification at exhaustion). Interleave a
+                    # sentinel user turn so the completion is not adjacent to it.
+                    return {"messages": [HumanMessage(content=SKIPPED_CLARIFICATION_SENTINEL), complete]}
+                return {"messages": [complete]}
             tools_info = [
                 {"name": getattr(t, "name", ""), "description": getattr(t, "description", "")} for t in self.tools
             ]
@@ -554,9 +640,37 @@ class ClarifierAgent:
                 messages.append(HumanMessage(content=JSON_REMINDER_AFTER_TOOLS))
 
             response = await bound_llm.ainvoke(messages)
+
+            # Search-before-clarify (issue #234): on the first turn, if the model
+            # asks for clarification without searching, nudge it once (guidance as
+            # ephemeral scaffolding, never persisted to state) and retry inline.
+            # The guard is one-shot: iteration == 0 and no tool call yet for the
+            # current request (scoped to the latest user turn). Return only the
+            # retry so the skipped first response can't leave two adjacent
+            # assistant messages in history. The guidance is folded into the
+            # leading system prompt (a trailing SystemMessage is rejected by
+            # providers that only accept a leading one).
+            if (
+                self.tools
+                and state.iteration == 0
+                and not self._searched_since_last_user_turn(state.messages)
+                and not getattr(response, "tool_calls", None)
+                and self._is_needed(response.content)
+            ):
+                logger.info("Clarifier: model skipped search before clarifying; injecting guidance and retrying once")
+                retry_system = SystemMessage(content=f"{rendered_system_prompt}\n\n{FORCE_SEARCH_GUIDANCE}")
+                retry_messages = [retry_system, *messages[1:], response]
+                retry_response = await bound_llm.ainvoke(retry_messages)
+                return {"messages": [retry_response]}
+
             return {"messages": [response]}
 
         async def ask_clarification(state: ClarifierAgentState):
+            """Prompt the user with the pending question and record their reply.
+
+            Handles skip commands (substituting a non-empty sentinel for blank
+            replies) and the max-turns cutoff, advancing the clarification log.
+            """
             iteration = state.iteration
             max_turns = state.max_turns
             clarifier_log = state.clarifier_log
@@ -582,8 +696,23 @@ class ClarifierAgent:
                 logger.info("Clarifier: User requested to skip clarification")
                 complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
                 clarifier_log = f"{clarifier_log}\n**Turn {iteration + 1} - User:** [Skipped clarification]"
+                # Persist the user's reply as a HumanMessage before the
+                # completion AIMessage. The prior turn already left an
+                # AIMessage(clarification) in history; without an interleaving
+                # human message the two assistant turns would be adjacent, which
+                # the OpenAI/Anthropic APIs reject. (The duplicate completion on
+                # graph re-entry is suppressed by the guard in agent_node.)
+                #
+                # A blank/whitespace reply also counts as skip (see
+                # SKIP_COMMANDS), but an empty HumanMessage must not be persisted
+                # -- it would flow into plan generation, and some chat APIs reject
+                # empty message content. Substitute a non-empty sentinel.
+                skip_reply = user_reply if user_reply.strip() else SKIPPED_CLARIFICATION_SENTINEL
                 return {
-                    "messages": [AIMessage(content=complete_response.model_dump_json())],
+                    "messages": [
+                        HumanMessage(content=skip_reply),
+                        AIMessage(content=complete_response.model_dump_json()),
+                    ],
                     "iteration": max_turns,  # Force end of clarification
                     "clarifier_log": clarifier_log,
                 }
@@ -596,6 +725,7 @@ class ClarifierAgent:
             }
 
         def decide_route(state: ClarifierAgentState | dict):
+            """Route after agent_node: to tools, plan preview, end, or the user."""
             if isinstance(state, dict):
                 messages = state.get("messages", [])
             elif hasattr(state, "messages"):
@@ -616,6 +746,11 @@ class ClarifierAgent:
                 if self.enable_plan_approval:
                     return "plan_preview"
                 return "__end__"
+
+            # The search-before-clarify nudge (issue #234) is handled inline in
+            # agent_node, not here — see the retry block there. By the time a
+            # clarification response reaches this router, any forced search has
+            # already happened, so we route straight to the user.
             return "ask_for_clarification"
 
         async def plan_preview_node(state: ClarifierAgentState):
