@@ -253,6 +253,7 @@ If your Blueprint version is not compatible:
 | `scripts/aiq.py status` | Fetch job status plus `/state` artifacts | `<job_id>` |
 | `scripts/aiq.py state` | Fetch event-store artifacts only | `<job_id>` |
 | `scripts/aiq.py report` | Fetch the final report; with `--out-dir DIR`, export a portable `report.md` + `artifacts/` folder with links rewritten to local files | `<job_id> [--out-dir DIR]` |
+| `scripts/aiq.py report_edit` | Edit a completed report with cosmetic changes | `<job_id> <edit_instructions>` |
 | `scripts/aiq.py artifacts` | List durable artifacts; with `--download-dir DIR`, download them and print local paths | `<job_id> [--download-dir DIR]` |
 | `scripts/aiq.py stream` | Stream SSE events from a job | `<job_id>` |
 | `scripts/aiq.py cancel` | Cancel a running job | `<job_id>` |
