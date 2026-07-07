@@ -165,7 +165,7 @@ When `research_poll` completes successfully, fetch and present the full report. 
 If the job status is `failed`, `failure`, or `cancelled`, show the error from the status response and ask whether the
 user wants to retry with a narrower query or different approach.
 
-### Step 6 - Follow up: ask about or redo a report
+### Step 6 - Follow up: ask about, edit, or redo a report
 
 After a report is presented, the user often wants to go deeper or adjust scope.
 Reuse the existing backend flow — the same auth boundary, polling, and report
@@ -185,6 +185,13 @@ retrieval from Steps 1-5 apply; there is no separate follow-up endpoint.
 
   If this returns a `deep_research_running` job ID, poll it with `research_poll`
   exactly as in Step 3.
+
+**Edit** — rewrite a report with cosmetic changes. This skill only has access
+to the data used to generate the initial report. No tools are available:
+
+```bash
+python3 $SKILL_DIR/scripts/aiq.py report_edit <JOB_ID> "<EDIT_INSTRUCTIONS>"
+```
 
 **Redo** — re-run research with adjusted scope (a narrower query, a corrected
 question, or a different depth):

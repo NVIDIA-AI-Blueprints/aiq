@@ -184,7 +184,6 @@ class DeepResearcherAgent:
         """Extract final Markdown from output files."""
         output_paths = ("/shared/output.md", "/output.md")
         files = result.get("files", None) if isinstance(result, dict) else getattr(result, "files", None) or files or {}
-        files = result.get("files", {}) if isinstance(result, dict) else getattr(result, "files", {})
         if isinstance(files, dict):
             for output_path in output_paths:
                 output_entry = files.get(output_path)
