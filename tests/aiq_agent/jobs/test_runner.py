@@ -421,6 +421,7 @@ class TestSubmitDeepResearchJob:
             {
                 "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
                 "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+                "AIQ_CONTENT_ENCRYPTION": "off",
             },
         ):
             with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
@@ -436,7 +437,10 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        assert ["web_search"] in job_args
+        # Trailing worker args: available_documents, data_sources, auth_token,
+        # encryption policy, initial_files, output_metadata, principal_user_id.
+        assert job_args[-6] == ["web_search"]
+        assert job_args[-4].mode == "off"
 
     @pytest.mark.asyncio
     async def test_submit_agent_job_passes_initial_files_and_output_metadata(self):
@@ -454,6 +458,7 @@ class TestSubmitDeepResearchJob:
             {
                 "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
                 "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+                "AIQ_CONTENT_ENCRYPTION": "off",
             },
         ):
             with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
@@ -469,7 +474,8 @@ class TestSubmitDeepResearchJob:
 
         assert result == "test-job-id"
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        # Trailing worker args: data_sources, auth_token, initial_files, output_metadata, principal_user_id
+        # Encryption policy precedes the upstream report-context arguments.
+        assert job_args[-4].mode == "off"
         assert job_args[-3] == initial_files
         assert job_args[-2] == output_metadata
 
@@ -592,6 +598,299 @@ class TestSubmitDeepResearchJob:
 
         mock_job_store.submit_job.assert_called_once()
         rollback_job_submission.assert_called_once_with("test-job-id", "sqlite:///./test.db")
+
+
+class TestRunAgentJobEncryption:
+    """Tests for async worker encryption preflight behavior."""
+
+    @pytest.mark.asyncio
+    async def test_encryption_preflight_failure_marks_failure_before_running(self):
+        from aiq_api.jobs.crypto import ContentEncryptionConfig
+        from aiq_api.jobs.crypto import ContentEncryptionUnavailable
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+
+        with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+            with patch(
+                "aiq_api.jobs.crypto.create_job_content_cipher",
+                side_effect=ContentEncryptionUnavailable("vault down"),
+            ):
+                await run_agent_job(
+                    False,
+                    20,
+                    "tcp://localhost:8786",
+                    "sqlite:///./test.db",
+                    "config.yml",
+                    "job-1",
+                    "input",
+                    "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                    "deep_research_agent",
+                    content_encryption_policy=ContentEncryptionConfig(mode="off").policy_identity,
+                )
+
+        statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
+        assert statuses == [JobStatus.FAILURE]
+        mock_job_store.update_status.assert_awaited_once_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="content encryption unavailable",
+        )
+
+    @pytest.mark.asyncio
+    async def test_worker_rejects_submission_policy_mismatch_before_running(self):
+        import base64
+
+        from aiq_api.jobs import crypto
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        with patch.dict(
+            "os.environ",
+            {
+                "AIQ_CONTENT_ENCRYPTION": "key",
+                "AIQ_CONTENT_ENCRYPTION_KEY": base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
+                "AIQ_CONTENT_ENCRYPTION_KEY_ID": "api-key",
+            },
+        ):
+            crypto.reset_content_encryption_manager_for_tests()
+            api_policy = crypto.get_content_encryption_policy_identity()
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+
+        with patch.dict("os.environ", {"AIQ_CONTENT_ENCRYPTION": "off"}):
+            crypto.reset_content_encryption_manager_for_tests()
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.crypto.create_job_content_cipher") as create_job_content_cipher:
+                    await run_agent_job(
+                        False,
+                        20,
+                        "tcp://localhost:8786",
+                        "sqlite:///./test.db",
+                        "config.yml",
+                        "job-1",
+                        "input",
+                        "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                        "deep_research_agent",
+                        content_encryption_policy=api_policy,
+                    )
+            crypto.reset_content_encryption_manager_for_tests()
+
+        create_job_content_cipher.assert_not_called()
+        mock_job_store.update_status.assert_awaited_once_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="content encryption policy mismatch",
+        )
+
+    @pytest.mark.asyncio
+    async def test_final_output_encryption_failure_marks_failure_without_plaintext_write(self, tmp_path):
+        from types import SimpleNamespace
+
+        from aiq_api.jobs.crypto import ContentEncryptionConfig
+        from aiq_api.jobs.crypto import ContentEncryptionUnavailable
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            def __init__(self, value=None):
+                self.value = value
+
+            async def __aenter__(self):
+                return self.value
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):
+                return AsyncContext()
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+        update_job_output = AsyncMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+
+        config = SimpleNamespace(workflow=None, functions={}, middleware={})
+        with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+            with patch("nat.runtime.loader.load_config", return_value=config):
+                with patch(
+                    "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                    return_value=FakeWorkflowBuilder(),
+                ):
+                    with patch(
+                        "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                        return_value=FakeExporterManager(),
+                    ):
+                        with patch("aiq_api.jobs.runner._load_agent_class", return_value=object):
+                            with patch(
+                                "aiq_api.jobs.runner._create_llm_provider",
+                                AsyncMock(return_value=(object(), object())),
+                            ):
+                                with patch("aiq_api.jobs.runner._create_agent_instance", return_value=object()):
+                                    with patch(
+                                        "aiq_api.jobs.runner._run_agent",
+                                        AsyncMock(return_value="secret report"),
+                                    ):
+                                        with patch("aiq_api.jobs.crypto.update_job_output", update_job_output):
+                                            await run_agent_job(
+                                                False,
+                                                20,
+                                                "tcp://localhost:8786",
+                                                db_url,
+                                                "config.yml",
+                                                "job-1",
+                                                "input",
+                                                "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                                                "deep_research_agent",
+                                                content_encryption_policy=ContentEncryptionConfig(
+                                                    mode="off"
+                                                ).policy_identity,
+                                                output_metadata={
+                                                    "parent_job_id": "parent-job",
+                                                    "interaction_action": "edit",
+                                                    "report": "must not win",
+                                                },
+                                            )
+
+        statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
+        assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        assert all("output" not in call.kwargs for call in mock_job_store.update_status.await_args_list)
+        update_job_output.assert_awaited_once()
+        assert update_job_output.await_args.kwargs["output"] == {
+            "parent_job_id": "parent-job",
+            "interaction_action": "edit",
+            "report": "secret report",
+        }
+
+    @pytest.mark.asyncio
+    async def test_encrypted_event_flush_failure_marks_failure_before_success(self, tmp_path):
+        import base64
+        from types import SimpleNamespace
+
+        from aiq_api.jobs import crypto
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            def __init__(self, value=None):
+                self.value = value
+
+            async def __aenter__(self):
+                return self.value
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):
+                return AsyncContext()
+
+        async def run_agent_with_event(*, event_store, **_kwargs):
+            event_store.store(
+                {
+                    "type": "artifact.update",
+                    "data": {"type": "output", "content": "secret report"},
+                }
+            )
+            return "secret report"
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+        update_job_output = AsyncMock()
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+        encryption_env = {
+            "AIQ_CONTENT_ENCRYPTION": "key",
+            "AIQ_CONTENT_ENCRYPTION_KEY": base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
+            "AIQ_CONTENT_ENCRYPTION_KEY_ID": "test-key",
+        }
+
+        with patch.dict("os.environ", encryption_env):
+            crypto.reset_content_encryption_manager_for_tests()
+            policy = crypto.get_content_encryption_policy_identity()
+            config = SimpleNamespace(workflow=None, functions={}, middleware={})
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("nat.runtime.loader.load_config", return_value=config):
+                    with patch(
+                        "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                        return_value=FakeWorkflowBuilder(),
+                    ):
+                        with patch(
+                            "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                            return_value=FakeExporterManager(),
+                        ):
+                            with patch("aiq_api.jobs.runner._load_agent_class", return_value=object):
+                                with patch(
+                                    "aiq_api.jobs.runner._create_llm_provider",
+                                    AsyncMock(return_value=(object(), object())),
+                                ):
+                                    with patch("aiq_api.jobs.runner._create_agent_instance", return_value=object()):
+                                        with patch(
+                                            "aiq_api.jobs.runner._run_agent",
+                                            side_effect=run_agent_with_event,
+                                        ):
+                                            with patch(
+                                                "aiq_api.jobs.event_store.EventStore.store_batch",
+                                                side_effect=RuntimeError("transient database failure"),
+                                            ):
+                                                with patch(
+                                                    "aiq_api.jobs.crypto.update_job_output",
+                                                    update_job_output,
+                                                ):
+                                                    await run_agent_job(
+                                                        False,
+                                                        20,
+                                                        "tcp://localhost:8786",
+                                                        db_url,
+                                                        "config.yml",
+                                                        "job-1",
+                                                        "input",
+                                                        "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                                                        "deep_research_agent",
+                                                        content_encryption_policy=policy,
+                                                    )
+            crypto.reset_content_encryption_manager_for_tests()
+
+        statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
+        assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        mock_job_store.update_status.assert_awaited_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="transient database failure",
+        )
+        update_job_output.assert_not_awaited()
 
 
 class TestEventStore:

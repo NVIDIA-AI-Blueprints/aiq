@@ -36,6 +36,13 @@ ENGINE_CACHE_TTL_SECONDS = 3600
 ENGINE_CACHE_MAX_SIZE = 10
 
 
+def _redact_db_url(db_url: str) -> str:
+    """Redact credentials and query parameters from a database URL for safe logging."""
+    from sqlalchemy.engine import make_url
+
+    return make_url(db_url).set(query={}).render_as_string(hide_password=True)
+
+
 def _normalize_db_url(db_url: str, async_mode: bool = True) -> str:
     """Normalize database URL to use consistent drivers."""
     if db_url.startswith("postgresql") or db_url.startswith("postgres"):
@@ -71,7 +78,7 @@ class SummaryStore:
         self.db_url = db_url
         self._sync_engine = self._get_or_create_sync_engine(db_url)
         self._ensure_table_sync()
-        logger.info("SummaryStore initialized: %s", db_url[:50])
+        logger.info("SummaryStore initialized: %s", _redact_db_url(db_url))
 
     @classmethod
     def _get_or_create_sync_engine(cls, db_url: str):
@@ -98,7 +105,7 @@ class SummaryStore:
                 connect_args=connect_args,
             )
             cls._sync_engine_cache[db_url] = (engine, time.monotonic())
-            logger.debug("Created sync engine for %s", db_url[:50])
+            logger.debug("Created sync engine for %s", _redact_db_url(db_url))
             return engine
 
     @classmethod
@@ -124,7 +131,7 @@ class SummaryStore:
                 max_overflow=0 if is_sqlite else 10,
             )
             cls._async_engine_cache[db_url] = (engine, time.monotonic())
-            logger.debug("Created async engine for %s", db_url[:50])
+            logger.debug("Created async engine for %s", _redact_db_url(db_url))
             return engine
 
     @classmethod
@@ -137,7 +144,7 @@ class SummaryStore:
             if engine:
                 try:
                     engine.dispose()
-                    logger.debug("Disposed stale engine for %s", key[:50])
+                    logger.debug("Disposed stale engine for %s", _redact_db_url(key))
                 except Exception as e:
                     logger.warning("Failed to dispose engine: %s", e)
 
@@ -182,7 +189,7 @@ class SummaryStore:
                     Index("idx_summaries_collection", "collection"),
                 )
                 metadata.create_all(self._sync_engine)
-                logger.info("Created summaries table in %s", self.db_url[:50])
+                logger.info("Created summaries table in %s", _redact_db_url(self.db_url))
 
             SummaryStore._tables_initialized.add(self.db_url)
 
@@ -220,7 +227,7 @@ class SummaryStore:
             await conn.run_sync(lambda sync_conn: metadata.create_all(sync_conn))
 
         cls._tables_initialized.add(db_url)
-        logger.info("Created summaries table (async) in %s", db_url[:50])
+        logger.info("Created summaries table (async) in %s", _redact_db_url(db_url))
 
     def register(self, collection: str, filename: str, summary: str) -> None:
         """Store a document summary (sync)."""

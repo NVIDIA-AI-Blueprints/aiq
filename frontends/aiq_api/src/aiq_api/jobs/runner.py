@@ -31,11 +31,15 @@ import logging
 import uuid
 from collections.abc import Awaitable
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 from typing import Any
 
 from .callbacks import AgentEventCallback
 from .event_store import BatchingEventStore
 from .event_store import EventStore
+
+if TYPE_CHECKING:
+    from .crypto import ContentEncryptionPolicyIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -447,6 +451,7 @@ async def run_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    content_encryption_policy: ContentEncryptionPolicyIdentity | None = None,
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
     owner_user_id: str | None = None,
@@ -481,6 +486,8 @@ async def run_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token propagated from the HTTP request for
             data sources that require authentication (requires_auth: true).
+        content_encryption_policy: Non-secret policy identity captured by the
+            submitting API process and required to match the worker configuration.
         initial_files: Optional DeepAgents virtual filesystem files to seed into state.
         output_metadata: Optional metadata to persist alongside the final report.
         owner_user_id: Canonical per-user key (``principal_user_id``), set on the NAT
@@ -521,6 +528,7 @@ async def run_agent_job(
             std_logging.basicConfig(level=log_level)
 
     job_store: JobStore | None = None
+    job_output_cipher = None
     cancellation_monitor: CancellationMonitor | None = None
     event_store: EventStore | BatchingEventStore | None = None
     # Sandbox runtime is released on the terminal path; interrupted forces terminate() over close().
@@ -535,6 +543,28 @@ async def run_agent_job(
 
     try:
         job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+        try:
+            from .crypto import ContentEncryptionError
+            from .crypto import ContentEncryptionPolicyMismatch
+            from .crypto import create_job_content_cipher
+            from .crypto import require_content_encryption_policy
+
+            require_content_encryption_policy(content_encryption_policy)
+            job_output_cipher = create_job_content_cipher(job_id)
+        except ContentEncryptionError as exc:
+            logger.warning(
+                "Job %s failed encryption policy/readiness before running exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
+            error = (
+                "content encryption policy mismatch"
+                if isinstance(exc, ContentEncryptionPolicyMismatch)
+                else "content encryption unavailable"
+            )
+            await job_store.update_status(job_id, JobStatus.FAILURE, error=error)
+            return
+
         await job_store.update_status(job_id, JobStatus.RUNNING)
 
         cancellation_monitor = CancellationMonitor(
@@ -687,7 +717,7 @@ async def run_agent_job(
                     verbose = is_verbose(getattr(fn_config, "verbose", False))
                     callbacks = [VerboseTraceCallback()] if verbose else []
 
-                    raw_event_store = EventStore(db_url, job_id)
+                    raw_event_store = EventStore(db_url, job_id, content_cipher=job_output_cipher)
                     event_store = BatchingEventStore(raw_event_store)
                     callbacks.append(AgentEventCallback(event_store))
                     callbacks.append(nat_profiler_callback)
@@ -775,10 +805,28 @@ async def run_agent_job(
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
+                    from .crypto import update_job_output
+
+                    if job_output_cipher is None:
+                        raise RuntimeError("job output cipher was not initialized")
                     # Apply caller metadata first, then set the canonical report last so a
                     # stray "report" key in output_metadata can never overwrite the real report.
                     output = {**(output_metadata or {}), "report": report}
-                    await job_store.update_status(job_id, JobStatus.SUCCESS, output=output)
+                    try:
+                        await update_job_output(
+                            job_store,
+                            job_id,
+                            JobStatus.SUCCESS,
+                            output=output,
+                            cipher=job_output_cipher,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "Job %s encrypted output write failed exception=%s",
+                            job_id,
+                            exc.__class__.__name__,
+                        )
+                        raise
                     logger.info("Job %s completed (report: %d chars)", job_id, len(report))
 
     except asyncio.CancelledError:
@@ -795,14 +843,13 @@ async def run_agent_job(
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
-        event_store.store(
+        _store_terminal_event_best_effort(
+            event_store,
             {
                 "type": "job.cancelled",
                 "data": {"reason": "cancelled by user"},
-            }
+            },
         )
-        if hasattr(event_store, "flush"):
-            event_store.flush()
 
     except Exception as e:
         logger.exception("Job %s failed: %s", job_id, type(e).__name__)
@@ -812,22 +859,28 @@ async def run_agent_job(
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
-        event_store.store(
+        _store_terminal_event_best_effort(
+            event_store,
             {
                 "type": "job.error",
                 "data": {
                     "error": str(e),
                     "error_type": type(e).__name__,
                 },
-            }
+            },
         )
-        if hasattr(event_store, "flush"):
-            event_store.flush()
 
     finally:
         # Ensure terminal-path events are not left in the batch buffer.
         if event_store is not None and hasattr(event_store, "flush"):
-            event_store.flush()
+            try:
+                event_store.flush()
+            except Exception as exc:
+                logger.warning(
+                    "Final event flush failed for job %s exception=%s",
+                    job_id,
+                    exc.__class__.__name__,
+                )
         if cancellation_monitor:
             cancellation_monitor.stop()
         # Release the sandbox off the event loop so the SDK session close never blocks the Dask
@@ -839,6 +892,21 @@ async def run_agent_job(
             from ._auth_context import job_auth_token
 
             job_auth_token.reset(_auth_token_reset)
+
+
+def _store_terminal_event_best_effort(event_store, event: dict) -> None:
+    """Persist a terminal event without masking the job's terminal status."""
+    try:
+        event_store.store(event)
+        if hasattr(event_store, "flush"):
+            event_store.flush()
+    except Exception as exc:
+        logger.warning(
+            "Failed to persist terminal event %s for job %s exception=%s",
+            event.get("type", "unknown"),
+            event_store.job_id,
+            exc.__class__.__name__,
+        )
 
 
 def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
@@ -1148,6 +1216,8 @@ async def run_deep_research(
 
     Preserved for backwards compatibility. New code should use run_agent_job directly.
     """
+    from .crypto import get_content_encryption_policy_identity
+
     await run_agent_job(
         configure_logging=configure_logging,
         log_level=log_level,
@@ -1158,4 +1228,5 @@ async def run_deep_research(
         input_text=input_text,
         agent_class_path="aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
         agent_config_name="deep_research_agent",
+        content_encryption_policy=get_content_encryption_policy_identity(),
     )

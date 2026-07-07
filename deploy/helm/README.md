@@ -189,8 +189,13 @@ aiq-postgres-xxx                1/1     Running   0          30s
 
 ```bash
 kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000 &
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
+
+The backend liveness probe uses `/live`, which checks only that the API process
+responds. The readiness probe uses `/health`, which checks required dependencies
+and can return HTTP 503 without causing Kubernetes to restart the process.
 
 The backend API docs are available at `http://localhost:8000/docs` while the port-forward is active.
 

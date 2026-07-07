@@ -22,10 +22,13 @@ used by LangGraph checkpointer, reducing dependency footprint.
 from __future__ import annotations
 
 import asyncio
+import copy
 import logging
 import threading
 import time
 from typing import Any
+
+from .crypto import ContentEncryptionError
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +104,69 @@ class EventStore:
     _cache_lock = threading.Lock()
     _tables_initialized: set[str] = set()
 
-    def __init__(self, db_url: str = "sqlite+aiosqlite:///./jobs.db", job_id: str | None = None):
+    def __init__(
+        self,
+        db_url: str = "sqlite+aiosqlite:///./jobs.db",
+        job_id: str | None = None,
+        content_cipher: Any | None = None,
+    ):
         self.db_url = db_url
         self.job_id = job_id
+        self._content_cipher = content_cipher
+        self._fail_closed = bool(content_cipher is not None and content_cipher.manager.config.encrypted)
         self._is_postgres = db_url.startswith("postgresql")
         self._sync_engine = self._get_or_create_sync_engine(db_url)
         self._ensure_table_sync()
+
+    def _prepare_event_for_storage(self, event: dict) -> dict:
+        """Encrypt sensitive event fields before persistence when content encryption is enabled."""
+
+        if self.job_id is None or self._content_cipher is None:
+            return event
+        if event.get("type") != "artifact.update":
+            return event
+        data = event.get("data")
+        if not isinstance(data, dict) or data.get("type") not in {"output", "file"} or "content" not in data:
+            return event
+
+        from .crypto import encrypt_event_field
+        from .crypto import is_encrypted_event_field
+
+        if is_encrypted_event_field(data["content"]):
+            return event
+
+        encrypted_event = copy.deepcopy(event)
+        encrypted_event["data"]["content"] = encrypt_event_field(
+            self.job_id,
+            "artifact.update.data.content",
+            encrypted_event["data"].get("content"),
+            self._content_cipher,
+        )
+        return encrypted_event
+
+    @classmethod
+    def _prepare_event_for_return(cls, job_id: str, event: dict) -> dict:
+        """Decrypt sensitive event fields before returning events to API/SSE callers."""
+
+        if event.get("type") != "artifact.update":
+            return event
+        data = event.get("data")
+        if not isinstance(data, dict) or data.get("type") not in {"output", "file"} or "content" not in data:
+            return event
+
+        from .crypto import decrypt_event_field
+        from .crypto import is_encrypted_event_field
+
+        if not is_encrypted_event_field(data["content"]):
+            return event
+
+        decrypted_event = copy.deepcopy(event)
+        decrypted_event["data"]["content"] = decrypt_event_field(
+            job_id,
+            "artifact.update.data.content",
+            decrypted_event["data"].get("content"),
+        )
+        return decrypted_event
 
     @classmethod
     def _get_or_create_sync_engine(cls, db_url: str):
@@ -343,7 +403,8 @@ class EventStore:
         from sqlalchemy import text
 
         event_type = event.get("type", "unknown")
-        event_json = json.dumps(event)
+        stored_event = self._prepare_event_for_storage(event)
+        event_json = json.dumps(stored_event)
 
         try:
             with self._sync_engine.connect() as conn:
@@ -381,6 +442,8 @@ class EventStore:
                 logger.debug("Stored event %s for job %s", event_type, self.job_id)
         except Exception as e:
             logger.warning("Failed to store event %s for job %s: %s", event_type, self.job_id, e)
+            if self._fail_closed:
+                raise
 
     def store_batch(self, events: list[dict]):
         """
@@ -398,11 +461,12 @@ class EventStore:
 
         rows = []
         for event in events:
+            stored_event = self._prepare_event_for_storage(event)
             rows.append(
                 {
                     "job_id": self.job_id,
-                    "event_type": event.get("type", "unknown"),
-                    "event_data": json.dumps(event),
+                    "event_type": stored_event.get("type", "unknown"),
+                    "event_data": json.dumps(stored_event),
                 }
             )
 
@@ -437,6 +501,8 @@ class EventStore:
                 logger.debug("Stored batch of %d events for job %s", len(events), self.job_id)
         except Exception as e:
             logger.warning("Failed to store batch of %d events for job %s: %s", len(events), self.job_id, e)
+            if self._fail_closed:
+                raise
 
     @classmethod
     def _ensure_table_exists(cls, db_url: str):
@@ -476,6 +542,30 @@ class EventStore:
         cls._tables_initialized.add(db_url)
 
     @classmethod
+    def _prepare_event_rows_for_return(cls, job_id: str, rows: list[Any]) -> list[dict]:
+        """Deserialize and decrypt event rows in sync code, suitable for thread offload."""
+
+        import json
+
+        events = []
+        for row in rows:
+            try:
+                event = cls._prepare_event_for_return(job_id, json.loads(row[1]))
+                event["_id"] = row[0]
+                events.append(event)
+            except json.JSONDecodeError:
+                logger.warning("Malformed event data for job %s, event id %d", job_id, row[0])
+            except ContentEncryptionError as e:
+                logger.warning(
+                    "Encrypted event data failed for job %s, event id %d: %s",
+                    job_id,
+                    row[0],
+                    e.__class__.__name__,
+                )
+                raise
+        return events
+
+    @classmethod
     def get_events(cls, db_url: str, job_id: str, after_id: int = 0, limit: int = 100) -> list[dict]:
         """
         Retrieve events for SSE streaming (sync).
@@ -489,8 +579,6 @@ class EventStore:
         Returns:
             List of event dicts with '_id' field for cursor tracking
         """
-        import json
-
         from sqlalchemy import text
 
         try:
@@ -505,15 +593,9 @@ class EventStore:
                     ),
                     {"job_id": job_id, "after_id": after_id, "limit": limit},
                 )
-                events = []
-                for row in result:
-                    try:
-                        event = json.loads(row[1])
-                        event["_id"] = row[0]
-                        events.append(event)
-                    except json.JSONDecodeError:
-                        logger.warning("Malformed event data for job %s, event id %d", job_id, row[0])
-                return events
+                return cls._prepare_event_rows_for_return(job_id, list(result))
+        except ContentEncryptionError:
+            raise
         except Exception as e:
             logger.warning("Failed to get events for job %s: %s", job_id, e)
             return []
@@ -525,8 +607,6 @@ class EventStore:
 
         Uses native async SQLAlchemy with psycopg for true async I/O.
         """
-        import json
-
         from sqlalchemy import text
 
         try:
@@ -541,15 +621,9 @@ class EventStore:
                     ),
                     {"job_id": job_id, "after_id": after_id, "limit": limit},
                 )
-                events = []
-                for row in result:
-                    try:
-                        event = json.loads(row[1])
-                        event["_id"] = row[0]
-                        events.append(event)
-                    except json.JSONDecodeError:
-                        logger.warning("Malformed event data for job %s, event id %d", job_id, row[0])
-                return events
+                return await asyncio.to_thread(cls._prepare_event_rows_for_return, job_id, list(result))
+        except ContentEncryptionError:
+            raise
         except Exception as e:
             logger.warning("Failed to get events async for job %s: %s", job_id, e)
             return await asyncio.get_running_loop().run_in_executor(
@@ -580,18 +654,28 @@ class EventStore:
             engine = cls._get_or_create_sync_engine(db_url)
             with engine.connect() as conn:
                 result = conn.execute(
-                    text("SELECT id, event_data FROM job_events WHERE id = :event_id"),
+                    text("SELECT id, job_id, event_data FROM job_events WHERE id = :event_id"),
                     {"event_id": event_id},
                 )
                 row = result.fetchone()
                 if row:
                     try:
-                        event = json.loads(row[1])
+                        event = cls._prepare_event_for_return(row[1], json.loads(row[2]))
                         event["_id"] = row[0]
                         return event
                     except json.JSONDecodeError:
                         logger.warning("Malformed event data for event id %d", event_id)
+                    except ContentEncryptionError as e:
+                        logger.warning(
+                            "Encrypted event data failed for job %s, event id %d: %s",
+                            row[1],
+                            event_id,
+                            e.__class__.__name__,
+                        )
+                        raise
                 return None
+        except ContentEncryptionError:
+            raise
         except Exception as e:
             logger.warning("Failed to get event %d: %s", event_id, e)
             return None
@@ -731,6 +815,7 @@ class BatchingEventStore:
         self._buffer: list[dict] = []
         self._lock = threading.Lock()
         self._timer: threading.Timer | None = None
+        self._flush_error: Exception | None = None
 
     @property
     def job_id(self) -> str | None:
@@ -740,30 +825,50 @@ class BatchingEventStore:
     def store(self, event: dict):
         """Buffer an event; flush when batch is full or timer fires."""
         with self._lock:
+            self._raise_flush_error_locked()
             self._buffer.append(event)
             if len(self._buffer) >= self.MAX_BATCH_SIZE:
                 self._flush_locked()
             elif self._timer is None:
-                self._timer = threading.Timer(self.FLUSH_INTERVAL_MS / 1000, self._flush)
+                self._timer = threading.Timer(self.FLUSH_INTERVAL_MS / 1000, self._flush_from_timer)
                 self._timer.daemon = True
                 self._timer.start()
+
+    def _raise_flush_error_locked(self):
+        """Raise a previously captured background flush failure."""
+        if self._flush_error is not None:
+            raise self._flush_error
 
     def _flush_locked(self):
         """Flush while already holding the lock."""
         if self._timer:
             self._timer.cancel()
             self._timer = None
+        self._raise_flush_error_locked()
         if not self._buffer:
             return
         batch = self._buffer[:]
         self._buffer.clear()
-        self._store.store_batch(batch)
+        try:
+            self._store.store_batch(batch)
+        except Exception as exc:
+            if self._flush_error is None:
+                self._flush_error = exc
+            raise
 
-    def _flush(self):
-        """Flush from timer callback (acquires lock)."""
+    def _flush_from_timer(self):
+        """Capture timer-thread failures for the owning job to observe."""
         with self._lock:
-            self._flush_locked()
+            try:
+                self._flush_locked()
+            except Exception as exc:
+                logger.warning(
+                    "Background event flush failed for job %s exception=%s",
+                    self.job_id,
+                    exc.__class__.__name__,
+                )
 
     def flush(self):
         """Force flush all buffered events. Call before job completion."""
-        self._flush()
+        with self._lock:
+            self._flush_locked()

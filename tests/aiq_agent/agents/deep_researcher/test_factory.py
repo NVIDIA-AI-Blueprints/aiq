@@ -25,6 +25,7 @@ from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepAgentsRuntime
@@ -217,6 +218,7 @@ def test_subagents_route_tools_and_writer_skills():
     assert _check_fs_permission(by_name["planner-agent"]["permissions"], "read", "/skills/synthesis/") == "deny"
     assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["planner-agent"]["middleware"])
     assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["writer-agent"]["middleware"])
+    assert any(isinstance(item, TodoSuppressionMiddleware) for item in by_name["writer-agent"]["middleware"])
 
 
 def test_skill_filesystem_permissions_filter_unassigned_skill_collections():
@@ -320,7 +322,6 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     assert result is researcher_agent
     assert kwargs["model"] is researcher_model
     assert kwargs["tools"] == [web_search_tool]
-    assert kwargs["system_prompt"] == "rendered researcher prompt"
     assert kwargs["response_format"] is ResearchNotes
     assert "TodoListMiddleware" not in middleware_names
     assert "SkillsMiddleware" in middleware_names

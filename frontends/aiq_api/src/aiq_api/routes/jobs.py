@@ -42,6 +42,7 @@ from fastapi import Body
 from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
+from fastapi.routing import APIRoute
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
@@ -62,6 +63,21 @@ if TYPE_CHECKING:
     from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
 
 logger = logging.getLogger(__name__)
+
+
+def _remove_existing_health_routes(app: FastAPI) -> int:
+    """Remove existing GET /health routes before installing AI-Q readiness."""
+    existing_routes = [
+        route
+        for route in app.router.routes
+        if isinstance(route, APIRoute) and route.path == "/health" and "GET" in route.methods
+    ]
+    for route in existing_routes:
+        app.router.routes.remove(route)
+    if existing_routes:
+        logger.info("Replacing %d existing GET /health route(s) with AI-Q readiness", len(existing_routes))
+    app.openapi_schema = None
+    return len(existing_routes)
 
 
 def _validate_artifact_store(db_url: str) -> None:
@@ -475,8 +491,14 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     from ..jobs.access import authorize_job_access
     from ..jobs.access import ensure_job_access_table
+    from ..jobs.crypto import ContentEncryptionConfigError
+    from ..jobs.crypto import ContentEncryptionInvalidData
+    from ..jobs.crypto import ContentEncryptionUnavailable
+    from ..jobs.crypto import get_content_encryption_health_async
+    from ..jobs.crypto import read_job_output_async
+    from ..jobs.crypto import require_content_encryption_ready_for_submission_async
+    from ..jobs.crypto import validate_content_encryption_startup_async
     from ..jobs.event_store import EventStore
-    from ..jobs.report_context import _decode_job_output
     from ..jobs.report_context import report_output_metadata
     from ..jobs.report_context import resolve_report_context
     from ..jobs.report_context import to_initial_files
@@ -497,6 +519,91 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     set_active_mcp_auth_provider(mcp_auth_provider)
     register_mcp_auth_routes(app, mcp_auth_provider)
+
+    await validate_content_encryption_startup_async()
+
+    @app.get(
+        "/live",
+        tags=["health"],
+        summary="Liveness check",
+        description="Returns success while the API process is running; does not check external dependencies.",
+    )
+    async def liveness_check() -> dict[str, str]:
+        """Report process liveness without coupling restarts to dependency health."""
+
+        return {"status": "alive"}
+
+    dask_available = getattr(worker, "_dask_available", False)
+    job_store = getattr(worker, "_job_store", None)
+    scheduler_address = getattr(worker, "_scheduler_address", None) or os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
+    db_url = getattr(worker, "_db_url", None) or os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
+    config_path = getattr(worker, "_config_file_path", None) or os.environ.get("NAT_CONFIG_FILE", "")
+    log_level = getattr(worker, "_log_level", std_logging.INFO)
+    use_threads = getattr(worker, "_use_dask_threads", False)
+    front_end_config = getattr(worker, "_front_end_config", None)
+    default_expiry_seconds = getattr(front_end_config, "expiry_seconds", 86400) if front_end_config else 86400
+
+    # NAT registers its generic /health route first. Replace it before any
+    # async-job prerequisite early return so /health always means readiness.
+    _remove_existing_health_routes(app)
+
+    @app.get(
+        "/health",
+        tags=["health"],
+        summary="Readiness check",
+        responses={503: {"description": "Async-job, database, or content-encryption dependency is unavailable"}},
+    )
+    async def health_check():
+        """Readiness endpoint that validates async-job, DB, and encryption dependencies."""
+        from fastapi.responses import JSONResponse
+        from sqlalchemy import text
+
+        from ..jobs.event_store import EventStore
+
+        result = {"status": "healthy", "dask_available": bool(dask_available), "db": "ok"}
+        if not dask_available or not job_store:
+            result["status"] = "degraded"
+            result["db"] = "unchecked"
+            result["reason"] = "async_jobs_unavailable"
+            return JSONResponse(status_code=503, content=result)
+        if not config_path:
+            result["status"] = "degraded"
+            result["db"] = "unchecked"
+            result["reason"] = "configuration_missing"
+            return JSONResponse(status_code=503, content=result)
+
+        # Check DB connectivity by obtaining (or creating) the engine for the
+        # configured db_url and running a bounded ping. An empty async-engine
+        # cache is the normal fresh-process state and must never be treated as
+        # healthy: readiness must reflect the actual database.
+        try:
+            engine = EventStore._get_or_create_async_engine(db_url)
+            async with engine.connect() as conn:
+                await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3.0)
+        except Exception:
+            logger.warning("Health check DB ping failed", exc_info=True)
+            result["status"] = "degraded"
+            result["db"] = "unreachable"
+            return JSONResponse(status_code=503, content=result)
+
+        try:
+            encryption = await get_content_encryption_health_async()
+            result["encryption"] = encryption.to_health_dict()
+            if encryption.mode != "off" and not encryption.ready:
+                result["status"] = "degraded"
+                return JSONResponse(status_code=503, content=result)
+        except ContentEncryptionConfigError as exc:
+            logger.warning("Health check encryption config failed exception=%s", exc.__class__.__name__)
+            result["status"] = "degraded"
+            result["encryption"] = {
+                "mode": "invalid",
+                "ready": False,
+                "reason": "configuration_invalid",
+                "exception_type": exc.__class__.__name__,
+            }
+            return JSONResponse(status_code=503, content=result)
+
+        return result
 
     if not get_all_sources():
         logger.warning(
@@ -547,9 +654,6 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     logger.info("Registered /v1/data_sources and /v1/jobs/async/agents routes")
 
-    dask_available = getattr(worker, "_dask_available", False)
-    job_store = getattr(worker, "_job_store", None)
-
     if not dask_available or not job_store:
         logger.warning(
             "Dask not available - async job submission routes require NAT_DASK_SCHEDULER_ADDRESS"
@@ -557,18 +661,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         )
         return
 
-    scheduler_address = getattr(worker, "_scheduler_address", None) or os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
-    db_url = getattr(worker, "_db_url", None) or os.environ.get("NAT_JOB_STORE_DB_URL", "sqlite:///./data/jobs.db")
-    config_path = getattr(worker, "_config_file_path", None) or os.environ.get("NAT_CONFIG_FILE", "")
-    log_level = getattr(worker, "_log_level", std_logging.INFO)
-    use_threads = getattr(worker, "_use_dask_threads", False)
-
     if not config_path:
         logger.error("Config file path not available - NAT_CONFIG_FILE not set")
         return
-
-    front_end_config = getattr(worker, "_front_end_config", None)
-    default_expiry_seconds = getattr(front_end_config, "expiry_seconds", 86400) if front_end_config else 86400
 
     logger.info(
         "Registering async job routes: scheduler=%s, db=%s, expiry=%ds",
@@ -579,34 +674,6 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, ensure_job_access_table, db_url)
     await loop.run_in_executor(None, _validate_artifact_store, db_url)
-
-    @app.get("/health", tags=["health"], summary="Health check")
-    async def health_check():
-        """Health check endpoint that validates DB connectivity."""
-        from sqlalchemy import text
-
-        from ..jobs.event_store import EventStore
-
-        result = {"status": "ok", "dask_available": dask_available, "db": "ok"}
-
-        # Check DB connectivity using any cached async engine
-        try:
-            cache = EventStore._async_engine_cache
-            if cache:
-                engine = next(iter(cache.values()))[0]
-                async with engine.connect() as conn:
-                    await asyncio.wait_for(conn.execute(text("SELECT 1")), timeout=3.0)
-            else:
-                result["db"] = "no_engine"
-        except Exception:
-            logger.warning("Health check DB ping failed", exc_info=True)
-            result["status"] = "degraded"
-            result["db"] = "unreachable"
-            from fastapi.responses import JSONResponse
-
-            return JSONResponse(status_code=503, content=result)
-
-        return result
 
     @app.post(
         "/v1/jobs/async/submit",
@@ -625,8 +692,12 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 )
             },
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
-            500: {"description": "Failed to persist async job authorization metadata"},
-            503: {"description": "Dask scheduler not available"},
+            500: {
+                "description": (
+                    "Content encryption configuration is invalid or async job authorization persistence failed"
+                )
+            },
+            503: {"description": "Content encryption, Dask scheduler, or sandbox capacity is unavailable"},
         },
     )
     async def submit_job(
@@ -644,6 +715,21 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         # Authenticate the caller (raises 401/403 if unverified). The returned principal
         # is also forwarded to submit_authorized_job(...) below for ownership recording.
         principal = require_verified_principal()
+        try:
+            await require_content_encryption_ready_for_submission_async()
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Rejected async job submission because content encryption is unready: %s",
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is not ready")
+        except ContentEncryptionConfigError as e:
+            logger.warning(
+                "Rejected async job submission because content encryption config is invalid: %s",
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Content encryption configuration is invalid")
+
         validation_start = time.perf_counter()
         await _validate_data_sources_for_agent(
             builder=builder,
@@ -686,7 +772,20 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 expiry_seconds=expiry,
                 data_sources=req.data_sources,
                 auth_token=auth_token,
+                skip_encryption_readiness_check=True,
             )
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Failed to submit authorized job because content encryption is unready: %s",
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is not ready")
+        except ContentEncryptionConfigError as e:
+            logger.warning(
+                "Failed to submit authorized job because content encryption config is invalid: %s",
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Content encryption configuration is invalid")
         except JobIdConflictError:
             raise HTTPException(409, f"Job already exists: {req.job_id}")
         except McpAuthRequiredError as e:
@@ -734,8 +833,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             404: {"description": "Parent job not found"},
             409: {"description": "Parent job is incomplete, has no durable report, or the child job_id collides"},
             422: {"description": "Request validation failed (e.g. blank edit instruction)"},
-            500: {"description": "Failed to submit the report edit job"},
-            503: {"description": "Dask scheduler not available"},
+            500: {"description": "Parent report data is invalid or report edit submission failed"},
+            503: {"description": "Content encryption or Dask scheduler is unavailable"},
         },
     )
     async def edit_job_report(job_id: str, req: ReportEditRequest) -> ReportEditResponse:
@@ -745,7 +844,22 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         if getattr(parent_job, "status", None) != JobStatus.SUCCESS.value:
             raise HTTPException(409, f"Parent job is not complete: {job_id}")
 
-        context = await resolve_report_context(parent_job, db_url, job_id)
+        try:
+            context = await resolve_report_context(parent_job, db_url, job_id)
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Parent report decrypt unavailable job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is unavailable")
+        except ContentEncryptionInvalidData as e:
+            logger.warning(
+                "Parent report persisted output invalid job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Parent report data is invalid")
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
 
         from aiq_agent.auth import get_auth_token
@@ -765,6 +879,21 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 output_metadata=report_output_metadata(job_id, "edit"),
                 allow_internal=True,
             )
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Report edit submission rejected because content encryption is unready parent_job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is not ready")
+        except ContentEncryptionConfigError as e:
+            logger.warning(
+                "Report edit submission rejected because content encryption config is invalid "
+                "parent_job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Content encryption configuration is invalid")
         except JobIdConflictError:
             raise HTTPException(409, f"Job already exists: {req.job_id}")
         except RuntimeError as e:
@@ -890,7 +1019,22 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         principal = require_verified_principal()
         await authorize_job_access(job_store, db_url, job_id, principal)
 
-        artifacts = await _get_job_artifacts(db_url, job_id)
+        try:
+            artifacts = await _get_job_artifacts(db_url, job_id)
+        except ContentEncryptionUnavailable as e:
+            logger.warning(
+                "Job state decrypt unavailable job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(503, "Content encryption is unavailable")
+        except ContentEncryptionInvalidData as e:
+            logger.warning(
+                "Job state persisted event data invalid job_id=%s exception=%s",
+                job_id,
+                e.__class__.__name__,
+            )
+            raise HTTPException(500, "Job state data is invalid")
         return JobStateResponse(
             job_id=job_id,
             has_state=artifacts is not None,
@@ -980,7 +1124,26 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         principal = require_verified_principal()
         job = await authorize_job_access(job_store, db_url, job_id, principal)
 
-        output = _decode_job_output(job.output)
+        output: dict[str, Any] = {}
+        if job.output is not None:
+            try:
+                decoded_output = await read_job_output_async(job_id, job.output)
+            except ContentEncryptionUnavailable as e:
+                logger.warning(
+                    "Final report decrypt unavailable job_id=%s exception=%s",
+                    job_id,
+                    e.__class__.__name__,
+                )
+                raise HTTPException(503, "Content encryption is unavailable")
+            except ContentEncryptionInvalidData as e:
+                logger.warning(
+                    "Final report persisted output invalid job_id=%s exception=%s",
+                    job_id,
+                    e.__class__.__name__,
+                )
+                raise HTTPException(500, "Final report data is invalid")
+            if isinstance(decoded_output, dict):
+                output = decoded_output
         report = output.get("report")
 
         return JobReportResponse(
@@ -1451,6 +1614,7 @@ async def _get_job_artifacts(db_url: str, job_id: str) -> dict | None:
     Returns:
         Dict with 'tools', 'outputs', and 'sources' (counts), or None if no artifacts found.
     """
+    from ..jobs.crypto import ContentEncryptionError
     from ..jobs.event_store import EventStore
 
     try:
@@ -1487,6 +1651,8 @@ async def _get_job_artifacts(db_url: str, job_id: str) -> dict | None:
         }
         return result if tools or outputs or sources_found else None
 
+    except ContentEncryptionError:
+        raise
     except (KeyError, TypeError) as e:
         logger.warning("Failed to parse artifacts for job %s: %s", job_id, e)
         return None
@@ -1502,12 +1668,20 @@ async def _sse_generator(job_store, job_id: str, db_url: str, start_event_id: in
     PostgreSQL: Uses LISTEN/NOTIFY for real-time push-based events (sub-10ms latency).
     SQLite: Uses polling (0.5s interval) since SQLite doesn't support pub-sub.
     """
+    from ..jobs.crypto import ContentEncryptionInvalidData
+    from ..jobs.crypto import ContentEncryptionUnavailable
     from ..jobs.event_store import EventStore
 
     if EventStore.is_postgres(db_url):
         try:
             async for event in _sse_generator_postgres(job_store, job_id, db_url, start_event_id):
                 yield event
+        except ContentEncryptionUnavailable as e:
+            logger.warning("SSE encrypted event decrypt unavailable for job %s: %s", job_id, e.__class__.__name__)
+            yield f"event: job.error\ndata: {json.dumps({'error': 'Content encryption is unavailable'})}\n\n"
+        except ContentEncryptionInvalidData as e:
+            logger.warning("SSE encrypted event data invalid for job %s: %s", job_id, e.__class__.__name__)
+            yield f"event: job.error\ndata: {json.dumps({'error': 'Job event data is invalid'})}\n\n"
         except Exception as e:
             logger.warning("Pub-sub failed, falling back to polling: %s", e)
             async for event in _sse_generator_polling(job_store, job_id, db_url, start_event_id):
@@ -1532,6 +1706,8 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs.connection_manager import get_connection_manager
+    from ..jobs.crypto import ContentEncryptionInvalidData
+    from ..jobs.crypto import ContentEncryptionUnavailable
     from ..jobs.event_store import EventStore
 
     connection_manager = get_connection_manager()
@@ -1702,6 +1878,22 @@ async def _sse_generator_postgres(job_store, job_id: str, db_url: str, start_eve
                 except asyncio.CancelledError:
                     logger.info("SSE pub-sub stream cancelled for job %s", job_id)
                     break
+                except ContentEncryptionUnavailable as e:
+                    logger.warning(
+                        "SSE pub-sub encrypted event decrypt unavailable for job %s: %s",
+                        job_id,
+                        e.__class__.__name__,
+                    )
+                    yield format_sse("job.error", {"error": "Content encryption is unavailable"})
+                    break
+                except ContentEncryptionInvalidData as e:
+                    logger.warning(
+                        "SSE pub-sub encrypted event data invalid for job %s: %s",
+                        job_id,
+                        e.__class__.__name__,
+                    )
+                    yield format_sse("job.error", {"error": "Job event data is invalid"})
+                    break
                 except Exception as e:
                     logger.exception("SSE pub-sub stream error for job %s: %s", job_id, e)
                     yield format_sse("job.error", {"error": "Internal server error"})
@@ -1732,6 +1924,8 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
     from ..jobs.connection_manager import get_connection_manager
+    from ..jobs.crypto import ContentEncryptionInvalidData
+    from ..jobs.crypto import ContentEncryptionUnavailable
     from ..jobs.event_store import EventStore
 
     connection_manager = get_connection_manager()
@@ -1856,6 +2050,14 @@ async def _sse_generator_polling(job_store, job_id: str, db_url: str, start_even
 
             except asyncio.CancelledError:
                 logger.info("SSE stream cancelled for job %s", job_id)
+                break
+            except ContentEncryptionUnavailable as e:
+                logger.warning("SSE encrypted event decrypt unavailable for job %s: %s", job_id, e.__class__.__name__)
+                yield format_sse("job.error", {"error": "Content encryption is unavailable"})
+                break
+            except ContentEncryptionInvalidData as e:
+                logger.warning("SSE encrypted event data invalid for job %s: %s", job_id, e.__class__.__name__)
+                yield format_sse("job.error", {"error": "Job event data is invalid"})
                 break
             except Exception as e:
                 logger.exception("SSE stream error for job %s: %s", job_id, e)

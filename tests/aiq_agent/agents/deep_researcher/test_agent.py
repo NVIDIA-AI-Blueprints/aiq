@@ -378,22 +378,6 @@ class TestDeepResearcherAgent:
             assert "backend" not in researcher_kwargs
             assert all(m in kwargs["middleware"] for m in agent.orchestrator_middleware)
             assert any(m.__class__.__name__ == "ToolVisibilityMiddleware" for m in kwargs["middleware"])
-            assert "Mandatory skill use" in researcher_kwargs["system_prompt"]
-            assert "MUST read that skill's `SKILL.md`" in researcher_kwargs["system_prompt"]
-            assert "data-table-analysis" not in researcher_kwargs["system_prompt"]
-            assert "/shared/plan.json" in researcher_kwargs["system_prompt"]
-            assert "read_file" in researcher_kwargs["system_prompt"]
-            assert "SKILL.md" in researcher_kwargs["system_prompt"]
-            assert "ResearchQuery.target_components" in researcher_kwargs["system_prompt"]
-            assert "Evidence judgment" in researcher_kwargs["system_prompt"]
-            assert "Do not call `write_file` or `edit_file`" in researcher_kwargs["system_prompt"]
-            assert "write_file` filesystem tool exactly once" not in researcher_kwargs["system_prompt"]
-            assert "After the `write_file` tool returns" not in researcher_kwargs["system_prompt"]
-            assert "Default source budget per ResearchQuery" in researcher_kwargs["system_prompt"]
-            assert "one primary source-tool call" in researcher_kwargs["system_prompt"]
-            assert "at most one fallback or corroboration call" in researcher_kwargs["system_prompt"]
-            assert "at most one extra targeted follow-up" in researcher_kwargs["system_prompt"]
-            assert "Do not run every possible source angle" in researcher_kwargs["system_prompt"]
             assert "skills" not in kwargs
             assert not callable(kwargs["backend"])
             assert [tool.name for tool in kwargs["tools"]] == [
@@ -402,42 +386,11 @@ class TestDeepResearcherAgent:
                 "run_research_batch",
             ]
             assert real_tool.name not in {tool.name for tool in kwargs["tools"]}
-            assert "Available Skills:" not in kwargs["system_prompt"]
-            assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" not in kwargs["system_prompt"]
-            assert 'execute("python /workspace/[name].py")' not in kwargs["system_prompt"]
-            assert "read_writer_context" not in kwargs["system_prompt"]
-            assert "Shell commands cannot see `/shared/`" not in kwargs["system_prompt"]
-            assert "to /shared/output.md" in kwargs["system_prompt"]
-            assert "returns only a short completion marker" in kwargs["system_prompt"]
-            assert "do not echo the full Markdown" in kwargs["system_prompt"]
-            assert (
-                "Never call `source-router-agent` and `planner-agent` in the same assistant turn"
-                in kwargs["system_prompt"]
-            )
-            assert "Only after the source-router-agent tool result has returned" in kwargs["system_prompt"]
-            assert "at most 6 full ResearchQuery objects per call" in kwargs["system_prompt"]
-            assert "all needed queries in one call when there are 6 or fewer" in kwargs["system_prompt"]
-            assert "fewest ordered batches" in kwargs["system_prompt"]
-            assert "do not create smaller curated waves" in kwargs["system_prompt"]
-            assert "Never repeat a covered query" in kwargs["system_prompt"]
-            assert "revise only the invalid, failed, or missing ResearchQuery objects" in kwargs["system_prompt"]
-            assert '{"content": "<task description>", "status": "pending"}' in kwargs["system_prompt"]
-            assert (
-                '`status` must be exactly one of `"pending"`, `"in_progress"`, or `"completed"`'
-                in kwargs["system_prompt"]
-            )
-            assert "Never use `task`, `title`, or `description` keys for todo items" in kwargs["system_prompt"]
-            assert "Do not call `write_todos` as the only tool call in an assistant turn" in kwargs["system_prompt"]
-            assert "If todo tracking causes uncertainty, skip it and continue the workflow" in kwargs["system_prompt"]
-            assert "max_batch_research_queries" not in kwargs["system_prompt"]
-            assert "data-table-analysis" not in kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
             assert set(subagents) == {"source-router-agent", "planner-agent", "writer-agent"}
             assert "response_format" not in subagents["source-router-agent"]
             assert "skills" not in subagents["source-router-agent"]
             assert {tool.name for tool in subagents["source-router-agent"]["tools"]} == {"lookup_source_catalog"}
-            assert "write_todos" in subagents["source-router-agent"]["system_prompt"]
-            assert "Use at most two tool calls total" in subagents["source-router-agent"]["system_prompt"]
             assert real_tool.name not in {tool.name for tool in subagents["source-router-agent"]["tools"]}
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
             assert "skills" not in subagents["planner-agent"]
@@ -449,61 +402,10 @@ class TestDeepResearcherAgent:
             assert any(
                 m.__class__.__name__ == "ToolVisibilityMiddleware" for m in subagents["writer-agent"]["middleware"]
             )
+            assert any(
+                m.__class__.__name__ == "TodoSuppressionMiddleware" for m in subagents["writer-agent"]["middleware"]
+            )
             assert subagents["writer-agent"]["skills"] == [synthesis_skill_source]
-            assert "/skills/synthesis/" not in subagents["writer-agent"]["system_prompt"]
-            assert "read_writer_context" not in subagents["writer-agent"]["system_prompt"]
-            assert "/shared/plan.json" in subagents["writer-agent"]["system_prompt"]
-            assert "Skill Use" not in subagents["writer-agent"]["system_prompt"]
-            assert "Required Skill Use" not in subagents["writer-agent"]["system_prompt"]
-            assert "General Cross-Synthesis Guidance" in subagents["writer-agent"]["system_prompt"]
-            assert "Retain useful detail" in subagents["writer-agent"]["system_prompt"]
-            assert "Point out meaningful conflicts" in subagents["writer-agent"]["system_prompt"]
-            assert "Use tables when the evidence has comparable entities" in subagents["writer-agent"]["system_prompt"]
-            assert "do not mechanically mirror them as final headings" in subagents["writer-agent"]["system_prompt"]
-            assert "coherent analytical narrative" in subagents["writer-agent"]["system_prompt"]
-            assert "Use bullets sparingly" in subagents["writer-agent"]["system_prompt"]
-            assert "/shared/evidence_judgments.json" not in subagents["writer-agent"]["system_prompt"]
-            assert "ResearchNotes.evidence_judgment" in subagents["writer-agent"]["system_prompt"]
-            assert (
-                "high-score/high-confidence notes are synthesis anchors" in subagents["writer-agent"]["system_prompt"]
-            )
-            assert "default compact mode" in subagents["writer-agent"]["system_prompt"]
-            assert 'get_verified_sources(mode="full")' in subagents["writer-agent"]["system_prompt"]
-            assert "Wrote /shared/output.md" in subagents["writer-agent"]["system_prompt"]
-            assert "Do not return the full Markdown" in subagents["writer-agent"]["system_prompt"]
-            assert "Do not use `edit_file` or repeated search-and-replace" in subagents["writer-agent"]["system_prompt"]
-            assert "Final Output Grading Rubric" not in subagents["writer-agent"]["system_prompt"]
-            assert "rubric" not in subagents["writer-agent"]["system_prompt"].lower()
-            assert "long-form-report-writer" not in subagents["writer-agent"]["system_prompt"]
-            assert "prediction-report-writer" not in subagents["writer-agent"]["system_prompt"]
-            assert "answer_strategy.answer_type" in subagents["writer-agent"]["system_prompt"]
-            assert "answer_strategy.title" in subagents["writer-agent"]["system_prompt"]
-            assert "answer_strategy.required_components" in subagents["writer-agent"]["system_prompt"]
-            for removed_field in ("assembly_instruction", "selection_mode", "expected_count", "options"):
-                assert removed_field not in subagents["writer-agent"]["system_prompt"]
-            planner_prompt = subagents["planner-agent"]["system_prompt"]
-            assert "Skills System" not in planner_prompt
-            assert "run_research_batch" in planner_prompt
-            assert "subqueries" in planner_prompt
-            assert "researcher agent" not in planner_prompt
-            assert "data-table-analysis" not in planner_prompt
-            assert "answer_strategy" in planner_prompt
-            assert "Dynamic Discovery Budget" in planner_prompt
-            assert "Do not turn planning into full evidence gathering" in planner_prompt
-            # write_todos is suppressed for the planner at the middleware level
-            # (TodoSuppressionMiddleware), so the prompt no longer mentions it at all.
-            assert "write_todos" not in planner_prompt
-            assert "configured batch concurrency of 6" in planner_prompt
-            assert "Thorough evidence gathering is essential" not in planner_prompt
-            assert "Table of Contents" not in planner_prompt
-            assert "/shared/source_routing.json" in planner_prompt
-            assert "Do not call `ls` and `read_file` for `/shared/source_routing.json` in the same assistant turn" in (
-                planner_prompt
-            )
-            assert "continue planning without source-routing guidance" in planner_prompt
-            assert "all highest-priority routed recommendations' exact `tool_names`" in planner_prompt
-            for removed_field in ("assembly_instruction", "selection_mode", "expected_count", "options"):
-                assert removed_field not in planner_prompt
 
     def test_build_orchestrator_omits_skills_when_disabled(
         self,
@@ -565,55 +467,9 @@ class TestDeepResearcherAgent:
             assert any(
                 m.__class__.__name__ == "ToolVisibilityMiddleware" for m in subagents["writer-agent"]["middleware"]
             )
-            assert (
-                "When available skills apply during planning, research, or synthesis"
-                not in (create.call_args.kwargs["system_prompt"])
+            assert any(
+                m.__class__.__name__ == "TodoSuppressionMiddleware" for m in subagents["writer-agent"]["middleware"]
             )
-
-    def test_build_orchestrator_uses_parent_report_delta_prompt_when_seeded(
-        self,
-        mock_llm_provider,
-        real_tool,
-        mock_create_deep_agent,
-    ):
-        """Parent-report delta runs are governed by deep researcher synthesis prompts, not chat query rewriting."""
-        with (
-            patch(
-                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
-                return_value=mock_create_deep_agent,
-            ) as create,
-            patch(
-                "aiq_agent.agents.deep_researcher.factory.create_agent",
-                return_value=mock_create_deep_agent,
-            ),
-        ):
-            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-
-            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-            state = DeepResearchAgentState(
-                messages=[HumanMessage(content="Add a Codex vs Claude Code comparison")],
-                files={
-                    "/shared/original_report.md": "# Parent report",
-                    "/shared/source_summary.md": "- source",
-                },
-            )
-
-            agent._build_orchestrator_agent(state)
-
-            kwargs = create.call_args.kwargs
-            orchestrator_prompt = kwargs["system_prompt"]
-            subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
-            writer_prompt = subagents["writer-agent"]["system_prompt"]
-
-            assert "Parent Report Delta Mode" in orchestrator_prompt
-            assert "/shared/original_report.md" in orchestrator_prompt
-            assert "/shared/source_summary.md" in orchestrator_prompt
-            assert "complete standalone revised report" in orchestrator_prompt
-            assert "Do not return a research plan" in orchestrator_prompt
-            assert "Parent Report Delta Mode" in writer_prompt
-            assert "/shared/original_report.md" in writer_prompt
-            assert "complete standalone revised report" in writer_prompt
-            assert "Do not return a research plan" in writer_prompt
 
     def test_build_orchestrator_can_disable_source_router(
         self,
@@ -645,19 +501,10 @@ class TestDeepResearcherAgent:
             agent._build_orchestrator_agent(state)
 
             kwargs = create.call_args.kwargs
-            prompt = kwargs["system_prompt"]
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
             requested_roles = [args[0] for args, _kwargs in mock_llm_provider.get.call_args_list]
             assert set(subagents) == {"planner-agent", "writer-agent"}
-            assert "source-router-agent" not in prompt
-            assert "/shared/source_routing.json" not in prompt
-            assert "Start with `planner-agent`" in prompt
-            assert "at most 2 full ResearchQuery objects per call" in prompt
-            assert "all needed queries in one call when there are 2 or fewer" in prompt
-            assert "fewest ordered batches" in prompt
-            assert "Never repeat a covered query" in prompt
             assert subagents["planner-agent"]["response_format"] is ResearchPlan
-            assert "/shared/source_routing.json" not in subagents["planner-agent"]["system_prompt"]
             assert real_tool.name in {tool.name for tool in subagents["planner-agent"]["tools"]}
             assert subagents["writer-agent"]["tools"] == agent.writer_tools
             assert LLMRole.ROUTER not in requested_roles

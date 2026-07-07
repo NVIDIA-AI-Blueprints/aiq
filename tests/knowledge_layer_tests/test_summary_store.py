@@ -30,10 +30,35 @@ import pytest
 from aiq_agent.knowledge.schema import AvailableDocument
 from aiq_agent.knowledge.summary_store import SummaryStore
 from aiq_agent.knowledge.summary_store import _normalize_db_url
+from aiq_agent.knowledge.summary_store import _redact_db_url
 
 # =============================================================================
 # URL Normalization Tests
 # =============================================================================
+
+
+def test_redact_db_url():
+    """Test database passwords are redacted while other URL details remain."""
+    assert (
+        _redact_db_url(
+            "postgresql://alice:plain_password@db.internal:5432/aiq"  # pragma: allowlist secret
+        )
+        == "postgresql://alice:***@db.internal:5432/aiq"
+    )
+    assert (
+        _redact_db_url(
+            "postgresql+psycopg://alice:p%40ss%3Aword@db.internal:5432/aiq"  # pragma: allowlist secret
+        )
+        == "postgresql+psycopg://alice:***@db.internal:5432/aiq"
+    )
+    assert (
+        _redact_db_url(
+            "postgresql://alice:plain_password@db.internal:5432/aiq"  # pragma: allowlist secret
+            "?password=query_password&sslpassword=tls_password&token=query_token"
+        )
+        == "postgresql://alice:***@db.internal:5432/aiq"
+    )
+    assert _redact_db_url("sqlite+aiosqlite:///./summaries.db") == "sqlite+aiosqlite:///./summaries.db"
 
 
 class TestNormalizeDbUrl:
