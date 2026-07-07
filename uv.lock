@@ -1838,16 +1838,16 @@ wheels = [
 
 [[package]]
 name = "google-scholar-paper-search"
-version = "1.0.0"
+version = "1.1.0"
 source = { editable = "sources/google_scholar_paper_search" }
 dependencies = [
-    { name = "httpx" },
+    { name = "aiohttp" },
     { name = "pydantic" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "httpx", specifier = ">=0.24.0" },
+    { name = "aiohttp", specifier = ">=3.8.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
