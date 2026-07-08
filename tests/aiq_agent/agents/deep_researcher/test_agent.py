@@ -17,9 +17,11 @@
 
 import asyncio
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
+from uuid import uuid4
 
 import pytest
 from deepagents.backends.protocol import FileUploadResponse
@@ -27,17 +29,20 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
+from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.agents.deep_researcher.models import ResearchQuery
+from aiq_agent.agents.deep_researcher.tools import research as research_module
 from aiq_agent.agents.deep_researcher.tools.research import build_research_batch_tool
 from aiq_agent.agents.deep_researcher.tools.research import researcher_invoke_state
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common.citation_verification import SourceEntry
+from aiq_api.jobs.callbacks import AgentEventCallback
 
 
 @tool
@@ -598,7 +603,7 @@ class TestDeepResearcherAgent:
         )
         assert '"subqueries": [' in call_state["messages"][0].content
         assert "Execution order" not in call_state["messages"][0].content
-        assert call_config == {"callbacks": agent.callbacks}
+        assert call_config == {"callbacks": agent.callbacks, "run_name": "researcher-agent"}
         fake_backend.upload_files.assert_called_once()
         persisted_files = fake_backend.upload_files.call_args.args[0]
         assert len(persisted_files) == 1
@@ -612,6 +617,83 @@ class TestDeepResearcherAgent:
         assert compact_sources is not None
         assert "https://example.test/opencl" in compact_sources
         assert "https://example.test/unused" not in compact_sources
+
+    def test_researcher_invoke_config_preserves_runtime_callbacks_and_starts_a_child_run(self):
+        """Nested researchers preserve callback lineage without reusing the parent run ID."""
+        runtime_callbacks = MagicMock(name="runtime_callbacks")
+        fallback_callbacks = [MagicMock(name="fallback_callback")]
+        parent_run_id = uuid4()
+        runtime = SimpleNamespace(
+            config={
+                "callbacks": runtime_callbacks,
+                "run_id": parent_run_id,
+                "tags": ["job"],
+                "metadata": {"job_id": "job-1"},
+                "configurable": {"thread_id": "parent-thread", "checkpoint_ns": "parent"},
+            }
+        )
+
+        config = research_module.researcher_invoke_config(runtime, fallback_callbacks)
+
+        assert config["callbacks"] is runtime_callbacks
+        assert config["run_name"] == "researcher-agent"
+        assert "run_id" not in config
+        assert config["tags"] == ["job"]
+        assert config["metadata"] == {"job_id": "job-1"}
+        assert "configurable" not in config
+        assert research_module.researcher_invoke_config(None, fallback_callbacks) == {
+            "callbacks": fallback_callbacks,
+            "run_name": "researcher-agent",
+        }
+
+    @pytest.mark.asyncio
+    async def test_researcher_event_attribution_uses_named_workflow_and_nested_agent_id(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """A batched researcher emits lifecycle events and owns its nested tools."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        event_store = MagicMock()
+        callback = AgentEventCallback(event_store=event_store)
+        researcher_runnable = (
+            RunnableLambda(lambda _state: {"query": "researcher observability"})
+            | real_tool
+            | RunnableLambda(lambda _output: self._structured_notes_response("Researcher Observability"))
+        )
+        agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool], callbacks=[callback])
+        batch_tool = self._build_batch_tool(agent, researcher_runnable)
+
+        await batch_tool.ainvoke(
+            {
+                "queries": [
+                    {
+                        "query": f"researcher observability {index}",
+                        "preferred_tools": ["web_search_tool"],
+                        "fallback_tools": [],
+                        "target_components": ["observability"],
+                        "rationale": "Verify researcher event attribution.",
+                    }
+                    for index in range(2)
+                ]
+            },
+            config={"callbacks": [callback]},
+        )
+
+        events = [call.args[0] for call in event_store.store.call_args_list]
+        workflow_starts = [event for event in events if event["type"] == "workflow.start"]
+        workflow_ends = [event for event in events if event["type"] == "workflow.end"]
+        search_starts = [
+            event for event in events if event["type"] == "tool.start" and event["name"] == "web_search_tool"
+        ]
+
+        assert [event["name"] for event in workflow_starts] == ["researcher-agent", "researcher-agent"]
+        assert [event["name"] for event in workflow_ends] == ["researcher-agent", "researcher-agent"]
+        researcher_ids = {event["metadata"]["agent_id"] for event in workflow_starts}
+        assert len(researcher_ids) == 2
+        assert len(search_starts) == 2
+        assert {event["metadata"]["agent_id"] for event in search_starts} == researcher_ids
 
     @pytest.mark.asyncio
     async def test_run_research_batch_rejects_unranked_oversized_batches(

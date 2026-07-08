@@ -70,7 +70,7 @@ export const AgentsTab: FC = () => {
           )}
         </Flex>
         <Text kind="body/regular/xs" className="text-subtle">
-          Active planner, researcher, and writer agents executing tasks.
+          Active source router, planner, researcher, and writer agents executing tasks.
         </Text>
       </Flex>
 

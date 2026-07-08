@@ -36,6 +36,7 @@ from ..models import ResearchQuery
 _NO_TOOL_RUNTIME = cast(ToolRuntime, None)
 logger = logging.getLogger(__name__)
 _NOTE_SLUG_MAX_LENGTH = 64
+RESEARCHER_AGENT_NAME = "researcher-agent"
 
 
 def format_research_request(query: ResearchQuery) -> str:
@@ -61,6 +62,17 @@ def researcher_invoke_state(query: ResearchQuery, runtime: ToolRuntime | None) -
     return invoke_state
 
 
+def researcher_invoke_config(runtime: ToolRuntime | None, callbacks: list[Any]) -> dict[str, Any]:
+    """Build child-run config while preserving the active callback lineage."""
+    config = dict(runtime.config) if runtime is not None else {}
+    config.pop("run_id", None)
+    config.pop("configurable", None)
+    config["run_name"] = RESEARCHER_AGENT_NAME
+    if not config.get("callbacks") and callbacks:
+        config["callbacks"] = callbacks
+    return config
+
+
 async def _run_research_query(
     *,
     query: ResearchQuery,
@@ -74,7 +86,7 @@ async def _run_research_query(
         try:
             result = await researcher_runnable.ainvoke(
                 researcher_invoke_state(query, runtime),
-                config={"callbacks": callbacks} if callbacks else None,
+                config=researcher_invoke_config(runtime, callbacks),
             )
         except Exception as exc:  # noqa: BLE001 - captured as per-item failure
             raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
