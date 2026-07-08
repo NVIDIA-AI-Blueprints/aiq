@@ -29,21 +29,10 @@ class ClarifierResult(BaseModel):
     """
     Result returned from clarifier agent run.
 
-    Contains the clarification log plus optional plan approval details.
+    Contains the clarification log.
     """
 
     clarifier_log: str = Field(default="")
-    plan_title: str | None = Field(default=None)
-    plan_sections: list[str] = Field(default_factory=list)
-    plan_approved: bool = Field(default=False)
-    plan_rejected: bool = Field(default=False)
-
-    def get_approved_plan_context(self) -> str | None:
-        """Get formatted plan context if approved."""
-        if not self.plan_approved or not self.plan_title:
-            return None
-        sections_text = "\n".join(f"- {s}" for s in self.plan_sections)
-        return f"**Approved Research Plan**\n\nTitle: {self.plan_title}\n\nSections:\n{sections_text}"
 
 
 class ClarifierAgentState(BaseModel):
@@ -58,11 +47,6 @@ class ClarifierAgentState(BaseModel):
         max_turns: Maximum number of turns for the clarification dialog.
         clarifier_log: Log of the clarification dialog.
         iteration: Current iteration of the clarification dialog.
-        plan_title: Title of the generated research plan (if plan approval enabled).
-        plan_sections: List of section titles for the research plan.
-        plan_approved: Whether the user approved the plan.
-        plan_rejected: Whether the user rejected the plan.
-        plan_feedback_history: History of user feedback on plan iterations.
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
@@ -74,11 +58,6 @@ class ClarifierAgentState(BaseModel):
     max_turns: int = Field(default=3)
     clarifier_log: str = Field(default="")
     iteration: int = Field(default=0)
-    plan_title: str | None = Field(default=None)
-    plan_sections: list[str] = Field(default_factory=list)
-    plan_approved: bool = Field(default=False)
-    plan_rejected: bool = Field(default=False)
-    plan_feedback_history: list[str] = Field(default_factory=list)
 
     @computed_field
     @property

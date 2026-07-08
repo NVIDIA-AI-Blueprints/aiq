@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Example: Full Pipeline (Foundational RAG)
 
-The complete AI-Q blueprint configuration with all features enabled: intent classification, shallow and deep research agents, knowledge retrieval (Foundational RAG), paper search, web search, clarifier with human-in-the-loop plan approval, and the async jobs API with SSE streaming.
+The complete AI-Q blueprint configuration with all features enabled: intent classification, shallow and deep research agents, knowledge retrieval (Foundational RAG), paper search, web search, clarifier with human-in-the-loop clarification, and the async jobs API with SSE streaming.
 
 This is based on `configs/config_web_frag.yml`, which is the default for Helm deployments.
 
@@ -139,17 +139,15 @@ functions:
   # -------------------------------------------------------------------------
   # Clarifier agent (human-in-the-loop)
   # -------------------------------------------------------------------------
-  # For deep research: asks clarifying questions and generates a research
-  # plan that the user can approve or modify before execution.
+  # For deep research: asks clarifying questions before handing off to the
+  # deep_research_agent.
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_super_llm
-    planner_llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search
     max_turns: 3                  # Max clarification rounds
-    enable_plan_approval: true    # User must approve the plan
     log_response_max_chars: 2000
     verbose: true
 
@@ -185,7 +183,7 @@ functions:
 # The chat_deepresearcher_agent is the meta-routing workflow:
 # 1. Intent classifier determines shallow vs deep
 # 2. Shallow queries go directly to shallow_research_agent
-# 3. Deep queries go through clarifier -> plan approval -> deep_research_agent
+# 3. Deep queries go through clarifier -> deep_research_agent
 workflow:
   _type: chat_deepresearcher_agent
   enable_escalation: true          # Allow shallow -> deep escalation

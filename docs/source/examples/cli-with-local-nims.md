@@ -123,11 +123,9 @@ functions:
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_super_llm
-    planner_llm: nemotron_super_llm
     tools:
       - web_search_tool
     max_turns: 3
-    enable_plan_approval: true    # Interactive plan approval in CLI
     log_response_max_chars: 2000
     verbose: true
 

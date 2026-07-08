@@ -4,11 +4,13 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Human-in-the-Loop (HITL)
 
-Human-in-the-loop (clarifier and plan approval) runs before deep research. To disable it:
+The clarifier runs before deep research. It gathers context and, when the
+request is vague, may ask you to narrow the scope or clarify the type of output
+you want. To disable it:
 
 ## Disable the Clarifier Entirely
 
-No plan generation or approval step:
+No clarification step before deep research:
 
 ```yaml
 workflow:
@@ -17,14 +19,14 @@ workflow:
   # ...
 ```
 
-## Keep Clarifier but Skip Plan Approval
+## Limit Clarification Questions
 
-No user approval step before deep research:
+Cap how many clarification turns the clarifier may take:
 
 ```yaml
 functions:
   clarifier_agent:
     _type: clarifier_agent
-    enable_plan_approval: false
+    max_turns: 1
     # ...
 ```

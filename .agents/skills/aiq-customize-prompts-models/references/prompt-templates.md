@@ -16,9 +16,8 @@ variable section there yet — so read the `.j2` file when in doubt.
 Each agent owns its Jinja2 templates under
 `src/aiq_agent/agents/<agent>/prompts/*.j2`. For example, the deep researcher has
 `orchestrator.j2`, `planner.j2`, `researcher.j2`, `source_router.j2`, `writer.j2`,
-and `source_registry.j2`; the clarifier has `plan_generation.j2` and
-`research_clarification.j2`; `shallow_researcher` and `chat_researcher` have their
-own as well.
+and `source_registry.j2`; the clarifier has `research_clarification.j2`;
+`shallow_researcher` and `chat_researcher` have their own as well.
 
 ## How templates load and render
 

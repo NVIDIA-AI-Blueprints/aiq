@@ -46,10 +46,9 @@ with `LLMProvider.configure(LLMRole.<ROLE>, llm)`
 An unset role falls back to the provider default (the `orchestrator_llm` model).
 There is **no** generic `llm` field on the deep research agent.
 
-**Clarifier** (`src/aiq_agent/agents/clarifier/register.py`) defines `llm` (its
-default) and `planner_llm`. It does **not** use `LLMProvider.configure` for the
-role — it passes `planner_llm` straight to the agent constructor, and `planner_llm`
-falls back to `llm` when unset.
+**Clarifier** (`src/aiq_agent/agents/clarifier/register.py`) defines a single
+`llm` field. It does **not** use `LLMProvider.configure` for a role — it passes
+`llm` straight to the agent constructor.
 
 ```yaml
 functions:

@@ -27,22 +27,26 @@ from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
 from nat.data_models.function import FunctionBaseConfig
 
+from .paper_search import PaperSearchProvider
 from .paper_search import PaperSearchTool
 
 logger = logging.getLogger(__name__)
 
-# Track if we've already warned about missing API key to avoid duplicate warnings
 _missing_key_warned = False
 
 
 class PaperSearchToolConfig(FunctionBaseConfig, name="paper_search"):
-    """
-    Configuration for the paper search tool.
+    """Configuration for the paper search tool.
 
-    Tool that searches for academic papers using Google Scholar (Serper).
-    Requires a SERPER_API_KEY environment variable or config.
+    Tool that searches for academic papers using Google Scholar. The
+    ``provider`` field selects the backend API: ``serper`` (default),
+    ``serpapi``, or ``searchapi``. Each provider requires its own API key.
     """
 
+    provider: PaperSearchProvider = Field(
+        default=PaperSearchProvider.SERPER,
+        description="Google Scholar backend: 'serper', 'serpapi', or 'searchapi'",
+    )
     timeout: int = Field(
         default=30,
         description="Timeout in seconds for the search requests",
@@ -53,54 +57,86 @@ class PaperSearchToolConfig(FunctionBaseConfig, name="paper_search"):
     )
     serper_api_key: SecretStr | None = Field(
         default=None,
-        description="The API key for Serper (Google Scholar)",
+        description="API key for Serper (required when provider='serper')",
     )
+    serpapi_api_key: SecretStr | None = Field(
+        default=None,
+        description="API key for SerpAPI (required when provider='serpapi')",
+    )
+    searchapi_api_key: SecretStr | None = Field(
+        default=None,
+        description="API key for SearchAPI (required when provider='searchapi')",
+    )
+
+
+# Maps each provider to (env var name, config attr name, sign-up URL)
+_PROVIDER_KEY_INFO = {
+    PaperSearchProvider.SERPER: ("SERPER_API_KEY", "serper_api_key", "https://serper.dev/"),
+    PaperSearchProvider.SERPAPI: ("SERPAPI_API_KEY", "serpapi_api_key", "https://serpapi.com/"),
+    PaperSearchProvider.SEARCHAPI: ("SEARCHAPI_API_KEY", "searchapi_api_key", "https://www.searchapi.io/"),
+}
+
+
+def _resolve_api_key(provider: PaperSearchProvider, tool_config: PaperSearchToolConfig) -> str | None:
+    env_var, config_attr, _ = _PROVIDER_KEY_INFO[provider]
+    env_value = os.environ.get(env_var)
+    if env_value:
+        return env_value
+    config_value = getattr(tool_config, config_attr)
+    if config_value:
+        return config_value.get_secret_value()
+    return None
 
 
 @register_function(config_type=PaperSearchToolConfig)
 async def paper_search(tool_config: PaperSearchToolConfig, builder: Builder):
-    """Register paper search tool using Google Scholar (Serper)."""
-    # Set environment variable if provided in config
-    if not os.environ.get("SERPER_API_KEY") and tool_config.serper_api_key:
-        os.environ["SERPER_API_KEY"] = tool_config.serper_api_key.get_secret_value()
+    provider = tool_config.provider
+    api_key = _resolve_api_key(provider, tool_config)
 
-    serper_api_key = os.environ.get("SERPER_API_KEY")
-
-    if not serper_api_key:
-        # Log warning only once to avoid duplicate warnings if tool is registered multiple times
+    if not api_key:
+        env_var, _, signup_url = _PROVIDER_KEY_INFO[provider]
         global _missing_key_warned
         if not _missing_key_warned:
             logger.warning(
-                "SERPER_API_KEY not found. The paper search tool will be registered but will "
-                "return an error when called. To enable: set SERPER_API_KEY in your environment, "
-                ".env file, or specify the API key in your workflow config (SERPER_API_KEY)."
+                "%s not found for provider '%s'. The paper search tool will be registered but "
+                "will return an error when called. To enable: set %s in your environment, .env "
+                "file, or specify the API key in your workflow config.",
+                env_var,
+                provider.value,
+                env_var,
             )
             _missing_key_warned = True
 
-        # Yield a stub function that returns an error message
         async def _paper_search_stub(
             query: str = Field(..., validation_alias=AliasChoices("query", "question")),
-            year: str | None = None,
+            year: str | int | None = None,
         ) -> str:
-            """Paper search tool (unavailable - missing SERPER_API_KEY)."""
             return (
-                "Error: Paper search is unavailable because SERPER_API_KEY is not set.\n"
+                f"Error: Paper search is unavailable because {env_var} is not set "
+                f"(provider='{provider.value}').\n"
                 "To enable this tool:\n"
-                "1. Get an API key from https://serper.dev/\n"
-                "2. Set the API key in your environment or .env file\n"
+                f"1. Get an API key from {signup_url}\n"
+                f"2. Set the API key in your environment or .env file as {env_var}\n"
                 "   (alternatively, specify the API key in your workflow config)\n"
                 "3. Restart the application"
             )
 
         yield FunctionInfo.from_fn(
             _paper_search_stub,
-            description=_paper_search_stub.__doc__,
+            description=(
+                f"Search for academic papers and peer-reviewed scientific publications "
+                f"on Google Scholar via the {provider.value} backend. This tool is "
+                f"registered in a degraded state because {env_var} is not configured; "
+                f"calling it returns setup instructions instead of search results."
+            ),
         )
         return
 
-    # Create the NAT-independent tool instance
     tool = PaperSearchTool(
-        serper_api_key=serper_api_key,
+        provider=provider,
+        serper_api_key=api_key if provider is PaperSearchProvider.SERPER else None,
+        serpapi_api_key=api_key if provider is PaperSearchProvider.SERPAPI else None,
+        searchapi_api_key=api_key if provider is PaperSearchProvider.SEARCHAPI else None,
         timeout=tool_config.timeout,
         max_results=tool_config.max_results,
     )

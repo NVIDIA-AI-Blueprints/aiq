@@ -153,7 +153,7 @@ describe('useIsCurrentSessionBusy', () => {
     mockUseChatStore.mockImplementation((selector: (state: any) => any) =>
       selector({
         ...idleState,
-        pendingInteraction: { type: 'plan_approval', content: 'Approve this plan?' },
+        pendingInteraction: { type: 'clarification', content: 'Approve this plan?' },
       })
     )
 
@@ -177,7 +177,7 @@ describe('useIsCurrentSessionBusy', () => {
       selector({
         ...idleState,
         isStreaming: true,
-        pendingInteraction: { type: 'plan_approval' },
+        pendingInteraction: { type: 'clarification' },
       })
     )
 
@@ -191,7 +191,7 @@ describe('useIsCurrentSessionBusy', () => {
     mockUseChatStore.mockImplementation((selector: (state: any) => any) =>
       selector({
         ...idleState,
-        pendingInteraction: { type: 'plan_approval' },
+        pendingInteraction: { type: 'clarification' },
       })
     )
 

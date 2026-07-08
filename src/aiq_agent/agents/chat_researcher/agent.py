@@ -181,31 +181,10 @@ class ChatResearcherAgent:
                 )
                 result = await self.clarifier_fn(clarifier_state)
 
-                # Check if plan was rejected
-                if result.plan_rejected:
-                    logger.info("ChatResearcher: Plan rejected by user, ending workflow")
-                    return Command(
-                        goto=END,
-                        update={
-                            "messages": [
-                                AIMessage(
-                                    content="Research plan was rejected. Please start a new research query when ready."
-                                )
-                            ],
-                            "original_query": original_query,
-                        },
-                    )
-
-                # Build clarifier result with optional approved plan context
-                clarifier_result = result.clarifier_log
-                approved_plan_context = result.get_approved_plan_context()
-                if approved_plan_context:
-                    clarifier_result = f"{clarifier_result}\n\n{approved_plan_context}"
-
                 return Command(
                     goto="deep_research",
                     update={
-                        "clarifier_result": clarifier_result,
+                        "clarifier_result": result.clarifier_log,
                         "original_query": original_query,
                     },
                 )

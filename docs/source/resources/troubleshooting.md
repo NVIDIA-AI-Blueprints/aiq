@@ -34,7 +34,7 @@ Common issues and solutions for the AI-Q blueprint.
 | Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
 | HTTP 429 or 503 on deep research | Nemotron Super Build API has limited availability due to high demand | Retry after a short delay, reduce concurrency, or self-host via [Brev Launchable](#nemotron-super--build-endpoint-availability) for consistent throughput |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
-| Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns` or set `enable_plan_approval: false` |
+| Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns`, or set `enable_clarifier: false` in the workflow to disable clarification |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
 | Job status stuck on RUNNING | Dask worker crashed | Check Dask logs; the ghost job reaper will eventually mark it FAILURE |
 

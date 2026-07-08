@@ -244,7 +244,7 @@ describe('getPersistedActivityFlags', () => {
   })
 
   it('detects pending HITL interaction', () => {
-    const flags = getPersistedActivityFlags([], { type: 'plan_approval', content: 'Approve?' })
+    const flags = getPersistedActivityFlags([], { type: 'clarification', content: 'Approve?' })
     expect(flags.hasActiveDeepResearch).toBe(false)
     expect(flags.hasPendingHITL).toBe(true)
   })
@@ -257,7 +257,7 @@ describe('getPersistedActivityFlags', () => {
         deepResearchJobStatus: 'submitted',
       }),
     ]
-    const flags = getPersistedActivityFlags(messages, { type: 'plan_approval' })
+    const flags = getPersistedActivityFlags(messages, { type: 'clarification' })
     expect(flags.hasActiveDeepResearch).toBe(true)
     expect(flags.hasPendingHITL).toBe(true)
   })
