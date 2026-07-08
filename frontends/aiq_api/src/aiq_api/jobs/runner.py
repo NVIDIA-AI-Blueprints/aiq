@@ -629,8 +629,10 @@ async def run_agent_job(
             from nat.data_models.intermediate_step import TraceMetadata
             from nat.data_models.invocation_node import InvocationNode
             from nat.observability.exporter_manager import ExporterManager
-            from nat.plugins.langchain.callback_handler import LangchainProfilerHandler
             from nat.utils.reactive.subject import Subject
+
+            from .telemetry import AgentLifecycleTelemetryCallback
+            from .telemetry import aiq_langchain_profiler_context
 
             telemetry_exporters = {
                 name: configured.instance for name, configured in builder._telemetry_exporters.items()
@@ -654,7 +656,7 @@ async def run_agent_job(
             _ = context_state.active_span_id_stack
 
             # Set up span hierarchy metadata
-            workflow_span_name = f"async_job:{agent_config_name}"
+            workflow_span_name = agent_config_name
             context_state.active_function.set(
                 InvocationNode(
                     function_name=workflow_span_name,
@@ -711,16 +713,15 @@ async def run_agent_job(
                         )
                     )
 
-                    # Create profiler callback AFTER workflow starts (ensures correct parent)
-                    nat_profiler_callback = LangchainProfilerHandler()
+                    agent_telemetry_callback = AgentLifecycleTelemetryCallback(context.intermediate_step_manager)
 
                     verbose = is_verbose(getattr(fn_config, "verbose", False))
                     callbacks = [VerboseTraceCallback()] if verbose else []
 
                     raw_event_store = EventStore(db_url, job_id, content_cipher=job_output_cipher)
                     event_store = BatchingEventStore(raw_event_store)
+                    callbacks.append(agent_telemetry_callback)
                     callbacks.append(AgentEventCallback(event_store))
-                    callbacks.append(nat_profiler_callback)
 
                     # Resolve per-user MCP source tools for the job owner (Context.user_id
                     # set above); connections stay open via mcp_stack for the agent run.
@@ -759,20 +760,22 @@ async def run_agent_job(
                         # agents without a sandbox runtime; close()/terminate() are then no-ops.
                         sandbox_runtime = getattr(agent, "deepagents_runtime", None)
 
-                        # Run agent - LLM/tool events will be nested under workflow span
-                        result = await _run_agent(
-                            agent=agent,
-                            input_text=input_text,
-                            builder=builder,
-                            config=config,
-                            function_name=agent_config_name,
-                            function_config=fn_config,
-                            monitor=cancellation_monitor,
-                            available_documents=available_documents,
-                            data_sources=data_sources,
-                            event_store=event_store,
-                            initial_files=initial_files,
-                        )
+                        # Replace NAT's inherited profiler for this invocation rather than adding a
+                        # second callback with duplicate LangChain run IDs.
+                        with aiq_langchain_profiler_context():
+                            result = await _run_agent(
+                                agent=agent,
+                                input_text=input_text,
+                                builder=builder,
+                                config=config,
+                                function_name=agent_config_name,
+                                function_config=fn_config,
+                                monitor=cancellation_monitor,
+                                available_documents=available_documents,
+                                data_sources=data_sources,
+                                event_store=event_store,
+                                initial_files=initial_files,
+                            )
 
                     # Emit WORKFLOW_END event for Phoenix
                     context.intermediate_step_manager.push_intermediate_step(
