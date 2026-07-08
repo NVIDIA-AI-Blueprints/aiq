@@ -15,6 +15,8 @@
 
 """Tests for chat_researcher register.py helper functions."""
 
+import logging
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
@@ -23,6 +25,19 @@ from langchain_core.messages import HumanMessage
 
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
+from aiq_agent.common.logging_utils import log_identifier_ref
+
+
+def test_conversation_log_uses_opaque_reference(caplog) -> None:
+    from aiq_agent.agents.chat_researcher.register import _log_conversation_reference
+
+    conversation_id = str(uuid.uuid4())
+    caplog.set_level(logging.INFO, logger="aiq_agent.agents.chat_researcher.register")
+
+    _log_conversation_reference("Thread reference for checkpointing: %s", conversation_id)
+
+    assert conversation_id not in caplog.text
+    assert log_identifier_ref(conversation_id) in caplog.text
 
 
 class TestReportFollowUpHelpers:

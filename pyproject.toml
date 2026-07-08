@@ -48,7 +48,7 @@ dependencies = [
     "python-multipart>=0.0.27,<0.1",
     "knowledge-layer[all]",
     # CVE version floors for transitive dependencies
-    "cryptography>=46.0.6,<47",
+    "cryptography>=48.0.1,<49",
     "pillow>=12.2.0,<13",
     "pygments>=2.20.0,<3",
 ]
@@ -103,7 +103,7 @@ aiq_data_source_registry = "aiq_agent.common.data_source_registry"
 aiq_guardrails = "aiq_agent.guardrails.register"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "sources/**/tests"]
+testpaths = ["tests", "sources/**/tests", "mcp/tests"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
@@ -160,7 +160,7 @@ extend-ignore = [
 combine-as-imports = true
 default-section = "third-party"
 force-single-line = true
-known-first-party = ["aiq", "aiq_api", "nat", "nat_*", "_utils"]
+known-first-party = ["aiq", "aiq_api", "aiq_mcp", "nat", "nat_*", "_utils"]
 known-third-party = [
   "agno",
   "autogen",
@@ -213,13 +213,14 @@ dev = [
     "aiq-api",
     "aiq-research-cli",
     "aiq-debug",
+    "aiq-mcp-server",
 ]
 
 [tool.uv]
 prerelease = "allow"
 override-dependencies = [
     "authlib>=1.6.11,<2",
-    "cryptography>=46.0.6,<47",
+    "cryptography>=48.0.1,<49",
     "pillow>=12.2.0,<13",
     "pygments>=2.20.0,<3",
     "pyopenssl>=26.0.0,<27",
@@ -243,6 +244,7 @@ members = [
     "frontends/debug",
     "frontends/benchmarks/freshqa",
     "frontends/benchmarks/deepsearch_qa",
+    "mcp",
 ]
 
 [tool.uv.sources]
@@ -256,5 +258,6 @@ knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }
 aiq-debug = { workspace = true }
+aiq-mcp-server = { workspace = true }
 freshqa-eval = { workspace = true }
 deepsearch-qa-evaluator = { workspace = true }

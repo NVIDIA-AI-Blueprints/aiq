@@ -31,6 +31,7 @@ from aiq_agent.common import is_verbose
 from aiq_agent.common.citation_verification import get_or_create_session_registry
 from aiq_agent.common.citation_verification import reset_session_registry
 from aiq_agent.common.citation_verification import set_session_registry
+from aiq_agent.common.logging_utils import log_identifier_ref
 from aiq_agent.observability.otel_header_redaction_exporter import (
     ensure_registered as _ensure_otel_redaction_registered,
 )
@@ -55,6 +56,11 @@ logger = logging.getLogger(__name__)
 _REPORT_ASK_TIMEOUT_S = 120
 
 _ensure_otel_redaction_registered()
+
+
+def _log_conversation_reference(message: str, conversation_id: str) -> None:
+    """Log a correlation reference without exposing the conversation identifier."""
+    logger.info(message, log_identifier_ref(conversation_id))
 
 
 def _build_report_ask_prompt(
@@ -552,14 +558,20 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         # This ensures each run starts with a clean conversation history
         if "--input" in sys.argv:
             nat_context_conversation_id = str(uuid.uuid4())
-            logger.info("Using fresh conversation ID for --input mode: %s", nat_context_conversation_id)
+            _log_conversation_reference(
+                "Using fresh conversation reference for --input mode: %s",
+                nat_context_conversation_id,
+            )
         else:
             nat_context_conversation_id = Context.get().conversation_id
             if not nat_context_conversation_id:
                 nat_context_conversation_id = str(uuid.uuid4())
-                logger.info("No conversation-id header; generated thread ID: %s", nat_context_conversation_id)
+                _log_conversation_reference(
+                    "No conversation-id header; generated thread reference: %s",
+                    nat_context_conversation_id,
+                )
             else:
-                logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
+                _log_conversation_reference("Thread reference for checkpointing: %s", nat_context_conversation_id)
 
         from aiq_agent.auth import get_current_principal
 
@@ -603,21 +615,22 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             collection_name = Context.get().conversation_id if Context.get() else None
 
             if collection_name:
+                collection_ref = log_identifier_ref(collection_name)
                 available_documents = await get_available_documents_async(collection_name)
                 if available_documents:
                     logger.info(
-                        "Loaded %d document summaries from DB for collection %s",
+                        "Loaded %d document summaries from DB for collection_ref=%s",
                         len(available_documents),
-                        collection_name,
+                        collection_ref,
                     )
                     for doc in available_documents:
                         logger.debug("  [summary] [file]: %s", "available" if doc.summary else "none")
                 else:
-                    logger.info("No document summaries in DB for collection %s", collection_name)
+                    logger.info("No document summaries in DB for collection_ref=%s", collection_ref)
             else:
                 logger.debug("No session context - cannot determine collection")
         except Exception as e:
-            logger.warning("Could not fetch available documents: %s", e)
+            logger.warning("Could not fetch available documents (%s)", type(e).__name__)
         # Resolve the report to follow up on: client-supplied id wins, else default to the last
         # completed report in this conversation (server-side, so any client gets follow-up).
         _ctx = Context.get()
@@ -629,7 +642,10 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             is_input_mode="--input" in sys.argv,
         )
         if effective_report_job_id and not request_context.active_report_job_id:
-            logger.info("Defaulting report follow-up to last report %s in conversation", effective_report_job_id)
+            logger.info(
+                "Defaulting report follow-up to report_ref=%s",
+                log_identifier_ref(effective_report_job_id),
+            )
 
         # Set session-scoped source registry for citation verification across turns.
         # When no conversation ID is available, get_or_create_session_registry returns a

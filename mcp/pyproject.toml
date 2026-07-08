@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 64", "setuptools-scm>=8"]
+
+[project]
+name = "aiq-mcp-server"
+version = "0.1.0"
+description = "Model Context Protocol server for the NVIDIA AI-Q Blueprint"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+    {name = "NVIDIA Corporation"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+    "aiq-agent>=2.0,<3",
+    "asyncpg>=0.29.0",
+    "langchain-core>=1.2.0,<2",
+    "mcp==1.27.2",
+    "msgpack>=1.2.1",
+    "nvidia-nat-core==1.8.0",
+    "python-dotenv>=1.0,<2",
+    "starlette>=1.0,<2",
+    "tavily-web-search>=1.0,<2",
+    "uvicorn>=0.40,<1",
+]
+
+[project.scripts]
+aiq-mcp-server = "aiq_mcp.server:main"
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.28,<1",
+    "langgraph>=1.2,<2",
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]

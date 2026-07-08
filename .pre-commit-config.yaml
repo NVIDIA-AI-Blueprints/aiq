@@ -69,7 +69,7 @@ repos:
         stages: [push]
       - id: pytest
         name: pytest
-        entry: pytest tests sources --cov=aiq_agent --cov-report=term --cov-fail-under=65
+        entry: pytest tests sources mcp/tests --cov=aiq_agent --cov=aiq_mcp --cov-report=term --cov-fail-under=65
         language: system
         pass_filenames: false
         stages: [push]
