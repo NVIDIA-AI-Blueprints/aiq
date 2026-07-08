@@ -36,8 +36,6 @@ uv audit --preview-features audit-command,json-output \
 uv audit --preview-features audit-command,json-output \
   --frozen --no-dev --no-default-groups \
   --ignore-until-fixed GHSA-f4j7-r4q5-qw2c \
-  --ignore-until-fixed GHSA-p4gq-832x-fm9v \
-  --ignore-until-fixed PYSEC-2026-597 \
   --output-format json >/dev/null
 ```
 
@@ -53,23 +51,27 @@ stricter than the MCP-only CycloneDX closure. CI archives the unfiltered JSON,
 including accepted findings, and runs the exception-aware command separately
 as the pass/fail gate.
 
-## No-fix vulnerability exceptions
+## No-fix vulnerability exception
 
-Three canonical exceptions are accepted only while the advisory service
-reports no fixed release. The `--ignore-until-fixed` form automatically turns
-each exception back into a failure when a fix becomes available.
+One canonical exception is accepted only while the advisory service reports no
+fixed release. The `--ignore-until-fixed` form automatically turns the
+exception back into a failure when a fix becomes available.
 
 | Advisory | Transitive package | MCP reachability and compensating control |
 |----------|--------------------|--------------------------------------------|
 | `GHSA-f4j7-r4q5-qw2c` | ChromaDB | Present through the optional knowledge-layer backend. `config_mcp.yml` has no knowledge-retrieval function and the MCP application does not mount the Chroma server API named by the advisory. |
-| `GHSA-p4gq-832x-fm9v` | NLTK | Present through optional knowledge-layer dependencies. The MCP source and public config do not call `nltk.data.load` or expose a caller-controlled NLTK resource path. |
-| `PYSEC-2026-597` | NLTK | Same unreachable optional dependency path and controls as the canonical NLTK advisory above. |
 
 The exact public function allowlist is enforced by
-`mcp/tests/test_config_and_packaging.py`. Removing these transitive packages
+`mcp/tests/test_config_and_packaging.py`. Removing this transitive package
 cleanly requires a future minimal `aiq-agent` distribution or optional-dependency
-refactor; uninstalling them after resolution would make package metadata
+refactor; uninstalling it after resolution would make package metadata
 inaccurate.
+
+The workspace requires `nltk>=3.10.0` so the production lock includes NLTK's
+path-security fixes. NLTK 3.10 adds `defusedxml`; the workspace constrains that
+dependency to the stable 0.7 release line because the repository-wide
+prerelease policy would otherwise select a 0.8 release candidate. NLTK no
+longer requires an audit exception.
 
 The audit also reports archived project status for transitive packages. An
 archived status is tracked as maintenance risk but is not itself a known

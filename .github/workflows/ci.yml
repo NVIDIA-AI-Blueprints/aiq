@@ -231,8 +231,6 @@ jobs:
           uv audit --preview-features audit-command,json-output \
             --frozen --no-dev --no-default-groups \
             --ignore-until-fixed GHSA-f4j7-r4q5-qw2c \
-            --ignore-until-fixed GHSA-p4gq-832x-fm9v \
-            --ignore-until-fixed PYSEC-2026-597 \
             --output-format json > "$RUNNER_TEMP/aiq-mcp-vulnerability-gate.json"
 
       - name: Generate MCP SBOM and license evidence
