@@ -18,14 +18,19 @@ NVIDIA_API_KEY=your_nvidia_api_key
 
 ## Example Workflow Configuration
 
-Define the reranked_search tool and other search tools that feed into the reranker. If the search tools are part of a function group, they must be specified in the group's `- include:` list, and use `{group_name}__{tool_name}` format in `reranked_search` config section.
+Define the reranked_search tool and other search tools that feed into the reranker. If the search tools are part of a function group, you may include all functions within the group by adding the function group to the search tools. Alternatively, you may include specific tools within the function group. To do so, they must be specified in the group's `- include:` list, and use `{group_name}__{tool_name}` format in `reranked_search` config section.
 
 For more info on function group name space, reference Nemo Agent Toolkit doc, specifically [Function Naming and Namespaing](https://docs.nvidia.com/nemo/agent-toolkit/latest/build-workflows/functions-and-function-groups/function-groups.html#function-naming-and-namespacing) and [Understanding Function Accessibility](https://docs.nvidia.com/nemo/agent-toolkit/latest/build-workflows/functions-and-function-groups/function-groups.html#understanding-function-accessibility).
 
 ```yaml
 function_groups:
   your_group:
-    _type: your_group
+    _type: your_group_1
+    # include: [tool_1, tool_2]  # Optionally define included functions
+    ...
+
+  your_group:
+    _type: your_group_2
     include: [tool_1, tool_2]
     ...
 
@@ -45,8 +50,9 @@ functions:
     search_tools:
       - web_search_tool # standalone function examples
       - your_custom_search_tool
-      - your_group__tool_1 # function group examples
-      - your_group__tool_2
+      - your_group_1
+      - your_group_2__tool_1 # function group examples
+      - your_group_2__tool_2
 
     # # uncomment to adjust default values
     # top_k: 5  # adjust as necessary as you add more search tools, meaning more results to rerank.
