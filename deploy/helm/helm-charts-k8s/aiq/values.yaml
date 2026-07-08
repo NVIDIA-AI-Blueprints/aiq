@@ -20,6 +20,9 @@ project:
 # OPTIONAL: Namespace Configuration
 # ==========================================
 namespace:
+  # All chart resources use the release namespace (helm install -n <ns> /
+  # .Release.Namespace), which is required for GitOps operators such as
+  # ArgoCD and Fleet.
   create: false  # Set to true to create namespace (useful for ArgoCD)
   labels: {}  # Additional custom labels
   annotations:

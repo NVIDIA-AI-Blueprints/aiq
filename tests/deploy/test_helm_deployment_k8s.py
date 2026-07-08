@@ -23,9 +23,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CHART_PATH = REPO_ROOT / "deploy" / "helm" / "deployment-k8s"
 
 
-def render_chart(*extra_args: str) -> list[dict[str, Any]]:
+def render_chart(*extra_args: str, namespace: str = "ns-aiq") -> list[dict[str, Any]]:
     result = subprocess.run(
-        ["helm", "template", "aiq", str(CHART_PATH), "-n", "ns-aiq", *extra_args],
+        ["helm", "template", "aiq", str(CHART_PATH), "-n", namespace, *extra_args],
         check=True,
         capture_output=True,
         text=True,
@@ -66,6 +66,28 @@ def test_default_chart_renders_referenced_configmaps_and_uses_user_supplied_secr
     assert referenced_configmaps <= rendered_configmaps
     assert referenced_secrets == {"aiq-credentials"}
     assert "aiq-credentials" not in rendered_secrets
+
+
+def test_all_namespaced_resources_honor_release_namespace():
+    """Regression test for #290: resources must use the Helm release namespace
+    (``helm install -n <ns>``) instead of a hardcoded ``ns-aiq``, so ``helm
+    install -n`` and GitOps operators (ArgoCD, Fleet) target the right namespace.
+    """
+    release_namespace = "my-namespace"
+    manifests = render_chart(namespace=release_namespace)
+
+    namespaced = [manifest for manifest in manifests if manifest.get("metadata", {}).get("namespace") is not None]
+
+    # The chart must render at least one namespaced resource, otherwise this
+    # test would pass vacuously if templating silently stopped emitting them.
+    assert namespaced, "expected the chart to render namespaced resources"
+
+    offenders = {
+        (manifest.get("kind"), manifest["metadata"].get("name")): manifest["metadata"]["namespace"]
+        for manifest in namespaced
+        if manifest["metadata"]["namespace"] != release_namespace
+    }
+    assert not offenders, f"resources not pinned to release namespace {release_namespace!r}: {offenders}"
 
 
 def test_chart_renders_app_host_aliases(tmp_path: Path):
