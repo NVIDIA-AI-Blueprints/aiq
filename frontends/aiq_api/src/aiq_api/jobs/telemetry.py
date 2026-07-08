@@ -18,17 +18,17 @@ from nat.data_models.intermediate_step import TraceMetadata
 from nat.plugins.langchain.callback_handler import LangchainProfilerHandler
 
 
-def _chain_name(serialized: dict[str, Any] | None, kwargs: dict[str, Any]) -> str:
-    if serialized:
-        name = serialized.get("name") or serialized.get("id", [""])[-1]
-        if name:
-            return str(name)
-    return str(kwargs.get("name", "unknown"))
+def _deepagents_agent_name(kwargs: dict[str, Any]) -> str | None:
+    """Return the outer DeepAgents chain name, excluding internal graph nodes."""
+    metadata = kwargs.get("metadata")
+    if not isinstance(metadata, dict):
+        return None
 
-
-def _is_agent_name(name: str) -> bool:
-    normalized = name.lower()
-    return "agent" in normalized and not any(part in normalized for part in ("middleware", "handler", "callback"))
+    semantic_name = metadata.get("lc_agent_name")
+    callback_name = kwargs.get("name")
+    if not isinstance(semantic_name, str) or callback_name != semantic_name:
+        return None
+    return semantic_name
 
 
 def _task_display_name(serialized: dict[str, Any], input_str: str, inputs: dict[str, Any] | None) -> str:
@@ -57,9 +57,9 @@ class AgentLifecycleTelemetryCallback(BaseCallbackHandler):
         self._agent_names: dict[str, str] = {}
 
     def on_chain_start(self, serialized: dict[str, Any] | None, inputs: dict[str, Any], **kwargs: Any) -> None:
-        name = _chain_name(serialized, kwargs)
+        name = _deepagents_agent_name(kwargs)
         run_id = str(kwargs.get("run_id", ""))
-        if not run_id or not _is_agent_name(name):
+        if not run_id or name is None:
             return
 
         self._agent_names[run_id] = name

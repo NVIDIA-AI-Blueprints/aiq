@@ -78,6 +78,7 @@ async def test_agent_telemetry_nests_named_subagent_and_model_under_task(telemet
         run_id=agent_id,
         parent_run_id=task_id,
         name="planner-agent",
+        metadata={"lc_agent_name": "planner-agent"},
     )
     await profiler_callback.on_chat_model_start(
         {},
@@ -148,7 +149,14 @@ async def test_parallel_researcher_spans_share_batch_parent_without_sharing_iden
     )
 
     async def run_researcher(run_id: UUID) -> None:
-        agent_callback.on_chain_start(None, inputs={}, run_id=run_id, parent_run_id=batch_id, name="researcher-agent")
+        agent_callback.on_chain_start(
+            None,
+            inputs={},
+            run_id=run_id,
+            parent_run_id=batch_id,
+            name="researcher-agent",
+            metadata={"lc_agent_name": "researcher-agent"},
+        )
         await asyncio.sleep(0)
         agent_callback.on_chain_end({}, run_id=run_id)
 
@@ -176,6 +184,7 @@ def test_agent_lifecycle_spans_do_not_capture_graph_state(telemetry_context):
         inputs={"messages": [HumanMessage(content="sensitive input")]},
         run_id=run_id,
         name="researcher-agent",
+        metadata={"lc_agent_name": "researcher-agent"},
     )
     callback.on_chain_end(
         {"messages": [AIMessage(content="sensitive output")]},
@@ -184,6 +193,32 @@ def test_agent_lifecycle_spans_do_not_capture_graph_state(telemetry_context):
 
     assert len(events) == 2
     assert all(event.payload.data is None for event in events)
+    assert all("sensitive input" not in str(event.payload.metadata) for event in events)
+    assert all("sensitive output" not in str(event.payload.metadata) for event in events)
+
+
+@pytest.mark.parametrize(
+    ("name", "metadata", "expected"),
+    [
+        ("general-purpose", {"lc_agent_name": "general-purpose"}, True),
+        ("reviewer", {"lc_agent_name": "reviewer"}, True),
+        ("agent", {"langgraph_node": "agent"}, False),
+        ("model", {"lc_agent_name": "reviewer"}, False),
+    ],
+)
+def test_agent_lifecycle_requires_matching_deepagents_identity(telemetry_context, name, metadata, expected):
+    """Only the outer chain identified by DeepAgents metadata is an agent boundary."""
+    from aiq_api.jobs.telemetry import AgentLifecycleTelemetryCallback
+
+    _, manager, events = telemetry_context
+    callback = AgentLifecycleTelemetryCallback(manager)
+    run_id = UUID("00000000-0000-0000-0000-000000000030")
+
+    callback.on_chain_start(None, inputs={}, run_id=run_id, name=name, metadata=metadata)
+    callback.on_chain_end({}, run_id=run_id)
+
+    assert [event.payload.name for event in events] == ([name, name] if expected else [])
+    assert manager.get_outstanding_step_count() == 0
 
 
 def test_aiq_profiler_context_replaces_and_restores_nat_profiler(telemetry_context):
