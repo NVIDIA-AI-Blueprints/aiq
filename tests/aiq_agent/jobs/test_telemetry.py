@@ -163,6 +163,29 @@ async def test_parallel_researcher_spans_share_batch_parent_without_sharing_iden
     assert {event.parent_id for event in starts.values()} == {str(batch_id)}
 
 
+def test_agent_lifecycle_spans_do_not_capture_graph_state(telemetry_context):
+    """Structural agent spans must not duplicate LangGraph state into telemetry."""
+    from aiq_api.jobs.telemetry import AgentLifecycleTelemetryCallback
+
+    _, manager, events = telemetry_context
+    callback = AgentLifecycleTelemetryCallback(manager)
+    run_id = UUID("00000000-0000-0000-0000-000000000020")
+
+    callback.on_chain_start(
+        None,
+        inputs={"messages": [HumanMessage(content="sensitive input")]},
+        run_id=run_id,
+        name="researcher-agent",
+    )
+    callback.on_chain_end(
+        {"messages": [AIMessage(content="sensitive output")]},
+        run_id=run_id,
+    )
+
+    assert len(events) == 2
+    assert all(event.payload.data is None for event in events)
+
+
 def test_aiq_profiler_context_replaces_and_restores_nat_profiler(telemetry_context):
     """AIQ must customize NAT's inherited profiler instead of installing a duplicate callback."""
     from aiq_api.jobs.telemetry import AIQLangchainProfilerHandler

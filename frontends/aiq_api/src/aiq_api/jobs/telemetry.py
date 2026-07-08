@@ -14,7 +14,6 @@ from langchain_core.callbacks import BaseCallbackHandler
 
 from nat.data_models.intermediate_step import IntermediateStepPayload
 from nat.data_models.intermediate_step import IntermediateStepType
-from nat.data_models.intermediate_step import StreamEventData
 from nat.data_models.intermediate_step import TraceMetadata
 from nat.plugins.langchain.callback_handler import LangchainProfilerHandler
 
@@ -70,7 +69,6 @@ class AgentLifecycleTelemetryCallback(BaseCallbackHandler):
                 UUID=run_id,
                 event_type=IntermediateStepType.WORKFLOW_START,
                 name=name,
-                data=StreamEventData(input=inputs),
                 metadata=TraceMetadata(
                     provided_metadata={
                         "agent_id": run_id,
@@ -108,7 +106,6 @@ class AgentLifecycleTelemetryCallback(BaseCallbackHandler):
                 UUID=run_id,
                 event_type=IntermediateStepType.WORKFLOW_END,
                 name=name,
-                data=StreamEventData(output=outputs if error is None else str(error)),
                 metadata=TraceMetadata(provided_metadata=metadata),
             )
         )
