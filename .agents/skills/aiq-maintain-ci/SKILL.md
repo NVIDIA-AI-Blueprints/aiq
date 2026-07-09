@@ -47,7 +47,8 @@ keep the gate working and must not weaken security or review rules.
   validation → `harbor-eval` on the self-hosted `aiq-eval` runner).
 - `.github/workflows/request-nvskills-ci.yml`: comment-triggered NVSkills CI.
 - `.pre-commit-config.yaml`: the hook set. Note `pytest` and `helm-lint` are
-  `stages: [push]` (see the reference for what that means locally).
+  `stages: [push]` (see the reference for what that means locally). The pytest
+  hook selects the opt-in `mcp-tests` dependency group itself.
 - `.github/CODEOWNERS`, `.coderabbit.yaml`, `.github/copy-pr-bot.yaml`: review
   routing, path-scoped automated review, and the PR mirror.
 

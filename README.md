@@ -344,7 +344,7 @@ Expose AI-Q to MCP clients through the standalone, stateless Streamable HTTP ser
 ```bash
 : "${NVIDIA_API_KEY:?Set NVIDIA_API_KEY}"
 : "${TAVILY_API_KEY:?Set TAVILY_API_KEY}"
-AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs uv run aiq-mcp-server
+AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs uv run --package aiq-mcp-server aiq-mcp-server
 ```
 
 The endpoint defaults to `http://localhost:9001/mcp` and advertises exactly `submit_query`, `poll_query`, and

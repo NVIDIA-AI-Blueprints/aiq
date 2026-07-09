@@ -64,7 +64,7 @@ from submitting AI-Q jobs through a service reachable from the user's browser.
 ```bash
 AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs \
 AIQ_MCP_CONFIG=/path/to/config.yml \
-uv run aiq-mcp-server
+uv run --package aiq-mcp-server aiq-mcp-server
 ```
 
 Runtime settings use only public component names:
@@ -95,9 +95,10 @@ public design decisions are recorded in [`REFERENCE_PARITY.md`](REFERENCE_PARITY
 ## Development checks
 
 ```bash
+uv sync --group dev --group mcp-tests
 uv run ruff check mcp
 uv run ruff format --check mcp
-uv run pytest mcp/tests
+uv run --group mcp-tests pytest mcp/tests
 ```
 
 Set `AIQ_MCP_TEST_DB_URL` to a disposable Postgres database to enable the ledger and checkpoint integration tests.

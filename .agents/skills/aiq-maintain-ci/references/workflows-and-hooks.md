@@ -43,7 +43,9 @@ Two hooks — `pytest` and `helm-lint` — are `stages: [push]`, so a default
 `pre-commit run` / `pre-commit run --all-files` **skips them**. Include them
 explicitly with `pre-commit run --all-files --hook-stage push`. CI does not run
 them via the `pre-commit` job either (it `SKIP=`s them); they run as the dedicated
-`test` and `helm-lint` jobs in `ci.yml`.
+`test` and `helm-lint` jobs in `ci.yml`. The pytest hook invokes
+`uv run --group mcp-tests pytest ...`, so it remains self-contained even when
+the opt-in MCP dependency group was not installed beforehand.
 
 ## Validation
 

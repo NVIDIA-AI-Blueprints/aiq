@@ -10,7 +10,7 @@ To run tests:
 pytest
 pytest --cov=src/aiq_agent --cov-report=html
 pytest tests/path/to/test_file.py
-uv run pytest
+uv run --group mcp-tests pytest
 ```
 
 Use mocks for external services; mark slow/integration tests with `@pytest.mark.slow` / `@pytest.mark.integration` as needed.

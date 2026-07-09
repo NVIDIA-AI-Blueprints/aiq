@@ -96,7 +96,7 @@ jobs:
       - name: Install test dependencies
         run: |
           uv venv --python 3.13 .venv
-          uv sync --group dev
+          uv sync --group dev --group mcp-tests
 
       - name: Run mandatory MCP PostgreSQL tests
         run: |
@@ -190,7 +190,7 @@ jobs:
         run: |
           set -euo pipefail
           uv venv --python 3.13 .venv
-          uv sync --group dev
+          uv sync --group dev --group mcp-tests
           for pkg in \
             ./frontends/benchmarks/freshqa \
             ./frontends/benchmarks/intent_classifier

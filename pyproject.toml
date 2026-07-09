@@ -187,7 +187,7 @@ indent_dictionary_value = true
 # Auto-discovers packages in sources/ and frontends/ directories
 #
 # Usage:
-#   uv sync                              # Install root + all workspace members
+#   uv sync --group dev --group mcp-tests  # Install development and MCP test dependencies
 #   uv sync --package aiq-agent  # Install only the root package
 #   uv pip install -e ./frontends/cli    # Install a specific package
 #   uv pip install -e "./frontends/aiq_api[postgres]"  # With extras
@@ -213,6 +213,8 @@ dev = [
     "aiq-api",
     "aiq-research-cli",
     "aiq-debug",
+]
+mcp-tests = [
     "aiq-mcp-server",
 ]
 

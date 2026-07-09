@@ -23,10 +23,10 @@ We welcome contributions to the NVIDIA AI-Q blueprint. This repository uses a ma
 Use the narrowest command that covers your change, then include the exact output or workflow link in the PR.
 
 ```bash
-uv sync --group dev
+uv sync --group dev --group mcp-tests
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest
+uv run --group mcp-tests pytest
 ```
 
 For UI changes:

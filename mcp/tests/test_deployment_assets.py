@@ -13,6 +13,7 @@ import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DOCKERFILE = _REPO_ROOT / "mcp" / "Dockerfile"
+_AIQ_DOCKERFILE = _REPO_ROOT / "deploy" / "Dockerfile"
 _COMPOSE_FILE = _REPO_ROOT / "deploy" / "compose" / "docker-compose.mcp.yaml"
 _INIT_SQL = _REPO_ROOT / "mcp" / "deploy" / "init-mcp-db.sql"
 _DOCKERIGNORE = _REPO_ROOT / ".dockerignore"
@@ -86,6 +87,12 @@ def test_release_dockerfile_is_public_reproducible_and_non_root() -> None:
     assert "COPY --chown=10001:10001 LICENSE /licenses/LICENSE" in text
     assert "/opt/venv/bin/python mcp/scripts/check_runtime_dependencies.py" in text
     assert tuple(line.strip() for line in text.splitlines() if line.startswith("COPY ")) == _EXPECTED_COPY_LINES
+
+
+def test_aiq_dockerfile_ignores_opt_in_workspace_sources_for_root_install() -> None:
+    text = _AIQ_DOCKERFILE.read_text()
+
+    assert "RUN uv pip install --no-sources --no-deps -e . \\" in text
 
 
 def test_init_sql_preserves_reference_schema_and_upgrade_history() -> None:

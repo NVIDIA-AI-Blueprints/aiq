@@ -252,7 +252,6 @@ viz = [
 dev = [
     { name = "aiq-api" },
     { name = "aiq-debug" },
-    { name = "aiq-mcp-server" },
     { name = "aiq-research-cli" },
     { name = "dask", extra = ["distributed"] },
     { name = "duckduckgo-news-search" },
@@ -269,6 +268,9 @@ dev = [
     { name = "ruff" },
     { name = "tavily-web-search" },
     { name = "yapf" },
+]
+mcp-tests = [
+    { name = "aiq-mcp-server" },
 ]
 
 [package.metadata]
@@ -318,7 +320,6 @@ provides-extras = ["s3", "dev", "docs", "viz"]
 dev = [
     { name = "aiq-api", editable = "frontends/aiq_api" },
     { name = "aiq-debug", editable = "frontends/debug" },
-    { name = "aiq-mcp-server", editable = "mcp" },
     { name = "aiq-research-cli", editable = "frontends/cli" },
     { name = "dask", extras = ["distributed"], specifier = ">=2024.1.0" },
     { name = "duckduckgo-news-search", editable = "sources/duckduckgo_news_search" },
@@ -336,6 +337,7 @@ dev = [
     { name = "tavily-web-search", editable = "sources/tavily_web_search" },
     { name = "yapf", specifier = ">=0.40.0" },
 ]
+mcp-tests = [{ name = "aiq-mcp-server", editable = "mcp" }]
 
 [[package]]
 name = "aiq-api"

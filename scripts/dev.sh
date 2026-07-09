@@ -6,7 +6,7 @@ COMMAND=${1:-help}
 case "$COMMAND" in
     test)
         echo "Running tests..."
-        uv run pytest
+        uv run --group mcp-tests pytest
         echo "Tests complete"
         ;;
     format)

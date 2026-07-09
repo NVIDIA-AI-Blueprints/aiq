@@ -35,8 +35,9 @@ boundaries — not to run every command every time.
   section is the source of truth for every command below.
 - [CONTRIBUTING.md](../../../CONTRIBUTING.md): "Local Validation" — the exact
   commands to run and the requirement to include their output in the PR.
-- `pyproject.toml`: Ruff config (line length 120, rule sets `E,F,W,I,PL,UP`)
-  and the dev dependency group used by `uv sync --group dev`.
+- `pyproject.toml`: Ruff config (line length 120, rule sets `E,F,W,I,PL,UP`),
+  the dev dependency group, and the opt-in MCP test group used by
+  `uv sync --group dev --group mcp-tests`.
 - `frontends/ui/package.json`: the real `scripts` (`lint`, `type-check`,
   `test:ci`, `build`) — use these names, do not invent npm scripts.
 
@@ -67,12 +68,20 @@ uv run ruff format --check <changed paths> # format check
 uv run pytest <scoped test paths>          # tests
 ```
 
+MCP server (run from the repo root):
+
+```bash
+uv run ruff check mcp
+uv run ruff format --check mcp
+uv run --group mcp-tests pytest mcp/tests
+```
+
 Broaden to the whole tree when the change crosses shared boundaries:
 
 ```bash
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest
+uv run --group mcp-tests pytest
 ```
 
 Frontend (from `frontends/ui/`):
@@ -89,7 +98,7 @@ matrix reference.
 
 ## Common Mistakes
 
-- Running the entire `uv run pytest` suite for a one-package change instead of
+- Running the entire `uv run --group mcp-tests pytest` suite for a one-package change instead of
   scoping to the touched paths first — slow, and it buries the relevant signal.
 - Skipping `ruff format --check` and pushing unformatted code that fails CI.
 - Hand-reformatting unrelated code; only the changed code should move.

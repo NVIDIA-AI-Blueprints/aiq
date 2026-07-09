@@ -52,9 +52,9 @@ Python (run from the repo root; the project uses `uv`):
 
 ```bash
 ./scripts/setup.sh                 # one-time environment setup
-uv run ruff check .                # lint
-uv run ruff format --check .       # format check
-uv run pytest                      # tests
+uv run ruff check .                     # lint
+uv run ruff format --check .            # format check
+uv run --group mcp-tests pytest         # tests
 ```
 
 Run the backend locally:

@@ -14,7 +14,7 @@ Validation"); this file is a convenience index, not a new source of truth.
 
 ```bash
 ./scripts/setup.sh          # one-time environment setup
-uv sync --group dev         # ensure dev dependencies (ruff, pytest) are present
+uv sync --group dev --group mcp-tests  # ensure dev and MCP test dependencies are present
 ```
 
 ## Backend Python — `src/`, `sources/`, `tests/`
@@ -39,12 +39,24 @@ Broaden to the whole tree when the change touches shared code (for example
 ```bash
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest
+uv run --group mcp-tests pytest
 ```
 
 Expected: Ruff reports no lint or format failures for the changed code, and the
 selected tests pass. Ruff config (line length 120; rule sets `E,F,W,I,PL,UP`)
 lives in `pyproject.toml`.
+
+## MCP server — `mcp/`
+
+```bash
+uv run ruff check mcp
+uv run ruff format --check mcp
+uv run --group mcp-tests pytest mcp/tests
+```
+
+Set `AIQ_MCP_TEST_DB_URL` to a disposable PostgreSQL database to include the
+database-backed job, checkpoint, restart, and NAT-load tests. Those tests create
+and drop tables, so never point them at a service or production database.
 
 ## Web UI — `frontends/ui/`
 

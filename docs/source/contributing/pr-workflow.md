@@ -21,10 +21,10 @@ We welcome contributions. Follow the steps below.
 Run the narrowest checks that cover your change.
 
 ```bash
-uv sync --group dev
+uv sync --group dev --group mcp-tests
 uv run ruff check .
 uv run ruff format --check .
-uv run pytest
+uv run --group mcp-tests pytest
 ```
 
 For UI changes:

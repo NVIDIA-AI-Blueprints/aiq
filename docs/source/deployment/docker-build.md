@@ -42,9 +42,9 @@ The builder stage handles all compilation and package installation:
 
 1. **System dependencies** -- Installs build tools, curl, git, and Python 3.12 from the `deadsnakes` PPA.
 2. **Virtual environment** -- Creates a venv at `/app/.venv` using `uv`.
-3. **Dependency installation** -- Runs `uv sync --frozen --no-dev --no-install-workspace` to install locked dependencies.
+3. **Dependency installation** -- Runs `uv sync --frozen --extra s3` to install locked runtime and default-group dependencies. The opt-in `mcp-tests` group is not selected, so the standalone MCP package is not part of this image.
 4. **Workspace packages** -- Installs application packages with `uv pip install -e` (the root package uses `--no-deps`):
-   - Root workspace package (`aiq-agent`) using `uv pip install --no-deps -e .`
+   - Root workspace package (`aiq-agent`) using `uv pip install --no-sources --no-deps -e .`; `--no-sources` keeps opt-in workspace source overrides from coupling this image to packages that are intentionally absent from its build context.
    - `sources/google_scholar_paper_search` -- Google Scholar search
    - `sources/tavily_web_search` -- Tavily web search
    - `sources/exa_web_search` -- Exa web search

@@ -119,6 +119,9 @@ def test_mcp_manifest_declares_public_direct_runtime_dependencies() -> None:
 def test_root_workspace_owns_mcp_package_and_single_lockfile() -> None:
     manifest = tomllib.loads(_ROOT_MANIFEST_PATH.read_text())
 
+    dependency_groups = manifest["dependency-groups"]
+    assert "aiq-mcp-server" not in dependency_groups["dev"]
+    assert dependency_groups["mcp-tests"] == ["aiq-mcp-server"]
     assert "mcp" in manifest["tool"]["uv"]["workspace"]["members"]
     assert manifest["tool"]["uv"]["sources"]["aiq-mcp-server"] == {"workspace": True}
     assert manifest["tool"]["uv"]["sources"]["tavily-web-search"] == {"workspace": True}

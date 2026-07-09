@@ -35,7 +35,7 @@ For a local source checkout, start PostgreSQL and then run:
 export NVIDIA_API_KEY="your-nvidia-api-key"  # pragma: allowlist secret
 export TAVILY_API_KEY="your-tavily-api-key"  # pragma: allowlist secret
 export AIQ_CHECKPOINT_DB="postgresql://aiq:local_mcp_password@127.0.0.1:1234/aiq_jobs"  # pragma: allowlist secret
-uv run aiq-mcp-server
+uv run --package aiq-mcp-server aiq-mcp-server
 ```
 
 The component accepts these runtime settings:
