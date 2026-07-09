@@ -23,11 +23,22 @@ We welcome contributions to the NVIDIA AI-Q blueprint. This repository uses a ma
 Use the narrowest command that covers your change, then include the exact output or workflow link in the PR.
 
 ```bash
-uv sync --group dev --group mcp-tests
+uv sync --group dev
 uv run ruff check .
 uv run ruff format --check .
-uv run --group mcp-tests pytest
+uv run pytest
 ```
+
+The MCP server is an independent uv project. For changes under `mcp/`, also
+run:
+
+```bash
+uv sync --project mcp --extra dev
+uv run --project mcp --extra dev pytest mcp/tests
+```
+
+Dependency changes must leave both project locks current: check the root with
+`uv lock --check` and MCP with `uv lock --project mcp --check`.
 
 For UI changes:
 

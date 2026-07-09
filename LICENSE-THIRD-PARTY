@@ -8,7 +8,7 @@ we list the packages that are distributed under it and include the license text.
 This is a curated notice snapshot, not an exhaustive or release-specific
 dependency inventory. Package versions below may differ from the current lock
 files. Release processes must generate and review target-specific inventories
-from `uv.lock` and `frontends/ui/package-lock.json`.
+from `uv.lock`, `mcp/uv.lock`, and `frontends/ui/package-lock.json`.
 
 ------------------------------------------------------------
 MIT License

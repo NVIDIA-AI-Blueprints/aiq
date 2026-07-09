@@ -344,13 +344,20 @@ Expose AI-Q to MCP clients through the standalone, stateless Streamable HTTP ser
 ```bash
 : "${NVIDIA_API_KEY:?Set NVIDIA_API_KEY}"
 : "${TAVILY_API_KEY:?Set TAVILY_API_KEY}"
-AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs uv run --package aiq-mcp-server aiq-mcp-server
+uv sync --project mcp --frozen
+AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs \
+  uv run --project mcp --frozen aiq-mcp-server
 ```
 
 The endpoint defaults to `http://localhost:9001/mcp` and advertises exactly `submit_query`, `poll_query`, and
 `get_final_report`. This public server intentionally has no authentication; job UUIDs are bearer capabilities and
 the endpoint must not be exposed directly to an untrusted network. See [Expose AI-Q as an MCP Server](docs/source/integration/mcp-server.md)
 for the exact JSON protocol, health contracts, security model, and container deployment.
+
+MCP is an independent uv project with its own `mcp/uv.lock`. The root lock remains compatible with NAT's
+`cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==48.0.1` as a
+security hardening measure. That uv override is lock policy rather than wheel metadata, so installing the wheel by
+itself does not guarantee the 48.0.1 profile.
 
 ### Benchmarks
 

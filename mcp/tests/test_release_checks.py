@@ -173,6 +173,41 @@ def test_license_inventory_requires_every_direct_runtime_dependency(monkeypatch:
         validate_inventory(inventory)
 
 
+def test_sbom_contract_accepts_the_exact_approved_local_component_set() -> None:
+    sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "metadata": {"component": {"name": "aiq-mcp-server", "version": "0.1.0"}},
+        "components": [
+            {"name": "aiq-agent", "version": "2.0.0"},
+            {"name": "knowledge-layer", "version": "1.0.0"},
+            {"name": "tavily-web-search", "version": "1.0.0"},
+            {
+                "name": "asyncpg",
+                "version": "0.31.0",
+                "purl": "pkg:pypi/asyncpg@0.31.0",
+            },
+        ],
+    }
+
+    validate_sbom(sbom)
+
+
+def test_sbom_contract_requires_every_approved_local_component() -> None:
+    sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "metadata": {"component": {"name": "aiq-mcp-server", "version": "0.1.0"}},
+        "components": [
+            {"name": "aiq-agent", "version": "2.0.0"},
+            {"name": "knowledge-layer", "version": "1.0.0"},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="local component set differs"):
+        validate_sbom(sbom)
+
+
 def test_sbom_contract_rejects_non_pypi_dependency_source() -> None:
     sbom = {
         "bomFormat": "CycloneDX",
@@ -181,7 +216,7 @@ def test_sbom_contract_rejects_non_pypi_dependency_source() -> None:
         "components": [{"name": "private-runtime", "version": "1.0"}],
     }
 
-    with pytest.raises(ValueError, match="not from the public PyPI source contract"):
+    with pytest.raises(ValueError, match="unapproved local dependency source"):
         validate_sbom(sbom)
 
 

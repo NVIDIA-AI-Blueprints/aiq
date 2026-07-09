@@ -26,28 +26,25 @@ ENV UV_LINK_MODE=copy
 ENV UV_PROJECT_ENVIRONMENT=/opt/venv
 ENV UV_PYTHON_DOWNLOADS=never
 
-# The root lock owns this workspace. Copy every workspace manifest that uv must
-# discover, plus only the source/config needed by the MCP dependency closure.
-COPY pyproject.toml uv.lock README.md ./
+# MCP is an independent uv project with its own lock. Preserve the repository
+# layout for its reviewed local path dependencies, but do not copy or resolve
+# the root workspace lock.
+COPY pyproject.toml README.md ./
 COPY src/ ./src/
-COPY sources/ ./sources/
-COPY frontends/aiq_api/pyproject.toml ./frontends/aiq_api/
-COPY frontends/cli/pyproject.toml ./frontends/cli/
-COPY frontends/debug/pyproject.toml ./frontends/debug/
-COPY frontends/benchmarks/freshqa/pyproject.toml ./frontends/benchmarks/freshqa/
-COPY frontends/benchmarks/deepsearch_qa/pyproject.toml ./frontends/benchmarks/deepsearch_qa/
-COPY mcp/LICENSE mcp/pyproject.toml mcp/README.md ./mcp/
+COPY sources/knowledge_layer/ ./sources/knowledge_layer/
+COPY sources/tavily_web_search/ ./sources/tavily_web_search/
+COPY mcp/LICENSE mcp/pyproject.toml mcp/README.md mcp/uv.lock ./mcp/
 COPY mcp/src/ ./mcp/src/
 COPY mcp/scripts/check_runtime_dependencies.py ./mcp/scripts/check_runtime_dependencies.py
 COPY configs/config_mcp.yml ./configs/config_mcp.yml
 
 # Install exactly the production dependency closure from the frozen public
-# workspace lock. Workspace packages are installed as wheels, not editables, so
+# MCP lock. Local path packages are installed as wheels, not editables, so
 # the release image needs only the virtual environment and runtime config.
 RUN --mount=type=cache,id=aiq-mcp-uv,target=/root/.cache/uv,sharing=locked \
     uv sync \
+        --project /app/mcp \
         --frozen \
-        --package aiq-mcp-server \
         --no-dev \
         --no-default-groups \
         --no-editable \

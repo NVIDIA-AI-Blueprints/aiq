@@ -9,6 +9,7 @@ import argparse
 import hashlib
 import json
 import re
+import tomllib
 from collections import Counter
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import distribution
@@ -28,11 +29,12 @@ _DIRECT_RUNTIME_DEPENDENCIES = {
     "uvicorn",
 }
 _FORBIDDEN_COMPONENTS = {"maas-sdk", "mos-sdk"}
-_WORKSPACE_COMPONENTS = {
-    ("aiq-agent", "2.0.0", "."),
-    ("knowledge-layer", "1.0.0", "sources/knowledge_layer"),
-    ("tavily-web-search", "1.0.0", "sources/tavily_web_search"),
+_LOCAL_SOURCE_COMPONENTS = {
+    ("aiq-agent", "2.0.0"): "../",
+    ("knowledge-layer", "1.0.0"): "../sources/knowledge_layer",
+    ("tavily-web-search", "1.0.0"): "../sources/tavily_web_search",
 }
+_MCP_LOCK_PATH = Path(__file__).resolve().parents[1] / "uv.lock"
 
 # These distributions omit license metadata but bundle a license file. A version
 # or file change intentionally fails until the new evidence is reviewed.
@@ -184,7 +186,7 @@ def validate_sbom(sbom: dict[str, Any]) -> None:
     if not isinstance(components, list):
         raise ValueError("SBOM must contain a component list")
 
-    observed_workspace: set[tuple[str, str, str]] = set()
+    observed_local: set[tuple[str, str]] = set()
     for component in components:
         name = _canonicalize(str(component.get("name", "")))
         version = str(component.get("version") or "")
@@ -195,19 +197,43 @@ def validate_sbom(sbom: dict[str, Any]) -> None:
             for item in component.get("properties", [])
             if item.get("name") is not None
         }
-        workspace_path = properties.get("uv:workspace:path")
-        if workspace_path is not None:
-            record = (name, version, workspace_path)
-            if record not in _WORKSPACE_COMPONENTS or component.get("purl") is not None:
-                raise ValueError(f"unapproved workspace dependency source: {name}=={version}")
-            observed_workspace.add(record)
+        record = (name, version)
+        if component.get("purl") is None:
+            if record not in _LOCAL_SOURCE_COMPONENTS or "uv:workspace:path" in properties:
+                raise ValueError(f"unapproved local dependency source: {name}=={version}")
+            observed_local.add(record)
             continue
 
         if component.get("purl") != f"pkg:pypi/{name}@{version}":
             raise ValueError(f"dependency is not from the public PyPI source contract: {name}=={version}")
 
-    if observed_workspace != _WORKSPACE_COMPONENTS:
-        raise ValueError("SBOM workspace component set differs from the approved public source contract")
+    if observed_local != set(_LOCAL_SOURCE_COMPONENTS):
+        raise ValueError("SBOM local component set differs from the approved public source contract")
+
+
+def validate_lock_sources(lock_path: Path = _MCP_LOCK_PATH) -> None:
+    """Preserve path provenance that uv's CycloneDX export does not encode."""
+    lock = tomllib.loads(lock_path.read_text())
+    expected_local = {
+        **_LOCAL_SOURCE_COMPONENTS,
+        ("aiq-mcp-server", "0.1.0"): ".",
+    }
+    observed_local: dict[tuple[str, str], str] = {}
+    for package in lock.get("package", []):
+        name = _canonicalize(str(package.get("name", "")))
+        version = str(package.get("version") or "")
+        source = package.get("source", {})
+        if source.get("registry") is not None:
+            if source != {"registry": "https://pypi.org/simple"}:
+                raise ValueError(f"dependency uses an unapproved registry source: {name}=={version}")
+            continue
+        editable = source.get("editable")
+        if not isinstance(editable, str):
+            raise ValueError(f"dependency uses an unapproved lock source: {name}=={version}")
+        observed_local[(name, version)] = editable
+
+    if observed_local != expected_local:
+        raise ValueError("MCP lock local sources differ from the approved public source contract")
 
 
 def build_inventory(sbom_path: Path) -> dict[str, Any]:
@@ -410,8 +436,9 @@ def main() -> int:
     parser.add_argument("output", type=Path)
     args = parser.parse_args()
 
-    inventory = build_inventory(args.sbom)
     try:
+        validate_lock_sources()
+        inventory = build_inventory(args.sbom)
         validation = validate_inventory(inventory)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc

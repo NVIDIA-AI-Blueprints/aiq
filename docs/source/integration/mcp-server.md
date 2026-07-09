@@ -29,13 +29,26 @@ required for this MCP configuration:
 The config intentionally excludes the AI-Q API frontend, authentication providers, enterprise data sources,
 paper search, and the second async-job layer. FastMCP owns the transport and the submit/poll lifecycle.
 
+### Dependency isolation
+
+MCP is a separate uv project with its own `mcp/pyproject.toml`, `mcp/uv.lock`, and environment. The root AI-Q
+workspace excludes it and keeps `cryptography>=46.0.6,<47`, which is compatible with NAT's declared requirements.
+The frozen MCP release/container profile instead pins `cryptography==48.0.1` to replace the OpenSSL version
+bundled in earlier wheels.
+
+The 48.0.1 override is security hardening for the audited release profile, not a functional MCP protocol
+requirement. uv overrides are lock policy and are not written into the published wheel metadata, so installing the
+`aiq-mcp-server` wheel outside this project may resolve a NAT-compatible `cryptography` version below 47. Use
+`mcp/uv.lock` through the commands below, or use the release container, when the audited 48.0.1 profile is required.
+
 For a local source checkout, start PostgreSQL and then run:
 
 ```bash
 export NVIDIA_API_KEY="your-nvidia-api-key"  # pragma: allowlist secret
 export TAVILY_API_KEY="your-tavily-api-key"  # pragma: allowlist secret
 export AIQ_CHECKPOINT_DB="postgresql://aiq:local_mcp_password@127.0.0.1:1234/aiq_jobs"  # pragma: allowlist secret
-uv run --package aiq-mcp-server aiq-mcp-server
+uv sync --project mcp --frozen
+uv run --project mcp --frozen aiq-mcp-server
 ```
 
 The component accepts these runtime settings:
@@ -225,7 +238,7 @@ in-process TLS configuration. Terminate HTTPS at a reverse proxy or platform ing
 Run the supported-client smoke test:
 
 ```bash
-uv run --frozen python mcp/scripts/protocol_smoke.py --url http://127.0.0.1:9001/mcp
+uv run --project mcp --frozen python mcp/scripts/protocol_smoke.py --url http://127.0.0.1:9001/mcp
 ```
 
 Stop the local stack with:

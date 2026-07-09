@@ -26,30 +26,30 @@ The same checks can be reproduced from the repository root:
 
 ```bash
 uv export --preview-features sbom-export \
-  --frozen --package aiq-mcp-server --no-dev --no-default-groups \
+  --project mcp --frozen --no-dev --no-default-groups \
   --format cyclonedx1.5 --output-file aiq-mcp.cdx.json >/dev/null
 
 uv audit --preview-features audit-command,json-output \
-  --frozen --no-dev --no-default-groups \
+  --project mcp --frozen --no-dev --no-default-groups \
   --output-format json > aiq-mcp-vulnerabilities.json || test "$?" -eq 1
 
 uv audit --preview-features audit-command,json-output \
-  --frozen --no-dev --no-default-groups \
+  --project mcp --frozen --no-dev --no-default-groups \
   --ignore-until-fixed GHSA-f4j7-r4q5-qw2c \
   --output-format json >/dev/null
 ```
 
 ```bash
 UV_PROJECT_ENVIRONMENT=/tmp/aiq-mcp-release \
-  uv sync --frozen --package aiq-mcp-server --no-dev --no-default-groups --no-editable
+  uv sync --project mcp --frozen --no-dev --no-default-groups --no-editable
 /tmp/aiq-mcp-release/bin/python mcp/scripts/check_license_inventory.py \
   aiq-mcp.cdx.json aiq-mcp-licenses.json
 ```
 
-`uv audit` currently audits the complete production workspace lock, which is
-stricter than the MCP-only CycloneDX closure. CI archives the unfiltered JSON,
-including accepted findings, and runs the exception-aware command separately
-as the pass/fail gate.
+`uv audit` audits the isolated `mcp/uv.lock`; it does not audit the root AI-Q
+workspace lock. CI archives the unfiltered MCP JSON, including accepted
+findings, and runs the exception-aware command separately as the pass/fail
+gate.
 
 ## No-fix vulnerability exception
 
@@ -67,11 +67,11 @@ cleanly requires a future minimal `aiq-agent` distribution or optional-dependenc
 refactor; uninstalling it after resolution would make package metadata
 inaccurate.
 
-The workspace requires `nltk>=3.10.0` so the production lock includes NLTK's
-path-security fixes. NLTK 3.10 adds `defusedxml`; the workspace constrains that
-dependency to the stable 0.7 release line because the repository-wide
-prerelease policy would otherwise select a 0.8 release candidate. NLTK no
-longer requires an audit exception.
+The MCP project requires `nltk>=3.10.0` so its production lock includes NLTK's
+path-security fixes. NLTK 3.10 adds `defusedxml`; the MCP project constrains
+that dependency to the stable 0.7 release line because its prerelease policy
+would otherwise select a 0.8 release candidate. NLTK no longer requires an
+audit exception.
 
 The audit also reports archived project status for transitive packages. An
 archived status is tracked as maintenance risk but is not itself a known
@@ -79,11 +79,19 @@ vulnerability. New vulnerability records still fail the required CI check.
 
 ## Security dependency override
 
-The lock installs `cryptography==48.0.1` to replace the vulnerable OpenSSL
-bundled in earlier wheels. `nvidia-nat-core==1.8.0` and `oci==2.178.0` still
-declare upper bounds below 47, so the workspace's uv override intentionally
-supersedes those stale bounds. The MCP config does not enable OCI or NAT
-authentication.
+The isolated MCP lock installs `cryptography==48.0.1` to replace the vulnerable
+OpenSSL bundled in earlier wheels. `nvidia-nat-core==1.8.0` and
+`oci==2.178.0` still declare upper bounds below 47, so the MCP project's uv
+override intentionally supersedes those stale bounds. The MCP config does not
+enable OCI or NAT authentication. The root AI-Q lock is separate and keeps
+`cryptography>=46.0.6,<47` so its environment remains within NAT's declared
+range.
+
+This override is security policy for the frozen MCP release and container, not
+a functional requirement of MCP. uv overrides are not encoded in published
+wheel metadata, so installing the `aiq-mcp-server` wheel by itself does not
+guarantee 48.0.1 and may resolve a NAT-compatible version below 47. Only the
+frozen `mcp/uv.lock` profile carries the audited 48.0.1 guarantee.
 
 `mcp/scripts/check_runtime_dependencies.py` performs the full installed
 requirement check and permits only those two exact owner/version/dependency/

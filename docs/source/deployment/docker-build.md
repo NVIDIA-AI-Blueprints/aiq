@@ -42,9 +42,9 @@ The builder stage handles all compilation and package installation:
 
 1. **System dependencies** -- Installs build tools, curl, git, and Python 3.12 from the `deadsnakes` PPA.
 2. **Virtual environment** -- Creates a venv at `/app/.venv` using `uv`.
-3. **Dependency installation** -- Runs `uv sync --frozen --extra s3` to install locked runtime and default-group dependencies. The opt-in `mcp-tests` group is not selected, so the standalone MCP package is not part of this image.
+3. **Dependency installation** -- Runs `uv sync --frozen --extra s3` against the root `uv.lock` to install locked runtime and default-group dependencies. The independent `mcp/` project is excluded from the root workspace, so the standalone MCP package and `mcp/uv.lock` are not part of this image.
 4. **Workspace packages** -- Installs application packages with `uv pip install -e` (the root package uses `--no-deps`):
-   - Root workspace package (`aiq-agent`) using `uv pip install --no-sources --no-deps -e .`; `--no-sources` keeps opt-in workspace source overrides from coupling this image to packages that are intentionally absent from its build context.
+   - Root workspace package (`aiq-agent`) using `uv pip install --no-sources --no-deps -e .`; `--no-sources` keeps workspace source overrides from coupling this image to packages that are intentionally absent from its build context.
    - `sources/google_scholar_paper_search` -- Google Scholar search
    - `sources/tavily_web_search` -- Tavily web search
    - `sources/exa_web_search` -- Exa web search
@@ -54,6 +54,22 @@ The builder stage handles all compilation and package installation:
 5. **File setup** -- Makes startup scripts executable, creates `/app/data`, and sets ownership to UID 1000.
 
 Only runtime scripts (`deploy/entrypoint.py` and `deploy/start_web.py`) are copied from the `deploy/` directory. The full `deploy/` directory is excluded to avoid leaking `.env` files, Helm charts, compose files, or other development artifacts into the image.
+
+## Standalone MCP Image
+
+The MCP release has a separate multi-stage Dockerfile at `mcp/Dockerfile`. Build
+it from the repository root so its local AI-Q source dependencies are available:
+
+```bash
+docker build -t aiq-mcp-server:local -f mcp/Dockerfile .
+```
+
+That builder syncs the frozen MCP project (`uv sync --project /app/mcp`) from
+`mcp/uv.lock`, independently of the root image. The root image stays within
+NAT's `cryptography<47` constraint; the audited MCP container profile pins
+`cryptography==48.0.1` through an MCP-scoped uv override. Because overrides are
+not embedded in wheel metadata, only the frozen MCP project/container—not an
+arbitrary wheel installation—guarantees that 48.0.1 profile.
 
 ## Dev Stage
 

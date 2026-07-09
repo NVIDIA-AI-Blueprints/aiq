@@ -21,10 +21,17 @@ We welcome contributions. Follow the steps below.
 Run the narrowest checks that cover your change.
 
 ```bash
-uv sync --group dev --group mcp-tests
+uv sync --group dev
 uv run ruff check .
 uv run ruff format --check .
-uv run --group mcp-tests pytest
+uv run pytest
+```
+
+For MCP changes, validate its independent project as well:
+
+```bash
+uv sync --project mcp --extra dev
+uv run --project mcp --extra dev pytest mcp/tests
 ```
 
 For UI changes:

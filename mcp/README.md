@@ -1,6 +1,6 @@
 # AI-Q MCP Server
 
-This workspace component exposes the AI-Q research workflow through the Model Context Protocol (MCP).
+This independent uv project exposes the AI-Q research workflow through the Model Context Protocol (MCP).
 
 For the canonical user and deployment guide, including exact JSON contracts, see
 [Expose AI-Q as an MCP Server](../docs/source/integration/mcp-server.md).
@@ -64,7 +64,7 @@ from submitting AI-Q jobs through a service reachable from the user's browser.
 ```bash
 AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs \
 AIQ_MCP_CONFIG=/path/to/config.yml \
-uv run --package aiq-mcp-server aiq-mcp-server
+uv run --project mcp --frozen aiq-mcp-server
 ```
 
 Runtime settings use only public component names:
@@ -94,14 +94,25 @@ public design decisions are recorded in [`REFERENCE_PARITY.md`](REFERENCE_PARITY
 
 ## Development checks
 
+The root AI-Q workspace and MCP project use separate environments and lockfiles:
+
 ```bash
-uv sync --group dev --group mcp-tests
+uv sync --group dev
+uv sync --project mcp --extra dev
 uv run ruff check mcp
 uv run ruff format --check mcp
-uv run --group mcp-tests pytest mcp/tests
+uv run --project mcp --extra dev pytest mcp/tests
 ```
 
 Set `AIQ_MCP_TEST_DB_URL` to a disposable Postgres database to enable the ledger and checkpoint integration tests.
+
+Build the standalone wheel from the repository root with `uv build mcp --wheel`.
+
+The root `uv.lock` keeps `cryptography>=46.0.6,<47` for compatibility with NAT. The audited MCP release profile is
+resolved independently from `mcp/uv.lock` and pins `cryptography==48.0.1` to harden the bundled OpenSSL version.
+That pin is a uv override for the frozen project and container, not a functional MCP requirement or published
+wheel constraint. A generic wheel installation can therefore resolve a NAT-compatible version below 47; use the
+frozen MCP project or release container when the audited 48.0.1 profile is required.
 
 ## Container deployment
 
@@ -128,7 +139,7 @@ passed into the MCP container.
 Run the supported-client, no-authentication smoke test:
 
 ```bash
-uv run --frozen python mcp/scripts/protocol_smoke.py --url http://127.0.0.1:9001/mcp
+uv run --project mcp --frozen python mcp/scripts/protocol_smoke.py --url http://127.0.0.1:9001/mcp
 ```
 
 The check waits for readiness, initializes MCP, asserts that exactly the three documented tools are advertised,

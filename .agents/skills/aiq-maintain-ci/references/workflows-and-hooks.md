@@ -13,8 +13,10 @@ Authoritative sources: the workflow files under `.github/workflows/` and
 - `ci.yml` ("AIQ CI") — jobs: `pre-commit`, `test` (pytest with a coverage gate),
   `helm-lint` (deploy charts), `test-scripts`. The `pre-commit` job does **not**
   run the full hook set: it runs `ruff check .` / `ruff format --check .`
-  separately and `SKIP=ruff-check,ruff-format,pytest,helm-lint pre-commit run
-  --all-files`, leaving pytest/helm-lint to their own jobs.
+  separately and skips the push-stage pytest and Helm hooks when it runs
+  `pre-commit run --all-files`, leaving those checks to their own jobs. The test
+  job syncs the root AI-Q environment from `uv.lock` and the independent MCP
+  environment from `mcp/uv.lock`.
 - `ui.yml` — jobs `install`, `lint`, `type-check`, `unit-test`, `build` for
   `frontends/ui/`.
 - `skills-eval.yml` ("Skills Eval") — runs on `push` and `workflow_dispatch`. A
@@ -35,17 +37,17 @@ bot-driven merge once repository rules pass. The mirror behavior is configured i
 
 `.pre-commit-config.yaml` is the source of truth. Default-stage hooks (run by a
 plain `pre-commit run`) include: `ruff-check`, `ruff-format`, `uv-lock`,
-`check-merge-conflict`, `check-added-large-files`, `check-yaml`,
+`uv-lock-mcp`, `check-merge-conflict`, `check-added-large-files`, `check-yaml`,
 `end-of-file-fixer`, `trailing-whitespace`, `detect-secrets`, `validate-skills`,
 `clear-notebook-output-cells`, and `markdown-link-check`.
 
-Two hooks — `pytest` and `helm-lint` — are `stages: [push]`, so a default
-`pre-commit run` / `pre-commit run --all-files` **skips them**. Include them
-explicitly with `pre-commit run --all-files --hook-stage push`. CI does not run
-them via the `pre-commit` job either (it `SKIP=`s them); they run as the dedicated
-`test` and `helm-lint` jobs in `ci.yml`. The pytest hook invokes
-`uv run --group mcp-tests pytest ...`, so it remains self-contained even when
-the opt-in MCP dependency group was not installed beforehand.
+The root pytest, MCP pytest, and `helm-lint` hooks are `stages: [push]`, so a
+default `pre-commit run` / `pre-commit run --all-files` **skips them**. Include
+them explicitly with `pre-commit run --all-files --hook-stage push`. CI does not
+run them via the `pre-commit` job either; they run as the dedicated `test` and
+`helm-lint` jobs in `ci.yml`. The root pytest hook uses `uv.lock`; the MCP hook
+invokes `uv run --project mcp --extra dev pytest mcp/tests` against
+`mcp/uv.lock`.
 
 ## Validation
 

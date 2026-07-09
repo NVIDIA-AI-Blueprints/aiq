@@ -48,7 +48,6 @@ dependencies = [
     "python-multipart>=0.0.27,<0.1",
     "knowledge-layer[all]",
     # CVE version floors for transitive dependencies
-    "cryptography>=48.0.1,<49",
     "pillow>=12.2.0,<13",
     "pygments>=2.20.0,<3",
 ]
@@ -103,7 +102,7 @@ aiq_data_source_registry = "aiq_agent.common.data_source_registry"
 aiq_guardrails = "aiq_agent.guardrails.register"
 
 [tool.pytest.ini_options]
-testpaths = ["tests", "sources/**/tests", "mcp/tests"]
+testpaths = ["tests", "sources/**/tests"]
 addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
@@ -187,7 +186,8 @@ indent_dictionary_value = true
 # Auto-discovers packages in sources/ and frontends/ directories
 #
 # Usage:
-#   uv sync --group dev --group mcp-tests  # Install development and MCP test dependencies
+#   uv sync --group dev                 # Install AI-Q development dependencies
+#   uv sync --project mcp --extra dev   # Install the isolated MCP test environment
 #   uv sync --package aiq-agent  # Install only the root package
 #   uv pip install -e ./frontends/cli    # Install a specific package
 #   uv pip install -e "./frontends/aiq_api[postgres]"  # With extras
@@ -214,15 +214,11 @@ dev = [
     "aiq-research-cli",
     "aiq-debug",
 ]
-mcp-tests = [
-    "aiq-mcp-server",
-]
-
 [tool.uv]
 prerelease = "allow"
 override-dependencies = [
     "authlib>=1.6.11,<2",
-    "cryptography>=48.0.1,<49",
+    "cryptography>=46.0.6,<47",
     "pillow>=12.2.0,<13",
     "pygments>=2.20.0,<3",
     "pyopenssl>=26.0.0,<27",
@@ -247,8 +243,8 @@ members = [
     "frontends/debug",
     "frontends/benchmarks/freshqa",
     "frontends/benchmarks/deepsearch_qa",
-    "mcp",
 ]
+exclude = ["mcp"]
 
 [tool.uv.sources]
 aiq-agent = { workspace = true }
@@ -261,6 +257,5 @@ knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }
 aiq-debug = { workspace = true }
-aiq-mcp-server = { workspace = true }
 freshqa-eval = { workspace = true }
 deepsearch-qa-evaluator = { workspace = true }

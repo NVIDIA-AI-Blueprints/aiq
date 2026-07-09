@@ -36,15 +36,11 @@ _MCP_ENVIRONMENT = {
     "TAVILY_API_KEY",
 }
 _EXPECTED_COPY_LINES = (
-    "COPY pyproject.toml uv.lock README.md ./",
+    "COPY pyproject.toml README.md ./",
     "COPY src/ ./src/",
-    "COPY sources/ ./sources/",
-    "COPY frontends/aiq_api/pyproject.toml ./frontends/aiq_api/",
-    "COPY frontends/cli/pyproject.toml ./frontends/cli/",
-    "COPY frontends/debug/pyproject.toml ./frontends/debug/",
-    "COPY frontends/benchmarks/freshqa/pyproject.toml ./frontends/benchmarks/freshqa/",
-    "COPY frontends/benchmarks/deepsearch_qa/pyproject.toml ./frontends/benchmarks/deepsearch_qa/",
-    "COPY mcp/LICENSE mcp/pyproject.toml mcp/README.md ./mcp/",
+    "COPY sources/knowledge_layer/ ./sources/knowledge_layer/",
+    "COPY sources/tavily_web_search/ ./sources/tavily_web_search/",
+    "COPY mcp/LICENSE mcp/pyproject.toml mcp/README.md mcp/uv.lock ./mcp/",
     "COPY mcp/src/ ./mcp/src/",
     "COPY mcp/scripts/check_runtime_dependencies.py ./mcp/scripts/check_runtime_dependencies.py",
     "COPY configs/config_mcp.yml ./configs/config_mcp.yml",
@@ -72,12 +68,15 @@ def test_release_dockerfile_is_public_reproducible_and_non_root() -> None:
     assert "AS builder" in text
     assert "AS release" in text
     assert "uv sync" in text
+    assert "--project /app/mcp" in text
     assert "--frozen" in text
-    assert "--package aiq-mcp-server" in text
+    assert "--package aiq-mcp-server" not in text
     assert "--no-dev" in text
     assert "--no-default-groups" in text
     assert "--no-editable" in text
     assert "COPY . " not in text
+    assert "COPY pyproject.toml uv.lock" not in text
+    assert "mcp/uv.lock" in text
     assert "USER 10001:10001" in text
     assert "EXPOSE 9001" in text
     assert "HEALTHCHECK" in text
