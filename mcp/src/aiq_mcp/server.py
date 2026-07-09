@@ -49,6 +49,8 @@ _DEFAULT_ENV_FILE = _REPO_ROOT / "deploy" / ".env"
 DEFAULT_CONFIG = _REPO_ROOT / "configs" / "config_mcp.yml"
 MCP_SERVER_NAME = "aiq_deep_research"
 ANONYMOUS_PRINCIPAL = "anonymous"
+_PUBLIC_POLL_ERROR = "Research query status check failed. Check server logs for details."
+_PUBLIC_REPORT_ERROR = "Research report retrieval failed. Check server logs for details."
 _PUBLIC_SUBMIT_ERROR = "Research query submission failed. Check server logs for details."
 _CHECKPOINT_DB_ENV_VAR = "AIQ_CHECKPOINT_DB"
 _DEFAULT_INSPECTOR_ORIGIN = "http://localhost:6274"
@@ -277,9 +279,13 @@ def _mcp_instructions(inline_wait_seconds: float) -> str:
     )
 
 
-def _public_submit_error(exc: Exception) -> RuntimeError:
-    logger.error("MCP submit_query failed before enqueue (%s)", type(exc).__name__)
-    return RuntimeError(_PUBLIC_SUBMIT_ERROR)
+def _log_public_tool_failure(operation: str, exc: Exception) -> None:
+    logger.error("MCP %s failed (%s)", operation, type(exc).__name__)
+
+
+def _public_tool_error(operation: str, public_message: str, exc: Exception) -> RuntimeError:
+    _log_public_tool_failure(operation, exc)
+    return RuntimeError(public_message)
 
 
 class MCPRuntime:
@@ -340,7 +346,9 @@ class MCPRuntime:
         For meta queries and shallow queries that finish within the configured
         inline window, the final answer is returned with state="complete" and
         result. Deep queries always queue. Shallow queries that do not finish
-        within the inline window return state="queued".
+        within the inline window return state="queued". If the inline wait
+        itself fails after enqueue, the original queued response is returned
+        so the caller retains the job capability and can poll it.
 
         Protocol:
           - If state="complete": use result directly; do not call get_final_report.
@@ -375,32 +383,41 @@ class MCPRuntime:
             periodic cleanup. Keep it private.
         """
         del ctx
-        jobs = self._get_jobs()
         try:
+            jobs = self._get_jobs()
             submit_result = await jobs.submit(query, ANONYMOUS_PRINCIPAL)
         except Exception as exc:  # noqa: BLE001 - public MCP boundary must sanitize tool errors
-            raise _public_submit_error(exc) from None
+            raise _public_tool_error("submit_query submission", _PUBLIC_SUBMIT_ERROR, exc) from None
 
-        if submit_result.get("state") != "queued":
-            return submit_result
-        if submit_result["depth"] != "shallow":
-            return submit_result
+        try:
+            if submit_result.get("state") != "queued":
+                return submit_result
+            if submit_result["depth"] != "shallow":
+                return submit_result
+        except Exception as exc:  # noqa: BLE001 - public MCP boundary must sanitize tool errors
+            raise _public_tool_error("submit_query response handling", _PUBLIC_SUBMIT_ERROR, exc) from None
 
         inline_wait = self.settings.shallow_inline_wait_seconds
-        inline = await jobs.wait_for_completion(
-            submit_result["job_id"],
-            ANONYMOUS_PRINCIPAL,
-            timeout=inline_wait,
-        )
-        if inline is not None:
-            return inline
+        try:
+            inline = await jobs.wait_for_completion(
+                submit_result["job_id"],
+                ANONYMOUS_PRINCIPAL,
+                timeout=inline_wait,
+            )
+            if inline is not None:
+                return inline
 
-        submit_result["first_poll_after_seconds"] = 0
-        submit_result["estimated_duration_seconds"] = max(
-            0,
-            int(submit_result["estimated_duration_seconds"] - inline_wait),
-        )
-        return submit_result
+            return {
+                **submit_result,
+                "first_poll_after_seconds": 0,
+                "estimated_duration_seconds": max(
+                    0,
+                    int(submit_result["estimated_duration_seconds"] - inline_wait),
+                ),
+            }
+        except Exception as exc:  # noqa: BLE001 - preserve an already-issued job capability
+            _log_public_tool_failure("submit_query inline wait after enqueue", exc)
+            return submit_result
 
     async def poll_query(self, ctx: Context, job_id: str) -> dict[str, Any]:
         """Check a research job's status.
@@ -430,7 +447,10 @@ class MCPRuntime:
                 expired database row is removed by periodic cleanup.
         """
         del ctx
-        return await self._get_jobs().poll(job_id, ANONYMOUS_PRINCIPAL)
+        try:
+            return await self._get_jobs().poll(job_id, ANONYMOUS_PRINCIPAL)
+        except Exception as exc:  # noqa: BLE001 - public MCP boundary must sanitize tool errors
+            raise _public_tool_error("poll_query", _PUBLIC_POLL_ERROR, exc) from None
 
     async def get_final_report(self, ctx: Context, job_id: str) -> dict[str, Any]:
         """Fetch a completed research job's final answer or report.
@@ -450,7 +470,10 @@ class MCPRuntime:
             job_id: The opaque capability UUID returned by submit_query.
         """
         del ctx
-        return await self._get_jobs().get_final_report(job_id, ANONYMOUS_PRINCIPAL)
+        try:
+            return await self._get_jobs().get_final_report(job_id, ANONYMOUS_PRINCIPAL)
+        except Exception as exc:  # noqa: BLE001 - public MCP boundary must sanitize tool errors
+            raise _public_tool_error("get_final_report", _PUBLIC_REPORT_ERROR, exc) from None
 
     def _build_app(self) -> Starlette:
         # FastMCP creates its session manager lazily here. The returned child

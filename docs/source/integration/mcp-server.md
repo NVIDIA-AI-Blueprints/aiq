@@ -120,6 +120,10 @@ with `error`. If the inline window expires, the task remains alive and the respo
 The zero values above are the result with the default 30-second inline wait. For a custom wait, the remaining
 estimate is `max(0, int(10 - inline_wait_seconds))`.
 
+If the inline wait encounters an infrastructure error after the shallow job has been enqueued, `submit_query`
+returns the original queued payload instead. The estimate and first-poll hint are left unchanged so the caller
+retains the `job_id` capability and can continue with `poll_query`.
+
 Deep work never waits inline and always returns:
 
 ```json
@@ -188,7 +192,11 @@ Unknown, malformed, noncanonical, expired, or inaccessible capabilities return t
 ```
 
 A failed final report returns `job_id`, `depth`, `state: "failed"`, and a sanitized `error`. Server exception
-details and capability UUIDs are not exposed in logs or responses.
+details are not exposed in logs or responses, and capability UUIDs are not written to logs.
+
+Unexpected infrastructure exceptions during submission before a capability is returned, polling, or final-report
+retrieval are returned as MCP tool errors with stable public messages. Internal exception text is never serialized;
+the MCP boundary log entry records only the affected operation and exception type.
 
 ## Health and transport contracts
 

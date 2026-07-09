@@ -160,6 +160,11 @@ _MCP_HEADERS = {
 }
 
 
+_BOUNDARY_FAILURE_CREDENTIAL = "mcp-boundary-credential-sentinel"  # pragma: allowlist secret
+_BOUNDARY_FAILURE_HOST = "internal-db.sentinel.invalid"
+_BOUNDARY_FAILURE_MESSAGE = f"postgresql://service:{_BOUNDARY_FAILURE_CREDENTIAL}@{_BOUNDARY_FAILURE_HOST}/jobs"
+
+
 def test_settings_defaults_and_overrides(tmp_path: Path) -> None:
     defaults = server.ServerSettings.from_env({})
     assert defaults.host == "0.0.0.0"
@@ -910,6 +915,177 @@ async def test_deep_submit_never_attempts_inline_wait(tmp_path: Path) -> None:
         "first_poll_after_seconds": 180,
     }
     assert jobs.calls == [("submit", "detailed research", "anonymous")]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("job_method", "tool_name", "arguments", "expected_call", "public_error"),
+    [
+        (
+            "submit",
+            "submit_query",
+            {"query": "question"},
+            ("question", "anonymous"),
+            "Research query submission failed. Check server logs for details.",
+        ),
+        (
+            "poll",
+            "poll_query",
+            {"job_id": _CapabilityJobs.JOB_ID},
+            (_CapabilityJobs.JOB_ID, "anonymous"),
+            "Research query status check failed. Check server logs for details.",
+        ),
+        (
+            "get_final_report",
+            "get_final_report",
+            {"job_id": _CapabilityJobs.JOB_ID},
+            (_CapabilityJobs.JOB_ID, "anonymous"),
+            "Research report retrieval failed. Check server logs for details.",
+        ),
+    ],
+    ids=("submit", "poll", "final-report"),
+)
+async def test_transport_sanitizes_job_service_exceptions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+    job_method: str,
+    tool_name: str,
+    arguments: dict[str, Any],
+    expected_call: tuple[Any, ...],
+    public_error: str,
+) -> None:
+    events: list[str] = []
+    jobs = _CapabilityJobs(events)
+    failed_calls: list[tuple[Any, ...]] = []
+
+    async def fail_with_internal_details(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        assert not kwargs
+        failed_calls.append(args)
+        raise RuntimeError(_BOUNDARY_FAILURE_MESSAGE)
+
+    monkeypatch.setattr(jobs, job_method, fail_with_internal_details)
+    runtime = server.MCPRuntime(
+        _settings(tmp_path, cors_origins=()),
+        runner=_Service("runner", events),
+        jobs_factory=lambda: jobs,
+        validate_startup=lambda: None,
+    )
+    transport = httpx.ASGITransport(app=runtime.app)
+    caplog.set_level("ERROR", logger="aiq_mcp.server")
+
+    async with runtime.app.router.lifespan_context(runtime.app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+            response = await client.post(
+                "/mcp",
+                headers=_MCP_HEADERS,
+                json=_tool_call_request(1, tool_name, arguments),
+            )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result.get("structuredContent") is None
+    assert public_error in result["content"][0]["text"]
+    assert failed_calls == [expected_call]
+    assert "RuntimeError" in caplog.text
+    assert _CapabilityJobs.JOB_ID not in caplog.text
+    for fragment in (_BOUNDARY_FAILURE_CREDENTIAL, _BOUNDARY_FAILURE_HOST):
+        assert fragment not in response.text
+        assert fragment not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_transport_sanitizes_submit_response_processing_exceptions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    class _ExplodingSubmitResult(dict[str, Any]):
+        def get(self, key: str, default: Any = None) -> Any:
+            del key, default
+            raise RuntimeError(_BOUNDARY_FAILURE_MESSAGE)
+
+    events: list[str] = []
+    jobs = _CapabilityJobs(events)
+
+    async def return_exploding_result(query: str, principal: str) -> dict[str, Any]:
+        jobs.calls.append(("submit", query, principal))
+        return _ExplodingSubmitResult(jobs.submit_result)
+
+    monkeypatch.setattr(jobs, "submit", return_exploding_result)
+    runtime = server.MCPRuntime(
+        _settings(tmp_path, cors_origins=()),
+        runner=_Service("runner", events),
+        jobs_factory=lambda: jobs,
+        validate_startup=lambda: None,
+    )
+    transport = httpx.ASGITransport(app=runtime.app)
+    caplog.set_level("ERROR", logger="aiq_mcp.server")
+
+    async with runtime.app.router.lifespan_context(runtime.app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+            response = await client.post(
+                "/mcp",
+                headers=_MCP_HEADERS,
+                json=_tool_call_request(1, "submit_query", {"query": "question"}),
+            )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result.get("structuredContent") is None
+    assert "Research query submission failed. Check server logs for details." in result["content"][0]["text"]
+    assert jobs.calls == [("submit", "question", "anonymous")]
+    assert "submit_query response handling failed (RuntimeError)" in caplog.text
+    assert _CapabilityJobs.JOB_ID not in caplog.text
+    for fragment in (_BOUNDARY_FAILURE_CREDENTIAL, _BOUNDARY_FAILURE_HOST):
+        assert fragment not in response.text
+        assert fragment not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_inline_wait_exception_preserves_queued_capability_without_exposing_details(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog,
+) -> None:
+    events: list[str] = []
+    jobs = _CapabilityJobs(events)
+
+    async def fail_inline_wait(job_id: str, principal: str, timeout: float) -> dict[str, Any] | None:
+        jobs.calls.append(("wait", job_id, principal, timeout))
+        raise RuntimeError(_BOUNDARY_FAILURE_MESSAGE)
+
+    monkeypatch.setattr(jobs, "wait_for_completion", fail_inline_wait)
+    runtime = server.MCPRuntime(
+        _settings(tmp_path, cors_origins=()),
+        runner=_Service("runner", events),
+        jobs_factory=lambda: jobs,
+        validate_startup=lambda: None,
+    )
+    transport = httpx.ASGITransport(app=runtime.app)
+    caplog.set_level("ERROR", logger="aiq_mcp.server")
+
+    async with runtime.app.router.lifespan_context(runtime.app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+            response = await client.post(
+                "/mcp",
+                headers=_MCP_HEADERS,
+                json=_tool_call_request(1, "submit_query", {"query": "question"}),
+            )
+
+    assert response.status_code == 200
+    assert _structured_tool_result(response) == jobs.submit_result
+    assert jobs.calls == [
+        ("submit", "question", "anonymous"),
+        ("wait", _CapabilityJobs.JOB_ID, "anonymous", 30.0),
+    ]
+    assert "submit_query inline wait after enqueue failed (RuntimeError)" in caplog.text
+    assert _CapabilityJobs.JOB_ID not in caplog.text
+    for fragment in (_BOUNDARY_FAILURE_CREDENTIAL, _BOUNDARY_FAILURE_HOST):
+        assert fragment not in response.text
+        assert fragment not in caplog.text
 
 
 @pytest.mark.asyncio

@@ -25,14 +25,14 @@ state, todo, report, and anonymous-capability instructions.
 |---|---|
 | Tool surface | Exactly `submit_query(query)`, `poll_query(job_id)`, and `get_final_report(job_id)`, in that order. Each argument is one required unconstrained string and each output is a generic object. |
 | Meta submit | Synchronous classification, persisted UUIDv4 job, and exact `{job_id, depth: "meta", state: "complete", result}`; missing meta text falls back to `I'm here to help.` |
-| Shallow submit | Initial estimate/first-poll values are 10/5 seconds. The server waits inline; terminal work returns complete/result or failed/error. A timeout leaves the task alive, returns first-poll 0, and returns `max(0, int(10 - inline_wait_seconds))` as the estimate (the default 30-second wait therefore returns zero). |
+| Shallow submit | Initial estimate/first-poll values are 10/5 seconds. The server waits inline; terminal work returns complete/result or failed/error. A timeout leaves the task alive, returns first-poll 0, and returns `max(0, int(10 - inline_wait_seconds))` as the estimate (the default 30-second wait therefore returns zero). An inline-wait infrastructure failure returns the original queued capability and cadence unchanged. |
 | Deep submit | Always queued and never inline-waited, with estimate/first-poll values 180/180 seconds. |
 | Poll | Status only. Found rows always include `todos`. Shallow queued/running cadence is 3 seconds; deep cadence is fixed at 180 seconds. Complete never includes `result`; failed includes `error`; terminal responses omit cadence. |
 | Final report | Queued/running becomes `not_ready/job_not_ready` without todos or cadence. Complete includes result; failed includes error; missing/hidden jobs return the exact not-found shape. |
 | Background work | The job UUID is also the NAT conversation/checkpoint thread ID. Submit creates a process-owned task; request completion and inline timeout do not cancel it. |
 | Persistence | The Postgres schema, migrations, UUIDv4 IDs, 86,400-second job TTL, 30-second heartbeats, 300-second reconciliation interval, 600-second stale threshold, poll count, and cross-manager visibility are retained. |
 | Todos | Only top-level deep-research checkpoints are read. Queued, shallow, and unavailable progress returns `[]`; running/complete/failed deep jobs may return normalized `{content,status,id?}` items. Reads fail soft. |
-| Errors | Generic workflow exceptions, cancellation, swallowed no-source failures, stale jobs, not-ready, and not-found responses retain stable client-safe messages. |
+| Errors | Generic workflow exceptions, cancellation, swallowed no-source failures, stale jobs, not-ready, and not-found responses retain stable client-safe messages. Submission failures before a capability is returned, plus poll and report infrastructure exceptions, become sanitized MCP tool errors; internal exception text never crosses the transport boundary. |
 
 The persisted state graph is:
 
@@ -78,7 +78,7 @@ this document and its golden tests.
 | Contract | Tests |
 |---|---|
 | Tool schemas, descriptions, no-auth settings, lifecycle | `test_server_runtime.py` |
-| Exact state/response/cadence/error/todo matrix | `test_jobs.py`, `test_checkpoint_todos.py` |
+| Exact state/response/cadence/error/todo matrix | `test_jobs.py`, `test_checkpoint_todos.py`, `test_server_runtime.py` |
 | Shared ledger, heartbeats, poll counts, TTL, reconciliation | `test_postgres_job_store.py` |
 | Real supported-client submit/poll/report flow | `test_client_session_integration.py` |
 | NAT/MCP versions and API surface | `test_dependency_compatibility.py`, `test_workflow_runner.py` |
