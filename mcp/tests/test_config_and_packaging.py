@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -20,6 +21,7 @@ _MCP_MANIFEST_PATH = _REPO_ROOT / "mcp" / "pyproject.toml"
 _ROOT_MANIFEST_PATH = _REPO_ROOT / "pyproject.toml"
 _MCP_LOCK_PATH = _REPO_ROOT / "mcp" / "uv.lock"
 _ROOT_LOCK_PATH = _REPO_ROOT / "uv.lock"
+_SETUP_SCRIPT_PATH = _REPO_ROOT / "scripts" / "setup.sh"
 
 
 def _iter_strings(value: Any) -> Iterator[str]:
@@ -175,6 +177,12 @@ def test_root_aiq_resolution_keeps_cryptography_in_the_nat_supported_range() -> 
 
 def test_mcp_project_owns_its_sources_lock_and_scoped_cryptography_override() -> None:
     manifest = tomllib.loads(_MCP_MANIFEST_PATH.read_text())
+    required_uv = SpecifierSet(manifest["tool"]["uv"]["required-version"])
+    assert Version("0.11.24") not in required_uv
+    assert Version("0.11.25") in required_uv
+    assert Version("0.11.26") in required_uv
+    assert 'UV_MIN_VERSION="0.11.25"' in _SETUP_SCRIPT_PATH.read_text()
+
     assert manifest["tool"]["uv"]["sources"] == {
         "aiq-agent": {"path": "..", "editable": True},
         "knowledge-layer": {"path": "../sources/knowledge_layer", "editable": True},

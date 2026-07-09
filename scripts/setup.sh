@@ -3,6 +3,39 @@
 
 set -euo pipefail
 
+UV_MIN_VERSION="0.11.25"
+
+version_at_least() {
+    local current="$1"
+    local minimum="$2"
+    local current_major current_minor current_patch
+    local minimum_major minimum_minor minimum_patch
+
+    if [[ ! "${current}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+        return 1
+    fi
+    current_major="${BASH_REMATCH[1]}"
+    current_minor="${BASH_REMATCH[2]}"
+    current_patch="${BASH_REMATCH[3]}"
+
+    if [[ ! "${minimum}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+        return 1
+    fi
+    minimum_major="${BASH_REMATCH[1]}"
+    minimum_minor="${BASH_REMATCH[2]}"
+    minimum_patch="${BASH_REMATCH[3]}"
+
+    if (( current_major != minimum_major )); then
+        (( current_major > minimum_major ))
+        return
+    fi
+    if (( current_minor != minimum_minor )); then
+        (( current_minor > minimum_minor ))
+        return
+    fi
+    (( current_patch >= minimum_patch ))
+}
+
 echo "=== AI-Q Blueprint Development Setup ==="
 echo ""
 
@@ -26,6 +59,16 @@ fi
 if [ -z "${UV_BIN}" ]; then
     echo "Error: uv was not found after installation."
     echo "Add uv to PATH (typically ${HOME}/.local/bin) and re-run setup."
+    exit 1
+fi
+
+UV_CURRENT_VERSION="$("${UV_BIN}" --version)"
+UV_CURRENT_VERSION="${UV_CURRENT_VERSION#uv }"
+UV_CURRENT_VERSION="${UV_CURRENT_VERSION%% *}"
+if ! version_at_least "${UV_CURRENT_VERSION}" "${UV_MIN_VERSION}"; then
+    echo "Error: uv ${UV_MIN_VERSION} or newer is required; found ${UV_CURRENT_VERSION} at ${UV_BIN}."
+    echo "The MCP project uses scoped dependency overrides introduced in uv ${UV_MIN_VERSION}."
+    echo "Upgrade uv and re-run setup (CI and the MCP image use uv 0.11.26)."
     exit 1
 fi
 

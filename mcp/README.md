@@ -94,7 +94,8 @@ public design decisions are recorded in [`REFERENCE_PARITY.md`](REFERENCE_PARITY
 
 ## Development checks
 
-The root AI-Q workspace and MCP project use separate environments and lockfiles:
+The root AI-Q workspace and MCP project use separate environments and lockfiles. Use uv 0.11.25 or newer; the
+validated CI and container toolchain pins uv 0.11.26 because the MCP lock policy uses scoped dependency overrides.
 
 ```bash
 uv sync --group dev

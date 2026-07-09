@@ -30,13 +30,15 @@ def test_public_module_imports(module_name: str) -> None:
 
 
 def test_package_does_not_shadow_protocol_package() -> None:
-    component_root = Path(aiq_mcp.__file__).parents[2]
+    component_root = Path(__file__).resolve().parents[1]
+    component_source_root = component_root / "src"
 
     assert aiq_mcp.__name__ == "aiq_mcp"
     assert mcp.__name__ == "mcp"
     assert Path(aiq_mcp.__file__).parent.name == "aiq_mcp"
     assert not (component_root / "__init__.py").exists()
-    assert component_root not in Path(fastmcp.__file__).parents
+    assert component_source_root not in Path(mcp.__file__).parents
+    assert component_source_root not in Path(fastmcp.__file__).parents
 
 
 def test_package_version_present() -> None:
