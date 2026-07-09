@@ -40,6 +40,9 @@ env/
 .env
 .env.local
 .env.*.local
+
+# Monocle traces
+.monocle/
 # Logs
 *.log
 logs/

@@ -1,0 +1,547 @@
+[{
+    "name": "openai.resources.chat.completions.AsyncCompletions.create",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "899cb44dd4cbc266",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "4965175556232f45",
+    "start_time": "2026-07-09T20:25:11.461959Z",
+    "end_time": "2026-07-09T20:25:13.656256Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/openai/_legacy_response.py:384",
+        "workflow.name": "nvidia-aiq",
+        "span.type": "inference.modelapi",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "5133c49ef68f7b6f2fc506866a02c2c3",
+        "span.subtype": "turn_end"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langchain_core.language_models.chat_models.BaseChatModel.ainvoke",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "4965175556232f45",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "252e148439056756",
+    "start_time": "2026-07-09T20:25:11.459818Z",
+    "end_time": "2026-07-09T20:25:13.660089Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/nat/utils/exception_handlers/automatic_retries.py:265",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "inference.generic",
+        "span.type": "inference.framework",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "5133c49ef68f7b6f2fc506866a02c2c3",
+        "entity.count": 1,
+        "span.subtype": "turn_end"
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:25:11.459889Z",
+            "attributes": {
+                "input": [
+                    "{\"system\": \"You are the orchestration layer of an AI Research Assistant built by NVIDIA. Your goal is to analyze the user's query, determine its intent, and provide either a direct response (Meta) or a research plan (Shallow/Deep).\\n\\n### STEP 1: INTENT CLASSIFICATION\\nClassify the query as \\\"meta\\\" or \\\"research\\\".\\n- **meta**: System identity, abilities, greetings, time/date, tool questions, out-of-scope requests (code/files), emotional check-ins, jokes, casual chat, small talk, or any request that does not need external sources (e.g. \\\"tell me a joke\\\", \\\"how are you\\\").\\n- **research**: Facts, data, analysis, \\\"how-to\\\", scientific/technical topics, or anything requiring external sources (web search, documents, etc.).\\n- **Rule**: If a query is mixed or you are unsure, choose \\\"research\\\".\\n\\n### STEP 2: BRANCHING LOGIC\\n\\n#### IF INTENT IS \\\"META\\\":\\nGenerate a direct response to the user.\\n1. **Identity**: You are the AI Research Assistant. You have two layers: Shallow (fast) and Deep (structured).\\n2. **Greeting**: Use the user's first name if available. Be brief and friendly.\\n3. **Out-of-Scope**: If they ask to run code, edit files, or send emails, politely decline, explain why, and redirect to research capabilities.\\n4. **Constraints**: No emojis. Do not answer research questions here.\\n\\n#### IF INTENT IS \\\"RESEARCH\\\":\\nDetermine the semantic route and depth.\\n- **route = \\\"report_ask\\\"** only when an active report is available and the user asks a question answerable from that existing report.\\n- **route = \\\"report_cosmetic_edit\\\"** only when an active report is available and the user asks for mechanical or aesthetic edits that do not require new evidence.\\n- **route = \\\"report_delta_research\\\"** only when an active report is available and the user asks for fresh evidence, deeper analysis, or a new analytical perspective on the same report topic.\\n- **route = \\\"standalone_research\\\"** for generic factual questions, new topics, unrelated report requests, or when no active report is available.\\n\\nRoute examples:\\n- \\\"what are the risks in this report?\\\" -> route = \\\"report_ask\\\"\\n- \\\"summarize this report\\\" -> route = \\\"report_ask\\\"\\n- \\\"make this shorter\\\" -> route = \\\"report_cosmetic_edit\\\"\\n- \\\"change tone\\\" -> route = \\\"report_cosmetic_edit\\\"\\n- \\\"format as bullets\\\" -> route = \\\"report_cosmetic_edit\\\"\\n- \\\"rewrite this report from a player-performance POV\\\" -> route = \\\"report_delta_research\\\"\\n- \\\"redo this with newer evidence\\\" -> route = \\\"report_delta_research\\\"\\n- \\\"can we write a report on this from a supply-chain angle?\\\" -> route = \\\"report_delta_research\\\"\\n- \\\"write a separate report on player performance\\\" -> route = \\\"standalone_research\\\"\\n\\nDetermine the depth for standalone_research.\\n- **shallow**: Single main question, factual lookup, 2-3 tool calls, no complex comparison.\\n- **deep**: Explicit report-generation requests (\\\"write/create/generate a report\\\"), multi-faceted requests,\\n  explicit comparisons, trend analysis, strategy/roadmaps, or \\\"comprehensive\\\" requests.\\n- **Tie-break**: If unsure, choose \\\"shallow\\\".\\n\\n### OUTPUT FORMAT\\nYou must respond ONLY with a JSON object using this schema:\\n{\\n  \\\"intent\\\": \\\"meta\\\" | \\\"research\\\",\\n  \\\"route\\\": \\\"report_ask\\\" | \\\"report_cosmetic_edit\\\" | \\\"report_delta_research\\\" | \\\"standalone_research\\\" | \\\"meta\\\",\\n  \\\"meta_response\\\": \\\"The text response if intent is meta, otherwise null\\\",\\n  \\\"research_depth\\\": \\\"shallow\\\" | \\\"deep\\\" | null,\\n  \\\"route_reasoning\\\": \\\"One sentence explanation for the route and depth, otherwise null\\\"\\n}### CONTEXT\\nCurrent Date and Time: 2026-07-09 13:25:11\\n\\n\\n\\nActive report: none\\n\\n\\nAvailable Tools:\\n\\n- advanced_web_search_tool: Retrieves relevant contexts from web search (using Exa) for the given question.\\n\\n        Args:\\n            question (str): The question to be answered. Will be truncated to 400 characters if longer.\\n\\n        Returns:\\n            str: The web search results containing relevant documents and their URLs.- web_search_tool: Retrieves relevant contexts from web search (using Exa) for the given question.\\n\\n        Args:\\n            question (str): The question to be answered. Will be truncated to 400 characters if longer.\\n\\n        Returns:\\n            str: The web search results containing relevant documents and their URLs.\\n\\n\\n### USER QUERY\\n\\\"What is the current stock price of NVIDIA today?\\\"\"}"
+                ]
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:25:13.660055Z",
+            "attributes": {
+                "response": "{\"ai\": \"```json\\n{\\n  \\\"intent\\\": \\\"research\\\",\\n  \\\"route\\\": \\\"standalone_research\\\",\\n  \\\"meta_response\\\": null,\\n  \\\"research_depth\\\": \\\"shallow\\\",\\n  \\\"route_reasoning\\\": \\\"The user is asking for a factual lookup of NVIDIA's current stock price, which requires a real-time web search.\\\"\\n}\\n```\"}"
+            }
+        },
+        {
+            "name": "metadata",
+            "timestamp": "2026-07-09T20:25:13.660073Z",
+            "attributes": {
+                "finish_reason": "stop",
+                "finish_type": "success"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "openai.resources.chat.completions.AsyncCompletions.create",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "aafe4cbbaaa63aa9",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "335965332693a78f",
+    "start_time": "2026-07-09T20:25:13.675238Z",
+    "end_time": "2026-07-09T20:25:15.346552Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/openai/_legacy_response.py:384",
+        "workflow.name": "nvidia-aiq",
+        "span.type": "inference.modelapi",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "4e25542b5829546b4dc93f55b4a69d90"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langchain_core.language_models.chat_models.BaseChatModel.ainvoke",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "335965332693a78f",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "ba5636fc1b3a0acb",
+    "start_time": "2026-07-09T20:25:13.674457Z",
+    "end_time": "2026-07-09T20:25:15.348959Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/nat/utils/exception_handlers/automatic_retries.py:265",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "inference.generic",
+        "span.type": "inference.framework",
+        "entity.2.name": "web_search_tool",
+        "entity.2.type": "tool.function",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "4e25542b5829546b4dc93f55b4a69d90",
+        "entity.count": 2,
+        "span.subtype": "tool_call"
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:25:13.674550Z",
+            "attributes": {
+                "input": [
+                    "{\"system\": \"You are a Shallow Research Agent. Your role is to provide rapid, citation-backed answers using available tools.\\n\\n## CRITICAL: Source Hierarchy\\nPrioritize sources based on the query intent:\\n\\n1. **User Documents (Highest Priority)**: If a knowledge_search or document tool is available, use it first for \\\"my files,\\\" \\\"the uploaded doc,\\\" or personal/provided data.\\n2. **Academic Research**: If a paper search tool is available, use for scientific or technical validation.\\n3. **Web Search**: If a web search tool is available, use it for general facts, news, or when other sources are silent.\\n\\n## Query Rewriting (before calling search tools)\\nBefore calling any search tool, rewrite the user's question into a **search-friendly query** that includes **all context the user implied**. Add whatever is needed for the index to return relevant results \\u2014 do not pass the raw user message if it relies on implicit context.\\n\\n- **Add missing context**: Time (current date/year from the Context section below), scope, topic, or other details the user assumed but the search index does not have.\\n- **Examples**: Add current year for \\\"upcoming\\\" or \\\"next\\\" questions; expand vague shorthand with the obvious topic or scope.\\n\\nPass the **rewritten query** to the search tool. This greatly improves result relevance.\\n\\n## Research Rules\\n- **Only use tools listed** in the Available Tools section below. Do not assume access to tools not listed. If no web search tool is listed, you have NO web access.\\n- **Loop Prevention**: Max 2 calls per tool. If results are empty, change your search string once or move to synthesis.\\n\\n## Citation Rules\\nCite sources inline with [1], [2], etc. Include a `**References:**` section at the end.\\n- **Format**: `- [N] Title - URL` or `- [N] filename.pdf, p.X` for internal documents\\n- Use only URLs that appeared in tool results. Do not add URLs from memory.\\n- If you use a tool result to answer, include at least one inline citation and a `**References:**` section.\\n- For tool results without URLs or document citation keys, cite the exact tool name from the tool call: `- [1] mcp_time__get_current_time`.\\n- Citations are automatically verified \\u2014 focus on answering the question, not on perfecting references.\\n\\n**Example**:\\n\\\"The uploaded report shows a 5% margin [1].\\n\\n**References:**\\n- [1] Q4_Review.pdf, p. 2 (Internal)\\\"## Context\\nCurrent date and time: 2026-07-09 13:25:13\\n\\n\\n## Available Tools\\n\\n- **web_search_tool**: Retrieves relevant contexts from web search (using Exa) for the given question.\\n\\n        Args:\\n            question (str): The question to be answered. Will be truncated to 400 characters if longer.\\n\\n        Returns:\\n            str: The web search results containing relevant documents and their URLs.\\n\\n\\n\\n\"}",
+                    "{\"human\": \"What is the current stock price of NVIDIA today?\"}"
+                ]
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:25:15.348887Z",
+            "attributes": {
+                "response": "{\"ai\": {\"name\": \"web_search_tool\", \"args\": {\"question\": \"current stock price of NVIDIA July 9 2026\"}, \"id\": \"call_1TPHlH9hEn01ZQZAkrRi6x85\", \"type\": \"tool_call\"}}"
+            }
+        },
+        {
+            "name": "metadata",
+            "timestamp": "2026-07-09T20:25:15.348925Z",
+            "attributes": {
+                "finish_reason": "tool_calls",
+                "finish_type": "tool_call"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "web_search_tool",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "e4424afd67f9903b",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "ba5636fc1b3a0acb",
+    "start_time": "2026-07-09T20:25:15.353889Z",
+    "end_time": "2026-07-09T20:25:16.922392Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/langchain_core/tools/base.py:1096",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.name": "web_search_tool",
+        "entity.1.description": "Retrieves relevant contexts from web search (using Exa) for the given question.\n\n        Args:\n            question (str): The question to be answered. Will be truncated to 400 characters if longer.\n\n        Returns:\n            str: The web search results containing relevant documents and their URLs.",
+        "entity.2.name": "LangGraph",
+        "entity.2.type": "agent.langgraph",
+        "span.type": "agentic.tool.invocation",
+        "entity.1.type": "tool.langgraph",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "4e25542b5829546b4dc93f55b4a69d90",
+        "entity.count": 2,
+        "span.subtype": "content_generation"
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:25:15.354017Z",
+            "attributes": {
+                "input": "{'question': 'current stock price of NVIDIA July 9 2026'}"
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:25:16.922328Z",
+            "attributes": {
+                "response": "<Document href=\"https://exa.ai/library/markets/stock/NVDA?t=6a5011bc870bf6f5e301d76b\">\n<title>\nNVIDIA Corp (NVDA) | Currently at $202.78 (-0.66%) | Jul 9, 2026\n</title>\n# NVDA \u2014 NVIDIA Corp\n\nNVIDIA Corp (NVDA) is currently at $202.78, down $1.34 (0.66%) today, as of July 9, 2026.\n\n## Today's Trading\n\n- Open: $204.35\n- High: $204.58\n- Low: $198.97\n- Close: $202.78\n- Volume: 130.82M\n\n## Previous Close\n\n- Close: $204.12\n</Document>\n\n---\n\n<Document href=\"https://investor.nvidia.com/stock-info/stock-quote-and-chart/default.aspx\">\n<title>\nNVIDIA Corporation - Stock Quote & Chart\n</title>\nStock Chart ; July 07, 2026, $196.93 ; July 06, 2026, $195.55 ; July 02, 2026, $194.83 ; July 01, 2026, $197.58.\n</Document>\n\n---\n\n<Document href=\"https://finance.yahoo.com/quote/NVDA/history/\">\n<title>\nNVIDIA Corporation (NVDA) Stock Historical Prices & Data - Yahoo Finance\n</title>\n\nDate\nOpen\nClose Close price adjusted for splits.\nJul 9, 2026\n204.46\n203.31\nJul 8, 2026\n195.18\n204.12\nJul 7, 2026\n192.37\n196.93\nJul 6, 2026\n194.42\n195.55\n</Document>\n\n---\n\n<Document href=\"https://www.investing.com/equities/nvidia-corp-historical-data\">\n<title>\nNVIDIA Stock Price History - Investing.com\n</title>\nAccess NVIDIA stock price history with daily data, historical prices, all-time highs, and stock chart history ... 06/08/2026 - 07/09/2026. Date. Price. Open. High.\n</Document>"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "openai.resources.chat.completions.AsyncCompletions.create",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "b2c363163c27acf5",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "391bd33f776e54b8",
+    "start_time": "2026-07-09T20:25:16.935224Z",
+    "end_time": "2026-07-09T20:25:19.152550Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/openai/_legacy_response.py:384",
+        "workflow.name": "nvidia-aiq",
+        "span.type": "inference.modelapi",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "4e25542b5829546b4dc93f55b4a69d90",
+        "span.subtype": "turn_end"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langchain_core.language_models.chat_models.BaseChatModel.ainvoke",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "391bd33f776e54b8",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "ba5636fc1b3a0acb",
+    "start_time": "2026-07-09T20:25:16.933692Z",
+    "end_time": "2026-07-09T20:25:19.155183Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/nat/utils/exception_handlers/automatic_retries.py:265",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "inference.generic",
+        "span.type": "inference.framework",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "4e25542b5829546b4dc93f55b4a69d90",
+        "entity.count": 1,
+        "span.subtype": "turn_end"
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:25:16.934087Z",
+            "attributes": {
+                "input": [
+                    "{\"system\": \"You are a Shallow Research Agent. Your role is to provide rapid, citation-backed answers using available tools.\\n\\n## CRITICAL: Source Hierarchy\\nPrioritize sources based on the query intent:\\n\\n1. **User Documents (Highest Priority)**: If a knowledge_search or document tool is available, use it first for \\\"my files,\\\" \\\"the uploaded doc,\\\" or personal/provided data.\\n2. **Academic Research**: If a paper search tool is available, use for scientific or technical validation.\\n3. **Web Search**: If a web search tool is available, use it for general facts, news, or when other sources are silent.\\n\\n## Query Rewriting (before calling search tools)\\nBefore calling any search tool, rewrite the user's question into a **search-friendly query** that includes **all context the user implied**. Add whatever is needed for the index to return relevant results \\u2014 do not pass the raw user message if it relies on implicit context.\\n\\n- **Add missing context**: Time (current date/year from the Context section below), scope, topic, or other details the user assumed but the search index does not have.\\n- **Examples**: Add current year for \\\"upcoming\\\" or \\\"next\\\" questions; expand vague shorthand with the obvious topic or scope.\\n\\nPass the **rewritten query** to the search tool. This greatly improves result relevance.\\n\\n## Research Rules\\n- **Only use tools listed** in the Available Tools section below. Do not assume access to tools not listed. If no web search tool is listed, you have NO web access.\\n- **Loop Prevention**: Max 2 calls per tool. If results are empty, change your search string once or move to synthesis.\\n\\n## Citation Rules\\nCite sources inline with [1], [2], etc. Include a `**References:**` section at the end.\\n- **Format**: `- [N] Title - URL` or `- [N] filename.pdf, p.X` for internal documents\\n- Use only URLs that appeared in tool results. Do not add URLs from memory.\\n- If you use a tool result to answer, include at least one inline citation and a `**References:**` section.\\n- For tool results without URLs or document citation keys, cite the exact tool name from the tool call: `- [1] mcp_time__get_current_time`.\\n- Citations are automatically verified \\u2014 focus on answering the question, not on perfecting references.\\n\\n**Example**:\\n\\\"The uploaded report shows a 5% margin [1].\\n\\n**References:**\\n- [1] Q4_Review.pdf, p. 2 (Internal)\\\"## Context\\nCurrent date and time: 2026-07-09 13:25:16\\n\\n\\n## Available Tools\\n\\n- **web_search_tool**: Retrieves relevant contexts from web search (using Exa) for the given question.\\n\\n        Args:\\n            question (str): The question to be answered. Will be truncated to 400 characters if longer.\\n\\n        Returns:\\n            str: The web search results containing relevant documents and their URLs.\\n\\n\\n\\n\"}",
+                    "{\"human\": \"What is the current stock price of NVIDIA today?\"}",
+                    "{\"ai\": \"[{\\\"name\\\": \\\"web_search_tool\\\", \\\"args\\\": {\\\"question\\\": \\\"current stock price of NVIDIA July 9 2026\\\"}, \\\"id\\\": \\\"call_1TPHlH9hEn01ZQZAkrRi6x85\\\", \\\"type\\\": \\\"tool_call\\\"}]\"}",
+                    "{\"tool\": \"<Document href=\\\"https://exa.ai/library/markets/stock/NVDA?t=6a5011bc870bf6f5e301d76b\\\">\\n<title>\\nNVIDIA Corp (NVDA) | Currently at $202.78 (-0.66%) | Jul 9, 2026\\n</title>\\n# NVDA \\u2014 NVIDIA Corp\\n\\nNVIDIA Corp (NVDA) is currently at $202.78, down $1.34 (0.66%) today, as of July 9, 2026.\\n\\n## Today's Trading\\n\\n- Open: $204.35\\n- High: $204.58\\n- Low: $198.97\\n- Close: $202.78\\n- Volume: 130.82M\\n\\n## Previous Close\\n\\n- Close: $204.12\\n</Document>\\n\\n---\\n\\n<Document href=\\\"https://investor.nvidia.com/stock-info/stock-quote-and-chart/default.aspx\\\">\\n<title>\\nNVIDIA Corporation - Stock Quote & Chart\\n</title>\\nStock Chart ; July 07, 2026, $196.93 ; July 06, 2026, $195.55 ; July 02, 2026, $194.83 ; July 01, 2026, $197.58.\\n</Document>\\n\\n---\\n\\n<Document href=\\\"https://finance.yahoo.com/quote/NVDA/history/\\\">\\n<title>\\nNVIDIA Corporation (NVDA) Stock Historical Prices & Data - Yahoo Finance\\n</title>\\n\\nDate\\nOpen\\nClose Close price adjusted for splits.\\nJul 9, 2026\\n204.46\\n203.31\\nJul 8, 2026\\n195.18\\n204.12\\nJul 7, 2026\\n192.37\\n196.93\\nJul 6, 2026\\n194.42\\n195.55\\n</Document>\\n\\n---\\n\\n<Document href=\\\"https://www.investing.com/equities/nvidia-corp-historical-data\\\">\\n<title>\\nNVIDIA Stock Price History - Investing.com\\n</title>\\nAccess NVIDIA stock price history with daily data, historical prices, all-time highs, and stock chart history ... 06/08/2026 - 07/09/2026. Date. Price. Open. High.\\n</Document>\"}"
+                ]
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:25:19.155046Z",
+            "attributes": {
+                "response": "{\"ai\": \"As of July 9, 2026, NVIDIA Corp (NVDA) is trading at $202.78, which is down by $1.34 (0.66%) today [1].\\n\\n**References:**\\n- [1] [NVIDIA Corp (NVDA) | Currently at $202.78 (-0.66%) | Jul 9, 2026](https://exa.ai/library/markets/stock/NVDA?t=6a5011bc870bf6f5e301d76b)\"}"
+            }
+        },
+        {
+            "name": "metadata",
+            "timestamp": "2026-07-09T20:25:19.155119Z",
+            "attributes": {
+                "finish_reason": "stop",
+                "finish_type": "success"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langgraph.graph.state.CompiledStateGraph.ainvoke",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "ba5636fc1b3a0acb",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "252e148439056756",
+    "start_time": "2026-07-09T20:25:13.669218Z",
+    "end_time": "2026-07-09T20:25:19.159892Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/src/aiq_agent/agents/shallow_researcher/agent.py:356",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "agent.langgraph",
+        "entity.1.name": "LangGraph",
+        "last.inference": "391bd33f776e54b8:*",
+        "span.type": "agentic.invocation",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "4e25542b5829546b4dc93f55b4a69d90",
+        "entity.count": 1,
+        "span.subtype": "content_processing",
+        "monocle.last.agent.invocation.id": "",
+        "monocle.last.agent.name": "",
+        "inference.decision.span.id": "4965175556232f45"
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:25:13.669291Z",
+            "attributes": {
+                "input": "[\"What is the current stock price of NVIDIA today?\"]"
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:25:19.159787Z",
+            "attributes": {
+                "response": "As of July 9, 2026, NVIDIA Corp (NVDA) is trading at $202.78, which is down by $1.34 (0.66%) today [1].\n\n**References:**\n- [1] [NVIDIA Corp (NVDA) | Currently at $202.78 (-0.66%) | Jul 9, 2026](https://exa.ai/library/markets/stock/NVDA?t=6a5011bc870bf6f5e301d76b)"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langgraph.graph.state.CompiledStateGraph.astream",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "252e148439056756",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "2571d8f530754181",
+    "start_time": "2026-07-09T20:25:11.453034Z",
+    "end_time": "2026-07-09T20:25:19.165599Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/langgraph/pregel/main.py:4061",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "agent.langgraph",
+        "entity.1.name": "LangGraph",
+        "last.inference": "391bd33f776e54b8:*",
+        "span.type": "agentic.invocation",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "scope.agentic.invocation": "5133c49ef68f7b6f2fc506866a02c2c3",
+        "entity.count": 1,
+        "span.subtype": "content_processing",
+        "monocle.last.agent.invocation.id": "",
+        "monocle.last.agent.name": ""
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:25:11.453076Z",
+            "attributes": {
+                "input": "[\"What is the current stock price of NVIDIA today?\"]"
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:25:19.165379Z",
+            "attributes": {
+                "response": "As of July 9, 2026, NVIDIA Corp (NVDA) is trading at $202.78, which is down by $1.34 (0.66%) today [1].\n\n## Sources\n- [1] [NVIDIA Corp (NVDA) | Currently at $202.78 (-0.66%) | Jul 9, 2026](https://exa.ai/library/markets/stock/NVDA?t=6a5011bc870bf6f5e301d76b)\n"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langgraph.graph.state.CompiledStateGraph.ainvoke",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "2571d8f530754181",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "9d62bf471530da08",
+    "start_time": "2026-07-09T20:25:11.450935Z",
+    "end_time": "2026-07-09T20:25:19.165744Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/src/aiq_agent/agents/chat_researcher/agent.py:570",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "agent.langgraph",
+        "monocle.last.agent.invocation.id": "252e148439056756",
+        "monocle.last.agent.name": "LangGraph",
+        "last.inference": "391bd33f776e54b8:*",
+        "span.type": "agentic.turn",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "entity.count": 1,
+        "span.subtype": "turn"
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:25:11.450977Z",
+            "attributes": {
+                "input": "[\"What is the current stock price of NVIDIA today?\"]"
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:25:19.165721Z",
+            "attributes": {
+                "response": "As of July 9, 2026, NVIDIA Corp (NVDA) is trading at $202.78, which is down by $1.34 (0.66%) today [1].\n\n## Sources\n- [1] [NVIDIA Corp (NVDA) | Currently at $202.78 (-0.66%) | Jul 9, 2026](https://exa.ai/library/markets/stock/NVDA?t=6a5011bc870bf6f5e301d76b)\n"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "workflow",
+    "context": {
+        "trace_id": "e2961458302a780a27f91a0d86b290dd",
+        "span_id": "9d62bf471530da08",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": null,
+    "start_time": "2026-07-09T20:25:11.450884Z",
+    "end_time": "2026-07-09T20:25:19.165759Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/src/aiq_agent/agents/chat_researcher/agent.py:570",
+        "scope.agentic.session": "3231a666-792d-49a0-bf51-37ba47f4eaf4",
+        "scope.agentic.turn": "1b91d731c386e41fcfbb29d01e3d0e7e",
+        "workflow.name": "nvidia-aiq",
+        "span.type": "workflow",
+        "entity.1.name": "nvidia-aiq",
+        "entity.1.type": "workflow.langgraph",
+        "entity.2.type": "app_hosting.generic",
+        "entity.2.name": "generic",
+        "last.inference": "391bd33f776e54b8:*"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+]

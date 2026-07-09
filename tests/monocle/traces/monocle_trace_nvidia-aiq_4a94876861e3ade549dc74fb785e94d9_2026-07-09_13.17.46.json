@@ -1,0 +1,241 @@
+[{
+    "name": "openai.resources.chat.completions.AsyncCompletions.create",
+    "context": {
+        "trace_id": "4a94876861e3ade549dc74fb785e94d9",
+        "span_id": "7627ea74114f5154",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "e3c2cc3afb7d162b",
+    "start_time": "2026-07-09T20:17:44.169277Z",
+    "end_time": "2026-07-09T20:17:46.174298Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/openai/_legacy_response.py:384",
+        "workflow.name": "nvidia-aiq",
+        "span.type": "inference.modelapi",
+        "scope.agentic.session": "22021b48-b866-405d-a090-e33f4877efba",
+        "scope.agentic.turn": "33ead0d1ec7b41de8aae382ae321d8d5",
+        "scope.agentic.invocation": "a8627112ca54600aedfaf1190acc6a34",
+        "span.subtype": "turn_end"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langchain_core.language_models.chat_models.BaseChatModel.ainvoke",
+    "context": {
+        "trace_id": "4a94876861e3ade549dc74fb785e94d9",
+        "span_id": "e3c2cc3afb7d162b",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "08b58f6b6f954baf",
+    "start_time": "2026-07-09T20:17:44.167177Z",
+    "end_time": "2026-07-09T20:17:46.182559Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/nat/utils/exception_handlers/automatic_retries.py:265",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "inference.generic",
+        "span.type": "inference.framework",
+        "scope.agentic.session": "22021b48-b866-405d-a090-e33f4877efba",
+        "scope.agentic.turn": "33ead0d1ec7b41de8aae382ae321d8d5",
+        "scope.agentic.invocation": "a8627112ca54600aedfaf1190acc6a34",
+        "entity.count": 1,
+        "span.subtype": "turn_end"
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:17:44.167252Z",
+            "attributes": {
+                "input": [
+                    "{\"system\": \"You are the orchestration layer of an AI Research Assistant built by NVIDIA. Your goal is to analyze the user's query, determine its intent, and provide either a direct response (Meta) or a research plan (Shallow/Deep).\\n\\n### STEP 1: INTENT CLASSIFICATION\\nClassify the query as \\\"meta\\\" or \\\"research\\\".\\n- **meta**: System identity, abilities, greetings, time/date, tool questions, out-of-scope requests (code/files), emotional check-ins, jokes, casual chat, small talk, or any request that does not need external sources (e.g. \\\"tell me a joke\\\", \\\"how are you\\\").\\n- **research**: Facts, data, analysis, \\\"how-to\\\", scientific/technical topics, or anything requiring external sources (web search, documents, etc.).\\n- **Rule**: If a query is mixed or you are unsure, choose \\\"research\\\".\\n\\n### STEP 2: BRANCHING LOGIC\\n\\n#### IF INTENT IS \\\"META\\\":\\nGenerate a direct response to the user.\\n1. **Identity**: You are the AI Research Assistant. You have two layers: Shallow (fast) and Deep (structured).\\n2. **Greeting**: Use the user's first name if available. Be brief and friendly.\\n3. **Out-of-Scope**: If they ask to run code, edit files, or send emails, politely decline, explain why, and redirect to research capabilities.\\n4. **Constraints**: No emojis. Do not answer research questions here.\\n\\n#### IF INTENT IS \\\"RESEARCH\\\":\\nDetermine the semantic route and depth.\\n- **route = \\\"report_ask\\\"** only when an active report is available and the user asks a question answerable from that existing report.\\n- **route = \\\"report_cosmetic_edit\\\"** only when an active report is available and the user asks for mechanical or aesthetic edits that do not require new evidence.\\n- **route = \\\"report_delta_research\\\"** only when an active report is available and the user asks for fresh evidence, deeper analysis, or a new analytical perspective on the same report topic.\\n- **route = \\\"standalone_research\\\"** for generic factual questions, new topics, unrelated report requests, or when no active report is available.\\n\\nRoute examples:\\n- \\\"what are the risks in this report?\\\" -> route = \\\"report_ask\\\"\\n- \\\"summarize this report\\\" -> route = \\\"report_ask\\\"\\n- \\\"make this shorter\\\" -> route = \\\"report_cosmetic_edit\\\"\\n- \\\"change tone\\\" -> route = \\\"report_cosmetic_edit\\\"\\n- \\\"format as bullets\\\" -> route = \\\"report_cosmetic_edit\\\"\\n- \\\"rewrite this report from a player-performance POV\\\" -> route = \\\"report_delta_research\\\"\\n- \\\"redo this with newer evidence\\\" -> route = \\\"report_delta_research\\\"\\n- \\\"can we write a report on this from a supply-chain angle?\\\" -> route = \\\"report_delta_research\\\"\\n- \\\"write a separate report on player performance\\\" -> route = \\\"standalone_research\\\"\\n\\nDetermine the depth for standalone_research.\\n- **shallow**: Single main question, factual lookup, 2-3 tool calls, no complex comparison.\\n- **deep**: Explicit report-generation requests (\\\"write/create/generate a report\\\"), multi-faceted requests,\\n  explicit comparisons, trend analysis, strategy/roadmaps, or \\\"comprehensive\\\" requests.\\n- **Tie-break**: If unsure, choose \\\"shallow\\\".\\n\\n### OUTPUT FORMAT\\nYou must respond ONLY with a JSON object using this schema:\\n{\\n  \\\"intent\\\": \\\"meta\\\" | \\\"research\\\",\\n  \\\"route\\\": \\\"report_ask\\\" | \\\"report_cosmetic_edit\\\" | \\\"report_delta_research\\\" | \\\"standalone_research\\\" | \\\"meta\\\",\\n  \\\"meta_response\\\": \\\"The text response if intent is meta, otherwise null\\\",\\n  \\\"research_depth\\\": \\\"shallow\\\" | \\\"deep\\\" | null,\\n  \\\"route_reasoning\\\": \\\"One sentence explanation for the route and depth, otherwise null\\\"\\n}### CONTEXT\\nCurrent Date and Time: 2026-07-09 13:17:44\\n\\n\\n\\nActive report: none\\n\\n\\nAvailable Tools:\\n\\n- advanced_web_search_tool: Retrieves relevant contexts from web search (using Exa) for the given question.\\n\\n        Args:\\n            question (str): The question to be answered. Will be truncated to 400 characters if longer.\\n\\n        Returns:\\n            str: The web search results containing relevant documents and their URLs.- web_search_tool: Retrieves relevant contexts from web search (using Exa) for the given question.\\n\\n        Args:\\n            question (str): The question to be answered. Will be truncated to 400 characters if longer.\\n\\n        Returns:\\n            str: The web search results containing relevant documents and their URLs.\\n\\n\\n### USER QUERY\\n\\\"Hi, what can you do?\\\"\"}"
+                ]
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:17:46.182474Z",
+            "attributes": {
+                "response": "{\"ai\": \"```json\\n{\\n  \\\"intent\\\": \\\"meta\\\",\\n  \\\"route\\\": \\\"meta\\\",\\n  \\\"meta_response\\\": \\\"Hello! I am the AI Research Assistant. I can help with research by providing factual information, generating reports, and analyzing data. If you have any specific questions or topics you'd like to explore, feel free to ask!\\\",\\n  \\\"research_depth\\\": null,\\n  \\\"route_reasoning\\\": null\\n}\\n```\"}"
+            }
+        },
+        {
+            "name": "metadata",
+            "timestamp": "2026-07-09T20:17:46.182514Z",
+            "attributes": {
+                "finish_reason": "stop",
+                "finish_type": "success"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langgraph.graph.state.CompiledStateGraph.astream",
+    "context": {
+        "trace_id": "4a94876861e3ade549dc74fb785e94d9",
+        "span_id": "08b58f6b6f954baf",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "06283298ccbb919b",
+    "start_time": "2026-07-09T20:17:44.159915Z",
+    "end_time": "2026-07-09T20:17:46.187493Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/.venv/lib/python3.12/site-packages/langgraph/pregel/main.py:4061",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "agent.langgraph",
+        "entity.1.name": "LangGraph",
+        "last.inference": "e3c2cc3afb7d162b:*",
+        "span.type": "agentic.invocation",
+        "scope.agentic.session": "22021b48-b866-405d-a090-e33f4877efba",
+        "scope.agentic.turn": "33ead0d1ec7b41de8aae382ae321d8d5",
+        "scope.agentic.invocation": "a8627112ca54600aedfaf1190acc6a34",
+        "entity.count": 1,
+        "span.subtype": "content_processing",
+        "monocle.last.agent.invocation.id": "",
+        "monocle.last.agent.name": ""
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:17:44.159954Z",
+            "attributes": {
+                "input": "[\"Hi, what can you do?\"]"
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:17:46.187298Z",
+            "attributes": {
+                "response": "Hello! I am the AI Research Assistant. I can help with research by providing factual information, generating reports, and analyzing data. If you have any specific questions or topics you'd like to explore, feel free to ask!"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "langgraph.graph.state.CompiledStateGraph.ainvoke",
+    "context": {
+        "trace_id": "4a94876861e3ade549dc74fb785e94d9",
+        "span_id": "06283298ccbb919b",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": "a10fe78911676ddf",
+    "start_time": "2026-07-09T20:17:44.157812Z",
+    "end_time": "2026-07-09T20:17:46.187610Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/src/aiq_agent/agents/chat_researcher/agent.py:570",
+        "workflow.name": "nvidia-aiq",
+        "entity.1.type": "agent.langgraph",
+        "monocle.last.agent.invocation.id": "08b58f6b6f954baf",
+        "monocle.last.agent.name": "LangGraph",
+        "last.inference": "e3c2cc3afb7d162b:*",
+        "span.type": "agentic.turn",
+        "scope.agentic.session": "22021b48-b866-405d-a090-e33f4877efba",
+        "scope.agentic.turn": "33ead0d1ec7b41de8aae382ae321d8d5",
+        "entity.count": 1,
+        "span.subtype": "turn"
+    },
+    "events": [
+        {
+            "name": "data.input",
+            "timestamp": "2026-07-09T20:17:44.157854Z",
+            "attributes": {
+                "input": "[\"Hi, what can you do?\"]"
+            }
+        },
+        {
+            "name": "data.output",
+            "timestamp": "2026-07-09T20:17:46.187592Z",
+            "attributes": {
+                "response": "Hello! I am the AI Research Assistant. I can help with research by providing factual information, generating reports, and analyzing data. If you have any specific questions or topics you'd like to explore, feel free to ask!"
+            }
+        }
+    ],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+,{
+    "name": "workflow",
+    "context": {
+        "trace_id": "4a94876861e3ade549dc74fb785e94d9",
+        "span_id": "a10fe78911676ddf",
+        "trace_state": "[]"
+    },
+    "kind": "SpanKind.INTERNAL",
+    "parent_id": null,
+    "start_time": "2026-07-09T20:17:44.157761Z",
+    "end_time": "2026-07-09T20:17:46.187621Z",
+    "status": {
+        "status_code": "OK"
+    },
+    "attributes": {
+        "monocle_apptrace.version": "0.8.8",
+        "monocle_apptrace.language": "python",
+        "span_source": "<repo>/src/aiq_agent/agents/chat_researcher/agent.py:570",
+        "scope.agentic.session": "22021b48-b866-405d-a090-e33f4877efba",
+        "scope.agentic.turn": "33ead0d1ec7b41de8aae382ae321d8d5",
+        "workflow.name": "nvidia-aiq",
+        "span.type": "workflow",
+        "entity.1.name": "nvidia-aiq",
+        "entity.1.type": "workflow.langgraph",
+        "entity.2.type": "app_hosting.generic",
+        "entity.2.name": "generic",
+        "last.inference": "e3c2cc3afb7d162b:*"
+    },
+    "events": [],
+    "links": [],
+    "resource": {
+        "attributes": {
+            "service.name": "nvidia-aiq"
+        },
+        "schema_url": ""
+    }
+}
+]
