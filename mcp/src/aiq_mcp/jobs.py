@@ -371,22 +371,36 @@ class JobManager:
                 runner_id=self._runner_id,
             )
         finally:
-            if heartbeat_task is not None:
-                heartbeat_task.cancel()
-                with suppress(asyncio.CancelledError):
-                    await heartbeat_task
-            # Guarantee the capture entry is gone on every exit path. The
-            # success path already consumed it above; the exception/cancel
-            # paths skip that consume, so without this they would leak.
-            _FAILURE_HANDLER.discard(job_id)
-            _current_job_id.reset(job_id_token)
+            try:
+                if heartbeat_task is not None:
+                    heartbeat_task.cancel()
+                    [heartbeat_outcome] = await asyncio.gather(heartbeat_task, return_exceptions=True)
+                    if isinstance(heartbeat_outcome, Exception):
+                        logger.warning(
+                            "Job %s: heartbeat task exited unexpectedly (%s)",
+                            job_ref,
+                            type(heartbeat_outcome).__name__,
+                        )
+            finally:
+                # Guarantee the capture entry and context binding are gone even
+                # if heartbeat cleanup itself is interrupted or fails.
+                _FAILURE_HANDLER.discard(job_id)
+                _current_job_id.reset(job_id_token)
 
     async def _heartbeat_job(self, job_id: str) -> None:
         if self._heartbeat_interval_seconds <= 0:
             return
+        job_ref = log_identifier_ref(job_id)
         while True:
             await asyncio.sleep(self._heartbeat_interval_seconds)
-            await self._store.heartbeat(job_id, self._runner_id)
+            try:
+                await self._store.heartbeat(job_id, self._runner_id)
+            except Exception as exc:  # noqa: BLE001 - transient store failures must not stop heartbeats
+                logger.warning(
+                    "Job %s: heartbeat write failed (%s); retrying",
+                    job_ref,
+                    type(exc).__name__,
+                )
 
     async def _reconcile_jobs(self) -> None:
         """Reap orphaned jobs and prune expired ones.

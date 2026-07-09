@@ -674,6 +674,92 @@ async def test_failure_capture_does_not_leak_when_workflow_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_transient_heartbeat_failure_retries_without_exposing_details(caplog) -> None:
+    class _TransientHeartbeatStore(_MemoryJobStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.heartbeat_calls = 0
+            self.recovered = asyncio.Event()
+
+        async def heartbeat(self, job_id: str, runner_id: str) -> None:
+            self.heartbeat_calls += 1
+            if self.heartbeat_calls == 1:
+                raise RuntimeError("postgresql://user:credential-sentinel@db/jobs")  # pragma: allowlist secret
+            await super().heartbeat(job_id, runner_id)
+            self.recovered.set()
+
+    gate = asyncio.Event()
+    store = _TransientHeartbeatStore()
+    manager = JobManager(
+        _Runner(gate=gate),  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        runner_id="pod-a",
+        heartbeat_interval_seconds=0.001,
+        ttl_sweep_interval_seconds=0,
+    )
+    caplog.set_level(logging.WARNING, logger="aiq_mcp.jobs")
+    await manager.start()
+    try:
+        submitted = await manager.submit("query", "anonymous")
+        job_id = submitted["job_id"]
+        await asyncio.wait_for(store.recovered.wait(), timeout=1)
+        gate.set()
+        report = await manager.wait_for_completion(job_id, "anonymous", timeout=1)
+    finally:
+        gate.set()
+        await manager.stop()
+
+    assert report == {
+        "job_id": job_id,
+        "depth": "shallow",
+        "state": "complete",
+        "result": "research answer",
+    }
+    assert store.heartbeat_calls >= 2
+    assert "heartbeat write failed (RuntimeError); retrying" in caplog.text
+    assert log_identifier_ref(job_id) in caplog.text
+    assert job_id not in caplog.text
+    assert "credential-sentinel" not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_unexpected_heartbeat_task_failure_cannot_skip_job_cleanup(caplog, monkeypatch) -> None:
+    gate = asyncio.Event()
+    heartbeat_failed = asyncio.Event()
+    manager = _manager(_Runner(gate=gate, log_no_sources=True, raise_after_log=True))
+
+    async def _fail_heartbeat(job_id: str) -> None:
+        del job_id
+        heartbeat_failed.set()
+        raise RuntimeError("postgresql://user:heartbeat-secret@db/jobs")  # pragma: allowlist secret
+
+    monkeypatch.setattr(manager, "_heartbeat_job", _fail_heartbeat)
+    caplog.set_level(logging.WARNING, logger="aiq_mcp.jobs")
+    await manager.start()
+    try:
+        submitted = await manager.submit("query", "anonymous")
+        job_id = submitted["job_id"]
+        await asyncio.wait_for(heartbeat_failed.wait(), timeout=1)
+        gate.set()
+        report = await manager.wait_for_completion(job_id, "anonymous", timeout=1)
+    finally:
+        gate.set()
+        await manager.stop()
+
+    assert report == {
+        "job_id": job_id,
+        "depth": "shallow",
+        "state": "failed",
+        "error": "Research task failed (RuntimeError). Check server logs for details.",
+    }
+    assert "heartbeat task exited unexpectedly (RuntimeError)" in caplog.text
+    assert log_identifier_ref(job_id) in caplog.text
+    assert job_id not in caplog.text
+    assert "heartbeat-secret" not in caplog.text
+    assert job_id not in _FAILURE_HANDLER._captures
+
+
+@pytest.mark.asyncio
 async def test_inline_timeout_does_not_cancel_background_job() -> None:
     gate = asyncio.Event()
     manager = _manager(_Runner(gate=gate))
