@@ -105,11 +105,16 @@ class _MemoryJobStore:
         )
         return job_id
 
-    async def mark_running(self, job_id: str, runner_id: str) -> None:
+    async def mark_running(self, job_id: str, runner_id: str) -> bool:
         job = self.jobs[job_id]
+        if job.state != "queued":
+            return False
         job.state = "running"
         job.runner_id = runner_id
-        job.heartbeat_at = datetime.now(UTC)
+        now = datetime.now(UTC)
+        job.heartbeat_at = now
+        job.updated_at = now
+        return True
 
     async def heartbeat(self, job_id: str, runner_id: str) -> None:
         job = self.jobs[job_id]
@@ -123,14 +128,22 @@ class _MemoryJobStore:
         state: str | None = None,
         result: str | None = None,
         error: str | None = None,
-    ) -> None:
+        from_states: tuple[str, ...] | None = None,
+        runner_id: str | None = None,
+    ) -> bool:
         job = self.jobs[job_id]
+        if from_states is not None and job.state not in from_states:
+            return False
+        if runner_id is not None and job.runner_id != runner_id:
+            return False
         if state is not None:
             job.state = state  # type: ignore[assignment]
         if result is not None:
             job.result = result
         if error is not None:
             job.error = error
+        job.updated_at = datetime.now(UTC)
+        return True
 
     async def get(self, job_id: str) -> Job | None:
         return self.jobs.get(job_id)
@@ -677,6 +690,48 @@ async def test_inline_timeout_does_not_cancel_background_job() -> None:
 
 
 @pytest.mark.asyncio
+async def test_background_completion_does_not_overwrite_terminal_state() -> None:
+    gate = asyncio.Event()
+    store = _MemoryJobStore()
+    manager = JobManager(
+        _Runner(gate=gate),  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        runner_id="pod-a",
+        heartbeat_interval_seconds=0,
+        ttl_sweep_interval_seconds=0,
+    )
+    await manager.start()
+    try:
+        submitted = await manager.submit("query", "anonymous")
+        job_id = submitted["job_id"]
+        task = manager._active_tasks[job_id]
+
+        for _ in range(100):
+            job = await store.get(job_id)
+            if job is not None and job.state == "running":
+                break
+            await asyncio.sleep(0)
+        else:
+            raise AssertionError("background job did not enter running state")
+
+        assert await store.update(job_id, state="failed", error="reconciled failure") is True
+        gate.set()
+        await asyncio.wait_for(task, timeout=1)
+
+        report = await manager.get_final_report(job_id, "anonymous")
+    finally:
+        gate.set()
+        await manager.stop()
+
+    assert report == {
+        "job_id": job_id,
+        "depth": "shallow",
+        "state": "failed",
+        "error": "reconciled failure",
+    }
+
+
+@pytest.mark.asyncio
 async def test_final_report_returns_not_ready_without_poll_cadence() -> None:
     gate = asyncio.Event()
     manager = _manager(_Runner(gate=gate))
@@ -781,7 +836,7 @@ async def test_swallowed_workflow_failure_is_persisted_as_failed() -> None:
 
 
 @pytest.mark.asyncio
-async def test_exception_info_workflow_failure_is_persisted_as_failed() -> None:
+async def test_exception_info_workflow_failure_is_persisted_as_sanitized_failed(caplog) -> None:
     class EmptySourceRegistryError(RuntimeError):
         pass
 
@@ -794,21 +849,37 @@ async def test_exception_info_workflow_failure_is_persisted_as_failed() -> None:
                 logging.getLogger("aiq_agent").exception("agent swallowed source failure")
             return "fallback answer"
 
+    caplog.set_level(logging.ERROR, logger="aiq_agent")
     manager = _manager(_ExceptionLoggingRunner())
     await manager.start()
     try:
         submitted = await manager.submit("query", "anonymous")
         job_id = submitted["job_id"]
         report = await manager.wait_for_completion(job_id, "anonymous", timeout=1)
+        polled = await manager.poll(job_id, "anonymous")
+        final_report = await manager.get_final_report(job_id, "anonymous")
     finally:
         await manager.stop()
 
+    expected_error = "Research task failed (EmptySourceRegistryError). Check server logs for details."
     assert report == {
         "job_id": job_id,
         "depth": "shallow",
         "state": "failed",
-        "error": "EmptySourceRegistryError: registry is empty",
+        "error": expected_error,
     }
+    assert polled == {
+        "job_id": job_id,
+        "depth": "shallow",
+        "state": "failed",
+        "error": expected_error,
+        "todos": [],
+    }
+    assert final_report == report
+    assert "registry is empty" in caplog.text
+    assert "registry is empty" not in report["error"]
+    assert "registry is empty" not in polled["error"]
+    assert "registry is empty" not in final_report["error"]
     assert job_id not in _FAILURE_HANDLER._captures
 
 

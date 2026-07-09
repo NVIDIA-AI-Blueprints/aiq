@@ -942,7 +942,8 @@ async def test_classifier_failure_becomes_mcp_tool_error_without_business_payloa
     result = response.json()["result"]
     assert result["isError"] is True
     assert result.get("structuredContent") is None
-    assert "classifier unavailable" in result["content"][0]["text"]
+    assert "Research query submission failed. Check server logs for details." in result["content"][0]["text"]
+    assert "classifier unavailable" not in result["content"][0]["text"]
     assert jobs.calls == [("submit", "question", "anonymous")]
 
 

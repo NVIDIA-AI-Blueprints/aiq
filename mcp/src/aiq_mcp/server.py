@@ -49,6 +49,7 @@ _DEFAULT_ENV_FILE = _REPO_ROOT / "deploy" / ".env"
 DEFAULT_CONFIG = _REPO_ROOT / "configs" / "config_mcp.yml"
 MCP_SERVER_NAME = "aiq_deep_research"
 ANONYMOUS_PRINCIPAL = "anonymous"
+_PUBLIC_SUBMIT_ERROR = "Research query submission failed. Check server logs for details."
 _CHECKPOINT_DB_ENV_VAR = "AIQ_CHECKPOINT_DB"
 _DEFAULT_INSPECTOR_ORIGIN = "http://localhost:6274"
 _DEFAULT_ALLOWED_HOSTS = (
@@ -276,6 +277,11 @@ def _mcp_instructions(inline_wait_seconds: float) -> str:
     )
 
 
+def _public_submit_error(exc: Exception) -> RuntimeError:
+    logger.error("MCP submit_query failed before enqueue (%s)", type(exc).__name__)
+    return RuntimeError(_PUBLIC_SUBMIT_ERROR)
+
+
 class MCPRuntime:
     """One worker's FastMCP transport and long-lived AIQ services."""
 
@@ -370,7 +376,10 @@ class MCPRuntime:
         """
         del ctx
         jobs = self._get_jobs()
-        submit_result = await jobs.submit(query, ANONYMOUS_PRINCIPAL)
+        try:
+            submit_result = await jobs.submit(query, ANONYMOUS_PRINCIPAL)
+        except Exception as exc:  # noqa: BLE001 - public MCP boundary must sanitize tool errors
+            raise _public_submit_error(exc) from None
 
         if submit_result.get("state") != "queued":
             return submit_result

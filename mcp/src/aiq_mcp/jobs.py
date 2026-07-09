@@ -20,6 +20,7 @@ import socket
 import uuid
 from contextlib import suppress
 from contextvars import ContextVar
+from dataclasses import dataclass
 from typing import Any
 from typing import Protocol
 
@@ -50,6 +51,12 @@ class CheckpointTodoReaderProtocol(Protocol):
 _current_job_id: ContextVar[str | None] = ContextVar("aiq_mcp_current_job_id", default=None)
 
 
+@dataclass(frozen=True)
+class _CapturedWorkflowFailure:
+    public_error: str
+    log_error: str
+
+
 class _WorkflowFailureCapture(logging.Handler):
     """Capture workflow-level errors that the agent layer swallows.
 
@@ -60,10 +67,10 @@ class _WorkflowFailureCapture(logging.Handler):
     cryptic message and no idea what actually went wrong.
 
     This handler watches ``aiq_agent`` log records during a job's run, and
-    when it sees one of the swallowed exceptions, stashes the original
-    message keyed by job_id. ``_run_job`` consumes the stash after the
-    workflow returns and (if non-empty) marks the job ``state="failed"``
-    with the real reason instead of the canned fallback text.
+    when it sees one of the swallowed exceptions, stashes a sanitized public
+    error keyed by job_id. ``_run_job`` consumes the stash after the workflow
+    returns and (if non-empty) marks the job ``state="failed"`` instead of
+    returning the canned fallback text.
 
     Per-job isolation is via the ``_current_job_id`` ContextVar: concurrent
     jobs each see their own job_id thanks to asyncio's context-copy semantics.
@@ -73,7 +80,7 @@ class _WorkflowFailureCapture(logging.Handler):
 
     def __init__(self) -> None:
         super().__init__(level=logging.WARNING)
-        self._captures: dict[str, str] = {}
+        self._captures: dict[str, _CapturedWorkflowFailure] = {}
 
     def emit(self, record: logging.LogRecord) -> None:
         job_id = _current_job_id.get()
@@ -83,7 +90,10 @@ class _WorkflowFailureCapture(logging.Handler):
         if record.exc_info and record.exc_info[1] is not None:
             exc = record.exc_info[1]
             if type(exc).__name__ in self._CAPTURED_EXCEPTIONS:
-                self._captures[job_id] = f"{type(exc).__name__}: {exc}"
+                self._captures[job_id] = _CapturedWorkflowFailure(
+                    public_error=_sanitize_error(exc),
+                    log_error=f"{type(exc).__name__}: {exc}",
+                )
                 return
         # Fallback: chat_researcher's downgraded warning when the exception
         # has already been caught upstream.
@@ -95,13 +105,16 @@ class _WorkflowFailureCapture(logging.Handler):
         # behavior here.
         msg = record.getMessage()
         if "no verifiable sources" in msg.lower() and job_id not in self._captures:
-            self._captures[job_id] = (
-                "Research produced no verifiable sources - the model answered "
-                "without invoking search tools. Try rephrasing as a lookup that "
-                "obviously requires web search."
+            self._captures[job_id] = _CapturedWorkflowFailure(
+                public_error=(
+                    "Research produced no verifiable sources - the model answered "
+                    "without invoking search tools. Try rephrasing as a lookup that "
+                    "obviously requires web search."
+                ),
+                log_error=msg,
             )
 
-    def consume(self, job_id: str) -> str | None:
+    def consume(self, job_id: str) -> _CapturedWorkflowFailure | None:
         return self._captures.pop(job_id, None)
 
     def discard(self, job_id: str) -> None:
@@ -301,7 +314,10 @@ class JobManager:
         job_ref = log_identifier_ref(job_id)
         heartbeat_task: asyncio.Task | None = None
         try:
-            await self._store.mark_running(job_id, self._runner_id)
+            claimed = await self._store.mark_running(job_id, self._runner_id)
+            if not claimed:
+                logger.info("Job %s: skipped because it is no longer queued", job_ref)
+                return
             heartbeat_task = asyncio.create_task(
                 self._heartbeat_job(job_id),
                 name=f"aiq-mcp-heartbeat-{job_ref}",
@@ -316,20 +332,44 @@ class JobManager:
                 logger.info(
                     "Job %s: surfaced swallowed workflow error: %s",
                     job_ref,
-                    captured.replace(job_id, job_ref),
+                    captured.log_error.replace(job_id, job_ref),
                 )
-                await self._store.update(job_id, state="failed", error=captured)
+                await self._store.update(
+                    job_id,
+                    state="failed",
+                    error=captured.public_error,
+                    from_states=("running",),
+                    runner_id=self._runner_id,
+                )
             else:
-                await self._store.update(job_id, state="complete", result=result)
+                await self._store.update(
+                    job_id,
+                    state="complete",
+                    result=result,
+                    from_states=("running",),
+                    runner_id=self._runner_id,
+                )
                 logger.info("Job %s: complete", job_ref)
         except asyncio.CancelledError:
             logger.info("Job %s: cancelled", job_ref)
-            await self._store.update(job_id, state="failed", error="Research task was cancelled before completion.")
+            await self._store.update(
+                job_id,
+                state="failed",
+                error="Research task was cancelled before completion.",
+                from_states=("running",),
+                runner_id=self._runner_id,
+            )
             raise
         except Exception as exc:  # noqa: BLE001 - we want to catch everything for jobs
             logger.error("Job %s failed (%s)", job_ref, type(exc).__name__)
             sanitized = _sanitize_error(exc)
-            await self._store.update(job_id, state="failed", error=sanitized)
+            await self._store.update(
+                job_id,
+                state="failed",
+                error=sanitized,
+                from_states=("running",),
+                runner_id=self._runner_id,
+            )
         finally:
             if heartbeat_task is not None:
                 heartbeat_task.cancel()

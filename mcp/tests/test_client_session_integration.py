@@ -119,13 +119,16 @@ class _MemoryJobStore:
         )
         return job_id
 
-    async def mark_running(self, job_id: str, runner_id: str) -> None:
+    async def mark_running(self, job_id: str, runner_id: str) -> bool:
         job = self.jobs[job_id]
+        if job.state != "queued":
+            return False
         now = datetime.now(UTC)
         job.state = "running"
         job.runner_id = runner_id
         job.heartbeat_at = now
         job.updated_at = now
+        return True
 
     async def heartbeat(self, job_id: str, runner_id: str) -> None:
         job = self.jobs[job_id]
@@ -141,8 +144,14 @@ class _MemoryJobStore:
         state: str | None = None,
         result: str | None = None,
         error: str | None = None,
-    ) -> None:
+        from_states: tuple[str, ...] | None = None,
+        runner_id: str | None = None,
+    ) -> bool:
         job = self.jobs[job_id]
+        if from_states is not None and job.state not in from_states:
+            return False
+        if runner_id is not None and job.runner_id != runner_id:
+            return False
         if state is not None:
             job.state = state  # type: ignore[assignment]
         if result is not None:
@@ -150,6 +159,7 @@ class _MemoryJobStore:
         if error is not None:
             job.error = error
         job.updated_at = datetime.now(UTC)
+        return True
 
     async def get(self, job_id: str) -> Job | None:
         return self.jobs.get(job_id)

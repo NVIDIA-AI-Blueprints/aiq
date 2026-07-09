@@ -137,20 +137,22 @@ class JobStore:
         )
         return job_id
 
-    async def mark_running(self, job_id: str, runner_id: str) -> None:
+    async def mark_running(self, job_id: str, runner_id: str) -> bool:
         pool = self._require_pool()
-        await pool.execute(
+        status = await pool.execute(
             f"""
             UPDATE {self._jobs_table}
                SET state = 'running',
                    runner_id = $2,
                    heartbeat_at = NOW(),
                    updated_at = NOW()
-             WHERE job_id = $1::uuid
+              WHERE job_id = $1::uuid
+                AND state = 'queued'
             """,
             job_id,
             runner_id,
         )
+        return _rows_changed(status) == 1
 
     async def heartbeat(self, job_id: str, runner_id: str) -> None:
         pool = self._require_pool()
@@ -174,9 +176,12 @@ class JobStore:
         state: JobState | None = None,
         result: str | None = None,
         error: str | None = None,
-    ) -> None:
+        from_states: tuple[JobState, ...] | None = None,
+        runner_id: str | None = None,
+    ) -> bool:
         assignments = ["updated_at = NOW()"]
-        vals: list[object] = []
+        vals: list[object] = [job_id]
+        predicates = ["job_id = $1::uuid"]
         if state is not None:
             vals.append(state)
             assignments.append(f"state = ${len(vals)}")
@@ -186,13 +191,19 @@ class JobStore:
         if error is not None:
             vals.append(error)
             assignments.append(f"error = ${len(vals)}")
+        if from_states is not None:
+            vals.append(list(from_states))
+            predicates.append(f"state = ANY(${len(vals)}::text[])")
+        if runner_id is not None:
+            vals.append(runner_id)
+            predicates.append(f"runner_id = ${len(vals)}")
 
-        vals.append(job_id)
         pool = self._require_pool()
-        await pool.execute(
-            f"UPDATE {self._jobs_table} SET {', '.join(assignments)} WHERE job_id = ${len(vals)}::uuid",
+        status = await pool.execute(
+            f"UPDATE {self._jobs_table} SET {', '.join(assignments)} WHERE {' AND '.join(predicates)}",
             *vals,
         )
+        return _rows_changed(status) == 1
 
     async def get(self, job_id: str) -> Job | None:
         pool = self._require_pool()

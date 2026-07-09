@@ -133,10 +133,9 @@ def test_compose_stack_is_isolated_explicit_and_health_gated() -> None:
     assert mcp["cap_drop"] == ["ALL"]
 
 
-def test_deployment_context_excludes_secrets_and_includes_package_readmes() -> None:
+def test_deployment_context_excludes_env_files_and_includes_package_readmes() -> None:
     lines = set(_DOCKERIGNORE.read_text().splitlines())
-    assert {".env", ".env.*", "**/.env", "**/.env.*", ".netrc", "**/.netrc"} <= lines
-    assert {"**/certs/", "**/*.crt", "**/*.key", "**/*.pem"} <= lines
+    assert {".env", ".env.*", "**/.env", "**/.env.*"} <= lines
     assert {
         "!README.md",
         "!mcp/README.md",

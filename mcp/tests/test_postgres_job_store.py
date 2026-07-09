@@ -306,6 +306,91 @@ async def test_poll_count_and_timestamps_preserve_stale_reconciliation_semantics
 
 
 @pytest.mark.asyncio
+async def test_state_transitions_are_guarded_by_state_and_runner(postgres_url: str) -> None:
+    store = JobStore(postgres_url, min_pool_size=1, max_pool_size=1)
+    await store.init()
+    try:
+        job_id = await store.create(
+            principal="principal-a",
+            query="query",
+            depth="shallow",
+            state="queued",
+        )
+
+        assert await store.mark_running(job_id, "runner-a") is True
+        running = await store.get(job_id)
+        assert running is not None
+        assert running.state == "running"
+        assert running.runner_id == "runner-a"
+
+        assert await store.mark_running(job_id, "runner-b") is False
+        still_running = await store.get(job_id)
+        assert still_running is not None
+        assert still_running.state == "running"
+        assert still_running.runner_id == "runner-a"
+
+        assert (
+            await store.update(
+                job_id,
+                state="failed",
+                error="wrong runner",
+                from_states=("running",),
+                runner_id="runner-b",
+            )
+            is False
+        )
+        assert (
+            await store.update(
+                job_id,
+                state="complete",
+                result="wrong state",
+                from_states=("queued",),
+                runner_id="runner-a",
+            )
+            is False
+        )
+
+        before_complete = await store.get(job_id)
+        assert before_complete is not None
+        assert before_complete.state == "running"
+        assert before_complete.error is None
+        assert before_complete.result is None
+
+        assert (
+            await store.update(
+                job_id,
+                state="complete",
+                result="answer",
+                from_states=("running",),
+                runner_id="runner-a",
+            )
+            is True
+        )
+        complete = await store.get(job_id)
+        assert complete is not None
+        assert complete.state == "complete"
+        assert complete.result == "answer"
+
+        assert (
+            await store.update(
+                job_id,
+                state="failed",
+                error="late failure",
+                from_states=("running",),
+                runner_id="runner-a",
+            )
+            is False
+        )
+        terminal = await store.get(job_id)
+        assert terminal is not None
+        assert terminal.state == "complete"
+        assert terminal.result == "answer"
+        assert terminal.error is None
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_cancellation_is_persisted_and_visible_after_restart(postgres_url: str) -> None:
     gate = asyncio.Event()
     manager = JobManager(
