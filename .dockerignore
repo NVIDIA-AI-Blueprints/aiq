@@ -10,15 +10,9 @@
 .env.*
 **/.env
 **/.env.*
-.netrc
-**/.netrc
 !.env.example
 !**/.env.example
 **/certs/
-**/*.crt
-**/*.key
-**/*.pem
-**/metadata.yaml
 
 # ---- Python ----
 __pycache__/
