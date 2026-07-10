@@ -432,7 +432,7 @@ async def phase6_postgres_url() -> str:
         await _ensure_database(db_url)
         await _reset_schema(db_url)
     except (OSError, asyncpg.PostgresError) as exc:
-        message = f"local Postgres test database is not available: {exc}"
+        message = f"local Postgres test database is not available ({type(exc).__name__})"
         warnings.warn(message, RuntimeWarning, stacklevel=2)
         pytest.skip(message)
 

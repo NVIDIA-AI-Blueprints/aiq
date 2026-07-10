@@ -69,7 +69,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
         env:
           POSTGRES_USER: aiq
           POSTGRES_PASSWORD: aiq_mcp_ci_password # pragma: allowlist secret
@@ -281,7 +281,7 @@ jobs:
 
       - name: Upload MCP release evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mcp-release-evidence
           path: |
@@ -310,7 +310,7 @@ jobs:
 
       - name: Upload MCP failure logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: mcp-compose-logs
           path: mcp-compose.log
