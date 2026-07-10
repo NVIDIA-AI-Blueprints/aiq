@@ -1045,6 +1045,81 @@ async def test_transport_sanitizes_submit_response_processing_exceptions(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("submit_result", "expected_log"),
+    [
+        (
+            {
+                "depth": "shallow",
+                "state": "queued",
+                "estimated_duration_seconds": 45,
+                "first_poll_after_seconds": 5,
+            },
+            "submit_query response handling failed (KeyError)",
+        ),
+        (
+            {
+                "job_id": "",
+                "depth": "shallow",
+                "state": "queued",
+                "estimated_duration_seconds": 45,
+                "first_poll_after_seconds": 5,
+            },
+            "submit_query response handling failed (TypeError)",
+        ),
+        (
+            {
+                "job_id": _CapabilityJobs.JOB_ID,
+                "depth": "shallow",
+                "state": "queued",
+                "estimated_duration_seconds": _BOUNDARY_FAILURE_MESSAGE,
+                "first_poll_after_seconds": 5,
+            },
+            "submit_query response handling failed (TypeError)",
+        ),
+    ],
+    ids=("missing-job-id", "empty-job-id", "bad-estimate"),
+)
+async def test_transport_sanitizes_malformed_queued_submit_response(
+    tmp_path: Path,
+    caplog,
+    submit_result: dict[str, Any],
+    expected_log: str,
+) -> None:
+    events: list[str] = []
+    jobs = _CapabilityJobs(events)
+    jobs.submit_result = submit_result
+    runtime = server.MCPRuntime(
+        _settings(tmp_path, cors_origins=()),
+        runner=_Service("runner", events),
+        jobs_factory=lambda: jobs,
+        validate_startup=lambda: None,
+    )
+    transport = httpx.ASGITransport(app=runtime.app)
+    caplog.set_level("ERROR", logger="aiq_mcp.server")
+
+    async with runtime.app.router.lifespan_context(runtime.app):
+        async with httpx.AsyncClient(transport=transport, base_url="http://localhost") as client:
+            response = await client.post(
+                "/mcp",
+                headers=_MCP_HEADERS,
+                json=_tool_call_request(1, "submit_query", {"query": "question"}),
+            )
+
+    assert response.status_code == 200
+    result = response.json()["result"]
+    assert result["isError"] is True
+    assert result.get("structuredContent") is None
+    assert "Research query submission failed. Check server logs for details." in result["content"][0]["text"]
+    assert jobs.calls == [("submit", "question", "anonymous")]
+    assert expected_log in caplog.text
+    assert _CapabilityJobs.JOB_ID not in caplog.text
+    for fragment in (_BOUNDARY_FAILURE_CREDENTIAL, _BOUNDARY_FAILURE_HOST):
+        assert fragment not in response.text
+        assert fragment not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_inline_wait_exception_preserves_queued_capability_without_exposing_details(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

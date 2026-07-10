@@ -399,8 +399,19 @@ class MCPRuntime:
 
         inline_wait = self.settings.shallow_inline_wait_seconds
         try:
+            job_id = submit_result["job_id"]
+            if not isinstance(job_id, str) or not job_id:
+                raise TypeError("queued submit result job_id must be a non-empty string")
+            remaining_estimate = max(
+                0,
+                int(submit_result["estimated_duration_seconds"] - inline_wait),
+            )
+        except Exception as exc:  # noqa: BLE001 - public MCP boundary must sanitize tool errors
+            raise _public_tool_error("submit_query response handling", _PUBLIC_SUBMIT_ERROR, exc) from None
+
+        try:
             inline = await jobs.wait_for_completion(
-                submit_result["job_id"],
+                job_id,
                 ANONYMOUS_PRINCIPAL,
                 timeout=inline_wait,
             )
@@ -410,10 +421,7 @@ class MCPRuntime:
             return {
                 **submit_result,
                 "first_poll_after_seconds": 0,
-                "estimated_duration_seconds": max(
-                    0,
-                    int(submit_result["estimated_duration_seconds"] - inline_wait),
-                ),
+                "estimated_duration_seconds": remaining_estimate,
             }
         except Exception as exc:  # noqa: BLE001 - preserve an already-issued job capability
             _log_public_tool_failure("submit_query inline wait after enqueue", exc)
