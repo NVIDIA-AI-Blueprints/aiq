@@ -82,7 +82,8 @@ helm show chart aiq2-web-2.0.0.tgz
 helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq --create-namespace \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
-  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret'
 ```
 
 - Replace `<YOUR_NGC_API_KEY>` with your NGC API key (or use `$NGC_API_KEY` if set in your environment).
@@ -97,7 +98,8 @@ helm upgrade --install aiq https://helm.ngc.nvidia.com/nvidia/blueprint/charts/a
   -n ns-aiq --create-namespace \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
-  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret'
 ```
 
 ### Override values
@@ -109,6 +111,7 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.image.tag=<tag>
 ```
 
@@ -127,6 +130,45 @@ To see what values the chart supports before installing:
 ```bash
 helm show values aiq2-web-2.0.0.tgz
 ```
+
+### Amazon OpenSearch Serverless
+
+The backend image can be overridden through values without forking the chart:
+
+```yaml
+aiq:
+  apps:
+    backend:
+      image:
+        repository: <registry>/<aiq-agent-image>
+        tag: <tag>
+```
+
+For Amazon OpenSearch Serverless, set the backend workflow config to `configs/config_web_opensearch.yml` and configure
+SigV4 through environment values:
+
+```yaml
+aiq:
+  apps:
+    backend:
+      env:
+        CONFIG_FILE: configs/config_web_opensearch.yml
+        OPENSEARCH_URL: https://abc123.us-west-2.aoss.amazonaws.com
+        OPENSEARCH_AUTH_TYPE: sigv4
+        OPENSEARCH_AWS_SERVICE: aoss
+        OPENSEARCH_INDEX_PREFIX: aiq
+        AWS_REGION: us-west-2
+        OPENSEARCH_INGESTION_MODE: auto
+        OPENSEARCH_DASK_FILE_TRANSFER: bytes
+```
+
+A complete example is available at
+[`deploy/helm/examples/aws-opensearch-serverless-values.yaml`](examples/aws-opensearch-serverless-values.yaml).
+
+For EKS Pod Identity, associate the IAM role with the backend service account for this release. With the default chart
+names, the namespace is `ns-aiq` and the backend service account is `aiq-backend`. EKS Pod Identity associations are
+created through EKS, not by annotating the service account. The role also needs OpenSearch Serverless IAM access and a
+data access policy for the target collection/index pattern.
 
 ### Verify
 
@@ -147,8 +189,13 @@ aiq-postgres-xxx                1/1     Running   0          30s
 
 ```bash
 kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000 &
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
+
+The backend liveness probe uses `/live`, which checks only that the API process
+responds. The readiness probe uses `/health`, which checks required dependencies
+and can return HTTP 503 without causing Kubernetes to restart the process.
 
 The backend API docs are available at `http://localhost:8000/docs` while the port-forward is active.
 
@@ -172,7 +219,8 @@ To upgrade an existing release to a newer chart version, pull the new chart arch
 helm upgrade aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
-  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
+  --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret'
 ```
 
 ### Uninstall
@@ -192,14 +240,46 @@ The backend loads a workflow config at startup. Switch configs with `--set`:
 |-------------|-------------|
 | `configs/config_web_default_llamaindex.yml` | Default — LlamaIndex backend (no external RAG required) |
 | `configs/config_web_frag.yml` | Foundational RAG mode (requires a running RAG service) |
+| `configs/config_web_frag_mcp_auth.yml` | Foundational RAG with optional per-user MCP authentication |
 
 ```bash
 helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml
 ```
+
+### Per-user MCP authentication with external Redis
+
+The chart does not install Redis. When selecting the per-user authentication config, provide a Redis service that the backend and its workers can both reach. The deployer owns its availability, persistence, networking, and backup.
+
+Add `REDIS_PASSWORD` to the existing `aiq-credentials` Secret when the Redis service requires authentication, then create a values file:
+
+```yaml
+# aiq-per-user-auth-values.yaml
+aiq:
+  apps:
+    backend:
+      env:
+        CONFIG_FILE: configs/config_web_frag_mcp_auth.yml
+        MCP_TOKEN_STORE_TYPE: redis
+        REDIS_HOST: redis.example.com
+        REDIS_PORT: "6379"
+      secretEnv:
+        REDIS_PASSWORD: REDIS_PASSWORD
+```
+
+Apply it to either the downloaded chart or a source-chart installation:
+
+```bash
+helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
+  --wait --timeout 10m \
+  -f aiq-per-user-auth-values.yaml
+```
+
+Configure `MCP_GDRIVE_URL`, `AIQ_PUBLIC_URL`, and any OAuth client credentials required by the protected MCP source through the same `env` and `secretEnv` maps. NAT 1.8's Redis object store in this image supports host, port, database, and optional password; this example does not support TLS, ACL usernames, Sentinel, or Redis Cluster.
 
 ## FRAG Integration
 
@@ -214,6 +294,7 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml \
   --set aiq.apps.backend.env.RAG_SERVER_URL=http://rag-server.<rag-namespace>.svc.cluster.local:8081/v1 \
   --set aiq.apps.backend.env.RAG_INGEST_URL=http://ingestor-server.<rag-namespace>.svc.cluster.local:8082/v1
@@ -230,6 +311,7 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --wait --timeout 10m \
   --set 'aiq.apps.backend.imagePullSecrets[0].name=ngc-secret' \
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret' \
+  --set 'aiq.apps.postgres.imagePullSecrets[0].name=ngc-secret' \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml \
   --set aiq.apps.backend.env.RAG_SERVER_URL=http://<rag-host>:8081/v1 \
   --set aiq.apps.backend.env.RAG_INGEST_URL=http://<rag-ingest-host>:8082/v1

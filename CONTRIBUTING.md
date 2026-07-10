@@ -1,40 +1,88 @@
 # Contributing Guidelines
 
-We're posting these examples on GitHub to support the NVIDIA LLM community and facilitate feedback.
-We invite contributions!
+We welcome contributions to the NVIDIA AI-Q blueprint. This repository uses a maintainer-reviewed pull request workflow with DCO sign-off, code-owner review, copy-pr-bot mirroring, and GitHub Actions validation.
 
-Use the following guidelines to contribute to this project.
+## Before You Start
 
+- Search existing issues and pull requests before opening new work.
+- Open an issue or discussion before large design changes, public APIs, deployment changes, or contributor workflow changes.
+- Do not include secrets, credentials, private hostnames, internal-only logs, customer data, or generated local artifacts.
+- Target the `develop` branch unless a maintainer asks you to use a release branch.
 
 ## Pull Requests
-Developer workflow for code contributions is as follows:
 
-1. Developers must first [fork](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/working-with-forks/fork-a-repo) the upstream this repository.
-2. Git clone the forked repository and push changes to the personal fork.
-3. Once the code changes are staged on the fork and ready for review, a Pull Request (PR) can be requested to merge the changes from a branch of the fork into a selected branch of upstream.
-4. Since there is no CI/CD process in place yet, the PR will be accepted and the corresponding issue closed only after adequate testing has been completed, manually, by the developer and/or repository owners reviewing the code.
+1. Fork the repository and create a focused branch from `develop`.
+2. Make the smallest coherent change and add or update tests for behavior changes.
+3. Sign off every commit with `git commit -s`.
+4. Run the relevant local validation before opening the PR.
+5. Open a pull request into `develop` and fill out the PR template with exact validation evidence.
+6. Address review feedback until required checks and code-owner review pass.
 
+## Local Validation
+
+Use the narrowest command that covers your change, then include the exact output or workflow link in the PR.
+
+```bash
+uv sync --group dev
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
+```
+
+For UI changes:
+
+```bash
+cd frontends/ui
+npm ci
+npm run lint
+npm run type-check
+npm run test:ci
+npm run build
+```
+
+For deployment changes, run the relevant Helm or compose validation and describe the environment used.
+
+## CI and Bot Workflow
+
+AI-Q uses push-triggered GitHub Actions. Pull requests are mirrored by copy-pr-bot to `pull-request/<PR number>` branches after a maintainer or configured vetter comments `/ok to test`, and CI runs on those mirrored branches.
+
+Repository owners, organization members, and collaborators can request NVSkills validation by commenting:
+
+```text
+/nvskills-ci
+```
+
+Maintainers can request bot-driven merge with:
+
+```text
+/merge
+```
+
+The `/merge` command requires the RAPIDS ops-bot GitHub App to be installed and the PR to satisfy repository rules, including required checks, code-owner review, resolved review threads, and branch policy.
 
 ## Signing Your Work
-We require that all contributors "sign-off" on their commits. This certifies that the contribution is your original work, or you have rights to submit it under the same license, or a compatible license.
 
-Any contribution which contains commits that are not Signed-Off will not be accepted.
-To sign off on a commit, use the `--signoff` (or `-s`) option when committing your changes:
+We require all contributors to sign off on their commits. This certifies that the contribution is your original work, or that you have the right to submit it under this project's license.
 
-`$ git commit -s -m "Add cool feature."`
-This will append the following to your commit message:
+```bash
+git commit -s -m "Add focused change"
+```
 
+This appends a line such as:
+
+```text
 Signed-off-by: Your Name <your@email.com>
+```
 
+Commits without sign-off may be rejected.
 
 ## Developer Certificate of Origin
+
 Version 1.1
 
 Copyright (C) 2004, 2006 The Linux Foundation and its contributors.
 
-Everyone is permitted to copy and distribute verbatim copies of this
-license document, but changing it is not allowed.
-
+Everyone is permitted to copy and distribute verbatim copies of this license document, but changing it is not allowed.
 
 Developer's Certificate of Origin 1.1
 

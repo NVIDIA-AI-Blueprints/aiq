@@ -197,8 +197,14 @@ class JWTValidator(TokenValidator):
     # Public API
     # ------------------------------------------------------------------
 
-    async def validate(self, token: str) -> dict[str, Any] | None:
-        """Validate *token* and return a user dict per ``TokenValidator``, or ``None``.
+    async def validate(self, token: str) -> tuple[dict[str, Any] | None, str | None]:
+        """Validate *token* and return ``(user_dict, error_code)``.
+
+        Returns ``(user_dict, None)`` on success.  On failure returns
+        ``(None, error_code)`` where *error_code* is one of:
+
+        - ``"token_expired"`` — signature valid but ``exp`` claim passed
+        - ``"token_invalid"`` — bad signature, malformed, or claim check failure
 
         Merges verified JWT claims with the required ``type`` / ``token`` /
         ``skip_clarifier`` fields. Contract keys are applied after ``**claims``
@@ -209,12 +215,12 @@ class JWTValidator(TokenValidator):
             import jwt as _jwt
         except ImportError:
             logger.error(_MISSING_PYJWT)
-            return None
+            return (None, "token_invalid")
 
         try:
             signing_key = await asyncio.to_thread(self._get_signing_key, token)
             if signing_key is None:
-                return None
+                return (None, "token_invalid")
 
             options: dict[str, Any] = {"verify_exp": True}
             if not self.verify_iss:
@@ -230,7 +236,7 @@ class JWTValidator(TokenValidator):
                 options["verify_aud"] = False
 
             claims = _jwt.decode(token, signing_key.key, **decode_kwargs)
-            return {
+            user = {
                 **claims,
                 "type": "jwt",
                 "sub": claims.get("sub"),
@@ -239,13 +245,14 @@ class JWTValidator(TokenValidator):
                 "token": token,
                 "skip_clarifier": False,
             }
+            return (user, None)
 
         except _jwt.ExpiredSignatureError:
             logger.debug("JWT expired")
-            return None
+            return (None, "token_expired")
         except _jwt.InvalidTokenError as exc:
             logger.debug("JWT invalid: %s", exc)
-            return None
+            return (None, "token_invalid")
         except Exception as exc:
             logger.warning("JWT validation error: %s", exc)
-            return None
+            return (None, "token_invalid")

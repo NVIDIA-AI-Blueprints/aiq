@@ -23,6 +23,10 @@ import {
   SESSION_MAX_AGE_SECONDS,
   shouldUseSecureCookies,
 } from '@/adapters/auth/config'
+import {
+  getIdTokenCookieDecision,
+  idTokenCookieMaxAgeSeconds,
+} from '@/adapters/auth/id-token-cookie'
 
 const nextAuthHandler = NextAuth(authOptions)
 
@@ -34,6 +38,103 @@ const clearAuthCookies = (response: NextResponse): void => {
   response.cookies.delete('__Host-next-auth.csrf-token')
   response.cookies.delete('next-auth.callback-url')
   response.cookies.delete('__Secure-next-auth.callback-url')
+}
+
+const cloneResponse = (response: Response): NextResponse =>
+  new NextResponse(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: new Headers(response.headers),
+  })
+
+interface SessionCookieSource {
+  idToken?: string
+  expiresAt?: number
+  error?: string
+}
+
+const readSessionCookieSource = async (
+  response: Response
+): Promise<SessionCookieSource | undefined> => {
+  const contentType = response.headers.get('content-type') ?? ''
+  if (!contentType.includes('application/json')) {
+    return undefined
+  }
+
+  try {
+    const session = (await response.clone().json()) as {
+      idToken?: unknown
+      idTokenExpiresAt?: unknown
+      error?: unknown
+    }
+
+    return {
+      idToken: typeof session.idToken === 'string' ? session.idToken : undefined,
+      expiresAt: typeof session.idTokenExpiresAt === 'number' ? session.idTokenExpiresAt : undefined,
+      error: typeof session.error === 'string' ? session.error : undefined,
+    }
+  } catch {
+    return undefined
+  }
+}
+
+const syncIdTokenCookie = async (
+  req: NextRequest,
+  response: Response,
+  {
+    preserveExpiredRequestToken = false,
+    preferResponseSessionToken = false,
+  }: { preserveExpiredRequestToken?: boolean; preferResponseSessionToken?: boolean } = {}
+): Promise<NextResponse> => {
+  const responseSession = preferResponseSessionToken
+    ? await readSessionCookieSource(response)
+    : undefined
+  const newResponse = cloneResponse(response)
+
+  try {
+    const token = await getToken({
+      req,
+      secret: process.env.NEXTAUTH_SECRET,
+      secureCookie: shouldUseSecureCookies(),
+    })
+
+    const hasResponseSessionCookieSource =
+      responseSession?.idToken !== undefined ||
+      responseSession?.expiresAt !== undefined ||
+      responseSession?.error !== undefined
+    const expiresAt = responseSession?.expiresAt ?? (token?.expiresAt as number | undefined)
+    const idToken = responseSession?.idToken ?? (token?.idToken as string | undefined)
+    const cookieDecision = getIdTokenCookieDecision({
+      // If the session response includes refreshed token fields, it is the
+      // authoritative state. Do not let a stale request-side refresh error
+      // shadow a successful recovery from the same /api/auth/session response.
+      tokenError: hasResponseSessionCookieSource ? responseSession?.error : token?.error,
+      idToken,
+      expiresAt,
+      preserveExpiredRequestToken,
+    })
+
+    if (cookieDecision === 'delete') {
+      newResponse.cookies.delete('idToken')
+      return newResponse
+    }
+
+    if (cookieDecision === 'preserve') {
+      return newResponse
+    }
+
+    newResponse.cookies.set('idToken', idToken!, {
+      httpOnly: true,
+      sameSite: 'lax',
+      path: '/',
+      secure: shouldUseSecureCookies(),
+      maxAge: idTokenCookieMaxAgeSeconds(expiresAt!, SESSION_MAX_AGE_SECONDS),
+    })
+  } catch (error) {
+    console.error('[NextAuth] Error syncing idToken cookie:', error)
+  }
+
+  return newResponse
 }
 
 /**
@@ -66,41 +167,24 @@ const withIdTokenCookie = async (
 
   // Run NextAuth handler first
   const response = await nextAuthHandler(req, context)
+  const action = params.nextauth?.[0]
 
   // Check if this is a callback (OAuth GET or Credentials POST)
   const isCallback = params.nextauth?.includes('callback')
+  if (action === 'session') {
+    // On session requests, NextAuth may refresh the JWT and write it only to
+    // the response. Prefer the session payload so idToken gets the refreshed
+    // token and TTL; fall back to preserving when only the old request JWT is
+    // visible.
+    return syncIdTokenCookie(req, response, {
+      preserveExpiredRequestToken: true,
+      preferResponseSessionToken: true,
+    })
+  }
 
   if (isCallback) {
-    try {
-      const token = await getToken({
-        req,
-        secret: process.env.NEXTAUTH_SECRET,
-      })
-
-      if (token?.idToken) {
-        console.log('[NextAuth] Setting idToken cookie after callback')
-
-        // Clone the response to modify headers
-        const newResponse = new NextResponse(response.body, {
-          status: response.status,
-          statusText: response.statusText,
-          headers: new Headers(response.headers),
-        })
-
-        // Keep callback-set cookies aligned with the shared auth session lifetime.
-        newResponse.cookies.set('idToken', token.idToken as string, {
-          httpOnly: true,
-          sameSite: 'lax',
-          path: '/',
-          secure: shouldUseSecureCookies(),
-          maxAge: SESSION_MAX_AGE_SECONDS,
-        })
-
-        return newResponse
-      }
-    } catch (error) {
-      console.error('[NextAuth] Error setting idToken cookie:', error)
-    }
+    console.log('[NextAuth] Syncing idToken cookie after callback')
+    return syncIdTokenCookie(req, response)
   }
 
   return response

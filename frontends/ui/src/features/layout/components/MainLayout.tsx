@@ -9,14 +9,15 @@
  * - SessionsPanel (left, overlay)
  * - ChatArea + InputArea (center, responsive width)
  * - ResearchPanel (right, pushes content - takes 60% when open)
- * - DataSourcesPanel / SettingsPanel (right, overlay)
+ * - DataSourcesPanel (right, overlay)
  *
  * Handles auth state to show different UI for logged-in vs logged-out users.
  */
 
 'use client'
 
-import { type FC, useCallback } from 'react'
+import { type FC, useCallback, useMemo } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { Flex } from '@/adapters/ui'
 import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { AppBar } from './AppBar'
@@ -25,9 +26,12 @@ import { ChatArea } from './ChatArea'
 import { InputArea } from './InputArea'
 import { ResearchPanel } from './ResearchPanel'
 import { DataSourcesPanel } from './DataSourcesPanel'
-import { SettingsPanel } from './SettingsPanel'
 import { useChatStore, useDeepResearch, NoSourcesBanner } from '@/features/chat'
-import { hasActiveDeepResearchJob } from '@/features/chat/lib/session-activity'
+import {
+  hasActiveDeepResearchJob,
+  hasCompletedDeepResearchReport,
+  hasExpiredDeepResearchReport,
+} from '@/features/chat/lib/session-activity'
 import { useLayoutStore } from '../store'
 import { useSessionUrl } from '@/hooks/use-session-url'
 
@@ -62,19 +66,32 @@ export const MainLayout: FC<MainLayoutProps> = ({
 }) => {
   const {
     currentConversation,
-    getUserConversations,
-    selectConversation,
-    startNewSessionDraft,
-    deleteConversation,
-    deleteAllConversations,
-    updateConversationTitle,
+    conversations,
     isStreaming,
     pendingInteraction,
     isDeepResearchStreaming,
     deepResearchOwnerConversationId,
-  } = useChatStore()
+    currentUserId,
+  } = useChatStore(
+    useShallow((s) => ({
+      currentConversation: s.currentConversation,
+      conversations: s.conversations,
+      isStreaming: s.isStreaming,
+      pendingInteraction: s.pendingInteraction,
+      isDeepResearchStreaming: s.isDeepResearchStreaming,
+      deepResearchOwnerConversationId: s.deepResearchOwnerConversationId,
+      currentUserId: s.currentUserId,
+    }))
+  )
 
-  const { rightPanel, closeRightPanel } = useLayoutStore()
+  const selectConversation = useChatStore((s) => s.selectConversation)
+  const startNewSessionDraft = useChatStore((s) => s.startNewSessionDraft)
+  const deleteConversation = useChatStore((s) => s.deleteConversation)
+  const deleteAllConversations = useChatStore((s) => s.deleteAllConversations)
+  const updateConversationTitle = useChatStore((s) => s.updateConversationTitle)
+
+  const isResearchPanelOpen = useLayoutStore((s) => s.rightPanel === 'research')
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const prefersReducedMotion = useReducedMotion()
 
   // Deep research SSE hook - manages connection when deep research starts
@@ -93,11 +110,14 @@ export const MainLayout: FC<MainLayoutProps> = ({
   )
 
   // Start a new unsaved draft session and clear URL until first interaction.
+  // Open Data Sources panel so it stays visible (default panel for new sessions).
   const handleNewSession = useCallback(() => {
     startNewSessionDraft()
     clearSessionUrl()
-    closeRightPanel()
-  }, [startNewSessionDraft, clearSessionUrl, closeRightPanel])
+    if (isAuthenticated) {
+      openRightPanel('data-sources')
+    }
+  }, [startNewSessionDraft, clearSessionUrl, openRightPanel, isAuthenticated])
 
   // Wrap deleteConversation to clear URL if deleting current session
   const handleDeleteSession = useCallback(
@@ -117,30 +137,33 @@ export const MainLayout: FC<MainLayoutProps> = ({
     clearSessionUrl()
   }, [deleteAllConversations, clearSessionUrl])
 
-  // Check if research panel is open (pushes content instead of overlaying)
-  const isResearchPanelOpen = rightPanel === 'research'
   const isNavigationBlocked = isStreaming || pendingInteraction !== null
 
-  // Get only conversations for the current authenticated user
-  const userConversations = getUserConversations()
+  const userConversations = useMemo(
+    () => (currentUserId ? conversations.filter((c) => c.userId === currentUserId) : []),
+    [conversations, currentUserId]
+  )
 
-  // Convert conversations to session format for sidebar
-  const sessions = userConversations.map((conv) => {
-    const hasActiveJob = hasActiveDeepResearchJob(conv.messages)
-
-    return {
-      id: conv.id,
-      title: conv.title,
-      date: conv.updatedAt,
-      hasActiveDeepResearch: hasActiveJob || (isDeepResearchStreaming && deepResearchOwnerConversationId === conv.id),
-    }
-  })
+  const sessions = useMemo(
+    () =>
+      userConversations.map((conv) => ({
+        id: conv.id,
+        title: conv.title,
+        date: conv.updatedAt,
+        hasActiveDeepResearch:
+          hasActiveDeepResearchJob(conv.messages) ||
+          (isDeepResearchStreaming && deepResearchOwnerConversationId === conv.id),
+        hasCompletedReport: hasCompletedDeepResearchReport(conv.messages),
+        hasExpiredReport: hasExpiredDeepResearchReport(conv.messages),
+      })),
+    [userConversations, isDeepResearchStreaming, deepResearchOwnerConversationId]
+  )
 
   return (
     <Flex direction="col" className="h-screen min-w-[768px] overflow-x-auto overflow-y-hidden">
       {/* AppBar - Fixed at top */}
       <AppBar
-        sessionTitle={currentConversation?.title || 'New Session'}
+        sessionTitle={currentConversation?.title}
         isAuthenticated={isAuthenticated}
         authRequired={authRequired}
         user={user}
@@ -168,10 +191,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
 
           {/* Input Area - Fixed at bottom of chat */}
           {/* Using WebSocket mode for full HITL (human-in-the-loop) support */}
-          <InputArea
-            isAuthenticated={isAuthenticated}
-            connectionMode="websocket"
-          />
+          <InputArea isAuthenticated={isAuthenticated} connectionMode="websocket" />
         </div>
 
         {/* Research Panel (Right) - Pushes content, takes 60% width */}
@@ -192,10 +212,7 @@ export const MainLayout: FC<MainLayoutProps> = ({
       />
 
       {/* Data Sources Panel (Right) - Overlay */}
-      <DataSourcesPanel />
-
-      {/* Settings Panel (Right) - Overlay */}
-      <SettingsPanel />
+      {isAuthenticated && <DataSourcesPanel />}
     </Flex>
   )
 }

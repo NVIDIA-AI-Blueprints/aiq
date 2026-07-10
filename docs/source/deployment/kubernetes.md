@@ -154,8 +154,13 @@ Once all pods are running, verify the backend is responding:
 
 ```bash
 kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000 &
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
+
+The chart uses `/live` for the liveness probe and `/health` for readiness. The
+liveness endpoint checks only that the API process responds; database or content-
+encryption outages make the pod unready without causing a restart loop.
 
 The backend API docs are available at `http://localhost:8000/docs` while the port-forward is active.
 
@@ -262,6 +267,7 @@ For complete examples with NGC-specific flags, see `deploy/helm/README.md` in th
 
 | Key | Description |
 |-----|-------------|
+| `EXA_API_KEY` | Exa API key for web search |
 | `SERPER_API_KEY` | Serper API key for Google search |
 | `JINA_API_KEY` | Jina API key |
 | `WANDB_API_KEY` | Weights & Biases API key |

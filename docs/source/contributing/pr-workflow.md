@@ -9,10 +9,36 @@ We welcome contributions. Follow the steps below.
 ## Pull Request Process
 
 1. **Fork** the upstream repository and clone your fork.
-2. Create a **branch** from `gen_v2`, make changes, and add or update tests.
-3. Run **checks:** `./scripts/dev.sh test && ./scripts/dev.sh pre-commit` (or equivalent).
-4. **Push** to your fork and open a **Pull Request** into the upstream branch you target.
-5. Address review feedback. Maintainers will merge after review (and any required manual verification if CI is not yet in place).
+2. Create a focused **branch** from `develop`, make changes, and add or update tests.
+3. Run the relevant local checks and record the exact commands in the PR description.
+4. **Push** to your fork and open a **Pull Request** into `develop`, unless a maintainer asks you to target a release branch.
+5. Wait for maintainer vetting. copy-pr-bot mirrors trusted PRs to `pull-request/<PR number>` branches after a maintainer or configured vetter comments `/ok to test`.
+6. Address review feedback until required checks, code-owner review, and review-thread resolution pass.
+7. Maintainers merge with the configured bot workflow when `/merge` is available; otherwise they use the repository's normal protected-branch merge flow.
+
+## Local Checks
+
+Run the narrowest checks that cover your change.
+
+```bash
+uv sync --group dev
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest
+```
+
+For UI changes:
+
+```bash
+cd frontends/ui
+npm ci
+npm run lint
+npm run type-check
+npm run test:ci
+npm run build
+```
+
+Repository owners, organization members, and collaborators may request additional validation, including NVSkills validation with `/nvskills-ci`.
 
 ## Sign-Off and DCO
 

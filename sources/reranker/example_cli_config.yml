@@ -113,6 +113,11 @@ functions:
         description: "Search uploaded documents and files."
         tools:
           - knowledge_search
+      - id: reranked_search
+        name: "Reranked Search"
+        description: "Search multiple sources and rerank the combined results."
+        tools:
+          - reranked_search
       # Uncomment when paper_search_tool is enabled (requires SERPER_API_KEY)
       # - id: paper_search
       #   name: "Academic Papers"
@@ -198,29 +203,18 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
+    enable_citation_verification: true
     orchestrator_llm: gpt_oss_llm
+    source_router_llm: gpt_oss_llm
     researcher_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
     planner_llm: gpt_oss_llm
+    writer_llm: gpt_oss_llm
     # tools: omitted -> inherits all from data_source_registry
     tools:
       - reranked_search
     # exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
     #   - web_search_tool
-    max_loops: 2
     verbose: true
-    skills:
-      enabled: true
-    sandbox:
-      provider: modal
-      app_name: aiq-deep-research
-      image: python:3.13-slim
-      python_packages:
-        - matplotlib
-        - numpy
-        - pandas
-        - pillow
-        - tabulate  # required by pandas.DataFrame.to_markdown(), used by data-table-analysis skill
-      block_network: true
 
 workflow:
   _type: chat_deepresearcher_agent

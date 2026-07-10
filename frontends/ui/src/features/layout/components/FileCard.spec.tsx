@@ -62,6 +62,30 @@ describe('FileCard', () => {
       const lineCount = screen.getByText(/lines/)
       expect(lineCount).toBeInTheDocument()
     })
+
+    test('renders durable artifact metadata and opens its authenticated content URL', async () => {
+      const user = userEvent.setup()
+      const open = vi.spyOn(window, 'open').mockImplementation(() => null)
+      render(
+        <FileCard
+          file={createFile({
+            filename: 'chart.png',
+            content: undefined,
+            contentUrl: '/api/jobs/async/job/job-1/artifacts/art-1/content',
+            mimeType: 'image/png',
+            sizeBytes: 2048,
+          })}
+        />
+      )
+
+      expect(screen.getByText('image/png · 2.0 KiB')).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: 'Open file' }))
+      expect(open).toHaveBeenCalledWith(
+        '/api/jobs/async/job/job-1/artifacts/art-1/content',
+        '_blank',
+        'noopener,noreferrer'
+      )
+    })
   })
 
   describe('expand/collapse behavior', () => {

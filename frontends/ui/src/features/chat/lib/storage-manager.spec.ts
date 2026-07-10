@@ -140,9 +140,7 @@ describe('storage-manager', () => {
     })
 
     test('returns null when only protected sessions exist', () => {
-      const conversations = [
-        makeConversation('s_current', 'user1', new Date()),
-      ]
+      const conversations = [makeConversation('s_current', 'user1', new Date())]
 
       const oldest = getOldestSession(conversations, new Set(['s_current']))
 
@@ -204,9 +202,7 @@ describe('storage-manager', () => {
         },
       ]
 
-      const conversations = [
-        makeConversation('s1', 'user1', new Date(), completedMessages),
-      ]
+      const conversations = [makeConversation('s1', 'user1', new Date(), completedMessages)]
 
       const busy = getBusySessionIds(conversations)
 
@@ -247,9 +243,7 @@ describe('storage-manager', () => {
     })
 
     test('accepts null userId for Tier 2 gracefully', () => {
-      const conversations = [
-        makeConversation('s1', 'user1', '2026-02-01'),
-      ]
+      const conversations = [makeConversation('s1', 'user1', '2026-02-01')]
 
       setStoreData(conversations, 's1')
 

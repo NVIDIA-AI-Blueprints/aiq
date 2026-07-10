@@ -4,6 +4,7 @@
 import { render, screen } from '@/test-utils'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { AgentPrompt } from './AgentPrompt'
+import { useChatStore } from '../store'
 
 // Mock MarkdownRenderer
 vi.mock('@/shared/components/MarkdownRenderer', () => ({
@@ -15,6 +16,7 @@ vi.mock('@/shared/components/MarkdownRenderer', () => ({
 describe('AgentPrompt', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    useChatStore.setState({ respondToInteractionFn: null })
   })
 
   test('renders prompt content', () => {
@@ -109,4 +111,5 @@ describe('AgentPrompt', () => {
 
     expect(screen.getByText(/\d{1,2}:\d{2}/)).toBeInTheDocument()
   })
+
 })

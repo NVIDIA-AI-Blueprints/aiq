@@ -31,7 +31,7 @@ general:
 llms:
   research_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.1       # Low temperature for factual research
     top_p: 0.3

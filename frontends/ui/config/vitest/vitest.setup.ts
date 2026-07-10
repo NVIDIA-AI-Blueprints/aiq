@@ -57,22 +57,31 @@ Object.defineProperty(global, 'crypto', {
   },
 })
 
-// Session storage mock
-const sessionStorageMock = (function () {
-  let storage: Record<string, unknown> = {}
+// Storage mocks — Node.js 22+ exposes a broken built-in localStorage when
+// `--localstorage-file` is passed without a valid path, overriding happy-dom's
+// implementation.  Provide explicit in-memory mocks for both storages.
+function createStorageMock() {
+  let storage: Record<string, string> = {}
 
   return {
     clear: () => (storage = {}),
-    getItem: (key: string) => storage[key],
+    getItem: (key: string) => (key in storage ? storage[key] : null),
     getAll: () => storage,
+    key: (index: number) => Object.keys(storage)[index] ?? null,
+    get length() {
+      return Object.keys(storage).length
+    },
     removeItem: (key: string) => {
       delete storage[key]
     },
-    setItem: (key: string, value: unknown) => {
-      storage[key] = value
+    setItem: (key: string, value: string) => {
+      storage[key] = String(value)
     },
   }
-})()
+}
+
+const localStorageMock = createStorageMock()
+const sessionStorageMock = createStorageMock()
 
 // Browser API mocks for happy-dom
 class ResizeObserver {
@@ -93,8 +102,34 @@ class MutationObserver {
   disconnect() {}
 }
 
-Object.defineProperty(global, 'sessionStorage', { value: sessionStorageMock })
+Object.defineProperty(global, 'localStorage', { value: localStorageMock, configurable: true })
+Object.defineProperty(global, 'sessionStorage', { value: sessionStorageMock, configurable: true })
 global.ResizeObserver = ResizeObserver
+
+// Node can expose a partial `localStorage` (e.g. missing `removeItem`) when a path
+// triggers web storage before happy-dom is ready. Chat/documents tests need full Storage.
+if (typeof globalThis.localStorage?.removeItem !== 'function') {
+  const mem: Record<string, string> = {}
+  Object.defineProperty(globalThis, 'localStorage', {
+    value: {
+      getItem: (key: string) => (key in mem ? mem[key] : null),
+      setItem: (key: string, value: string) => {
+        mem[key] = value
+      },
+      removeItem: (key: string) => {
+        delete mem[key]
+      },
+      clear: () => {
+        for (const k of Object.keys(mem)) delete mem[k]
+      },
+      key: (index: number) => Object.keys(mem)[index] ?? null,
+      get length() {
+        return Object.keys(mem).length
+      },
+    } as Storage,
+    configurable: true,
+  })
+}
 // @ts-expect-error - Partial mock
 global.IntersectionObserver = IntersectionObserver
 // @ts-expect-error - Partial mock
@@ -102,6 +137,7 @@ global.MutationObserver = MutationObserver
 
 // MSW server lifecycle
 beforeAll(() => {
+  localStorageMock.clear()
   sessionStorageMock.clear()
   return server.listen({ onUnhandledRequest: 'bypass' })
 })

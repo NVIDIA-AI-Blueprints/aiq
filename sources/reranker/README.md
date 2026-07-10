@@ -20,6 +20,8 @@ NVIDIA_API_KEY=your_nvidia_api_key
 
 Define the reranked_search tool and other search tools that feed into the reranker. If the search tools are part of a function group, you may include all functions within the group by adding the function group to the search tools. Alternatively, you may include specific tools within the function group. To do so, they must be specified in the group's `- include:` list, and use `{group_name}__{tool_name}` format in `reranked_search` config section.
 
+Register `reranked_search` in the `data_source_registry` as shown below. The shallow researcher only captures and verifies citations from registered data-source tools, so omitting this entry causes an otherwise successful reranked search to be discarded as unverifiable.
+
 For more info on function group name space, reference Nemo Agent Toolkit doc, specifically [Function Naming and Namespaing](https://docs.nvidia.com/nemo/agent-toolkit/latest/build-workflows/functions-and-function-groups/function-groups.html#function-naming-and-namespacing) and [Understanding Function Accessibility](https://docs.nvidia.com/nemo/agent-toolkit/latest/build-workflows/functions-and-function-groups/function-groups.html#understanding-function-accessibility).
 
 ```yaml
@@ -35,6 +37,15 @@ function_groups:
     ...
 
 functions:
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: reranked_search
+        name: "Reranked Search"
+        description: "Search multiple sources and rerank the combined results."
+        tools:
+          - reranked_search
+
   web_search_tool:
     _type: tavily_web_search
     max_results: 5

@@ -100,7 +100,10 @@ export const checkStorageHealth = (): {
 /**
  * Get chat store data from localStorage
  */
-const getChatStoreData = (): { conversations: Conversation[]; currentConversationId: string | null } | null => {
+const getChatStoreData = (): {
+  conversations: Conversation[]
+  currentConversationId: string | null
+} | null => {
   try {
     const stored = localStorage.getItem(STORAGE_KEY)
     if (!stored) return null
@@ -222,7 +225,7 @@ export const cleanupOldSessions = (
   const now = Date.now()
   while (isAboveTarget() && !hitLimit()) {
     const staleCandidates = conversations.filter(
-      (c) => !protectedIds.has(c.id) && (now - getUpdatedAtMs(c)) > STALE_SESSION_MS
+      (c) => !protectedIds.has(c.id) && now - getUpdatedAtMs(c) > STALE_SESSION_MS
     )
     const oldest = pickOldest(staleCandidates)
     if (!oldest) break

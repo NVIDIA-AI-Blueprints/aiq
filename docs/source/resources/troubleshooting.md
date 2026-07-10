@@ -24,6 +24,7 @@ Common issues and solutions for the AI-Q blueprint.
 | `[404] Not found for account` | Invalid or expired NVIDIA API key | Regenerate key at [build.nvidia.com](https://build.nvidia.com) |
 | `Gateway timeout (504)` | Model endpoint overloaded or unavailable | Retry, or switch to a different model in config |
 | Tavily search returns empty | Invalid `TAVILY_API_KEY` | Verify key at [tavily.com](https://tavily.com) |
+| Exa search returns empty or 401 | Invalid or missing `EXA_API_KEY` | Verify key at [exa.ai](https://exa.ai) |
 | Serper search fails | Missing `SERPER_API_KEY` | Set key or remove `paper_search_tool` from config |
 
 ## Runtime Issues
@@ -31,9 +32,9 @@ Common issues and solutions for the AI-Q blueprint.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
-| HTTP 429 or 503 on deep research | Nemotron Super Build API has limited availability due to high demand | Default configs use Nemotron Nano for reliability. Retry after a short delay, or self-host via [Brev Launchable](#nemotron-super--build-endpoint-availability) for consistent throughput |
+| HTTP 429 or 503 on deep research | Nemotron Super Build API has limited availability due to high demand | Retry after a short delay, reduce concurrency, or self-host via [Brev Launchable](#nemotron-super--build-endpoint-availability) for consistent throughput |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
-| Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns` or set `enable_plan_approval: false` |
+| Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns`, or set `enable_clarifier: false` in the workflow to disable clarification |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
 | Job status stuck on RUNNING | Dask worker crashed | Check Dask logs; the ghost job reaper will eventually mark it FAILURE |
 
@@ -45,7 +46,7 @@ Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested wi
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
 - Degraded agent workflow performance due to upstream model availability
 
-**Default Configuration:** The default configs use Nemotron Nano (`nvidia/nemotron-3-nano-30b-a3b`) for the researcher role for reliability. When Super endpoints are stable, you can uncomment `nemotron_super_llm` in your config for higher-capacity research.
+**Default Configuration:** The default configs use Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`). If hosted endpoints are saturated, retry after a short delay, reduce concurrency, or self-host for consistent throughput.
 
 ### Recommended Mitigation: Self-Host via Brev Launchable
 

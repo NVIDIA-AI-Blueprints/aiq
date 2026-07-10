@@ -1,0 +1,32 @@
+name: Documentation Issue
+description: Report stale, missing, or confusing AI-Q documentation.
+title: "[Docs]: "
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Documentation Location
+      description: Link to the page or name the file/path.
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: Issue
+      description: What is inaccurate, missing, or hard to follow?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested Fix
+      description: If you know the correct wording or command, include it here.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-Submission Checks
+      options:
+        - label: I searched existing issues and pull requests.
+          required: true
+        - label: This report does not include secrets, credentials, or private data.
+          required: true

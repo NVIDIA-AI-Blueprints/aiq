@@ -36,16 +36,26 @@ repos:
       - id: check-yaml
         exclude: ^deploy/helm/helm-charts-k8s/.*/templates/.*\.ya?ml$
       - id: end-of-file-fixer
+        exclude: ^skills/[^/]+/skill\.oms\.sig$
       - id: trailing-whitespace
+        exclude: ^skills/[^/]+/skill-card\.md$
 
   - repo: https://github.com/Yelp/detect-secrets
     rev: v1.5.0
     hooks:
       - id: detect-secrets
         args: [--baseline, .secrets.baseline]
+        exclude: ^skills/[^/]+/skill\.oms\.sig$
 
   - repo: local
     hooks:
+      - id: validate-skills
+        name: Validate agent skills
+        entry: python scripts/validate_skills.py .agents/skills
+        language: python
+        additional_dependencies: ["pyyaml==6.0.3"]
+        files: ^\.agents/skills/
+        pass_filenames: false
       - id: clear-notebook-output-cells
         name: Clear Jupyter Notebook Output Cells
         entry: ci/scripts/clear_notebook_output_cells.sh
@@ -69,6 +79,7 @@ repos:
     hooks:
       - id: markdown-link-check
         args: ["-q", "--config", "ci/markdown-link-check-config.json"]
+        exclude: ^skills/[^/]+/skill-card\.md$
 
 default_language_version:
   python: python3

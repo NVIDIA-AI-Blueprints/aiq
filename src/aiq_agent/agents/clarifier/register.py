@@ -37,6 +37,7 @@ from pydantic import Field
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import VerboseTraceCallback
+from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
 from nat.builder.builder import Builder
@@ -66,17 +67,11 @@ class ClarifierConfig(FunctionBaseConfig, name="clarifier_agent"):
         llm: Reference to the LLM to use for generating clarification questions.
         tools: List of tool references for context gathering (e.g., web search).
         max_turns: Maximum number of clarification Q&A turns before auto-completing.
-        enable_plan_approval: Whether to enable plan preview and approval after clarification.
-        max_plan_iterations: Maximum number of plan feedback iterations before auto-approving.
         log_response_max_chars: Maximum characters to log from LLM responses.
         verbose: Whether to enable verbose logging with VerboseTraceCallback.
     """
 
     llm: LLMRef = Field(..., description="LLM to use for generating questions")
-    planner_llm: LLMRef | None = Field(
-        default=None,
-        description="LLM to use for plan generation. If not specified, uses the main llm.",
-    )
     tools: list[FunctionRef | FunctionGroupRef] = Field(
         default_factory=list,
         description="Explicit tool list. Empty = inherit all from data_source_registry.",
@@ -88,14 +83,6 @@ class ClarifierConfig(FunctionBaseConfig, name="clarifier_agent"):
     max_turns: int = Field(
         default=3,
         description="Maximum number of clarification Q&A turns",
-    )
-    enable_plan_approval: bool = Field(
-        default=False,
-        description="Whether to enable plan preview and approval after clarification",
-    )
-    max_plan_iterations: int = Field(
-        default=10,
-        description="Maximum number of plan feedback iterations before auto-approving",
     )
     log_response_max_chars: int = Field(
         default=2000,
@@ -135,12 +122,6 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
         config.llm,
         wrapper_type=LLMFrameworkEnum.LANGCHAIN,
     )
-    planner_llm = None
-    if config.planner_llm is not None:
-        planner_llm = await builder.get_llm(
-            config.planner_llm,
-            wrapper_type=LLMFrameworkEnum.LANGCHAIN,
-        )
     if config.tools:
         tool_refs = config.tools
     else:
@@ -192,9 +173,6 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
         tools=tools,
         user_prompt_callback=user_prompt_callback,
         max_turns=config.max_turns,
-        enable_plan_approval=config.enable_plan_approval,
-        max_plan_iterations=config.max_plan_iterations,
-        planner_llm=planner_llm,
         log_response_max_chars=config.log_response_max_chars,
         verbose=verbose,
         callbacks=callbacks,
@@ -207,7 +185,7 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
             state: ClarifierAgentState with conversation messages.
 
         Returns:
-            ClarifierResult with clarification log and plan approval details.
+            ClarifierResult with the clarification log.
         """
         data_sources = state.data_sources
         selected_tools = filter_tools_by_sources(tools, data_sources)
@@ -218,14 +196,12 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
                 tools=selected_tools,
                 user_prompt_callback=user_prompt_callback,
                 max_turns=config.max_turns,
-                enable_plan_approval=config.enable_plan_approval,
-                max_plan_iterations=config.max_plan_iterations,
-                planner_llm=planner_llm,
                 log_response_max_chars=config.log_response_max_chars,
                 verbose=verbose,
                 callbacks=callbacks,
             )
-        elif data_sources is not None and not selected_tools:
+
+        if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
             logger.warning("Clarifier received data_sources with no matching tools")
         return await active_agent.run(state)
 
@@ -233,7 +209,7 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
         _run,
         description=(
             "Handles interactive clarification dialog with users "
-            "for deep research queries. Asks follow-up questions and refines the research "
-            "scope, constraints, and requirements before planning begins."
+            "for deep research queries. Gathers context and, when the request is vague, "
+            "clarifies the scope or the type of output requested before research begins."
         ),
     )

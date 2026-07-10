@@ -13,11 +13,13 @@
 'use client'
 
 import { useEffect, useRef, useCallback, useState } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import {
   createDeepResearchClient,
   cancelJob,
   type DeepResearchClient,
   type DeepResearchJobStatus,
+  type FileArtifactUpdate,
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
@@ -25,6 +27,7 @@ import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 import { checkBackendHealthCached } from '@/shared/hooks/use-backend-health'
 import { isLikelyAuthRelatedTransportError, isDeepResearchReplayCompleteMode } from '../lib/transport-auth-signals'
+import { normalizeDeepResearchTodos } from '../lib/deep-research-todos'
 
 /** Timeout in milliseconds before showing a warning (60 seconds) */
 const TIMEOUT_WARNING_MS = 60000
@@ -34,6 +37,15 @@ const TIMEOUT_CHECK_INTERVAL_MS = 10000
  *  job.status "interrupted" within this window, clean up locally so the
  *  UI never stays stuck in a streaming state. */
 const CANCEL_FALLBACK_TIMEOUT_MS = 5000
+const USER_CANCELLED_ERROR_MARKER = 'cancelled by user'
+
+const isUserCancelledStatus = (
+  status: DeepResearchJobStatus,
+  error?: string
+): boolean => (
+  status === 'interrupted' &&
+  error?.toLowerCase().includes(USER_CANCELLED_ERROR_MARKER) === true
+)
 
 interface UseDeepResearchReturn {
   /** Whether deep research is currently streaming */
@@ -78,53 +90,55 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
   // Note: idToken is used for backend auth, not accessToken
   const { idToken, authRequired, error: authError } = useAuth()
 
-  // Chat store state and actions
-  const {
-    deepResearchJobId,
-    isDeepResearchStreaming,
-    deepResearchStatus,
-    updateDeepResearchStatus,
-    completeDeepResearch,
-    addDeepResearchCitation,
-    setReportContent,
-    addThinkingStep,
-    appendToThinkingStep,
-    completeThinkingStep,
-    setCurrentStatus,
-    setStreaming,
-    setDeepResearchTodos,
-    stopAllDeepResearchSpinners,
-    // New dedicated actions for ThinkingTab sub-tabs
-    addDeepResearchLLMStep,
-    appendToDeepResearchLLMStep,
-    completeDeepResearchLLMStep,
-    addDeepResearchAgentWithId,
-    completeDeepResearchAgent,
-    addDeepResearchToolCall,
-    completeDeepResearchToolCall,
-    addDeepResearchFile,
-    // Actions for message patching
-    patchConversationMessage,
-    // Actions for deep research banners
-    addDeepResearchBanner,
-    setStreamLoaded,
-  } = useChatStore()
+  // Chat store — reactive state only
+  const { deepResearchJobId, isDeepResearchStreaming, deepResearchStatus } =
+    useChatStore(useShallow((s) => ({
+      deepResearchJobId: s.deepResearchJobId,
+      isDeepResearchStreaming: s.isDeepResearchStreaming,
+      deepResearchStatus: s.deepResearchStatus,
+    })))
+
+  // Actions — stable references, won't trigger re-renders
+  const updateDeepResearchStatus = useChatStore((s) => s.updateDeepResearchStatus)
+  const completeDeepResearch = useChatStore((s) => s.completeDeepResearch)
+  const addDeepResearchCitation = useChatStore((s) => s.addDeepResearchCitation)
+  const setReportContent = useChatStore((s) => s.setReportContent)
+  const addThinkingStep = useChatStore((s) => s.addThinkingStep)
+  const appendToThinkingStep = useChatStore((s) => s.appendToThinkingStep)
+  const completeThinkingStep = useChatStore((s) => s.completeThinkingStep)
+  const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
+  const setStreaming = useChatStore((s) => s.setStreaming)
+  const setDeepResearchTodos = useChatStore((s) => s.setDeepResearchTodos)
+  const stopAllDeepResearchSpinners = useChatStore((s) => s.stopAllDeepResearchSpinners)
+  const addDeepResearchLLMStep = useChatStore((s) => s.addDeepResearchLLMStep)
+  const appendToDeepResearchLLMStep = useChatStore((s) => s.appendToDeepResearchLLMStep)
+  const completeDeepResearchLLMStep = useChatStore((s) => s.completeDeepResearchLLMStep)
+  const addDeepResearchAgentWithId = useChatStore((s) => s.addDeepResearchAgentWithId)
+  const completeDeepResearchAgent = useChatStore((s) => s.completeDeepResearchAgent)
+  const addDeepResearchToolCall = useChatStore((s) => s.addDeepResearchToolCall)
+  const completeDeepResearchToolCall = useChatStore((s) => s.completeDeepResearchToolCall)
+  const addDeepResearchFile = useChatStore((s) => s.addDeepResearchFile)
+  const patchConversationMessage = useChatStore((s) => s.patchConversationMessage)
+  const addDeepResearchBanner = useChatStore((s) => s.addDeepResearchBanner)
+  const setStreamLoaded = useChatStore((s) => s.setStreamLoaded)
 
   /**
    * Check if the current session owns the active deep research stream.
    * This prevents SSE events from mutating the wrong session.
    */
-  const isOwnerActive = useCallback((): boolean => {
+  const isOwnerActive = useCallback((expectedJobId?: string): boolean => {
     const state = useChatStore.getState()
     return Boolean(
       state.isDeepResearchStreaming &&
+        (!expectedJobId || state.deepResearchJobId === expectedJobId) &&
         state.deepResearchOwnerConversationId &&
         state.currentConversation?.id === state.deepResearchOwnerConversationId
     )
   }, [])
 
   // Layout store for opening research panel
-  const { openRightPanel, setResearchPanelTab } = useLayoutStore()
+  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
+  const setResearchPanelTab = useLayoutStore((s) => s.setResearchPanelTab)
 
   // Ref to track active thinking step IDs by name
   const activeStepIdsRef = useRef<Map<string, string>>(new Map())
@@ -196,29 +210,43 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         activeToolStacks: new Map<string, string[]>(),
         agents: new Map<string, { name: string; input?: string; output?: string }>(),
         llmSteps: new Map<string, { name: string; workflow?: string; content: string; thinking?: string; usage?: { input_tokens: number; output_tokens: number } }>(),
-        toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string }>(),
+        toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string; isSandbox?: boolean }>(),
         todos: null as TodoItem[] | null,
         citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-        files: new Map<string, string>(),
+        files: new Map<string, FileArtifactUpdate>(),
         reportContent: null as string | null,
       }
 
-      /** Flush buffer to store in one setState, deactivate buffer, switch to live. */
-      const flushBuffer = (): void => {
-        if (!buf.active) return
+      /** The stream may outlive the selected job; guard every delayed flush by job ID. */
+      const isActiveJob = (): boolean => isOwnerActive(jobId)
+
+      const deactivateBuffer = (): void => {
         buf.active = false
         if (buf.timer) { clearTimeout(buf.timer); buf.timer = null }
+      }
+
+      /** Flush buffer to store in one setState, deactivate buffer, switch to live. */
+      const flushBuffer = (): boolean => {
+        if (!buf.active) return true
+        if (!isActiveJob()) {
+          deactivateBuffer()
+          return false
+        }
+        deactivateBuffer()
 
         const now = new Date()
         const agents = Array.from(buf.agents.entries()).map(([id, a]) => ({ id, name: a.name, input: a.input, output: a.output, status: 'complete' as const, startedAt: now, completedAt: now }))
         const llmSteps = Array.from(buf.llmSteps.entries()).map(([id, s]) => ({ id, name: s.name, workflow: s.workflow, content: s.content, thinking: s.thinking, usage: s.usage, isComplete: true, timestamp: now }))
-        const toolCalls = Array.from(buf.toolCalls.entries()).map(([id, t]) => ({ id, name: t.name, input: t.input, output: t.output, workflow: t.workflow, agentId: t.agentId, status: 'complete' as const, timestamp: now }))
+        const toolCalls = Array.from(buf.toolCalls.entries()).map(([id, t]) => ({ id, name: t.name, input: t.input, output: t.output, workflow: t.workflow, agentId: t.agentId, isSandbox: t.isSandbox, status: 'complete' as const, timestamp: now }))
         const citations = buf.citations.map((c, i) => ({ id: `citation-${i}`, url: c.url, content: c.content, isCited: c.isCited, timestamp: now }))
-        const files = Array.from(buf.files.entries()).map(([filename, content], i) => ({ id: `file-${i}`, filename, content, timestamp: now }))
-        const todos = buf.todos?.map((t, i) => ({ id: `todo-${i}-${t.content.substring(0, 20).replace(/\s+/g, '-').toLowerCase()}`, content: t.content, status: t.status as 'pending' | 'in_progress' | 'completed' | 'stopped' }))
+        const files = Array.from(buf.files.values()).map((file, i) => ({ id: `file-${i}`, ...file, timestamp: now }))
+        const todos = buf.todos ? normalizeDeepResearchTodos(buf.todos) : undefined
 
         useChatStore.setState((state) => ({
-          ...(buf.reportContent !== null && { reportContent: buf.reportContent }),
+          ...(buf.reportContent !== null && {
+            reportContent: buf.reportContent,
+            reportContentCategory: 'final_report' as const,
+          }),
           ...(todos && todos.length > 0 && { deepResearchTodos: todos }),
           ...(agents.length > 0 && { deepResearchAgents: agents }),
           ...(llmSteps.length > 0 && { deepResearchLLMSteps: llmSteps }),
@@ -244,6 +272,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             activeStepIdsRef.current.set(`toolCall:${name}`, lastId)
           }
         }
+        return true
       }
 
       // Safety timeout: flush if the backend never sends the live signal
@@ -258,7 +287,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         callbacks: {
           onStreamStart: () => {
             if (buf.active) return
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             resetTimeout()
             researchStartTimeRef.current = Date.now()
             setCurrentStatus('researching')
@@ -266,14 +295,14 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
 
           onStreamMode: (mode) => {
             if (isDeepResearchReplayCompleteMode(mode) && buf.active) {
-              flushBuffer()
+              if (!flushBuffer()) return
               setCurrentStatus('researching')
             }
           },
 
           onJobStatus: (status, error) => {
             if (buf.active) flushBuffer()
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             resetTimeout()
             // Clear the cancel-fallback timer — the SSE stream delivered
             // the terminal status so optimistic cleanup is unnecessary.
@@ -312,6 +341,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               setCurrentStatus('error')
               stopAllDeepResearchSpinners()
               const hasReport = Boolean(state.reportContent?.trim())
+              const isUserCancelled = isUserCancelledStatus(status, error)
 
               if (ownerConvId && messageId) {
                 patchConversationMessage(ownerConvId, messageId, {
@@ -321,7 +351,6 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
                   showViewReport: hasReport,
                 })
               }
-              const isUserCancelled = status === 'interrupted'
               addDeepResearchBanner(isUserCancelled ? 'cancelled' : 'failure', jobId, ownerConvId || undefined)
               researchStartTimeRef.current = null
               clientRef.current?.disconnect()
@@ -331,13 +360,16 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               if (error && !isUserCancelled) {
                 const { addErrorCard } = useChatStore.getState()
                 addErrorCard('agent.deep_research_failed', error)
+              } else if (status === 'interrupted' && !isUserCancelled) {
+                const { addErrorCard } = useChatStore.getState()
+                addErrorCard('agent.deep_research_failed', 'Research was interrupted before completion.')
               }
             }
           },
 
           onHeartbeat: () => {
             if (buf.active) return
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             resetTimeout()
           },
 
@@ -347,7 +379,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               if (!buf.agents.has(id)) buf.agents.set(id, { name, input: input ? (typeof input === 'string' ? input : JSON.stringify(input)) : undefined })
               return
             }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             resetTimeout()
             const hasUserMsg = Boolean(useChatStore.getState().currentUserMessageId)
             if (hasUserMsg) {
@@ -363,7 +395,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               if (agentId) { const a = buf.agents.get(agentId); if (a) a.output = output ? (typeof output === 'string' ? output : JSON.stringify(output)) : undefined }
               return
             }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             const stepId = activeStepIdsRef.current.get(name)
             if (stepId) { if (output) appendToThinkingStep(stepId, `\nOutput: ${output}`); completeThinkingStep(stepId); activeStepIdsRef.current.delete(name) }
             if (agentId) { completeDeepResearchAgent(agentId, output); activeStepIdsRef.current.delete(`agent:${agentId}`) }
@@ -373,7 +405,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             if (buf.active) {
               const id = `llm-${buf.idCounter++}`; buf.activeLLMStack.push(id); buf.llmSteps.set(id, { name, workflow, content: '' }); return
             }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
 
             const hasUserMsg = Boolean(useChatStore.getState().currentUserMessageId)
             if (hasUserMsg) {
@@ -389,7 +421,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             if (buf.active) {
               const id = buf.activeLLMStack[buf.activeLLMStack.length - 1]; if (id) { const s = buf.llmSteps.get(id); if (s) s.content += chunk }; return
             }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             resetTimeout()
             const llmStepId = Array.from(activeStepIdsRef.current.entries()).filter(([k]) => k.startsWith('llm:')).pop()?.[1]
             if (llmStepId) appendToThinkingStep(llmStepId, chunk)
@@ -401,20 +433,20 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             if (buf.active) {
               const id = buf.activeLLMStack.pop(); if (id) { const s = buf.llmSteps.get(id); if (s) { s.thinking = thinking; s.usage = usage } }; return
             }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             const llmSteps = Array.from(activeStepIdsRef.current.entries()).filter(([k]) => k.startsWith('llm:'))
             if (llmSteps.length > 0) { const [key, stepId] = llmSteps[llmSteps.length - 1]; if (thinking) appendToThinkingStep(stepId, `\n\nThinking: ${thinking}`); completeThinkingStep(stepId); activeStepIdsRef.current.delete(key) }
             const llmStepKeys = Array.from(activeStepIdsRef.current.entries()).filter(([k]) => k.startsWith('llmStep:'))
             if (llmStepKeys.length > 0) { const [key, llmStepId] = llmStepKeys[llmStepKeys.length - 1]; completeDeepResearchLLMStep(llmStepId, thinking, usage); activeStepIdsRef.current.delete(key) }
           },
 
-          onToolStart: (name, input, workflow, _eventId, agentId) => {
+          onToolStart: (name, input, workflow, _eventId, agentId, isSandbox) => {
             if (name === 'task') return
             if (buf.active) {
-              const id = `tool-${buf.idCounter++}`; buf.toolCalls.set(id, { name, input, workflow, agentId })
+              const id = `tool-${buf.idCounter++}`; buf.toolCalls.set(id, { name, input, workflow, agentId, isSandbox })
               let stack = buf.activeToolStacks.get(name); if (!stack) { stack = []; buf.activeToolStacks.set(name, stack) }; stack.push(id); return
             }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             resetTimeout(); setCurrentStatus('searching')
             const hasUserMsg = Boolean(useChatStore.getState().currentUserMessageId)
             if (hasUserMsg) {
@@ -422,7 +454,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
               const stepId = addThinkingStep({ category: 'tools', functionName: name, displayName: name, content: inputText ? `Input: ${inputText}\n` : 'Executing...\n', isComplete: false, isDeepResearch: true })
               activeStepIdsRef.current.set(`tool:${name}`, stepId)
             }
-            const toolCallId = addDeepResearchToolCall({ name, input, workflow, agentId })
+            const toolCallId = addDeepResearchToolCall({ name, input, workflow, agentId, isSandbox })
             activeStepIdsRef.current.set(`toolCall:${name}`, toolCallId)
           },
 
@@ -431,7 +463,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             if (buf.active) {
               const stack = buf.activeToolStacks.get(name); const id = stack?.pop(); if (id) { const t = buf.toolCalls.get(id); if (t) t.output = output ? JSON.stringify(output) : undefined }; return
             }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             const stepId = activeStepIdsRef.current.get(`tool:${name}`)
             if (stepId) { if (output) { const truncated = output.length > 500 ? output.substring(0, 500) + '...' : output; appendToThinkingStep(stepId, `\nOutput: ${truncated}`) }; completeThinkingStep(stepId); activeStepIdsRef.current.delete(`tool:${name}`) }
             const toolCallId = activeStepIdsRef.current.get(`toolCall:${name}`)
@@ -440,45 +472,50 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
           },
 
           onTodoUpdate: (todos: TodoItem[], workflow?: string) => {
+            // Workflow-scoped todo artifacts belong to sub-agent-local plans.
+            // The Tasks tab shows only the top-level research todo list.
             if (workflow) return
             if (buf.active) { buf.todos = todos; return }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             resetTimeout(); setDeepResearchTodos(todos)
 
           },
 
           onCitationUpdate: (url, content, isCited) => {
             if (buf.active) { buf.citations.push({ url, content, isCited: isCited ?? false }); return }
-            if (!isOwnerActive()) return
+            if (!isActiveJob()) return
             resetTimeout(); addDeepResearchCitation(url, content, isCited)
           },
 
-          onFileUpdate: (filename, content) => {
-            if (buf.active) { buf.files.set(filename, content); return }
-            if (!isOwnerActive()) return
-            resetTimeout(); addDeepResearchFile({ filename, content })
+          onFileUpdate: (file) => {
+            if (buf.active) {
+              // Merge like the live store (addDeepResearchFile): a later metadata-only
+              // event must not drop content from an earlier event for the same filename.
+              const prev = buf.files.get(file.filename)
+              buf.files.set(file.filename, prev ? { ...prev, ...file } : file)
+              return
+            }
+            if (!isActiveJob()) return
+            resetTimeout(); addDeepResearchFile(file)
             // report.md artifact arrives 1-2 min before the final_report output event —
             // use it as an early signal to switch the UI to "writing" status.
-            if (filename.endsWith('report.md')) {
+            if (file.filename.endsWith('report.md')) {
               setCurrentStatus('writing')
             }
           },
 
           onOutputUpdate: (content, outputCategory, _workflow) => {
-            if (outputCategory === 'intermediate') return
+            // Only the explicit final_report artifact belongs in the Report tab.
+            // Draft, research_notes, and uncategorized output can be partial JSON
+            // from failed or cancelled workflow paths.
+            if (outputCategory !== 'final_report') return
             if (buf.active) {
-              if (outputCategory === 'final_report' || !outputCategory) { buf.reportContent = content }
-              // research_notes are already captured via write_file artifacts — skip to avoid duplicates
+              buf.reportContent = content
               return
             }
-            if (!isOwnerActive()) return
-            if (outputCategory === 'research_notes') {
-              // Skip — research notes are already tracked via write_file tool artifacts
-              void 0
-            } else if (outputCategory === 'final_report' || !outputCategory) {
-              setReportContent(content)
-              setCurrentStatus('writing')
-            }
+            if (!isActiveJob()) return
+            setReportContent(content, 'final_report')
+            setCurrentStatus('writing')
           },
 
           onComplete: () => {
@@ -488,6 +525,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
           onError: async (error) => {
             console.warn('Deep research SSE error:', error.message)
             if (buf.active) flushBuffer()
+            if (!isActiveJob()) return
             const { isDeepResearchStreaming, deepResearchStatus } = useChatStore.getState()
             if (isDeepResearchStreaming && deepResearchStatus !== 'interrupted' && deepResearchStatus !== 'failure') {
               const backendUp = await checkBackendHealthCached()

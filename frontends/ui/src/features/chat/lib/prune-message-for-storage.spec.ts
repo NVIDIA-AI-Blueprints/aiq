@@ -2,12 +2,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { describe, test, expect } from 'vitest'
-import { pruneMessageForStorage, capString, stripThinkingStepsForStorage, prunePlanMessages } from './prune-message-for-storage'
+import {
+  pruneMessageForStorage,
+  capString,
+  stripThinkingStepsForStorage,
+  prunePlanMessages,
+} from './prune-message-for-storage'
 import type { ChatMessage } from '../types'
 
 describe('prune-message-for-storage', () => {
   describe('pruneMessageForStorage', () => {
-    test('removes heavy refetchable fields', () => {
+    test('removes heavy refetchable fields but keeps last known todos', () => {
       const message: ChatMessage = {
         id: 'msg_1',
         role: 'assistant',
@@ -16,13 +21,32 @@ describe('prune-message-for-storage', () => {
         messageType: 'agent_response',
         // Heavy fields that should be removed
         reportContent: 'Large report content...',
-        citations: [{ id: 'c1', url: 'http://example.com', content: 'Citation content', timestamp: new Date(), isCited: true }],
+        citations: [
+          {
+            id: 'c1',
+            url: 'http://example.com',
+            content: 'Citation content',
+            timestamp: new Date(),
+            isCited: true,
+          },
+        ],
+        // Todos are intentionally lightweight enough to keep as the last known task state.
         deepResearchTodos: [{ id: 't1', content: 'Todo item', status: 'pending' }],
-        deepResearchLLMSteps: [{ id: 'l1', name: 'gpt-4', content: 'Step', timestamp: new Date(), isComplete: false }],
-        deepResearchAgents: [{ id: 'a1', name: 'Agent', startedAt: new Date(), status: 'complete' }],
-        deepResearchToolCalls: [{ id: 'tc1', name: 'search', timestamp: new Date(), status: 'complete' }],
-        deepResearchFiles: [{ id: 'f1', filename: 'file.txt', content: 'File content', timestamp: new Date() }],
-        intermediateSteps: [{ id: 'i1', name: 'Step', status: 'complete', content: 'Content', timestamp: new Date() }],
+        deepResearchLLMSteps: [
+          { id: 'l1', name: 'gpt-4', content: 'Step', timestamp: new Date(), isComplete: false },
+        ],
+        deepResearchAgents: [
+          { id: 'a1', name: 'Agent', startedAt: new Date(), status: 'complete' },
+        ],
+        deepResearchToolCalls: [
+          { id: 'tc1', name: 'search', timestamp: new Date(), status: 'complete' },
+        ],
+        deepResearchFiles: [
+          { id: 'f1', filename: 'file.txt', content: 'File content', timestamp: new Date() },
+        ],
+        intermediateSteps: [
+          { id: 'i1', name: 'Step', status: 'complete', content: 'Content', timestamp: new Date() },
+        ],
       }
 
       const pruned = pruneMessageForStorage(message)
@@ -36,7 +60,9 @@ describe('prune-message-for-storage', () => {
       // Heavy fields removed
       expect(pruned.reportContent).toBeUndefined()
       expect(pruned.citations).toBeUndefined()
-      expect(pruned.deepResearchTodos).toBeUndefined()
+      expect(pruned.deepResearchTodos).toEqual([
+        { id: 't1', content: 'Todo item', status: 'pending' },
+      ])
       expect(pruned.deepResearchLLMSteps).toBeUndefined()
       expect(pruned.deepResearchAgents).toBeUndefined()
       expect(pruned.deepResearchToolCalls).toBeUndefined()

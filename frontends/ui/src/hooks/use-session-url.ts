@@ -13,6 +13,7 @@
 'use client'
 
 import { useEffect, useCallback, useRef } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { useSearchParams, useRouter, usePathname } from 'next/navigation'
 import { useChatStore } from '@/features/chat'
 
@@ -37,8 +38,12 @@ export function useSessionUrl({ isAuthenticated }: UseSessionUrlOptions): UseSes
   const pathname = usePathname() ?? '/'
   const searchParams = useSearchParams()
 
-  const { currentConversation, currentUserId, selectConversation, getUserConversations } =
-    useChatStore()
+  const { currentConversation, currentUserId } = useChatStore(useShallow((s) => ({
+    currentConversation: s.currentConversation,
+    currentUserId: s.currentUserId,
+  })))
+  const selectConversation = useChatStore((s) => s.selectConversation)
+  const getUserConversations = useChatStore((s) => s.getUserConversations)
 
   // Track if we've done the initial URL sync to avoid duplicate effects
   const initialSyncDone = useRef(false)

@@ -15,6 +15,7 @@ import { type FC } from 'react'
 import { Flex, Text } from '@/adapters/ui'
 import { Wrench } from '@/adapters/ui/icons'
 import { ToolCallCard, type ToolCallInfo } from './ToolCallCard'
+import { EMPTY_RESEARCH_DETAILS_HELP_TEXT } from './research-empty-state-copy'
 
 interface ToolCallsTabProps {
   /** Array of tool call info from SSE events */
@@ -41,7 +42,9 @@ export const ToolCallsTab: FC<ToolCallsTabProps> = ({ toolCalls = [] }) => {
           </Text>
           {toolCalls.length > 0 && (
             <Text kind="body/regular/xs" className="text-subtle">
-              {runningCount > 0 ? `${runningCount} running` : `${completedCount}/${toolCalls.length}`}
+              {runningCount > 0
+                ? `${runningCount} running`
+                : `${completedCount}/${toolCalls.length}`}
             </Text>
           )}
         </Flex>
@@ -52,24 +55,19 @@ export const ToolCallsTab: FC<ToolCallsTabProps> = ({ toolCalls = [] }) => {
 
       {/* Content */}
       {isEmpty ? (
-        <Flex
-          direction="col"
-          align="center"
-          justify="center"
-          className="flex-1 text-center py-8"
-        >
+        <Flex direction="col" align="center" justify="center" className="flex-1 py-8 text-center">
           <span data-testid="toolcalls-empty-icon" className="text-subtle mb-3 h-8 w-8">
             <Wrench className="h-8 w-8" />
           </span>
           <Text kind="body/regular/md" className="text-subtle">
-            Tool calls will appear here during research.
+            No tool calls available.
           </Text>
           <Text kind="body/regular/sm" className="text-subtle mt-2">
-            Shows web searches, file writes, and other tool invocations.
+            {EMPTY_RESEARCH_DETAILS_HELP_TEXT}
           </Text>
         </Flex>
       ) : (
-        <Flex direction="col" gap="2" className="flex-1 min-h-0 overflow-y-auto">
+        <Flex direction="col" gap="2" className="min-h-0 flex-1 overflow-y-auto">
           {toolCalls.map((toolCall) => (
             <div key={toolCall.id} className="shrink-0">
               <ToolCallCard toolCall={toolCall} />

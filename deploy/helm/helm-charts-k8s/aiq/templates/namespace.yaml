@@ -2,7 +2,7 @@
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: {{ .Release.Namespace }}
+  name: {{ include "aiq.namespace" . }}
   labels:
     {{- if and .Values.project.dl (ne (.Values.project.orientation | default "internal") "external") }}
     sysdev.nvidia.com/dl: {{ .Values.project.dl | quote }}

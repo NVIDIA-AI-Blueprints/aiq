@@ -59,6 +59,7 @@ from langgraph.prebuilt import ToolNode
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
@@ -80,19 +81,6 @@ DEFAULT_CLARIFICATION_PROMPT = (
 )
 """Fallback prompt used when the prompt file cannot be loaded."""
 
-DEFAULT_PLAN_GENERATION_PROMPT = (
-    "/no_think\n\n"
-    "Generate a research plan with a title and 5-8 sections. "
-    'Respond with JSON: {"title": "...", "sections": ["...", "..."]}'
-)
-"""Fallback prompt for plan generation."""
-
-APPROVAL_KEYWORDS = {"approve", "approved", "yes", "ok", "proceed", "continue", "go ahead", "looks good", "y", "accept"}
-"""Keywords that indicate the user approves the plan."""
-
-REJECTION_KEYWORDS = {"reject", "rejected", "no", "cancel", "stop", "abort", "n"}
-"""Keywords that indicate the user rejects the plan."""
-
 JSON_REMINDER_AFTER_TOOLS = (
     "Based on the search results above, now make your clarification decision. "
     "IMPORTANT: You must respond with ONLY a valid JSON object, nothing else. "
@@ -103,6 +91,19 @@ JSON_REMINDER_AFTER_TOOLS = (
     '{"needs_clarification": false, "clarification_question": null}'
 )
 """Reminder prompt added after tool results to reinforce JSON-only output."""
+
+FORCE_SEARCH_GUIDANCE = (
+    "You attempted to ask the user for clarification before gathering any context. "
+    "Before asking the user a question, you MUST first use the available search tools "
+    "to look up unfamiliar entities, acronyms, products, or terms in their request. "
+    "Issue one focused tool call now with a query derived from the user's request. "
+    "Only after reviewing the tool results should you decide whether clarification is still needed."
+)
+"""Guidance prompt injected when the LLM tries to clarify without having searched first."""
+
+SKIPPED_CLARIFICATION_SENTINEL = "[skipped clarification]"
+"""Stand-in user turn persisted when a skip reply is blank, so an empty
+HumanMessage is never written to state (some chat APIs reject empty content)."""
 
 
 class ClarifierAgent:
@@ -117,6 +118,10 @@ class ClarifierAgent:
     - agent: Generates clarification questions using the LLM
     - tools: Executes tool calls for context gathering (e.g., web search)
     - ask_for_clarification: Prompts the user and processes their response
+
+    It gathers context and, when the request is vague, may clarify the scope or
+    the type of output the user wants (e.g. report, table, comparison, prediction)
+    before research begins. It does not produce or approve a research plan.
 
     Attributes:
         llm_provider: Provider for obtaining LLM instances.
@@ -149,9 +154,6 @@ class ClarifierAgent:
         *,
         user_prompt_callback: Callable[[str], Awaitable[str]],
         max_turns: int = 3,
-        enable_plan_approval: bool = False,
-        max_plan_iterations: int = 10,
-        planner_llm: BaseChatModel | None = None,
         log_response_max_chars: int = 2000,
         verbose: bool = False,
         callbacks: list[Any] | None = None,
@@ -167,12 +169,6 @@ class ClarifierAgent:
                 Takes a question string and returns the user's response string.
             max_turns: Maximum number of clarification Q&A turns before
                 automatically completing clarification. Defaults to 3.
-            enable_plan_approval: Whether to enable plan preview and approval
-                after clarification completes. Defaults to False.
-            max_plan_iterations: Maximum number of plan feedback iterations
-                before auto-approving. Defaults to 10.
-            planner_llm: Optional LLM to use for plan generation. If not provided,
-                uses the default clarifier LLM.
             log_response_max_chars: Maximum characters to log from LLM responses.
                 Used for debugging. Defaults to 2000.
             verbose: Whether to enable detailed logging. Defaults to False.
@@ -183,15 +179,11 @@ class ClarifierAgent:
         self.tools = list(tools) if tools else []
         self.user_prompt_callback = user_prompt_callback
         self.max_turns = max_turns
-        self.enable_plan_approval = enable_plan_approval
-        self.max_plan_iterations = max_plan_iterations
-        self.planner_llm = planner_llm
         self.log_response_max_chars = log_response_max_chars
         self.verbose = verbose
         self.callbacks = callbacks or []
 
         self.system_prompt = self._load_default_prompt()
-        self.plan_generation_prompt = self._load_plan_generation_prompt()
 
         self._graph = self._build_graph()
 
@@ -210,101 +202,6 @@ class ClarifierAgent:
         except Exception:
             logger.warning("Clarifier prompt not found, using inline default")
             return DEFAULT_CLARIFICATION_PROMPT
-
-    def _load_plan_generation_prompt(self) -> str:
-        """
-        Load the plan generation prompt from file.
-
-        Returns:
-            The loaded prompt string, or the default fallback prompt.
-        """
-        try:
-            return load_prompt(AGENT_DIR / "prompts", "plan_generation")
-        except Exception:
-            logger.warning("Plan generation prompt not found, using inline default")
-            return DEFAULT_PLAN_GENERATION_PROMPT
-
-    def _parse_plan_response(self, text: str) -> tuple[str | None, list[str]]:
-        """
-        Parse plan generation response from LLM.
-
-        Args:
-            text: Raw JSON text response from the LLM.
-
-        Returns:
-            Tuple of (title, sections) or (None, []) if parsing fails.
-        """
-        if not text:
-            return None, []
-
-        text = text.strip()
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
-        if json_match:
-            text = json_match.group(1).strip()
-
-        try:
-            data = json.loads(text)
-            title = data.get("title")
-            sections = data.get("sections", [])
-            if isinstance(sections, list) and all(isinstance(s, str) for s in sections):
-                return title, sections
-        except (json.JSONDecodeError, Exception) as e:
-            logger.warning("Failed to parse plan response as JSON: %s", e)
-
-        return None, []
-
-    def _parse_approval(self, response: str) -> tuple[bool, bool, str | None]:
-        """
-        Parse user's approval response.
-
-        Args:
-            response: User's response text (may be JSON wrapped).
-
-        Returns:
-            Tuple of (approved, rejected, feedback).
-            - If approved: (True, False, None)
-            - If rejected: (False, True, None)
-            - If feedback: (False, False, feedback_text)
-        """
-        # Extract query from JSON if wrapped (e.g., {"query": "approve", ...})
-        text = response.strip()
-        try:
-            data = json.loads(text)
-            if isinstance(data, dict) and "query" in data:
-                text = data["query"]
-        except (json.JSONDecodeError, TypeError):
-            pass  # Not JSON, use original text
-
-        normalized = text.strip().lower()
-
-        if normalized in APPROVAL_KEYWORDS:
-            return True, False, None
-
-        if normalized in REJECTION_KEYWORDS:
-            return False, True, None
-
-        # Treat as feedback for plan revision
-        return False, False, text.strip()
-
-    def _format_plan_for_user(self, title: str, sections: list[str]) -> str:
-        """
-        Format the plan for user display.
-
-        Args:
-            title: Plan title.
-            sections: List of section titles.
-
-        Returns:
-            Formatted string for user display.
-        """
-        sections_text = "\n".join(f"  {i + 1}. {s}" for i, s in enumerate(sections))
-        return (
-            f"**Research Plan Preview**\n\n"
-            f"**Title:** {title}\n\n"
-            f"**Sections:**\n{sections_text}\n\n"
-            f"---\n"
-            f"Reply **approve** to proceed, **reject** to cancel, or provide feedback to revise the plan."
-        )
 
     def _parse_response(self, text: str) -> ClarificationResponse | None:
         """
@@ -484,6 +381,45 @@ class ClarifierAgent:
     SKIP_COMMANDS = {"skip", "done", "exit", "quit", "proceed", "continue", "no", "n", ""}
     """Set of commands that indicate the user wants to skip clarification."""
 
+    @staticmethod
+    def _has_tool_invocations(messages: Sequence[Any]) -> bool:
+        """
+        Check whether any prior assistant message in the conversation issued tool calls.
+
+        Args:
+            messages: The conversation message history.
+
+        Returns:
+            True if any AIMessage in the history carries non-empty tool_calls,
+            False otherwise.
+        """
+        for msg in messages:
+            tool_calls = getattr(msg, "tool_calls", None)
+            if tool_calls:
+                return True
+        return False
+
+    @staticmethod
+    def _searched_since_last_user_turn(messages: Sequence[Any]) -> bool:
+        """Check whether a tool call has occurred since the latest user message.
+
+        Scopes the search-before-clarify guard to the *current* request: tool
+        calls from earlier conversation turns must not suppress the nudge for a
+        fresh user query.
+
+        Args:
+            messages: The conversation message history.
+
+        Returns:
+            True if any message after the most recent HumanMessage carries tool
+            calls, False otherwise.
+        """
+        last_user_idx = -1
+        for idx, msg in enumerate(messages):
+            if isinstance(msg, HumanMessage):
+                last_user_idx = idx
+        return ClarifierAgent._has_tool_invocations(messages[last_user_idx + 1 :])
+
     def _is_skip_command(self, user_reply: str) -> bool:
         """
         Check if the user's reply indicates they want to skip clarification.
@@ -503,38 +439,74 @@ class ClarifierAgent:
         """
         Build the LangGraph StateGraph for the clarification workflow.
 
-        Creates a graph with three nodes:
-        - agent: Generates clarification questions using the LLM
+        Creates a graph with the following nodes:
+        - agent: Generates clarification questions using the LLM. On the first
+          turn it also enforces search-before-clarify (issue #234): if the model
+          asks for clarification without using its bound search tools, it nudges
+          the model once and retries inline.
         - tools: Executes tool calls (e.g., web search) for context
         - ask_for_clarification: Prompts user and processes response
 
         The graph flow:
-        1. agent generates a response (question, tool call, or completion)
+        1. agent generates a response (question, tool call, or completion);
+           on turn 0 it may force one search-and-retry before yielding
         2. If tool call → tools node → back to agent
-        3. If question → ask_for_clarification → back to agent
-        4. If complete → end
+        3. If complete → end
+        4. Otherwise → ask_for_clarification → back to agent
 
         Returns:
             Compiled LangGraph StateGraph ready for execution.
         """
         llm = self._get_llm()
         bound_llm = llm.bind_tools(self.tools, parallel_tool_calls=True) if self.tools else llm
-        # Use planner_llm for plan generation if provided, otherwise use default llm
-        planner_llm = self.planner_llm if self.planner_llm is not None else llm
 
         graph = StateGraph(ClarifierAgentState)
 
         async def agent_node(state: ClarifierAgentState):
+            """Run the LLM for one turn and apply the search-before-clarify nudge.
+
+            Emits a completion when the clarification budget is exhausted, and on
+            the first turn forces one search-and-retry if the model tries to ask
+            for clarification without using its bound tools.
+            """
             if state.remaining_questions <= 0:
-                complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
-                return {"messages": [AIMessage(content=complete_response.model_dump_json())]}
+                # Clarification budget is exhausted — emit a completion signal,
+                # but never create an invalid history (two adjacent assistant
+                # messages, or a pending tool call left unresolved), since the
+                # message list is replayed to the LLM on later turns.
+                last_message = state.messages[-1] if state.messages else None
+                if isinstance(last_message, AIMessage) and getattr(last_message, "tool_calls", None):
+                    # A pending tool call must be resolved before we complete;
+                    # let decide_route route to the tools node, after which the
+                    # tool result re-enters here as the last turn.
+                    return {}
+                if isinstance(last_message, AIMessage) and self._is_complete(getattr(last_message, "content", "")):
+                    # A prior node (e.g. the skip-command branch) already emitted
+                    # the completion; don't duplicate it. Let decide_route end.
+                    return {}
+                complete = AIMessage(
+                    content=ClarificationResponse(
+                        needs_clarification=False, clarification_question=None
+                    ).model_dump_json()
+                )
+                if isinstance(last_message, AIMessage):
+                    # The last turn is a non-complete assistant message (e.g. an
+                    # unanswered clarification at exhaustion). Interleave a
+                    # sentinel user turn so the completion is not adjacent to it.
+                    return {"messages": [HumanMessage(content=SKIPPED_CLARIFICATION_SENTINEL), complete]}
+                return {"messages": [complete]}
             tools_info = [
                 {"name": getattr(t, "name", ""), "description": getattr(t, "description", "")} for t in self.tools
             ]
+            # Selected data sources (e.g. Google Drive) become tools in the research
+            # phase but are NOT bound to the clarifier, so surface them explicitly —
+            # otherwise the LLM refuses Drive/URL requests it thinks it can't access.
+            connected_sources = format_data_source_tools(state.data_sources) if state.data_sources else []
             rendered_system_prompt = render_prompt_template(
                 self.system_prompt,
                 clarifier_result=state.clarifier_log,
                 available_documents=state.available_documents or [],
+                connected_sources=connected_sources,
                 tools=tools_info,
                 tool_names=[t["name"] for t in tools_info],
             )
@@ -548,9 +520,37 @@ class ClarifierAgent:
                 messages.append(HumanMessage(content=JSON_REMINDER_AFTER_TOOLS))
 
             response = await bound_llm.ainvoke(messages)
+
+            # Search-before-clarify (issue #234): on the first turn, if the model
+            # asks for clarification without searching, nudge it once (guidance as
+            # ephemeral scaffolding, never persisted to state) and retry inline.
+            # The guard is one-shot: iteration == 0 and no tool call yet for the
+            # current request (scoped to the latest user turn). Return only the
+            # retry so the skipped first response can't leave two adjacent
+            # assistant messages in history. The guidance is folded into the
+            # leading system prompt (a trailing SystemMessage is rejected by
+            # providers that only accept a leading one).
+            if (
+                self.tools
+                and state.iteration == 0
+                and not self._searched_since_last_user_turn(state.messages)
+                and not getattr(response, "tool_calls", None)
+                and self._is_needed(response.content)
+            ):
+                logger.info("Clarifier: model skipped search before clarifying; injecting guidance and retrying once")
+                retry_system = SystemMessage(content=f"{rendered_system_prompt}\n\n{FORCE_SEARCH_GUIDANCE}")
+                retry_messages = [retry_system, *messages[1:], response]
+                retry_response = await bound_llm.ainvoke(retry_messages)
+                return {"messages": [retry_response]}
+
             return {"messages": [response]}
 
         async def ask_clarification(state: ClarifierAgentState):
+            """Prompt the user with the pending question and record their reply.
+
+            Handles skip commands (substituting a non-empty sentinel for blank
+            replies) and the max-turns cutoff, advancing the clarification log.
+            """
             iteration = state.iteration
             max_turns = state.max_turns
             clarifier_log = state.clarifier_log
@@ -576,8 +576,23 @@ class ClarifierAgent:
                 logger.info("Clarifier: User requested to skip clarification")
                 complete_response = ClarificationResponse(needs_clarification=False, clarification_question=None)
                 clarifier_log = f"{clarifier_log}\n**Turn {iteration + 1} - User:** [Skipped clarification]"
+                # Persist the user's reply as a HumanMessage before the
+                # completion AIMessage. The prior turn already left an
+                # AIMessage(clarification) in history; without an interleaving
+                # human message the two assistant turns would be adjacent, which
+                # the OpenAI/Anthropic APIs reject. (The duplicate completion on
+                # graph re-entry is suppressed by the guard in agent_node.)
+                #
+                # A blank/whitespace reply also counts as skip (see
+                # SKIP_COMMANDS), but an empty HumanMessage must not be persisted
+                # -- it would flow into plan generation, and some chat APIs reject
+                # empty message content. Substitute a non-empty sentinel.
+                skip_reply = user_reply if user_reply.strip() else SKIPPED_CLARIFICATION_SENTINEL
                 return {
-                    "messages": [AIMessage(content=complete_response.model_dump_json())],
+                    "messages": [
+                        HumanMessage(content=skip_reply),
+                        AIMessage(content=complete_response.model_dump_json()),
+                    ],
                     "iteration": max_turns,  # Force end of clarification
                     "clarifier_log": clarifier_log,
                 }
@@ -590,6 +605,7 @@ class ClarifierAgent:
             }
 
         def decide_route(state: ClarifierAgentState | dict):
+            """Route after agent_node: to tools, plan preview, end, or the user."""
             if isinstance(state, dict):
                 messages = state.get("messages", [])
             elif hasattr(state, "messages"):
@@ -607,81 +623,17 @@ class ClarifierAgent:
                 return "tools"
 
             if self._is_complete(ai_message.content):
-                if self.enable_plan_approval:
-                    return "plan_preview"
                 return "__end__"
+
+            # The search-before-clarify nudge (issue #234) is handled inline in
+            # agent_node, not here — see the retry block there. By the time a
+            # clarification response reaches this router, any forced search has
+            # already happened, so we route straight to the user.
             return "ask_for_clarification"
-
-        async def plan_preview_node(state: ClarifierAgentState):
-            """Generate plan preview and handle approval/feedback loop."""
-            clarifier_log = state.clarifier_log
-            feedback_history: list[str] = list(state.plan_feedback_history)
-
-            # Initialize with fallback values in case loop doesn't execute (max_plan_iterations <= 0)
-            title: str = "Research Report"
-            sections: list[str] = ["Introduction", "Background", "Analysis", "Findings", "Conclusion"]
-
-            for iteration in range(self.max_plan_iterations):
-                rendered_prompt = render_prompt_template(
-                    self.plan_generation_prompt,
-                    clarifier_context=clarifier_log,
-                    feedback_history=feedback_history if feedback_history else None,
-                )
-
-                # Generate plan using planner LLM
-                messages_for_plan = state.messages + [HumanMessage(content="Generate a research plan.")]
-                response = await planner_llm.ainvoke([SystemMessage(content=rendered_prompt)] + messages_for_plan)
-                title, sections = self._parse_plan_response(response.content)
-
-                if not title or not sections:
-                    logger.warning("Failed to generate valid plan, using fallback")
-                    title = "Research Report"
-                    sections = ["Introduction", "Background", "Analysis", "Findings", "Conclusion"]
-
-                # Present plan to user
-                plan_display = self._format_plan_for_user(title, sections)
-                user_response = await self.user_prompt_callback(plan_display)
-
-                approved, rejected, feedback = self._parse_approval(user_response)
-
-                if approved:
-                    logger.info("Clarifier: Plan approved by user")
-                    return {
-                        "plan_title": title,
-                        "plan_sections": sections,
-                        "plan_approved": True,
-                        "plan_rejected": False,
-                        "plan_feedback_history": feedback_history,
-                    }
-
-                if rejected:
-                    logger.info("Clarifier: Plan rejected by user")
-                    return {
-                        "plan_title": title,
-                        "plan_sections": sections,
-                        "plan_approved": False,
-                        "plan_rejected": True,
-                        "plan_feedback_history": feedback_history,
-                    }
-
-                # User provided feedback, add to history and continue loop
-                logger.info("Clarifier: User provided feedback, regenerating plan")
-                feedback_history.append(feedback)
-
-            # Max iterations reached, auto-approve
-            logger.warning("Clarifier: Max plan iterations reached, auto-approving")
-            return {
-                "plan_title": title,
-                "plan_sections": sections,
-                "plan_approved": True,
-                "plan_rejected": False,
-                "plan_feedback_history": feedback_history,
-            }
 
         graph.add_node("agent", agent_node)
         graph.add_node("tools", ToolNode(self.tools))
         graph.add_node("ask_for_clarification", ask_clarification)
-        graph.add_node("plan_preview", plan_preview_node)
 
         graph.set_entry_point("agent")
 
@@ -691,14 +643,12 @@ class ClarifierAgent:
             {
                 "tools": "tools",
                 "ask_for_clarification": "ask_for_clarification",
-                "plan_preview": "plan_preview",
                 "__end__": "__end__",
             },
         )
 
         graph.add_edge("tools", "agent")
         graph.add_edge("ask_for_clarification", "agent")
-        graph.add_edge("plan_preview", "__end__")
 
         return graph.compile()
 
@@ -710,20 +660,14 @@ class ClarifierAgent:
             state: Initial state of the clarifier agent.
 
         Returns:
-            ClarifierResult with clarification log and plan approval details.
+            ClarifierResult with the clarification log.
         """
         logger.info("Clarifier: Starting (max %d turns)", self.max_turns)
         query = get_latest_user_query(state.messages)
         logger.info("User's query: %s...", str(query)[:100] if query else "")
         result = await self._graph.ainvoke(state, config={"callbacks": self.callbacks})
         final_state = ClarifierAgentState.model_validate(result)
-        return ClarifierResult(
-            clarifier_log=final_state.clarifier_log,
-            plan_title=final_state.plan_title,
-            plan_sections=final_state.plan_sections,
-            plan_approved=final_state.plan_approved,
-            plan_rejected=final_state.plan_rejected,
-        )
+        return ClarifierResult(clarifier_log=final_state.clarifier_log)
 
     @property
     def graph(self) -> CompiledStateGraph:

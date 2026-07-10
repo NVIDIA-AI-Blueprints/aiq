@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
@@ -34,9 +35,11 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt import tools_condition
 
+from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 from aiq_agent.common.citation_verification import get_session_registry
@@ -52,6 +55,43 @@ logger = logging.getLogger(__name__)
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
+
+
+def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
+    """Append one verified citation when the model omitted references."""
+    citation_target = source.url or source.citation_key
+    if not citation_target:
+        return report_text
+
+    # verify_citations may strip every citation line under a **References:**
+    # (or ## References / ## Sources) header and leave the empty header
+    # behind. Drop that trailing header before we append our own so the final
+    # output has exactly one references section.
+    content = report_text.rstrip()
+    content = re.sub(
+        r"\n{1,2}\*\*References:?\*\*\s*$",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    ).rstrip()
+    content = re.sub(
+        r"\n{1,2}#{2,3}\s+(?:References|Sources)\s*$",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    ).rstrip()
+    if content.endswith((".", "!", "?")):
+        content = f"{content[:-1]} [1]{content[-1]}"
+    else:
+        content = f"{content} [1]"
+
+    if source.url:
+        title = source.title or source.url
+        reference = f"- [1] {title} - {source.url}"
+    else:
+        reference = f"- [1] {citation_target}"
+
+    return f"{content}\n\n**References:**\n{reference}"
 
 
 class ShallowResearcherAgent:
@@ -226,13 +266,28 @@ class ShallowResearcherAgent:
 
         tool_node = ToolNode(self.tools)
 
-        _source_tool_names = {t.name for t in self.tools}
+        # Per-agent allowlist mirrors the deep researcher: only tools this
+        # agent was loaded with are candidates for source capture. The
+        # data_source_registry then decides which of those are configured
+        # data sources. Having both gates keeps behavior consistent across
+        # agents and safe even if the global registry is ever polluted.
+        source_tool_names = {t.name for t in self.tools}
 
         async def tool_node_with_source_capture(state: ShallowResearchAgentState) -> dict[str, Any]:
             """Execute tools and capture source URLs/citations for verification.
 
-            Only config-defined source tools contribute to the registry;
-            internal tools are ignored automatically.
+            Source capture is gated by two conditions:
+
+            1. The tool must be in this agent's loaded tool set
+               (``source_tool_names``) — mirrors the deep researcher's
+               middleware allowlist.
+            2. The tool must resolve to a configured data source via
+               :func:`get_source_id_for_tool` (i.e. declared under
+               ``data_sources`` in the workflow YAML).
+
+            Tools that fail either check (internal scratchpads, ad-hoc
+            utilities, unregistered MCP servers) are skipped without
+            contributing to the citation registry.
             """
             result = await tool_node.ainvoke(state)
             # Resolve registry at call time (not build time) so each request
@@ -241,9 +296,16 @@ class ShallowResearcherAgent:
             for msg in result.get("messages", []):
                 if isinstance(msg, ToolMessage) and msg.content:
                     tool_name = getattr(msg, "name", "") or ""
-                    if tool_name not in _source_tool_names:
+                    if tool_name not in source_tool_names:
                         continue
-                    sources = extract_sources_from_tool_result(tool_name, str(msg.content))
+                    source_id = get_source_id_for_tool(tool_name)
+                    if source_id is None:
+                        logger.debug(
+                            "[CitationRegistry] Skipping non-data-source tool result from %s",
+                            tool_name,
+                        )
+                        continue
+                    sources = extract_sources_from_tool_result(tool_name, str(msg.content), source_id=source_id)
                     for source in sources:
                         active_registry.add(source)
                     if sources:
@@ -311,6 +373,9 @@ class ShallowResearcherAgent:
                         len(registry.all_sources()),
                     )
                     content = verification.verified_report
+                    sources = registry.all_sources()
+                    if not verification.valid_citations and len(sources) == 1:
+                        content = _append_minimal_citation(content, sources[0])
                 else:
                     from aiq_agent.common.tool_validation import validate_tool_availability
 

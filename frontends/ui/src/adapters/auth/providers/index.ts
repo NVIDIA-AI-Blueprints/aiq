@@ -27,7 +27,7 @@
 
 import type { AuthProviderConfig } from './types'
 
-export type { AuthProviderConfig, TokenRefreshResult } from './types'
+export type { AuthProviderConfig, TokenRefreshResult, SignInHookParams, SessionHookParams } from './types'
 
 /**
  * Returns the active auth provider configuration.

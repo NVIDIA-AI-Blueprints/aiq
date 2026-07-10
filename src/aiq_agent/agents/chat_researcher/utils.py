@@ -18,8 +18,17 @@ from typing import Any
 
 from langchain_core.messages import BaseMessage
 from langchain_core.messages import trim_messages
+from pydantic import BaseModel
 
 from aiq_agent.common import parse_data_sources
+
+
+class ChatRequestContext(BaseModel):
+    """Normalized chat request context extracted from NAT/OpenAI-style payloads."""
+
+    query_text: str
+    data_sources: list[str] | None = None
+    active_report_job_id: str | None = None
 
 
 def trim_message_history(messages: list[BaseMessage], max_tokens: int) -> list[BaseMessage]:
@@ -96,35 +105,48 @@ def _extract_text_from_message(message: Any) -> str | None:
     return None
 
 
-def _extract_query_from_text(text: str) -> tuple[str, list[str] | None]:
+def _clean_optional_string(value: Any) -> str | None:
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def _extract_context_from_text(text: str) -> ChatRequestContext:
     if not text:
-        return ("", None)
+        return ChatRequestContext(query_text="")
     trimmed = text.strip()
     if trimmed.startswith("{") and trimmed.endswith("}"):
         try:
             payload = json.loads(trimmed)
         except json.JSONDecodeError:
-            return (text, None)
+            return ChatRequestContext(query_text=text)
         if isinstance(payload, dict):
-            data_sources = parse_data_sources(payload.get("data_sources"))
             query_text = payload.get("query") or payload.get("text")
             if isinstance(query_text, str) and query_text.strip():
-                return (query_text.strip(), data_sources)
-    return (text, None)
+                return ChatRequestContext(
+                    query_text=query_text.strip(),
+                    data_sources=parse_data_sources(payload.get("data_sources")),
+                    active_report_job_id=_clean_optional_string(payload.get("active_report_job_id")),
+                )
+    return ChatRequestContext(query_text=text)
 
 
-def _extract_query_and_sources(payload: Any) -> tuple[str, list[str] | None]:
-    """Extract query text and data sources from various payload formats.
+def _extract_query_context(payload: Any) -> ChatRequestContext:
+    """Extract query text, data sources, and active report context from payloads.
 
     Returns:
-        Tuple of (query_text, data_sources).
+        ChatRequestContext.
         - data_sources is None if not specified, meaning use all configured tools
         - data_sources is a list if explicitly specified (use only those)
+        - active_report_job_id is optional report context for router decisions
     """
     if isinstance(payload, dict):
         content = payload.get("content", {}) if isinstance(payload.get("content"), dict) else {}
-        data_sources = parse_data_sources(payload.get("data_sources")) or parse_data_sources(
-            content.get("data_sources")
+        # Use `is None` (not `or`): an explicit empty list means "no data-source tools"
+        # and must be preserved rather than falling through to the nested/inline value.
+        data_sources = parse_data_sources(payload.get("data_sources"))
+        if data_sources is None:
+            data_sources = parse_data_sources(content.get("data_sources"))
+        active_report_job_id = _clean_optional_string(payload.get("active_report_job_id")) or _clean_optional_string(
+            content.get("active_report_job_id")
         )
         messages = content.get("messages", [])
         query_text = None
@@ -141,14 +163,21 @@ def _extract_query_and_sources(payload: Any) -> tuple[str, list[str] | None]:
                 payload.get("text")
             )
         if query_text:
-            inline_query, inline_sources = _extract_query_from_text(query_text)
-            query_text = inline_query
-            data_sources = data_sources or inline_sources
-        return (query_text or "", data_sources)
+            inline_context = _extract_context_from_text(query_text)
+            query_text = inline_context.query_text
+            if data_sources is None:
+                data_sources = inline_context.data_sources
+            active_report_job_id = active_report_job_id or inline_context.active_report_job_id
+        return ChatRequestContext(
+            query_text=query_text or "",
+            data_sources=data_sources,
+            active_report_job_id=active_report_job_id,
+        )
 
     messages = getattr(payload, "messages", None)
     if isinstance(messages, list):
         data_sources = parse_data_sources(getattr(payload, "data_sources", None))
+        active_report_job_id = _clean_optional_string(getattr(payload, "active_report_job_id", None))
         query_text = None
         for msg in reversed(messages):
             if _is_user_role(getattr(msg, "role", None)):
@@ -158,11 +187,22 @@ def _extract_query_and_sources(payload: Any) -> tuple[str, list[str] | None]:
         if not query_text and messages:
             query_text = _extract_text_from_message(messages[-1])
         if query_text:
-            inline_query, inline_sources = _extract_query_from_text(query_text)
-            query_text = inline_query
-            data_sources = data_sources or inline_sources
-        return (query_text or "", data_sources)
+            inline_context = _extract_context_from_text(query_text)
+            query_text = inline_context.query_text
+            if data_sources is None:
+                data_sources = inline_context.data_sources
+            active_report_job_id = active_report_job_id or inline_context.active_report_job_id
+        return ChatRequestContext(
+            query_text=query_text or "",
+            data_sources=data_sources,
+            active_report_job_id=active_report_job_id,
+        )
 
-    query_text = str(payload)
-    inline_query, inline_sources = _extract_query_from_text(query_text)
-    return (inline_query, inline_sources)
+    return _extract_context_from_text(str(payload))
+
+
+def _extract_query_and_sources(payload: Any) -> tuple[str, list[str] | None]:
+    """Compatibility wrapper returning only query text and data sources."""
+
+    context = _extract_query_context(payload)
+    return (context.query_text, context.data_sources)

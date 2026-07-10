@@ -65,6 +65,7 @@ echo "Benchmarks installed"
 echo ""
 echo "Installing data sources..."
 "${UV_BIN}" pip install -e ./sources/tavily_web_search
+"${UV_BIN}" pip install -e ./sources/exa_web_search
 "${UV_BIN}" pip install -e ./sources/google_scholar_paper_search
 "${UV_BIN}" pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 "${UV_BIN}" pip install -e ./sources/reranker
@@ -113,6 +114,7 @@ echo "1. Activate virtual environment: source .venv/bin/activate"
 echo "2. Add your NVIDIA_API_KEY to deploy/.env"
 echo "3. Run the agent:"
 echo "   - CLI mode:        ./scripts/start_cli.sh"
+echo "   - Skill backend:   ./scripts/start_as_skill.sh"
 echo "   - Server mode:     ./scripts/start_server_in_debug_mode.sh"
 echo "   - End-to-End (UI): ./scripts/start_e2e.sh"
 echo ""

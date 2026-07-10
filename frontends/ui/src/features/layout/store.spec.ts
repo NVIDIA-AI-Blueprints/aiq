@@ -1,18 +1,32 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { describe, test, expect, beforeEach } from 'vitest'
+import { describe, test, expect, beforeEach, vi } from 'vitest'
 import { useLayoutStore } from './store'
+
+const mockGetDataSources = vi.hoisted(() => vi.fn())
+
+vi.mock('@/adapters/api', () => ({
+  createDataSourcesClient: vi.fn(() => ({
+    getDataSources: mockGetDataSources,
+  })),
+}))
 
 describe('useLayoutStore', () => {
   beforeEach(() => {
-    // Reset store to initial state before each test
+    mockGetDataSources.mockReset()
+    // Reset store to initial state before each test (matches store.ts initialState)
     useLayoutStore.setState({
       isSessionsPanelOpen: false,
-      rightPanel: null,
-      researchPanelTab: 'plan',
+      rightPanel: 'data-sources',
+      researchPanelTab: 'tasks',
       dataSourcesPanelTab: 'connections',
+      enabledDataSourceIds: [],
       theme: 'system',
+      availableDataSources: null,
+      knowledgeLayerAvailable: false,
+      dataSourcesLoading: false,
+      dataSourcesError: null,
     })
   })
 
@@ -21,8 +35,8 @@ describe('useLayoutStore', () => {
       const state = useLayoutStore.getState()
 
       expect(state.isSessionsPanelOpen).toBe(false)
-      expect(state.rightPanel).toBeNull()
-      expect(state.researchPanelTab).toBe('plan')
+      expect(state.rightPanel).toBe('data-sources')
+      expect(state.researchPanelTab).toBe('tasks')
       expect(state.dataSourcesPanelTab).toBe('connections')
     })
   })
@@ -110,6 +124,8 @@ describe('useLayoutStore', () => {
     })
 
     test('handles closing when already closed', () => {
+      useLayoutStore.setState({ rightPanel: null })
+
       useLayoutStore.getState().closeRightPanel()
 
       expect(useLayoutStore.getState().rightPanel).toBeNull()
@@ -121,12 +137,6 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setResearchPanelTab('thinking')
 
       expect(useLayoutStore.getState().researchPanelTab).toBe('thinking')
-    })
-
-    test('sets citations tab', () => {
-      useLayoutStore.getState().setResearchPanelTab('citations')
-
-      expect(useLayoutStore.getState().researchPanelTab).toBe('citations')
     })
 
     test('sets report tab', () => {
@@ -173,6 +183,107 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().setTheme('system')
 
       expect(useLayoutStore.getState().theme).toBe('system')
+    })
+  })
+
+  describe('fetchDataSources', () => {
+    test('enables all returned sources by default', async () => {
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          { id: 'web_search', name: 'Web Search', requires_auth: false },
+          { id: 'knowledge_base', name: 'Knowledge Base', requires_auth: true },
+        ],
+        knowledge_layer: true,
+      })
+
+      await useLayoutStore.getState().fetchDataSources('token-1')
+
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual([
+        'web_search',
+        'knowledge_base',
+      ])
+      expect(useLayoutStore.getState().knowledgeLayerAvailable).toBe(true)
+    })
+
+    test('does not auto-enable a protected source that is not connected', async () => {
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          { id: 'web_search', name: 'Web Search', requires_auth: false },
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'not_connected' },
+          },
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().fetchDataSources('token-1')
+
+      // gdrive is not connected -> excluded from the initial selection.
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['web_search'])
+    })
+
+    test('auto-enables a protected source once it is connected', async () => {
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'connected' },
+          },
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().fetchDataSources('token-1')
+
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['gdrive'])
+    })
+  })
+
+  describe('refreshDataSourceStatus', () => {
+    test('drops a protected source that is no longer connected from the selection', async () => {
+      useLayoutStore.setState({ enabledDataSourceIds: ['web_search', 'gdrive'] })
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          { id: 'web_search', name: 'Web Search', requires_auth: false },
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'expired' },
+          },
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().refreshDataSourceStatus('token-1')
+
+      // gdrive's token expired -> reconciled out; web_search preserved.
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['web_search'])
+    })
+
+    test('keeps a still-connected protected source and preserves other selections', async () => {
+      useLayoutStore.setState({ enabledDataSourceIds: ['gdrive', 'confluence'] })
+      mockGetDataSources.mockResolvedValueOnce({
+        data_sources: [
+          {
+            id: 'gdrive',
+            name: 'Google Drive',
+            requires_auth: false,
+            per_user_auth: { required: true, status: 'connected' },
+          },
+          // 'confluence' is absent from this response -> must be preserved, not dropped.
+        ],
+        knowledge_layer: false,
+      })
+
+      await useLayoutStore.getState().refreshDataSourceStatus('token-1')
+
+      expect(useLayoutStore.getState().enabledDataSourceIds).toEqual(['gdrive', 'confluence'])
     })
   })
 })

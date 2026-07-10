@@ -20,6 +20,9 @@ project:
 # OPTIONAL: Namespace Configuration
 # ==========================================
 namespace:
+  # All chart resources use the release namespace (helm install -n <ns> /
+  # .Release.Namespace), which is required for GitOps operators such as
+  # ArgoCD and Fleet.
   create: false  # Set to true to create namespace (useful for ArgoCD)
   labels: {}  # Additional custom labels
   annotations:
@@ -28,9 +31,11 @@ namespace:
 # ==========================================
 # OPTIONAL: Image Pull Secrets
 # ==========================================
-imagePullSecrets:
-  dockerRegistry: null
-  artifactRegistry: null
+# Default null so deployment.yaml's per-app fallback never renders this dict
+# directly into a pod spec (which expects a list). To auto-create a registry
+# secret in-cluster, set dockerRegistry / artifactRegistry to a base64-encoded
+# .dockerconfigjson — this is consumed by templates/imagepullsecrets.yaml.
+imagePullSecrets: null
 
 # ==========================================
 # OPTIONAL: Global Image Repository
@@ -61,6 +66,14 @@ externalSecrets:
         audiences:
           - "https://kubernetes.default.svc"
         expirationSeconds: 600
+
+# ==========================================
+# OPTIONAL: Bootstrap Resources
+# ==========================================
+# Create chart-owned resources needed by the default chart.
+bootstrap:
+  createPostgresInitConfigMap: true
+  postgresInitConfigMapName: ""  # Auto-generated: {project.name}-postgres-init
 
 # ==========================================
 # OPTIONAL: Shared Secrets (Simplified)

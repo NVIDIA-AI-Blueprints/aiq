@@ -9,8 +9,9 @@ import { FilesTab } from './FilesTab'
 let mockDeepResearchFiles: Array<{ id: string; filename: string; content: string }> = []
 
 vi.mock('@/features/chat/store', () => ({
-  useChatStore: (selector: (state: { deepResearchFiles: typeof mockDeepResearchFiles }) => unknown) =>
-    selector({ deepResearchFiles: mockDeepResearchFiles }),
+  useChatStore: (
+    selector: (state: { deepResearchFiles: typeof mockDeepResearchFiles }) => unknown
+  ) => selector({ deepResearchFiles: mockDeepResearchFiles }),
 }))
 
 // Mock FileCard
@@ -30,8 +31,12 @@ describe('FilesTab', () => {
     test('shows empty state when no files', () => {
       render(<FilesTab />)
 
-      expect(screen.getByText('Generated files will appear here during research.')).toBeInTheDocument()
-      expect(screen.getByText(/Shows drafts, reports/)).toBeInTheDocument()
+      expect(screen.getByText('No generated files available.')).toBeInTheDocument()
+      expect(
+        screen.getByText(
+          'These details appear during active research and may not be available for completed reports.'
+        )
+      ).toBeInTheDocument()
     })
   })
 

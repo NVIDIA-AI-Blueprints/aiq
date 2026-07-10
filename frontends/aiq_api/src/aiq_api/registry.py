@@ -41,6 +41,9 @@ class AgentConfig:
     description: str = ""
     """Human-readable description of the agent."""
 
+    public: bool = True
+    """Whether this agent should be exposed through public agent listing and submission surfaces."""
+
 
 # Global agent registry
 AGENT_REGISTRY: dict[str, AgentConfig] = {}
@@ -51,6 +54,7 @@ def register_agent(
     class_path: str,
     config_name: str,
     description: str = "",
+    public: bool = True,
 ) -> None:
     """
     Register an agent type for use with the async job system.
@@ -60,6 +64,7 @@ def register_agent(
         class_path: Full module path to the agent class.
         config_name: NAT config function name for this agent.
         description: Human-readable description.
+        public: Whether this agent is visible to public agent listing and direct submission.
 
     Example:
         register_agent(
@@ -73,6 +78,7 @@ def register_agent(
         class_path=class_path,
         config_name=config_name,
         description=description,
+        public=public,
     )
     logger.debug("Registered agent: %s -> %s", agent_type, class_path)
 
@@ -109,4 +115,12 @@ register_agent(
     class_path="aiq_agent.agents.shallow_researcher.agent.ShallowResearcherAgent",
     config_name="shallow_research_agent",
     description="Performs quick single-turn research",
+)
+
+register_agent(
+    agent_type="report_rewriter",
+    class_path="aiq_agent.agents.report_rewriter.agent.ReportRewriterAgent",
+    config_name="deep_research_agent",
+    description="Internal child agent for report edit follow-up",
+    public=False,
 )

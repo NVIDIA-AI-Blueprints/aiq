@@ -21,14 +21,14 @@ llms:
   # NIM models for fast paths (intent + shallow)
   nemotron_llm_intent:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.5
     max_tokens: 4096
 
-  nemotron_nano_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.1
     max_tokens: 16384
@@ -68,17 +68,15 @@ functions:
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_nano_llm
-    planner_llm: nemotron_nano_llm
+    llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search
     max_turns: 3
-    enable_plan_approval: true
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_nano_llm
+    llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -88,7 +86,6 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: frontier_llm    # Frontier model here
-    max_loops: 2
     tools:
       - advanced_web_search_tool
       - knowledge_search

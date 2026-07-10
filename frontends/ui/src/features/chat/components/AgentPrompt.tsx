@@ -6,25 +6,18 @@
  *
  * Displays prompts from the agent that require user response.
  * This is a display-only component - user responds via the main chat input.
- *
- * For plan approval prompts, inline Approve/Reject buttons are rendered
- * inside the bubble so the user can respond without typing.
  */
 
 'use client'
 
-import { type FC, useCallback } from 'react'
-import { Flex, Text, Button } from '@/adapters/ui'
+import type { FC } from 'react'
+import { Flex, Text } from '@/adapters/ui'
 import { formatTime } from '@/shared/utils/format-time'
 import { Chat } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
-import { useChatStore } from '../store'
 import type { PromptType } from '../types'
 
 export type { PromptType }
-
-const APPROVAL_PROMPT_RE =
-  /Reply\s+\*{0,2}approve\*{0,2}\s+to proceed,\s+\*{0,2}reject\*{0,2}\s+to cancel/i
 
 export interface AgentPromptProps {
   /** Unique identifier for this prompt */
@@ -50,9 +43,6 @@ export interface AgentPromptProps {
 /**
  * Agent prompt component - display only.
  * User responds via the main chat input area.
- *
- * When the prompt contains plan approval text, Approve/Reject buttons
- * are rendered inline so the user can respond with a single click.
  */
 export const AgentPrompt: FC<AgentPromptProps> = ({
   type: _type,
@@ -62,25 +52,13 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
   response,
   timestamp,
 }) => {
-  const respondToInteractionFn = useChatStore((state) => state.respondToInteractionFn)
-  const isApprovalPrompt = APPROVAL_PROMPT_RE.test(content)
-  const showApprovalButtons = isApprovalPrompt && !isResponded && !!respondToInteractionFn
-
-  const handleApprove = useCallback(() => {
-    respondToInteractionFn?.('approve')
-  }, [respondToInteractionFn])
-
-  const handleReject = useCallback(() => {
-    respondToInteractionFn?.('reject')
-  }, [respondToInteractionFn])
-
   return (
     <Flex justify="start" className="w-full">
       <Flex direction="col" className="max-w-[85%]">
         <Flex
           direction="col"
           gap="3"
-          className="bg-surface-sunken-opaque border-base rounded-br-xl rounded-tl-xl rounded-tr-xl border p-4 break-words overflow-hidden"
+          className="bg-surface-sunken-opaque border-base overflow-hidden break-words rounded-br-xl rounded-tl-xl rounded-tr-xl border p-4"
         >
           {/* Agent icon and label */}
           <Flex align="center" gap="2" className={isResponded ? 'opacity-75' : ''}>
@@ -98,36 +76,13 @@ export const AgentPrompt: FC<AgentPromptProps> = ({
           {/* Options list for choice prompts */}
           {options.length > 0 && !isResponded && <OptionsList options={options} />}
 
-          {/* Approve/Reject buttons for plan approval prompts */}
-          {showApprovalButtons && (
-            <Flex justify="end" gap="2">
-              <Button
-                kind="secondary"
-                size="small"
-                color="danger"
-                onClick={handleReject}
-                aria-label="Reject plan"
-              >
-                Reject
-              </Button>
-              <Button
-                kind="secondary"
-                size="small"
-                onClick={handleApprove}
-                aria-label="Approve plan"
-              >
-                Approve
-              </Button>
-            </Flex>
-          )}
-
           {/* Response display (only shown after user responds) */}
           {isResponded && <ResponseDisplay response={response} />}
         </Flex>
 
         {/* Timestamp outside bubble, right-aligned */}
         {timestamp && (
-          <Text kind="body/regular/xs" className="text-subtle mt-1 mr-3 self-end">
+          <Text kind="body/regular/xs" className="text-subtle mr-3 mt-1 self-end">
             {formatTime(timestamp)}
           </Text>
         )}

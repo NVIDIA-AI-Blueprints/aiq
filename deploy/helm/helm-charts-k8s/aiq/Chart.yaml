@@ -3,4 +3,4 @@ appVersion: 2.0.0
 description: AI-Q Helm Chart
 name: aiq
 type: application
-version: "0.0.4"
+version: "0.0.5"

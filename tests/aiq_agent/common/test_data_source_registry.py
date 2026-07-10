@@ -24,6 +24,7 @@ from aiq_agent.common.data_source_registry import get_all_tool_refs
 from aiq_agent.common.data_source_registry import get_source
 from aiq_agent.common.data_source_registry import get_source_id_for_tool
 from aiq_agent.common.data_source_registry import populate_from_config
+from aiq_agent.common.data_source_registry import register_tool_sources
 from aiq_agent.common.data_source_registry import reset_registry
 from aiq_agent.common.data_source_registry import set_group_source_map
 from aiq_agent.common.data_source_registry import set_tool_source_map
@@ -128,6 +129,14 @@ class TestPopulateFromConfig:
         assert get_source_id_for_tool("my_group__tool_b") == "my_group"
         assert get_source_id_for_tool("web_search_tool") is None
 
+    def test_child_tool_matches_data_source_ref_when_group_detection_misses_it(self):
+        """MCP-style child tools still match refs declared under data_sources."""
+        populate_from_config(
+            [{"id": "mcp_time", "name": "MCP Time", "description": "Get current time.", "tools": ["mcp_time"]}]
+        )
+
+        assert get_source_id_for_tool("mcp_time__get_current_time") == "mcp_time"
+
 
 class TestGetAllSources:
     def test_empty_registry(self):
@@ -156,6 +165,27 @@ class TestGetSource:
         meta = get_source("known")
         assert isinstance(meta, DataSourceMeta)
         assert meta.name == "Known"
+
+
+class TestRegisterToolSources:
+    def test_adds_new_mappings(self):
+        register_tool_sources({"gdrive_search": "gdrive"})
+        assert get_source_id_for_tool("gdrive_search") == "gdrive"
+
+    def test_reregistering_same_pair_is_idempotent(self):
+        register_tool_sources({"gdrive_search": "gdrive"})
+        register_tool_sources({"gdrive_search": "gdrive"})
+        assert get_source_id_for_tool("gdrive_search") == "gdrive"
+
+    def test_collision_keeps_existing_owner_and_skips(self, caplog):
+        register_tool_sources({"shared_tool": "source_a"})
+        with caplog.at_level("WARNING"):
+            register_tool_sources({"shared_tool": "source_b", "new_tool": "source_b"})
+
+        # Existing owner preserved; conflicting remap skipped; unrelated key still added.
+        assert get_source_id_for_tool("shared_tool") == "source_a"
+        assert get_source_id_for_tool("new_tool") == "source_b"
+        assert "shared_tool" in caplog.text
 
 
 class TestToolSourceMap:

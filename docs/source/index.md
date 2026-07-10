@@ -39,6 +39,7 @@ Overview <./architecture/index.md>
 Architecture <./architecture/overview.md>
 Agents <./architecture/agents/index.md>
 Data Flow <./architecture/data-flow.md>
+Deep Research Sandbox <./architecture/agents/sandbox.md>
 ```
 
 ```{toctree}
@@ -50,6 +51,7 @@ Configuration Reference <./customization/configuration-reference.md>
 Swapping Models <./customization/swapping-models.md>
 Tools and Sources <./customization/tools-and-sources.md>
 MCP Tools <./customization/mcp-tools.md>
+Guardrails <./customization/guardrails.md>
 Knowledge Layer <./customization/knowledge-layer.md>
 Prompts <./customization/prompts.md>
 Human-in-the-Loop <./customization/hitl.md>
@@ -69,6 +71,7 @@ Adding a Data Source <./extending/adding-a-data-source.md>
 :caption: Integration
 
 Overview <./integration/index.md>
+Agent Skills <./integration/agent-skills.md>
 REST API <./integration/rest-api.md>
 ```
 
@@ -82,14 +85,24 @@ Benchmarks <./evaluation/benchmarks/index.md>
 
 ```{toctree}
 :hidden:
+:caption: Profiling
+
+Profiling & Cost Analysis <./profiling/index.md>
+```
+
+```{toctree}
+:hidden:
 :caption: Deployment
 
 Overview <./deployment/index.md>
 Docker Compose <./deployment/docker-compose.md>
 Docker Build System <./deployment/docker-build.md>
+Authentication <./deployment/authentication.md>
+Async Job Content Encryption <./deployment/content-encryption.md>
 Observability <./deployment/observability.md>
 Production <./deployment/production.md>
 Kubernetes <./deployment/kubernetes.md>
+Amazon OpenSearch Serverless <./deployment/aws-opensearch-serverless.md>
 ```
 
 ```{toctree}
@@ -130,4 +143,5 @@ FAQ <./resources/faq.md>
 ./examples/full-pipeline-web.md
 ./examples/cli-with-local-nims.md
 ./examples/hybrid-frontier-model.md
+./examples/skills-sandbox/index.md
 ```

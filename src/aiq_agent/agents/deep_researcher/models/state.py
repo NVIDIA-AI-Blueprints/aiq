@@ -51,8 +51,8 @@ class DeepResearchAgentState(BaseModel):
         tools_info: Information about available tools.
         todos: Todo list managed by TodoListMiddleware.
         files: Virtual filesystem managed by FilesystemMiddleware.
-        subagents: Status of subagents (planner, researcher) managed by
-            SubAgentMiddleware.
+        subagents: Status of configured DeepAgents subagents.
+        rubric: DeepAgents rubric used by RubricMiddleware when available.
         clarifier_result: Log from clarifier agent dialog.
         available_documents: User-uploaded documents with summaries for context.
     """
@@ -64,5 +64,6 @@ class DeepResearchAgentState(BaseModel):
     todos: list[dict[str, Any]] = Field(default_factory=list)
     files: Annotated[dict[str, Any], _merge_dict_state] = Field(default_factory=dict)
     subagents: list[dict[str, Any]] = Field(default_factory=list)
+    rubric: str | None = None
     clarifier_result: str | None = None
     available_documents: list[AvailableDocument] | None = None

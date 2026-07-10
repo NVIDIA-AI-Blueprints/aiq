@@ -26,29 +26,28 @@
 # =============================================================================
 # Stage 1: Builder (shared between dev and release)
 # =============================================================================
-FROM nvcr.io/nvidia/base/ubuntu:jammy-20251013 AS builder
+FROM nvcr.io/nvidia/base/ubuntu:noble-20260217 AS builder
 
 WORKDIR /app
 
-# Install system dependencies and Python 3.12
+# Install system dependencies and bootstrap Python for uv.
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     tzdata \
     build-essential \
+    ca-certificates \
     curl \
     git \
-    software-properties-common \
-    && add-apt-repository ppa:deadsnakes/ppa \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
-    python3.12 \
-    python3.12-dev \
-    python3.12-venv \
+    python3 \
+    python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN python3.12 -m ensurepip --upgrade \
-    && python3.12 -m pip install --no-cache-dir uv \
-    && ln -sf /usr/bin/python3.12 /usr/local/bin/python \
-    && ln -sf /usr/bin/python3.12 /usr/local/bin/python3
+ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
+
+RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
+    && uv python install 3.13 \
+    && UV_PYTHON_BIN="$(uv python find 3.13)" \
+    && ln -sf "$UV_PYTHON_BIN" /usr/local/bin/python \
+    && ln -sf "$UV_PYTHON_BIN" /usr/local/bin/python3
 
 RUN uv venv /app/.venv --python /usr/local/bin/python
 
@@ -70,13 +69,20 @@ COPY configs/ ./configs/
 # to avoid leaking .env, Helm charts, compose files, or other dev artifacts.
 COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
 
-# Install dependencies using uv sync
-RUN uv sync --frozen --no-dev --no-install-workspace
+# Install dependencies using uv sync. We do NOT pass --no-dev: the workspace
+# source packages (tavily-web-search, exa-web-search, ...) and their runtime
+# deps (e.g. langchain-tavily) are declared in the [dependency-groups] dev group,
+# so --no-dev would omit them and the editable source installs below would
+# import-fail at runtime. Syncing with the dev group installs those deps from the
+# frozen lock (still pinned, no re-resolve). TODO(deploy): move the source
+# packages to a dedicated non-dev group to keep test-only tooling out of the image.
+RUN uv sync --frozen --extra s3
 
 # Install workspace packages (without CLI for base)
 RUN uv pip install --no-deps -e . \
     && uv pip install --no-deps -e ./sources/google_scholar_paper_search \
     && uv pip install --no-deps -e ./sources/tavily_web_search \
+    && uv pip install --no-deps -e ./sources/exa_web_search \
     && uv pip install --no-deps -e "./sources/knowledge_layer[all]" \
     && uv pip install --no-deps -e ./frontends/aiq_api \
     && uv pip install "psycopg[binary]>=3.0.0"
@@ -101,10 +107,11 @@ RUN /app/.venv/bin/python -c "import aiq_api; import aiq_research_cli; import ai
 # =============================================================================
 # Stage 3: Development runtime
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.12-v4.0.4 AS dev
+FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS dev
 
 WORKDIR /app
 
+COPY --from=dev-builder /opt/uv-python /opt/uv-python
 COPY --from=dev-builder /app /app
 
 USER 1000:1000
@@ -120,11 +127,12 @@ ENTRYPOINT ["python", "/app/deploy/entrypoint.py"]
 # =============================================================================
 # Stage 4: Release (production - no CLI)
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.12-v4.0.4 AS release
+FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS release
 
 WORKDIR /app
 
 # Copy from base builder (no CLI)
+COPY --from=builder /opt/uv-python /opt/uv-python
 COPY --from=builder /app /app
 
 USER 1000:1000

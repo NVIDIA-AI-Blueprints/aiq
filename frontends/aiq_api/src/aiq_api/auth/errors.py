@@ -24,3 +24,17 @@ class AuthError(Exception):
     (e.g. missing token, expired token, insufficient permissions) to ensure
     actionable error messages reach the caller rather than a generic fallback.
     """
+
+    error_code: str = "auth_error"
+
+
+class TokenExpiredError(AuthError):
+    """Token signature is valid but the ``exp`` claim has passed."""
+
+    error_code = "token_expired"
+
+
+class TokenInvalidError(AuthError):
+    """Token is malformed, has an invalid signature, or fails claim checks."""
+
+    error_code = "token_invalid"

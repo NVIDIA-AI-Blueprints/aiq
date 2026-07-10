@@ -53,11 +53,12 @@ from nat.front_ends.fastapi.fastapi_front_end_plugin import FastApiFrontEndPlugi
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorkerBase
 
-from .jobs import EventStore
-from .jobs import get_connection_manager
+from .jobs.connection_manager import get_connection_manager
+from .jobs.event_store import EventStore
 from .routes.collections import add_collection_routes
 from .routes.documents import add_document_routes
 from .routes.jobs import register_job_routes
+from .websocket_reconnect import configure_websocket_auth
 from .websocket_reconnect import install_reconnectable_handler
 
 logger = logging.getLogger(__name__)
@@ -215,6 +216,7 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
                 "or declare an 'aiq_api.validators' entry point in your package."
             )
         app.add_middleware(AuthMiddleware, validators=validators, require_auth=require_auth)
+        configure_websocket_auth(validators=validators, require_auth=require_auth)
         logger.info(
             "AuthMiddleware registered (require_auth=%s, validators=%s)",
             require_auth,
@@ -251,13 +253,17 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
 
             self._restore_signal_handlers()
 
-        try:
-            from aiq_debug import register_debug_routes
+        enable_debug = os.environ.get("AIQ_ENABLE_DEBUG", "true").lower() not in {"0", "false", "no", "off"}
+        if enable_debug:
+            try:
+                from aiq_debug import register_debug_routes
 
-            await register_debug_routes(app)
-            logger.info("Debug console registered at /debug")
-        except ImportError:
-            pass
+                await register_debug_routes(app)
+                logger.info("Debug console registered at /debug")
+            except ImportError:
+                pass
+        else:
+            logger.info("Debug console disabled by AIQ_ENABLE_DEBUG")
 
     def _install_signal_handlers(self):
         """Install signal handlers to notify SSE connections on shutdown."""

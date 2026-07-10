@@ -32,9 +32,9 @@ functions:
           - eci
 ```
 
-The `GET /v1/data_sources` API endpoint returns these entries, which the UI renders as toggles. When a user sends a message with `data_sources: ["web_search"]`, only tools belonging to that source are active for that request.
+The `GET /v1/data_sources` API endpoint returns these entries, which the UI renders as toggles. Clients can scope a request to a subset by passing `data_sources: ["web_search"]` in the WebSocket chat payload or in the body of `POST /v1/jobs/async/submit`; only tools belonging to selected sources are active for that request.
 
-Tools not listed in any data source entry (e.g., utility tools like "think") are always included regardless of filtering.
+Tools not listed in any data source entry (e.g., utility tools like "think") are always included regardless of filtering. Passing an explicit empty list (`data_sources: []`) -- in the WebSocket chat payload or in a `POST /v1/jobs/async/submit` body -- disables data-source tools while leaving those unmapped utility tools available.
 
 ### Source Entry Fields
 

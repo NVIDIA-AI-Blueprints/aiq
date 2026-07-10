@@ -364,9 +364,27 @@ class TestGenericUrlExtractor:
             entries = extract_sources_from_tool_result(name, content)
             assert len(entries) == 1, f"Failed for tool name: {name}"
 
-    def test_empty_content_returns_empty(self):
+    def test_no_results_status_without_source_id_is_not_citable(self):
+        """No-results status text is not evidence and should not produce a source."""
         entries = extract_sources_from_tool_result("any_tool", "Search returned no results")
-        assert len(entries) == 0
+        assert entries == []
+
+    def test_no_results_status_with_source_id_is_not_citable(self):
+        """source_id does not make source status text citable evidence."""
+        entries = extract_sources_from_tool_result(
+            "duckduckgo_news_search_tool",
+            "News search returned no results",
+            source_id="news_search",
+        )
+        assert entries == []
+
+    def test_error_status_is_not_citable(self):
+        entries = extract_sources_from_tool_result(
+            "duckduckgo_news_search_tool",
+            "Error: News search failed",
+            source_id="news_search",
+        )
+        assert entries == []
 
     def test_duplicate_urls_deduplicated(self):
         content = "See https://example.com/page and also https://example.com/page for reference."
@@ -395,6 +413,39 @@ class TestGenericUrlExtractor:
         entries = extract_sources_from_tool_result("web_search", content)
         assert len(entries) == 1
         assert entries[0].title == "Correct Title"
+
+    def test_url_with_commas_in_path(self):
+        """Commas inside URL paths (e.g., lat/lon coordinates) must not truncate the URL.
+
+        Regression: the generic URL regex previously excluded ``,`` from the
+        character class, so an FAA cam URL like
+        ``https://weathercams.faa.gov/map/-122.31167,47.22287,10/...`` was
+        registered as ``https://weathercams.faa.gov/map/-122.31167``. The LLM
+        would then cite the full URL, the verifier would compare full vs.
+        truncated, and the citation would be silently removed as
+        ``url_not_in_registry``.
+        """
+        full_url = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
+        content = f'<Document href="{full_url}">\n<title>\nFAA Cam\n</title>\nObservation.\n</Document>'
+        entries = extract_sources_from_tool_result("tavily_web_search", content)
+        assert len(entries) == 1
+        assert entries[0].url == full_url
+
+    def test_trailing_comma_still_trimmed(self):
+        """A comma immediately followed by whitespace is still treated as
+        sentence punctuation and stripped from the captured URL."""
+        content = "See https://example.com/page, then continue reading."
+        entries = extract_sources_from_tool_result("any_tool", content)
+        assert len(entries) == 1
+        assert entries[0].url == "https://example.com/page"
+
+    def test_markdown_bracket_still_terminates(self):
+        """``]`` continues to terminate a URL match so markdown links don't
+        leak the closing bracket into the captured URL."""
+        content = "[See here](https://example.com/page) for details."
+        entries = extract_sources_from_tool_result("any_tool", content)
+        assert len(entries) == 1
+        assert entries[0].url == "https://example.com/page"
 
 
 class TestKnowledgeLayerParser:
@@ -440,9 +491,21 @@ class TestKnowledgeLayerParser:
 class TestParserDispatcher:
     """Tests for parser dispatcher and fallback behavior."""
 
-    def test_unknown_tool_no_urls_returns_empty(self):
-        entries = extract_sources_from_tool_result("totally_unknown_tool", "some content without links")
+    def test_tool_without_content_returns_empty(self):
+        entries = extract_sources_from_tool_result("weather_observation_tool", "   ", source_id="weather")
+
         assert entries == []
+
+    def test_data_source_tool_without_urls_registers_tool_result_source(self):
+        entries = extract_sources_from_tool_result(
+            "weather_observation_tool", "Visibility: 10 miles", source_id="weather"
+        )
+
+        assert len(entries) == 1
+        assert entries[0].url is None
+        assert entries[0].citation_key == "weather_observation_tool"
+        assert entries[0].source_type == "tool_result"
+        assert entries[0].tool_name == "weather_observation_tool"
 
     def test_unknown_tool_with_urls_extracts_them(self):
         """Generic fallback extracts URLs from any unknown tool."""
@@ -491,6 +554,110 @@ class TestVerifyCitations:
         result = verify_citations(report, registry)
         assert result.verified_report == report
 
+    def test_missing_references_section_with_inline_citations_does_not_guess_from_registry_order(self, registry):
+        report = "Finding one [1]. Finding two [2]."
+        result = verify_citations(report, registry)
+
+        assert result.verified_report == report
+        assert not result.valid_citations
+        assert not result.removed_citations
+
+    def test_missing_references_section_with_reference_sources_appends_sources(self, registry):
+        report = "Finding one [1]. Finding two [2]."
+        result = verify_citations(report, registry, reference_sources=registry.all_sources())
+
+        assert result.verified_report.startswith(report)
+        assert "## Sources" in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_missing_references_section_strips_unresolved_inline_citations(self, registry):
+        report = "Finding one [1]. Missing source [3]. Finding two [2]."
+        result = verify_citations(report, registry, reference_sources=registry.all_sources()[:2])
+
+        assert "Missing source." in result.verified_report
+        assert "[3]" not in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_missing_references_section_uses_reference_sources_not_registry_order(self):
+        reg = SourceRegistry()
+        unused = SourceEntry(url="https://valid.com/unused", title="Unused", source_type="tavily")
+        compact_one = SourceEntry(url="https://valid.com/compact-one", title="Compact One", source_type="tavily")
+        compact_two = SourceEntry(url="https://valid.com/compact-two", title="Compact Two", source_type="tavily")
+        reg.add(unused)
+        reg.add(compact_one)
+        reg.add(compact_two)
+
+        report = "Finding one [1]. Finding two [2]."
+        result = verify_citations(report, reg, reference_sources=[compact_one, compact_two])
+
+        assert "[1] Compact One: https://valid.com/compact-one" in result.verified_report
+        assert "[2] Compact Two: https://valid.com/compact-two" in result.verified_report
+        assert "Unused" not in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_footnote_inline_citations_are_normalized_before_appending_sources(self, registry):
+        report = "Finding one [^1]. Finding two [^2]."
+        result = verify_citations(report, registry, reference_sources=registry.all_sources())
+
+        assert "Finding one [1]. Finding two [2]." in result.verified_report
+        assert "[^1]" not in result.verified_report
+        assert "## Sources" in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_footnote_reference_lines_are_normalized(self, registry):
+        report = (
+            "Finding one [^1]. Finding two [^2].\n\n"
+            "## Sources\n"
+            "[^1]: Article 1: https://valid.com/article1\n"
+            "[^2]: Article 2: https://valid.com/article2"
+        )
+        result = verify_citations(report, registry)
+
+        assert "Finding one [1]. Finding two [2]." in result.verified_report
+        assert "[^" not in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_source_location_citations_are_normalized_before_appending_sources(self, registry):
+        report = "Finding one \u30101\u2020L2-L4\u3011. Finding two \u30102\u2020L56-L60\u3011."
+        result = verify_citations(report, registry, reference_sources=registry.all_sources())
+
+        assert "Finding one [1]. Finding two [2]." in result.verified_report
+        assert "\u2020" not in result.verified_report
+        assert "## Sources" in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_source_location_reference_lines_are_normalized(self, registry):
+        report = (
+            "Finding one \u30101\u2020L2-L4\u3011. Finding two \u30102\u2020L56-L60\u3011.\n\n"
+            "## Sources\n"
+            "\u30101\u2020L2-L4\u3011 Article 1: https://valid.com/article1\n"
+            "\u30102\u2020L56-L60\u3011 Article 2: https://valid.com/article2"
+        )
+        result = verify_citations(report, registry)
+
+        assert "Finding one [1]. Finding two [2]." in result.verified_report
+        assert "\u2020" not in result.verified_report
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
     def test_valid_citations_preserved(self, registry):
         report = (
             "Finding one [1]. Finding two [2].\n\n"
@@ -502,6 +669,98 @@ class TestVerifyCitations:
         assert "[1]" in result.verified_report
         assert "[2]" in result.verified_report
         assert len(result.valid_citations) == 2
+        assert len(result.removed_citations) == 0
+
+    def test_plain_sources_heading_and_collapsed_lines_are_normalized(self, registry):
+        report = (
+            "Finding one [1]. Finding two [2].\n\n"
+            "Sources\n"
+            "[1] Article 1: https://valid.com/article1 [2] Article 2: https://valid.com/article2"
+        )
+        result = verify_citations(report, registry)
+
+        assert "## Sources\n[1] Article 1: https://valid.com/article1\n" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_bracketed_year_in_source_title_is_not_split(self, registry):
+        report = "Finding [1].\n\n## Sources\n[1] Semiconductor outlook [2024] update: https://valid.com/article1"
+        result = verify_citations(report, registry)
+
+        assert "[1] Semiconductor outlook [2024] update: https://valid.com/article1" in result.verified_report
+        assert len(result.valid_citations) == 1
+        assert not result.removed_citations
+
+    def test_bare_sources_line_does_not_terminate_body_before_marked_sources(self, registry):
+        report = (
+            "Summary.\n"
+            "Sources\n"
+            "This sentence is part of the report body and should stay there [1].\n\n"
+            "## Sources\n"
+            "[1] Article 1: https://valid.com/article1"
+        )
+        result = verify_citations(report, registry)
+
+        assert result.verified_report.startswith(
+            "Summary.\nSources\nThis sentence is part of the report body and should stay there [1]."
+        )
+        assert len(result.valid_citations) == 1
+        assert not result.removed_citations
+
+    def test_ordered_list_references_are_normalized_and_verified(self, registry):
+        report = (
+            "Finding one [1]. Finding two [2].\n\n"
+            "## Sources\n"
+            "1. Article 1: https://valid.com/article1\n"
+            "2. Article 2: https://valid.com/article2"
+        )
+        result = verify_citations(report, registry)
+
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_invalid_ordered_list_reference_is_removed(self, registry):
+        report = (
+            "Good finding [1]. Bad finding [2].\n\n"
+            "## Sources\n"
+            "1. Article 1: https://valid.com/article1\n"
+            "2. Fake Source: https://fake.com/nonexistent"
+        )
+        result = verify_citations(report, registry)
+
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["number"] == 2
+        assert result.removed_citations[0]["reason"] == "url_not_in_registry"
+        assert "Good finding [1]. Bad finding." in result.verified_report
+        assert "Fake Source" not in result.verified_report
+
+    def test_ordered_list_parenthesis_references_are_normalized_and_verified(self, registry):
+        report = "Finding [1].\n\n## Sources\n1) Article 1: https://valid.com/article1"
+        result = verify_citations(report, registry)
+
+        assert "[1] Article 1: https://valid.com/article1" in result.verified_report
+        assert len(result.valid_citations) == 1
+        assert not result.removed_citations
+
+    def test_url_in_markdown_brackets_still_verifies(self, registry):
+        """Regression: when the LLM wraps a citation URL in markdown brackets
+        (``[https://valid.com/article1]``), the verifier captured the trailing
+        ``]`` as part of the URL and then failed to resolve it against the
+        registry, silently removing an otherwise-valid citation."""
+        report = "Finding [1].\n\n## Sources\n[1] Article 1: [https://valid.com/article1]"
+        result = verify_citations(report, registry)
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 0
+
+    def test_url_in_angle_brackets_still_verifies(self, registry):
+        """Same idea as above for ``<https://...>`` Markdown-style autolinks."""
+        report = "Finding [1].\n\n## Sources\n[1] Article 1: <https://valid.com/article1>"
+        result = verify_citations(report, registry)
+        assert len(result.valid_citations) == 1
         assert len(result.removed_citations) == 0
 
     def test_invalid_citation_removed(self, registry):
@@ -519,6 +778,31 @@ class TestVerifyCitations:
         assert "[2]" not in result.verified_report
         # [1] stays as [1]
         assert "[1]" in result.verified_report
+
+    def test_unreferenced_inline_citation_removed(self, registry):
+        report = "Good finding [1]. Missing reference [3].\n\n## Sources\n[1] Article 1: https://valid.com/article1"
+        result = verify_citations(report, registry)
+
+        assert "Missing reference." in result.verified_report
+        assert "[3]" not in result.verified_report
+        assert len(result.valid_citations) == 1
+        assert not result.removed_citations
+
+    def test_unreferenced_inline_citation_removed_with_invalid_reference(self, registry):
+        report = (
+            "Good finding [1]. Bad finding [2]. Missing reference [3].\n\n"
+            "## Sources\n"
+            "[1] Article 1: https://valid.com/article1\n"
+            "[2] Fake Source: https://fake.com/nonexistent"
+        )
+        result = verify_citations(report, registry)
+
+        assert "Bad finding." in result.verified_report
+        assert "Missing reference." in result.verified_report
+        assert "[2]" not in result.verified_report
+        assert "[3]" not in result.verified_report
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 1
 
     def test_removal_leaves_gaps_for_sanitize(self, registry):
         """verify_citations removes invalid refs but does NOT renumber — gaps are left for sanitize_report."""
@@ -633,6 +917,184 @@ class TestVerifyCitations:
         assert len(result.valid_citations) == 1
         assert "https://arxiv.org/abs/1706.03762" in result.verified_report
 
+    def test_duplicate_tool_result_refs_collapse_to_single_citation(self):
+        """Two [N] lines that resolve to the same non-URL tool_result source are merged.
+
+        The model often makes the same tool call twice (e.g. for two
+        timezones) and emits two separate ``[N] mcp_time__get_current_time``
+        reference lines. Both lines resolve to the single registered
+        SourceEntry for that tool, so verify_citations should keep one and
+        rewrite the body's ``[2]`` to ``[1]`` so the prose still cites the
+        source.
+        """
+        reg = SourceRegistry()
+        reg.add(
+            SourceEntry(
+                citation_key="mcp_time__get_current_time",
+                source_type="tool_result",
+                tool_name="mcp_time__get_current_time",
+            )
+        )
+        report = (
+            "Time in Mumbai [1].\n"
+            "Time in Tokyo [2].\n\n"
+            "**References**\n"
+            "- [1] mcp_time__get_current_time\n"
+            "- [2] mcp_time__get_current_time"
+        )
+
+        result = verify_citations(report, reg)
+
+        assert len(result.valid_citations) == 1
+        # The duplicate is recorded as removed for audit, with a clear reason.
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["reason"].startswith("duplicate_of_citation_")
+        # Body keeps a citation for both sentences — the second [2] is
+        # rewritten to [1] rather than stripped, since the source is real.
+        assert "Time in Mumbai [1]." in result.verified_report
+        assert "Time in Tokyo [1]." in result.verified_report
+        # Reference section keeps exactly one entry for the source.
+        ref_section = result.verified_report.split("## Sources", 1)[1]
+        assert ref_section.count("mcp_time__get_current_time") == 1
+        assert "[2]" not in ref_section
+
+    def test_duplicate_url_refs_collapse_to_single_citation(self):
+        """Two [N] lines pointing at the same URL are merged.
+
+        Latent variant of the tool_result case: even URL-based citations
+        should collapse when the model emits the same source twice.
+        """
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url="https://valid.com/article1", title="Article 1", source_type="tavily"))
+        report = (
+            "Finding A [1]. Finding B [2].\n\n"
+            "## Sources\n"
+            "[1] Article 1: https://valid.com/article1\n"
+            "[2] Article 1: https://valid.com/article1"
+        )
+
+        result = verify_citations(report, reg)
+
+        assert len(result.valid_citations) == 1
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["reason"].startswith("duplicate_of_citation_")
+        assert "Finding A [1]." in result.verified_report
+        assert "Finding B [1]." in result.verified_report
+        ref_section = result.verified_report.split("## Sources", 1)[1]
+        assert ref_section.count("[1]") == 1
+        assert "[2]" not in ref_section
+
+    def test_dedup_keeps_lowest_number_when_duplicates_appear_after_unique(self):
+        """Mixed: [1] valid URL A, [2] dup of [1], [3] valid URL B.
+
+        After verify_citations, [2] should be merged into [1] and [3] should
+        survive. Renumbering happens later in sanitize_report.
+        """
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url="https://valid.com/article1", title="Article 1", source_type="tavily"))
+        reg.add(SourceEntry(url="https://valid.com/article2", title="Article 2", source_type="tavily"))
+        report = (
+            "A [1]. B [2]. C [3].\n\n"
+            "## Sources\n"
+            "[1] Article 1: https://valid.com/article1\n"
+            "[2] Article 1: https://valid.com/article1\n"
+            "[3] Article 2: https://valid.com/article2"
+        )
+
+        result = verify_citations(report, reg)
+
+        assert len(result.valid_citations) == 2
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["number"] == 2
+        # Body: B's [2] becomes [1]; A and C unchanged.
+        assert "A [1]. B [1]. C [3]." in result.verified_report
+        ref_section = result.verified_report.split("## Sources", 1)[1]
+        assert ref_section.count("[1]") == 1
+        assert "[2]" not in ref_section
+        assert ref_section.count("[3]") == 1
+
+
+class TestVerifyCitationsBackfill:
+    """Backfill of URL-less ``[N] Title`` lines from the writer-facing list.
+
+    The writer sometimes emits ``[N] Title`` and drops the ``: url`` suffix.
+    These tests cover recovering the URL from ``reference_sources`` (same
+    captured registry) without weakening precision.
+    """
+
+    @pytest.fixture(name="registry")
+    def fixture_registry(self):
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url="https://amd.com/q1-2024", title="AMD Q1 2024 Financial Results", source_type="tavily"))
+        reg.add(SourceEntry(url="https://meta.com/q1-2024", title="Meta Q1 2024 Results", source_type="tavily"))
+        reg.add(SourceEntry(citation_key="report.pdf, p.15", title="Internal Report", source_type="knowledge_layer"))
+        return reg
+
+    def test_url_less_lines_backfilled_from_reference_sources(self, registry):
+        report = (
+            "AMD spent more [1]. Meta followed [2].\n\n"
+            "## Sources\n"
+            "[1] AMD Q1 2024 Financial Results\n"
+            "[2] Meta Q1 2024 Results"
+        )
+        result = verify_citations(report, registry, reference_sources=registry.all_sources())
+
+        assert "[1] AMD Q1 2024 Financial Results: https://amd.com/q1-2024" in result.verified_report
+        assert "[2] Meta Q1 2024 Results: https://meta.com/q1-2024" in result.verified_report
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
+    def test_backfill_recovers_url_less_citation_key_source(self, registry):
+        report = "Per the internal report [1].\n\n## Sources\n[1] Internal Report"
+        result = verify_citations(report, registry, reference_sources=registry.all_sources())
+
+        assert len(result.valid_citations) == 1
+        assert result.valid_citations[0]["citation_key"] == "report.pdf, p.15"
+        assert not result.removed_citations
+        assert "[1]" in result.verified_report.split("## Sources", 1)[1]
+
+    def test_url_less_line_without_matching_reference_still_removed(self, registry):
+        report = "Claim [1].\n\n## Sources\n[1] Some Source The Writer Invented"
+        result = verify_citations(report, registry, reference_sources=registry.all_sources())
+
+        assert not result.valid_citations
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["reason"] == "unverifiable"
+
+    def test_ambiguous_title_not_backfilled(self):
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url="https://a.com/one", title="Quarterly Update", source_type="tavily"))
+        reg.add(SourceEntry(url="https://b.com/two", title="Quarterly Update", source_type="tavily"))
+        report = "Claim [1].\n\n## Sources\n[1] Quarterly Update"
+        result = verify_citations(report, reg, reference_sources=reg.all_sources())
+
+        assert not result.valid_citations
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["reason"] == "unverifiable"
+
+    def test_aggregate_label_not_resurrected(self):
+        reg = SourceRegistry()
+        reg.add(SourceEntry(url="https://cnn.com/biz", title="CNN", source_type="tavily"))
+        report = "Markets moved [1].\n\n## Sources\n[1] CNN; Yahoo Finance; Barchart"
+        result = verify_citations(report, reg, reference_sources=reg.all_sources())
+
+        assert not result.valid_citations
+        assert len(result.removed_citations) == 1
+        assert result.removed_citations[0]["reason"] == "unverifiable"
+
+    def test_existing_url_and_key_paths_unchanged_without_reference_sources(self, registry):
+        report = (
+            "AMD [1]. Doc [2].\n\n"
+            "## Sources\n"
+            "[1] AMD Q1 2024 Financial Results: https://amd.com/q1-2024\n"
+            "[2] report.pdf, p.15"
+        )
+        result = verify_citations(report, registry)
+
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+        assert "https://amd.com/q1-2024" in result.verified_report
+
 
 # ---------------------------------------------------------------------------
 # sanitize_report tests
@@ -655,6 +1117,19 @@ class TestSanitizeReport:
         assert "https://nvidia.com/article" in result.sanitized_report
         assert result.body_urls_removed == 1
         assert result.body_urls_replaced == 0
+
+    def test_body_url_with_commas_matched_to_reference(self):
+        """Regression: ``_BODY_URL_RE`` previously stopped at the first comma,
+        so a bare body URL with commas in its path was truncated, only the
+        prefix got replaced with ``[N]``, and the rest of the URL was left as
+        dangling text in the sanitized report."""
+        full_url = "https://weathercams.faa.gov/map/-122.31167,47.22287,10/airport/SEA/details/weather"
+        report = f"Live cam at {full_url} confirms it [1].\n\n## Sources\n[1] FAA cam: {full_url}"
+        result = sanitize_report(report)
+        assert "Live cam at [1] confirms it [1]" in result.sanitized_report
+        # No fragment of the URL should be left dangling in the body
+        assert ",47.22287" not in result.sanitized_report.split("## Sources", 1)[0]
+        assert result.body_urls_replaced == 1
 
     def test_body_url_matching_ref_replaced_with_citation(self):
         """Bare body URL matching a reference is replaced with [N]."""
@@ -692,6 +1167,38 @@ class TestSanitizeReport:
         result = sanitize_report(report)
         assert result.body_urls_removed == 0
         assert "Finding [1]" in result.sanitized_report
+
+    def test_plain_sources_heading_and_collapsed_lines_are_sanitized(self):
+        report = (
+            "Finding [1]. Another finding [2].\n\n"
+            "Sources\n"
+            "[1] Title: https://example.com/article [2] Title: https://other.com/page"
+        )
+        result = sanitize_report(report)
+
+        assert "## Sources\n[1] Title: https://example.com/article\n" in result.sanitized_report
+        assert "[2] Title: https://other.com/page" in result.sanitized_report
+
+    def test_bracketed_year_in_sanitized_source_title_is_not_split(self):
+        report = "Finding [1].\n\n## Sources\n[1] Semiconductor outlook [2024] update: https://example.com/article"
+        result = sanitize_report(report)
+
+        assert "[1] Semiconductor outlook [2024] update: https://example.com/article" in result.sanitized_report
+
+    def test_bare_sources_line_does_not_terminate_sanitized_body_before_marked_sources(self):
+        report = (
+            "Summary.\n"
+            "Sources\n"
+            "This sentence is part of the report body and should stay there [1].\n\n"
+            "## Sources\n"
+            "[1] Title: https://example.com/article"
+        )
+        result = sanitize_report(report)
+
+        assert result.sanitized_report.startswith(
+            "Summary.\nSources\nThis sentence is part of the report body and should stay there [1]."
+        )
+        assert "## Sources\n[1] Title: https://example.com/article" in result.sanitized_report
 
     def test_shortened_url_removed_from_references(self):
         report = "Finding [1].\n\n## Sources\n[1] Article: https://bit.ly/abc123"
