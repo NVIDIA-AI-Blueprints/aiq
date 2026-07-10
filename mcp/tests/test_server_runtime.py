@@ -173,6 +173,7 @@ def test_settings_defaults_and_overrides(tmp_path: Path) -> None:
     assert defaults.workers == 1
     assert defaults.log_level == "INFO"
     assert defaults.cors_origins == ("http://localhost:6274",)
+    assert defaults.max_query_chars == 8000
     assert "localhost:*" in defaults.allowed_hosts
     assert "127.0.0.1:*" in defaults.allowed_hosts
     assert "http://localhost:*" in defaults.allowed_origins
@@ -188,6 +189,7 @@ def test_settings_defaults_and_overrides(tmp_path: Path) -> None:
             "AIQ_MCP_LOG_LEVEL": "warning",
             "AIQ_MCP_CONFIG": str(config_path),
             "AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS": "4.5",
+            "AIQ_MCP_MAX_QUERY_CHARS": "2000",
             "AIQ_MCP_CORS_ORIGINS": "http://localhost:6274, https://inspector.example",
             "AIQ_MCP_ALLOWED_HOSTS": "research.example.com,research.example.com:*",
             "AIQ_MCP_ALLOWED_ORIGINS": "https://research.example.com",
@@ -201,6 +203,7 @@ def test_settings_defaults_and_overrides(tmp_path: Path) -> None:
         log_level="WARNING",
         config_path=config_path.resolve(),
         shallow_inline_wait_seconds=4.5,
+        max_query_chars=2000,
         cors_origins=("http://localhost:6274", "https://inspector.example"),
         allowed_hosts=("research.example.com", "research.example.com:*"),
         allowed_origins=(
@@ -293,6 +296,8 @@ def test_load_env_file_warns_for_missing_explicit_path(
         ({"AIQ_MCP_LOG_LEVEL": "verbose"}, "AIQ_MCP_LOG_LEVEL"),
         ({"AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS": "-1"}, "AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS"),
         ({"AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS": "nan"}, "finite"),
+        ({"AIQ_MCP_MAX_QUERY_CHARS": "0"}, "AIQ_MCP_MAX_QUERY_CHARS"),
+        ({"AIQ_MCP_MAX_QUERY_CHARS": "not-a-count"}, "AIQ_MCP_MAX_QUERY_CHARS"),
         ({"AIQ_MCP_ALLOWED_HOSTS": ""}, "AIQ_MCP_ALLOWED_HOSTS"),
     ],
 )
@@ -915,6 +920,26 @@ async def test_default_shallow_inline_timeout_returns_exact_zero_cadence_contrac
         "estimated_duration_seconds": 0,
         "first_poll_after_seconds": 0,
     }
+
+
+@pytest.mark.asyncio
+async def test_submit_query_rejects_oversized_query_before_enqueue(tmp_path: Path) -> None:
+    events: list[str] = []
+    jobs = _Jobs(events)
+    runtime = server.MCPRuntime(
+        _settings(tmp_path, max_query_chars=10),
+        jobs_factory=lambda: jobs,
+        validate_startup=lambda: None,
+    )
+    runtime.jobs = jobs
+
+    with pytest.raises(ValueError, match="11 characters exceeds the 10-character limit"):
+        await runtime.submit_query(None, "x" * 11)  # type: ignore[arg-type]
+    assert jobs.calls == []
+
+    boundary = await runtime.submit_query(None, "x" * 10)  # type: ignore[arg-type]
+    assert boundary["state"] == "queued"
+    assert jobs.calls == [("submit", "x" * 10, "anonymous")]
 
 
 @pytest.mark.asyncio

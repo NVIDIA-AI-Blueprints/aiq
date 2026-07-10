@@ -50,8 +50,10 @@ RUN --mount=type=cache,id=aiq-mcp-uv,target=/root/.cache/uv,sharing=locked \
         --no-editable \
         --python /usr/local/bin/python
 
-RUN /opt/venv/bin/python mcp/scripts/check_runtime_dependencies.py \
-    && /opt/venv/bin/python -c "import importlib; from importlib.metadata import entry_points, version; [importlib.import_module(name) for name in ('aiq_mcp', 'aiq_mcp.server', 'aiq_mcp.jobs', 'aiq_mcp.job_store', 'aiq_mcp.workflow_runner', 'aiq_agent.common', 'tavily_web_search', 'knowledge_layer', 'asyncpg')]; assert version('mcp') == '1.27.2'; assert version('nvidia-nat-core') == '1.8.0'; assert any(ep.name == 'tavily_web_search' for ep in entry_points(group='nat.plugins')); print('AI-Q MCP runtime verified')"
+# The import canary loads aiq_mcp.server, which resolves its workflow config at
+# import time; point it at the same config the release image ships.
+RUN AIQ_MCP_CONFIG=/app/configs/config_mcp.yml \
+    /opt/venv/bin/python mcp/scripts/check_runtime_dependencies.py --verify-imports
 
 FROM ${PYTHON_IMAGE} AS release
 

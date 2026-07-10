@@ -869,19 +869,23 @@ async def run_agent_job(
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
+        # Persist only the exception class name: raw messages can embed
+        # credentials or internal hostnames, and both the event stream and the
+        # stored status are surfaced to the job's caller.
+        sanitized_error = f"job failed ({type(e).__name__}); check server logs for details"
         await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
         _store_terminal_event_best_effort(
             event_store,
             {
                 "type": "job.error",
                 "data": {
-                    "error": str(e),
+                    "error": sanitized_error,
                     "error_type": type(e).__name__,
                 },
             },
         )
         if job_store:
-            await job_store.update_status(job_id, JobStatus.FAILURE, error=str(e))
+            await job_store.update_status(job_id, JobStatus.FAILURE, error=sanitized_error)
 
     finally:
         # Ensure terminal-path events are not left in the batch buffer.

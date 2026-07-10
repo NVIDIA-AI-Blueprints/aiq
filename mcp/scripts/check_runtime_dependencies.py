@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from importlib.metadata import distributions
 from typing import Any
 
@@ -18,6 +19,28 @@ _ALLOWED_INCOMPATIBILITIES = {
     ("nvidia-nat-core", "1.8.0", "cryptography", "48.0.1", "<47,>=46.0.6"),
     ("oci", "2.178.0", "cryptography", "48.0.1", "<47.0.0,>=3.2.1"),
 }
+
+# Release-image import canary: every module the server needs at runtime must be
+# importable from the production closure, the release pins must match exactly,
+# and the NAT plugin entry point must be discoverable. Importing aiq_mcp.server
+# requires AIQ_MCP_CONFIG (or a source checkout) because the module builds its
+# default ASGI app at import time.
+_REQUIRED_IMPORTS = (
+    "aiq_mcp",
+    "aiq_mcp.server",
+    "aiq_mcp.jobs",
+    "aiq_mcp.job_store",
+    "aiq_mcp.workflow_runner",
+    "aiq_agent.common",
+    "tavily_web_search",
+    "knowledge_layer",
+    "asyncpg",
+)
+_PINNED_RELEASE_VERSIONS = {
+    "mcp": "1.27.2",
+    "nvidia-nat-core": "1.8.0",
+}
+_REQUIRED_ENTRY_POINTS = (("nat.plugins", "tavily_web_search"),)
 
 
 def validate_dependency_records(
@@ -82,12 +105,36 @@ def validate_environment() -> dict[str, list[str]]:
     return validate_dependency_records(records, installed_versions)
 
 
-def main() -> int:
+def verify_runtime_imports() -> None:
+    import importlib
+    from importlib.metadata import entry_points
+    from importlib.metadata import version
+
+    for module_name in _REQUIRED_IMPORTS:
+        importlib.import_module(module_name)
+    for distribution_name, pinned in _PINNED_RELEASE_VERSIONS.items():
+        installed = version(distribution_name)
+        if installed != pinned:
+            raise ValueError(f"release pin mismatch: {distribution_name}=={installed}, expected {pinned}")
+    for group, name in _REQUIRED_ENTRY_POINTS:
+        if not any(entry_point.name == name for entry_point in entry_points(group=group)):
+            raise ValueError(f"missing entry point: {name} in group {group}")
+
+
+def main(argv: list[str] | None = None) -> int:
+    arguments = sys.argv[1:] if argv is None else argv
+    unknown = [argument for argument in arguments if argument != "--verify-imports"]
+    if unknown:
+        raise SystemExit(f"unknown arguments: {unknown}")
     try:
         result = validate_environment()
+        if "--verify-imports" in arguments:
+            verify_runtime_imports()
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
     print(json.dumps(result, sort_keys=True))
+    if "--verify-imports" in arguments:
+        print("AI-Q MCP runtime verified")
     return 0
 
 

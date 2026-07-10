@@ -13,6 +13,8 @@ import pytest
 _SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "check_runtime_dependencies.py"
 _NAMESPACE = runpy.run_path(str(_SCRIPT), run_name="dependency_policy_test")
 validate_dependency_records = _NAMESPACE["validate_dependency_records"]
+verify_runtime_imports = _NAMESPACE["verify_runtime_imports"]
+script_main = _NAMESPACE["main"]
 
 
 def _records() -> list[dict[str, object]]:
@@ -73,3 +75,45 @@ def test_resolved_override_must_be_removed_from_policy() -> None:
 def test_missing_dependency_fails() -> None:
     with pytest.raises(ValueError, match="missing installed dependency"):
         validate_dependency_records(_records(), {})
+
+
+def test_verify_runtime_imports_accepts_frozen_environment() -> None:
+    # The mcp test environment resolves from the same frozen lock as the
+    # release image, so the release import canary must pass here too.
+    verify_runtime_imports()
+
+
+def test_verify_runtime_imports_rejects_release_pin_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    from importlib.metadata import version as real_version
+
+    def fake_version(name: str) -> str:
+        if name == "mcp":
+            return "0.0.0"
+        return real_version(name)
+
+    monkeypatch.setattr("importlib.metadata.version", fake_version)
+    with pytest.raises(ValueError, match="release pin mismatch: mcp==0.0.0, expected 1.27.2"):
+        verify_runtime_imports()
+
+
+def test_verify_runtime_imports_rejects_missing_entry_point(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("importlib.metadata.entry_points", lambda *, group: ())
+    with pytest.raises(ValueError, match="missing entry point: tavily_web_search in group nat.plugins"):
+        verify_runtime_imports()
+
+
+def test_main_verify_imports_reports_verification(capsys: pytest.CaptureFixture[str]) -> None:
+    assert script_main(["--verify-imports"]) == 0
+    output = capsys.readouterr().out
+    assert "security_overrides" in output
+    assert "AI-Q MCP runtime verified" in output
+
+
+def test_main_without_flag_skips_verification(capsys: pytest.CaptureFixture[str]) -> None:
+    assert script_main([]) == 0
+    assert "AI-Q MCP runtime verified" not in capsys.readouterr().out
+
+
+def test_main_rejects_unknown_arguments() -> None:
+    with pytest.raises(SystemExit, match="unknown arguments"):
+        script_main(["--verify-imports", "--bogus"])

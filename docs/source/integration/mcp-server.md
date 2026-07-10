@@ -63,6 +63,7 @@ The component accepts these runtime settings:
 | `AIQ_MCP_CONFIG` | `configs/config_mcp.yml` | NAT workflow configuration |
 | `AIQ_MCP_ENV_FILE` | `deploy/.env` | Optional dotenv file; process variables take precedence |
 | `AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS` | `30` | Shallow-query inline wait window |
+| `AIQ_MCP_MAX_QUERY_CHARS` | `8000` | Maximum accepted `submit_query` query length in characters |
 | `AIQ_MCP_CORS_ORIGINS` | `http://localhost:6274` | Browser CORS allowlist; an empty value disables CORS |
 | `AIQ_MCP_ALLOWED_HOSTS` | Local hosts | Valid HTTP `Host` values |
 | `AIQ_MCP_ALLOWED_ORIGINS` | Local HTTP origins | Valid browser `Origin` values |
@@ -222,9 +223,10 @@ untrusted web origins. CORS controls which browser applications may read respons
 authenticate a user or create per-user authorization. Headless clients normally omit `Origin` but must send an
 allowed `Host`.
 
-An unauthenticated MCP endpoint can consume model/search quota. Do not expose it directly to an untrusted network.
-Use network policy, an authenticated reverse proxy or gateway, request limits, and deployment monitoring when
-running beyond a trusted local environment.
+An unauthenticated MCP endpoint can consume model/search quota. The server rejects `submit_query` requests whose
+query exceeds `AIQ_MCP_MAX_QUERY_CHARS` characters before any job is enqueued, but it does not rate-limit callers.
+Do not expose it directly to an untrusted network. Use network policy, an authenticated reverse proxy or gateway,
+request and rate limits, and deployment monitoring when running beyond a trusted local environment.
 
 ## Container deployment
 

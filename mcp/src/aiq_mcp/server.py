@@ -140,6 +140,7 @@ class ServerSettings:
     cors_origins: tuple[str, ...]
     allowed_hosts: tuple[str, ...]
     allowed_origins: tuple[str, ...]
+    max_query_chars: int = 8000
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> ServerSettings:
@@ -179,6 +180,13 @@ class ServerSettings:
             minimum=0.0,
         )
 
+        max_query_chars = _parse_int(
+            values.get("AIQ_MCP_MAX_QUERY_CHARS"),
+            name="AIQ_MCP_MAX_QUERY_CHARS",
+            default=8000,
+            minimum=1,
+        )
+
         raw_origins = values.get("AIQ_MCP_CORS_ORIGINS", _DEFAULT_INSPECTOR_ORIGIN)
         cors_origins = _parse_csv(raw_origins)
 
@@ -204,6 +212,7 @@ class ServerSettings:
             cors_origins=cors_origins,
             allowed_hosts=allowed_hosts,
             allowed_origins=allowed_origins,
+            max_query_chars=max_query_chars,
         )
 
 
@@ -402,6 +411,11 @@ class MCPRuntime:
             periodic cleanup. Keep it private.
         """
         del ctx
+        # Anonymous callers get a static, capability-free rejection before any
+        # job is enqueued; the limit bounds per-request workflow input size.
+        query_limit = self.settings.max_query_chars
+        if len(query) > query_limit:
+            raise ValueError(f"query is too long: {len(query)} characters exceeds the {query_limit}-character limit")
         try:
             jobs = self._get_jobs()
             submit_result = await jobs.submit(query, ANONYMOUS_PRINCIPAL)

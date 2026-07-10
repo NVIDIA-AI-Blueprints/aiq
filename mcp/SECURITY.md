@@ -7,8 +7,11 @@ SPDX-License-Identifier: Apache-2.0
 
 The standalone MCP profile is unauthenticated. Its job UUIDs are bearer
 capabilities, and the endpoint must be protected by network policy or an
-authenticated gateway outside a trusted environment. The full runtime model is
-documented in
+authenticated gateway outside a trusted environment. The server bounds a single
+request's workflow input by rejecting `submit_query` calls longer than
+`AIQ_MCP_MAX_QUERY_CHARS` (default 8000) characters before any job is enqueued;
+submission rate limiting is deployment-owned and belongs at the gateway or
+ingress in front of the endpoint. The full runtime model is documented in
 [Expose AI-Q as an MCP Server](../docs/source/integration/mcp-server.md#anonymous-capability-security).
 
 ## Reproducible dependency evidence
@@ -96,8 +99,10 @@ frozen `mcp/uv.lock` profile carries the audited 48.0.1 guarantee.
 `mcp/scripts/check_runtime_dependencies.py` performs the full installed
 requirement check and permits only those two exact owner/version/dependency/
 specifier tuples. It fails on any other incompatibility and also fails when an
-upstream release makes an exception stale. The release image runs this check
-before its import and plugin verification.
+upstream release makes an exception stale. The release image runs the same
+script with `--verify-imports`, which additionally imports every runtime
+module, asserts the exact `mcp` and `nvidia-nat-core` release pins, and checks
+the `tavily_web_search` NAT plugin entry point.
 
 ## License metadata policy
 
