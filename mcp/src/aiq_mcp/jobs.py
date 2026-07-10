@@ -145,6 +145,7 @@ _DEEP_ESTIMATED_SECONDS = 180
 _DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 30.0
 _DEFAULT_TTL_SWEEP_INTERVAL_SECONDS = 300.0
 _DEFAULT_STALE_JOB_AFTER_SECONDS = 10 * 60
+_CANCELLED_JOB_ERROR = "Research task was cancelled before completion."
 _STALE_JOB_ERROR = (
     "Research task was interrupted before completion. Submit the query again if you still need the result."
 )
@@ -207,12 +208,21 @@ class JobManager:
                 await self._ttl_sweeper_task
             self._ttl_sweeper_task = None
 
-        tasks = list(self._active_tasks.values())
-        for task in tasks:
-            task.cancel()
+        task_items = list(self._active_tasks.items())
+        cancelled_job_ids = [job_id for job_id, task in task_items if task.cancel()]
+        tasks = [task for _, task in task_items]
         if tasks:
             with suppress(asyncio.CancelledError):
                 await asyncio.gather(*tasks, return_exceptions=True)
+        # A task cancelled before _run_job executes cannot enter its own
+        # cancellation handler. Retry the guarded transition after every
+        # accepted cancellation; terminal and foreign-owned rows are no-ops.
+        for job_id in cancelled_job_ids:
+            await self._persist_job_failure(
+                job_id,
+                job_ref=log_identifier_ref(job_id),
+                error=_CANCELLED_JOB_ERROR,
+            )
         self._active_tasks.clear()
         try:
             if self._checkpoint_todo_reader is not None:
@@ -305,8 +315,13 @@ class JobManager:
             return None
 
         job = await self._store.get(job_id)
-        if job is None:
+        if job is None or job.principal != principal:
             return _job_not_found()
+        if job.state not in ("complete", "failed"):
+            # A local task can finish without persisting a terminal state when
+            # a store operation fails. Preserve the queued polling capability
+            # rather than returning get_final_report's synthetic not_ready state.
+            return None
         return _render_final_report(job)
 
     async def _run_job(self, job_id: str, query: str) -> None:
@@ -352,23 +367,18 @@ class JobManager:
                 logger.info("Job %s: complete", job_ref)
         except asyncio.CancelledError:
             logger.info("Job %s: cancelled", job_ref)
-            await self._store.update(
+            await self._persist_job_failure(
                 job_id,
-                state="failed",
-                error="Research task was cancelled before completion.",
-                from_states=("running",),
-                runner_id=self._runner_id,
+                job_ref=job_ref,
+                error=_CANCELLED_JOB_ERROR,
             )
             raise
         except Exception as exc:  # noqa: BLE001 - we want to catch everything for jobs
             logger.error("Job %s failed (%s)", job_ref, type(exc).__name__)
-            sanitized = _sanitize_error(exc)
-            await self._store.update(
+            await self._persist_job_failure(
                 job_id,
-                state="failed",
-                error=sanitized,
-                from_states=("running",),
-                runner_id=self._runner_id,
+                job_ref=job_ref,
+                error=_sanitize_error(exc),
             )
         finally:
             try:
@@ -386,6 +396,17 @@ class JobManager:
                 # if heartbeat cleanup itself is interrupted or fails.
                 _FAILURE_HANDLER.discard(job_id)
                 _current_job_id.reset(job_id_token)
+
+    async def _persist_job_failure(self, job_id: str, *, job_ref: str, error: str) -> None:
+        """Best-effort failure transition for an ambiguous claim outcome."""
+        try:
+            await self._store.mark_failed_if_queued_or_owned(job_id, self._runner_id, error)
+        except Exception as exc:  # noqa: BLE001 - persistence errors must not mask cancellation or cleanup
+            logger.error(
+                "Job %s: failed to persist terminal state (%s)",
+                job_ref,
+                type(exc).__name__,
+            )
 
     async def _heartbeat_job(self, job_id: str) -> None:
         if self._heartbeat_interval_seconds <= 0:

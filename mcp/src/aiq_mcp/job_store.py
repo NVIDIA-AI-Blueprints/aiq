@@ -154,6 +154,33 @@ class JobStore:
         )
         return _rows_changed(status) == 1
 
+    async def mark_failed_if_queued_or_owned(self, job_id: str, runner_id: str, error: str) -> bool:
+        """Fail a queued job or a running job owned by ``runner_id``.
+
+        A connection failure during :meth:`mark_running` can be ambiguous: the
+        transition may not have happened, or PostgreSQL may have committed it
+        before the acknowledgement was lost. Match both safe states in one
+        statement without overwriting terminal work or another runner's job.
+        """
+        pool = self._require_pool()
+        status = await pool.execute(
+            f"""
+            UPDATE {self._jobs_table}
+               SET state = 'failed',
+                   error = $3,
+                   updated_at = NOW()
+             WHERE job_id = $1::uuid
+               AND (
+                   state = 'queued'
+                   OR (state = 'running' AND runner_id = $2)
+               )
+            """,
+            job_id,
+            runner_id,
+            error,
+        )
+        return _rows_changed(status) == 1
+
     async def heartbeat(self, job_id: str, runner_id: str) -> None:
         pool = self._require_pool()
         await pool.execute(

@@ -130,6 +130,15 @@ class _MemoryJobStore:
         job.updated_at = now
         return True
 
+    async def mark_failed_if_queued_or_owned(self, job_id: str, runner_id: str, error: str) -> bool:
+        job = self.jobs[job_id]
+        if job.state != "queued" and not (job.state == "running" and job.runner_id == runner_id):
+            return False
+        job.state = "failed"
+        job.error = error
+        job.updated_at = datetime.now(UTC)
+        return True
+
     async def heartbeat(self, job_id: str, runner_id: str) -> None:
         job = self.jobs[job_id]
         if job.state == "running" and job.runner_id == runner_id:

@@ -391,6 +391,83 @@ async def test_state_transitions_are_guarded_by_state_and_runner(postgres_url: s
 
 
 @pytest.mark.asyncio
+async def test_failure_transition_updates_only_queued_or_owned_running_jobs(postgres_url: str) -> None:
+    store = JobStore(postgres_url, min_pool_size=1, max_pool_size=1)
+    await store.init()
+    try:
+        queued_id = await store.create(
+            principal="principal-a",
+            query="queued",
+            depth="shallow",
+            state="queued",
+        )
+        owned_id = await store.create(
+            principal="principal-a",
+            query="owned",
+            depth="shallow",
+            state="queued",
+        )
+        foreign_id = await store.create(
+            principal="principal-a",
+            query="foreign",
+            depth="shallow",
+            state="queued",
+        )
+        complete_id = await store.create(
+            principal="principal-a",
+            query="complete",
+            depth="shallow",
+            state="complete",
+            result="answer",
+        )
+        failed_id = await store.create(
+            principal="principal-a",
+            query="failed",
+            depth="shallow",
+            state="failed",
+        )
+
+        assert await store.mark_running(owned_id, "runner-a") is True
+        assert await store.mark_running(foreign_id, "runner-b") is True
+
+        assert await store.mark_failed_if_queued_or_owned(queued_id, "runner-a", "claim failed") is True
+        assert await store.mark_failed_if_queued_or_owned(owned_id, "runner-a", "run failed") is True
+        assert await store.mark_failed_if_queued_or_owned(foreign_id, "runner-a", "wrong owner") is False
+        assert await store.mark_failed_if_queued_or_owned(complete_id, "runner-a", "late failure") is False
+        assert await store.mark_failed_if_queued_or_owned(failed_id, "runner-a", "replacement failure") is False
+
+        queued = await store.get(queued_id)
+        owned = await store.get(owned_id)
+        foreign = await store.get(foreign_id)
+        complete = await store.get(complete_id)
+        failed = await store.get(failed_id)
+
+        assert queued is not None and (queued.state, queued.error, queued.runner_id) == (
+            "failed",
+            "claim failed",
+            None,
+        )
+        assert owned is not None and (owned.state, owned.error, owned.runner_id) == (
+            "failed",
+            "run failed",
+            "runner-a",
+        )
+        assert foreign is not None and (foreign.state, foreign.error, foreign.runner_id) == (
+            "running",
+            None,
+            "runner-b",
+        )
+        assert complete is not None and (complete.state, complete.result, complete.error) == (
+            "complete",
+            "answer",
+            None,
+        )
+        assert failed is not None and (failed.state, failed.error) == ("failed", None)
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_shutdown_cancellation_is_persisted_and_visible_after_restart(postgres_url: str) -> None:
     gate = asyncio.Event()
     manager = JobManager(

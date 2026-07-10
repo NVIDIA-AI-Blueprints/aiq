@@ -116,6 +116,15 @@ class _MemoryJobStore:
         job.updated_at = now
         return True
 
+    async def mark_failed_if_queued_or_owned(self, job_id: str, runner_id: str, error: str) -> bool:
+        job = self.jobs[job_id]
+        if job.state != "queued" and not (job.state == "running" and job.runner_id == runner_id):
+            return False
+        job.state = "failed"
+        job.error = error
+        job.updated_at = datetime.now(UTC)
+        return True
+
     async def heartbeat(self, job_id: str, runner_id: str) -> None:
         job = self.jobs[job_id]
         if job.runner_id == runner_id and job.state == "running":
@@ -654,6 +663,55 @@ async def test_workflow_exception_does_not_log_capability_uuid(caplog) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "fail_after_claim",
+    [False, True],
+    ids=("before-claim", "after-claim-commit"),
+)
+async def test_claim_failure_marks_queued_or_owned_job_failed(fail_after_claim: bool, caplog) -> None:
+    class _ClaimFailureStore(_MemoryJobStore):
+        async def mark_running(self, job_id: str, runner_id: str) -> bool:
+            if fail_after_claim:
+                assert await super().mark_running(job_id, runner_id) is True
+            raise RuntimeError(
+                "postgresql://user:claim-failure-secret@db/jobs"  # pragma: allowlist secret
+            )
+
+    runner = _Runner()
+    store = _ClaimFailureStore()
+    manager = JobManager(
+        runner,  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        runner_id="pod-a",
+        heartbeat_interval_seconds=0,
+        ttl_sweep_interval_seconds=0,
+    )
+    caplog.set_level(logging.ERROR, logger="aiq_mcp.jobs")
+    await manager.start()
+    try:
+        submitted = await manager.submit("query", "anonymous")
+        job_id = submitted["job_id"]
+        report = await manager.wait_for_completion(job_id, "anonymous", timeout=1)
+        job = await store.get(job_id)
+    finally:
+        await manager.stop()
+
+    assert report == {
+        "job_id": job_id,
+        "depth": "shallow",
+        "state": "failed",
+        "error": "Research task failed (RuntimeError). Check server logs for details.",
+    }
+    assert job is not None
+    assert job.state == "failed"
+    assert job.runner_id == ("pod-a" if fail_after_claim else None)
+    assert runner.run_calls == []
+    assert log_identifier_ref(job_id) in caplog.text
+    assert job_id not in caplog.text
+    assert "claim-failure-secret" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_failure_capture_does_not_leak_when_workflow_raises() -> None:
     manager = _manager(_Runner(log_no_sources=True, raise_after_log=True))
     await manager.start()
@@ -818,6 +876,59 @@ async def test_background_completion_does_not_overwrite_terminal_state() -> None
 
 
 @pytest.mark.asyncio
+async def test_lost_claim_returns_none_without_overwriting_new_owner() -> None:
+    class _LostClaimStore(_MemoryJobStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.claimed_elsewhere = asyncio.Event()
+            self.release_claim = asyncio.Event()
+
+        async def mark_running(self, job_id: str, runner_id: str) -> bool:
+            del runner_id
+            job = self.jobs[job_id]
+            assert job.state == "queued"
+            now = datetime.now(UTC)
+            job.state = "running"
+            job.runner_id = "pod-b"
+            job.heartbeat_at = now
+            job.updated_at = now
+            self.claimed_elsewhere.set()
+            await self.release_claim.wait()
+            return False
+
+    runner = _Runner()
+    store = _LostClaimStore()
+    manager = JobManager(
+        runner,  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        runner_id="pod-a",
+        heartbeat_interval_seconds=0,
+        ttl_sweep_interval_seconds=0,
+    )
+    await manager.start()
+    try:
+        submitted = await manager.submit("query", "anonymous")
+        job_id = submitted["job_id"]
+        await asyncio.wait_for(store.claimed_elsewhere.wait(), timeout=1)
+
+        waiting = asyncio.create_task(manager.wait_for_completion(job_id, "anonymous", timeout=1))
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        store.release_claim.set()
+
+        assert await waiting is None
+        job = await store.get(job_id)
+    finally:
+        store.release_claim.set()
+        await manager.stop()
+
+    assert job is not None
+    assert job.state == "running"
+    assert job.runner_id == "pod-b"
+    assert runner.run_calls == []
+
+
+@pytest.mark.asyncio
 async def test_final_report_returns_not_ready_without_poll_cadence() -> None:
     gate = asyncio.Event()
     manager = _manager(_Runner(gate=gate))
@@ -975,6 +1086,88 @@ def test_operational_reconciliation_defaults_are_frozen() -> None:
     assert manager._heartbeat_interval_seconds == 30.0
     assert manager._ttl_sweep_interval_seconds == 300.0
     assert manager._stale_job_after_seconds == 600
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "claim_before_cancel",
+    [False, True],
+    ids=("before-claim", "after-claim-commit"),
+)
+async def test_stop_during_claim_persists_cancellation(claim_before_cancel: bool) -> None:
+    class _BlockingClaimStore(_MemoryJobStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.claim_blocked = asyncio.Event()
+            self.release_claim = asyncio.Event()
+
+        async def mark_running(self, job_id: str, runner_id: str) -> bool:
+            if claim_before_cancel:
+                assert await super().mark_running(job_id, runner_id) is True
+            self.claim_blocked.set()
+            await self.release_claim.wait()
+            if not claim_before_cancel:
+                return await super().mark_running(job_id, runner_id)
+            return True
+
+    runner = _Runner()
+    store = _BlockingClaimStore()
+    manager = JobManager(
+        runner,  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        runner_id="pod-a",
+        heartbeat_interval_seconds=0,
+        ttl_sweep_interval_seconds=0,
+    )
+    stopped = False
+    await manager.start()
+    try:
+        submitted = await manager.submit("question", "anonymous")
+        job_id = submitted["job_id"]
+        await asyncio.wait_for(store.claim_blocked.wait(), timeout=1)
+
+        await manager.stop()
+        stopped = True
+        job = await store.get(job_id)
+    finally:
+        store.release_claim.set()
+        if not stopped:
+            await manager.stop()
+
+    assert job is not None
+    assert job.state == "failed"
+    assert job.error == "Research task was cancelled before completion."
+    assert job.runner_id == ("pod-a" if claim_before_cancel else None)
+    assert runner.run_calls == []
+    assert job_id not in _FAILURE_HANDLER._captures
+
+
+@pytest.mark.asyncio
+async def test_stop_before_job_task_starts_persists_cancellation() -> None:
+    runner = _Runner()
+    store = _MemoryJobStore()
+    manager = JobManager(
+        runner,  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        runner_id="pod-a",
+        heartbeat_interval_seconds=0,
+        ttl_sweep_interval_seconds=0,
+    )
+    await manager.start()
+    submitted = await manager.submit("question", "anonymous")
+    job_id = submitted["job_id"]
+
+    # Do not yield after submit: _run_job has not executed its try block yet,
+    # so JobManager.stop() must persist cancellation after gathering the task.
+    await manager.stop()
+
+    job = await store.get(job_id)
+    assert job is not None
+    assert job.state == "failed"
+    assert job.error == "Research task was cancelled before completion."
+    assert job.runner_id is None
+    assert runner.run_calls == []
+    assert job_id not in _FAILURE_HANDLER._captures
 
 
 @pytest.mark.asyncio
