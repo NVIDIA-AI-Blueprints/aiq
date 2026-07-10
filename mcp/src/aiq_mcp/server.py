@@ -44,9 +44,18 @@ from .workflow_runner import WorkflowRunner
 
 logger = logging.getLogger(__name__)
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-_DEFAULT_ENV_FILE = _REPO_ROOT / "deploy" / ".env"
-DEFAULT_CONFIG = _REPO_ROOT / "configs" / "config_mcp.yml"
+
+def _find_source_checkout_root() -> Path | None:
+    """Return the AI-Q checkout root, or None when running from an installed package."""
+    candidate = Path(__file__).resolve().parents[3]
+    if (candidate / "configs" / "config_mcp.yml").is_file():
+        return candidate
+    return None
+
+
+_REPO_ROOT = _find_source_checkout_root()
+_DEFAULT_ENV_FILE = _REPO_ROOT / "deploy" / ".env" if _REPO_ROOT else None
+DEFAULT_CONFIG = _REPO_ROOT / "configs" / "config_mcp.yml" if _REPO_ROOT else None
 MCP_SERVER_NAME = "aiq_deep_research"
 ANONYMOUS_PRINCIPAL = "anonymous"
 _PUBLIC_POLL_ERROR = "Research query status check failed. Check server logs for details."
@@ -80,6 +89,8 @@ def _load_env_file() -> None:
     """Load the public MCP dotenv file without overriding process variables."""
     configured_path = os.getenv("AIQ_MCP_ENV_FILE")
     path = Path(configured_path).expanduser() if configured_path else _DEFAULT_ENV_FILE
+    if path is None:
+        return
     if not path.exists():
         if configured_path:
             logger.warning("MCP env file does not exist: %s", path)
@@ -151,7 +162,15 @@ class ServerSettings:
         log_level = cast(LogLevel, raw_log_level)
 
         config_value = values.get("AIQ_MCP_CONFIG")
-        config_path = Path(config_value).expanduser().resolve() if config_value else DEFAULT_CONFIG
+        if config_value:
+            config_path = Path(config_value).expanduser().resolve()
+        elif DEFAULT_CONFIG is not None:
+            config_path = DEFAULT_CONFIG
+        else:
+            raise ValueError(
+                "AIQ_MCP_CONFIG must point to a workflow config when aiq_mcp is installed "
+                "outside the AI-Q source checkout"
+            )
 
         inline_wait = _parse_float(
             values.get("AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS"),

@@ -212,6 +212,38 @@ def test_settings_defaults_and_overrides(tmp_path: Path) -> None:
     assert server.ServerSettings.from_env({"AIQ_MCP_CORS_ORIGINS": ""}).cors_origins == ()
 
 
+def test_installed_layout_disables_checkout_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An installed package must not point defaults at site-packages paths."""
+    site_packages = tmp_path / "venv" / "lib" / "python3.13" / "site-packages"
+    module_path = site_packages / "aiq_mcp" / "server.py"
+    module_path.parent.mkdir(parents=True)
+    module_path.write_text("")
+    monkeypatch.setattr(server, "__file__", str(module_path))
+
+    assert server._find_source_checkout_root() is None
+
+    monkeypatch.setattr(server, "DEFAULT_CONFIG", None)
+    with pytest.raises(ValueError, match="AIQ_MCP_CONFIG must point to a workflow config"):
+        server.ServerSettings.from_env({})
+
+    explicit = tmp_path / "workflow.yml"
+    assert server.ServerSettings.from_env({"AIQ_MCP_CONFIG": str(explicit)}).config_path == explicit.resolve()
+
+    monkeypatch.delenv("AIQ_MCP_ENV_FILE", raising=False)
+    monkeypatch.setattr(server, "_DEFAULT_ENV_FILE", None)
+    server._load_env_file()
+
+
+def test_source_checkout_defaults_resolve_to_repo_paths() -> None:
+    assert server._REPO_ROOT is not None
+    assert server.DEFAULT_CONFIG == server._REPO_ROOT / "configs" / "config_mcp.yml"
+    assert server.DEFAULT_CONFIG.is_file()
+    assert server._DEFAULT_ENV_FILE == server._REPO_ROOT / "deploy" / ".env"
+
+
 def test_load_env_file_uses_public_name_without_overriding_process_env(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
