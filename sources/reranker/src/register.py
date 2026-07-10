@@ -16,7 +16,7 @@
 """NAT register function for the reranked search tool.
 
 Queries multiple search tools in parallel, parses their individual results,
-and reranks them using BM25, dense embedding similarity, or cross-encoder scoring.
+and orders them by relevance using the configured reranker.
 """
 
 # from __future__ import annotations
@@ -54,7 +54,7 @@ class RerankedSearchConfig(FunctionBaseConfig, name="reranked_search"):
     )
 
     cross_encoder_model: str = Field(
-        description="Cross-encoder model identifier (e.g. nv-rerank-qa-mistral-4b:1).",
+        description="Model identifier for the reranker (e.g. nv-rerank-qa-mistral-4b:1).",
     )
 
     timeout_seconds: float = Field(
@@ -65,11 +65,10 @@ class RerankedSearchConfig(FunctionBaseConfig, name="reranked_search"):
 
 @register_function(config_type=RerankedSearchConfig)
 async def reranked_search(config: RerankedSearchConfig, builder: Builder):
-    """
-    A cross-encoder feeds the query–document pair together into a single model pass and outputs a
-    relevance score directly.  This is more accurate but slower per document.
+    """Register a tool that searches multiple sources and reranks their combined results.
 
-    Uses `langchain-nvidia-ai-endpoints` (`NVIDIARerank`).  Expects `NVIDIA_API_KEY` in the environment.
+    Uses the configured reranker to prioritize results for the overall query.
+    Expects `NVIDIA_API_KEY` in the environment.
     """
     compressor = NVIDIARerank(model=config.cross_encoder_model, top_n=config.top_k)
 
