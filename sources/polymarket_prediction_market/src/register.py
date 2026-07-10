@@ -27,6 +27,7 @@ from typing import Any
 
 from pydantic import Field
 
+from aiq_agent.common import SOURCE_DELIMITER
 from nat.builder.builder import Builder
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
@@ -434,7 +435,7 @@ async def polymarket_search(
                     documents.append((f"market:{key}", _format_market_document(market)))
                 output = _dedupe_documents(documents)[: tool_config.max_results]
                 if output:
-                    return "\n\n---\n\n".join(output)
+                    return SOURCE_DELIMITER.join(output)
                 return "Polymarket search returned no results"
             except Exception as exc:  # noqa: BLE001 - source APIs can raise transport-specific exceptions
                 last_error = exc

@@ -25,6 +25,7 @@ from typing import Literal
 
 from pydantic import Field
 
+from aiq_agent.common import SOURCE_DELIMITER
 from nat.builder.builder import Builder
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
@@ -141,7 +142,7 @@ async def duckduckgo_news_search(
             try:
                 results = await asyncio.wait_for(asyncio.to_thread(_search), timeout=tool_config.timeout)
                 if results:
-                    return "\n\n---\n\n".join(_format_news_result(result) for result in results)
+                    return SOURCE_DELIMITER.join(_format_news_result(result) for result in results)
                 return "News search returned no results"
             except Exception as exc:  # noqa: BLE001 - source APIs can raise transport-specific exceptions
                 if attempt == tool_config.max_retries - 1:
