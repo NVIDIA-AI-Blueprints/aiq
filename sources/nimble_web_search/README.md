@@ -42,25 +42,34 @@ You can alternatively set `api_key` directly in the YAML (as a string). Both pat
 
 ## Test
 
+The package ships three test layers; the first two are credential-free and run everywhere.
+
 ```bash
-# Unit tests (credential-free, mocked)
+# 1. Mocked unit tests + recorded-response replay (credential-free; the default run)
 uv run pytest sources/nimble_web_search -v
+# → 36 passed, 1 skipped (the live test, opt-in below)
+
+# 2. Live integration test (opt-in; exactly one API call, bounded at 120 s)
+AIQ_NIMBLE_LIVE_TESTS=1 NIMBLE_API_KEY=<key> \
+    uv run pytest sources/nimble_web_search/tests -m integration -v
 
 # Lint
 uv run ruff check sources/nimble_web_search
 uv run ruff format --check sources/nimble_web_search
 ```
 
-The unit tests cover: config defaults / all fields / invalid `search_depth` rejection, missing-key stub + warn-once, key-from-config env hydration, successful render + description fallback, deep depth passthrough, query/content truncation, empty/error handling, retry-then-success, final-retry failure, 401, 403 enterprise-tier, non-default country/locale passthrough, and renderer behavior on titles containing special characters.
+- **Mocked unit tests** (`test_nimble_register.py`) cover: config defaults / all fields / invalid `search_depth` rejection, missing-key stub + warn-once, key-from-config env hydration, successful render + description fallback, deep depth passthrough, query/content truncation, empty/error handling, retry-then-success, final-retry failure, 401, 403 enterprise-tier, non-default country/locale passthrough, and renderer behavior on titles containing special characters.
+- **Recorded-response replay** (`test_nimble_recorded_replay.py`) replays real, redacted `NimbleSearchRetriever` responses ([`tests/fixtures/README.md`](tests/fixtures/README.md)) through the full provider pipeline — a deterministic test mode that needs no network and no key.
+- **Live integration** (`test_nimble_live_integration.py`) runs the canned query `NVIDIA CUDA Toolkit documentation` once against the real API with the shipped defaults and asserts the structural output contract: a non-error response containing 1..`max_results` `<Document>` blocks, every block with an http(s) `href` and a title, every block XML-parseable, and at least one non-empty body. Assertions are structural — never content-exact — so ordinary result variation cannot flake the run. Suitable for CI: add `NIMBLE_API_KEY` as a repository secret and set `AIQ_NIMBLE_LIVE_TESTS=1` in the job.
 
 ## Verification
 
 Beyond the mocked unit tests above, verify the provider is fully integrated with AI-Q by walking the [adding-a-data-source checklist](../../docs/source/extending/adding-a-data-source.md):
 
 ```bash
-# 1. Mocked unit tests pass (CI-safe, no credentials)
+# 1. Mocked unit tests + recorded replay pass (CI-safe, no credentials)
 uv run pytest sources/nimble_web_search -q
-# → 21 passed in <1s
+# → 36 passed, 1 skipped in <1s
 
 # 2. NAT discovers the registered function
 nat info components --types function | grep nimble_web_search

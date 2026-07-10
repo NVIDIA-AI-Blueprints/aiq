@@ -71,7 +71,7 @@ class NimbleWebSearchToolConfig(FunctionBaseConfig, name="nimble_web_search"):
     )
     country: str = Field(
         default="US",
-        description="ISO country code passed to Nimble (e.g. 'US', 'UK', 'FR').",
+        description="ISO 3166 country code passed to Nimble (e.g. 'US', 'GB', 'FR').",
     )
     locale: str = Field(
         default="en",
