@@ -47,7 +47,7 @@ The package ships three test layers; the first two are credential-free and run e
 ```bash
 # 1. Mocked unit tests + recorded-response replay (credential-free; the default run)
 uv run pytest sources/nimble_web_search -v
-# → 36 passed, 1 skipped (the live test, opt-in below)
+# → 40 passed, 1 skipped (the live test, opt-in below)
 
 # 2. Live integration test (opt-in; exactly one API call, bounded at 120 s)
 AIQ_NIMBLE_LIVE_TESTS=1 NIMBLE_API_KEY=<key> \
@@ -69,7 +69,7 @@ Beyond the mocked unit tests above, verify the provider is fully integrated with
 ```bash
 # 1. Mocked unit tests + recorded replay pass (CI-safe, no credentials)
 uv run pytest sources/nimble_web_search -q
-# → 36 passed, 1 skipped in <1s
+# → 40 passed, 1 skipped in <1s
 
 # 2. NAT discovers the registered function
 nat info components --types function | grep nimble_web_search
@@ -96,7 +96,7 @@ The provider exposes the following Nimble-specific surface. Defaults are tuned f
 | Result count | `max_results` | `5` | Range `1-100` (Nimble's documented cap). Soft cap (Nimble may return up to N+2; see Known limitations). |
 | Search depth | `search_depth` | `lite` | See the dedicated [Search depth](#search-depth) section below. |
 | Search focus | `focus` | `general` | Nimble focus mode: `general` (default, broad web/research), `news` (news-publisher sources ordered by recency — not a recency filter; older articles still appear), or domain-specific `location` / `shopping` / `geo` / `social`. Leave `general` for normal research; the LLM never selects focus, so general queries can't drift to `news`. |
-| Localization — country | `country` | `US` | Two-letter country code (e.g. `FR`, `JP`, `UK`). Reaches the SDK constructor verbatim. |
+| Localization — country | `country` | `US` | Two-letter ISO 3166 country code (e.g. `FR`, `JP`, `GB`). Reaches the SDK constructor verbatim. |
 | Localization — language | `locale` | `en` | ISO 639-1 language code (e.g. `fr`, `ja`). |
 | Per-result content size | `max_content_length` | `10000` chars | Truncates each result's body to N chars (3-char ellipsis included). Minimum `1`; set to `null` to disable truncation; omit to use default. |
 | Retries | `max_retries` | `3` | Exponential backoff on transient errors. Final failure surfaces a friendly per-status message (401, 403, generic). |

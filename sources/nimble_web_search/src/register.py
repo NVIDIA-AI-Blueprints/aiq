@@ -186,6 +186,22 @@ async def nimble_web_search(
                 if not docs:
                     raise ValueError("Search returned no results")
 
+                # The API intermittently returns results whose URL is empty or
+                # a server-relative redirect token (e.g. "/goto?url=...")
+                # instead of a resolvable link — observed in ~2% of calls
+                # during a 100-run soak. Such results break citation
+                # downstream, so drop them; if none remain, treat the response
+                # as transient so the retry loop re-queries instead of
+                # rendering unusable documents.
+                def _has_resolvable_url(doc) -> bool:
+                    url = str((getattr(doc, "metadata", {}) or {}).get("url", "") or "")
+                    return bool(url) and not url.startswith("/")
+
+                usable_docs = [doc for doc in docs if _has_resolvable_url(doc)]
+                if not usable_docs:
+                    raise RuntimeError("Search returned only results without resolvable URLs")
+                docs = usable_docs
+
                 def _render(doc) -> str:
                     metadata = getattr(doc, "metadata", {}) or {}
                     url = metadata.get("url", "") or ""
