@@ -17,6 +17,7 @@ authors = [
     {name = "NVIDIA Corporation"},
 ]
 classifiers = [
+    "Private :: Do Not Upload",
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
@@ -55,7 +56,7 @@ where = ["src"]
 # The MCP release is intentionally a separate uv project. Its audited container
 # uses cryptography 48 without changing the NAT-supported dependency set used by
 # the root AI-Q workspace. These overrides are release-resolution policy; they
-# are not part of the published wheel metadata.
+# are not encoded in the locally built package metadata.
 [tool.uv]
 required-version = ">=0.11.25"
 prerelease = "allow"

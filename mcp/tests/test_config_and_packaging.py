@@ -125,6 +125,7 @@ def test_mcp_manifest_declares_public_direct_runtime_dependencies() -> None:
     assert manifest["project"]["name"] == "aiq-mcp-server"
     assert manifest["project"]["license"] == "Apache-2.0"
     assert manifest["project"]["license-files"] == ["LICENSE"]
+    assert "Private :: Do Not Upload" in manifest["project"]["classifiers"]
     assert manifest["project"]["scripts"] == {"aiq-mcp-server": "aiq_mcp.server:main"}
 
 

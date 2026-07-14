@@ -12,6 +12,17 @@ continues after the request that submitted it has returned.
 The repository directory is named `mcp`, while the Python package is `aiq_mcp` so it does not shadow the
 third-party `mcp` package.
 
+## Supported distribution paths
+
+Run this component from an AI-Q source checkout with the frozen `mcp/uv.lock`, or use the release container built
+from the repository root. In this documentation, *standalone* describes the MCP process and transport boundary; it
+does not mean that `aiq-mcp-server` is a separately installable Python wheel.
+
+The MCP project depends on `aiq-agent`, `tavily-web-search`, and other packages supplied from this repository. That
+complete dependency closure is not published to a Python package index. The wheel that local build tooling may
+produce is therefore an internal implementation artifact: do not publish it or install it as a generic wheel. The
+project's `Private :: Do Not Upload` classifier makes this distribution boundary explicit.
+
 ## Component layout
 
 - `src/aiq_mcp/workflow_runner.py` owns the long-lived NAT workflow.
@@ -76,8 +87,8 @@ Runtime settings use only public component names:
 | `AIQ_MCP_PATH` | `/mcp` | Streamable HTTP endpoint |
 | `AIQ_MCP_WORKERS` | `1` | Independent workflow-owning workers |
 | `AIQ_MCP_LOG_LEVEL` | `INFO` | Python/Uvicorn log level |
-| `AIQ_MCP_CONFIG` | `configs/config_mcp.yml` (source checkout only) | NAT workflow configuration |
-| `AIQ_MCP_ENV_FILE` | `deploy/.env` (source checkout only) | Optional dotenv file; existing process variables take precedence |
+| `AIQ_MCP_CONFIG` | `configs/config_mcp.yml` (source checkout) | NAT workflow configuration; set explicitly by the release image |
+| `AIQ_MCP_ENV_FILE` | `deploy/.env` (source checkout) | Optional dotenv file; existing process variables take precedence |
 | `AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS` | `30` | Shallow-query inline wait window |
 | `AIQ_MCP_MAX_QUERY_CHARS` | `8000` | Maximum submitted query length in characters |
 | `AIQ_MCP_CORS_ORIGINS` | `http://localhost:6274` | Browser origin allowlist |
@@ -85,9 +96,8 @@ Runtime settings use only public component names:
 | `AIQ_MCP_ALLOWED_ORIGINS` | local HTTP origins | Valid MCP Origin headers; browser CORS origins are added automatically |
 | `AIQ_CHECKPOINT_DB` | required | Shared Postgres DSN for checkpoints and jobs |
 
-The `AIQ_MCP_CONFIG` and `AIQ_MCP_ENV_FILE` path defaults are available only in an AI-Q source checkout.
-Installed-package and wheel usage receives neither path by default and must set `AIQ_MCP_CONFIG`; set
-`AIQ_MCP_ENV_FILE` only when an optional dotenv file should be loaded.
+The `AIQ_MCP_CONFIG` and `AIQ_MCP_ENV_FILE` path defaults are available only in an AI-Q source checkout. The
+supported release image sets `AIQ_MCP_CONFIG` to its bundled config and does not load a dotenv file by default.
 
 The default `configs/config_mcp.yml` uses only public AI-Q plugins: hosted NVIDIA NIM inference through
 `NVIDIA_API_KEY` and Tavily web search through `TAVILY_API_KEY`. It intentionally has no API front end,
@@ -112,13 +122,10 @@ uv run --project mcp --extra dev pytest mcp/tests
 
 Set `AIQ_MCP_TEST_DB_URL` to a disposable Postgres database to enable the ledger and checkpoint integration tests.
 
-Build the standalone wheel from the repository root with `uv build mcp --wheel`.
-
 The root `uv.lock` keeps `cryptography>=46.0.6,<47` for compatibility with NAT. The audited MCP release profile is
 resolved independently from `mcp/uv.lock` and pins `cryptography==48.0.1` to harden the bundled OpenSSL version.
-That pin is a uv override for the frozen project and container, not a functional MCP requirement or published
-wheel constraint. A generic wheel installation can therefore resolve a NAT-compatible version below 47; use the
-frozen MCP project or release container when the audited 48.0.1 profile is required.
+That pin is a uv override for the two supported runtime paths, not a functional MCP requirement or published
+package constraint.
 
 ## Container deployment
 

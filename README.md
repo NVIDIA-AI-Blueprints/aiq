@@ -356,8 +356,8 @@ for the exact JSON protocol, health contracts, security model, and container dep
 
 MCP is an independent uv project with its own `mcp/uv.lock`. The root lock remains compatible with NAT's
 `cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==48.0.1` as a
-security hardening measure. That uv override is lock policy rather than wheel metadata, so installing the wheel by
-itself does not guarantee the 48.0.1 profile.
+security hardening measure. The supported distribution paths are this source checkout and the release container;
+the MCP package's local path dependency closure is not published as a standalone wheel.
 
 ### Benchmarks
 

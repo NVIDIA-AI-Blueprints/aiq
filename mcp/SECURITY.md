@@ -90,11 +90,10 @@ enable OCI or NAT authentication. The root AI-Q lock is separate and keeps
 `cryptography>=46.0.6,<47` so its environment remains within NAT's declared
 range.
 
-This override is security policy for the frozen MCP release and container, not
-a functional requirement of MCP. uv overrides are not encoded in published
-wheel metadata, so installing the `aiq-mcp-server` wheel by itself does not
-guarantee 48.0.1 and may resolve a NAT-compatible version below 47. Only the
-frozen `mcp/uv.lock` profile carries the audited 48.0.1 guarantee.
+This override is security policy for the frozen MCP project and release
+container, not a functional requirement of MCP or a published package
+constraint. Only the frozen `mcp/uv.lock` profile carries the audited 48.0.1
+guarantee.
 
 `mcp/scripts/check_runtime_dependencies.py` performs the full installed
 requirement check and permits only those two exact owner/version/dependency/
@@ -124,10 +123,14 @@ new or changed finding fails CI instead of being silently accepted.
 This is an engineering evidence and drift gate, not a general SPDX-license
 allowlist or legal approval. The marker-excluded packages in the CycloneDX
 document are not installed in the Linux CPython 3.13 release image and remain
-listed as `platform_excluded`. Publishing the generic Python 3.11–3.13 wheel or
-a Windows image requires a target-specific inventory and organizational
-license/NOTICE review. The repository's curated `LICENSE-THIRD-PARTY` is not
-used as the exact MCP dependency inventory; the archived JSON is.
+listed as `platform_excluded`. Publishing an image for another platform requires
+a target-specific inventory and organizational license/NOTICE review. The
+repository's curated `LICENSE-THIRD-PARTY` is not used as the exact MCP
+dependency inventory; the archived JSON is.
 
-The `aiq-mcp-server` wheel embeds the repository's Apache-2.0 license through
+The supported distributable artifact is the release container built from the
+repository root. The frozen source project is the supported development path.
+`aiq-mcp-server` and its repository-local dependency closure are not published
+as generic Python wheels. CI builds the MCP wheel only as an internal packaging
+check and verifies that it embeds the repository's Apache-2.0 license through
 PEP 639 `license-files` metadata.

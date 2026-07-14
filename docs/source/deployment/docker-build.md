@@ -67,9 +67,9 @@ docker build -t aiq-mcp-server:local -f mcp/Dockerfile .
 That builder syncs the frozen MCP project (`uv sync --project /app/mcp`) from
 `mcp/uv.lock`, independently of the root image. The root image stays within
 NAT's `cryptography<47` constraint; the audited MCP container profile pins
-`cryptography==48.0.1` through an MCP-scoped uv override. Because overrides are
-not embedded in wheel metadata, only the frozen MCP project/container—not an
-arbitrary wheel installation—guarantees that 48.0.1 profile.
+`cryptography==48.0.1` through an MCP-scoped uv override. The supported MCP
+distribution paths are the frozen source project and this release container;
+the repository-local dependency closure is not published as a generic wheel.
 
 ## Dev Stage
 

@@ -36,10 +36,15 @@ workspace excludes it and keeps `cryptography>=46.0.6,<47`, which is compatible 
 The frozen MCP release/container profile instead pins `cryptography==48.0.1` to replace the OpenSSL version
 bundled in earlier wheels.
 
-The 48.0.1 override is security hardening for the audited release profile, not a functional MCP protocol
-requirement. uv overrides are lock policy and are not written into the published wheel metadata, so installing the
-`aiq-mcp-server` wheel outside this project may resolve a NAT-compatible `cryptography` version below 47. Use
-`mcp/uv.lock` through the commands below, or use the release container, when the audited 48.0.1 profile is required.
+The supported distribution paths are the frozen MCP project in an AI-Q source checkout and the release container
+built from the repository root. Here, *standalone* describes the MCP process and transport boundary, not a generic
+Python wheel. `aiq-mcp-server` depends on `aiq-agent`, `tavily-web-search`, and other packages supplied by this
+repository; that complete dependency closure is not published to a Python package index. Its locally buildable
+wheel is an internal implementation artifact and is marked `Private :: Do Not Upload`.
+
+The 48.0.1 override is security hardening for those supported runtime paths, not a functional MCP protocol
+requirement or published package constraint. Use `mcp/uv.lock` through the commands below, or use the release
+container, to retain the audited dependency profile.
 
 For a local source checkout, start PostgreSQL and then run:
 

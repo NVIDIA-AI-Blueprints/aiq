@@ -264,7 +264,10 @@ jobs:
             mcp/scripts/check_license_inventory.py \
             aiq-mcp.cdx.json aiq-mcp-licenses.json
 
-      - name: Build MCP wheel and verify embedded license
+      # This locally built wheel is an internal package/license check, not a
+      # published release artifact. Supported distribution uses the frozen
+      # source project or the release container built below.
+      - name: Verify MCP package license metadata
         run: |
           set -euo pipefail
           uv build mcp --wheel --out-dir "$RUNNER_TEMP/mcp-dist"
