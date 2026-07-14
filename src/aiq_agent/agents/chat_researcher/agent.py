@@ -46,6 +46,7 @@ from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_identifier_ref
 
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
@@ -59,6 +60,16 @@ from .models import WorkflowFailure
 from .utils import trim_message_history
 
 logger = logging.getLogger(__name__)
+
+
+def _report_ref(job_id: str | None) -> str:
+    """Redacted correlation ref for a report job UUID (an opaque bearer capability).
+
+    The raw UUID must never enter logs; ``log_identifier_ref`` yields a stable
+    ``sha256:<12hex>`` reference instead. ``active_report_job_id`` is optional, so
+    fall back to ``"none"`` rather than hashing ``None``.
+    """
+    return log_identifier_ref(job_id) if job_id else "none"
 
 
 # Async-job escalation signal. The chat WebSocket frame carries only a string ``content`` field,
@@ -408,7 +419,7 @@ class ChatResearcherAgent:
             try:
                 answer = await self.report_ask_fn(state)
             except TimeoutError:
-                logger.warning("Report ask timed out for report %s", state.active_report_job_id)
+                logger.warning("Report ask timed out (report_ref=%s)", _report_ref(state.active_report_job_id))
                 return {
                     "messages": [AIMessage(content="The report service took too long to respond. Please try again.")],
                     "workflow_outcome": _research_workflow_failure(),
@@ -417,8 +428,8 @@ class ChatResearcherAgent:
                 # The node has no HTTP scope, so a raised exception would surface as an
                 # opaque workflow error / empty completion. Degrade to a chat message.
                 logger.warning(
-                    "Report ask failed for report %s (error_type=%s)",
-                    state.active_report_job_id,
+                    "Report ask failed (report_ref=%s, error_type=%s)",
+                    _report_ref(state.active_report_job_id),
                     type(e).__name__,
                 )
                 return {
@@ -436,8 +447,8 @@ class ChatResearcherAgent:
                     job_id = await self.report_edit_job_submitter(state)
                 except Exception as e:
                     logger.warning(
-                        "Report edit submission failed for report %s (error_type=%s)",
-                        state.active_report_job_id,
+                        "Report edit submission failed (report_ref=%s, error_type=%s)",
+                        _report_ref(state.active_report_job_id),
                         type(e).__name__,
                     )
                     return {

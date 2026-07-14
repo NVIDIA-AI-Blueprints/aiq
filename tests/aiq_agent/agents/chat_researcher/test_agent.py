@@ -15,6 +15,7 @@
 
 """Tests for the ChatResearcherAgent."""
 
+import logging
 from unittest.mock import MagicMock
 
 import pytest
@@ -27,6 +28,7 @@ from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
 from aiq_agent.agents.chat_researcher.models import WorkflowFailure
+from aiq_agent.common.logging_utils import log_identifier_ref
 
 
 class TestChatResearcherAgent:
@@ -590,6 +592,7 @@ class TestChatResearcherAgent:
         mock_shallow_research,
         mock_deep_research,
         mock_clarifier,
+        caplog,
     ):
         """A report-ask timeout returns user-safe text and a terminal failure."""
 
@@ -618,7 +621,8 @@ class TestChatResearcherAgent:
             messages=[HumanMessage(content="Summarize this report")],
             active_report_job_id="job-1",
         )
-        result = await agent.run(state, thread_id="test-thread")
+        with caplog.at_level(logging.WARNING):
+            result = await agent.run(state, thread_id="test-thread")
 
         content = result["messages"][-1].content
         assert isinstance(content, str) and content.strip()
@@ -626,12 +630,64 @@ class TestChatResearcherAgent:
 
         assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
+        # The report job UUID is a bearer capability: only its redacted ref may be logged.
+        assert "job-1" not in caplog.text
+        assert log_identifier_ref("job-1") in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_report_ask_failure_redacts_job_uuid_in_logs(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+        caplog,
+    ):
+        """A non-timeout report-ask failure degrades gracefully and never logs the raw job UUID."""
+
+        async def report_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research",
+                    target="report",
+                    report_action="ask",
+                    raw=None,
+                )
+            }
+
+        async def report_ask_raises(_state):
+            raise ValueError("upstream boom")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            report_ask_fn=report_ask_raises,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Summarize this report")],
+            active_report_job_id="job-1",
+        )
+        with caplog.at_level(logging.WARNING):
+            result = await agent.run(state, thread_id="test-thread")
+
+        content = result["messages"][-1].content
+        assert isinstance(content, str) and content.strip()
+        assert "couldn't" in content.lower() or "could not" in content.lower()
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+        # The report job UUID is a bearer capability: only its redacted ref may be logged.
+        assert "job-1" not in caplog.text
+        assert log_identifier_ref("job-1") in caplog.text
+
     @pytest.mark.asyncio
     async def test_report_edit_degrades_gracefully_when_hook_raises(
         self,
         mock_shallow_research,
         mock_deep_research,
         mock_clarifier,
+        caplog,
     ):
         """A failing report-edit hook returns a user-facing message, not an unhandled error."""
 
@@ -660,12 +716,17 @@ class TestChatResearcherAgent:
             messages=[HumanMessage(content="Rewrite this report")],
             active_report_job_id="job-1",
         )
-        result = await agent.run(state, thread_id="test-thread")
+        with caplog.at_level(logging.WARNING):
+            result = await agent.run(state, thread_id="test-thread")
 
         content = result["messages"][-1].content
         assert isinstance(content, str) and content.strip()
         assert "couldn't" in content.lower() or "could not" in content.lower()
         assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+        # The report job UUID is a bearer capability: only its redacted ref may be logged.
+        assert "job-1" not in caplog.text
+        assert log_identifier_ref("job-1") in caplog.text
 
     @pytest.mark.asyncio
     async def test_run_with_empty_messages(
