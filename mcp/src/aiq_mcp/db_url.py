@@ -27,9 +27,9 @@ def require_test_database_url(value: str, *, label: str) -> str:
     normalized = normalize_postgres_url(value, label=label)
     database_path = urlsplit(normalized).path
     if not re.fullmatch(r"/[^/]+", database_path):
-        raise ValueError(f"{label} must target a test database whose name ends with _test")
+        raise ValueError(f"{label} must target a test database whose name ends with _test or _tests")
 
     database_name = unquote(database_path[1:])
-    if "/" in database_name or not database_name.casefold().endswith("_test"):
-        raise ValueError(f"{label} must target a test database whose name ends with _test")
+    if "/" in database_name or not database_name.casefold().endswith(("_test", "_tests")):
+        raise ValueError(f"{label} must target a test database whose name ends with _test or _tests")
     return normalized

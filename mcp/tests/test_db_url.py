@@ -34,6 +34,8 @@ def test_normalize_postgres_url_rejects_non_postgres_values(value: str) -> None:
     [
         ("postgresql://db.example/aiq_mcp_test", "postgresql://db.example/aiq_mcp_test"),
         ("postgresql+asyncpg://db.example/AIQ_MCP_TEST", "postgresql://db.example/AIQ_MCP_TEST"),
+        ("postgresql://db.example/aiq_mcp_tests", "postgresql://db.example/aiq_mcp_tests"),
+        ("postgresql+asyncpg://db.example/AIQ_MCP_TESTS", "postgresql://db.example/AIQ_MCP_TESTS"),
     ],
 )
 def test_require_test_database_url_accepts_test_database_names(value: str, expected: str) -> None:
@@ -53,5 +55,5 @@ def test_require_test_database_url_accepts_test_database_names(value: str, expec
     ],
 )
 def test_require_test_database_url_refuses_non_test_database_names(value: str) -> None:
-    with pytest.raises(ValueError, match="must target a test database whose name ends with _test"):
+    with pytest.raises(ValueError, match="must target a test database whose name ends with _test or _tests"):
         require_test_database_url(value, label="test URL")
