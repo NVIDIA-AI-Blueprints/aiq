@@ -19,6 +19,7 @@ import logging
 import os
 from collections.abc import AsyncGenerator
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field
 from pydantic import SecretStr
@@ -132,7 +133,8 @@ async def nimble_web_search(
             return (
                 "Error: Nimble web search is unavailable because NIMBLE_API_KEY is not set.\n"
                 "To enable this tool:\n"
-                "1. Get an API key from https://nimbleway.com/\n"
+                "1. Get an API key from "
+                "https://docs.nimbleway.com/nimble-sdk/admin/account-management\n"
                 "2. Set the API key in your environment or in your .env file\n"
                 "3. Restart the application"
             )
@@ -198,7 +200,11 @@ async def nimble_web_search(
             so they are dropped by the caller.
             """
             url = str((getattr(doc, "metadata", {}) or {}).get("url", "") or "")
-            return bool(url) and not url.startswith("/")
+            try:
+                parsed = urlparse(url)
+                return parsed.scheme.lower() in {"http", "https"} and bool(parsed.hostname)
+            except ValueError:
+                return False
 
         def _render(doc) -> str:
             """Render one result as an escaped XML ``<Document>`` block."""

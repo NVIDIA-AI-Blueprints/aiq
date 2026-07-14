@@ -38,6 +38,8 @@ See [`docs/source/customization/configuration-reference.md`](../../docs/source/c
 NIMBLE_API_KEY=...
 ```
 
+Create a key in the [Nimble dashboard](https://docs.nimbleway.com/nimble-sdk/admin/account-management): open **Account Settings > API Keys**, select **Create New API Key**, and copy the key when it is displayed. Nimble displays a new key only once, so store it securely.
+
 You can alternatively set `api_key` directly in the YAML (as a string). Both paths use the standard `nat.data_models.function.FunctionBaseConfig` `SecretStr` handling — the key is not logged.
 
 ## Test
@@ -47,7 +49,7 @@ The package ships three test layers; the first two are credential-free and run e
 ```bash
 # 1. Mocked unit tests + recorded-response replay (credential-free; the default run)
 uv run pytest sources/nimble_web_search -v
-# → 40 passed, 1 skipped (the live test, opt-in below)
+# → credential-free tests pass; the opt-in live test is skipped
 
 # 2. Live integration test (opt-in; exactly one API call, bounded at 120 s)
 AIQ_NIMBLE_LIVE_TESTS=1 NIMBLE_API_KEY=<key> \
@@ -58,7 +60,7 @@ uv run ruff check sources/nimble_web_search
 uv run ruff format --check sources/nimble_web_search
 ```
 
-- **Mocked unit tests** (`test_nimble_register.py`) cover: config defaults / all fields / invalid `search_depth` rejection, missing-key stub + warn-once, key-from-config env hydration, successful render + description fallback, deep depth passthrough, query/content truncation, empty/error handling, retry-then-success, final-retry failure, 401, 403 enterprise-tier, non-default country/locale passthrough, and renderer behavior on titles containing special characters.
+- **Mocked unit tests** (`test_nimble_register.py`) cover: config defaults / all fields / invalid `search_depth` rejection, missing-key stub + warn-once, direct config-key passthrough to the SDK, successful render + description fallback, deep depth passthrough, query/content truncation, empty/error handling, retry-then-success, final-retry failure, 401, 403 enterprise-tier, non-default country/locale passthrough, and renderer behavior on titles containing special characters.
 - **Recorded-response replay** (`test_nimble_recorded_replay.py`) replays real, redacted `NimbleSearchRetriever` responses ([`tests/fixtures/README.md`](tests/fixtures/README.md)) through the full provider pipeline — a deterministic test mode that needs no network and no key.
 - **Live integration** (`test_nimble_live_integration.py`) runs the canned query `NVIDIA CUDA Toolkit documentation` once against the real API with the shipped defaults and asserts the structural output contract: a non-error response containing 1..`max_results` `<Document>` blocks, every block with an http(s) `href` and a title, every block XML-parseable, and at least one non-empty body. Assertions are structural — never content-exact — so ordinary result variation cannot flake the run. Suitable for CI: add `NIMBLE_API_KEY` as a repository secret and set `AIQ_NIMBLE_LIVE_TESTS=1` in the job.
 
@@ -69,7 +71,7 @@ Beyond the mocked unit tests above, verify the provider is fully integrated with
 ```bash
 # 1. Mocked unit tests + recorded replay pass (CI-safe, no credentials)
 uv run pytest sources/nimble_web_search -q
-# → 40 passed, 1 skipped in <1s
+# → credential-free tests pass; the opt-in live test is skipped
 
 # 2. NAT discovers the registered function
 nat info components --types function | grep nimble_web_search
@@ -100,9 +102,9 @@ The provider exposes the following Nimble-specific surface. Defaults are tuned f
 | Localization — language | `locale` | `en` | ISO 639-1 language code (e.g. `fr`, `ja`). |
 | Per-result content size | `max_content_length` | `10000` chars | Truncates each result's body to N chars (3-char ellipsis included). Minimum `1`; set to `null` to disable truncation; omit to use default. |
 | Retries | `max_retries` | `3` | Exponential backoff on transient errors. Final failure surfaces a friendly per-status message (401, 403, generic). |
-| Auth | `api_key` / `NIMBLE_API_KEY` | env or config | `pydantic.SecretStr`; never logged. Config-side `api_key` hydrates the env var so the underlying SDK can read it. |
+| Auth | `api_key` / `NIMBLE_API_KEY` | env or config | `pydantic.SecretStr`; never logged. A config-side `api_key` is passed directly to the SDK without modifying the process environment. |
 
-Each `<Document>` block in the rendered output carries an `entity_type` (`"OrganicResult"` for SERP results). The `include_answer=True` capability — which would produce an `entity_type="answer"` block first — is intentionally **not exposed** in this initial integration. See [Known limitations](#known-limitations).
+Each rendered `<Document>` block contains the result URL, title, and body. Other provider metadata, including `entity_type`, is not included. The `include_answer=True` capability is intentionally **not exposed** in this initial integration. See [Known limitations](#known-limitations).
 
 ## Search depth
 

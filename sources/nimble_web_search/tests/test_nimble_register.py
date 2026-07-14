@@ -230,7 +230,9 @@ class TestNimbleWebSearchLive:
 
     async def test_search_depth_deep_passes_through(self, fake_langchain_nimble, monkeypatch):
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="body")]
+        fake_langchain_nimble.ainvoke.return_value = [
+            _FakeDoc(url="https://example.com", title="t", page_content="body")
+        ]
 
         config = NimbleWebSearchToolConfig(search_depth="deep")
         builder = MagicMock()
@@ -255,7 +257,7 @@ class TestNimbleWebSearchLive:
         so general research queries never silently use a news/other focus.
         """
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="https://example.com", title="t", page_content="b")]
 
         config = NimbleWebSearchToolConfig()
         builder = MagicMock()
@@ -271,7 +273,7 @@ class TestNimbleWebSearchLive:
         drift to news on their own.)
         """
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="https://example.com", title="t", page_content="b")]
 
         config = NimbleWebSearchToolConfig(focus="news")
         builder = MagicMock()
@@ -283,7 +285,9 @@ class TestNimbleWebSearchLive:
 
     async def test_truncates_long_query(self, fake_langchain_nimble, monkeypatch):
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="body")]
+        fake_langchain_nimble.ainvoke.return_value = [
+            _FakeDoc(url="https://example.com", title="t", page_content="body")
+        ]
 
         config = NimbleWebSearchToolConfig()
         builder = MagicMock()
@@ -297,7 +301,9 @@ class TestNimbleWebSearchLive:
 
     async def test_truncates_content(self, fake_langchain_nimble, monkeypatch):
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="abcdefghijklmnop")]
+        fake_langchain_nimble.ainvoke.return_value = [
+            _FakeDoc(url="https://example.com", title="t", page_content="abcdefghijklmnop")
+        ]
 
         config = NimbleWebSearchToolConfig(max_content_length=8)
         builder = MagicMock()
@@ -312,7 +318,9 @@ class TestNimbleWebSearchLive:
         result never exceeds the configured budget (the ellipsis needs 3 chars of headroom).
         """
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="abcdefghij")]
+        fake_langchain_nimble.ainvoke.return_value = [
+            _FakeDoc(url="https://example.com", title="t", page_content="abcdefghij")
+        ]
 
         config = NimbleWebSearchToolConfig(max_content_length=2)
         builder = MagicMock()
@@ -340,7 +348,7 @@ class TestNimbleWebSearchLive:
 
         fake_langchain_nimble.ainvoke.side_effect = [
             RuntimeError("transient"),
-            [_FakeDoc(url="u", title="t", page_content="ok")],
+            [_FakeDoc(url="https://example.com", title="t", page_content="ok")],
         ]
 
         config = NimbleWebSearchToolConfig(max_retries=3)
@@ -422,7 +430,7 @@ class TestNimbleWebSearchLive:
     async def test_non_default_country_passthrough(self, fake_langchain_nimble, monkeypatch):
         """VERIFIES: NimbleWebSearchToolConfig(country="FR") forwards country='FR' to the SDK."""
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="https://example.com", title="t", page_content="b")]
 
         config = NimbleWebSearchToolConfig(country="FR")
         builder = MagicMock()
@@ -435,7 +443,7 @@ class TestNimbleWebSearchLive:
     async def test_non_default_locale_passthrough(self, fake_langchain_nimble, monkeypatch):
         """VERIFIES: NimbleWebSearchToolConfig(locale="fr") forwards locale='fr' to the SDK."""
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="https://example.com", title="t", page_content="b")]
 
         config = NimbleWebSearchToolConfig(locale="fr")
         builder = MagicMock()
@@ -448,7 +456,7 @@ class TestNimbleWebSearchLive:
     async def test_country_locale_combined_passthrough(self, fake_langchain_nimble, monkeypatch):
         """VERIFIES: Both country and locale non-defaults are forwarded together to the SDK."""
         monkeypatch.setenv("NIMBLE_API_KEY", "sk-env")
-        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="u", title="t", page_content="b")]
+        fake_langchain_nimble.ainvoke.return_value = [_FakeDoc(url="https://example.com", title="t", page_content="b")]
 
         config = NimbleWebSearchToolConfig(country="JP", locale="ja")
         builder = MagicMock()

@@ -61,6 +61,25 @@ class TestUnresolvableUrlFiltering:
         assert "example.com/a" in result and "example.com/b" in result
         assert "/goto?url=" not in result
 
+    async def test_non_http_or_hostless_urls_are_filtered(
+        self, fake_langchain_nimble, make_fake_document, assert_search_contract
+    ):
+        fake_langchain_nimble.ainvoke.return_value = [
+            make_fake_document(url="javascript:alert(1)", title="Script", description="invalid scheme"),
+            make_fake_document(url="example.com/no-scheme", title="No scheme", description="relative URL"),
+            make_fake_document(url="ftp://example.com/file", title="FTP", description="invalid scheme"),
+            make_fake_document(url="https:///missing-host", title="No host", description="invalid absolute URL"),
+            make_fake_document(url="https://example.com/ok", title="OK", description="valid URL"),
+        ]
+
+        result = await _run_provider(NimbleWebSearchToolConfig(), "q")
+
+        blocks = assert_search_contract(result, max_results=5)
+        assert len(blocks) == 1
+        assert "https://example.com/ok" in result
+        assert "javascript:" not in result
+        assert "ftp://" not in result
+
     async def test_all_unresolvable_response_is_retried(
         self, fake_langchain_nimble, make_fake_document, assert_search_contract, monkeypatch
     ):

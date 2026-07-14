@@ -213,7 +213,7 @@ functions:
     max_results: 5
     max_content_length: 10000
 
-  deep_web_search_tool:
+  advanced_web_search_tool:
     _type: nimble_web_search
     max_results: 5
     search_depth: deep
