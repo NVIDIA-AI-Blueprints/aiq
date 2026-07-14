@@ -22,9 +22,11 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 
 from aiq_agent.agents.chat_researcher.agent import ChatResearcherAgent
+from aiq_agent.agents.chat_researcher.models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
+from aiq_agent.agents.chat_researcher.models import WorkflowFailure
 
 
 class TestChatResearcherAgent:
@@ -209,6 +211,32 @@ class TestChatResearcherAgent:
         result = await agent.run(state, thread_id="test-thread")
 
         assert result is not None
+        assert result.get("workflow_outcome") is None
+
+    @pytest.mark.asyncio
+    async def test_shallow_research_failure_sets_terminal_outcome(
+        self,
+        mock_intent_classifier,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        async def shallow_boom(_state):
+            raise RuntimeError("provider detail must stay private")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=mock_intent_classifier,
+            shallow_research_fn=shallow_boom,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            enable_escalation=False,
+        )
+
+        state = ChatResearcherState(messages=[HumanMessage(content="What is CUDA?")])
+        result = await agent.run(state, thread_id="test-shallow-fail")
+
+        assert "try again" in result["messages"][-1].content.lower()
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "provider detail" not in result["workflow_outcome"].error
 
     @pytest.mark.asyncio
     async def test_run_deep_research_flow(
@@ -553,6 +581,8 @@ class TestChatResearcherAgent:
         content = result["messages"][-1].content
         assert content
         assert "try again" in content.lower()
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "writer-agent" not in result["workflow_outcome"].error
 
     @pytest.mark.asyncio
     async def test_report_ask_degrades_gracefully_when_hook_raises(

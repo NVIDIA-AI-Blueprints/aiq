@@ -16,11 +16,14 @@ from typing import Any
 import pytest
 from langchain_core.messages import AIMessage
 
+from aiq_agent.agents.chat_researcher.models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
+from aiq_agent.agents.chat_researcher.models import WorkflowFailure
+from aiq_agent.agents.chat_researcher.models import WorkflowOutcome
+from aiq_agent.agents.chat_researcher.models import WorkflowSuccess
 from aiq_agent.common.logging_utils import log_identifier_ref
 from aiq_mcp.job_store import Job
-from aiq_mcp.jobs import _FAILURE_HANDLER
 from aiq_mcp.jobs import JobManager
 
 
@@ -32,15 +35,15 @@ class _Runner:
         intent: str = "research",
         gate: asyncio.Event | None = None,
         result: str = "research answer",
-        log_no_sources: bool = False,
-        raise_after_log: bool = False,
+        failure: str | None = None,
+        raise_on_run: bool = False,
     ):
         self.depth = depth
         self.intent = intent
         self.gate = gate
         self.result = result
-        self.log_no_sources = log_no_sources
-        self.raise_after_log = raise_after_log
+        self.failure = failure
+        self.raise_on_run = raise_on_run
         self.run_calls: list[tuple[str, str]] = []
 
     async def classify(self, query: str) -> dict[str, Any]:
@@ -53,15 +56,15 @@ class _Runner:
             result["messages"] = [AIMessage(content="Hello from AI-Q")]
         return result
 
-    async def run_query(self, query: str, *, conversation_id: str) -> str:
+    async def run_query(self, query: str, *, conversation_id: str) -> WorkflowOutcome:
         self.run_calls.append((query, conversation_id))
         if self.gate is not None:
             await self.gate.wait()
-        if self.log_no_sources:
-            logging.getLogger("aiq_agent").warning("No verifiable sources were produced")
-        if self.raise_after_log:
-            raise RuntimeError("workflow failed after logging")
-        return self.result
+        if self.raise_on_run:
+            raise RuntimeError("workflow failed")
+        if self.failure is not None:
+            return WorkflowFailure(error=self.failure)
+        return WorkflowSuccess(result=self.result)
 
 
 class _MemoryJobStore:
@@ -635,7 +638,7 @@ async def test_job_logs_use_opaque_reference_not_capability_uuid(caplog) -> None
 @pytest.mark.asyncio
 async def test_workflow_exception_does_not_log_capability_uuid(caplog) -> None:
     class _CapabilityEchoingRunner(_Runner):
-        async def run_query(self, query: str, *, conversation_id: str) -> str:
+        async def run_query(self, query: str, *, conversation_id: str) -> WorkflowOutcome:
             del query
             raise RuntimeError(f"workflow failed for conversation {conversation_id}")
 
@@ -659,7 +662,6 @@ async def test_workflow_exception_does_not_log_capability_uuid(caplog) -> None:
     assert job_id not in caplog.text
     assert log_identifier_ref(job_id) in caplog.text
     assert "RuntimeError" in caplog.text
-    assert job_id not in _FAILURE_HANDLER._captures
 
 
 @pytest.mark.asyncio
@@ -709,26 +711,6 @@ async def test_claim_failure_marks_queued_or_owned_job_failed(fail_after_claim: 
     assert log_identifier_ref(job_id) in caplog.text
     assert job_id not in caplog.text
     assert "claim-failure-secret" not in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_failure_capture_does_not_leak_when_workflow_raises() -> None:
-    manager = _manager(_Runner(log_no_sources=True, raise_after_log=True))
-    await manager.start()
-    try:
-        submitted = await manager.submit("query", "anonymous")
-        job_id = submitted["job_id"]
-        report = await manager.wait_for_completion(job_id, "anonymous", timeout=1)
-    finally:
-        await manager.stop()
-
-    assert report == {
-        "job_id": job_id,
-        "depth": "shallow",
-        "state": "failed",
-        "error": "Research task failed (RuntimeError). Check server logs for details.",
-    }
-    assert job_id not in _FAILURE_HANDLER._captures
 
 
 @pytest.mark.asyncio
@@ -784,7 +766,7 @@ async def test_transient_heartbeat_failure_retries_without_exposing_details(capl
 async def test_unexpected_heartbeat_task_failure_cannot_skip_job_cleanup(caplog, monkeypatch) -> None:
     gate = asyncio.Event()
     heartbeat_failed = asyncio.Event()
-    manager = _manager(_Runner(gate=gate, log_no_sources=True, raise_after_log=True))
+    manager = _manager(_Runner(gate=gate, raise_on_run=True))
 
     async def _fail_heartbeat(job_id: str) -> None:
         del job_id
@@ -814,7 +796,6 @@ async def test_unexpected_heartbeat_task_failure_cannot_skip_job_cleanup(caplog,
     assert log_identifier_ref(job_id) in caplog.text
     assert job_id not in caplog.text
     assert "heartbeat-secret" not in caplog.text
-    assert job_id not in _FAILURE_HANDLER._captures
 
 
 @pytest.mark.asyncio
@@ -1010,44 +991,10 @@ async def test_deep_poll_includes_todos_and_remains_principal_scoped() -> None:
         await manager.stop()
 
 
+@pytest.mark.parametrize("depth", ["shallow", "deep"])
 @pytest.mark.asyncio
-async def test_swallowed_workflow_failure_is_persisted_as_failed() -> None:
-    manager = _manager(_Runner(log_no_sources=True))
-    await manager.start()
-    try:
-        submitted = await manager.submit("query", "anonymous")
-        report = await manager.wait_for_completion(submitted["job_id"], "anonymous", timeout=1)
-    finally:
-        await manager.stop()
-
-    assert report == {
-        "job_id": submitted["job_id"],
-        "depth": "shallow",
-        "state": "failed",
-        "error": (
-            "Research produced no verifiable sources - the model answered without invoking search tools. "
-            "Try rephrasing as a lookup that obviously requires web search."
-        ),
-    }
-    assert submitted["job_id"] not in _FAILURE_HANDLER._captures
-
-
-@pytest.mark.asyncio
-async def test_exception_info_workflow_failure_is_persisted_as_sanitized_failed(caplog) -> None:
-    class EmptySourceRegistryError(RuntimeError):
-        pass
-
-    class _ExceptionLoggingRunner(_Runner):
-        async def run_query(self, query: str, *, conversation_id: str) -> str:
-            del query, conversation_id
-            try:
-                raise EmptySourceRegistryError("registry is empty")
-            except EmptySourceRegistryError:
-                logging.getLogger("aiq_agent").exception("agent swallowed source failure")
-            return "fallback answer"
-
-    caplog.set_level(logging.ERROR, logger="aiq_agent")
-    manager = _manager(_ExceptionLoggingRunner())
+async def test_structured_workflow_failure_is_persisted_as_failed(depth: str) -> None:
+    manager = _manager(_Runner(depth=depth, failure=RESEARCH_WORKFLOW_FAILURE_ERROR))
     await manager.start()
     try:
         submitted = await manager.submit("query", "anonymous")
@@ -1058,26 +1005,15 @@ async def test_exception_info_workflow_failure_is_persisted_as_sanitized_failed(
     finally:
         await manager.stop()
 
-    expected_error = "Research task failed (EmptySourceRegistryError). Check server logs for details."
-    assert report == {
+    expected = {
         "job_id": job_id,
-        "depth": "shallow",
+        "depth": depth,
         "state": "failed",
-        "error": expected_error,
+        "error": RESEARCH_WORKFLOW_FAILURE_ERROR,
     }
-    assert polled == {
-        "job_id": job_id,
-        "depth": "shallow",
-        "state": "failed",
-        "error": expected_error,
-        "todos": [],
-    }
-    assert final_report == report
-    assert "registry is empty" in caplog.text
-    assert "registry is empty" not in report["error"]
-    assert "registry is empty" not in polled["error"]
-    assert "registry is empty" not in final_report["error"]
-    assert job_id not in _FAILURE_HANDLER._captures
+    assert report == expected
+    assert polled == {**expected, "todos": []}
+    assert final_report == expected
 
 
 def test_operational_reconciliation_defaults_are_frozen() -> None:
@@ -1139,7 +1075,6 @@ async def test_stop_during_claim_persists_cancellation(claim_before_cancel: bool
     assert job.error == "Research task was cancelled before completion."
     assert job.runner_id == ("pod-a" if claim_before_cancel else None)
     assert runner.run_calls == []
-    assert job_id not in _FAILURE_HANDLER._captures
 
 
 @pytest.mark.asyncio
@@ -1167,7 +1102,6 @@ async def test_stop_before_job_task_starts_persists_cancellation() -> None:
     assert job.error == "Research task was cancelled before completion."
     assert job.runner_id is None
     assert runner.run_calls == []
-    assert job_id not in _FAILURE_HANDLER._captures
 
 
 @pytest.mark.asyncio
@@ -1191,7 +1125,6 @@ async def test_stop_cancels_active_job_and_persists_exact_failure() -> None:
     assert job is not None
     assert job.state == "failed"
     assert job.error == "Research task was cancelled before completion."
-    assert job_id not in _FAILURE_HANDLER._captures
 
 
 @pytest.mark.asyncio

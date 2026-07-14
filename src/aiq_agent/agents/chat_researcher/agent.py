@@ -52,8 +52,10 @@ try:
 except ImportError:
     _AuthError = None  # type: ignore[assignment,misc]
 
+from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from .models import ChatResearcherState
 from .models import ShallowResult
+from .models import WorkflowFailure
 from .utils import trim_message_history
 
 logger = logging.getLogger(__name__)
@@ -65,6 +67,10 @@ logger = logging.getLogger(__name__)
 # changes. Mirrored by the UI parser in frontends/ui/src/features/chat/hooks/use-websocket-chat.ts.
 _ESCALATION_KIND_DEEP_RESEARCH = "deep_research"
 _ESCALATION_KIND_REPORT_EDIT = "report_edit"
+
+
+def _research_workflow_failure() -> WorkflowFailure:
+    return WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
 
 def _job_escalation_message(kind: str, job_id: str) -> str:
@@ -163,6 +169,7 @@ class ChatResearcherAgent:
                         update={
                             "messages": [AIMessage(content=error_msg)],
                             "original_query": original_query,
+                            "workflow_outcome": _research_workflow_failure(),
                         },
                     )
 
@@ -227,6 +234,7 @@ class ChatResearcherAgent:
                 # source registry or transient failure; the user should rephrase and retry.
                 return {
                     "messages": [AIMessage(content=err_msg)],
+                    "workflow_outcome": _research_workflow_failure(),
                     "shallow_result": ShallowResult(
                         answer=err_msg,
                         confidence="high",
@@ -239,6 +247,7 @@ class ChatResearcherAgent:
                     err_msg = str(e)
                     return {
                         "messages": [AIMessage(content=err_msg)],
+                        "workflow_outcome": _research_workflow_failure(),
                         "shallow_result": ShallowResult(
                             answer=err_msg,
                             confidence="high",
@@ -251,6 +260,7 @@ class ChatResearcherAgent:
                 # occurred; escalating to deep research will not resolve an unexpected exception.
                 return {
                     "messages": [AIMessage(content=err_msg)],
+                    "workflow_outcome": _research_workflow_failure(),
                     "shallow_result": ShallowResult(
                         answer=err_msg,
                         confidence="high",
@@ -289,7 +299,10 @@ class ChatResearcherAgent:
                     # before enqueue when a selected source isn't connected.
                     if _AuthError and isinstance(e, _AuthError):
                         logger.warning("Auth required before deep research submit: %s", e)
-                        return {"messages": [AIMessage(content=str(e))]}
+                        return {
+                            "messages": [AIMessage(content=str(e))],
+                            "workflow_outcome": _research_workflow_failure(),
+                        }
                     raise
                 escalation = _job_escalation_message(_ESCALATION_KIND_DEEP_RESEARCH, job_id)
                 return {"messages": [AIMessage(content=escalation)]}
@@ -348,24 +361,34 @@ class ChatResearcherAgent:
                         "This may be due to a temporary issue or the question may need to be rephrased. "
                         "Please try again."
                     )
-                return {"messages": [AIMessage(content=err_msg)]}
+                return {
+                    "messages": [AIMessage(content=err_msg)],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
             except Exception as e:
                 if _AuthError and isinstance(e, _AuthError):
                     logger.warning("Auth error in deep research: %s", e)
-                    return {"messages": [AIMessage(content=str(e))]}
+                    return {
+                        "messages": [AIMessage(content=str(e))],
+                        "workflow_outcome": _research_workflow_failure(),
+                    }
                 # Inline (synchronous CLI) path: a raised exception would crash the whole CLI turn.
                 # Degrade to a chat message instead (the error is logged for debugging).
                 logger.error("Inline deep research failed (error_type=%s)", type(e).__name__, exc_info=True)
                 return {
                     "messages": [
                         AIMessage(content="I ran into an error while producing that report. Please try again.")
-                    ]
+                    ],
+                    "workflow_outcome": _research_workflow_failure(),
                 }
             if not result.messages:
                 error_message = "An error occurred during deep research."
                 logger.error(error_message)
                 final_message = AIMessage(content=error_message)
-                return {"messages": [final_message]}
+                return {
+                    "messages": [final_message],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
             else:
                 report_message = result.messages[-1]
                 report_md = report_message.content
@@ -535,6 +558,7 @@ class ChatResearcherAgent:
                 "data_sources": state.data_sources,
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
+                "workflow_outcome": None,
                 "skip_clarifier": state.skip_clarifier,
                 "active_report_job_id": state.active_report_job_id,
                 # Pass through; the keep-if-set reducer preserves a prior in-session report when

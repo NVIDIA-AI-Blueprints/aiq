@@ -31,6 +31,9 @@ from mcp.shared.version import LATEST_PROTOCOL_VERSION
 from mcp.types import Implementation
 from mcp.types import TextContent
 
+from aiq_agent.agents.chat_researcher.models import RESEARCH_WORKFLOW_FAILURE_ERROR
+from aiq_agent.agents.chat_researcher.models import WorkflowFailure
+from aiq_agent.agents.chat_researcher.models import WorkflowSuccess
 from aiq_mcp.db_url import normalize_postgres_url
 from aiq_mcp.job_store import Job
 from aiq_mcp.job_store import JobStore
@@ -68,12 +71,21 @@ class _ProtocolRunner:
             "depth_decision": {"decision": "deep"},
         }
 
-    async def run_query(self, query: str, *, conversation_id: str) -> str:
+    async def run_query(self, query: str, *, conversation_id: str) -> WorkflowSuccess:
         self.run_calls.append((query, conversation_id))
         self.background_started.set()
         await self.release.wait()
         self.background_completed.set()
-        return _ANSWER
+        return WorkflowSuccess(result=_ANSWER)
+
+
+class _ProtocolFailureRunner(_ProtocolRunner):
+    async def run_query(self, query: str, *, conversation_id: str) -> WorkflowFailure:
+        self.run_calls.append((query, conversation_id))
+        self.background_started.set()
+        await self.release.wait()
+        self.background_completed.set()
+        return WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
 
 class _MemoryJobStore:
@@ -428,6 +440,69 @@ async def test_real_client_background_job_survives_submit_request() -> None:
 
     await _exercise_complete_client_flow(runtime_factory, runner, manager, store)
 
+    assert store.init_count == 1
+    assert store.close_count == 1
+
+
+@pytest.mark.asyncio
+async def test_real_client_surfaces_structured_workflow_failure() -> None:
+    runner = _ProtocolFailureRunner()
+    store = _MemoryJobStore()
+    manager = JobManager(
+        runner,  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        runner_id="protocol-failure-runner",
+        heartbeat_interval_seconds=0,
+        ttl_sweep_interval_seconds=0,
+        stale_job_after_seconds=3600,
+    )
+
+    def runtime_factory(port: int) -> MCPRuntime:
+        return MCPRuntime(
+            _settings(port),
+            runner=runner,
+            jobs_factory=lambda: manager,
+            validate_startup=lambda: None,
+        )
+
+    observed_headers: list[set[str]] = []
+    async with _serve_runtime(runtime_factory) as (_runtime, endpoint):
+        async with _client_session(endpoint, observed_headers) as (session, _initialized, _get_session_id):
+            submitted = _structured(await session.call_tool("submit_query", {"query": _QUESTION}))
+            job_id = submitted["job_id"]
+            assert submitted == {
+                "job_id": job_id,
+                "depth": "deep",
+                "state": "queued",
+                "estimated_duration_seconds": 180,
+                "first_poll_after_seconds": 180,
+            }
+
+            await asyncio.wait_for(runner.background_started.wait(), timeout=5)
+            background_task = manager._active_tasks[job_id]
+            runner.release.set()
+            await asyncio.wait_for(runner.background_completed.wait(), timeout=5)
+            await asyncio.wait_for(asyncio.shield(background_task), timeout=5)
+
+            assert _structured(await session.call_tool("poll_query", {"job_id": job_id})) == {
+                "job_id": job_id,
+                "depth": "deep",
+                "state": "failed",
+                "error": RESEARCH_WORKFLOW_FAILURE_ERROR,
+                "todos": [],
+            }
+            assert _structured(await session.call_tool("get_final_report", {"job_id": job_id})) == {
+                "job_id": job_id,
+                "depth": "deep",
+                "state": "failed",
+                "error": RESEARCH_WORKFLOW_FAILURE_ERROR,
+            }
+
+    failed_job = await store.get(job_id)
+    assert failed_job is not None
+    assert failed_job.state == "failed"
+    assert failed_job.result is None
+    assert failed_job.error == RESEARCH_WORKFLOW_FAILURE_ERROR
     assert store.init_count == 1
     assert store.close_count == 1
 

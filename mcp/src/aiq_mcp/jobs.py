@@ -19,13 +19,12 @@ import logging
 import socket
 import uuid
 from contextlib import suppress
-from contextvars import ContextVar
-from dataclasses import dataclass
 from typing import Any
 from typing import Protocol
 
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
+from aiq_agent.agents.chat_researcher.models import WorkflowFailure
 from aiq_agent.common.logging_utils import log_identifier_ref
 
 from .job_store import Job
@@ -42,96 +41,6 @@ class CheckpointTodoReaderProtocol(Protocol):
     async def close(self) -> None: ...
 
     async def get_todos(self, thread_id: str) -> list[dict[str, str]]: ...
-
-
-# Per-job context binding so the log handler below can attribute captured
-# errors back to the job that triggered them. asyncio tasks inherit the
-# context at create_task time, so the binding survives the awaits inside
-# _run_job and the workflow call chain.
-_current_job_id: ContextVar[str | None] = ContextVar("aiq_mcp_current_job_id", default=None)
-
-
-@dataclass(frozen=True)
-class _CapturedWorkflowFailure:
-    public_error: str
-    log_error: str
-
-
-class _WorkflowFailureCapture(logging.Handler):
-    """Capture workflow-level errors that the agent layer swallows.
-
-    The chat_researcher converts certain shallow_researcher failures (most
-    notably ``EmptySourceRegistryError`` - research returned no verifiable
-    citations) into a polite "please rephrase" string and yields that as the
-    successful result. The end user then sees ``state="complete"`` with a
-    cryptic message and no idea what actually went wrong.
-
-    This handler watches ``aiq_agent`` log records during a job's run, and
-    when it sees one of the swallowed exceptions, stashes a sanitized public
-    error keyed by job_id. ``_run_job`` consumes the stash after the workflow
-    returns and (if non-empty) marks the job ``state="failed"`` instead of
-    returning the canned fallback text.
-
-    Per-job isolation is via the ``_current_job_id`` ContextVar: concurrent
-    jobs each see their own job_id thanks to asyncio's context-copy semantics.
-    """
-
-    _CAPTURED_EXCEPTIONS = ("EmptySourceRegistryError",)
-
-    def __init__(self) -> None:
-        super().__init__(level=logging.WARNING)
-        self._captures: dict[str, _CapturedWorkflowFailure] = {}
-
-    def emit(self, record: logging.LogRecord) -> None:
-        job_id = _current_job_id.get()
-        if not job_id:
-            return
-        # Prefer the raw exception (logger.exception(...) sets exc_info).
-        if record.exc_info and record.exc_info[1] is not None:
-            exc = record.exc_info[1]
-            if type(exc).__name__ in self._CAPTURED_EXCEPTIONS:
-                self._captures[job_id] = _CapturedWorkflowFailure(
-                    public_error=_sanitize_error(exc),
-                    log_error=f"{type(exc).__name__}: {exc}",
-                )
-                return
-        # Fallback: chat_researcher's downgraded warning when the exception
-        # has already been caught upstream.
-        # TODO(#3b): This fallback matches on the substring "no verifiable
-        # sources" in the log message, which is brittle — it silently breaks if
-        # the upstream wording changes. Prefer a structured signal (a dedicated
-        # exception type added to _CAPTURED_EXCEPTIONS, or a stable error code /
-        # log extra) over string matching. Tracked for follow-up; not changing
-        # behavior here.
-        msg = record.getMessage()
-        if "no verifiable sources" in msg.lower() and job_id not in self._captures:
-            self._captures[job_id] = _CapturedWorkflowFailure(
-                public_error=(
-                    "Research produced no verifiable sources - the model answered "
-                    "without invoking search tools. Try rephrasing as a lookup that "
-                    "obviously requires web search."
-                ),
-                log_error=msg,
-            )
-
-    def consume(self, job_id: str) -> _CapturedWorkflowFailure | None:
-        return self._captures.pop(job_id, None)
-
-    def discard(self, job_id: str) -> None:
-        """Drop any capture for ``job_id`` without returning it.
-
-        Called unconditionally when a job finishes so an entry stashed during a
-        run that then took an exception/cancel path (which skips ``consume``)
-        cannot linger for the process lifetime.
-        """
-        self._captures.pop(job_id, None)
-
-
-_FAILURE_HANDLER = _WorkflowFailureCapture()
-# Guard against double-install if jobs.py is re-imported.
-_aiq_logger = logging.getLogger("aiq_agent")
-if not any(isinstance(h, _WorkflowFailureCapture) for h in _aiq_logger.handlers):
-    _aiq_logger.addHandler(_FAILURE_HANDLER)
 
 
 _SHALLOW_FIRST_POLL_SECONDS = 5
@@ -325,7 +234,6 @@ class JobManager:
         return _render_final_report(job)
 
     async def _run_job(self, job_id: str, query: str) -> None:
-        job_id_token = _current_job_id.set(job_id)
         job_ref = log_identifier_ref(job_id)
         heartbeat_task: asyncio.Task | None = None
         try:
@@ -338,21 +246,13 @@ class JobManager:
                 name=f"aiq-mcp-heartbeat-{job_ref}",
             )
             logger.info("Job %s: running workflow", job_ref)
-            result = await self._runner.run_query(query, conversation_id=job_id)
-            # If a swallowed workflow error was captured during the run, surface
-            # it as the job's failure reason instead of the polite fallback text
-            # the agent layer returned as ``result``.
-            captured = _FAILURE_HANDLER.consume(job_id)
-            if captured is not None:
-                logger.info(
-                    "Job %s: surfaced swallowed workflow error: %s",
-                    job_ref,
-                    captured.log_error.replace(job_id, job_ref),
-                )
+            outcome = await self._runner.run_query(query, conversation_id=job_id)
+            if isinstance(outcome, WorkflowFailure):
+                logger.info("Job %s: workflow returned a failed outcome", job_ref)
                 await self._store.update(
                     job_id,
                     state="failed",
-                    error=captured.public_error,
+                    error=outcome.error,
                     from_states=("running",),
                     runner_id=self._runner_id,
                 )
@@ -360,7 +260,7 @@ class JobManager:
                 await self._store.update(
                     job_id,
                     state="complete",
-                    result=result,
+                    result=outcome.result,
                     from_states=("running",),
                     runner_id=self._runner_id,
                 )
@@ -381,21 +281,15 @@ class JobManager:
                 error=_sanitize_error(exc),
             )
         finally:
-            try:
-                if heartbeat_task is not None:
-                    heartbeat_task.cancel()
-                    [heartbeat_outcome] = await asyncio.gather(heartbeat_task, return_exceptions=True)
-                    if isinstance(heartbeat_outcome, Exception):
-                        logger.warning(
-                            "Job %s: heartbeat task exited unexpectedly (%s)",
-                            job_ref,
-                            type(heartbeat_outcome).__name__,
-                        )
-            finally:
-                # Guarantee the capture entry and context binding are gone even
-                # if heartbeat cleanup itself is interrupted or fails.
-                _FAILURE_HANDLER.discard(job_id)
-                _current_job_id.reset(job_id_token)
+            if heartbeat_task is not None:
+                heartbeat_task.cancel()
+                [heartbeat_outcome] = await asyncio.gather(heartbeat_task, return_exceptions=True)
+                if isinstance(heartbeat_outcome, Exception):
+                    logger.warning(
+                        "Job %s: heartbeat task exited unexpectedly (%s)",
+                        job_ref,
+                        type(heartbeat_outcome).__name__,
+                    )
 
     async def _persist_job_failure(self, job_id: str, *, job_ref: str, error: str) -> None:
         """Best-effort failure transition for an ambiguous claim outcome."""

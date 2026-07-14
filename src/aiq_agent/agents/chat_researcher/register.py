@@ -40,13 +40,16 @@ from nat.builder.context import Context
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
-from nat.data_models.api_server import ChatResponse
 from nat.data_models.component_ref import FunctionGroupRef
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
+from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
+from .models import ChatResearcherResponse
 from .models import ChatResearcherState
+from .models import WorkflowFailure
+from .models import WorkflowSuccess
 from .utils import _extract_query_context
 
 logger = logging.getLogger(__name__)
@@ -61,6 +64,36 @@ _ensure_otel_redaction_registered()
 def _log_conversation_reference(message: str, conversation_id: str) -> None:
     """Log a correlation reference without exposing the conversation identifier."""
     logger.info(message, log_identifier_ref(conversation_id))
+
+
+def _render_workflow_response(
+    result: ChatResearcherState | dict[str, Any],
+    *,
+    model: str,
+    response_id: str = "research_response",
+) -> ChatResearcherResponse:
+    """Render chat text and an explicit terminal outcome at the workflow boundary."""
+    if isinstance(result, dict):
+        messages = result.get("messages", [])
+        raw_outcome = result.get("workflow_outcome")
+    else:
+        messages = result.messages
+        raw_outcome = result.workflow_outcome
+
+    if messages:
+        response_content = messages[-1].content
+    else:
+        response_content = "No response generated."
+        raw_outcome = raw_outcome or WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    if not isinstance(response_content, str):
+        response_content = str(response_content)
+
+    if isinstance(raw_outcome, dict) and raw_outcome.get("status") == "failed":
+        raw_outcome = WorkflowFailure.model_validate(raw_outcome)
+    outcome = raw_outcome if isinstance(raw_outcome, WorkflowFailure) else WorkflowSuccess(result=response_content)
+    response = _create_chat_response(response_content, response_id=response_id, model=model)
+    return ChatResearcherResponse(**response.model_dump(), workflow_outcome=outcome)
 
 
 def _build_report_ask_prompt(
@@ -534,7 +567,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
 
-    async def _run(query: object) -> ChatResponse:
+    async def _run(query: object) -> ChatResearcherResponse:
         import os
         import sys
         import uuid
@@ -552,7 +585,10 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
                 threading.Thread(target=exit_after_error, daemon=False).start()
 
-            return api_key_error_response
+            return ChatResearcherResponse(
+                **api_key_error_response.model_dump(),
+                workflow_outcome=WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            )
 
         # For --input mode, use a fresh conversation_id to avoid loading old checkpoint state
         # This ensures each run starts with a clean conversation history
@@ -665,16 +701,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         finally:
             reset_session_registry(token)
 
-        if isinstance(result, dict):
-            messages = result.get("messages", [])
-        else:
-            messages = getattr(result, "messages", [])
-
-        if messages:
-            response_content = messages[-1].content
-        else:
-            response_content = "No response generated."
-        # return _create_chat_response(response_content, response_id="research_response")
+        response = _render_workflow_response(result, model=workflow_id)
 
         # Exit after response when --input is provided
         if "--input" in sys.argv:
@@ -687,6 +714,6 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
             threading.Thread(target=exit_after_response, daemon=False).start()
 
-        return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
+        return response
 
     yield FunctionInfo.from_fn(_run, description="Chat deep researcher with intent routing and escalation.")

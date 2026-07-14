@@ -69,7 +69,8 @@ this document and its golden tests.
 - NAT 1.8 compatibility covers `load_workflow(config_file)`,
   `SessionManager.shared_builder`, `get_function("intent_classifier")`,
   `session(conversation_id=...)`, `session.run(query)`,
-  `runner.result(to_type=str)`, and `Context.scope`.
+  `runner.result(to_type=ChatResearcherResponse)`, explicit `success`/`failed`
+  workflow outcomes, and `Context.scope`.
 - The public NAT workflow is loaded in a PostgreSQL-backed compatibility test
   without invoking external model or search calls.
 

@@ -19,6 +19,7 @@ from urllib.parse import urlunsplit
 import asyncpg
 import pytest
 
+from aiq_agent.agents.chat_researcher.models import WorkflowSuccess
 from aiq_mcp.db_url import normalize_postgres_url
 from aiq_mcp.job_store import JobStore
 from aiq_mcp.jobs import JobManager
@@ -46,11 +47,11 @@ class _Runner:
             "depth_decision": {"decision": self.depth},
         }
 
-    async def run_query(self, query: str, *, conversation_id: str) -> str:
+    async def run_query(self, query: str, *, conversation_id: str) -> WorkflowSuccess:
         self.run_calls.append((query, conversation_id))
         if self.gate is not None:
             await self.gate.wait()
-        return self.result
+        return WorkflowSuccess(result=self.result)
 
 
 @pytest.fixture()

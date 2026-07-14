@@ -21,6 +21,8 @@ from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import Any
 
+from aiq_agent.agents.chat_researcher.models import ChatResearcherResponse
+from aiq_agent.agents.chat_researcher.models import WorkflowOutcome
 from aiq_agent.common.logging_utils import log_identifier_ref
 from nat.builder.context import Context
 from nat.runtime.loader import load_workflow
@@ -109,12 +111,13 @@ class WorkflowRunner:
         query: str,
         *,
         conversation_id: str,
-    ) -> str:
-        """Run the full workflow.
+    ) -> WorkflowOutcome:
+        """Run the full workflow and return its explicit terminal outcome.
 
         ``conversation_id`` is also LangGraph's checkpoint ``thread_id``; MCP
         async jobs pass their ``job_id`` so NAT resume/checkpoint state lines up
-        with the MCP job ledger.
+        with the MCP job ledger. Swallowed agent exceptions arrive as a typed
+        failure instead of fallback text that could be mistaken for success.
         """
         if self._session_manager is None:
             raise RuntimeError("WorkflowRunner.start() must be called before run_query()")
@@ -124,9 +127,9 @@ class WorkflowRunner:
         with Context.scope(conversation_id=conversation_id):
             async with self._session_manager.session(conversation_id=conversation_id) as session:
                 async with session.run(query) as runner:
-                    result = await runner.result(to_type=str)
+                    response = await runner.result(to_type=ChatResearcherResponse)
 
-        return result
+        return response.workflow_outcome
 
 
 def _current_checkpointer_keys() -> set[str]:

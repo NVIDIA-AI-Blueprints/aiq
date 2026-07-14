@@ -11,11 +11,22 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import HumanMessage
 
+from aiq_agent.agents.chat_researcher.models import RESEARCH_WORKFLOW_FAILURE_ERROR
+from aiq_agent.agents.chat_researcher.models import ChatResearcherResponse
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
+from aiq_agent.agents.chat_researcher.models import WorkflowFailure
+from aiq_agent.agents.chat_researcher.models import WorkflowOutcome
+from aiq_agent.agents.chat_researcher.models import WorkflowSuccess
+from aiq_agent.common import _create_chat_response
 from aiq_agent.common.logging_utils import log_identifier_ref
 from aiq_mcp import workflow_runner as workflow_runner_module
 from aiq_mcp.workflow_runner import WorkflowRunner
 from nat.builder.context import Context
+
+
+def _workflow_response(content: str, outcome: WorkflowOutcome) -> ChatResearcherResponse:
+    response = _create_chat_response(content)
+    return ChatResearcherResponse(**response.model_dump(), workflow_outcome=outcome)
 
 
 def test_run_query_requires_explicit_conversation_id(tmp_path) -> None:
@@ -79,16 +90,29 @@ async def test_start_and_stop_own_one_nat_workflow_lifecycle(monkeypatch, tmp_pa
     ]
 
 
+@pytest.mark.parametrize(
+    ("response_content", "workflow_outcome"),
+    [
+        pytest.param("research answer", WorkflowSuccess(result="research answer"), id="success"),
+        pytest.param(
+            "Please try again.",
+            WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            id="failed",
+        ),
+    ],
+)
 @pytest.mark.asyncio
-async def test_run_query_scopes_restores_context_and_redacts_capability_log(tmp_path, caplog) -> None:
+async def test_run_query_returns_structured_outcome_and_restores_context(
+    tmp_path, caplog, response_content: str, workflow_outcome: WorkflowOutcome
+) -> None:
     observed: dict[str, str | None] = {}
     job_id = str(uuid.uuid4())
 
     class _Result:
-        async def result(self, to_type: type[str]) -> str:
+        async def result(self, to_type: type[ChatResearcherResponse]) -> ChatResearcherResponse:
             observed["result_type"] = to_type.__name__
             observed["result_context"] = Context.get().conversation_id
-            return "research answer"
+            return _workflow_response(response_content, workflow_outcome)
 
     class _RunContext:
         async def __aenter__(self) -> _Result:
@@ -121,7 +145,7 @@ async def test_run_query_scopes_restores_context_and_redacts_capability_log(tmp_
     caplog.set_level(logging.INFO, logger="aiq_mcp.workflow_runner")
 
     with Context.scope(conversation_id="outer"):
-        assert await runner.run_query("query", conversation_id=job_id) == "research answer"
+        assert await runner.run_query("query", conversation_id=job_id) == workflow_outcome
         assert Context.get().conversation_id == "outer"
 
     assert observed == {
@@ -129,7 +153,7 @@ async def test_run_query_scopes_restores_context_and_redacts_capability_log(tmp_
         "session_context": job_id,
         "query": "query",
         "run_context": job_id,
-        "result_type": "str",
+        "result_type": "ChatResearcherResponse",
         "result_context": job_id,
     }
     assert job_id not in caplog.text
