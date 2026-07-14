@@ -31,14 +31,16 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
 dependencies = [
-    "nvidia-nat-core==1.6.0",
-    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.6.0",
-    "nvidia-nat-eval==1.6.0",
-    "nvidia-nat-profiler==1.6.0",
-    "deepagents==0.5.0",
-    "langchain-modal==0.0.3",
+    "nvidia-nat-core==1.8.0",
+    "nvidia-nat[langchain,async_endpoints,phoenix,mcp]==1.8.0",
+    "nvidia-nat-eval==1.8.0",
+    "nvidia-nat-profiler==1.8.0",
+    "nvidia-nat-redis==1.8.0",
+    "nvidia-nat-security[guardrails]==1.8.0",
+    "deepagents>=0.6.5",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
+    "langchain-modal==0.0.5",
     "psycopg[binary]>=3.0.0",
     "asyncpg>=0.29.0",
     "aiosqlite>=0.19.0",
@@ -52,6 +54,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+s3 = [
+    "boto3>=1.35.0,<2",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -77,6 +82,11 @@ viz = [
     "pygraphviz>=1.11",
 ]
 
+[tool.aiq.openshell]
+release-tag = "v0.0.80"
+adapter-version = "0.1.0"
+installer-sha256 = "c15d6cb8090e1c7c8d79a320b5bcbdaf1c15c2363942d81e84b56e03b836249e" # pragma: allowlist secret
+
 # -----------------------------------------------------------------------------
 # Workspace members are installed via: uv sync
 # Individual packages: uv pip install -e ./frontends/cli
@@ -90,11 +100,18 @@ aiq_deep_researcher = "aiq_agent.agents.deep_researcher.register"
 aiq_fastapi_extensions = "aiq_agent.fastapi_extensions.register"
 aiq_clarifier = "aiq_agent.agents.clarifier.register"
 aiq_data_source_registry = "aiq_agent.common.data_source_registry"
+aiq_guardrails = "aiq_agent.guardrails.register"
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "sources/**/tests"]
+addopts = "--import-mode=importlib"
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "session"
+markers = [
+    "aws: tests that require AWS resources",
+    "integration: tests that require external services",
+    "opensearch_serverless: tests that require Amazon OpenSearch Serverless",
+]
 
 
 [tool.ruff]
@@ -191,6 +208,8 @@ dev = [
     "tavily-web-search",
     "exa-web-search",
     "nimble-web-search",
+    "duckduckgo-news-search",
+    "polymarket-prediction-market",
     "knowledge-layer[all]",
     "aiq-api",
     "aiq-research-cli",
@@ -198,7 +217,7 @@ dev = [
 ]
 
 [tool.uv]
-prerelease = "if-necessary-or-explicit"
+prerelease = "allow"
 override-dependencies = [
     "authlib>=1.6.11,<2",
     "cryptography>=46.0.6,<47",
@@ -233,6 +252,8 @@ google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }
 nimble-web-search = { workspace = true }
+duckduckgo-news-search = { workspace = true }
+polymarket-prediction-market = { workspace = true }
 knowledge-layer = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }

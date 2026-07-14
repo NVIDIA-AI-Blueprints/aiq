@@ -893,10 +893,25 @@ class TestAuthMiddlewareHelpers:
 
     def test_path_allowed_exact_and_prefix(self) -> None:
         mw = AuthMiddleware(MagicMock(), external_hostnames=set())
+        assert mw._path_allowed("/live") is True
         assert mw._path_allowed("/health") is True
         assert mw._path_allowed("/v1/jobs/async/job/abc/result") is True
         assert mw._path_allowed("/v1/jobs/async/job") is True
         assert mw._path_allowed("/nope") is False
+        # Per-user MCP auth routes must be reachable externally.
+        assert mw._path_allowed("/v1/auth/mcp/gdrive/status") is True
+        assert mw._path_allowed("/v1/auth/mcp/gdrive/connect") is True
+        assert mw._path_allowed("/v1/auth/mcp/gdrive/callback") is True
+
+    def test_mcp_oauth_callback_is_auth_exempt(self) -> None:
+        from aiq_api.auth.middleware import _is_oauth_callback_path
+
+        # Only the OAuth redirect callback is exempt (no AIQ token; secured by state).
+        assert _is_oauth_callback_path("/v1/auth/mcp/gdrive/callback") is True
+        # status/connect must still require auth (they need the principal).
+        assert _is_oauth_callback_path("/v1/auth/mcp/gdrive/status") is False
+        assert _is_oauth_callback_path("/v1/auth/mcp/gdrive/connect") is False
+        assert _is_oauth_callback_path("/v1/data_sources") is False
 
     @pytest.mark.asyncio
     async def test_non_http_passthrough(self) -> None:
@@ -927,6 +942,19 @@ class TestAuthMiddlewareHelpers:
 
 
 class TestAuthMiddlewareExempt:
+    @pytest.mark.asyncio
+    async def test_liveness_exempt_without_auth(self, capture_asgi, external_host):
+        app, state = capture_asgi
+        mw = AuthMiddleware(app, require_auth=True, external_hostnames={external_host.decode()})
+
+        async def send(msg):
+            pass
+
+        scope = _http_scope("/live", host=external_host)
+        await mw(scope, AsyncMock(), send)
+
+        assert state["user"]["type"] == "anonymous"
+
     @pytest.mark.asyncio
     async def test_health_exempt_without_auth(self, capture_asgi, external_host):
         app, state = capture_asgi

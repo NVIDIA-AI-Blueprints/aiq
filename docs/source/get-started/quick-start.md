@@ -70,7 +70,7 @@ The web UI requires Node.js 22+ and npm. If these were available during `./scrip
 ```
 
 ```{tip}
-**Running on a remote VM?** If you access the VM via SSH, you need to forward ports 3000 and 8000 to your local machine: `ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@your-vm-host`. See [Troubleshooting — VM / Remote Development](../resources/troubleshooting.md#vm--remote-development) for details.
+**Running on a remote VM?** If you access the VM via SSH, you need to forward ports 3000 and 8000 to your local machine: `ssh -L 3000:localhost:3000 -L 8000:localhost:8000 user@your-vm-host`. Refer to [Troubleshooting — VM / Remote Development](../resources/troubleshooting.md#vm--remote-development) for details.
 ```
 
 ## Step 3: Ask a Question
@@ -139,6 +139,8 @@ To view detailed agent execution logs (tool calls, routing decisions, LLM intera
 
 Now that you have the system running, explore these topics:
 
+- **[Review recent changes](../resources/changelog.md)** -- See what has changed and choose among the focused [configuration profiles](../customization/configuration-reference.md#provided-config-files)
+- **[Agent Skills](../integration/agent-skills.md)** -- Deploy and call AI-Q from a compatible coding harness
 - **[Architecture Overview](../architecture/overview.md)** -- Understand how the orchestrator, shallow researcher, and deep researcher work together
 - **[Customization](../customization/index.md)** -- Swap models, configure tools, adjust prompts, and tune agent behavior
 - **[Deployment](../deployment/index.md)** -- Run with Docker Compose

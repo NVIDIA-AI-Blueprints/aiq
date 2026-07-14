@@ -10,9 +10,9 @@ LLMs are defined in the `llms` section and referenced by agents and tools. You c
 
 ```yaml
 llms:
-  nemotron_nano_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.7
     top_p: 0.7
@@ -24,9 +24,9 @@ llms:
 
 ```yaml
 llms:
-  nemotron_nano_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 1.0
     top_p: 1.0
@@ -35,7 +35,7 @@ llms:
       enable_thinking: true
 ```
 
-**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_nano_llm`, `llm: nemotron_nano_llm`). Use different keys in `llms` and point agents at them to swap models per role.
+**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_super_llm`, `llm: nemotron_super_llm`). Use different keys in `llms` and point agents at them to swap models per role.
 
 ## Using Downloadable NIMs (Self-Hosted)
 
@@ -50,7 +50,7 @@ Browse available NIMs at [build.nvidia.com](https://build.nvidia.com/explore/dis
 ```bash
 # Example: run Nemotron on port 8080
 docker run --gpus all -p 8080:8000 \
-  nvcr.io/nim/nvidia/nemotron-3-nano-30b-a3b:latest
+  nvcr.io/nim/nvidia/nemotron-3-super-120b-a12b:latest
 ```
 
 Refer to the [NIM documentation](https://docs.nvidia.com/nim/) for GPU requirements, environment variables, and multi-GPU setup.
@@ -61,9 +61,9 @@ Change `base_url` to point to your local NIM instance instead of the hosted API.
 
 ```yaml
 llms:
-  nemotron_nano_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "http://localhost:8080/v1"    # local NIM
     temperature: 0.7
     max_tokens: 8192
@@ -71,7 +71,7 @@ llms:
 ```
 
 ```{note}
-**Nemotron Super — Build Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429 or 503 responses). The default configs use Nemotron Nano for reliability. You can uncomment `nemotron_super_llm` in your config if the endpoint is accessible. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended.
+**Nemotron Super — Build Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429 or 503 responses). The default configs use Nemotron Super. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended.
 ```
 
 You can mix hosted and local NIMs in the same config -- for example, use a local NIM for the high-volume shallow researcher and a hosted NIM for the orchestrator:
@@ -80,14 +80,14 @@ You can mix hosted and local NIMs in the same config -- for example, use a local
 llms:
   local_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "http://localhost:8080/v1"
     temperature: 0.7
     max_tokens: 8192
 
   hosted_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 1.0
     max_tokens: 128000

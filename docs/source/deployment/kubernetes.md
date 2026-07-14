@@ -97,11 +97,19 @@ helm upgrade --install aiq https://helm.ngc.nvidia.com/nvidia/blueprint/charts/a
   --set 'aiq.apps.frontend.imagePullSecrets[0].name=ngc-secret'
 ```
 
-For the full NGC chart workflow (value overrides, upgrades, troubleshooting), see `deploy/helm/README.md` in the source repository.
+For the full NGC chart workflow (value overrides, upgrades, troubleshooting), refer to `deploy/helm/README.md` in the source repository.
 
 ### Using the source chart
 
-If you cloned the repository, you can deploy from the local source chart. See the source chart README at `deploy/helm/deployment-k8s/README.md` in the source repository for full details including Kind local development.
+If you cloned the repository, you can deploy from the local source chart. Refer to the source chart README at `deploy/helm/deployment-k8s/README.md` in the source repository for full details including Kind local development.
+
+The source chart on `develop` derives every namespaced resource from Helm's
+`.Release.Namespace`, which is the value passed with `-n`. The examples use `ns-aiq`,
+but you can choose another namespace by replacing it consistently in Helm, `kubectl`,
+Secret creation, and external bindings such as EKS Pod Identity. The
+`aiq.namespace.create` value controls whether the chart renders a Namespace object; it
+does not override `-n`. This behavior applies to the repository source chart and does not
+change the published NGC 2.0.0 instructions above.
 
 ```bash
 cd deploy/helm
@@ -121,7 +129,7 @@ helm install aiq deployment-k8s/ -n ns-aiq --create-namespace \
   --set aiq.apps.frontend.image.repository=nvcr.io/nvidia/blueprint/aiq-frontend
 ```
 
-To use locally built images (see [Docker Build System](./docker-build.md)):
+To use locally built images (refer to [Docker Build System](./docker-build.md)):
 
 ```bash
 helm install aiq deployment-k8s/ -n ns-aiq --create-namespace \
@@ -154,8 +162,13 @@ Once all pods are running, verify the backend is responding:
 
 ```bash
 kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000 &
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
+
+The chart uses `/live` for the liveness probe and `/health` for readiness. The
+liveness endpoint checks only that the API process responds; database or content-
+encryption outages make the pod unready without causing a restart loop.
 
 The backend API docs are available at `http://localhost:8000/docs` while the port-forward is active.
 
@@ -188,11 +201,11 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml
 ```
 
-For source chart deployments, use `deployment-k8s/` instead of the `.tgz` file (see [Deploy](#deploy)).
+For source chart deployments, use `deployment-k8s/` instead of the `.tgz` file (refer to [Deploy](#deploy)).
 
 ## FRAG Integration
 
-To use the Foundational RAG (FRAG) config, you need a running NVIDIA RAG Blueprint deployment. See the [RAG Blueprint Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/develop/docs/deploy-helm.md) for setup instructions.
+To use the Foundational RAG (FRAG) config, you need a running NVIDIA RAG Blueprint deployment. Refer to the [RAG Blueprint Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/develop/docs/deploy-helm.md) for setup instructions.
 
 ### Same-cluster RAG connection
 
@@ -245,7 +258,7 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   -f aiq-frag-values.yaml
 ```
 
-For complete examples with NGC-specific flags, see `deploy/helm/README.md` in the source repository.
+For complete examples with NGC-specific flags, refer to `deploy/helm/README.md` in the source repository.
 
 ## Secrets Reference
 

@@ -47,6 +47,66 @@ Tools not listed in any data source entry (e.g., utility tools like "think") are
 | `requires_auth` | bool | `false` | If `true`, the UI greys out this source until the user signs in. Use for sources that need user-level OAuth tokens (e.g., enterprise SSO). Sources that use backend API keys (Tavily, Serper) should leave this `false`. |
 | `default_enabled` | bool | `true` | Whether the source is enabled by default when a user first loads the UI |
 
+## Automatic Source Routing
+
+Deep research can run an optional source-router subagent before planning. Request filtering and automatic routing have
+different responsibilities:
+
+1. A request's `data_sources` value is the hard boundary for tools mapped in `data_source_registry`. A mapped tool is
+   callable only when its source ID is selected. Configured tools that are not mapped to a registry source remain
+   callable, including when `data_sources: []` is passed.
+2. The router catalog contains only mapped sources that still have an available runtime tool after request filtering.
+   Unmapped tools are reported separately for diagnostics and are never source recommendations.
+3. The router writes advisory preferred and fallback source guidance. The planner uses that guidance to populate the
+   ordered `preferred_tools` and `fallback_tools` fields of each structured `ResearchQuery`.
+4. Researcher workers receive the complete request-filtered callable tool set. The preferred and fallback fields guide
+   tool order; they are not per-worker tool allowlists.
+
+Set `enable_source_router: false` on `deep_research_agent` to skip the routing step. When enabled, the router uses
+`source_router_llm`, or falls back to `orchestrator_llm` when no router-specific LLM is configured. Routing remains
+advisory in either case: the planner owns the final query plan.
+
+### Domain Catalog
+
+Set `domain_catalog_path` to a YAML or JSON file with this schema:
+
+```yaml
+default_domain_id: general_research
+
+domains:
+  - domain_id: general_research
+    domain_name: General Research
+    description: Broad factual and mixed-domain research.
+    preferred_source_ids:
+      - knowledge_layer
+      - web_search
+    fallback_source_ids:
+      - web_search
+    is_default: true
+```
+
+| Field | Type | Default | Behavior |
+|---|---|---|---|
+| `default_domain_id` | string or null | `null` | Root-level fallback domain. If omitted, the first entry with `is_default: true` is used, then the first domain entry. |
+| `domains` | list | `[]` | Domain routes loaded from an explicitly configured catalog. An explicitly configured empty catalog exposes no domain entries, so the router may use `unconfigured` with runtime fallback sources. When `domain_catalog_path` is omitted, the runtime synthesizes `general_research` instead. |
+| `domain_id` | string | *required* | Stable route identifier returned in the source-routing plan. |
+| `domain_name` | string | *required* | Human-readable route name. |
+| `description` | string | `""` | Guidance for deciding whether the request belongs to this domain. |
+| `preferred_source_ids` | list[string] | `[]` | Ordered primary sources for the domain. IDs unavailable in the active runtime are removed before the router sees the route. |
+| `fallback_source_ids` | list[string] | `[]` | Ordered alternatives. Unavailable IDs are removed before routing. |
+| `is_default` | bool | `false` | Marks a fallback domain when the root `default_domain_id` is not set. |
+
+For each domain, the runtime also computes `unavailable_source_ids` from configured preferred and fallback IDs that do
+not exist in the active mapped source set. The router cannot recommend those sources; it uses an available domain
+fallback instead. If `domain_catalog_path` is omitted, AI-Q creates a `general_research` route whose preferred sources
+are all active mapped sources. Its fallback is `web_search` when available, otherwise the first active mapped source.
+An explicitly configured empty catalog remains empty: the router may return `unconfigured` and use that same runtime
+fallback order. A nonempty configured catalog also uses the runtime fallback when no domain fits.
+
+Refer to the runnable
+[`config_domain_routing_and_skills.yml`](../../../configs/config_domain_routing_and_skills.yml) example and its
+[`deep_research_domain_catalog.yml`](../../../configs/domain_catalogs/deep_research_domain_catalog.yml) catalog.
+
 ## Auto-Inherit: Agents Get All Registry Tools by Default
 
 When an agent's `tools` list is **empty** (the default), it automatically inherits every tool registered in `data_source_registry`. This means adding a new tool or data source requires only **one config change** -- adding it to the registry.
@@ -145,7 +205,7 @@ That's it -- one registry entry. Every agent automatically gets the MCP tools. T
 
 The registry auto-detects that `mcp_financial_tools` is a function group and uses NAT's group separator (`__`) for prefix matching. All tools exposed by the MCP server (e.g., `mcp_financial_tools__get_stock_quote`, `mcp_financial_tools__get_earnings`) map to the `financial_data` data source.
 
-For details on MCP server setup, transport options, tool overrides, and prompt tuning, see [MCP Tools](./mcp-tools.md).
+For details on MCP server setup, transport options, tool overrides, and prompt tuning, refer to [MCP Tools](./mcp-tools.md).
 
 ## Disabling a Tool
 

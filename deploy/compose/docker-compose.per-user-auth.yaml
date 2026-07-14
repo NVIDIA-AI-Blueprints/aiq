@@ -1,0 +1,31 @@
+# Optional local stack for configs/config_web_frag_mcp_auth.yml.
+# Apply this file together with docker-compose.yaml; it is not standalone.
+
+services:
+  aiq-agent:
+    environment:
+      CONFIG_FILE: /app/configs/config_web_frag_mcp_auth.yml
+      MCP_TOKEN_STORE_TYPE: redis
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    networks:
+      - aiq-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  redis-data:
+    driver: local

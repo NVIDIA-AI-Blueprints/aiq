@@ -15,6 +15,36 @@ The AI-Q blueprint supports multiple observability backends for tracing agent ex
 | [OpenTelemetry Collector](#opentelemetry-collector) | Production infrastructure, enterprise redaction | YAML config with OTEL endpoint |
 | [Verbose Logging](#verbose-logging) | Quick debugging, no external services | CLI flag or YAML config |
 
+## Async Deep Research Trace Hierarchy
+
+NAT-exported traces from the async job runner preserve the DeepAgents execution
+hierarchy instead of flattening named agents beside their task and model spans. The root
+workflow span uses the configured function name. A `task` tool is labeled with its
+subagent type, and each outer DeepAgents chain receives a distinct named-agent span:
+
+```text
+deep_research_agent
+├── task: planner-agent
+│   └── planner-agent
+│       └── model
+└── run_research_batch
+    ├── researcher-agent
+    │   └── model
+    └── researcher-agent
+        └── model
+```
+
+Parallel researchers remain separate children of the shared batch span. Structural
+agent spans include `agent_id`, `agent_name`, and `span_role=agent`; start metadata also
+records the LangChain parent run ID, and an error close records only the exception class
+as `error_type`. These structural spans deliberately omit LangGraph input/output state so
+they do not duplicate prompts or results. LLM and tool spans can still contain application
+content, so configure the selected exporter's redaction controls for the deployment's
+privacy requirements.
+
+This hierarchy describes NAT-exported async-job telemetry. Third-party tracing SDKs that
+instrument LangChain directly can present a different tree.
+
 ## Phoenix
 
 [Phoenix](https://docs.arize.com/phoenix) provides a local UI for visualizing traces, inspecting LLM calls, and analyzing token usage and latency. It is the recommended backend for local development.

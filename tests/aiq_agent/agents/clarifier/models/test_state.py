@@ -126,68 +126,8 @@ class TestClarifierResult:
         """Test default values for ClarifierResult."""
         result = ClarifierResult()
         assert result.clarifier_log == ""
-        assert result.plan_title is None
-        assert result.plan_sections == []
-        assert result.plan_approved is False
-        assert result.plan_rejected is False
 
     def test_custom_values(self):
         """Test custom values for ClarifierResult."""
-        result = ClarifierResult(
-            clarifier_log="Test log",
-            plan_title="Research Plan",
-            plan_sections=["Intro", "Analysis"],
-            plan_approved=True,
-            plan_rejected=False,
-        )
+        result = ClarifierResult(clarifier_log="Test log")
         assert result.clarifier_log == "Test log"
-        assert result.plan_title == "Research Plan"
-        assert result.plan_sections == ["Intro", "Analysis"]
-        assert result.plan_approved is True
-        assert result.plan_rejected is False
-
-    def test_get_approved_plan_context_when_approved(self):
-        """Test get_approved_plan_context returns formatted string when approved."""
-        result = ClarifierResult(
-            plan_title="AI Research Report",
-            plan_sections=["Introduction", "Background", "Analysis"],
-            plan_approved=True,
-        )
-        context = result.get_approved_plan_context()
-
-        assert context is not None
-        assert "**Approved Research Plan**" in context
-        assert "AI Research Report" in context
-        assert "- Introduction" in context
-        assert "- Background" in context
-        assert "- Analysis" in context
-
-    def test_get_approved_plan_context_when_not_approved(self):
-        """Test get_approved_plan_context returns None when not approved."""
-        result = ClarifierResult(
-            plan_title="Research Plan",
-            plan_sections=["Section 1"],
-            plan_approved=False,
-        )
-        assert result.get_approved_plan_context() is None
-
-    def test_get_approved_plan_context_when_no_title(self):
-        """Test get_approved_plan_context returns None when no title."""
-        result = ClarifierResult(
-            plan_title=None,
-            plan_sections=["Section 1"],
-            plan_approved=True,
-        )
-        assert result.get_approved_plan_context() is None
-
-    def test_get_approved_plan_context_empty_sections(self):
-        """Test get_approved_plan_context with empty sections."""
-        result = ClarifierResult(
-            plan_title="Research Plan",
-            plan_sections=[],
-            plan_approved=True,
-        )
-        context = result.get_approved_plan_context()
-        assert context is not None
-        assert "Research Plan" in context
-        assert "Sections:" in context

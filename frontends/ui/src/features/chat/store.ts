@@ -378,17 +378,32 @@ const patchConversationMessageById = (
   return didPatch ? { ...conversation, messages, updatedAt: new Date() } : conversation
 }
 
+/**
+ * A protected per-user source (e.g. Google Drive) must be connected before it
+ * can be part of the active selection — otherwise it appears in "Selected Data
+ * Sources" and is submitted while unusable. Mirrors the card toggle, "Enable
+ * All", and the initial-fetch gate in the layout store.
+ */
+const isSelectableDataSource = (source: {
+  per_user_auth?: { required?: boolean; status?: string | null } | null
+}): boolean => !(source.per_user_auth?.required && source.per_user_auth.status !== 'connected')
+
 const getDefaultEnabledDataSourceIds = (): string[] => {
   const layoutStore = useLayoutStore.getState()
-  return layoutStore.availableDataSources?.map((source) => source.id) ?? []
+  return (layoutStore.availableDataSources ?? []).filter(isSelectableDataSource).map((source) => source.id)
 }
 
 const restoreConversationDataSources = (conversation: Conversation): void => {
   const layoutStore = useLayoutStore.getState()
 
   if (conversation.enabledDataSourceIds) {
-    const availableIds = new Set(layoutStore.availableDataSources?.map((source) => source.id) ?? [])
-    const validIds = conversation.enabledDataSourceIds.filter((id) => availableIds.has(id))
+    // Only restore sources that are still available AND currently selectable —
+    // a protected source saved as enabled must not come back while it's not
+    // connected (e.g. an old session that had Google Drive on).
+    const selectableIds = new Set(
+      (layoutStore.availableDataSources ?? []).filter(isSelectableDataSource).map((source) => source.id)
+    )
+    const validIds = conversation.enabledDataSourceIds.filter((id) => selectableIds.has(id))
     layoutStore.setEnabledDataSources(validIds)
     return
   }
@@ -2898,9 +2913,9 @@ export const useChatStore = create<ChatStore>()(
           const existingIndex = deepResearchFiles.findIndex((f) => f.filename === file.filename)
 
           if (existingIndex >= 0) {
-            // Update existing file with latest content
+            // Update existing text or durable generated-artifact metadata.
             const updatedFiles = deepResearchFiles.map((f, i) =>
-              i === existingIndex ? { ...f, content: file.content, timestamp: new Date() } : f
+              i === existingIndex ? { ...f, ...file, timestamp: new Date() } : f
             )
             set({ deepResearchFiles: updatedFiles }, false, 'addDeepResearchFile:update')
             return deepResearchFiles[existingIndex].id
@@ -3197,6 +3212,19 @@ export const selectHasConnectionError = (state: ChatStore): boolean =>
   state.currentConversation?.messages.some(
     (m) => m.messageType === 'error' && m.errorData?.errorCode?.startsWith('connection.')
   ) ?? false
+
+/**
+ * Resolve the deep-research job id for artifact resolution (report images, PDF/markdown
+ * export). Prefers the active streaming job, then falls back to the latest deep-research
+ * message in the conversation — the active id is cleared once a job stops streaming, but a
+ * finished report still needs the id to fetch its artifact content.
+ */
+export const selectResolvedDeepResearchJobId = (state: ChatStore): string | undefined => {
+  if (state.deepResearchJobId) return state.deepResearchJobId
+  const conversation = state.currentConversation
+  if (!conversation) return undefined
+  return getLatestDeepResearchMessage(conversation)?.deepResearchJobId ?? undefined
+}
 
 // ============================================================
 // Storage Event Monitoring (for debugging session clearing)

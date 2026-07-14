@@ -2,10 +2,10 @@ apiVersion: v2
 name: aiq2-web
 description: AI-Q - WEB Profile ()
 type: application
-version: 2.0.0
+version: 2.1.1
 appVersion: '1.0'
 dependencies:
 - name: aiq
-  version: 0.0.4
+  version: 0.0.5
   repository: file://../helm-charts-k8s/aiq
   alias: aiq

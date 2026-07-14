@@ -24,10 +24,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from typing import Any
+
+from sqlalchemy.exc import IntegrityError
 
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
 from aiq_api.auth import get_current_trace_tags
+from aiq_api.mcp_auth.provider import principal_user_id
 
 from ..registry import get_agent_config
 from .access import _make_no_auth_principal
@@ -36,6 +40,24 @@ from .access import rollback_job_submission
 from .runner import run_agent_job
 
 logger = logging.getLogger(__name__)
+
+
+class JobIdConflictError(RuntimeError):
+    """Raised when a caller-supplied job_id collides with an existing job.
+
+    Distinct from generic submission failures so callers can map it to HTTP 409
+    instead of triggering the rollback path, which would delete the pre-existing
+    (victim) job's durable state.
+    """
+
+
+class InternalAgentError(RuntimeError):
+    """Raised when an internal-only (public=False) agent is submitted without opt-in.
+
+    The submission helper is the real trust boundary; trusted internal callers must
+    pass allow_internal=True explicitly rather than relying on every call site (and
+    the HTTP route filter) to remember the gate.
+    """
 
 
 def _resolve_submission_principal(owner: str) -> Principal | None:
@@ -53,6 +75,16 @@ def _resolve_submission_principal(owner: str) -> Principal | None:
         return None
 
     return _make_no_auth_principal(owner)
+
+
+def _current_conversation_id() -> str | None:
+    """Best-effort read of the originating conversation id from the NAT context."""
+    try:
+        from nat.builder.context import ContextState
+
+        return ContextState.get().conversation_id.get()
+    except Exception:
+        return None
 
 
 def _get_parent_trace_context() -> tuple[
@@ -120,6 +152,10 @@ async def submit_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    skip_encryption_readiness_check: bool = False,
+    initial_files: dict[str, Any] | None = None,
+    output_metadata: dict[str, Any] | None = None,
+    allow_internal: bool = False,
 ) -> str:
     """
     Submit an agent job to the Dask cluster.
@@ -138,6 +174,11 @@ async def submit_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
+        skip_encryption_readiness_check: Skip the internal readiness check when
+            the caller already performed it off the event loop.
+        initial_files: Optional DeepAgents virtual filesystem files to seed into worker state.
+        output_metadata: Optional metadata persisted with the final job output.
+        allow_internal: Allow trusted callers to submit an internal-only agent.
 
     Returns:
         The job ID.
@@ -156,8 +197,16 @@ async def submit_agent_job(
     """
     from nat.front_ends.fastapi.async_jobs.job_store import JobStore
 
+    from .crypto import get_content_encryption_policy_identity
+    from .crypto import require_content_encryption_ready_for_submission_async
+
     # Get agent configuration from registry
     agent_config = get_agent_config(agent_type)
+
+    # Enforce the internal-agent gate at the submission boundary (defense in depth):
+    # internal-only agents may only be launched by trusted callers that opt in.
+    if not agent_config.public and not allow_internal:
+        raise InternalAgentError(f"Agent type is internal-only and cannot be submitted directly: {agent_type}")
 
     # @environment_variable NAT_DASK_SCHEDULER_ADDRESS
     # @category Server
@@ -200,6 +249,10 @@ async def submit_agent_job(
     if not scheduler_address:
         raise RuntimeError("Async job submission requires NAT_DASK_SCHEDULER_ADDRESS to be set")
 
+    if not skip_encryption_readiness_check:
+        await require_content_encryption_ready_for_submission_async()
+    content_encryption_policy = get_content_encryption_policy_identity()
+
     # Auto-capture auth token if not explicitly provided
     if auth_token is None:
         from aiq_agent.auth import get_auth_token
@@ -211,9 +264,40 @@ async def submit_agent_job(
     if principal is None:
         raise RuntimeError("Verified current principal required for async job submission")
 
+    # Preflight protected MCP sources before enqueue. The REST submit route also
+    # does this (returning 409), but programmatic submitters — notably the chat
+    # researcher's async deep-research path — call this directly and would otherwise
+    # bypass the check, so this is the single chokepoint both paths share. Skipped
+    # when no MCP auth provider is active in this process (nothing to enforce).
+    from aiq_api.mcp_auth.active import get_active_mcp_auth_provider
+    from aiq_api.mcp_auth.preflight import McpAuthRequiredError
+    from aiq_api.mcp_auth.preflight import evaluate_mcp_auth
+
+    mcp_provider = get_active_mcp_auth_provider()
+    if mcp_provider is not None:
+        block = await evaluate_mcp_auth(mcp_provider, principal, data_sources)
+        if block is not None:
+            raise McpAuthRequiredError(block)
+
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
     loop = asyncio.get_running_loop()
+
+    async def _rollback_partial_submission() -> None:
+        """Best-effort cleanup of a job_info row we created before submission failed."""
+        try:
+            await loop.run_in_executor(None, rollback_job_submission, resolved_job_id, db_url)
+            logger.warning(
+                "Rolled back partial async job submission for %s. "
+                "The Dask worker may still be running and should be investigated if it continues writing state.",
+                resolved_job_id,
+            )
+        except Exception as cleanup_error:
+            logger.warning(
+                "Failed to roll back partial async job submission for %s: %s",
+                resolved_job_id,
+                cleanup_error,
+            )
 
     try:
         await job_store.submit_job(
@@ -234,23 +318,39 @@ async def submit_agent_job(
                 available_documents,
                 data_sources,
                 auth_token,
+                content_encryption_policy,
+                initial_files,
+                output_metadata,
+                principal_user_id(principal),
             ],
         )
-        await loop.run_in_executor(None, create_job_access, resolved_job_id, principal, db_url)
+    except IntegrityError as e:
+        # A caller-supplied job_id collided with an existing job. NAT's _create_job
+        # inserts job_info first, so the collision fails before any state of OURS is
+        # created. The colliding job belongs to someone else — we must NOT run the
+        # rollback path, which unconditionally deletes that job's info/events/access
+        # rows. Surface a conflict so the route can return HTTP 409.
+        logger.info("Rejected colliding job_id %s on async submit", resolved_job_id)
+        raise JobIdConflictError(f"Job already exists: {resolved_job_id}") from e
     except Exception:
-        try:
-            await loop.run_in_executor(None, rollback_job_submission, resolved_job_id, db_url)
-            logger.warning(
-                "Rolled back partial async job submission for %s after access persistence failure. "
-                "The Dask worker may still be running and should be investigated if it continues writing state.",
-                resolved_job_id,
-            )
-        except Exception as cleanup_error:
-            logger.warning(
-                "Failed to roll back partial async job submission for %s after access persistence failure: %s",
-                resolved_job_id,
-                cleanup_error,
-            )
+        # NAT's submit_job commits the job_info row before it hands the task to Dask,
+        # so a post-commit failure (scheduler unreachable, serialization error,
+        # Variable.set timeout) leaves an ownerless job_info row. Roll it back.
+        await _rollback_partial_submission()
+        raise
+
+    # Conversation that originated this job (from the request's conversation-id), recorded so
+    # report follow-up can default to "the last report in this conversation". None when the
+    # client sent no conversation-id (e.g. a CLI that doesn't thread one) — then no linkage.
+    submission_conversation_id = _current_conversation_id()
+    try:
+        await loop.run_in_executor(
+            None, create_job_access, resolved_job_id, principal, db_url, submission_conversation_id, agent_type
+        )
+    except Exception:
+        # We successfully created this job above, then ownership persistence failed;
+        # roll back our own partial state. (Safe: this id was newly created by us.)
+        await _rollback_partial_submission()
         raise
 
     logger.info(

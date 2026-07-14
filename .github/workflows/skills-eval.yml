@@ -1,0 +1,305 @@
+# SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# AI-Q skill eval. Two jobs on the aiq-eval self-hosted runner:
+#   - generate-datasets: spec validation, no credentials.
+#   - harbor-eval:       full Harbor trial; auto on push, or dispatch w/ run_harbor.
+# Push-triggered on develop/release/pull-request/<N> (copy-pr-bot mirror after a
+# vetter's `/ok to test`); workflow_dispatch for manual full sweeps.
+# Credentials and runtime knobs live in a runner-side .env;
+# see README-aiq-runner-bootstrap.md.
+
+name: Skills Eval
+
+on:
+  # Push-only, matching the repo CI model (ci.yml/ui.yml): all PRs (internal and
+  # external) are mirrored to pull-request/<N> branches by copy-pr-bot after a
+  # vetter's `/ok to test`, so the mirror branch is the trust gate. Direct pushes
+  # to develop/release also run.
+  # NB: deliberately NO `paths:` filter. copy-pr-bot creates the mirror branch at
+  # an already-existing commit, so the branch-creation push has no file diff and a
+  # `paths:` filter would silently exclude the workflow (ci.yml/ui.yml omit it for
+  # the same reason). The detect-changes job below does the path gating instead,
+  # by diffing against the PR base.
+  # workflow_dispatch remains for manual full sweeps.
+  push:
+    branches:
+      - develop
+      - "release/**"
+      - "pull-request/[0-9]+"
+  workflow_dispatch:
+    inputs:
+      run_harbor:
+        description: "Run Harbor trials on the self-hosted aiq-eval runner"
+        required: false
+        default: false
+        type: boolean
+      agent:
+        description: "Harbor agent to run"
+        required: false
+        default: "claude-code"
+        type: choice
+        options:
+          - claude-code
+          - codex
+      model:
+        description: "Override AIQ_SKILL_EVAL_MODEL for this dispatch (blank = use runner .env default)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aiq-skills-eval-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  RUNNER_ENV_FILE: /home/ubuntu/aiq-eval/.env
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # detect-changes: path gate. Replaces the trigger `paths:` filter, which is
+  # unreliable for copy-pr-bot mirror branches (created at an existing commit, so
+  # the push carries no diff). Diffs against the PR base / pre-push SHA instead.
+  # Runs on a GitHub-hosted runner; no credentials.
+  # ---------------------------------------------------------------------------
+  detect-changes:
+    name: Detect skill/eval changes
+    runs-on: ubuntu-latest
+    outputs:
+      relevant: ${{ steps.f.outputs.relevant }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Filter watched paths
+        id: f
+        env:
+          # Pass context via env; never interpolate ${{ }} into the shell body.
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          # Manual dispatch always runs (full-sweep intent).
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          # pull-request/<N> mirror: compare against develop. Direct
+          # develop/release push: compare against the pre-push SHA.
+          case "$REF_NAME" in
+            pull-request/*) BASE="origin/develop" ;;
+            *)              BASE="$BEFORE_SHA" ;;
+          esac
+          # Missing/zero/unresolvable base (e.g. new branch) -> run to be safe.
+          if [ -z "$BASE" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git rev-parse --verify "$BASE" >/dev/null 2>&1; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          if git diff --name-only "$BASE"...HEAD \
+               | grep -qE '^(skills/|\.github/skill-eval/|\.github/workflows/skills-eval\.yml|deploy/)'; then
+            echo "relevant=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "relevant=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # generate-datasets: spec validation + Harbor task-root materialization.
+  # Cheap. No credentials.
+  # ---------------------------------------------------------------------------
+  generate-datasets:
+    name: Validate skill-eval specs
+    # Path gate (see detect-changes). harbor-eval needs this job, so when it is
+    # skipped the whole eval is skipped. Only trusted refs / dispatch can trigger.
+    needs: detect-changes
+    if: needs.detect-changes.outputs.relevant == 'true'
+    runs-on: [self-hosted, aiq-eval]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Generate datasets
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # pull-request/<N> mirror branch: only skills changed vs develop.
+          # Direct develop/release push or manual dispatch: full sweep.
+          case "$REF_NAME" in
+            pull-request/*) SCOPE="--base origin/develop" ;;
+            *)              SCOPE="--all" ;;
+          esac
+          python3 .github/skill-eval/skills_eval_agent.py $SCOPE \
+            --output-dir /tmp/aiq-skill-eval/datasets
+
+      - name: Upload generated datasets
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiq-skill-eval-datasets-${{ github.run_id }}
+          path: /tmp/aiq-skill-eval/datasets
+          if-no-files-found: error
+          retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # harbor-eval: bring up AI-Q from PR HEAD, run Harbor trials, tear down.
+  # Gated on workflow_dispatch + inputs.run_harbor=true.
+  # ---------------------------------------------------------------------------
+  harbor-eval:
+    name: Run Harbor skill eval
+    # Push events (vetted pull-request/<N> mirrors, develop/release) run harbor
+    # automatically; manual dispatch runs it only when run_harbor=true.
+    if: >
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_harbor)
+    runs-on: [self-hosted, aiq-eval]
+    timeout-minutes: 60
+    needs: generate-datasets
+    # Global single-flight: the stack is stateful on one runner, so only one
+    # harbor run anywhere at a time. Others queue; a live run is never
+    # cross-cancelled by a different PR. (Same-PR new commits are aborted by the
+    # workflow-level concurrency above, whose always() teardown clears the stack.)
+    concurrency:
+      group: aiq-harbor-eval
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Verify runner .env exists
+        run: |
+          if [ ! -r "$RUNNER_ENV_FILE" ]; then
+            echo "::error::Runner credential file missing or unreadable at $RUNNER_ENV_FILE"
+            echo "See README-aiq-runner-bootstrap.md for the one-time setup."
+            exit 1
+          fi
+          # Print only the *names* of keys present, never values.
+          echo "Loaded credential keys (names only):"
+          grep -oE '^[A-Z_][A-Z0-9_]*=' "$RUNNER_ENV_FILE" | sed 's/=$//' | sort
+
+      - name: Materialize deploy/.env from runner credentials
+        run: |
+          # docker-compose.yaml has `env_file: [../.env]` paths that resolve to
+          # aiq/deploy/.env. That file is gitignored. Copy the runner's
+          # canonical .env into place for the duration of this job.
+          install -m 0600 "$RUNNER_ENV_FILE" deploy/.env
+
+      - name: Bring up AI-Q stack from PR HEAD
+        working-directory: deploy/compose
+        run: |
+          set -a
+          # shellcheck disable=SC1090
+          source "$RUNNER_ENV_FILE"
+          set +a
+          # Mirror local recipe: build from source, tag with run id so
+          # concurrent runs (if any) don't collide.
+          export BACKEND_IMAGE="aiq-agent:ci-${{ github.run_id }}"
+          docker compose --env-file ../.env -f docker-compose.yaml up -d --build aiq-agent postgres
+
+      - name: Wait for AI-Q /health
+        run: |
+          # Poll up to 5 minutes. AI-Q cold start on the runner is typically
+          # <2 min; 5 min gives margin for the postgres init + first build.
+          for i in $(seq 1 60); do
+            if curl -sf http://localhost:8000/health >/dev/null 2>&1; then
+              echo "AI-Q healthy after ${i} x 5s"
+              curl -s http://localhost:8000/health | head -c 400; echo
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::AI-Q did not report healthy within 5 minutes"
+          docker compose --env-file deploy/.env -f deploy/compose/docker-compose.yaml ps || true
+          docker compose --env-file deploy/.env -f deploy/compose/docker-compose.yaml logs --tail 200 aiq-agent || true
+          exit 1
+
+      - name: Run Harbor trials
+        env:
+          # Constant in our architecture. The adapter emits
+          # extra_hosts: host.docker.internal:host-gateway so this resolves
+          # from inside the Harbor task container too (see A0).
+          AIQ_SERVER_URL: http://host.docker.internal:8000
+          # Pass inputs/context via env; never interpolate ${{ }} into the shell
+          # body -- a free-form `model` input would otherwise allow injection.
+          AGENT_INPUT: ${{ inputs.agent }}
+          MODEL_INPUT: ${{ inputs.model }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          # Agent: dispatch input wins; default to claude-code on push events
+          # (no inputs -> would otherwise be empty and harbor rejects `-a ''`).
+          AGENT="${AGENT_INPUT:-claude-code}"
+          set -a
+          # shellcheck disable=SC1090
+          source "$RUNNER_ENV_FILE"
+          set +a
+          # Honor dispatch override of model when provided.
+          if [ -n "$MODEL_INPUT" ]; then
+            export AIQ_SKILL_EVAL_MODEL="$MODEL_INPUT"
+          fi
+          export AIQ_SKILL_EVAL_AGENT="$AGENT"
+          # pull-request/<N> mirror branch: only skills changed vs develop.
+          # Direct develop/release push or manual dispatch: full sweep.
+          case "$REF_NAME" in
+            pull-request/*) SCOPE="--base origin/develop" ;;
+            *)              SCOPE="--all" ;;
+          esac
+          python3 .github/skill-eval/skills_eval_agent.py $SCOPE --run-harbor \
+            --output-dir /tmp/aiq-skill-eval/datasets
+
+      - name: Upload Harbor results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aiq-skill-eval-results-${{ github.run_id }}
+          # Only this job's results (skills_eval_agent.py isolates output under
+          # <results>/<run_id>-<attempt>/), not the shared root's accumulated history.
+          path: /tmp/aiq-skill-eval/results/${{ github.run_id }}-${{ github.run_attempt }}
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Tear down AI-Q stack
+        if: always()
+        working-directory: deploy/compose
+        run: |
+          # Conservative cleanup: stop+remove containers, drop volumes so
+          # Postgres doesn't leak state between runs, prune dangling images
+          # so we don't fill the runner disk. Keep the image cache for the
+          # `aiq-agent` build layers (next run is faster).
+          docker compose --env-file ../.env -f docker-compose.yaml down -v --remove-orphans || true
+          docker image prune -f || true
+
+      - name: Remove materialized deploy/.env
+        if: always()
+        run: |
+          # The runner is long-lived; don't leave the copied .env on disk
+          # between job runs even though the source file at $RUNNER_ENV_FILE
+          # is the canonical home.
+          rm -f deploy/.env || true
+
+      - name: Clean ephemeral image
+        if: always()
+        run: |
+          docker image rm "aiq-agent:ci-${{ github.run_id }}" 2>/dev/null || true

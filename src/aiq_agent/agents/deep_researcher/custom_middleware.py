@@ -16,17 +16,24 @@
 """Custom middleware for the deep research agent."""
 
 import asyncio
+import json
 import logging
+import re
 from pathlib import Path
+from pathlib import PurePosixPath
 
 from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import hook_config
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
+from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 
@@ -34,6 +41,48 @@ logger = logging.getLogger(__name__)
 
 # Path to this agent's prompts directory
 _PROMPTS_DIR = Path(__file__).parent / "prompts"
+_SOURCE_ROUTING_PATH = "/shared/source_routing.json"
+# When a sandbox provider is configured, CompositeBackend strips the /shared/ route
+# before delegating to StateBackend, so the router's file is stored under the
+# route-local key. The guard reads raw state, so it must accept both forms or it
+# blocks the orchestrator forever on sandboxed runs.
+_SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
+_UNRESOLVED_SANDBOX_PATH_PATTERN = re.compile(
+    r"<\s*sandbox_(?:artifact_dir|workdir)\s*>|\{\{\s*sandbox_(?:artifact_dir|workdir)\s*\}\}"
+)
+
+
+class SourceRoutingGuardMiddleware(AgentMiddleware):
+    """Require the source-router handoff before other orchestrator tool calls."""
+
+    def __init__(self, *, enabled: bool, required_subagent: str = "source-router-agent") -> None:
+        self.enabled = enabled
+        self.required_subagent = required_subagent
+
+    @staticmethod
+    def _routing_complete(state: object) -> bool:
+        files = state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+        return isinstance(files, dict) and any(key in files for key in _SOURCE_ROUTING_STATE_KEYS)
+
+    async def awrap_tool_call(self, request, handler):
+        """Block out-of-order calls until the source router writes its route file."""
+        if not self.enabled or self._routing_complete(request.state):
+            return await handler(request)
+
+        tool_call = request.tool_call
+        args = tool_call.get("args") or {}
+        if tool_call.get("name") == "task" and args.get("subagent_type") == self.required_subagent:
+            return await handler(request)
+
+        return ToolMessage(
+            content=(
+                "Source routing is required before any other tool call. "
+                f"Call task with subagent_type={self.required_subagent!r}."
+            ),
+            tool_call_id=tool_call.get("id", "source-routing-guard"),
+            name=tool_call.get("name"),
+            status="error",
+        )
 
 
 class EmptyContentFixMiddleware(AgentMiddleware):
@@ -74,6 +123,171 @@ class EmptyContentFixMiddleware(AgentMiddleware):
         return await handler(request.override(messages=fixed_messages))
 
 
+class ExecuteTimeoutClampMiddleware(AgentMiddleware):
+    """Clamp the sandbox ``execute`` tool's per-call timeout to a configured ceiling.
+
+    The deepagents ``execute`` tool forwards a model-supplied ``timeout`` straight to the
+    sandbox backend, and providers cap it (OpenShell rejects an ``exec`` timeout above the
+    gateway maximum). LLMs routinely pass an oversized value -- e.g. milliseconds, where the
+    backend expects seconds, or an arbitrarily large round number -- so an unclamped timeout
+    makes every ``execute`` fail with a "timeout exceeds maximum" error and no sandbox code
+    ever runs. Bound the argument to the configured sandbox lifetime (seconds).
+
+    This guards a different boundary than ``SandboxProvider._clamp_timeout`` in
+    ``sandbox/base.py``: that clamp covers AI-Q's own provider-mediated calls (e.g. workspace
+    prep), whereas the deepagents ``execute`` tool reaches the backend without passing through
+    it, so the untrusted agent argument must be sanitized here at the tool-call boundary.
+    """
+
+    def __init__(self, *, max_timeout_seconds: int) -> None:
+        """Store the ceiling (in seconds) that a single ``execute`` call may request."""
+        self.max_timeout_seconds = max(1, int(max_timeout_seconds))
+
+    async def awrap_tool_call(self, request, handler):
+        """Clamp an oversized ``timeout`` argument on ``execute`` tool calls."""
+        tool_call = request.tool_call
+        if tool_call.get("name") != "execute":
+            return await handler(request)
+        args = tool_call.get("args")
+        if not isinstance(args, dict) or not isinstance(args.get("timeout"), (int, float)):
+            return await handler(request)
+        requested = int(args["timeout"])
+        # A non-positive value means "no timeout" to the backend; leave it alone.
+        if requested <= 0 or requested <= self.max_timeout_seconds:
+            return await handler(request)
+        logger.warning(
+            "Clamping execute timeout %ss -> %ss (agent-supplied value exceeds the sandbox ceiling)",
+            requested,
+            self.max_timeout_seconds,
+        )
+        modified = {**tool_call, "args": {**args, "timeout": self.max_timeout_seconds}}
+        return await handler(request.override(tool_call=modified))
+
+
+class FilesystemToolCallGuardMiddleware(AgentMiddleware):
+    """Normalize safe filesystem aliases and reject unresolved sandbox path templates."""
+
+    async def awrap_tool_call(self, request, handler):
+        """Repair ``read_file(path=...)`` and fail before executing placeholder paths."""
+        tool_call = request.tool_call
+        if not isinstance(tool_call, dict):
+            return await handler(request)
+        args = tool_call.get("args")
+        if not isinstance(args, dict):
+            return await handler(request)
+
+        if tool_call.get("name") == "read_file" and isinstance(args.get("path"), str):
+            normalized_args = {key: value for key, value in args.items() if key != "path"}
+            normalized_args.setdefault("file_path", args["path"])
+            modified = {**tool_call, "args": normalized_args}
+            return await handler(request.override(tool_call=modified))
+
+        if tool_call.get("name") == "execute" and isinstance(args.get("command"), str):
+            command = args["command"]
+            unresolved = _UNRESOLVED_SANDBOX_PATH_PATTERN.search(command)
+            if unresolved is not None:
+                return ToolMessage(
+                    content=(
+                        f"Command not executed: unresolved sandbox path placeholder {unresolved.group(0)}. "
+                        "Use the exact sandbox_workdir or sandbox_artifact_dir path from your instructions."
+                    ),
+                    tool_call_id=tool_call.get("id", "filesystem-tool-call-guard"),
+                    name="execute",
+                    status="error",
+                )
+
+        return await handler(request)
+
+
+class RequiredOutputFileMiddleware(AgentMiddleware):
+    """Verify a model's file-backed completion marker before ending its run.
+
+    A model can claim that it wrote a file without making the filesystem tool call.
+    Keep recovery local to that agent: request one corrective model turn, then fail
+    with a stable reason code instead of restarting the surrounding workflow.
+    """
+
+    def __init__(
+        self,
+        *,
+        paths: tuple[str, ...] = ("/shared/output.md", "/output.md"),
+        completion_marker: str = "Wrote /shared/output.md",
+        max_retries: int = 1,
+        reason_code: str = "writer_output_missing",
+    ) -> None:
+        """Configure the accepted state paths and bounded corrective turns."""
+        if not paths:
+            raise ValueError("paths must not be empty")
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        self.paths = paths
+        self.completion_marker = completion_marker
+        self.max_retries = max_retries
+        self.reason_code = reason_code
+        self._retry_message = (
+            "The required final output file is missing or empty. Do not repeat research or regenerate artifacts. "
+            f"Call write_file with file_path={paths[0]} and the complete final Markdown, confirm the tool "
+            f"succeeds, and only then return `{completion_marker}`."
+        )
+
+    @staticmethod
+    def _files_from_state(state: object) -> object:
+        return state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+
+    @staticmethod
+    def _entry_has_content(entry: object) -> bool:
+        if isinstance(entry, dict):
+            entry = entry.get("content")
+        if isinstance(entry, bytes):
+            return bool(entry.strip())
+        if isinstance(entry, str):
+            return bool(entry.strip())
+        if isinstance(entry, list):
+            return any(isinstance(line, str) and line.strip() for line in entry)
+        return False
+
+    def _required_output_exists(self, state: object) -> bool:
+        files = self._files_from_state(state)
+        return isinstance(files, dict) and any(self._entry_has_content(files.get(path)) for path in self.paths)
+
+    def _retry_count(self, messages: list[object]) -> int:
+        return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
+
+    def _check_after_model(self, state: object) -> dict[str, object] | None:
+        messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+        if not isinstance(messages, list) or not messages:
+            return None
+        last_message = messages[-1]
+        if not isinstance(last_message, AIMessage) or last_message.tool_calls:
+            return None
+        if last_message.text.strip() != self.completion_marker:
+            return None
+        if self._required_output_exists(state):
+            return None
+
+        retry_count = self._retry_count(messages)
+        if retry_count >= self.max_retries:
+            raise RuntimeError(self.reason_code)
+
+        logger.warning(
+            "Agent reported file-backed completion before the required output existed; requesting corrective turn"
+        )
+        return {
+            "messages": [HumanMessage(content=self._retry_message)],
+            "jump_to": "model",
+        }
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state, runtime):
+        """Verify synchronous writer completion and request one local repair when needed."""
+        return self._check_after_model(state)
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        """Verify asynchronous writer completion and request one local repair when needed."""
+        return self._check_after_model(state)
+
+
 # Common hallucinated tool name mappings
 _TOOL_NAME_ALIASES: dict[str, str] = {
     "open_file": "read_file",
@@ -93,6 +307,7 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
     """
 
     def __init__(self, valid_tool_names: list[str]):
+        """Store the set of valid tool names used to correct malformed tool calls."""
         self.valid_tool_names = set(valid_tool_names)
 
     def _sanitize_tool_name(self, name: str) -> str:
@@ -160,6 +375,86 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
         return ModelResponse(result=new_result, structured_response=response.structured_response)
 
 
+def _request_tool_name(tool: object) -> str | None:
+    """Return a LangChain model-request tool name across common tool shapes."""
+    name = getattr(tool, "name", None)
+    if isinstance(name, str):
+        return name
+    if isinstance(tool, dict):
+        dict_name = tool.get("name")
+        if isinstance(dict_name, str):
+            return dict_name
+        function = tool.get("function")
+        if isinstance(function, dict):
+            function_name = function.get("name")
+            if isinstance(function_name, str):
+                return function_name
+    return None
+
+
+class ToolVisibilityMiddleware(AgentMiddleware):
+    """Hide selected tools from model requests without removing scaffolding middleware."""
+
+    def __init__(self, hidden_tool_names: set[str]) -> None:
+        """Store the tool names to hide from model requests."""
+        self.hidden_tool_names = hidden_tool_names
+
+    def _filter_tools(self, tools: list[object]) -> list[object]:
+        """Return the tool list with hidden tools removed."""
+        if not self.hidden_tool_names:
+            return tools
+        return [tool for tool in tools if _request_tool_name(tool) not in self.hidden_tool_names]
+
+    def wrap_model_call(self, request, handler):
+        """Filter hidden tools before a synchronous model call."""
+        return handler(request.override(tools=self._filter_tools(request.tools)))
+
+    async def awrap_model_call(self, request, handler):
+        """Filter hidden tools before an asynchronous model call."""
+        return await handler(request.override(tools=self._filter_tools(request.tools)))
+
+
+class TodoSuppressionMiddleware(AgentMiddleware):
+    """Strip the framework's ``write_todos`` tool and its injected prompt for a subagent.
+
+    deepagents attaches ``TodoListMiddleware`` to every subagent, which adds the
+    ``write_todos`` tool plus a system-prompt block telling the agent to use it.
+    Agents that own no progress list - e.g. the planner, which returns a single
+    structured ``ResearchPlan`` - should not have it. Placed after the framework's
+    ``TodoListMiddleware`` in the stack, this removes both the tool and the injected
+    prompt block from the model request, keeping todo tracking solely with the
+    orchestrator. It is a no-op when neither is present.
+    """
+
+    _TODO_TOOL = "write_todos"
+    _TODO_PROMPT_MARKER = "## `write_todos`"
+
+    def _clean_request(self, request: object) -> object:
+        """Return the request with the write_todos tool and its prompt block removed."""
+        overrides: dict[str, object] = {
+            "tools": [tool for tool in request.tools if _request_tool_name(tool) != self._TODO_TOOL]
+        }
+        system_message = getattr(request, "system_message", None)
+        if system_message is not None:
+            blocks = system_message.content_blocks
+            kept = [
+                block
+                for block in blocks
+                if not (isinstance(block, dict) and self._TODO_PROMPT_MARKER in str(block.get("text", "")))
+            ]
+            if len(kept) != len(blocks):
+                overrides["system_message"] = SystemMessage(content=kept)
+        return request.override(**overrides)
+
+    def wrap_model_call(self, request, handler):
+        """Strip write_todos and its prompt before a synchronous model call."""
+        return handler(self._clean_request(request))
+
+    async def awrap_model_call(self, request, handler):
+        """Strip write_todos and its prompt before an asynchronous model call."""
+        return await handler(self._clean_request(request))
+
+
 class ToolRetryMiddleware(AgentMiddleware):
     """Retries failed tool calls with exponential backoff.
 
@@ -174,6 +469,7 @@ class ToolRetryMiddleware(AgentMiddleware):
         backoff_factor: float = 2.0,
         initial_delay: float = 1.0,
     ):
+        """Configure retry count and exponential backoff for failed tool calls."""
         self.max_retries = max_retries
         self.backoff_factor = backoff_factor
         self.initial_delay = initial_delay
@@ -208,7 +504,7 @@ class SourceRegistryMiddleware(AgentMiddleware):
     1. awrap_tool_call: Capture URLs/citation keys from tool results
     2. awrap_model_call: Inject a consolidated source list into the LLM context
        so the orchestrator has a single, authoritative reference list when
-       writing the final report (no manual reconciliation across subagent files)
+       writing the final report (no manual reconciliation across research-note files)
 
     Source capture is gated only by the agent's loaded tool set
     (``source_tool_names``). Internal scratchpad/runtime tools (think,
@@ -223,14 +519,62 @@ class SourceRegistryMiddleware(AgentMiddleware):
     """
 
     def __init__(self, source_tool_names: set[str] | None = None) -> None:
+        """Create a source registry scoped to the given source-producing tool names."""
         self.registry = SourceRegistry()
         self._source_tool_names = source_tool_names or set()
+        self._compact_source_keys: set[str] = set()
+        self._lock = asyncio.Lock()
 
-    def _get_registry(self) -> SourceRegistry:
+    def active_registry(self) -> SourceRegistry:
         """Return the session-scoped registry if set, otherwise the instance registry."""
         from aiq_agent.common.citation_verification import get_session_registry
 
         return get_session_registry() or self.registry
+
+    def has_sources(self) -> bool:
+        """Return True when the active source registry contains captured sources."""
+        return bool(self.active_registry().all_sources())
+
+    @staticmethod
+    def _locator_key(locator: str) -> str:
+        """Return the comparable key used for source locators and registry entries."""
+        locator = locator.strip()
+        if locator.startswith(("http://", "https://")):
+            from aiq_agent.common.citation_verification import _normalize_url
+
+            return _normalize_url(locator)
+        return locator
+
+    @classmethod
+    def _entry_key(cls, entry: SourceEntry) -> str | None:
+        """Return the comparable key for a registered source entry."""
+        if entry.url:
+            return cls._locator_key(entry.url)
+        if entry.citation_key:
+            return entry.citation_key.strip()
+        return None
+
+    def register_research_note_sources(self, notes: list[object]) -> None:
+        """Mark ResearchNotes source locators as the compact writer-facing citation set."""
+        for note in notes:
+            sources = getattr(note, "sources", None) or []
+            for source in sources:
+                locator = getattr(source, "locator", "")
+                if isinstance(locator, str) and locator.strip():
+                    self._compact_source_keys.add(self._locator_key(locator))
+
+    def register_compact_sources(self, sources: list[SourceEntry]) -> int:
+        """Register seeded sources and expose them in the compact citation source list."""
+        registry = self.active_registry()
+        registered = 0
+        for source in sources:
+            key = self._entry_key(source)
+            if not key:
+                continue
+            registry.add(source)
+            self._compact_source_keys.add(key)
+            registered += 1
+        return registered
 
     async def awrap_tool_call(self, request, handler):
         """Capture sources from tool results after execution.
@@ -256,9 +600,10 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 return result
             source_id = get_source_id_for_tool(tool_name)
             sources = extract_sources_from_tool_result(tool_name, str(result.content), source_id=source_id)
-            active_registry = self._get_registry()
-            for source in sources:
-                active_registry.add(source)
+            async with self._lock:
+                active_registry = self.active_registry()
+                for source in sources:
+                    active_registry.add(source)
             if sources:
                 logger.info(
                     "[CitationRegistry] Captured %d source(s) from %s: %s",
@@ -268,8 +613,8 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 )
         return result
 
-    def get_source_list_text(self) -> str | None:
-        """Build a consolidated source list for injection into retry feedback.
+    def _render_source_list_text(self, sources: list[SourceEntry]) -> str | None:
+        """Render a consolidated source list from registry entries.
 
         Returns rendered template text, or None if no sources captured.
         Used by agent.run() to include the source list in retry messages
@@ -279,7 +624,6 @@ class SourceRegistryMiddleware(AgentMiddleware):
 
         from aiq_agent.common.citation_verification import _normalize_url
 
-        sources = self._get_registry().all_sources()
         if not sources:
             return None
 
@@ -316,6 +660,130 @@ class SourceRegistryMiddleware(AgentMiddleware):
             logger.warning("Failed to load source_registry prompt template", exc_info=True)
             return None
 
+    def get_source_entries(self, mode: str = "compact") -> list[SourceEntry]:
+        """Return the source entries represented by the writer-facing source list."""
+        sources = self.active_registry().all_sources()
+        if mode == "full" or not self._compact_source_keys:
+            return sources
+        compact_sources = [source for source in sources if self._entry_key(source) in self._compact_source_keys]
+        return compact_sources or sources
+
+    def get_source_list_text(self, mode: str = "compact") -> str | None:
+        """Build a writer-facing verified source list.
+
+        Compact mode returns the subset of registered sources that researcher
+        workers actually carried forward in structured ResearchNotes. Full mode
+        returns the complete registry.
+        """
+        return self._render_source_list_text(self.get_source_entries(mode=mode))
+
+
+class ArtifactHarvestMiddleware(AgentMiddleware):
+    """Checkpoint durable artifacts after successful sandbox execute calls."""
+
+    def __init__(self, artifact_manager: object) -> None:
+        """Store the artifact manager used for best-effort checkpoints."""
+        self.artifact_manager = artifact_manager
+
+    async def awrap_tool_call(self, request, handler):
+        """Run the tool, then checkpoint manifest-declared artifacts after execute."""
+        result = await handler(request)
+        tool_name = ""
+        if hasattr(request, "tool_call") and isinstance(request.tool_call, dict):
+            tool_name = request.tool_call.get("name", "")
+        result_status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+        if tool_name == "execute" and result_status != "error":
+            try:
+                captured = await asyncio.to_thread(self.artifact_manager.harvest_after_execute)
+            except Exception as exc:  # noqa: BLE001 - artifact capture must not fail the agent
+                logger.warning("Artifact checkpoint harvest failed (%s)", type(exc).__name__)
+            else:
+                result = self._append_checkpoint_result(result, captured)
+        return result
+
+    @staticmethod
+    def _append_checkpoint_result(result: object, captured: object) -> object:
+        """Tell the model the exact safe filenames captured from a valid manifest."""
+        if not isinstance(result, ToolMessage) or not isinstance(result.content, str):
+            return result
+        if not isinstance(captured, (list, tuple)) or not captured:
+            return result
+
+        lines = ["Artifact checkpoint captured these exact filenames:"]
+        for artifact in captured[:10]:
+            filename = PurePosixPath(str(getattr(artifact, "filename", ""))).name
+            if not filename:
+                continue
+            if bool(getattr(artifact, "inline", False)):
+                lines.append(f"- {filename} (inline): embed as ![caption](artifact://{filename})")
+            else:
+                lines.append(f"- {filename} (downloadable; not marked inline)")
+        if len(lines) == 1:
+            return result
+        content = result.content.rstrip() + "\n\n" + "\n".join(lines)
+        return result.model_copy(update={"content": content})
+
+
+class PlanPersistenceMiddleware(AgentMiddleware):
+    """Persists the planner's structured ResearchPlan to the shared filesystem.
+
+    The planner returns a schema-validated ``ResearchPlan`` (``response_format``).
+    This middleware writes that plan to ``/shared/plan.json`` deterministically via
+    the overwrite-safe ``backend.upload_files`` (the same state-channel write
+    ``run_research_batch`` uses for ResearchNotes), so the planner never performs
+    file I/O itself. Keeping the write off the LLM removes the ``write_file`` /
+    ``edit_file`` loop the planner otherwise hits when ``/shared/plan.json`` already
+    exists, since the LLM ``write_file`` tool refuses to overwrite while
+    ``upload_files`` overwrites in place.
+
+    Persistence failures propagate so the planner task fails before the
+    orchestrator reads a missing or stale ``/shared/plan.json``.
+    """
+
+    def __init__(self, backend: object, *, path: str = "/shared/plan.json") -> None:
+        """Initialize the middleware.
+
+        Args:
+            backend: Shared filesystem backend exposing ``upload_files``.
+            path: Shared path the serialized plan is written to.
+        """
+        self.backend = backend
+        self.path = path
+
+    @staticmethod
+    def _plan_from_state(state: object) -> object:
+        """Extract the planner's ``structured_response`` from dict or attribute state."""
+        if isinstance(state, dict):
+            return state.get("structured_response")
+        return getattr(state, "structured_response", None)
+
+    def _persist_plan(self, plan: object) -> None:
+        """Serialize a structured ResearchPlan and upload it to shared state."""
+        if plan is None:
+            return
+        if hasattr(plan, "model_dump"):
+            payload = plan.model_dump(mode="json", exclude_none=True)
+        elif isinstance(plan, dict):
+            payload = plan
+        else:
+            return
+        content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        responses = self.backend.upload_files([(self.path, content)])
+        errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
+        if errors:
+            # Raw backend detail stays in logs; the raised error reaches the job status /
+            # caller, so it must not echo backend-internal strings (hostnames, paths, etc.).
+            logger.error("Failed to persist plan to %s: %s", self.path, "; ".join(errors))
+            raise RuntimeError(f"Failed to persist the research plan to {self.path}")
+
+    def after_agent(self, state, runtime):
+        """Persist the plan once the synchronous planner run completes."""
+        self._persist_plan(self._plan_from_state(state))
+
+    async def aafter_agent(self, state, runtime):
+        """Persist the plan once the asynchronous planner run completes."""
+        await asyncio.to_thread(self._persist_plan, self._plan_from_state(state))
+
 
 class ToolResultPruningMiddleware(AgentMiddleware):
     """Truncates older tool results to keep context manageable.
@@ -326,6 +794,7 @@ class ToolResultPruningMiddleware(AgentMiddleware):
     """
 
     def __init__(self, keep_last_n: int = 3, max_chars: int = 500):
+        """Configure how many recent tool results to keep intact and the truncation cap."""
         self.keep_last_n = keep_last_n
         self.max_chars = max_chars
 

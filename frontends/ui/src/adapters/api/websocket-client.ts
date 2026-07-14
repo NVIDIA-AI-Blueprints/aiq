@@ -223,17 +223,21 @@ export class NATWebSocketClient {
    * Send a user chat message
    * @param content - The message text content (query)
    * @param enabledDataSources - Optional array of enabled data source IDs to include in the query
+   * @param activeReportJobId - Optional completed report job ID for report-aware follow-up
    */
-  sendMessage = (content: string, enabledDataSources?: string[]): void => {
+  sendMessage = (
+    content: string,
+    enabledDataSources?: string[],
+    activeReportJobId?: string
+  ): string | null => {
     // Format the text content as JSON with query and data_sources
     const textContent = JSON.stringify({
       query: content,
       data_sources: enabledDataSources ?? [],
+      ...(activeReportJobId ? { active_report_job_id: activeReportJobId } : {}),
     })
 
     const messageId = this.generateMessageId()
-    this.activeParentId = messageId
-
     const message: NATUserMessage = {
       type: NATMessageType.USER_MESSAGE,
       schema_type: NATSchemaType.CHAT_STREAM,
@@ -250,16 +254,20 @@ export class NATWebSocketClient {
       timestamp: new Date().toISOString(),
     }
 
-    this.send(message)
+    if (!this.send(message)) return null
+
+    this.activeParentId = messageId
+    return messageId
   }
 
   /**
    * Send a response to a human prompt (clarification, approval, etc.)
    */
-  sendInteractionResponse = (promptId: string, parentId: string, responseText: string): void => {
+  sendInteractionResponse = (promptId: string, parentId: string, responseText: string): string | null => {
+    const messageId = this.generateMessageId()
     const message: NATUserInteractionResponse = {
       type: NATMessageType.USER_INTERACTION,
-      id: this.generateMessageId(),
+      id: messageId,
       parent_id: parentId,
       conversation_id: this.options.conversationId,
       content: {
@@ -273,7 +281,8 @@ export class NATWebSocketClient {
       timestamp: new Date().toISOString(),
     }
 
-    this.send(message)
+    if (!this.send(message)) return null
+    return messageId
   }
 
   /**
@@ -416,11 +425,13 @@ export class NATWebSocketClient {
     }
   }
 
-  private send = (message: object): void => {
+  private send = (message: object): boolean => {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(message))
+      return true
     } else {
       console.warn('NAT WebSocket not connected, message not sent')
+      return false
     }
   }
 

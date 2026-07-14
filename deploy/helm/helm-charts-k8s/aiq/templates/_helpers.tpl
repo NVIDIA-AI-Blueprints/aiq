@@ -50,13 +50,13 @@ nspect_id: {{ . }}
 
 {{/*
 Generate namespace name
+
+Always uses the release namespace (`helm install -n <ns>` / `.Release.Namespace`)
+so the chart honors the install namespace and works with GitOps operators such as
+ArgoCD and Fleet that do not pre-create a `ns-<appname>` namespace.
 */}}
 {{- define "aiq.namespace" -}}
-{{- if eq (.Values.project.deploymentTarget | default "") "kind" -}}
-{{- .Values.appname -}}
-{{- else -}}
-{{- printf "ns-%s" .Values.appname -}}
-{{- end -}}
+{{- .Release.Namespace -}}
 {{- end }}
 
 {{/*

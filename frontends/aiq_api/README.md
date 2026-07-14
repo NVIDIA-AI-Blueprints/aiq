@@ -149,7 +149,7 @@ Events streamed during job execution:
 | `workflow.start` / `workflow.end` | Workflow lifecycle |
 | `llm.start` / `llm.chunk` / `llm.end` | LLM inference progress |
 | `tool.start` / `tool.end` | Tool invocations |
-| `artifact.update` | Todos, files, citations, output updates |
+| `artifact.update` | Todos, citations, output, and generated-file metadata (`content_url` for durable bytes) |
 | `job.error` | Error occurred |
 
 ## Configuration

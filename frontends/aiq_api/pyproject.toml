@@ -47,6 +47,8 @@ dependencies = [
     "python-multipart>=0.0.27,<0.1",
     # JWT validation for AuthMiddleware (RS256 via JWKS)
     "PyJWT[cryptography]>=2.8.0",
+    # Vault Transit support for async final-report encryption at rest.
+    "hvac>=2.3.0,<3",
 ]
 
 [project.optional-dependencies]

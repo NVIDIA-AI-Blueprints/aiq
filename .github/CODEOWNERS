@@ -1,0 +1,10 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# The owning teams must be visible and have write access to this repository.
+* @NVIDIA-AI-Blueprints/aiq-developers
+
+# Keep repo governance and skill surfaces on the maintainer approval path.
+.github/ @NVIDIA-AI-Blueprints/aiq-maintainers
+ci/ @NVIDIA-AI-Blueprints/aiq-maintainers
+skills/ @NVIDIA-AI-Blueprints/aiq-maintainers

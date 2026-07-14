@@ -28,6 +28,7 @@ import {
   createDeepResearchClient,
   type DeepResearchClient,
   type DeepResearchJobStatus,
+  type FileArtifactUpdate,
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
@@ -281,11 +282,12 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           const { tools, outputs } = stateResponse.artifacts
 
           tools?.forEach(
-            (tool: { name: string; input?: Record<string, unknown>; output?: string }) => {
+            (tool: { name: string; input?: Record<string, unknown>; output?: string; is_sandbox?: boolean }) => {
               const toolCallId = addDeepResearchToolCall({
                 name: tool.name,
                 input: tool.input,
                 workflow: undefined,
+                isSandbox: tool.is_sandbox,
               })
               if (tool.output) {
                 completeDeepResearchToolCall(toolCallId, tool.output)
@@ -365,11 +367,12 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               output?: string
               workflow?: string
               agentId?: string
+              isSandbox?: boolean
             }
           >(),
           todos: null as TodoItem[] | null,
           citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-          files: new Map<string, string>(), // filename -> latest content (deduped)
+          files: new Map<string, FileArtifactUpdate>(), // filename -> latest event (deduped)
           reportContent: null as string | null,
         }
 
@@ -412,6 +415,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             output: t.output,
             workflow: t.workflow,
             agentId: t.agentId,
+            isSandbox: t.isSandbox,
             status: 'complete' as const,
             timestamp: now,
           }))
@@ -424,10 +428,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             timestamp: now,
           }))
 
-          const files = Array.from(buffer.files.entries()).map(([filename, content], idx) => ({
+          const files = Array.from(buffer.files.values()).map((file, idx) => ({
             id: `file-${idx}`,
-            filename,
-            content,
+            ...file,
             timestamp: now,
           }))
 
@@ -538,10 +541,10 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               }
             },
 
-            onToolStart: (name, input, workflow, _eventId, agentId) => {
+            onToolStart: (name, input, workflow, _eventId, agentId, isSandbox) => {
               if (name === 'task') return
               const uniqueId = `tool-${idCounter++}`
-              buffer.toolCalls.set(uniqueId, { name, input, workflow, agentId })
+              buffer.toolCalls.set(uniqueId, { name, input, workflow, agentId, isSandbox })
               let stack = activeToolStacks.get(name)
               if (!stack) {
                 stack = []
@@ -571,8 +574,11 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               buffer.citations.push({ url, content, isCited: isCited ?? false })
             },
 
-            onFileUpdate: (filename, content) => {
-              buffer.files.set(filename, content)
+            onFileUpdate: (file) => {
+              // Merge like the live store: a later metadata-only event must not drop
+              // content from an earlier event for the same filename during replay.
+              const prev = buffer.files.get(file.filename)
+              buffer.files.set(file.filename, prev ? { ...prev, ...file } : file)
             },
 
             onOutputUpdate: (content, outputCategory) => {

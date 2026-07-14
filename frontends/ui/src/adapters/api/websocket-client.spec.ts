@@ -200,6 +200,28 @@ describe('NATWebSocketClient auth observability', () => {
     expect(MockWebSocket.instances).toHaveLength(1)
   })
 
+  test('sendMessage includes active report job id when provided', async () => {
+    const client = new NATWebSocketClient({
+      conversationId: 'conv-1',
+      websocketUrl: 'ws://localhost/websocket',
+      callbacks: {},
+    })
+
+    await client.connect()
+    const ws = MockWebSocket.instances[0]
+    ws.onopen?.(new Event('open'))
+
+    client.sendMessage('What changed?', ['web_search'], 'job-123')
+
+    const sent = JSON.parse(ws.send.mock.calls[0][0] as string)
+    const textContent = sent.content.messages[0].content[0].text
+    expect(JSON.parse(textContent)).toEqual({
+      query: 'What changed?',
+      data_sources: ['web_search'],
+      active_report_job_id: 'job-123',
+    })
+  })
+
   test('does not emit RUM error for non-auth websocket errors', async () => {
     const addError = vi.fn()
     ;(window as unknown as Record<string, unknown>).DD_RUM = { addError }

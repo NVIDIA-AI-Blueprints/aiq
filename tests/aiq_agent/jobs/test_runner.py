@@ -65,6 +65,7 @@ Test coverage:
 
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
+from unittest.mock import call
 from unittest.mock import patch
 
 import pytest
@@ -420,6 +421,7 @@ class TestSubmitDeepResearchJob:
             {
                 "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
                 "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+                "AIQ_CONTENT_ENCRYPTION": "off",
             },
         ):
             with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
@@ -435,8 +437,47 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        # data_sources is second-to-last (auth_token is last)
-        assert job_args[-2] == ["web_search"]
+        # Trailing worker args: available_documents, data_sources, auth_token,
+        # encryption policy, initial_files, output_metadata, principal_user_id.
+        assert job_args[-6] == ["web_search"]
+        assert job_args[-4].mode == "off"
+
+    @pytest.mark.asyncio
+    async def test_submit_agent_job_passes_initial_files_and_output_metadata(self):
+        """Test submit_agent_job forwards report context files and output metadata into worker args."""
+        from aiq_api.jobs.submit import submit_agent_job
+
+        mock_job_store = MagicMock()
+        mock_job_store.ensure_job_id.return_value = "test-job-id"
+        mock_job_store.submit_job = AsyncMock(return_value=None)
+        initial_files = {"/shared/original_report.md": "# Report"}
+        output_metadata = {"parent_job_id": "parent-job", "interaction_action": "edit"}
+
+        with patch.dict(
+            "os.environ",
+            {
+                "NAT_DASK_SCHEDULER_ADDRESS": "tcp://localhost:8786",
+                "NAT_JOB_STORE_DB_URL": "sqlite:///./test.db",
+                "AIQ_CONTENT_ENCRYPTION": "off",
+            },
+        ):
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.submit.get_current_principal", return_value=self.principal):
+                    with patch("aiq_api.jobs.submit.create_job_access"):
+                        result = await submit_agent_job(
+                            agent_type="deep_researcher",
+                            input_text="test query",
+                            owner="test@example.com",
+                            initial_files=initial_files,
+                            output_metadata=output_metadata,
+                        )
+
+        assert result == "test-job-id"
+        job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
+        # Encryption policy precedes the upstream report-context arguments.
+        assert job_args[-4].mode == "off"
+        assert job_args[-3] == initial_files
+        assert job_args[-2] == output_metadata
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):
@@ -559,6 +600,299 @@ class TestSubmitDeepResearchJob:
         rollback_job_submission.assert_called_once_with("test-job-id", "sqlite:///./test.db")
 
 
+class TestRunAgentJobEncryption:
+    """Tests for async worker encryption preflight behavior."""
+
+    @pytest.mark.asyncio
+    async def test_encryption_preflight_failure_marks_failure_before_running(self):
+        from aiq_api.jobs.crypto import ContentEncryptionConfig
+        from aiq_api.jobs.crypto import ContentEncryptionUnavailable
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+
+        with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+            with patch(
+                "aiq_api.jobs.crypto.create_job_content_cipher",
+                side_effect=ContentEncryptionUnavailable("vault down"),
+            ):
+                await run_agent_job(
+                    False,
+                    20,
+                    "tcp://localhost:8786",
+                    "sqlite:///./test.db",
+                    "config.yml",
+                    "job-1",
+                    "input",
+                    "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                    "deep_research_agent",
+                    content_encryption_policy=ContentEncryptionConfig(mode="off").policy_identity,
+                )
+
+        statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
+        assert statuses == [JobStatus.FAILURE]
+        mock_job_store.update_status.assert_awaited_once_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="content encryption unavailable",
+        )
+
+    @pytest.mark.asyncio
+    async def test_worker_rejects_submission_policy_mismatch_before_running(self):
+        import base64
+
+        from aiq_api.jobs import crypto
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        with patch.dict(
+            "os.environ",
+            {
+                "AIQ_CONTENT_ENCRYPTION": "key",
+                "AIQ_CONTENT_ENCRYPTION_KEY": base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
+                "AIQ_CONTENT_ENCRYPTION_KEY_ID": "api-key",
+            },
+        ):
+            crypto.reset_content_encryption_manager_for_tests()
+            api_policy = crypto.get_content_encryption_policy_identity()
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+
+        with patch.dict("os.environ", {"AIQ_CONTENT_ENCRYPTION": "off"}):
+            crypto.reset_content_encryption_manager_for_tests()
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("aiq_api.jobs.crypto.create_job_content_cipher") as create_job_content_cipher:
+                    await run_agent_job(
+                        False,
+                        20,
+                        "tcp://localhost:8786",
+                        "sqlite:///./test.db",
+                        "config.yml",
+                        "job-1",
+                        "input",
+                        "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                        "deep_research_agent",
+                        content_encryption_policy=api_policy,
+                    )
+            crypto.reset_content_encryption_manager_for_tests()
+
+        create_job_content_cipher.assert_not_called()
+        mock_job_store.update_status.assert_awaited_once_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="content encryption policy mismatch",
+        )
+
+    @pytest.mark.asyncio
+    async def test_final_output_encryption_failure_marks_failure_without_plaintext_write(self, tmp_path):
+        from types import SimpleNamespace
+
+        from aiq_api.jobs.crypto import ContentEncryptionConfig
+        from aiq_api.jobs.crypto import ContentEncryptionUnavailable
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            def __init__(self, value=None):
+                self.value = value
+
+            async def __aenter__(self):
+                return self.value
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):
+                return AsyncContext()
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+        update_job_output = AsyncMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+
+        config = SimpleNamespace(workflow=None, functions={}, middleware={})
+        with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+            with patch("nat.runtime.loader.load_config", return_value=config):
+                with patch(
+                    "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                    return_value=FakeWorkflowBuilder(),
+                ):
+                    with patch(
+                        "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                        return_value=FakeExporterManager(),
+                    ):
+                        with patch("aiq_api.jobs.runner._load_agent_class", return_value=object):
+                            with patch(
+                                "aiq_api.jobs.runner._create_llm_provider",
+                                AsyncMock(return_value=(object(), object())),
+                            ):
+                                with patch("aiq_api.jobs.runner._create_agent_instance", return_value=object()):
+                                    with patch(
+                                        "aiq_api.jobs.runner._run_agent",
+                                        AsyncMock(return_value="secret report"),
+                                    ):
+                                        with patch("aiq_api.jobs.crypto.update_job_output", update_job_output):
+                                            await run_agent_job(
+                                                False,
+                                                20,
+                                                "tcp://localhost:8786",
+                                                db_url,
+                                                "config.yml",
+                                                "job-1",
+                                                "input",
+                                                "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                                                "deep_research_agent",
+                                                content_encryption_policy=ContentEncryptionConfig(
+                                                    mode="off"
+                                                ).policy_identity,
+                                                output_metadata={
+                                                    "parent_job_id": "parent-job",
+                                                    "interaction_action": "edit",
+                                                    "report": "must not win",
+                                                },
+                                            )
+
+        statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
+        assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        assert all("output" not in call.kwargs for call in mock_job_store.update_status.await_args_list)
+        update_job_output.assert_awaited_once()
+        assert update_job_output.await_args.kwargs["output"] == {
+            "parent_job_id": "parent-job",
+            "interaction_action": "edit",
+            "report": "secret report",
+        }
+
+    @pytest.mark.asyncio
+    async def test_encrypted_event_flush_failure_marks_failure_before_success(self, tmp_path):
+        import base64
+        from types import SimpleNamespace
+
+        from aiq_api.jobs import crypto
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            def __init__(self, value=None):
+                self.value = value
+
+            async def __aenter__(self):
+                return self.value
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):
+                return AsyncContext()
+
+        async def run_agent_with_event(*, event_store, **_kwargs):
+            event_store.store(
+                {
+                    "type": "artifact.update",
+                    "data": {"type": "output", "content": "secret report"},
+                }
+            )
+            return "secret report"
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+        update_job_output = AsyncMock()
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+        encryption_env = {
+            "AIQ_CONTENT_ENCRYPTION": "key",
+            "AIQ_CONTENT_ENCRYPTION_KEY": base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
+            "AIQ_CONTENT_ENCRYPTION_KEY_ID": "test-key",
+        }
+
+        with patch.dict("os.environ", encryption_env):
+            crypto.reset_content_encryption_manager_for_tests()
+            policy = crypto.get_content_encryption_policy_identity()
+            config = SimpleNamespace(workflow=None, functions={}, middleware={})
+            with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+                with patch("nat.runtime.loader.load_config", return_value=config):
+                    with patch(
+                        "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                        return_value=FakeWorkflowBuilder(),
+                    ):
+                        with patch(
+                            "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                            return_value=FakeExporterManager(),
+                        ):
+                            with patch("aiq_api.jobs.runner._load_agent_class", return_value=object):
+                                with patch(
+                                    "aiq_api.jobs.runner._create_llm_provider",
+                                    AsyncMock(return_value=(object(), object())),
+                                ):
+                                    with patch("aiq_api.jobs.runner._create_agent_instance", return_value=object()):
+                                        with patch(
+                                            "aiq_api.jobs.runner._run_agent",
+                                            side_effect=run_agent_with_event,
+                                        ):
+                                            with patch(
+                                                "aiq_api.jobs.event_store.EventStore.store_batch",
+                                                side_effect=RuntimeError("transient database failure"),
+                                            ):
+                                                with patch(
+                                                    "aiq_api.jobs.crypto.update_job_output",
+                                                    update_job_output,
+                                                ):
+                                                    await run_agent_job(
+                                                        False,
+                                                        20,
+                                                        "tcp://localhost:8786",
+                                                        db_url,
+                                                        "config.yml",
+                                                        "job-1",
+                                                        "input",
+                                                        "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                                                        "deep_research_agent",
+                                                        content_encryption_policy=policy,
+                                                    )
+            crypto.reset_content_encryption_manager_for_tests()
+
+        statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
+        assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        mock_job_store.update_status.assert_awaited_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="transient database failure",
+        )
+        update_job_output.assert_not_awaited()
+
+
 class TestEventStore:
     """Tests for the EventStore class."""
 
@@ -575,6 +909,37 @@ class TestEventStore:
         events = EventStore.get_events(db_url, "test-job-1")
         assert len(events) == 1
         assert events[0]["type"] == "test.event"
+
+    def test_artifact_update_survives_event_store_round_trip(self, tmp_path):
+        """Generated-file metadata remains reconstructable after durable storage."""
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import Artifact
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import ArtifactKind
+        from aiq_api.jobs.event_store import EventStore
+
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+        content_url = "/v1/jobs/async/job/job-1/artifacts/artifact-1/content"
+        artifact = Artifact(
+            artifact_id="artifact-1",
+            job_id="job-1",
+            kind=ArtifactKind.IMAGE,
+            mime_type="image/png",
+            filename="chart.png",
+            sandbox_path="/sandbox/job-1/aiq-artifacts/chart.png",
+            storage_uri="db://artifacts/artifact-1",
+            sha256="a" * 64,
+            size_bytes=128,
+            inline=True,
+        )
+
+        EventStore(db_url, "job-1").store(artifact.to_sse_payload(content_url))
+
+        event = EventStore.get_events(db_url, "job-1")[0]
+        assert event["type"] == "artifact.update"
+        assert event["name"] == "chart.png"
+        assert event["data"]["type"] == "file"
+        assert event["data"]["content_url"] == content_url
+        assert "content" not in event["data"]
+        assert event["data"]["artifact_id"] == "artifact-1"
 
     def test_get_events_empty(self, tmp_path):
         """Test get_events returns empty list for unknown job."""
@@ -818,6 +1183,210 @@ class TestToolArtifactMapping:
         assert mapping.is_artifact_tool("custom_tool")
         custom = mapping.get_mapping("custom_tool")
         assert custom["artifact_type"] == ArtifactType.OUTPUT
+
+
+def test_get_worker_function_type_maps_async_deep_research_flag():
+    """Async deep research selects the deep research function type."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_worker_function_type
+
+    enabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=True))
+    disabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=False))
+    no_workflow_config = SimpleNamespace(workflow=None)
+
+    assert _get_worker_function_type(enabled_config) == "deep_research_agent"
+    assert _get_worker_function_type(disabled_config) is None
+    assert _get_worker_function_type(no_workflow_config) is None
+
+
+@pytest.mark.asyncio
+async def test_attach_middleware_to_function_registers_middleware_for_async_deep_function():
+    """The Dask worker registers middleware configured for the async deep function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _attach_middleware_to_function
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={
+            "renamed_deep_agent": SimpleNamespace(type="deep_research_agent", middleware=["direct_deep_middleware"])
+        },
+        middleware={
+            "direct_deep_middleware": SimpleNamespace(),
+            "deep_agent_guardrails": SimpleNamespace(workflow_functions={"renamed_deep_agent": {}}),
+            "shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}}),
+        },
+    )
+    builder = MagicMock()
+    builder.get_middleware = AsyncMock(side_effect=ValueError("missing"))
+    builder.add_middleware = AsyncMock()
+
+    await _attach_middleware_to_function(builder, config, "renamed_deep_agent")
+
+    assert builder.get_middleware.await_args_list == [
+        call("direct_deep_middleware"),
+        call("deep_agent_guardrails"),
+    ]
+    assert builder.add_middleware.await_args_list == [
+        call("direct_deep_middleware", config.middleware["direct_deep_middleware"]),
+        call("deep_agent_guardrails", config.middleware["deep_agent_guardrails"]),
+    ]
+
+
+def test_get_middleware_for_listed_function_rejects_duplicate_middleware():
+    """Worker setup fails if the same middleware is configured twice for one worker function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_listed_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["direct_middleware", "direct_middleware"])},
+        middleware={"direct_middleware": SimpleNamespace()},
+    )
+
+    with pytest.raises(ValueError, match="Middleware configured multiple times"):
+        _get_middleware_for_listed_function(config, "deep_research_agent")
+
+
+def test_get_middleware_for_worker_function_includes_workflow_function_middleware():
+    """Worker middleware discovery includes middleware targeting the configured function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_worker_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["direct_middleware"])},
+        middleware={
+            "direct_middleware": SimpleNamespace(),
+            "deep_agent_guardrails": SimpleNamespace(workflow_functions={"deep_research_agent": {}}),
+            "shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}}),
+        },
+    )
+
+    assert _get_middleware_for_worker_function(config, "deep_research_agent") == [
+        "direct_middleware",
+        "deep_agent_guardrails",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_wraps_dask_callable():
+    """Configured worker middleware wraps the callable that Dask actually executes."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    captured = {}
+
+    class BlockingMiddleware:
+        enabled = True
+
+        async def middleware_invoke(self, *args, call_next, context, **kwargs):
+            captured["context"] = context
+            captured["args"] = args
+            return "blocked"
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"deep_research_agent": SimpleNamespace(type="deep_research_agent", middleware=[])},
+        middleware={"deep_agent_guardrails": SimpleNamespace(workflow_functions={"deep_research_agent": {}})},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock(return_value=[BlockingMiddleware()])
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="deep_research_agent",
+        function_config=config.functions["deep_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "blocked"
+    assert captured["context"].name == "deep_research_agent"
+    assert captured["args"] == (state,)
+    call_next.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_runs_callable_without_middleware():
+    """Worker callable runs directly when no middleware targets the function."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"deep_research_agent": SimpleNamespace(type="deep_research_agent", middleware=[])},
+        middleware={},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock()
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="deep_research_agent",
+        function_config=config.functions["deep_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "ran"
+    call_next.assert_awaited_once_with(state)
+    builder.get_middleware_list.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_with_configured_function_middleware_ignores_non_worker_function():
+    """Non-worker functions run directly even if the full config contains unrelated middleware."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _run_with_configured_function_middleware
+
+    config = SimpleNamespace(
+        workflow=SimpleNamespace(use_async_deep_research=True),
+        functions={"shallow_research_agent": SimpleNamespace(type="shallow_research_agent", middleware=[])},
+        middleware={"shallow_agent_guardrails": SimpleNamespace(workflow_functions={"shallow_research_agent": {}})},
+    )
+    builder = MagicMock()
+    builder.get_middleware_list = AsyncMock()
+    call_next = AsyncMock(return_value="ran")
+    state = SimpleNamespace(messages=[])
+
+    result = await _run_with_configured_function_middleware(
+        builder=builder,
+        config=config,
+        function_name="shallow_research_agent",
+        function_config=config.functions["shallow_research_agent"],
+        input_value=state,
+        call_next=call_next,
+    )
+
+    assert result == "ran"
+    call_next.assert_awaited_once_with(state)
+    builder.get_middleware_list.assert_not_awaited()
+
+
+def test_get_middleware_for_worker_function_rejects_missing_middleware_config():
+    """Active worker middleware discovery fails clearly when a listed middleware is undefined."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _get_middleware_for_worker_function
+
+    config = SimpleNamespace(
+        functions={"deep_research_agent": SimpleNamespace(middleware=["missing_guardrails"])},
+        middleware={},
+    )
+
+    with pytest.raises(ValueError, match="not defined: missing_guardrails"):
+        _get_middleware_for_worker_function(config, "deep_research_agent")
 
 
 class TestDeepResearchEventCallbackAdvanced:
@@ -1302,10 +1871,81 @@ class TestSQLAlchemyPoolFilter:
 class TestAsyncJobRunnerAgentFactory:
     """Tests for async job agent construction."""
 
-    def test_create_agent_instance_passes_config_and_job_id_when_supported(self):
-        """Async workers can receive generic function config without runner-specific agent knowledge."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+    @pytest.mark.asyncio
+    async def test_create_llm_provider_configures_deep_research_roles(self):
+        """Async workers honor all deep-research role-specific LLM config fields."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_llm_provider
+
+        llms = {
+            "orchestrator": MagicMock(name="orchestrator_llm"),
+            "router": MagicMock(name="source_router_llm"),
+            "planner": MagicMock(name="planner_llm"),
+            "researcher": MagicMock(name="researcher_llm"),
+            "writer": MagicMock(name="writer_llm"),
+        }
+
+        async def get_llm(llm_ref, wrapper_type):
+            return llms[llm_ref]
+
+        builder = MagicMock()
+        builder.get_llm = AsyncMock(side_effect=get_llm)
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="orchestrator",
+            source_router_llm="router",
+            planner_llm="planner",
+            researcher_llm="researcher",
+            writer_llm="writer",
+        )
+
+        provider, default_llm = await _create_llm_provider(builder, fn_config)
+
+        assert default_llm is llms["orchestrator"]
+        assert provider.get(LLMRole.ORCHESTRATOR) is llms["orchestrator"]
+        assert provider.get(LLMRole.ROUTER) is llms["router"]
+        assert provider.get(LLMRole.PLANNER) is llms["planner"]
+        assert provider.get(LLMRole.RESEARCHER) is llms["researcher"]
+        assert provider.get(LLMRole.REPORT_WRITER) is llms["writer"]
+        assert builder.get_llm.await_count == 5
+
+    @pytest.mark.asyncio
+    async def test_create_llm_provider_reuses_shared_llm_refs(self):
+        """Shared role/default LLM refs should initialize one wrapper instance."""
+        from types import SimpleNamespace
+
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_llm_provider
+
+        shared_llm = MagicMock(name="shared_llm")
+
+        async def get_llm(llm_ref, wrapper_type):
+            assert llm_ref == "shared"
+            return shared_llm
+
+        builder = MagicMock()
+        builder.get_llm = AsyncMock(side_effect=get_llm)
+        fn_config = SimpleNamespace(
+            source_router_llm="shared",
+            planner_llm="shared",
+            researcher_llm="shared",
+            writer_llm="shared",
+            llm="shared",
+        )
+
+        provider, default_llm = await _create_llm_provider(builder, fn_config)
+
+        assert default_llm is shared_llm
+        assert provider.get(LLMRole.ROUTER) is shared_llm
+        assert provider.get(LLMRole.PLANNER) is shared_llm
+        assert provider.get(LLMRole.RESEARCHER) is shared_llm
+        assert provider.get(LLMRole.REPORT_WRITER) is shared_llm
+        builder.get_llm.assert_awaited_once()
+
+    def test_create_agent_instance_passes_deep_research_config_as_explicit_args(self):
+        """Async workers pass DeepResearchAgentConfig fields through the explicit constructor surface."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_api.jobs.runner import _create_agent_instance
 
@@ -1315,25 +1955,46 @@ class TestAsyncJobRunnerAgentFactory:
                 *,
                 llm_provider,
                 tools,
-                max_loops,
                 verbose,
                 callbacks,
-                config=None,
+                domain_catalog_path=None,
+                enable_source_router=True,
+                enable_citation_verification=True,
+                skills=None,
+                sandbox=None,
                 job_id=None,
+                artifact_db_url=None,
+                artifact_emit=None,
+                max_research_concurrency=None,
+                max_concurrent_source_tool_calls=None,
+                max_source_tool_batch_size=None,
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
-                self.max_loops = max_loops
                 self.verbose = verbose
                 self.callbacks = callbacks
-                self.config = config
+                self.domain_catalog_path = domain_catalog_path
+                self.enable_source_router = enable_source_router
+                self.enable_citation_verification = enable_citation_verification
+                self.skills = skills
+                self.sandbox = sandbox
                 self.job_id = job_id
+                self.artifact_db_url = artifact_db_url
+                self.artifact_emit = artifact_emit
+                self.max_research_concurrency = max_research_concurrency
+                self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
+                self.max_source_tool_batch_size = max_source_tool_batch_size
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            max_loops=7,
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            enable_citation_verification=False,
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
+            max_research_concurrency=2,
+            max_concurrent_source_tool_calls=3,
+            max_source_tool_batch_size=4,
         )
 
         agent = _create_agent_instance(
@@ -1347,22 +2008,251 @@ class TestAsyncJobRunnerAgentFactory:
             job_id="job-123",
         )
 
-        assert agent.max_loops == 7
         assert agent.job_id == "job-123"
-        assert agent.config is fn_config
-        assert agent.config.skills.enabled is True
-        assert agent.config.skills.sources == ("/skills/",)
-        assert agent.config.sandbox is not None
-        assert agent.config.sandbox.app_name == "async-aiq"
+        assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
+        assert agent.enable_source_router is False
+        assert agent.enable_citation_verification is False
+        assert agent.skills is fn_config.skills
+        assert agent.skills.agents == {"writer-agent": ("synthesis",)}
+        assert agent.sandbox is fn_config.sandbox
+        assert agent.sandbox is not None
+        assert agent.sandbox.app_name == "async-aiq"
+        assert agent.max_research_concurrency == 2
+        assert agent.max_concurrent_source_tool_calls == 3
+        assert agent.max_source_tool_batch_size == 4
 
-    def test_async_deep_researcher_constructor_gets_rendered_skill_instructions(self):
-        """Async job construction preserves skills/sandbox config through orchestrator prompt creation."""
+    def test_create_agent_instance_allows_non_deep_agent_to_reuse_deep_config(self):
+        """Async workers should not treat shared DeepResearchAgentConfig as a constructor contract."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeReportRewriterAgent:
+            def __init__(
+                self,
+                llm_provider,
+                tools=None,
+                *,
+                verbose=False,
+                callbacks=None,
+                config=None,
+                job_id=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.verbose = verbose
+                self.callbacks = callbacks
+                self.config = config
+                self.job_id = job_id
+
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            enable_citation_verification=False,
+        )
+
+        agent = _create_agent_instance(
+            agent_cls=FakeReportRewriterAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=fn_config,
+            verbose=True,
+            callbacks=["callback"],
+            job_id="job-123",
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.verbose is True
+        assert agent.callbacks == ["callback"]
+        assert agent.config is fn_config
+        assert agent.job_id == "job-123"
+
+    def test_create_agent_instance_passes_job_id_to_agent_without_config_arg(self):
+        """Async workers should preserve job_id for non-deep agents that do not need config."""
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeReportRewriterAgent:
+            def __init__(
+                self,
+                llm_provider,
+                tools=None,
+                *,
+                verbose=False,
+                callbacks=None,
+                job_id=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.verbose = verbose
+                self.callbacks = callbacks
+                self.job_id = job_id
+
+        agent = _create_agent_instance(
+            agent_cls=FakeReportRewriterAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=DeepResearchAgentConfig(orchestrator_llm="llm"),
+            verbose=True,
+            callbacks=["callback"],
+            job_id="job-123",
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.verbose is True
+        assert agent.callbacks == ["callback"]
+        assert agent.job_id == "job-123"
+
+    def test_async_deep_researcher_constructor_applies_config_tuning(self):
+        """Async construction preserves catalog and concurrency settings."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMProvider
+        from aiq_agent.common import LLMRole
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        mock_llm = MagicMock()
+        provider = LLMProvider()
+        provider.set_default(mock_llm)
+        provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
+        fn_config = DeepResearchAgentConfig(
+            orchestrator_llm="llm",
+            domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
+            enable_source_router=False,
+            max_research_concurrency=2,
+            max_concurrent_source_tool_calls=3,
+            max_source_tool_batch_size=4,
+        )
+
+        agent = _create_agent_instance(
+            agent_cls=DeepResearcherAgent,
+            llm_provider=provider,
+            llm=mock_llm,
+            tools=[],
+            fn_config=fn_config,
+            verbose=False,
+            callbacks=[],
+            job_id="async-job-123",
+        )
+
+        assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
+        assert agent.enable_source_router is False
+        assert agent.max_research_concurrency == 2
+        assert agent.max_concurrent_source_tool_calls == 3
+        assert agent.max_source_tool_batch_size == 4
+
+    @pytest.mark.asyncio
+    async def test_run_agent_seeds_initial_files_when_state_supports_files(self):
+        """Async runner seeds DeepAgents virtual filesystem files into stateful agents."""
+        from typing import Annotated
+        from typing import Any
+
+        from langchain_core.messages import AnyMessage
+        from langgraph.graph.message import add_messages
+        from pydantic import BaseModel
+        from pydantic import Field
+
+        from aiq_api.jobs import runner
+
+        class FakeState(BaseModel):
+            messages: Annotated[list[AnyMessage], add_messages]
+            files: dict[str, Any] = Field(default_factory=dict)
+
+        class FakeAgent:
+            def __init__(self):
+                self.seen_state = None
+
+            async def run(self, state):
+                self.seen_state = state
+                return {"report": state.files["/shared/original_report.md"]}
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        agent = FakeAgent()
+        initial_files = {"/shared/original_report.md": "# Parent"}
+
+        with patch("aiq_api.jobs.runner._get_agent_state_class", return_value=FakeState):
+            result = await runner._run_agent(
+                agent=agent,
+                input_text="revise",
+                monitor=FakeMonitor(),
+                initial_files=initial_files,
+            )
+
+        assert result == {"report": "# Parent"}
+        assert agent.seen_state.files == initial_files
+
+    @pytest.mark.asyncio
+    async def test_run_agent_skips_data_sources_when_state_lacks_field(self):
+        """Runner must not inject data_sources into states that don't declare the field.
+
+        report_rewriter's state omits data_sources; with Pydantic's default (extra
+        ignored) that is currently harmless, but the runner should not pass fields a
+        state does not model. This uses an extra=forbid state to prove the guard
+        actually prevents the injection (without it, state construction would raise).
+        """
+        from typing import Annotated
+
+        from langchain_core.messages import AnyMessage
+        from langgraph.graph.message import add_messages
+        from pydantic import BaseModel
+        from pydantic import ConfigDict
+
+        from aiq_api.jobs import runner
+
+        class StrictState(BaseModel):
+            model_config = ConfigDict(extra="forbid")
+            messages: Annotated[list[AnyMessage], add_messages]
+
+        class FakeAgent:
+            def __init__(self):
+                self.seen_state = None
+
+            async def run(self, state):
+                self.seen_state = state
+                return "ok"
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        agent = FakeAgent()
+
+        with patch("aiq_api.jobs.runner._get_agent_state_class", return_value=StrictState):
+            result = await runner._run_agent(
+                agent=agent,
+                input_text="revise",
+                monitor=FakeMonitor(),
+                data_sources=["web_search"],
+            )
+
+        assert result == "ok"
+        assert not hasattr(agent.seen_state, "data_sources")
+
+    def test_async_deep_researcher_constructor_preserves_writer_skills(self):
+        """Async job construction preserves writer-only skills and sandbox job scoping."""
         from langchain_core.messages import HumanMessage
         from langchain_core.tools import tool
 
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_agent.common import LLMProvider
@@ -1380,10 +2270,11 @@ class TestAsyncJobRunnerAgentFactory:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
         )
         mock_deep_agent = MagicMock()
         mock_deep_agent.with_config.return_value = mock_deep_agent
@@ -1392,11 +2283,19 @@ class TestAsyncJobRunnerAgentFactory:
             patch(
                 "aiq_agent.agents.deep_researcher.deepagents_runtime._create_sandbox_backend",
                 return_value=MagicMock(),
-            ),
+            ) as create_backend,
             patch(
-                "aiq_agent.agents.deep_researcher.agent.create_deep_agent",
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
                 return_value=mock_deep_agent,
             ) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_summarization_middleware",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
+                return_value=MagicMock(),
+            ),
         ):
             agent = _create_agent_instance(
                 agent_cls=DeepResearcherAgent,
@@ -1420,14 +2319,18 @@ class TestAsyncJobRunnerAgentFactory:
             agent._build_orchestrator_agent(state)
 
         kwargs = create.call_args.kwargs
-        assert kwargs["skills"] == ["/skills/"]
-        assert "Available Skills:" in kwargs["system_prompt"]
-        assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" in kwargs["system_prompt"]
-        assert 'execute("python /workspace/[name].py")' in kwargs["system_prompt"]
-        assert "Tell the planner to account for available skills" in kwargs["system_prompt"]
-        assert "Include any applicable skill-use requirements from the plan" in kwargs["system_prompt"]
+        assert "skills" not in kwargs
+        subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
+        assert "skills" not in subagents["planner-agent"]
+        assert subagents["writer-agent"]["skills"] == ["/skills/synthesis/"]
+        assert "Available Skills:" not in kwargs["system_prompt"]
+        assert "Use read_file to load the relevant SKILL.md BEFORE writing any code" not in kwargs["system_prompt"]
+        assert 'execute("python /workspace/[name].py")' not in kwargs["system_prompt"]
+        assert "Skills System" not in kwargs["system_prompt"]
+        assert "Shell commands cannot see `/shared/`" in kwargs["system_prompt"]
+        assert "writer-agent" in kwargs["system_prompt"]
         assert "data-table-analysis" not in kwargs["system_prompt"]
-        assert agent.deepagents_runtime.job_id == "async-job-123"
+        assert create_backend.call_args.args[1] == "async-job-123"
 
     def test_async_deep_researcher_empty_data_sources_keeps_internal_tools(self):
         """Explicit empty data_sources disables source tools but keeps DeepResearcher helpers."""
@@ -1446,10 +2349,21 @@ class TestAsyncJobRunnerAgentFactory:
         provider.configure(LLMRole.ORCHESTRATOR, mock_llm)
         provider.configure(LLMRole.PLANNER, mock_llm)
         provider.configure(LLMRole.RESEARCHER, mock_llm)
+        provider.configure(LLMRole.REPORT_WRITER, mock_llm)
         mock_deep_agent = MagicMock()
         mock_deep_agent.with_config.return_value = mock_deep_agent
 
-        with patch("aiq_agent.agents.deep_researcher.agent.create_deep_agent", return_value=mock_deep_agent) as create:
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_deep_agent) as create,
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_summarization_middleware",
+                return_value=MagicMock(),
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_agent",
+                return_value=MagicMock(),
+            ),
+        ):
             agent = _create_agent_instance(
                 agent_cls=DeepResearcherAgent,
                 llm_provider=provider,
@@ -1464,14 +2378,19 @@ class TestAsyncJobRunnerAgentFactory:
             agent._build_orchestrator_agent(state)
 
         tool_names = [tool.name for tool in create.call_args.kwargs["tools"]]
-        assert tool_names == ["think", "get_verified_sources"]
-        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == tool_names
-        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == tool_names
+        assert tool_names == ["think", "get_verified_sources", "run_research_batch"]
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][0]["tools"]] == [
+            "lookup_source_catalog",
+        ]
+        assert [tool.name for tool in create.call_args.kwargs["subagents"][1]["tools"]] == [
+            "think",
+            "get_verified_sources",
+        ]
 
-    def test_create_agent_instance_does_not_drop_config_on_internal_type_error(self):
-        """Constructor bugs must not silently fall back to no-config construction."""
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SandboxConfig
-        from aiq_agent.agents.deep_researcher.deepagents_runtime import SkillsConfig
+    def test_create_agent_instance_does_not_swallow_deep_research_constructor_type_error(self):
+        """Constructor bugs must not silently fall back to another construction pattern."""
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
+        from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
         from aiq_api.jobs.runner import _create_agent_instance
 
@@ -1481,18 +2400,26 @@ class TestAsyncJobRunnerAgentFactory:
                 *,
                 llm_provider,
                 tools,
-                max_loops,
                 verbose,
                 callbacks,
-                config=None,
+                domain_catalog_path=None,
+                enable_source_router=True,
+                enable_citation_verification=True,
+                skills=None,
+                sandbox=None,
                 job_id=None,
+                artifact_db_url=None,
+                artifact_emit=None,
+                max_research_concurrency=None,
+                max_concurrent_source_tool_calls=None,
+                max_source_tool_batch_size=None,
             ):
                 raise TypeError("internal constructor failure")
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
-            skills=SkillsConfig(enabled=True),
-            sandbox=SandboxConfig(app_name="async-aiq"),
+            skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
+            sandbox=DeepResearchSandboxConfig(app_name="async-aiq"),
         )
 
         with pytest.raises(TypeError, match="internal constructor failure"):
@@ -1506,3 +2433,137 @@ class TestAsyncJobRunnerAgentFactory:
                 callbacks=["callback"],
                 job_id="job-123",
             )
+
+
+class TestTerminalTeardown:
+    """_teardown_sandbox routes close()/terminate() and never raises on the terminal path."""
+
+    def test_none_runtime_is_noop(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        # Must not raise when no sandbox runtime is present (non-sandbox agents).
+        _teardown_sandbox(None, job_id="job-1", interrupted=False)
+
+    @pytest.mark.asyncio
+    async def test_terminal_event_flush_failure_is_nonfatal_and_sanitized(self, caplog):
+        from aiq_api.jobs.runner import _flush_event_store
+
+        event_store = MagicMock()
+        event_store.flush.side_effect = RuntimeError("secret-bearing database detail")
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            await _flush_event_store(event_store, job_id="job-1")
+
+        event_store.flush.assert_called_once_with()
+        assert "Event store flush failed for job job-1 (RuntimeError)" in caplog.text
+        assert "secret-bearing database detail" not in caplog.text
+
+    def test_runtime_finalizer_owns_cleanup_when_available(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize", "close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.finalize.assert_called_once_with(interrupted=True)
+        runtime.close.assert_not_called()
+        runtime.terminate.assert_not_called()
+
+    def test_runtime_finalizer_false_result_is_logged(self, caplog):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize"])
+        runtime.finalize.return_value = False
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup reported failure for job job-1" in caplog.text
+
+    def test_runtime_finalizer_exception_is_nonfatal_and_sanitized(self, caplog):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize"])
+        runtime.finalize.side_effect = RuntimeError("credential=do-not-log")
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup failed for job job-1 (RuntimeError)" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+
+    def test_normal_path_calls_close(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        runtime.close.assert_called_once_with()
+        runtime.terminate.assert_not_called()
+
+    def test_interrupted_path_calls_terminate(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.terminate.assert_called_once_with()
+        runtime.close.assert_not_called()
+
+    def test_interrupted_without_terminate_falls_back_to_close(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close"])  # no terminate attribute
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.close.assert_called_once_with()
+
+    def test_fallback_teardown_exception_is_nonfatal_and_sanitized(self, caplog):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["close", "terminate"])
+        runtime.close.side_effect = RuntimeError("credential=do-not-log")
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup failed for job job-1 (RuntimeError)" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+
+    def test_finalizes_artifacts_before_close(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        order: list[str] = []
+        runtime = MagicMock(spec=["close", "terminate", "finalize_artifacts"])
+        runtime.finalize_artifacts.side_effect = lambda **_kwargs: order.append("harvest")
+        runtime.close.side_effect = lambda: order.append("close")
+
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        runtime.finalize_artifacts.assert_called_once_with(interrupted=False)
+        assert order == ["harvest", "close"]
+
+    def test_harvest_persists_artifacts_without_releasing_sandbox(self):
+        from aiq_api.jobs.runner import _harvest_sandbox_artifacts
+
+        # Runs before the terminal status: artifacts must be persisted, but the
+        # unbounded close()/terminate() must NOT run here (deferred to finally),
+        # so a hanging SDK cleanup cannot strand a finished job in RUNNING.
+        runtime = MagicMock(spec=["close", "terminate", "finalize_artifacts"])
+        _harvest_sandbox_artifacts(runtime, job_id="job-1", interrupted=False)
+
+        runtime.finalize_artifacts.assert_called_once_with(interrupted=False)
+        runtime.close.assert_not_called()
+        runtime.terminate.assert_not_called()
+
+    def test_harvest_none_runtime_is_noop(self):
+        from aiq_api.jobs.runner import _harvest_sandbox_artifacts
+
+        _harvest_sandbox_artifacts(None, job_id="job-1", interrupted=False)
+
+    def test_harvest_never_raises_when_finalize_fails(self):
+        from aiq_api.jobs.runner import _harvest_sandbox_artifacts
+
+        runtime = MagicMock(spec=["finalize_artifacts"])
+        runtime.finalize_artifacts.side_effect = RuntimeError("artifact scan failed")
+        # Artifact capture cannot replace or block the job result.
+        _harvest_sandbox_artifacts(runtime, job_id="job-1", interrupted=False)

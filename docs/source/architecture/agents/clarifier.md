@@ -6,8 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 # Clarifier Agent
 
 The Clarifier Agent provides human-in-the-loop (HITL) interaction before deep
-research begins. It gathers clarifications from the user, generates a
-structured research plan, and optionally presents the plan for approval.
+research begins. It gathers context and, when the request is vague, optionally
+asks the user to narrow the scope or clarify the type of output requested.
 
 **Location:** `src/aiq_agent/agents/clarifier/agent.py`
 
@@ -16,9 +16,9 @@ structured research plan, and optionally presents the plan for approval.
 Deep research is expensive in both time and compute. The Clarifier reduces
 wasted effort by:
 
-1. Asking focused clarification questions to narrow the research scope
-2. Generating a structured research plan with title and sections
-3. Allowing the user to approve, reject, or provide feedback on the plan
+1. Gathering context (including optional tool calls such as web search) about the request
+2. Asking focused clarification questions only when the request is genuinely ambiguous
+3. Optionally clarifying the **type of output** the user wants (for example, report, table, comparison, prediction, or brief answer) when that is unclear
 
 The clarifier runs on the deep research path and also when a shallow query
 escalates to deep. It can be disabled entirely using `enable_clarifier: false`
@@ -46,28 +46,11 @@ graph TD
     I -->|no| L[Auto-complete clarification]
 
     H -->|no| L[Clarification complete]
-    L --> M{enable_plan_approval?}
-
-    M -->|no| N[Return ClarifierResult<br/>with clarifier_log]
-    M -->|yes| O[Generate research plan<br/>using plan_generation.j2]
-
-    O --> P[Present plan to user]
-    P --> Q{User decision?}
-
-    Q -->|approve| R[Return ClarifierResult<br/>plan_approved = true]
-    Q -->|reject| S[Return ClarifierResult<br/>plan_rejected = true]
-    Q -->|feedback| T{iterations < max_plan_iterations?}
-    T -->|yes| U[Regenerate plan<br/>with feedback]
-    U --> P
-    T -->|no| V[Auto-approve plan]
-    V --> R
+    L --> N[Return ClarifierResult<br/>with clarifier_log]
 
     style A fill:#e1f5fe
     style N fill:#e8f5e9
-    style R fill:#e8f5e9
-    style S fill:#ffebee
     style J fill:#fff3e0
-    style P fill:#fff3e0
 ```
 
 ## State Model
@@ -82,11 +65,6 @@ graph TD
 | `max_turns` | `int` | `3` | Maximum clarification Q&A turns |
 | `clarifier_log` | `str` | `""` | Accumulated clarification dialog log |
 | `iteration` | `int` | `0` | Current clarification turn counter |
-| `plan_title` | `str` or `None` | `None` | Title of the generated research plan |
-| `plan_sections` | `list[str]` | `[]` | Section titles for the research plan |
-| `plan_approved` | `bool` | `false` | Whether the user approved the plan |
-| `plan_rejected` | `bool` | `false` | Whether the user rejected the plan |
-| `plan_feedback_history` | `list[str]` | `[]` | History of user feedback on plan iterations |
 
 Computed property:
 - `remaining_questions` = `max_turns - iteration`
@@ -98,13 +76,6 @@ Returned to the orchestrator after the clarification dialog completes:
 | Field | Type | Description |
 | ----- | ---- | ----------- |
 | `clarifier_log` | `str` | Full clarification dialog log |
-| `plan_title` | `str` or `None` | Research plan title (if plan approval enabled) |
-| `plan_sections` | `list[str]` | Plan section titles |
-| `plan_approved` | `bool` | Whether the plan was approved |
-| `plan_rejected` | `bool` | Whether the plan was rejected |
-
-The `get_approved_plan_context()` method formats the approved plan as markdown
-for injection into the deep researcher's orchestrator prompt.
 
 ### ClarificationResponse
 
@@ -122,11 +93,8 @@ Configured through `ClarifierConfig` (NeMo Agent Toolkit type name: `clarifier_a
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
 | `llm` | `LLMRef` | required | LLM for generating clarification questions |
-| `planner_llm` | `LLMRef` or `None` | `None` | Separate LLM for plan generation; falls back to `llm` |
 | `tools` | `list[FunctionRef \| FunctionGroupRef]` | `[]` | Tools for context gathering (for example, web search) |
 | `max_turns` | `int` | `3` | Maximum clarification Q&A turns before auto-completing |
-| `enable_plan_approval` | `bool` | `false` | Enable plan preview and approval after clarification |
-| `max_plan_iterations` | `int` | `10` | Maximum plan feedback iterations before auto-approving |
 | `log_response_max_chars` | `int` | `2000` | Maximum characters to log from LLM responses |
 | `verbose` | `bool` | `false` | Enable verbose logging with `VerboseTraceCallback` |
 
@@ -137,12 +105,9 @@ functions:
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_llm
-    planner_llm: nemotron_llm
     tools:
       - web_search_tool
     max_turns: 3
-    enable_plan_approval: true
-    max_plan_iterations: 10
     verbose: true
 ```
 
@@ -153,7 +118,6 @@ Located in `src/aiq_agent/agents/clarifier/prompts/`:
 | Template | Purpose |
 | -------- | ------- |
 | `research_clarification.j2` | Generates clarification questions. Includes conditional sections for uploaded documents context. Instructs the LLM to respond with JSON containing `needs_clarification` and `clarification_question`. Template variables: `clarifier_result`, `available_documents`, `tools`, `tool_names` |
-| `plan_generation.j2` | Generates a structured research plan with title and sections from the clarified query and dialog log. Template variables: `clarifier_context`, `feedback_history` |
 
 ## HITL Interaction Patterns
 
@@ -167,25 +131,9 @@ User:   "Focus on Germany and Japan."
 Agent:  "Got it. Are you interested in economic impacts from a GDP perspective,
          job creation, or both?"
 User:   "Both GDP impact and job creation."
-Agent:  [clarification complete, generates plan]
+Agent:  [clarification complete, proceeds to deep research]
 ```
 
-When `enable_plan_approval` is `true`:
-
-```
-Agent:  "Here is the proposed research plan:
-         Title: Economic Impacts of Renewable Energy in Germany and Japan
-         Sections:
-         - GDP Impact Analysis
-         - Job Creation Metrics
-         - Comparative Analysis
-         Do you approve this plan?"
-User:   "Add a section on policy frameworks."
-Agent:  [regenerates plan with feedback]
-User:   "Approve"
-Agent:  [returns ClarifierResult with plan_approved=true]
-```
-
-User responses are matched against keyword sets:
-- **Approval:** approve, approved, yes, ok, proceed, continue, go ahead, looks good, y, accept
-- **Rejection:** reject, rejected, no, cancel, stop, abort, n
+When the desired output form is unclear, the clarifier may instead ask which
+type of output you want (for example, a full report, a comparison table, or a
+brief answer) before research begins.

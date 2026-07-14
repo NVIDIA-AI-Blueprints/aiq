@@ -61,6 +61,35 @@ const EMPTY_MESSAGES: ChatMessage[] = []
 const EMPTY_CONVERSATIONS: Conversation[] = []
 
 /**
+ * Structured async-job escalation signal parsed from a system_response `content` string.
+ *
+ * The backend (chat_researcher/agent.py `_job_escalation_message`) emits a compact JSON
+ * payload rather than a prose sentence so escalation detection is immune to wording or
+ * punctuation changes:
+ *   {"type":"job_escalation","kind":"deep_research"|"report_edit","job_id":"<id>"}
+ */
+interface JobEscalation {
+  kind: 'deep_research' | 'report_edit'
+  jobId: string
+}
+
+function parseJobEscalation(content?: string): JobEscalation | null {
+  if (!content) return null
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(content)
+  } catch {
+    return null
+  }
+  if (typeof parsed !== 'object' || parsed === null) return null
+  const obj = parsed as Record<string, unknown>
+  if (obj.type !== 'job_escalation') return null
+  if (obj.kind !== 'deep_research' && obj.kind !== 'report_edit') return null
+  if (typeof obj.job_id !== 'string' || obj.job_id.length === 0) return null
+  return { kind: obj.kind, jobId: obj.job_id }
+}
+
+/**
  * Buffer entry for an outgoing payload that has to bridge a socket
  * rotation. Discriminated by `kind` because both chat messages and HITL
  * interaction responses can hit `auth_expired` at the backend, and the
@@ -68,8 +97,22 @@ const EMPTY_CONVERSATIONS: Conversation[] = []
  * right `NATWebSocketClient` method.
  */
 type PendingOutgoing =
-  | { kind: 'message'; content: string; dataSources: string[] }
-  | { kind: 'interaction'; interactionId: string; parentId: string; response: string }
+  | {
+      kind: 'message'
+      content: string
+      dataSources: string[]
+      activeReportJobId?: string
+      deliveryRetryCount?: number
+    }
+  | { kind: 'interaction'; interactionId: string; parentId: string; response: string; deliveryRetryCount?: number }
+
+type UnacknowledgedOutgoing = {
+  payload: PendingOutgoing
+  outboundId: string
+  ackParentId: string
+  conversationId?: string
+  retryCount: number
+}
 
 /**
  * Seconds before token expiry to proactively rotate the WebSocket. The
@@ -108,6 +151,36 @@ const WS_REFRESH_SOFT_GUARD_SECONDS = 60
  * because a single passing message proves the post-rotation auth is alive.
  */
 const MAX_CONSECUTIVE_AUTH_EXPIRED = 3
+
+export const getActiveReportJobId = (conversation: Conversation | null): string | undefined => {
+  if (!conversation) return undefined
+  const reportMessage = [...conversation.messages].reverse().find(
+    (message) =>
+      message.messageType === 'agent_response' &&
+      Boolean(message.deepResearchJobId) &&
+      !message.deepResearchReportExpired &&
+      (message.showViewReport || Boolean(message.reportContent?.trim()))
+  )
+  return reportMessage?.deepResearchJobId
+}
+
+/**
+ * One silent replay is enough to cover the stale-open socket race observed in
+ * staging: the browser reported OPEN, the UI wrote the prompt, and the socket
+ * closed before the backend emitted any frame. More than one replay risks
+ * duplicate workflows if the backend accepted the earlier send but was slow to
+ * answer, so a second unacknowledged close falls back to the normal connection
+ * failure path.
+ */
+const MAX_UNACKNOWLEDGED_OUTGOING_REPLAYS = 1
+
+/**
+ * If the browser accepts a WebSocket send but the server never emits any
+ * response frame, `onclose` may also never fire on half-open network paths.
+ * This timeout closes that remaining gap: no backend contact within the
+ * window is treated like an unacknowledged stale send.
+ */
+const UNACKNOWLEDGED_OUTGOING_ACK_TIMEOUT_MS = 7_000
 
 /**
  * Map NAT/backend error codes to frontend ErrorCode for consistent UI display.
@@ -231,6 +304,16 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
   const lastSentOutgoingRef = useRef<PendingOutgoing | null>(null)
 
   /**
+   * Payload that has been written to a WebSocket but has not yet produced any
+   * backend frame. Browser `readyState === OPEN` is not a delivery guarantee:
+   * a proxy/backend close can arrive immediately after `send()`. This ref lets
+   * an unintentional close before first backend contact replay the payload once
+   * on the reconnected socket.
+   */
+  const unacknowledgedOutgoingRef = useRef<UnacknowledgedOutgoing | null>(null)
+  const unacknowledgedOutgoingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /**
    * Set by the soft timer when it fires while streaming; consumed by the
    * deferred-rotation effect once `isStreaming` returns to false. Ref (not
    * state) so flipping the flag doesn't re-run the timer effect.
@@ -263,7 +346,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
   const rotateSocket = useCallback((reason: string): void => {
     const client = wsClientRef.current
     if (!client) return
-    console.warn(`[WS] Rotating connection before token expiry (${reason})`)
+    console.warn(`[WS] Rotating connection (${reason})`)
     void client.rotate()
   }, [])
 
@@ -319,6 +402,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     currentStatus: s.currentStatus,
     pendingInteraction: s.pendingInteraction,
   })))
+  const currentConversationId = currentConversation?.id
 
   // Actions — stable references, individual selectors won't cause re-renders
   const addUserMessage = useChatStore((s) => s.addUserMessage)
@@ -376,6 +460,150 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     [authRequired, authError]
   )
 
+  const clearUnacknowledgedOutgoingTimeout = useCallback((): void => {
+    if (unacknowledgedOutgoingTimeoutRef.current) {
+      clearTimeout(unacknowledgedOutgoingTimeoutRef.current)
+      unacknowledgedOutgoingTimeoutRef.current = null
+    }
+  }, [])
+
+  const clearUnacknowledgedOutgoing = useCallback((): void => {
+    unacknowledgedOutgoingRef.current = null
+    clearUnacknowledgedOutgoingTimeout()
+  }, [clearUnacknowledgedOutgoingTimeout])
+
+  const failUnacknowledgedOutgoing = useCallback((): void => {
+    if (currentThinkingStepIdRef.current) {
+      completeThinkingStep(currentThinkingStepIdRef.current)
+      currentThinkingStepIdRef.current = null
+      currentStatusRef.current = null
+    }
+
+    addErrorCard(
+      'connection.failed',
+      'No response received from the server. Please try again.',
+    )
+    setCurrentStatus(null)
+    setStreaming(false)
+    setLoading(false)
+    clearPendingInteraction()
+    lastSentOutgoingRef.current = null
+    pendingOutgoingRef.current = null
+    clearUnacknowledgedOutgoing()
+  }, [
+    addErrorCard,
+    clearPendingInteraction,
+    clearUnacknowledgedOutgoing,
+    completeThinkingStep,
+    setCurrentStatus,
+    setLoading,
+    setStreaming,
+  ])
+
+  const handleUnacknowledgedOutgoingTimeout = useCallback((): void => {
+    const unacknowledged = unacknowledgedOutgoingRef.current
+    if (!unacknowledged) return
+
+    const activeConversationId = useChatStore.getState().currentConversation?.id
+    const sameConversation =
+      !unacknowledged.conversationId ||
+      unacknowledged.conversationId === activeConversationId
+
+    if (!sameConversation) {
+      lastSentOutgoingRef.current = null
+      pendingOutgoingRef.current = null
+      clearUnacknowledgedOutgoing()
+      return
+    }
+
+    if (
+      unacknowledged.retryCount < MAX_UNACKNOWLEDGED_OUTGOING_REPLAYS
+    ) {
+      pendingOutgoingRef.current = {
+        ...unacknowledged.payload,
+        deliveryRetryCount: unacknowledged.retryCount + 1,
+      } as PendingOutgoing
+      clearUnacknowledgedOutgoing()
+      rotateSocket('delivery-timeout')
+      return
+    }
+
+    failUnacknowledgedOutgoing()
+  }, [
+    clearUnacknowledgedOutgoing,
+    failUnacknowledgedOutgoing,
+    rotateSocket,
+  ])
+
+  const trackSentOutgoing = useCallback(
+    (payload: PendingOutgoing, outboundId: string): void => {
+      const retryCount = payload.deliveryRetryCount ?? 0
+      const conversationId = useChatStore.getState().currentConversation?.id ?? currentConversationId
+
+      clearUnacknowledgedOutgoingTimeout()
+      lastSentOutgoingRef.current = payload
+      unacknowledgedOutgoingRef.current = {
+        payload,
+        outboundId,
+        ackParentId: payload.kind === 'message' ? outboundId : payload.parentId,
+        conversationId,
+        retryCount,
+      }
+      unacknowledgedOutgoingTimeoutRef.current = setTimeout(
+        handleUnacknowledgedOutgoingTimeout,
+        UNACKNOWLEDGED_OUTGOING_ACK_TIMEOUT_MS,
+      )
+    },
+    [
+      clearUnacknowledgedOutgoingTimeout,
+      currentConversationId,
+      handleUnacknowledgedOutgoingTimeout,
+    ]
+  )
+
+  const acknowledgeOutgoingDelivery = useCallback((parentId?: string): void => {
+    const unacknowledged = unacknowledgedOutgoingRef.current
+    if (!unacknowledged) return
+
+    // Some NAT frames omit parent_id, and intermediate frames may carry an
+    // internal step id rather than the original user-message id. Any backend
+    // frame while this request is active proves the prior send crossed the
+    // socket boundary, but when parent_id is present and matches our known
+    // request ids we can be stricter.
+    if (
+      !parentId ||
+      parentId === unacknowledged.ackParentId ||
+      parentId === unacknowledged.outboundId
+    ) {
+      clearUnacknowledgedOutgoing()
+    }
+  }, [clearUnacknowledgedOutgoing])
+
+  const sendOutgoingPayload = useCallback(
+    (payload: PendingOutgoing): boolean => {
+      const client = wsClientRef.current
+      if (!client?.isConnected()) return false
+
+      let outboundId: string | null
+      if (payload.kind === 'message') {
+        outboundId = payload.activeReportJobId
+          ? client.sendMessage(payload.content, payload.dataSources, payload.activeReportJobId)
+          : client.sendMessage(payload.content, payload.dataSources)
+      } else {
+        outboundId = client.sendInteractionResponse(
+          payload.interactionId,
+          payload.parentId,
+          payload.response,
+        )
+      }
+
+      if (!outboundId) return false
+      trackSentOutgoing(payload, outboundId)
+      return true
+    },
+    [trackSentOutgoing]
+  )
+
   /**
    * Create WebSocket callbacks that route messages to the store
    */
@@ -415,23 +643,29 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           )
           return
         }
+        acknowledgeOutgoingDelivery(parentId)
 
-        // Check for deep research escalation signal
-        // Backend sends: "Deep research job submitted. Job ID: {uuid}"
-        const deepResearchMatch = content?.match(
-          /Deep research job submitted\. Job ID: ([a-f0-9-]+)/i
-        )
+        // Check for an async-job escalation signal. Two backend paths produce a
+        // pollable child job whose report is fetched over the same SSE/report
+        // endpoints, so both escalate the same way. The backend emits a structured
+        // JSON payload (see _job_escalation_message in chat_researcher/agent.py)
+        // rather than a prose sentence, so detection is robust to wording/punctuation:
+        //   {"type":"job_escalation","kind":"deep_research"|"report_edit","job_id":"<id>"}
+        const escalation = parseJobEscalation(content)
 
-        if (deepResearchMatch) {
-          const jobId = deepResearchMatch[1]
+        if (escalation) {
+          const isReportEdit = escalation.kind === 'report_edit'
+          const jobId = escalation.jobId
           // Get current state for plan messages and conversation
           const state = useChatStore.getState()
           const currentPlanMessages = state.planMessages
           const currentConversation = state.currentConversation
 
           // Derive a conversation title from the plan (preferred) or fall
-          // back to the last user message.
-          if (currentConversation) {
+          // back to the last user message. Report edits run inside an existing
+          // report conversation, so they must NOT rename it to the edit
+          // instruction -- only new deep-research runs derive a title.
+          if (currentConversation && !isReportEdit) {
             let extractedTitle: string | null = null
 
             // First, look at all plan messages for a title
@@ -558,6 +792,12 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           console.warn('Ignoring stale intermediate step -- not currently streaming')
           return
         }
+        // This is the same signal that makes ChatThinking appear in the UI:
+        // after the streaming stale guard, any intermediate frame proves the
+        // backend received the outbound message even when NAT uses internal
+        // workflow parent IDs that do not match the user-message id.
+        clearUnacknowledgedOutgoing()
+
         // Legacy string-content path: synthesize a generic thinking step.
         if (typeof content === 'string') {
           // For plain string content, create a generic thinking step
@@ -617,6 +857,8 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       },
 
       onHumanPrompt: (promptId: string, parentId: string, prompt: NATHumanPrompt) => {
+        acknowledgeOutgoingDelivery(parentId)
+
         // Store the pending interaction for the UI to handle
         const inputType = prompt.input_type as PendingInteraction['inputType']
         const interaction: PendingInteraction = {
@@ -673,6 +915,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
             consecutiveAuthExpiredRef.current = 0
             lastSentOutgoingRef.current = null
             pendingOutgoingRef.current = null
+            clearUnacknowledgedOutgoing()
             addErrorCard(
               'auth.session_expired' as ErrorCode,
               'Your session has expired. Please sign in again to continue.',
@@ -689,6 +932,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           if (lastSent) {
             pendingOutgoingRef.current = lastSent
           }
+          clearUnacknowledgedOutgoing()
           rotateSocket('auth_expired')
           return
         }
@@ -713,6 +957,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           // pre-rotation payload behind the user's back.
           lastSentOutgoingRef.current = null
           pendingOutgoingRef.current = null
+          clearUnacknowledgedOutgoing()
           return
         }
 
@@ -742,6 +987,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         // user expects to be re-sent once we've shown them an error card.
         lastSentOutgoingRef.current = null
         pendingOutgoingRef.current = null
+        clearUnacknowledgedOutgoing()
       },
 
       onConnectionChange: (status, context?: ConnectionChangeContext) => {
@@ -761,26 +1007,14 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
           const client = wsClientRef.current
           if (pending && client) {
             pendingOutgoingRef.current = null
-            if (pending.kind === 'message') {
-              client.sendMessage(pending.content, pending.dataSources)
+            if (sendOutgoingPayload(pending)) {
+              // Match each send path's loading contract: chat sends clear the
+              // composer spinner after putting the message on the wire, while
+              // HITL answers keep it visible until the backend processes them.
+              setLoading(pending.kind === 'interaction')
             } else {
-              client.sendInteractionResponse(
-                pending.interactionId,
-                pending.parentId,
-                pending.response,
-              )
+              pendingOutgoingRef.current = pending
             }
-            // Mirror doSend(): the drain just put a payload on the wire,
-            // so it is now the canonical "last sent". Without this, a
-            // pre-flight rotation that gets immediately hit by a second
-            // `auth_expired` on the fresh socket would have a null
-            // `lastSentOutgoingRef` and silently drop the user's payload
-            // (the auth_expired handler couldn't re-buffer it).
-            lastSentOutgoingRef.current = pending
-            // Match each send path's loading contract: chat sends clear the
-            // composer spinner after putting the message on the wire, while
-            // HITL answers keep it visible until the backend processes them.
-            setLoading(pending.kind === 'interaction')
           }
           return
         }
@@ -790,6 +1024,30 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         if (context?.intentional) return
 
         if (status === 'error' || status === 'disconnected') {
+          const unacknowledged = unacknowledgedOutgoingRef.current
+          if (unacknowledged) {
+            const activeConversationId = useChatStore.getState().currentConversation?.id
+            const sameConversation =
+              !unacknowledged.conversationId ||
+              unacknowledged.conversationId === activeConversationId
+
+            if (
+              sameConversation &&
+              unacknowledged.retryCount < MAX_UNACKNOWLEDGED_OUTGOING_REPLAYS
+            ) {
+              pendingOutgoingRef.current = {
+                ...unacknowledged.payload,
+                deliveryRetryCount: unacknowledged.retryCount + 1,
+              } as PendingOutgoing
+              clearUnacknowledgedOutgoing()
+              return
+            }
+
+            clearUnacknowledgedOutgoing()
+            lastSentOutgoingRef.current = null
+            pendingOutgoingRef.current = null
+          }
+
           // Don't show error cards here -- the WS client only fires
           // onError(CONNECTION_FAILED) after all retries are exhausted,
           // and the health-check gate there decides whether to show UI.
@@ -828,13 +1086,14 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     updateConversationTitle,
     getTransportFailure,
     rotateSocket,
+    acknowledgeOutgoingDelivery,
+    clearUnacknowledgedOutgoing,
+    sendOutgoingPayload,
   ])
 
   /**
    * Initialize WebSocket client when conversation changes
    */
-  const currentConversationId = currentConversation?.id
-
   useEffect(() => {
     if (!currentConversationId || !autoConnect) return
 
@@ -878,6 +1137,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       }
       pendingOutgoingRef.current = null
       lastSentOutgoingRef.current = null
+      clearUnacknowledgedOutgoing()
       consecutiveAuthExpiredRef.current = 0
       pendingRotationRef.current = false
       currentThinkingStepIdRef.current = null
@@ -888,6 +1148,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
     autoConnect,
     createCallbacks,
     refreshAuthBeforeReconnect,
+    clearUnacknowledgedOutgoing,
     setStreaming,
     setLoading,
     setCurrentStatus,
@@ -954,16 +1215,12 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
         kind: 'message',
         content,
         dataSources: dataSourcesForMessage,
+        activeReportJobId: getActiveReportJobId(storeState.currentConversation),
       }
 
       // Helper to actually send the message
       const doSend = () => {
-        if (wsClientRef.current?.isConnected()) {
-          wsClientRef.current.sendMessage(content, dataSourcesForMessage)
-          // Remember the payload so a mid-workflow `auth_expired` can
-          // transparently re-issue it after the reconnect. Cleared on
-          // isFinal or any non-auth error.
-          lastSentOutgoingRef.current = outgoingPayload
+        if (sendOutgoingPayload(outgoingPayload)) {
           setLoading(false)
         } else {
           addErrorCard('connection.failed', 'WebSocket connection failed')
@@ -1022,6 +1279,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       createCallbacks,
       refreshAuthBeforeReconnect,
       rotateSocket,
+      sendOutgoingPayload,
       authRequired,
       activeSocketTokenExpiresAt,
     ]
@@ -1071,16 +1329,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       }
 
       const doSend = () => {
-        if (wsClientRef.current?.isConnected()) {
-          wsClientRef.current.sendInteractionResponse(
-            pendingInteraction.id,
-            pendingInteraction.parentId,
-            response
-          )
-          // Record the HITL payload so a follow-up `auth_expired` can
-          // transparently re-issue THIS response (not a stale chat
-          // payload that happened to be the previous `lastSentOutgoing`).
-          lastSentOutgoingRef.current = interactionPayload
+        if (sendOutgoingPayload(interactionPayload)) {
           setStreaming(true)
           setLoading(true)
         } else {
@@ -1120,6 +1369,7 @@ export const useWebSocketChat = (options: UseWebSocketChatOptions = {}): UseWebS
       authRequired,
       activeSocketTokenExpiresAt,
       rotateSocket,
+      sendOutgoingPayload,
     ]
   )
 

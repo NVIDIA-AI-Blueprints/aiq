@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-import { render, screen } from '@/test-utils'
+import { render, screen, within } from '@/test-utils'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { AgentsTab } from './AgentsTab'
 import { useChatStore } from '@/features/chat'
@@ -62,7 +62,9 @@ describe('AgentsTab', () => {
       render(<AgentsTab />)
 
       expect(
-        screen.getByText('Active planner, researcher, and writer agents executing tasks.')
+        screen.getByText(
+          'Active source router, planner, researcher, and writer agents executing tasks.'
+        )
       ).toBeInTheDocument()
     })
   })
@@ -119,6 +121,28 @@ describe('AgentsTab', () => {
 
       expect(screen.getByText('researcher-agent')).toBeInTheDocument()
       expect(screen.getAllByTestId('tool-call')).toHaveLength(2)
+    })
+
+    test('keeps concurrent researcher tool calls on their owning cards', () => {
+      useChatStore.setState({
+        deepResearchAgents: [
+          createStoreAgent({ id: 'researcher-1', name: 'researcher-agent' }),
+          createStoreAgent({ id: 'researcher-2', name: 'researcher-agent' }),
+        ],
+        deepResearchToolCalls: [
+          createToolCall({ id: 'tool-1', name: 'web_search', agentId: 'researcher-1' }),
+          createToolCall({ id: 'tool-2', name: 'tavily_search', agentId: 'researcher-2' }),
+        ],
+      })
+
+      render(<AgentsTab />)
+
+      const cards = screen.getAllByTestId('agent-card')
+      expect(cards).toHaveLength(2)
+      expect(within(cards[0]).getByText('web_search')).toBeInTheDocument()
+      expect(within(cards[0]).queryByText('tavily_search')).not.toBeInTheDocument()
+      expect(within(cards[1]).getByText('tavily_search')).toBeInTheDocument()
+      expect(within(cards[1]).queryByText('web_search')).not.toBeInTheDocument()
     })
 
     test('ignores orphaned tool calls without agentId', () => {

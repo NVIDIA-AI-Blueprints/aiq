@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Example: Full Pipeline (Foundational RAG)
 
-The complete AI-Q blueprint configuration with all features enabled: intent classification, shallow and deep research agents, knowledge retrieval (Foundational RAG), paper search, web search, clarifier with human-in-the-loop plan approval, and the async jobs API with SSE streaming.
+The complete AI-Q blueprint configuration with all features enabled: intent classification, shallow and deep research agents, knowledge retrieval (Foundational RAG), paper search, web search, clarifier with human-in-the-loop clarification, and the async jobs API with SSE streaming.
 
 This is based on `configs/config_web_frag.yml`, which is the default for Helm deployments.
 
@@ -67,7 +67,7 @@ general:
 llms:
   nemotron_llm_intent:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.5    # Moderate: needs to reason about intent
     top_p: 0.9
@@ -76,9 +76,9 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_nano_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.1    # Low: factual research output
     top_p: 0.3
@@ -86,20 +86,6 @@ llms:
     num_retries: 5
     chat_template_kwargs:
       enable_thinking: true
-
-  # Nemotron Super is compatible and tested with AIQ but has limited availability
-  # on the Build API due to high demand.
-  # Uncomment nemotron_super_llm below if the endpoint is accessible.
-  # nemotron_super_llm:
-  #   _type: nim
-  #   model_name: nvidia/nemotron-3-super-120b-a12b
-  #   base_url: "https://integrate.api.nvidia.com/v1"
-  #   temperature: 1.0    # High: diverse research planning
-  #   top_p: 1.0
-  #   max_tokens: 128000  # Large context for multi-loop orchestration
-  #   num_retries: 5
-  #   chat_template_kwargs:
-  #     enable_thinking: true
 
 # ===========================================================================
 # Functions (tools and agents)
@@ -153,17 +139,15 @@ functions:
   # -------------------------------------------------------------------------
   # Clarifier agent (human-in-the-loop)
   # -------------------------------------------------------------------------
-  # For deep research: asks clarifying questions and generates a research
-  # plan that the user can approve or modify before execution.
+  # For deep research: asks clarifying questions before handing off to the
+  # deep_research_agent.
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_nano_llm
-    planner_llm: nemotron_nano_llm
+    llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search
     max_turns: 3                  # Max clarification rounds
-    enable_plan_approval: true    # User must approve the plan
     log_response_max_chars: 2000
     verbose: true
 
@@ -173,7 +157,7 @@ functions:
   # Single-turn ReAct agent for quick queries.
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_nano_llm
+    llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -187,8 +171,7 @@ functions:
   # and synthesizes comprehensive reports.
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    max_loops: 2                  # Research iteration loops
+    orchestrator_llm: nemotron_super_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool
@@ -200,7 +183,7 @@ functions:
 # The chat_deepresearcher_agent is the meta-routing workflow:
 # 1. Intent classifier determines shallow vs deep
 # 2. Shallow queries go directly to shallow_research_agent
-# 3. Deep queries go through clarifier -> plan approval -> deep_research_agent
+# 3. Deep queries go through clarifier -> deep_research_agent
 workflow:
   _type: chat_deepresearcher_agent
   enable_escalation: true          # Allow shallow -> deep escalation

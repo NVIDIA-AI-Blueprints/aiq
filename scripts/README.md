@@ -49,6 +49,39 @@ Starts the agent in CLI mode with browser-based authentication.
 | `--verbose` or `-v` | Enable verbose logging |
 | `--config_file <path>` | Use a custom configuration file |
 
+### `openshell/` - OpenShell Sandbox Utilities
+
+`openshell/setup_openshell.sh` installs the certified SDK/adapter, generates a policy, and builds
+the reusable image. `openshell/install_gateway.sh` is the explicit Apple Silicon macOS
+entry point for installing the official packaged gateway. `openshell/start_openshell_gateway.sh`
+validates an authenticated registered
+gateway and performs a disposable version/policy/selector/execution/cleanup probe. AI-Q
+then owns one attested physical sandbox per job. OpenShell `0.0.80` is the supported
+version because it contains the required policy-revision and request-label fixes.
+The quick start below is the Linux production pairing; activate the repository virtual
+environment first. macOS requires the explicit local-demo pairing in the canonical guide.
+
+```bash
+source .venv/bin/activate
+./scripts/openshell/setup_openshell.sh --openshell-version 0.0.80 --policy offline
+./scripts/openshell/start_openshell_gateway.sh --gateway-name openshell
+./scripts/start_e2e.sh --config_file configs/config_openshell.yml
+```
+
+For a macOS local demo:
+
+```bash
+/opt/homebrew/bin/bash ./scripts/openshell/setup_openshell.sh --local-demo --policy offline
+./scripts/openshell/install_gateway.sh --dry-run
+./scripts/openshell/install_gateway.sh
+AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK=false \
+  ./scripts/start_e2e.sh --start-openshell-gateway --config_file configs/config_openshell.yml
+```
+
+For supported platforms, production versus local-demo policy pairing, remote gateways,
+live pytest acceptance, and troubleshooting, use the canonical
+[OpenShell deployment guide](../docs/source/deployment/openshell.md). This README is only
+the script-discovery surface.
 
 ### `start_server_in_debug_mode.sh` - Server Mode
 
@@ -56,7 +89,7 @@ Starts the NAT FastAPI server for deep research with async job support.
 
 ```bash
 ./scripts/start_server_in_debug_mode.sh
-./scripts/start_server_in_debug_mode.sh--port 8080
+./scripts/start_server_in_debug_mode.sh --port 8080
 ./scripts/start_server_in_debug_mode.sh --config_file configs/config_web_frag.yml
 ```
 
@@ -109,10 +142,26 @@ Starts the AI-Q API backend for use by Agent Skills such as `aiq-research`. This
 ### `start_e2e.sh` - End-to-End Mode
 
 Starts both backend and frontend for full WebSocket support and HITL workflows.
+Complete the standard setup and activate the virtual environment first:
+
+```bash
+./scripts/setup.sh
+source .venv/bin/activate
+```
 
 ```bash
 ./scripts/start_e2e.sh
+./scripts/start_e2e.sh --config_file configs/config_openshell.yml
+./scripts/start_e2e.sh --start-openshell-gateway --config_file configs/config_openshell.yml --port 8080
 ```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--config_file <path>` | Use a custom configuration file |
+| `--port <port>` | Backend port and frontend backend URL (default: 8000) |
+| `--start-openshell-gateway` | Start/reuse the packaged authenticated gateway and run its strict capability probe before E2E |
 
 **Services:**
 
@@ -128,6 +177,8 @@ Starts both backend and frontend for full WebSocket support and HITL workflows.
 | `configs/config_cli_default.yml` | CLI mode with web search (default) |
 | `configs/config_web_frag.yml` | Server/E2E mode with Foundational RAG |
 | `configs/config_web_default_llamaindex.yml` | Server/E2E mode with LlamaIndex |
+| `configs/config_skills.yml` | Deep research with DeepAgents skills + Modal sandbox |
+| `configs/config_openshell.yml` | Experimental per-job OpenShell sandbox + artifact capture (run `scripts/openshell/setup_openshell.sh` first) |
 
 ## Development Workflow
 

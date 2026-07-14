@@ -1,6 +1,46 @@
 # Change Log
 
-Release v2.1.0 (Unreleased — target 2026-05-19)
+Unreleased changes targeting AI-Q v2.2.0
+
+These entries track candidate work merged to `develop`. AI-Q `v2.1.0` remains the latest stable
+release; the candidate will be stabilized before the final `v2.2.0` release.
+
+**Research and reports**
+
+- Routed deep research now uses explicit source-router, structured planner, concurrent researcher, and writer roles, with bounded source-tool batching and no research-plan approval step
+- Report follow-up supports answers over a completed report, child-job cosmetic rewrites, and delta research that carries the parent report forward as context
+- Clarification is more targeted: it can search for context before asking the user to narrow scope or choose an output shape
+
+**Sources and integrations**
+
+- OpenSearch is a first-class knowledge backend for self-hosted, Amazon OpenSearch Service, and Amazon OpenSearch Serverless deployments
+- Paper search adds SerpAPI and SearchAPI providers alongside Serper; the routed-research profile adds DuckDuckGo news and Polymarket sources
+- Per-user MCP OAuth adds status, connect, callback, and reconnect flows backed by a token store shared by the API and workers; disconnect and in-worker token refresh are not included
+
+**Sandboxes, artifacts, and policy**
+
+- DeepAgents execution uses a provider-neutral sandbox contract: Modal is fresh per job, while the experimental OpenShell profile uses one shared, pre-provisioned sandbox and is not a multi-tenant isolation boundary
+- Opt-in durable artifact capture checkpoints manifest-declared files after successful sandbox `execute` calls, performs one final manifest-plus-directory scan on success/failure, and preserves earlier checkpoints without delaying cancellation when the provider is busy
+- Captured files store metadata in SQL and bytes in SQL or S3-compatible storage, emit metadata-only `artifact.update` events for live and replayed Files-tab access, and remain available through job-scoped list/content endpoints that enforce ownership when `REQUIRE_AUTH=true`
+- Opt-in NeMo Guardrails middleware covers selected workflow and agent input/output boundaries; defining middleware does not activate every boundary
+- Opt-in content encryption protects final async output and selected artifact event content only; it is off by default, forward-only, and does not encrypt checkpoints or most job/event metadata
+- Summary Store database logging masks URL passwords and removes query parameters so credentials and query-string secrets are not written to initialization or lifecycle logs
+
+**Deployment and observability**
+
+- The repository source Helm chart honors `helm install -n <namespace>` for every namespaced resource, including GitOps-rendered deployments; chart metadata advances to `aiq2-web` 2.1.1 with the `aiq` 0.0.5 dependency
+- NAT-exported async-job traces preserve configured workflow, task/batch, named-agent, and model/tool hierarchy across concurrent researchers without copying graph-state content into structural agent spans
+
+**Agent Skills, UX, and developer workflow**
+
+- Consumer Agent Skills now include `aiq-deploy` and `aiq-research`; maintainer skills cover data sources, tools, release QA, PR preparation, prompt/model customization, and CI maintenance
+- The UI surfaces batched researcher activity and improves research-session recovery, expiry handling, and WebSocket delivery reliability
+- Contributor governance and product-level Agent Skill evaluation checks expand release and contribution tooling
+- Pinned to NeMo Agent Toolkit (NAT) v1.8.0
+
+The nine checked-in workflow configurations are focused profiles; no single profile enables every 2.2 capability.
+
+Release v2.1.0
 
 - AI-Q REST API with pluggable auth middleware, entry-point-registered token validators, and async job ownership enforcement
 - Auth extensibility hooks (`register_token_fetcher`, provider lifecycle) and auth refactor eliminating the refresh race

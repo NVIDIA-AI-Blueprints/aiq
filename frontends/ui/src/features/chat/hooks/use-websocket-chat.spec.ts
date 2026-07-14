@@ -192,8 +192,8 @@ const mockWsClient = {
   connect: vi.fn(),
   disconnect: vi.fn(),
   rotate: vi.fn(),
-  sendMessage: vi.fn(),
-  sendInteractionResponse: vi.fn(),
+  sendMessage: vi.fn(() => 'mock-outbound-message-id'),
+  sendInteractionResponse: vi.fn(() => 'mock-outbound-interaction-id'),
   isConnected: vi.fn(() => false),
   updateConversationId: vi.fn(),
 }
@@ -343,6 +343,37 @@ describe('useWebSocketChat', () => {
     expect(mockSetLoading).toHaveBeenCalledWith(false)
   })
 
+  test('sendMessage includes active report job id from latest completed report message', () => {
+    mockWsClient.isConnected.mockReturnValue(true)
+    mockStoreState.currentConversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      messages: [
+        {
+          id: 'assistant-1',
+          role: 'assistant',
+          content: 'Report ready',
+          messageType: 'agent_response',
+          deepResearchJobId: 'job-123',
+          showViewReport: true,
+          reportContent: '# Report',
+        },
+      ],
+    }
+
+    const { result } = renderWebSocketHook()
+
+    act(() => {
+      result.current.sendMessage('What is the biggest risk?')
+    })
+
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith(
+      'What is the biggest risk?',
+      expect.any(Array),
+      'job-123',
+    )
+  })
+
   test('sendMessage while the existing socket is connecting buffers instead of creating a parallel client', () => {
     mockWsClient.isConnected.mockReturnValue(false)
     const { result } = renderWebSocketHook()
@@ -367,6 +398,262 @@ describe('useWebSocketChat', () => {
       'Send during handshake',
       expect.any(Array),
     )
+  })
+
+  test('replays a just-sent message once when the socket drops before any backend frame', () => {
+    mockWsClient.isConnected.mockReturnValue(true)
+    mockWsClient.sendMessage
+      .mockReturnValueOnce('outbound-original')
+      .mockReturnValueOnce('outbound-replay')
+
+    const { result } = renderWebSocketHook()
+
+    act(() => {
+      result.current.sendMessage('Need current weather')
+    })
+
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith(
+      'Need current weather',
+      expect.any(Array),
+    )
+
+    mockWsClient.sendMessage.mockClear()
+    mockSetStreaming.mockClear()
+    mockSetLoading.mockClear()
+    mockAddErrorCard.mockClear()
+
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('disconnected')
+    })
+
+    expect(mockSetStreaming).not.toHaveBeenCalledWith(false)
+    expect(mockSetLoading).not.toHaveBeenCalledWith(false)
+    expect(mockAddErrorCard).not.toHaveBeenCalled()
+
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('connected')
+    })
+
+    expect(mockWsClient.sendMessage).toHaveBeenCalledTimes(1)
+    expect(mockWsClient.sendMessage).toHaveBeenCalledWith(
+      'Need current weather',
+      expect.any(Array),
+    )
+
+    // Once any backend frame arrives, the delivery guard is cleared. A later
+    // disconnect must not replay the same prompt again.
+    mockStoreState.isStreaming = true
+    mockWsClient.sendMessage.mockClear()
+
+    act(() => {
+      capturedCallbacks.onIntermediateStep?.('Thinking...', 'in_progress')
+    })
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('disconnected')
+    })
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('connected')
+    })
+
+    expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
+  })
+
+  test('does not replay an unacknowledged message more than once', () => {
+    mockWsClient.isConnected.mockReturnValue(true)
+    mockWsClient.sendMessage
+      .mockReturnValueOnce('outbound-original')
+      .mockReturnValueOnce('outbound-replay')
+
+    const { result } = renderWebSocketHook()
+
+    act(() => {
+      result.current.sendMessage('Retry bounded request')
+    })
+
+    mockWsClient.sendMessage.mockClear()
+
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('disconnected')
+    })
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('connected')
+    })
+
+    expect(mockWsClient.sendMessage).toHaveBeenCalledTimes(1)
+
+    mockWsClient.sendMessage.mockClear()
+    mockSetStreaming.mockClear()
+    mockSetLoading.mockClear()
+
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('disconnected')
+    })
+    act(() => {
+      capturedCallbacks.onConnectionChange?.('connected')
+    })
+
+    expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
+    expect(mockSetStreaming).toHaveBeenCalledWith(false)
+    expect(mockSetLoading).toHaveBeenCalledWith(false)
+  })
+
+  test('replays a just-sent message once when no backend frame arrives before the ack timeout', () => {
+    vi.useFakeTimers()
+    try {
+      mockWsClient.isConnected.mockReturnValue(true)
+      mockWsClient.sendMessage
+        .mockReturnValueOnce('outbound-original')
+        .mockReturnValueOnce('outbound-replay')
+
+      const { result } = renderWebSocketHook()
+
+      act(() => {
+        result.current.sendMessage('Request after stale socket')
+      })
+
+      mockWsClient.sendMessage.mockClear()
+      mockWsClient.rotate.mockClear()
+      mockSetStreaming.mockClear()
+      mockSetLoading.mockClear()
+      mockAddErrorCard.mockClear()
+
+      act(() => {
+        vi.advanceTimersByTime(7_000)
+      })
+
+      expect(mockWsClient.rotate).toHaveBeenCalledTimes(1)
+      expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
+      expect(mockSetStreaming).not.toHaveBeenCalledWith(false)
+      expect(mockSetLoading).not.toHaveBeenCalledWith(false)
+      expect(mockAddErrorCard).not.toHaveBeenCalled()
+
+      act(() => {
+        capturedCallbacks.onConnectionChange?.('connected')
+      })
+
+      expect(mockWsClient.sendMessage).toHaveBeenCalledTimes(1)
+      expect(mockWsClient.sendMessage).toHaveBeenCalledWith(
+        'Request after stale socket',
+        expect.any(Array),
+      )
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('does not replay after an accepted intermediate frame with an internal parent id before the ack timeout', () => {
+    vi.useFakeTimers()
+    try {
+      mockWsClient.isConnected.mockReturnValue(true)
+      mockWsClient.sendMessage.mockReturnValueOnce('outbound-original')
+
+      const { result } = renderWebSocketHook()
+
+      act(() => {
+        result.current.sendMessage('Request that gets a response')
+      })
+
+      mockStoreState.isStreaming = true
+      act(() => {
+        capturedCallbacks.onIntermediateStep?.('Thinking...', 'in_progress', 'internal-step-id')
+      })
+
+      mockWsClient.sendMessage.mockClear()
+      mockWsClient.rotate.mockClear()
+
+      act(() => {
+        vi.advanceTimersByTime(7_000)
+      })
+
+      expect(mockWsClient.rotate).not.toHaveBeenCalled()
+      expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('does not replay or show an error when the ack timeout fires after switching conversations', () => {
+    vi.useFakeTimers()
+    try {
+      mockStoreState.currentConversation = { id: 'conv-A', messages: [], userId: 'user-1' }
+      mockWsClient.isConnected.mockReturnValue(true)
+      mockWsClient.sendMessage.mockReturnValueOnce('outbound-original')
+
+      const { result } = renderWebSocketHook()
+
+      act(() => {
+        result.current.sendMessage('Request from conv A')
+      })
+
+      mockStoreState.currentConversation = { id: 'conv-B', messages: [], userId: 'user-1' }
+      mockWsClient.sendMessage.mockClear()
+      mockWsClient.rotate.mockClear()
+      mockAddErrorCard.mockClear()
+      mockSetStreaming.mockClear()
+      mockSetLoading.mockClear()
+
+      act(() => {
+        vi.advanceTimersByTime(7_000)
+      })
+
+      expect(mockWsClient.rotate).not.toHaveBeenCalled()
+      expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
+      expect(mockAddErrorCard).not.toHaveBeenCalled()
+      expect(mockSetStreaming).not.toHaveBeenCalledWith(false)
+      expect(mockSetLoading).not.toHaveBeenCalledWith(false)
+
+      act(() => {
+        capturedCallbacks.onConnectionChange?.('connected')
+      })
+
+      expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  test('fails closed when the replay also receives no backend frame before the ack timeout', () => {
+    vi.useFakeTimers()
+    try {
+      mockWsClient.isConnected.mockReturnValue(true)
+      mockWsClient.sendMessage
+        .mockReturnValueOnce('outbound-original')
+        .mockReturnValueOnce('outbound-replay')
+
+      const { result } = renderWebSocketHook()
+
+      act(() => {
+        result.current.sendMessage('Request with repeated stale socket')
+      })
+
+      act(() => {
+        vi.advanceTimersByTime(7_000)
+      })
+      act(() => {
+        capturedCallbacks.onConnectionChange?.('connected')
+      })
+
+      mockWsClient.sendMessage.mockClear()
+      mockWsClient.rotate.mockClear()
+      mockSetStreaming.mockClear()
+      mockSetLoading.mockClear()
+      mockAddErrorCard.mockClear()
+
+      act(() => {
+        vi.advanceTimersByTime(7_000)
+      })
+
+      expect(mockWsClient.rotate).not.toHaveBeenCalled()
+      expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
+      expect(mockAddErrorCard).toHaveBeenCalledWith(
+        'connection.failed',
+        'No response received from the server. Please try again.',
+      )
+      expect(mockSetStreaming).toHaveBeenCalledWith(false)
+      expect(mockSetLoading).toHaveBeenCalledWith(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   test('sendMessage does not add knowledge_layer when no files uploaded', async () => {
@@ -935,7 +1222,11 @@ describe('useWebSocketChat', () => {
 
     // Simulate response with deep research escalation signal
     act(() => {
-      capturedCallbacks.onResponse?.('Deep research job submitted. Job ID: abc123-def456', 'complete', false)
+      capturedCallbacks.onResponse?.(
+        JSON.stringify({ type: 'job_escalation', kind: 'deep_research', job_id: 'abc123-def456' }),
+        'complete',
+        false
+      )
     })
 
     // Should detect deep research and call banner with 'starting' status
@@ -951,6 +1242,83 @@ describe('useWebSocketChat', () => {
       })
     )
     expect(mockStartDeepResearch).toHaveBeenCalledWith('abc123-def456', 'msg-1')
+  })
+
+  test('detects report-edit escalation and starts SSE streaming for the child job', () => {
+    const mockStartDeepResearch = vi.fn()
+    const mockUpdateConversationTitle = vi.fn()
+    const localMockAddAgentResponseWithMeta = vi.fn(() => 'msg-1')
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        ...mockStoreState,
+        addUserMessage: mockAddUserMessage,
+        addAgentResponse: mockAddAgentResponse,
+        addAgentResponseWithMeta: localMockAddAgentResponseWithMeta,
+        addThinkingStep: mockAddThinkingStep,
+        appendToThinkingStep: mockAppendToThinkingStep,
+        completeThinkingStep: mockCompleteThinkingStep,
+        updateThinkingStepByFunctionName: mockUpdateThinkingStepByFunctionName,
+        findThinkingStepByFunctionName: mockFindThinkingStepByFunctionName,
+        setReportContent: mockSetReportContent,
+        addStatusCard: mockAddStatusCard,
+        addAgentPrompt: mockAddAgentPrompt,
+        addErrorCard: mockAddErrorCard,
+        setCurrentStatus: mockSetCurrentStatus,
+        setPendingInteraction: mockSetPendingInteraction,
+        clearPendingInteraction: mockClearPendingInteraction,
+        setLoading: mockSetLoading,
+        setStreaming: mockSetStreaming,
+        clearThinkingSteps: mockClearThinkingSteps,
+        clearReportContent: mockClearReportContent,
+        createConversation: mockCreateConversation,
+        setCurrentUser: mockSetCurrentUser,
+        getUserConversations: mockGetUserConversations,
+        selectConversation: mockSelectConversation,
+        respondToPrompt: mockRespondToPrompt,
+        addPlanMessage: mockAddPlanMessage,
+        updatePlanMessageResponse: mockUpdatePlanMessageResponse,
+        addDeepResearchBanner: mockAddDeepResearchBanner,
+        startDeepResearch: mockStartDeepResearch,
+        updateConversationTitle: mockUpdateConversationTitle,
+      }
+      return selector ? selector(state) : state
+    })
+
+    // A real conversation with a prior user message: a report edit must NOT rename
+    // the existing report conversation to the edit instruction.
+    mockStoreState.currentConversation = {
+      id: 'conv-1',
+      userId: 'user-1',
+      messages: [{ id: 'u1', role: 'user', content: 'Rewrite this report to be shorter' }],
+    } as unknown as typeof mockStoreState.currentConversation
+
+    renderWebSocketHook()
+    mockStoreState.isStreaming = true
+
+    // Report edit submits a child report_rewriter job that produces a full report,
+    // pollable through the same SSE path as deep research.
+    act(() => {
+      capturedCallbacks.onResponse?.(
+        JSON.stringify({ type: 'job_escalation', kind: 'report_edit', job_id: 'abcd1234-ef56' }),
+        'complete',
+        false
+      )
+    })
+
+    expect(mockAddDeepResearchBanner).toHaveBeenCalledWith('starting', 'abcd1234-ef56')
+    expect(localMockAddAgentResponseWithMeta).toHaveBeenCalledWith(
+      '',
+      false,
+      expect.objectContaining({
+        deepResearchJobId: 'abcd1234-ef56',
+        deepResearchJobStatus: 'submitted',
+        isDeepResearchActive: true,
+      })
+    )
+    expect(mockStartDeepResearch).toHaveBeenCalledWith('abcd1234-ef56', 'msg-1')
+    // Report edits reuse the deep-research escalation plumbing but must not rename
+    // the conversation to the edit instruction (deep-research-only behavior).
+    expect(mockUpdateConversationTitle).not.toHaveBeenCalled()
   })
 })
 

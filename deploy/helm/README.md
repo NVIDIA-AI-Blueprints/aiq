@@ -27,13 +27,20 @@ deploy/helm/
 | [NGC Helm chart](#install-from-ngc-helm-repository) | Install a pre-built chart from the NGC Helm repository |
 | [Source chart](deployment-k8s/README.md) | You cloned the repository and want to build/deploy from source |
 
+All examples use `ns-aiq`. The repository source chart derives every namespaced
+resource from Helm's `.Release.Namespace`, supplied with `-n`; use a different namespace
+consistently across Helm, Secrets, `kubectl`, and external identity bindings. The
+`aiq.namespace.create` value controls whether the source chart renders a Namespace object
+and does not override `-n`. The NGC instructions below install published chart 2.0.0. Use
+the source chart when you need behavior from the checked-out repository.
+
 ## Prerequisites
 
 - Kubernetes cluster (EKS, GKE, AKS, or a local cluster such as Kind or Minikube)
 - `kubectl` configured with cluster access
 - `helm` v3.x installed
 - NGC API key (`NGC_API_KEY` environment variable)
-- Required API keys (see [Secrets](#secrets) below)
+- Required API keys (refer to [Secrets](#secrets) below)
 
 ## Install from NGC Helm Repository
 
@@ -131,6 +138,45 @@ To see what values the chart supports before installing:
 helm show values aiq2-web-2.0.0.tgz
 ```
 
+### Amazon OpenSearch Serverless
+
+The backend image can be overridden through values without forking the chart:
+
+```yaml
+aiq:
+  apps:
+    backend:
+      image:
+        repository: <registry>/<aiq-agent-image>
+        tag: <tag>
+```
+
+For Amazon OpenSearch Serverless, set the backend workflow config to `configs/config_web_opensearch.yml` and configure
+SigV4 through environment values:
+
+```yaml
+aiq:
+  apps:
+    backend:
+      env:
+        CONFIG_FILE: configs/config_web_opensearch.yml
+        OPENSEARCH_URL: https://abc123.us-west-2.aoss.amazonaws.com
+        OPENSEARCH_AUTH_TYPE: sigv4
+        OPENSEARCH_AWS_SERVICE: aoss
+        OPENSEARCH_INDEX_PREFIX: aiq
+        AWS_REGION: us-west-2
+        OPENSEARCH_INGESTION_MODE: auto
+        OPENSEARCH_DASK_FILE_TRANSFER: bytes
+```
+
+A complete example is available at
+[`deploy/helm/examples/aws-opensearch-serverless-values.yaml`](examples/aws-opensearch-serverless-values.yaml).
+
+For EKS Pod Identity, associate the IAM role with the backend service account for this release. These examples install
+into `ns-aiq`, and the backend service account is `aiq-backend`. If you change `-n`, create the association in that same
+release namespace. EKS Pod Identity associations are created through EKS, not by annotating the service account. The role
+also needs OpenSearch Serverless IAM access and a data access policy for the target collection/index pattern.
+
 ### Verify
 
 ```bash
@@ -150,8 +196,13 @@ aiq-postgres-xxx                1/1     Running   0          30s
 
 ```bash
 kubectl port-forward -n ns-aiq svc/aiq-backend 8000:8000 &
+curl http://localhost:8000/live
 curl http://localhost:8000/health
 ```
+
+The backend liveness probe uses `/live`, which checks only that the API process
+responds. The readiness probe uses `/health`, which checks required dependencies
+and can return HTTP 503 without causing Kubernetes to restart the process.
 
 The backend API docs are available at `http://localhost:8000/docs` while the port-forward is active.
 
@@ -196,6 +247,7 @@ The backend loads a workflow config at startup. Switch configs with `--set`:
 |-------------|-------------|
 | `configs/config_web_default_llamaindex.yml` | Default — LlamaIndex backend (no external RAG required) |
 | `configs/config_web_frag.yml` | Foundational RAG mode (requires a running RAG service) |
+| `configs/config_web_frag_mcp_auth.yml` | Foundational RAG with optional per-user MCP authentication |
 
 ```bash
 helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
@@ -206,9 +258,39 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
   --set aiq.apps.backend.env.CONFIG_FILE=configs/config_web_frag.yml
 ```
 
+### Per-user MCP authentication with external Redis
+
+The chart does not install Redis. When selecting the per-user authentication config, provide a Redis service that the backend and its workers can both reach. The deployer owns its availability, persistence, networking, and backup.
+
+Add `REDIS_PASSWORD` to the existing `aiq-credentials` Secret when the Redis service requires authentication, then create a values file:
+
+```yaml
+# aiq-per-user-auth-values.yaml
+aiq:
+  apps:
+    backend:
+      env:
+        CONFIG_FILE: configs/config_web_frag_mcp_auth.yml
+        MCP_TOKEN_STORE_TYPE: redis
+        REDIS_HOST: redis.example.com
+        REDIS_PORT: "6379"
+      secretEnv:
+        REDIS_PASSWORD: REDIS_PASSWORD
+```
+
+Apply it to either the downloaded chart or a source-chart installation:
+
+```bash
+helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
+  --wait --timeout 10m \
+  -f aiq-per-user-auth-values.yaml
+```
+
+Configure `MCP_GDRIVE_URL`, `AIQ_PUBLIC_URL`, and any OAuth client credentials required by the protected MCP source through the same `env` and `secretEnv` maps. NAT 1.8's Redis object store in this image supports host, port, database, and optional password; this example does not support TLS, ACL usernames, Sentinel, or Redis Cluster.
+
 ## FRAG Integration
 
-To use the Foundational RAG (FRAG) config, you need a running NVIDIA RAG Blueprint deployment. See the [RAG Blueprint Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/develop/docs/deploy-helm.md) for setup instructions.
+To use the Foundational RAG (FRAG) config, you need a running NVIDIA RAG Blueprint deployment. Refer to the [RAG Blueprint Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/develop/docs/deploy-helm.md) for setup instructions.
 
 ### Same-cluster RAG connection
 
@@ -330,4 +412,4 @@ kubectl logs -n ns-aiq <backend-pod> -c db-init
 
 ## Source Chart Deployment
 
-For deploying from the cloned repository (building from source charts, local images, NGC images), see the [deployment-k8s README](deployment-k8s/README.md).
+For deploying from the cloned repository (building from source charts, local images, NGC images), refer to the [deployment-k8s README](deployment-k8s/README.md).

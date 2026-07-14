@@ -19,9 +19,16 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 UI_DIR="$PROJECT_ROOT/frontends/ui"
+VENV_DIR="$PROJECT_ROOT/.venv"
+PYTHON_BIN="$VENV_DIR/bin/python"
+NAT_BIN="$VENV_DIR/bin/nat"
 
 # Default config file
 CONFIG_FILE="configs/config_web_default_llamaindex.yml"
+PORT=8000
+START_OPENSHELL_GATEWAY=false
+BACKEND_PID=""
+FRONTEND_PID=""
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -30,15 +37,26 @@ while [[ $# -gt 0 ]]; do
             CONFIG_FILE="$2"
             shift 2
             ;;
+        --port)
+            PORT="$2"
+            shift 2
+            ;;
+        --start-openshell-gateway)
+            START_OPENSHELL_GATEWAY=true
+            shift
+            ;;
         --help|-h)
             echo "Usage: $0 [OPTIONS]"
             echo ""
             echo "Options:"
             echo "  --config_file <path>  Path to config file (default: configs/config_web_default_llamaindex.yml)"
+            echo "  --port PORT           Backend server port (default: 8000)"
+            echo "  --start-openshell-gateway  Start/verify an authenticated gateway and run its strict capability probe"
             echo "  --help, -h            Show this help message"
             echo ""
-            echo "Example:"
-            echo "  $0 --config_file configs/config_web_default_llamaindex.yml"
+            echo "Examples:"
+            echo "  $0 --config_file configs/config_web_default_llamaindex.yml --port 8000"
+            echo "  $0 --start-openshell-gateway --config_file configs/config_openshell.yml --port 8000"
             exit 0
             ;;
         *)
@@ -60,11 +78,11 @@ fi
 cleanup() {
     echo ""
     echo "Shutting down services..."
-    if [ ! -z "$BACKEND_PID" ]; then
-        kill $BACKEND_PID 2>/dev/null || true
+    if [[ -n "${BACKEND_PID:-}" ]]; then
+        kill "$BACKEND_PID" 2>/dev/null || true
     fi
-    if [ ! -z "$FRONTEND_PID" ]; then
-        kill $FRONTEND_PID 2>/dev/null || true
+    if [[ -n "${FRONTEND_PID:-}" ]]; then
+        kill "$FRONTEND_PID" 2>/dev/null || true
     fi
     exit 0
 }
@@ -92,21 +110,41 @@ check_env() {
     # Suppress Python warnings unless overridden by .env
     export PYTHONWARNINGS="${PYTHONWARNINGS:-ignore}"
 
-    # For local E2E, backend always runs on localhost:8000
-    export BACKEND_URL="http://localhost:8000"
-    export NEXT_PUBLIC_BACKEND_URL="http://localhost:8000"
+    # For local E2E, backend URL follows --port (default 8000)
+    export BACKEND_URL="http://localhost:${PORT}"
+    export NEXT_PUBLIC_BACKEND_URL="http://localhost:${PORT}"
     echo "Backend URL for e2e: $BACKEND_URL"
 }
 
 check_dependencies() {
     echo "Checking Python dependencies..."
 
-    if ! python -c "import nat" 2>/dev/null; then
-        echo "NAT not installed. Installing dependencies..."
-        pip install -e .
+    if [ ! -x "$PYTHON_BIN" ]; then
+        echo "AI-Q virtual environment not found at $VENV_DIR"
+        echo "Run ./scripts/setup.sh or ./scripts/openshell/setup_openshell.sh first."
+        exit 1
     fi
 
-    echo "Python dependencies installed"
+    if ! "$PYTHON_BIN" -c "import nat" 2>/dev/null; then
+        echo "NAT not installed. Installing dependencies..."
+        "$PYTHON_BIN" -m pip install -e .
+    fi
+    if [ ! -x "$NAT_BIN" ]; then
+        echo "NAT CLI not found at $NAT_BIN"
+        echo "Run ./scripts/setup.sh or ./scripts/openshell/setup_openshell.sh first."
+        exit 1
+    fi
+
+    echo "Python dependencies installed ($PYTHON_BIN)"
+}
+
+check_openshell_component_versions() {
+    if ! grep -Eq '^[[:space:]]*provider:[[:space:]]*openshell([[:space:]]|$)' "$PROJECT_ROOT/$CONFIG_FILE"; then
+        return
+    fi
+    echo "Checking the certified OpenShell component stack..."
+    "$PYTHON_BIN" "$PROJECT_ROOT/scripts/openshell/check_versions.py" \
+        --gateway-name "${AIQ_OPENSHELL_GATEWAY_NAME:-openshell}"
 }
 
 check_ui_dependencies() {
@@ -143,14 +181,22 @@ start_backend() {
     echo "Starting NAT Backend Server (Hot Reload Enabled)..."
     echo "================================================"
     echo ""
-    echo "Backend will be available at: http://localhost:8000"
+    echo "Backend will be available at: http://localhost:${PORT}"
     echo "Backend will auto-reload on code changes"
     echo "Config: $CONFIG_FILE"
     echo ""
 
-    nat serve --config_file "$CONFIG_FILE" --host 0.0.0.0 --port 8000 &
+    "$NAT_BIN" serve --config_file "$CONFIG_FILE" --host 0.0.0.0 --port "$PORT" &
     BACKEND_PID=$!
     echo "Backend PID: $BACKEND_PID"
+}
+
+start_openshell_gateway() {
+    if [[ "$START_OPENSHELL_GATEWAY" != "true" ]]; then
+        return
+    fi
+    echo "Starting/verifying authenticated OpenShell gateway..."
+    "$PROJECT_ROOT/scripts/openshell/start_openshell_gateway.sh"
 }
 
 wait_for_backend() {
@@ -159,8 +205,8 @@ wait_for_backend() {
     local attempt=1
 
     while [ $attempt -le $max_attempts ]; do
-        if curl -s -f http://localhost:8000/health > /dev/null 2>&1 || \
-           curl -s -f http://localhost:8000/docs > /dev/null 2>&1; then
+        if curl -s -f "http://localhost:${PORT}/health" > /dev/null 2>&1 || \
+           curl -s -f "http://localhost:${PORT}/docs" > /dev/null 2>&1; then
             echo "Backend is ready!"
             return 0
         fi
@@ -204,6 +250,12 @@ main() {
     check_dependencies
     echo ""
 
+    start_openshell_gateway
+    echo ""
+
+    check_openshell_component_versions
+    echo ""
+
     if check_ui_dependencies; then
         HAS_UI=true
     else
@@ -221,7 +273,7 @@ main() {
         echo "WARNING: Frontend will NOT be started."
         echo "   Reason: UI dependencies not available (missing npm or node_modules)"
         echo "   To fix: install Node.js 22+ and run 'npm ci' in frontends/ui/"
-        echo "   The backend will still run at http://localhost:8000"
+        echo "   The backend will still run at http://localhost:${PORT}"
         echo ""
     fi
 
@@ -230,7 +282,7 @@ main() {
     echo "Services Started"
     echo "================================================"
     echo ""
-    echo "Backend: http://localhost:8000"
+    echo "Backend: http://localhost:${PORT}"
     if [ "$HAS_UI" = true ]; then
         echo "Frontend: http://localhost:3000"
     else

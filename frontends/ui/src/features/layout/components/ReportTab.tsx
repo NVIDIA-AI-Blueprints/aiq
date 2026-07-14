@@ -19,7 +19,7 @@ import { Flex, Text } from '@/adapters/ui'
 import { useShallow } from 'zustand/react/shallow'
 import { Document } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
-import { useChatStore } from '@/features/chat'
+import { useChatStore, selectResolvedDeepResearchJobId } from '@/features/chat'
 import { ExportFooter } from './ExportFooter'
 
 interface ReportTabProps {
@@ -40,6 +40,8 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
       isStreaming: s.isStreaming,
       currentStatus: s.currentStatus,
     })))
+  // Resolve the owning job id (active or latest finished) so artifact:// images render.
+  const deepResearchJobId = useChatStore(selectResolvedDeepResearchJobId)
 
   const reportContentStr = typeof reportContent === 'string' ? reportContent : ''
   const isEmpty = !reportContentStr.trim()
@@ -77,6 +79,7 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
                 content={reportContentStr}
                 isStreaming={false}
                 className="max-w-none"
+                artifactJobId={deepResearchJobId ?? undefined}
               />
             </div>
           </Flex>
@@ -87,6 +90,7 @@ export const ReportTab: FC<ReportTabProps> = ({ children }) => {
               content={reportContentStr}
               isStreaming={isGeneratingReport}
               className="max-w-none"
+              artifactJobId={deepResearchJobId ?? undefined}
             />
           </div>
         )}
