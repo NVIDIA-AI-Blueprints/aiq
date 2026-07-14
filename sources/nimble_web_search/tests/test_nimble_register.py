@@ -177,7 +177,7 @@ class TestNimbleWebSearchStub:
 
 
 class TestNimbleWebSearchLive:
-    async def test_api_key_from_config_sets_env(self, fake_langchain_nimble):
+    async def test_api_key_from_config_passed_to_retriever(self, fake_langchain_nimble):
         fake_langchain_nimble.ainvoke.return_value = [
             _FakeDoc(url="https://a.example", title="A", page_content="body a")
         ]
@@ -187,7 +187,11 @@ class TestNimbleWebSearchLive:
         async with nimble_web_search(config, builder) as info:
             out = await info.single_fn("question")
 
-        assert os.environ.get("NIMBLE_API_KEY") == "sk-from-config"
+        # The configured key is passed straight to the retriever, never written
+        # to the process-global environment.
+        retriever_cls = sys.modules["langchain_nimble"].NimbleSearchRetriever
+        assert retriever_cls.call_args.kwargs["api_key"].get_secret_value() == "sk-from-config"
+        assert os.environ.get("NIMBLE_API_KEY") is None
         assert "https://a.example" in out
         assert "body a" in out
 

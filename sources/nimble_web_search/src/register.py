@@ -110,10 +110,12 @@ async def nimble_web_search(
     """
     from langchain_nimble import NimbleSearchRetriever
 
-    if not os.environ.get("NIMBLE_API_KEY") and tool_config.api_key:
-        os.environ["NIMBLE_API_KEY"] = tool_config.api_key.get_secret_value()
+    # Resolve the key from config or environment. A config-supplied key is passed
+    # straight to the retriever below (never written to os.environ), so the secret
+    # does not enter process-global state where it could leak to child processes.
+    api_key = tool_config.api_key
 
-    if not os.environ.get("NIMBLE_API_KEY"):
+    if api_key is None and not os.environ.get("NIMBLE_API_KEY"):
         global _missing_key_warned
         if not _missing_key_warned:
             logger.warning(
@@ -145,13 +147,19 @@ async def nimble_web_search(
     # the retriever. `focus` is passed explicitly so the default is provably
     # "general" rather than relying on the SDK's (unvalidated) field default.
     # `include_answer` is intentionally not exposed in this initial integration.
-    retriever = NimbleSearchRetriever(
-        max_results=tool_config.max_results,
-        search_depth=tool_config.search_depth,
-        focus=tool_config.focus,
-        country=tool_config.country,
-        locale=tool_config.locale,
-    )
+    retriever_kwargs = {
+        "max_results": tool_config.max_results,
+        "search_depth": tool_config.search_depth,
+        "focus": tool_config.focus,
+        "country": tool_config.country,
+        "locale": tool_config.locale,
+    }
+    # Pass the configured key through the SDK's `api_key` field instead of the
+    # environment; when no config key is set, the SDK resolves NIMBLE_API_KEY
+    # from the environment itself.
+    if api_key is not None:
+        retriever_kwargs["api_key"] = api_key
+    retriever = NimbleSearchRetriever(**retriever_kwargs)
 
     async def _nimble_web_search(question: str) -> str:
         """Search the web with Nimble and return relevant sources for a question.
@@ -179,6 +187,33 @@ async def nimble_web_search(
                 return content[: limit - 3] + "..."
             return content
 
+        def _has_resolvable_url(doc) -> bool:
+            """Return True when the result carries a resolvable absolute URL.
+
+            The API intermittently returns results whose URL is empty or a
+            server-relative redirect token (e.g. "/goto?url=...") -- observed in
+            ~2% of calls during a 100-run soak. Those break citation downstream,
+            so they are dropped by the caller.
+            """
+            url = str((getattr(doc, "metadata", {}) or {}).get("url", "") or "")
+            return bool(url) and not url.startswith("/")
+
+        def _render(doc) -> str:
+            """Render one result as an escaped XML ``<Document>`` block."""
+            metadata = getattr(doc, "metadata", {}) or {}
+            url = metadata.get("url", "") or ""
+            title = metadata.get("title", "") or ""
+            page_content = getattr(doc, "page_content", "") or ""
+            description = metadata.get("description", "") or ""
+            body = _truncate_content(page_content if page_content else description)
+            # Escape untrusted API fields so they can't break the <Document>
+            # markup or inject into downstream renderers/parsers.
+            return (
+                f'<Document href="{html.escape(url, quote=True)}">\n'
+                f"<title>\n{html.escape(title)}\n</title>\n"
+                f"{html.escape(body)}\n</Document>"
+            )
+
         for attempt in range(tool_config.max_retries):
             try:
                 docs = await retriever.ainvoke(question)
@@ -186,36 +221,13 @@ async def nimble_web_search(
                 if not docs:
                     raise ValueError("Search returned no results")
 
-                # The API intermittently returns results whose URL is empty or
-                # a server-relative redirect token (e.g. "/goto?url=...")
-                # instead of a resolvable link — observed in ~2% of calls
-                # during a 100-run soak. Such results break citation
-                # downstream, so drop them; if none remain, treat the response
-                # as transient so the retry loop re-queries instead of
+                # Drop results without a resolvable URL; if none remain, treat the
+                # response as transient so the retry loop re-queries instead of
                 # rendering unusable documents.
-                def _has_resolvable_url(doc) -> bool:
-                    url = str((getattr(doc, "metadata", {}) or {}).get("url", "") or "")
-                    return bool(url) and not url.startswith("/")
-
                 usable_docs = [doc for doc in docs if _has_resolvable_url(doc)]
                 if not usable_docs:
                     raise RuntimeError("Search returned only results without resolvable URLs")
                 docs = usable_docs
-
-                def _render(doc) -> str:
-                    metadata = getattr(doc, "metadata", {}) or {}
-                    url = metadata.get("url", "") or ""
-                    title = metadata.get("title", "") or ""
-                    page_content = getattr(doc, "page_content", "") or ""
-                    description = metadata.get("description", "") or ""
-                    body = _truncate_content(page_content if page_content else description)
-                    # Escape untrusted API fields so they can't break the <Document>
-                    # markup or inject into downstream renderers/parsers.
-                    return (
-                        f'<Document href="{html.escape(url, quote=True)}">\n'
-                        f"<title>\n{html.escape(title)}\n</title>\n"
-                        f"{html.escape(body)}\n</Document>"
-                    )
 
                 web_search_results = "\n\n---\n\n".join(_render(doc) for doc in docs)
                 return web_search_results if web_search_results else "Search returned no results"
