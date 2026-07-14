@@ -63,6 +63,7 @@ ENV_REF = re.compile(r"\$\{([A-Z0-9_]+)(?::-[^}]*)?\}")
 
 
 def _load(path: str) -> tuple[dict, str]:
+    """Load a YAML file and return its parsed mapping plus raw text."""
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
     data = yaml.safe_load(text)
@@ -86,11 +87,13 @@ def _iter_refs(node: object):
 
 
 def _general_block(data: dict) -> dict:
+    """Return the top-level general block when it is a mapping."""
     general = data.get("general") or {}
     return general if isinstance(general, dict) else {}
 
 
 def _validate_registry(registry: dict, declared_functions: set[str], errors: list[str], warnings: list[str]) -> None:
+    """Validate data source registry shape and tool references."""
     sources = registry.get("sources")
     if not isinstance(sources, list):
         errors.append("data_source_registry.sources must be a list.")
@@ -129,6 +132,7 @@ def _validate_registry(registry: dict, declared_functions: set[str], errors: lis
 
 
 def _validate_telemetry(general: dict, errors: list[str], warnings: list[str]) -> None:
+    """Validate telemetry logging and tracing configuration shape."""
     telemetry = general.get("telemetry")
     if telemetry is None:
         return
@@ -177,6 +181,7 @@ def _validate_telemetry(general: dict, errors: list[str], warnings: list[str]) -
 
 
 def _validate_front_end(general: dict, errors: list[str]) -> None:
+    """Validate AI-Q API front-end settings."""
     front_end = general.get("front_end")
     if front_end is None:
         return
@@ -202,6 +207,7 @@ def _validate_front_end(general: dict, errors: list[str]) -> None:
 
 
 def validate(path: str) -> int:
+    """Validate one AI-Q workflow config and print a human-readable report."""
     errors: list[str] = []
     warnings: list[str] = []
 
@@ -244,23 +250,24 @@ def validate(path: str) -> int:
         _validate_registry(registry, declared_functions, errors, warnings)
 
     workflow = data.get("workflow")
-    if workflow is not None:
-        if not isinstance(workflow, dict):
-            errors.append("`workflow:` must be a mapping.")
-        else:
-            wf_type = workflow.get("_type")
-            if wf_type != WORKFLOW_TYPE:
-                errors.append(f"workflow._type must be '{WORKFLOW_TYPE}' (got {wf_type!r}).")
-            for agent_name in REQUIRED_WORKFLOW_AGENTS:
-                if agent_name not in declared_functions:
-                    errors.append(f"workflow requires function '{agent_name}' under functions: (missing).")
-            if workflow.get("enable_clarifier") is True and "clarifier_agent" not in declared_functions:
-                errors.append("workflow.enable_clarifier is true but 'clarifier_agent' is missing under functions:.")
-            if workflow.get("use_async_deep_research") is True and "front_end" not in _general_block(data):
-                warnings.append(
-                    "use_async_deep_research is true but general.front_end is missing "
-                    "(web/aiq_api mode expected for async jobs)."
-                )
+    for agent_name in REQUIRED_WORKFLOW_AGENTS:
+        if agent_name not in declared_functions:
+            errors.append(f"workflow requires function '{agent_name}' under functions: (missing).")
+    if workflow is None:
+        errors.append("`workflow:` is required for an AI-Q workflow config.")
+    elif not isinstance(workflow, dict):
+        errors.append("`workflow:` must be a mapping.")
+    else:
+        wf_type = workflow.get("_type")
+        if wf_type != WORKFLOW_TYPE:
+            errors.append(f"workflow._type must be '{WORKFLOW_TYPE}' (got {wf_type!r}).")
+        if workflow.get("enable_clarifier") is True and "clarifier_agent" not in declared_functions:
+            errors.append("workflow.enable_clarifier is true but 'clarifier_agent' is missing under functions:.")
+        if workflow.get("use_async_deep_research") is True and not _general_block(data).get("front_end"):
+            warnings.append(
+                "use_async_deep_research is true but general.front_end is missing "
+                "(web/aiq_api mode expected for async jobs)."
+            )
 
     general = _general_block(data)
     _validate_telemetry(general, errors, warnings)
@@ -290,6 +297,7 @@ def validate(path: str) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Parse command-line arguments and run validation."""
     args = argv if argv is not None else sys.argv
     if len(args) != 2:
         print("Usage: validate_config.py path/to/config.yml", file=sys.stderr)

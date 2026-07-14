@@ -18,6 +18,7 @@ Canonical references:
 | `OPENAI_API_KEY` | Frontier/OpenAI model profiles | Required by `config_frontier_models.yml`. |
 | `NAT_JOB_STORE_DB_URL` | Web/API mode | Job, event, and artifact metadata database. Defaults to local SQLite. Use PostgreSQL for production. |
 | `NAT_DASK_SCHEDULER_ADDRESS` | Distributed execution | Optional. A local Dask cluster is created when unset. |
+| `AIQ_CHECKPOINT_DB` | `workflow.checkpoint_db` | Optional. Defaults to local SQLite file `./checkpoints.db`. |
 
 ## Retrieval and tools
 

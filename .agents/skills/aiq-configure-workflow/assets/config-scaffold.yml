@@ -48,5 +48,5 @@ functions:
 workflow:
   _type: chat_deepresearcher_agent
   enable_escalation: true
-  enable_clarifier: true
+  enable_clarifier: false   # set true and add clarifier_agent under functions: to enable
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
