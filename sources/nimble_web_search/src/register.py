@@ -46,7 +46,9 @@ class NimbleWebSearchToolConfig(FunctionBaseConfig, name="nimble_web_search"):
         description="Maximum number of search results to return (Nimble accepts 1-100).",
     )
     api_key: SecretStr | None = Field(default=None, description="The API key for the Nimble service")
-    max_retries: int = Field(default=3, ge=1, description="Maximum number of retries for the search request")
+    max_retries: int = Field(
+        default=3, ge=1, le=10, description="Maximum number of retries for the search request (1-10)."
+    )
     search_depth: Literal["lite", "fast", "deep"] = Field(
         default="lite",
         description=(
@@ -252,7 +254,9 @@ async def nimble_web_search(
                 # Transient error: retry with backoff, or give up on the last attempt.
                 if attempt == tool_config.max_retries - 1:
                     return f"Error: Web search failed - {error_msg}"
-                await asyncio.sleep(2**attempt)
+                # Cap the exponential delay so a large max_retries can't produce
+                # an unbounded wait.
+                await asyncio.sleep(min(2**attempt, 30))
 
         return "Error: Search failed after all retries"
 

@@ -228,7 +228,7 @@ functions:
 | `focus` | `str` | `"general"` | Nimble focus mode. See options below. |
 | `country` | `str` | `"US"` | ISO 3166 country code passed to Nimble (e.g. `US`, `GB`, `FR`). |
 | `locale` | `str` | `"en"` | Language/locale passed to Nimble (e.g. `en`, `fr`, `es`). |
-| `max_content_length` | `int` | `10000` | Max characters per result's page content. Set to `None` to disable truncation. |
+| `max_content_length` | `int \| None` | `10000` | Max characters per result's page content. Set to `None` to disable truncation. |
 
 **`search_depth` options:**
 

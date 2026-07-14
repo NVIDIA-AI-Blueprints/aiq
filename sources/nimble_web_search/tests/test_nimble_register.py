@@ -131,6 +131,7 @@ class TestNimbleWebSearchToolConfig:
             ("max_results", 0),  # below ge=1
             ("max_results", 101),  # above le=100 (Nimble's documented cap)
             ("max_retries", 0),  # below ge=1
+            ("max_retries", 11),  # above le=10
             ("max_content_length", 0),  # below ge=1 (use None to disable truncation)
         ],
     )
