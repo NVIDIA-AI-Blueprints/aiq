@@ -137,7 +137,7 @@ Then edit `deploy/.env` and fill in your keys.
 |----------|----------|---------|
 | `TAVILY_API_KEY` | [Tavily](https://tavily.com/) | Web search (Tavily provider) |
 | `EXA_API_KEY` | [Exa](https://exa.ai/) | Web search (Exa provider) |
-| `NIMBLE_API_KEY` | [Nimble API keys](https://docs.nimbleway.com/nimble-sdk/admin/account-management) | Web search (Nimble provider) |
+| `NIMBLE_API_KEY` | [Nimble](https://nimbleway.com/) | Web search (Nimble provider) |
 | `SERPER_API_KEY` | [Serper](https://serper.dev/) | Google Scholar paper search with `provider: serper` (the default) |
 | `SERPAPI_API_KEY` | [SerpAPI](https://serpapi.com/) | Google Scholar paper search with `provider: serpapi` |
 | `SEARCHAPI_API_KEY` | [SearchAPI](https://www.searchapi.io/) | Google Scholar paper search with `provider: searchapi` |

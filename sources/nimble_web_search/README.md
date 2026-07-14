@@ -38,7 +38,7 @@ See [`docs/source/customization/configuration-reference.md`](../../docs/source/c
 NIMBLE_API_KEY=...
 ```
 
-Create a key in the [Nimble dashboard](https://docs.nimbleway.com/nimble-sdk/admin/account-management): open **Account Settings > API Keys**, select **Create New API Key**, and copy the key when it is displayed. Nimble displays a new key only once, so store it securely.
+Visit [Nimble](https://nimbleway.com/) to create an account, obtain an API key, and access the provider's setup guides. Store the key securely.
 
 You can alternatively set `api_key` directly in the YAML (as a string). Both paths use the standard `nat.data_models.function.FunctionBaseConfig` `SecretStr` handling — the key is not logged.
 
