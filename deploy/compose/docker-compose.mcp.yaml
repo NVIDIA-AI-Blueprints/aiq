@@ -50,6 +50,7 @@ services:
       AIQ_MCP_WORKERS: "${AIQ_MCP_WORKERS:-1}"
       AIQ_MCP_LOG_LEVEL: "${AIQ_MCP_LOG_LEVEL:-INFO}"
       AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS: "${AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS:-30}"
+      AIQ_MCP_MAX_QUERY_CHARS: "${AIQ_MCP_MAX_QUERY_CHARS:-8000}"
       AIQ_MCP_CORS_ORIGINS: "${AIQ_MCP_CORS_ORIGINS-http://localhost:6274}"
       AIQ_MCP_ALLOWED_HOSTS: "${AIQ_MCP_ALLOWED_HOSTS:-localhost,localhost:*,127.0.0.1,127.0.0.1:*,[::1],[::1]:*,0.0.0.0,0.0.0.0:*,aiq-mcp,aiq-mcp:*}"
       AIQ_MCP_ALLOWED_ORIGINS: "${AIQ_MCP_ALLOWED_ORIGINS:-http://localhost:*,http://127.0.0.1:*,http://[::1]:*,http://0.0.0.0:*}"

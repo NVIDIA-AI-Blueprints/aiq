@@ -28,6 +28,7 @@ _MCP_ENVIRONMENT = {
     "AIQ_MCP_CORS_ORIGINS",
     "AIQ_MCP_HOST",
     "AIQ_MCP_LOG_LEVEL",
+    "AIQ_MCP_MAX_QUERY_CHARS",
     "AIQ_MCP_PATH",
     "AIQ_MCP_PORT",
     "AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS",
@@ -133,6 +134,7 @@ def test_compose_stack_is_isolated_explicit_and_health_gated() -> None:
     )
     assert mcp["environment"]["AIQ_MCP_PORT"] == "9001"
     assert mcp["environment"]["AIQ_MCP_CONFIG"] == "/app/configs/config_mcp.yml"
+    assert mcp["environment"]["AIQ_MCP_MAX_QUERY_CHARS"] == "${AIQ_MCP_MAX_QUERY_CHARS:-8000}"
     assert mcp["ports"] == ["127.0.0.1:${AIQ_MCP_PUBLISHED_PORT:-9001}:9001"]
     assert mcp["depends_on"] == {"postgres": {"condition": "service_healthy"}}
     assert mcp["security_opt"] == ["no-new-privileges:true"]
