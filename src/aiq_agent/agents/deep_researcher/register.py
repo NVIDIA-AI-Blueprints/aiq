@@ -15,6 +15,7 @@
 
 """NAT register function for deep research agent."""
 
+import asyncio
 import logging
 from typing import TypeVar
 
@@ -236,10 +237,12 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
         """Run deep research with a list of messages or payload."""
+        active_agent = agent
+        owns_active_agent = False
+        interrupted = False
         try:
             data_sources = state.data_sources
             selected_tools = filter_tools_by_sources(tools, data_sources)
-            active_agent = agent
             if sandbox_config is not None or (data_sources is not None and selected_tools != tools):
                 # Scope the Modal sandbox to the async job_id when one is in
                 # NAT context (set by aiq_api/jobs/runner.py). Falls back to a
@@ -266,6 +269,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
                 )
+                owns_active_agent = True
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
                 logger.warning("Deep research received data_sources with no matching tools")
@@ -291,9 +295,15 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
 
             result = await active_agent.run(state)
             return result
+        except asyncio.CancelledError:
+            interrupted = True
+            raise
         except Exception:
             logger.exception("Error in deep research execution")
             raise
+        finally:
+            if owns_active_agent:
+                await asyncio.to_thread(active_agent.finalize, interrupted=interrupted)
 
     yield FunctionInfo.from_fn(_run, description="Deep research agent for comprehensive multi-phase research.")
 

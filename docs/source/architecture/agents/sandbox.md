@@ -6,9 +6,12 @@ SPDX-License-Identifier: Apache-2.0
 # Deep Research Sandbox Notes
 
 Deep research can optionally run DeepAgents `execute` calls through a sandbox provider
-(Modal, OpenShell, or any registered provider). Modal creates a sandbox per job. The
-experimental OpenShell path attaches to a pre-created named sandbox shared by its jobs;
-job-scoped directories prevent filename collisions but are not a security boundary.
+(Modal, OpenShell, or any registered provider). Modal and OpenShell create a fresh physical
+sandbox per job. OpenShell binds the configured policy at creation and attests the authoritative
+effective policy source, content, hash, and active revision before exposing the execution backend.
+On the supported OpenShell `0.0.80` stack, current, active, revision, and effective-config versions
+must all be positive and agree with the exact submitted policy/hash; missing capabilities or any
+version disagreement fails closed.
 
 The sandbox is an internal execution detail. There are no sandbox-specific API
 endpoints, and job-level auth remains responsible for submit, stream, status,
@@ -19,15 +22,19 @@ access policy and is owner-scoped when `REQUIRE_AUTH=true`.
 > **Developer reference:** the full architecture, provider contract, config schema,
 > artifact pipeline, and troubleshooting live next to the code in
 > [`src/aiq_agent/agents/deep_researcher/sandbox/README.md`](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/src/aiq_agent/agents/deep_researcher/sandbox/README.md).
+> Operators should use the canonical [OpenShell deployment guide](../../deployment/openshell.md)
+> for setup, authenticated gateway lifecycle, supported platforms, acceptance, and cleanup.
 
 ## Current Behavior
 
-- Modal uses one sandbox per deep research job. OpenShell currently attaches jobs to
-  the configured shared sandbox name and is intended for local, single-operator testing.
+- Modal and OpenShell use one physical sandbox per deep research job. OpenShell shared
+  attachment is available only through an explicit debug-only opt-in and is not job-isolated.
 - Synchronous sandbox-enabled runs use an internal per-agent runtime ID.
 - Providers are selected by config (`sandbox.provider` + `providers.<name>`); the
   provider is validated against the registry and gated by its declared capabilities.
-  OpenShell policy is provisioned externally and is not verified when AI-Q attaches.
+  OpenShell policy YAML is parsed strictly against the installed SDK schema, applied in the
+  job's creation spec, checked against the declared network upper bound (hostless/CIDR overrides
+  are rejected), and attested through the gateway status/config RPCs before use.
 - Job IDs must satisfy each provider's object-name rules (Modal: 64 chars or fewer,
   alphanumeric plus dash/period/underscore).
 - `timeout` bounds individual execution. Other lifecycle controls are provider-dependent.
@@ -51,16 +58,19 @@ and [Production Considerations](../../deployment/production.md#artifact-storage)
 
 ## Operational Notes
 
-- High-concurrency Modal runs create one sandbox per job. OpenShell runs share the named
-  sandbox and must not be used concurrently for mutually untrusted jobs. Optional submit-path
+- High-concurrency Modal and OpenShell runs create one sandbox per job. Optional submit-path
   caps (`AIQ_MAX_SANDBOXES_PER_PRINCIPAL` / `AIQ_MAX_SANDBOXES_GLOBAL`, default-off) bound
-  concurrency/cost but do not provide filesystem isolation.
+  concurrency and cost.
 - Custom client-supplied job IDs must not be reused for a new job.
 - Manifest checkpoints preserve completed artifacts after successful sandbox commands. The
   terminal finalizer harvests once before cleanup on success/failure; cancellation harvests
   only when the provider is idle and otherwise terminates immediately.
 - The runtime closes provider sessions on success, failure, cancellation, and timeout.
-  A named OpenShell sandbox persists when `delete_on_exit` is disabled.
+- Per-job OpenShell mode requires `delete_on_exit: true`. A persistent shared sandbox is
+  possible only through the explicit debug attachment settings.
+- OpenShell provisioning and authenticated gateway lifecycle have separate owners. See the
+  [OpenShell responsibility table](../../deployment/openshell.md#responsibility-and-lifecycle-ownership)
+  rather than duplicating operational commands here.
 
 ## Current Safeguards
 
@@ -72,3 +82,4 @@ The following safeguards are in place:
   with MIME-from-bytes spoof rejection, SVG sanitization, and an inline-render allowlist.
 - Sandbox quota and concurrency controls, and periodic time-based artifact retention cleanup.
 - Structured lifecycle logging for sandbox create, reuse, failure, and cleanup.
+- Structured `sandbox.attestation` and `sandbox.cleanup` events.

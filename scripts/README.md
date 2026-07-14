@@ -49,63 +49,39 @@ Starts the agent in CLI mode with browser-based authentication.
 | `--verbose` or `-v` | Enable verbose logging |
 | `--config_file <path>` | Use a custom configuration file |
 
-### `setup_openshell.sh` - OpenShell Sandbox Setup
+### `openshell/` - OpenShell Sandbox Utilities
 
-Sets up the experimental, local single-operator NVIDIA OpenShell path for AI-Q. Run this once before using
-`configs/config_openshell.yml` with `start_cli.sh` or `start_e2e.sh`. It installs
-the `openshell` SDK and the `langchain-nvidia-openshell` adapter, starts/verifies
-the local OpenShell gateway, builds the sandbox image, generates a network policy,
-and creates the named sandbox `aiq-openshell-demo`. Inference is unaffected (it
-stays host-side, routed to NVIDIA Build); only generated code runs in the
-network-blocked sandbox.
-
-The generated configuration attaches all jobs to one named sandbox. Per-job directories
-avoid filename collisions but do not isolate mutually untrusted jobs, and AI-Q does not
-verify the provisioned policy when attaching. Do not treat this setup as a multi-tenant
-security boundary.
+`openshell/setup_openshell.sh` installs the certified SDK/adapter, generates a policy, and builds
+the reusable image. `openshell/install_gateway.sh` is the explicit Apple Silicon macOS
+entry point for installing the official packaged gateway. `openshell/start_openshell_gateway.sh`
+validates an authenticated registered
+gateway and performs a disposable version/policy/selector/execution/cleanup probe. AI-Q
+then owns one attested physical sandbox per job. OpenShell `0.0.80` is the supported
+version because it contains the required policy-revision and request-label fixes.
+The quick start below is the Linux production pairing; activate the repository virtual
+environment first. macOS requires the explicit local-demo pairing in the canonical guide.
 
 ```bash
-./scripts/setup_openshell.sh --policy offline
+source .venv/bin/activate
+./scripts/openshell/setup_openshell.sh --openshell-version 0.0.80 --policy offline
+./scripts/openshell/start_openshell_gateway.sh --gateway-name openshell
 ./scripts/start_e2e.sh --config_file configs/config_openshell.yml
-# or direct serve:
-dotenv -f deploy/.env run .venv/bin/nat serve --config_file configs/config_openshell.yml --host 0.0.0.0 --port 8000
 ```
 
-Useful version examples:
+For a macOS local demo:
 
 ```bash
-./scripts/setup_openshell.sh --openshell-version 0.0.72
-./scripts/setup_openshell.sh --openshell-version latest
-./scripts/setup_openshell.sh --list-openshell-versions
+/opt/homebrew/bin/bash ./scripts/openshell/setup_openshell.sh --local-demo --policy offline
+./scripts/openshell/install_gateway.sh --dry-run
+./scripts/openshell/install_gateway.sh
+AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK=false \
+  ./scripts/start_e2e.sh --start-openshell-gateway --config_file configs/config_openshell.yml
 ```
 
-In the interactive version prompt, pressing Enter selects `0.0.72`.
-
-The setup installs the `openshell` SDK plus the official `langchain-nvidia-openshell`
-adapter (`OpenShellSandbox`), published on PyPI. The script installs it from PyPI by
-default; set `LANGCHAIN_NVIDIA_REPO` or pass `--langchain-nvidia` to use another
-`uv pip install` spec or a local checkout.
-
-Useful policy examples:
-
-```bash
-./scripts/setup_openshell.sh --policy offline
-./scripts/setup_openshell.sh --policy research
-./scripts/setup_openshell.sh --policy python-packages
-./scripts/setup_openshell.sh --policy custom --allow github,pypi,nvidia,tavily
-```
-
-Verify and clean up:
-
-```bash
-.venv/bin/openshell status
-.venv/bin/openshell sandbox list          # expect: aiq-openshell-demo ... Ready
-.venv/bin/openshell sandbox delete aiq-openshell-demo
-# Inspect, then stop only the gateway you started (avoid killing other sessions):
-pgrep -fl openshell-gateway        # find the PID(s)
-kill <PID>                         # stop the specific process
-```
-
+For supported platforms, production versus local-demo policy pairing, remote gateways,
+live pytest acceptance, and troubleshooting, use the canonical
+[OpenShell deployment guide](../docs/source/deployment/openshell.md). This README is only
+the script-discovery surface.
 
 ### `start_server_in_debug_mode.sh` - Server Mode
 
@@ -113,7 +89,7 @@ Starts the NAT FastAPI server for deep research with async job support.
 
 ```bash
 ./scripts/start_server_in_debug_mode.sh
-./scripts/start_server_in_debug_mode.sh--port 8080
+./scripts/start_server_in_debug_mode.sh --port 8080
 ./scripts/start_server_in_debug_mode.sh --config_file configs/config_web_frag.yml
 ```
 
@@ -166,11 +142,26 @@ Starts the AI-Q API backend for use by Agent Skills such as `aiq-research`. This
 ### `start_e2e.sh` - End-to-End Mode
 
 Starts both backend and frontend for full WebSocket support and HITL workflows.
+Complete the standard setup and activate the virtual environment first:
+
+```bash
+./scripts/setup.sh
+source .venv/bin/activate
+```
 
 ```bash
 ./scripts/start_e2e.sh
 ./scripts/start_e2e.sh --config_file configs/config_openshell.yml
+./scripts/start_e2e.sh --start-openshell-gateway --config_file configs/config_openshell.yml --port 8080
 ```
+
+**Options:**
+
+| Option | Description |
+|--------|-------------|
+| `--config_file <path>` | Use a custom configuration file |
+| `--port <port>` | Backend port and frontend backend URL (default: 8000) |
+| `--start-openshell-gateway` | Start/reuse the packaged authenticated gateway and run its strict capability probe before E2E |
 
 **Services:**
 
@@ -187,7 +178,7 @@ Starts both backend and frontend for full WebSocket support and HITL workflows.
 | `configs/config_web_frag.yml` | Server/E2E mode with Foundational RAG |
 | `configs/config_web_default_llamaindex.yml` | Server/E2E mode with LlamaIndex |
 | `configs/config_skills.yml` | Deep research with DeepAgents skills + Modal sandbox |
-| `configs/config_openshell.yml` | Experimental local single-operator OpenShell sandbox + artifact capture (run `setup_openshell.sh` first) |
+| `configs/config_openshell.yml` | Experimental per-job OpenShell sandbox + artifact capture (run `scripts/openshell/setup_openshell.sh` first) |
 
 ## Development Workflow
 

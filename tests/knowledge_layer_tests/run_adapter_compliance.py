@@ -19,11 +19,22 @@ Usage:
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend llamaindex --quick
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend foundational_rag --quick
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend opensearch --quick
+    python tests/knowledge_layer_tests/run_adapter_compliance.py --backend azure_ai_search --quick \
+      --config '{"endpoint":"https://example.search.windows.net","start_ttl_cleanup":false}'
 
     # Full mode - complete ingestion + retrieval test
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend llamaindex
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend foundational_rag
     python tests/knowledge_layer_tests/run_adapter_compliance.py --backend opensearch
+
+    export AZURE_SEARCH_ENDPOINT=https://your-service.search.windows.net
+    export AZURE_SEARCH_API_KEY=your-search-admin-key
+    export AIQ_AZURE_SEARCH_INDEX_PREFIX="aiq-${USER}"
+    python tests/knowledge_layer_tests/run_adapter_compliance.py --backend azure_ai_search \
+      --config '{"start_ttl_cleanup":false}'
+
+    # For managed identity, omit AZURE_SEARCH_API_KEY. Set AZURE_CLIENT_ID for a
+    # user-assigned identity. NVIDIA_API_KEY remains required for embeddings.
 
 Exit codes:
     0 - All tests passed
@@ -95,6 +106,7 @@ class AdapterComplianceTest:
             "llamaindex": "knowledge_layer.llamaindex",
             "foundational_rag": "knowledge_layer.foundational_rag",
             "opensearch": "knowledge_layer.opensearch",
+            "azure_ai_search": "knowledge_layer.azure_ai_search",
         }
 
         module_name = backend_imports.get(self.backend.lower())
@@ -390,8 +402,9 @@ class AdapterComplianceTest:
         if not files:
             return True, "No files to delete (already empty)"
 
+        file_id = files[0].file_id
         filename = files[0].file_name
-        result = self.ingestor.delete_file(filename, self.collection_name)
+        result = self.ingestor.delete_file(file_id, self.collection_name)
 
         if not result:
             return False, f"delete_file returned False for '{filename}'"
@@ -455,7 +468,10 @@ def main():
     )
 
     parser.add_argument(
-        "--backend", "-b", required=True, help="Backend name (e.g., llamaindex, foundational_rag, opensearch)"
+        "--backend",
+        "-b",
+        required=True,
+        help="Backend name (e.g., llamaindex, foundational_rag, opensearch, azure_ai_search)",
     )
 
     parser.add_argument("--config", "-c", default="{}", help="Backend config as JSON string (default: {})")

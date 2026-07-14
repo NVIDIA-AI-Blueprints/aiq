@@ -43,6 +43,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 |---------|-------------|------|--------------|----------|
 | `llamaindex` | `"llamaindex"` | Local Library | ChromaDB | Dev, prototyping, macOS/Linux |
 | `foundational_rag` | `"foundational_rag"` | Hosted Service | Remote Milvus | Production, multi-user |
+| `azure_ai_search` | `"azure_ai_search"` | Managed Service | Azure AI Search | Managed hybrid retrieval |
 | `opensearch` | `"opensearch"` | External Service | OpenSearch k-NN index | Self-hosted OpenSearch, Amazon OpenSearch Service, or Serverless |
 
 **Local Library Mode** - Everything runs in your Python process. No external services needed.
@@ -53,6 +54,8 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
   - Tested with: **NVIDIA RAG Blueprint `v2.4.0`** (Helm chart `nvidia-blueprint-rag`)
   - [Deployment Guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/deploy-docker-self-hosted.md)
   - Backend-specific documentation: `sources/knowledge_layer/src/foundational_rag/README.md`
+- **`azure_ai_search`** - Stores client-generated embeddings in namespaced Azure AI Search indexes and supports
+  vector, hybrid, and semantic-ranked retrieval.
 - **`opensearch`** - Uses one vector index per AI-Q collection with `none`, `basic`, or SigV4 authentication.
   - Supports self-hosted OpenSearch, Amazon OpenSearch Service (`es`), and Amazon OpenSearch Serverless (`aoss`).
   - Can ingest in the local process or dispatch ingestion to Dask workers.
@@ -75,6 +78,7 @@ export NVIDIA_API_KEY=nvapi-your-key-here
 # 2. Install backend (choose one)
 uv pip install -e "sources/knowledge_layer[llamaindex]"        # Recommended for local dev - works on macOS/Linux
 uv pip install -e "sources/knowledge_layer[foundational_rag]"  # Requires deployed server
+uv pip install -e "sources/knowledge_layer[azure_ai_search]"   # Requires an Azure AI Search service
 uv pip install -e "sources/knowledge_layer[opensearch]"        # Requires an OpenSearch endpoint
 ```
 
@@ -163,6 +167,36 @@ functions:
     ingest_url: http://your-server:8082/v1   # Ingestion server
     timeout: 120
 ```
+
+**Azure AI Search (Managed Service)**
+
+```yaml
+functions:
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: azure_ai_search
+    collection_name: my_docs
+```
+
+Set `AZURE_SEARCH_ENDPOINT` and `NVIDIA_API_KEY` in the environment. Setting
+`AZURE_SEARCH_API_KEY` selects key authentication; otherwise Azure
+`DefaultAzureCredential` is used. The workload identity needs `Search Service
+Contributor` for index management and `Search Index Data Contributor` for
+document ingestion and retrieval. Embedding defaults can be shared with the
+LlamaIndex backend through `AIQ_EMBED_BASE_URL` and `AIQ_EMBED_MODEL`; set
+`AIQ_EMBED_DIM` when changing the model dimensions. Set a deployment-unique
+`AIQ_AZURE_SEARCH_INDEX_PREFIX` when multiple AI-Q deployments share a search
+service.
+
+Azure stores all logical collections in one physical index selected by the
+prefix, schema version, embedding model, and dimension. Collection, file, and
+chunk manifests enforce logical isolation. Retrieval is always hybrid, and
+chunking is fixed at 1024 tokens with 128-token overlap.
+
+Upload responses return canonical UUID file IDs. Same-name uploads coexist as
+independent files. Collection cleanup uses `AIQ_COLLECTION_TTL_HOURS` (24 hours
+by default) and `AIQ_TTL_CLEANUP_INTERVAL_SECONDS` (one hour by default),
+matching the other knowledge backends.
 
 **OpenSearch (Self-Hosted or AWS)**
 
@@ -264,10 +298,13 @@ File type support depends on the configured backend:
 | **LlamaIndex** | PDF, DOCX, TXT, MD, HTML, JSON, CSV |
 | **Foundational RAG** | PDF, DOCX, PPTX, TXT, MD, HTML, images (PNG, JPG) |
 | **OpenSearch** | PDF, DOCX, PPTX, TXT, MD, CSV, JSON, YAML, YML, LOG |
+| **Azure AI Search** | PDF, DOCX, TXT, MD |
 
 For custom backends, supported types are determined by the backend implementation.
 
-> **Note:** The backends support more types than the frontend currently allows. The frontend only supports uploading `.pdf,.docx,.txt,.md` (the common subset across the shipped backends). Types such as PPTX, HTML, JSON, CSV, YAML, logs, and images depend on the backend and are not accepted by the default frontend upload flow.
+> **Note:** The backends support more types than the frontend currently allows. The frontend only supports uploading
+> `.pdf,.docx,.txt,.md` (the common subset across all backends). Types like HTML, JSON, CSV, and images are supported by
+> some backends but the frontend upload flow does not handle them yet -- this is a separate task.
 
 To change the accepted types in the frontend, set `FILE_UPLOAD_ACCEPTED_TYPES` for your deployment method:
 
@@ -448,6 +485,8 @@ Configuration values are resolved in the following order (highest to lowest prio
 | `KNOWLEDGE_RETRIEVER_BACKEND` | All | Default retriever backend (fallback if not in YAML) |
 | `KNOWLEDGE_INGESTOR_BACKEND` | All | Default ingestor backend (fallback if not in YAML) |
 | `AIQ_CHROMA_DIR` | llamaindex | ChromaDB persistence path |
+| `AIQ_COLLECTION_TTL_HOURS` | all local/managed backends | Hours before stale collections are deleted (default: 24) |
+| `AIQ_TTL_CLEANUP_INTERVAL_SECONDS` | all local/managed backends | Collection cleanup interval (default: 3600) |
 | `RAG_SERVER_URL` | foundational_rag | Query server URL (port 8081) |
 | `RAG_INGEST_URL` | foundational_rag | Ingestion server URL (port 8082) |
 | `OPENSEARCH_URL` | opensearch | OpenSearch endpoint URL |

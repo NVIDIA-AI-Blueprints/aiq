@@ -228,8 +228,8 @@ functions:
 
 ### `knowledge_retrieval`
 
-Semantic search over ingested documents. AI-Q supports three backends: LlamaIndex (local ChromaDB), Foundational RAG
-(hosted NVIDIA RAG Blueprint), and OpenSearch (self-hosted OpenSearch or Amazon OpenSearch Serverless).
+Semantic search over ingested documents. Supports LlamaIndex (local ChromaDB), Foundational RAG
+(hosted NVIDIA RAG Blueprint), OpenSearch (self-hosted OpenSearch or Amazon OpenSearch Serverless), and Azure AI Search.
 
 ```yaml
 functions:
@@ -256,8 +256,21 @@ functions:
     rag_url: ${RAG_SERVER_URL:-http://localhost:8081/v1}
     ingest_url: ${RAG_INGEST_URL:-http://localhost:8082/v1}
     timeout: 300
-    # verify_ssl: false            # Only set to false for self-signed certs
+    # verify_ssl: false # Only set to false for self-signed certs
 ```
+
+```yaml
+functions:
+  # Azure AI Search backend
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: azure_ai_search
+    collection_name: ${COLLECTION_NAME:-test_collection}
+```
+
+This example reads `AZURE_SEARCH_ENDPOINT` and `NVIDIA_API_KEY` from the
+environment. `AZURE_SEARCH_API_KEY` is optional; when absent, the adapter uses
+`DefaultAzureCredential`.
 
 ```yaml
 functions:
@@ -278,7 +291,7 @@ functions:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `backend` | `str` | `llamaindex` | Backend type: `llamaindex`, `foundational_rag`, or `opensearch`. |
+| `backend` | `str` | `llamaindex` | Backend type: `llamaindex`, `opensearch`, `foundational_rag`, or `azure_ai_search`. |
 | `collection_name` | `str` | `default` | Name of the document collection/index. |
 | `top_k` | `int` | `5` | Number of results to return per query. |
 | `generate_summary` | `bool` | `false` | Generate one-sentence summaries for ingested documents. |
@@ -289,6 +302,10 @@ functions:
 | `ingest_url` | `str` | `http://localhost:8082/v1` | RAG ingestion server URL. Foundational RAG backend only. |
 | `timeout` | `int` | `120` | Request timeout in seconds. Foundational RAG backend only. |
 | `verify_ssl` | `bool` | `true` | Verify SSL certificates. Set `false` for self-signed certs. Foundational RAG backend only. |
+| `azure_search_endpoint` | `URL` | `AZURE_SEARCH_ENDPOINT` | Azure AI Search service endpoint. Required for Azure AI Search. |
+| `azure_search_api_key` | `SecretStr` | `AZURE_SEARCH_API_KEY` | Optional admin API key. |
+| `azure_search_index_prefix` | `str` | `AIQ_AZURE_SEARCH_INDEX_PREFIX` or `aiq` | Deployment-unique namespace for the shared AI-Q index. |
+| `embed_dim` | `int` | `AIQ_EMBED_DIM` or `2048` | Embedding dimensions; must match the model and existing index schema. |
 | `opensearch_url` | `str` | `http://localhost:9200` | OpenSearch endpoint. OpenSearch backend only. |
 | `opensearch_auth_type` | `str` | `none` | Authentication mode: `none`, `basic`, or `sigv4`. |
 | `opensearch_username` | `str` | `None` | Username for basic authentication. Also read from `OPENSEARCH_USERNAME`. |
@@ -585,6 +602,7 @@ only the additional sections you need.
 |------|------|------------------------------|
 | `configs/config_cli_default.yml` | CLI | Chat pipeline with Tavily web search and clarification. No knowledge backend. Paper search is present only as a commented opt-in. |
 | `configs/config_web_default_llamaindex.yml` | Web API | Default chat pipeline with LlamaIndex/ChromaDB knowledge retrieval and Tavily. Paper search is commented out. |
+| `configs/config_web_azure_ai_search.yml` | Web API | Azure AI Search knowledge retrieval and web search |
 | `configs/config_web_frag.yml` | Web API / Helm base | Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. Paper search is commented out. |
 | `configs/config_web_opensearch.yml` | Web API | Built-in OpenSearch knowledge backend plus Tavily. Supports unauthenticated or basic self-hosted OpenSearch and SigV4 (`es` or `aoss`); infrastructure and credentials are deployment opt-ins. |
 | `configs/config_frontier_models.yml` | Web API | LlamaIndex plus explicit per-agent tools, Nemotron researcher roles, and an OpenAI frontier model for orchestration/planning/writing. Requires `OPENAI_API_KEY`; paper search is commented out. |

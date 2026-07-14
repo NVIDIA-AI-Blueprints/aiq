@@ -19,6 +19,7 @@ validation pipeline (traversal/extension/size/quota/dedup/scan), and SQL or S3-c
 from __future__ import annotations
 
 import json
+import logging
 from hashlib import sha256
 from io import BytesIO
 from types import SimpleNamespace
@@ -118,6 +119,21 @@ class TestNormalizePosix:
 
 
 class TestHarvest:
+    def test_store_and_scan_failures_do_not_log_exception_text(self, caplog: pytest.LogCaptureFixture) -> None:
+        store = SimpleNamespace(list=lambda _job_id: (_ for _ in ()).throw(RuntimeError("credential=do-not-log")))
+        manager, _ = _make_manager(store, {})
+
+        with caplog.at_level(logging.WARNING):
+            assert manager.resolve_report_references("report") == "report"
+            manager.backend.execute = lambda *_args, **_kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
+                RuntimeError("token=do-not-log")
+            )
+            assert manager._scan_dir() == []
+
+        assert "RuntimeError" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+        assert "token=do-not-log" not in caplog.text
+
     def test_captures_manifest_artifact(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
         png_path = f"{_ARTIFACT_DIR}/chart.png"
@@ -407,17 +423,20 @@ class TestS3Store:
             ).scalar_one()
         assert content is None
 
-    def test_failed_upload_removes_metadata(self, tmp_path: Any) -> None:
+    def test_failed_upload_removes_metadata(self, tmp_path: Any, caplog: pytest.LogCaptureFixture) -> None:
         client = _FakeS3Client()
         client.fail_put = True
         store = self._store(tmp_path, client)
         artifact = self._artifact()
 
-        with pytest.raises(RuntimeError, match="upload failed"):
-            store.put(artifact, _PNG)
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(RuntimeError, match="upload failed"):
+                store.put(artifact, _PNG)
 
         assert store.get(artifact.job_id, artifact.artifact_id) is None
         assert b"".join(store.open_bytes(artifact.job_id, artifact.artifact_id)) == b""
+        assert "RuntimeError" in caplog.text
+        assert "upload failed" not in caplog.text
 
     def test_failed_delete_retains_metadata_for_retry(self, tmp_path: Any) -> None:
         client = _FakeS3Client()

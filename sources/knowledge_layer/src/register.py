@@ -26,6 +26,7 @@ import os
 from typing import Literal
 
 from pydantic import Field
+from pydantic import HttpUrl
 from pydantic import SecretStr
 from pydantic import model_validator
 
@@ -33,13 +34,24 @@ from nat.builder.builder import Builder
 from nat.builder.context import Context
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
+from nat.data_models.common import OptionalSecretStr
 from nat.data_models.function import FunctionBaseConfig
 
 logger = logging.getLogger(__name__)
 
 
+def _url_from_env(name: str, default: str | None = None) -> HttpUrl | None:
+    value = os.environ.get(name) or default
+    return HttpUrl(value) if value else None
+
+
+def _secret_from_env(name: str) -> SecretStr | None:
+    value = os.environ.get(name)
+    return SecretStr(value) if value else None
+
+
 # Type-safe backend selection - Pydantic validates at config load time
-BackendType = Literal["llamaindex", "foundational_rag", "opensearch"]
+BackendType = Literal["llamaindex", "foundational_rag", "opensearch", "azure_ai_search"]
 OpenSearchAuthType = Literal["none", "basic", "sigv4"]
 OpenSearchAwsService = Literal["aoss", "es"]
 OpenSearchIngestionMode = Literal["local", "dask", "auto"]
@@ -244,11 +256,30 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
     )
     embed_model: str = Field(
         default_factory=lambda: _env_value("AIQ_EMBED_MODEL", default="nvidia/llama-nemotron-embed-vl-1b-v2"),
-        description="Embedding model for OpenSearch vector ingestion and retrieval.",
+        description="Embedding model for OpenSearch and Azure AI Search ingestion and retrieval.",
     )
     embed_base_url: str = Field(
         default_factory=lambda: _env_value("AIQ_EMBED_BASE_URL", default="https://integrate.api.nvidia.com/v1"),
         description="OpenAI-compatible embeddings endpoint base URL.",
+    )
+    # Azure AI Search options
+    azure_search_endpoint: HttpUrl | None = Field(
+        default_factory=lambda: _url_from_env("AZURE_SEARCH_ENDPOINT"),
+        description="Azure AI Search service URL; defaults to AZURE_SEARCH_ENDPOINT",
+    )
+    azure_search_api_key: OptionalSecretStr = Field(
+        default_factory=lambda: _secret_from_env("AZURE_SEARCH_API_KEY"),
+        description="Optional Azure AI Search admin key; defaults to AZURE_SEARCH_API_KEY",
+    )
+    azure_search_index_prefix: str = Field(
+        default_factory=lambda: _env_value("AIQ_AZURE_SEARCH_INDEX_PREFIX", default="aiq"),
+        min_length=1,
+        description="Unique deployment namespace for the shared AI-Q index",
+    )
+    embed_dim: int = Field(
+        default_factory=lambda: _env_int("AIQ_EMBED_DIM", 2048),
+        gt=0,
+        description="Embedding dimensions; defaults to AIQ_EMBED_DIM and must match existing indexes",
     )
 
     @model_validator(mode="after")
@@ -298,6 +329,9 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
                     )
             if not self.opensearch_verify_certs:
                 logger.warning("TLS verification disabled for opensearch. Use only in trusted environments.")
+        elif backend == "azure_ai_search":
+            if self.azure_search_endpoint is None:
+                raise ValueError("azure_ai_search requires azure_search_endpoint")
 
         return self
 
@@ -384,8 +418,25 @@ def _setup_backend(config: KnowledgeRetrievalConfig, summary_llm_obj=None) -> tu
             **summary_config,
         }
 
+    elif backend == "azure_ai_search":
+        import knowledge_layer.azure_ai_search.adapter  # noqa: F401
+
+        backend_config = {
+            "endpoint": str(config.azure_search_endpoint),
+            "api_key": config.azure_search_api_key,
+            "index_prefix": config.azure_search_index_prefix,
+            "embed_base_url": str(config.embed_base_url),
+            "embed_model": config.embed_model,
+            "embed_dim": config.embed_dim,
+            "collection_name": config.collection_name,
+            "cleanup_files": False,
+            **summary_config,
+        }
+
     else:
-        raise ValueError(f"Unknown backend: {backend}. Use 'llamaindex', 'foundational_rag', or 'opensearch'.")
+        raise ValueError(
+            f"Unknown backend: {backend}. Use 'llamaindex', 'foundational_rag', 'opensearch', or 'azure_ai_search'."
+        )
 
     os.environ["KNOWLEDGE_RETRIEVER_BACKEND"] = backend
     os.environ["KNOWLEDGE_INGESTOR_BACKEND"] = backend
@@ -477,7 +528,7 @@ async def knowledge_retrieval(config: KnowledgeRetrievalConfig, _builder: Builde
 
     This function provides semantic search over documents that have been
     previously ingested into the knowledge layer. It supports multiple
-    backends (LlamaIndex, Foundational RAG, OpenSearch) and returns formatted results
+    backends (LlamaIndex, Foundational RAG, OpenSearch, Azure AI Search) and returns formatted results
     suitable for LLM consumption.
 
     The retriever and ingestor are initialized once when the function is

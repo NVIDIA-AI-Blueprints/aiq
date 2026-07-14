@@ -14,33 +14,35 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-# Set up NVIDIA OpenShell for AI-Q with a named, policy-backed sandbox.
+# Set up NVIDIA OpenShell for AI-Q per-job policy-backed sandboxes.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(dirname "$SCRIPT_DIR")"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VENV_DIR="$REPO_ROOT/.venv"
 
-# Floor aligned with the published langchain-nvidia-openshell 0.1.0 adapter, which is
-# tested against OpenShell 0.0.72+. Anything below this is upgraded by the adapter during
-# its install, so do not pin under it.
-MIN_OPENSHELL_VERSION="0.0.72"
-DEFAULT_OPENSHELL_VERSION="0.0.72"
+OPENSHELL_RELEASE_TAG="$(awk -F'"' '
+    $0 == "[tool.aiq.openshell]" { in_contract = 1; next }
+    in_contract && /^\[/ { in_contract = 0 }
+    in_contract && /^release-tag = / { print $2; exit }
+' "$REPO_ROOT/pyproject.toml")"
+OPENSHELL_ADAPTER_VERSION="$(awk -F'"' '
+    $0 == "[tool.aiq.openshell]" { in_contract = 1; next }
+    in_contract && /^\[/ { in_contract = 0 }
+    in_contract && /^adapter-version = / { print $2; exit }
+' "$REPO_ROOT/pyproject.toml")"
+[[ "$OPENSHELL_RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || { echo "ERROR: invalid OpenShell release contract" >&2; exit 1; }
+[[ "$OPENSHELL_ADAPTER_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || { echo "ERROR: invalid OpenShell adapter contract" >&2; exit 1; }
+DEFAULT_OPENSHELL_VERSION="${OPENSHELL_RELEASE_TAG#v}"
 OPENSHELL_VERSION="${AIQ_OPENSHELL_VERSION:-}"
-OPENSHELL_VERSION_USER_SUPPLIED=false
-if [[ -n "$OPENSHELL_VERSION" ]]; then
-    OPENSHELL_VERSION_USER_SUPPLIED=true
-fi
-OPENSHELL_LATEST_VERSION=""
-OPENSHELL_AVAILABLE_VERSIONS=""
-PYTHON_BIN=""
 # Official OpenShell deepagents adapter: the `langchain-nvidia-openshell` partner
 # package, now published on PyPI. Override with LANGCHAIN_NVIDIA_REPO to use a git
 # spec or a local checkout (e.g. to test an unreleased adapter build).
-DEFAULT_LANGCHAIN_NVIDIA_INSTALL_SPEC="langchain-nvidia-openshell==0.1.0"
+DEFAULT_LANGCHAIN_NVIDIA_INSTALL_SPEC="langchain-nvidia-openshell==$OPENSHELL_ADAPTER_VERSION"
 LANGCHAIN_NVIDIA_REPO="${LANGCHAIN_NVIDIA_REPO:-$DEFAULT_LANGCHAIN_NVIDIA_INSTALL_SPEC}"
-SANDBOX_NAME="${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}"
 IMAGE_NAME="${AIQ_OPENSHELL_IMAGE:-aiq-openshell-demo:latest}"
 # Sandbox log verbosity baked into the image (RUST_LOG). Default `warn` is OpenShell's
 # stock sandbox level; set to `debug` to surface in-container process/relay detail.
@@ -48,16 +50,12 @@ SANDBOX_LOG_LEVEL="${AIQ_OPENSHELL_SANDBOX_LOG_LEVEL:-warn}"
 POLICY_PRESET="${AIQ_OPENSHELL_POLICY:-}"
 POLICY_ALLOWLIST="${AIQ_OPENSHELL_POLICY_ALLOWLIST:-${AIQ_OPENSHELL_POLICY_SERVICES:-}}"
 POLICY_FILE="${AIQ_OPENSHELL_POLICY_FILE:-$REPO_ROOT/configs/openshell/generated/aiq-openshell-policy.yaml}"
-GATEWAY_NAME="${AIQ_OPENSHELL_GATEWAY_NAME:-aiq-local}"
-GATEWAY_PORT="${AIQ_OPENSHELL_GATEWAY_PORT:-8080}"
+LANDLOCK_COMPATIBILITY="${AIQ_OPENSHELL_LANDLOCK_COMPATIBILITY:-hard_requirement}"
+LANDLOCK_COMPATIBILITY_CLI=false
+LOCAL_DEMO=false
 DOCKER_BIN="${DOCKER_BIN:-}"
 OPENSHELL_BIN="${OPENSHELL_BIN:-}"
-OPENSHELL_GATEWAY_LAUNCH_BIN="${OPENSHELL_GATEWAY_LAUNCH_BIN:-}"
-GATEWAY_ENDPOINT=""
-GATEWAY_DISABLE_TLS=false
-RESTART_GATEWAY=true
 BUILD_IMAGE=true
-CREATE_SANDBOX=true
 LIST_OPENSHELL_VERSIONS=false
 
 SUPPORTED_SERVICES="github,pypi,nvidia,tavily,serper,huggingface,arxiv,semantic-scholar,npm"
@@ -65,23 +63,24 @@ SUPPORTED_POLICIES="offline,research,python-packages,ai-dev,custom"
 
 usage() {
     cat <<EOF
-Usage: scripts/setup_openshell.sh [options]
+Usage: scripts/openshell/setup_openshell.sh [options]
 
 Sets up OpenShell for AI-Q:
   1. Detects macOS/Linux.
-  2. Checks available OpenShell releases and selects an exact version.
-  3. Installs the selected OpenShell Python package version.
+  2. Loads the AI-Q-certified exact OpenShell release contract.
+  3. Installs the certified OpenShell Python package version.
   4. Installs the langchain-nvidia-openshell deepagents adapter.
-  5. Resolves Docker and OpenShell gateway paths.
-  6. Generates an initial OpenShell policy.
-  7. Starts/verifies the OpenShell gateway.
-  8. Builds the AI-Q sandbox image.
-  9. Creates a named policy-backed sandbox.
+  5. Generates an initial OpenShell policy.
+  6. Resolves Docker and builds the reusable AI-Q sandbox image.
+
+This script never starts, stops, registers, or probes a gateway. Run
+scripts/openshell/start_openshell_gateway.sh after provisioning; per-job sandbox creation
+remains owned by the AI-Q runtime.
+
+Canonical operator guide: docs/source/deployment/openshell.md
 
 Options:
-  --openshell-version VERSION   Exact OpenShell version, or "latest".
-                                Default: asks in an interactive shell; Enter selects 0.0.72.
-                                Non-interactive default: 0.0.72.
+  --openshell-version VERSION   Certified exact OpenShell version only (0.0.80).
   --policy CHOICE               Sandbox network policy.
                                 Choices: $SUPPORTED_POLICIES
                                 Default: asks in an interactive shell, offline otherwise.
@@ -89,30 +88,28 @@ Options:
                                 Services: $SUPPORTED_SERVICES
   --policy-file PATH            Output policy file.
                                 Default: configs/openshell/generated/aiq-openshell-policy.yaml
-  --sandbox-name NAME           OpenShell sandbox name (default: aiq-openshell-demo).
+  --landlock-compatibility MODE hard_requirement (default) or best_effort (local demo only).
+  --local-demo                 Shortcut for best_effort policy generation. Runtime commands
+                               must set AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK=false.
   --image-name NAME             Docker image tag (default: aiq-openshell-demo:latest).
   --sandbox-log-level LEVEL     In-container OpenShell log verbosity baked into the
                                 image via RUST_LOG (default: warn). Use "debug" to
                                 surface process/relay detail in the sandbox logs.
   --langchain-nvidia SPEC       uv install spec or local langchain-nvidia checkout
                                 for the langchain-nvidia-openshell adapter.
-  --gateway-name NAME           OpenShell gateway name (default: aiq-local).
-  --gateway-port PORT           Local gateway port (default: 8080).
   --docker-bin PATH             Docker CLI path when docker is not on PATH.
-  --gateway-bin PATH            OpenShell gateway launcher path.
-  --no-restart-gateway          Reuse the active gateway instead of starting one.
   --skip-build                  Do not build the sandbox image.
-  --skip-sandbox                Do not create the named sandbox.
   --list-policies               Print supported policy choices.
   --list-services               Print supported services for --allow.
-  --list-openshell-versions     Print released OpenShell versions >= 0.0.72.
+  --list-openshell-versions     Print the certified OpenShell version.
   -h, --help                    Show this help.
 
 Examples:
-  scripts/setup_openshell.sh
-  scripts/setup_openshell.sh --policy python-packages
-  scripts/setup_openshell.sh --policy custom --allow github,pypi,nvidia,tavily
-  scripts/setup_openshell.sh --openshell-version latest --policy offline
+  scripts/openshell/setup_openshell.sh
+  scripts/openshell/setup_openshell.sh --policy python-packages
+  scripts/openshell/setup_openshell.sh --policy custom --allow github,pypi,nvidia,tavily
+  scripts/openshell/setup_openshell.sh --openshell-version 0.0.80 --policy offline
+  scripts/openshell/setup_openshell.sh --local-demo --policy offline
 EOF
 }
 
@@ -130,7 +127,6 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --openshell-version)
             OPENSHELL_VERSION="$2"
-            OPENSHELL_VERSION_USER_SUPPLIED=true
             shift 2
             ;;
         --policy)
@@ -149,9 +145,14 @@ while [[ $# -gt 0 ]]; do
             POLICY_FILE="$2"
             shift 2
             ;;
-        --sandbox-name)
-            SANDBOX_NAME="$2"
+        --landlock-compatibility)
+            LANDLOCK_COMPATIBILITY="$2"
+            LANDLOCK_COMPATIBILITY_CLI=true
             shift 2
+            ;;
+        --local-demo)
+            LOCAL_DEMO=true
+            shift
             ;;
         --image-name)
             IMAGE_NAME="$2"
@@ -165,33 +166,16 @@ while [[ $# -gt 0 ]]; do
             LANGCHAIN_NVIDIA_REPO="$2"
             shift 2
             ;;
-        --gateway-name)
-            GATEWAY_NAME="$2"
-            shift 2
-            ;;
-        --gateway-port)
-            GATEWAY_PORT="$2"
-            shift 2
-            ;;
         --docker-bin)
             DOCKER_BIN="$2"
             shift 2
-            ;;
-        --gateway-bin)
-            OPENSHELL_GATEWAY_LAUNCH_BIN="$2"
-            shift 2
-            ;;
-        --no-restart-gateway)
-            RESTART_GATEWAY=false
-            shift
             ;;
         --skip-build)
             BUILD_IMAGE=false
             shift
             ;;
-        --skip-sandbox)
-            CREATE_SANDBOX=false
-            shift
+        --create-shared-debug-sandbox|--sandbox-name|--gateway-name|--gateway-port|--gateway-bin|--no-restart-gateway|--skip-sandbox)
+            fail "Gateway and debug-sandbox lifecycle moved to scripts/openshell/start_openshell_gateway.sh"
             ;;
         --list-policies)
             echo "$SUPPORTED_POLICIES" | tr ',' '\n'
@@ -215,6 +199,13 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+if [[ "$LOCAL_DEMO" == "true" ]]; then
+    if [[ "$LANDLOCK_COMPATIBILITY_CLI" == "true" && "$LANDLOCK_COMPATIBILITY" != "best_effort" ]]; then
+        fail "--local-demo conflicts with --landlock-compatibility $LANDLOCK_COMPATIBILITY"
+    fi
+    LANDLOCK_COMPATIBILITY="best_effort"
+fi
 
 detect_os() {
     case "$(uname -s)" in
@@ -246,132 +237,12 @@ EOF
     fi
 }
 
-resolve_python() {
-    if [[ -n "$PYTHON_BIN" && -x "$PYTHON_BIN" ]]; then
-        return
-    fi
-    PYTHON_BIN="$(uv python find 2>/dev/null || true)"
-    if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
-        PYTHON_BIN="$(command -v python3 || command -v python || true)"
-    fi
-    if [[ -z "$PYTHON_BIN" || ! -x "$PYTHON_BIN" ]]; then
-        fail "Python was not found. Install Python 3.11+ or run ./scripts/setup.sh first."
-    fi
-}
-
-fetch_openshell_versions() {
-    resolve_python
-    log "Checking available OpenShell versions"
-    local output
-    if ! output="$("$PYTHON_BIN" - "$MIN_OPENSHELL_VERSION" <<'PY'
-import json
-import re
-import sys
-import urllib.request
-
-min_version = sys.argv[1]
-version_re = re.compile(r"^\d+\.\d+\.\d+$")
-
-def parse(version: str) -> tuple[int, int, int]:
-    return tuple(int(part) for part in version.split("."))
-
-try:
-    with urllib.request.urlopen("https://pypi.org/pypi/openshell/json", timeout=15) as response:
-        payload = json.load(response)
-except Exception as exc:
-    raise SystemExit(f"failed to fetch OpenShell versions from PyPI: {exc}")
-
-minimum = parse(min_version)
-versions = []
-for version, files in payload.get("releases", {}).items():
-    if not version_re.match(version):
-        continue
-    if not files:
-        continue
-    parsed = parse(version)
-    if parsed >= minimum:
-        versions.append((parsed, version))
-
-if not versions:
-    raise SystemExit(f"no OpenShell releases found at or above {min_version}")
-
-versions.sort()
-print(versions[-1][1])
-print(",".join(version for _, version in versions))
-PY
-)"; then
-        fail "$output"
-    fi
-
-    OPENSHELL_LATEST_VERSION="$(printf '%s\n' "$output" | sed -n '1p')"
-    OPENSHELL_AVAILABLE_VERSIONS="$(printf '%s\n' "$output" | sed -n '2p')"
-
-    if [[ -z "$OPENSHELL_LATEST_VERSION" || -z "$OPENSHELL_AVAILABLE_VERSIONS" ]]; then
-        fail "Could not determine available OpenShell versions from PyPI."
-    fi
-    echo "OpenShell version range: $MIN_OPENSHELL_VERSION through $OPENSHELL_LATEST_VERSION"
-}
-
-version_is_available() {
-    case ",$OPENSHELL_AVAILABLE_VERSIONS," in
-        *",$1,"*)
-            return 0
-            ;;
-        *)
-            return 1
-            ;;
-    esac
-}
-
-version_prompt_text() {
-    echo "OpenShell version [press Enter for ${DEFAULT_OPENSHELL_VERSION}; type latest for ${OPENSHELL_LATEST_VERSION}]: "
-}
-
-choose_openshell_version_interactively() {
-    local candidate
-    while true; do
-        read -r -p "$(version_prompt_text)" candidate
-        candidate="${candidate:-$DEFAULT_OPENSHELL_VERSION}"
-        if [[ "$candidate" == "latest" ]]; then
-            candidate="$OPENSHELL_LATEST_VERSION"
-        fi
-        if version_is_available "$candidate"; then
-            OPENSHELL_VERSION="$candidate"
-            return
-        fi
-        echo "OpenShell version '$candidate' was not found between $MIN_OPENSHELL_VERSION and $OPENSHELL_LATEST_VERSION."
-        echo "Try an exact released version, '$DEFAULT_OPENSHELL_VERSION', or 'latest'."
-    done
-}
-
 resolve_openshell_version() {
-    fetch_openshell_versions
-
-    if [[ -n "$OPENSHELL_VERSION" ]]; then
-        if [[ "$OPENSHELL_VERSION" == "latest" ]]; then
-            OPENSHELL_VERSION="$OPENSHELL_LATEST_VERSION"
-        fi
-        if version_is_available "$OPENSHELL_VERSION"; then
-            echo "OpenShell version selected: $OPENSHELL_VERSION"
-            return
-        fi
-
-        if [[ -t 0 && "$OPENSHELL_VERSION_USER_SUPPLIED" == "true" ]]; then
-            echo "OpenShell version '$OPENSHELL_VERSION' was not found between $MIN_OPENSHELL_VERSION and $OPENSHELL_LATEST_VERSION."
-            choose_openshell_version_interactively
-            echo "OpenShell version selected: $OPENSHELL_VERSION"
-            return
-        fi
-        fail "OpenShell version '$OPENSHELL_VERSION' was not found between $MIN_OPENSHELL_VERSION and $OPENSHELL_LATEST_VERSION."
-    fi
-
-    if [[ -t 0 ]]; then
-        choose_openshell_version_interactively
-    else
+    if [[ -z "$OPENSHELL_VERSION" ]]; then
         OPENSHELL_VERSION="$DEFAULT_OPENSHELL_VERSION"
-        if ! version_is_available "$OPENSHELL_VERSION"; then
-            fail "Default OpenShell version '$OPENSHELL_VERSION' was not found on PyPI."
-        fi
+    fi
+    if [[ "$OPENSHELL_VERSION" == "latest" || "$OPENSHELL_VERSION" != "$DEFAULT_OPENSHELL_VERSION" ]]; then
+        fail "OpenShell '$OPENSHELL_VERSION' is not certified for this AI-Q release. Use exact version $DEFAULT_OPENSHELL_VERSION; certify upgrades in a separate development change."
     fi
     echo "OpenShell version selected: $OPENSHELL_VERSION"
 }
@@ -407,31 +278,40 @@ install_openshell_python() {
     # NOTE: expand editable_args only when non-empty; macOS bash 3.2 errors on
     # "${arr[@]}" for an empty array under `set -u`.
     local adapter_install_args=()
-    if [[ ${#editable_args[@]} -eq 0 ]]; then
-        adapter_install_args=(--reinstall-package langchain-nvidia-openshell)
-    else
+    if [[ ${#editable_args[@]} -gt 0 ]]; then
         adapter_install_args=("${editable_args[@]}")
     fi
-    if ! uv pip install "${adapter_install_args[@]}" "$adapter_install_spec"; then
+    local adapter_install_failed=false
+    if [[ ${#adapter_install_args[@]} -eq 0 ]]; then
+        uv pip install "$adapter_install_spec" || adapter_install_failed=true
+    else
+        uv pip install "${adapter_install_args[@]}" "$adapter_install_spec" || adapter_install_failed=true
+    fi
+    if [[ "$adapter_install_failed" == "true" ]]; then
         cat <<EOF
 ERROR: Could not install the langchain-nvidia-openshell adapter.
 
 The adapter is published on PyPI as langchain-nvidia-openshell. The default install
 resolves from PyPI; if your environment cannot reach it, point LANGCHAIN_NVIDIA_REPO at
 an alternate uv install spec or a local checkout, then rerun. Examples:
-  LANGCHAIN_NVIDIA_REPO=langchain-nvidia-openshell scripts/setup_openshell.sh
-  scripts/setup_openshell.sh --langchain-nvidia /path/to/langchain-nvidia
+  LANGCHAIN_NVIDIA_REPO=langchain-nvidia-openshell==$OPENSHELL_ADAPTER_VERSION scripts/openshell/setup_openshell.sh
+  scripts/openshell/setup_openshell.sh --langchain-nvidia /path/to/langchain-nvidia
 EOF
         exit 1
     fi
 
-    # The adapter still declares deepagents<0.6, so its install downgrades the 0.6.x that
-    # AI-Q's deep-research runtime requires (pyproject: deepagents>=0.6.5). The adapter's
-    # code only uses the stable deepagents BaseSandbox/protocol surface (the same imports
-    # AI-Q's own sandbox package uses on 0.6.x), so reasserting the floor AI-Q needs is
-    # safe. This is the OpenShell setup script, so keeping AI-Q runnable is the goal.
-    log "Reasserting deepagents>=0.6.5 (AI-Q runtime floor) after adapter install"
-    uv pip install "deepagents>=0.6.5"
+    # Adapter 0.1.0 still declares deepagents<0.6 and can otherwise downgrade AI-Q's
+    # locked DeepAgents 0.6.x runtime. Restore the complete AI-Q lock while retaining
+    # optional packages that are intentionally absent from the base project metadata.
+    # This keeps repeated setup deterministic without pretending the upstream adapter
+    # metadata is compatible; `pip check` remains a documented upstream limitation.
+    log "Restoring locked AI-Q dependencies while retaining optional OpenShell packages"
+    uv sync --dev --inexact
+
+    # Adapter dependency resolution must not silently change the operator-selected
+    # OpenShell SDK/CLI version. Reapply the exact pin after every dependent package.
+    log "Reasserting exact OpenShell version after adapter install: openshell==$OPENSHELL_VERSION"
+    uv pip install "openshell==$OPENSHELL_VERSION"
 
     local installed
     installed="$("$VENV_DIR/bin/python" - <<'PY'
@@ -439,21 +319,14 @@ import openshell
 print(getattr(openshell, "__version__", "unknown"))
 PY
 )"
-    # The adapter pins openshell>=0.0.68 and may upgrade the package above the requested
-    # version during its own install; only a version BELOW the requested floor is an error
-    # (an exact-match check would spuriously fail on that allowed adapter-driven upgrade).
+    # CLI, SDK, and gateway compatibility is validated again by the strict readiness
+    # checker. Provisioning still guarantees that the selected local SDK is exact.
     if ! "$VENV_DIR/bin/python" - "$OPENSHELL_VERSION" "$installed" <<'PY'
 import sys
-
-
-def parts(v):
-    return tuple(int(p) for p in v.split(".")[:3] if p.isdigit())
-
-
-sys.exit(0 if parts(sys.argv[2]) >= parts(sys.argv[1]) else 1)
+sys.exit(0 if sys.argv[2] == sys.argv[1] else 1)
 PY
     then
-        fail "Installed openshell $installed is older than the requested floor $OPENSHELL_VERSION"
+        fail "Installed openshell $installed does not match the requested version $OPENSHELL_VERSION"
     fi
     "$VENV_DIR/bin/python" - <<'PY'
 import langchain_nvidia_openshell  # noqa: F401
@@ -482,6 +355,13 @@ resolve_openshell_cli() {
 
 resolve_docker() {
     log "Resolving Docker CLI"
+    # Docker Desktop stores both the CLI and credential helper here. Prepend the
+    # directory before resolving `docker` so public-image pulls do not follow a
+    # stale /usr/local symlink and then fail to locate docker-credential-desktop.
+    local docker_desktop_bin="/Applications/Docker.app/Contents/Resources/bin"
+    if [[ "$OS_NAME" == "macos" && -x "$docker_desktop_bin/docker" ]]; then
+        export PATH="$docker_desktop_bin:$PATH"
+    fi
     local candidates=(
         "$DOCKER_BIN"
         "$(command -v docker || true)"
@@ -514,7 +394,7 @@ Install or link Docker CLI, then rerun:
 
 If Docker is installed but not on PATH, rerun with:
 
-  scripts/setup_openshell.sh --docker-bin /path/to/docker
+  scripts/openshell/setup_openshell.sh --docker-bin /path/to/docker
 EOF
     else
         cat <<'EOF'
@@ -527,7 +407,7 @@ Install Docker for your Linux distribution, then rerun. For example:
 
 If Docker is installed but not on PATH, rerun with:
 
-  scripts/setup_openshell.sh --docker-bin /path/to/docker
+  scripts/openshell/setup_openshell.sh --docker-bin /path/to/docker
 EOF
     fi
     exit 1
@@ -566,7 +446,7 @@ DOCKER_HOST is set to:
 
 Start that Docker daemon or update DOCKER_HOST, then rerun:
 
-  scripts/setup_openshell.sh
+  scripts/openshell/setup_openshell.sh
 EOF
         exit 1
     fi
@@ -590,7 +470,7 @@ Docker Desktop appears to be installed at:
 
 Start Docker Desktop, wait until it reports that Docker is running, then rerun:
 
-  scripts/setup_openshell.sh
+  scripts/openshell/setup_openshell.sh
 
 If you use a remote Docker daemon, set DOCKER_HOST before rerunning.
 EOF
@@ -601,7 +481,7 @@ Docker CLI was found, but the Docker daemon is not reachable.
 No Colima socket was selected and Docker Desktop was not found in /Applications
 or ~/Applications. Install and start Docker Desktop for macOS, then rerun:
 
-  scripts/setup_openshell.sh
+  scripts/openshell/setup_openshell.sh
 
 If you use Colima, start it first. For example:
 
@@ -628,132 +508,6 @@ If you use a remote Docker daemon, set DOCKER_HOST before rerunning.
 EOF
     fi
     exit 1
-}
-
-resolve_gateway_launcher() {
-    if [[ -n "$OPENSHELL_GATEWAY_LAUNCH_BIN" && -x "$OPENSHELL_GATEWAY_LAUNCH_BIN" ]]; then
-        echo "OpenShell gateway launcher: $OPENSHELL_GATEWAY_LAUNCH_BIN"
-        return
-    fi
-
-    local candidates=(
-        "/opt/homebrew/opt/openshell/libexec/openshell-gateway-homebrew-service"
-        "$(command -v openshell-gateway || true)"
-        "/opt/homebrew/bin/openshell-gateway"
-        "/usr/local/bin/openshell-gateway"
-        "/usr/bin/openshell-gateway"
-        "$HOME/.local/bin/openshell-gateway"
-        "$VENV_DIR/bin/openshell-gateway"
-    )
-    local candidate
-    for candidate in "${candidates[@]}"; do
-        if [[ -n "$candidate" && -x "$candidate" ]]; then
-            OPENSHELL_GATEWAY_LAUNCH_BIN="$candidate"
-            echo "OpenShell gateway launcher: $OPENSHELL_GATEWAY_LAUNCH_BIN"
-            return
-        fi
-    done
-
-    if [[ "$OS_NAME" == "macos" ]]; then
-        # The nvidia/openshell Homebrew tap (github.com/nvidia/homebrew-openshell) is not
-        # published, so `brew install nvidia/openshell/openshell` 404s. Use OpenShell's
-        # official installer instead, which sets up the gateway (local brew service + mTLS).
-        log "Installing the OpenShell gateway via the official installer (NVIDIA/OpenShell)"
-        curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
-        local installed_candidate
-        for installed_candidate in \
-            "/opt/homebrew/opt/openshell/libexec/openshell-gateway-homebrew-service" \
-            "$(command -v openshell-gateway || true)" \
-            "/opt/homebrew/bin/openshell-gateway"; do
-            if [[ -n "$installed_candidate" && -x "$installed_candidate" ]]; then
-                OPENSHELL_GATEWAY_LAUNCH_BIN="$installed_candidate"
-                echo "OpenShell gateway launcher: $OPENSHELL_GATEWAY_LAUNCH_BIN"
-                return
-            fi
-        done
-    fi
-
-    cat <<EOF
-OpenShell gateway launcher was not found.
-
-Install the gateway, or rerun with:
-
-  scripts/setup_openshell.sh --gateway-bin /path/to/openshell-gateway
-
-On macOS, install the OpenShell gateway with the official installer:
-
-  curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/main/install.sh | sh
-EOF
-    exit 1
-}
-
-configure_gateway_mode() {
-    GATEWAY_ENDPOINT="https://127.0.0.1:$GATEWAY_PORT"
-    GATEWAY_DISABLE_TLS=false
-
-    if [[ "$(basename "$OPENSHELL_GATEWAY_LAUNCH_BIN")" == "openshell-gateway" ]]; then
-        if [[ "$CREATE_SANDBOX" == "true" ]]; then
-            cat <<'EOF'
-The raw openshell-gateway binary is not enough for Docker sandbox creation in
-this setup because Docker sandboxes require gateway JWT/mTLS configuration.
-
-Use the packaged gateway service wrapper when available, for example:
-
-  scripts/setup_openshell.sh --gateway-bin /opt/homebrew/opt/openshell/libexec/openshell-gateway-homebrew-service
-
-Or start a configured OpenShell gateway yourself, then rerun:
-
-  scripts/setup_openshell.sh --no-restart-gateway
-EOF
-            exit 1
-        fi
-        GATEWAY_ENDPOINT="http://127.0.0.1:$GATEWAY_PORT"
-        GATEWAY_DISABLE_TLS=true
-        echo "OpenShell gateway mode: plaintext local HTTP"
-    else
-        echo "OpenShell gateway mode: local mTLS"
-    fi
-}
-
-start_or_verify_gateway() {
-    log "Starting/verifying OpenShell gateway"
-    if [[ "$RESTART_GATEWAY" == "true" ]]; then
-        resolve_gateway_launcher
-        configure_gateway_mode
-        pkill -f openshell-gateway >/dev/null 2>&1 || true
-        sleep 2
-        rm -f /tmp/aiq-openshell-gateway.log
-        if [[ "$GATEWAY_DISABLE_TLS" == "true" ]]; then
-            nohup env OPENSHELL_SERVER_PORT="$GATEWAY_PORT" \
-                OPENSHELL_DRIVERS=docker \
-                DOCKER_HOST="${DOCKER_HOST:-}" \
-                "$OPENSHELL_GATEWAY_LAUNCH_BIN" --disable-tls >/tmp/aiq-openshell-gateway.log 2>&1 &
-        else
-            nohup env OPENSHELL_SERVER_PORT="$GATEWAY_PORT" \
-                OPENSHELL_DRIVERS=docker \
-                DOCKER_HOST="${DOCKER_HOST:-}" \
-                "$OPENSHELL_GATEWAY_LAUNCH_BIN" >/tmp/aiq-openshell-gateway.log 2>&1 &
-        fi
-        "$OPENSHELL_BIN" gateway remove "$GATEWAY_NAME" >/dev/null 2>&1 || true
-        if [[ "$GATEWAY_DISABLE_TLS" == "true" ]]; then
-            "$OPENSHELL_BIN" gateway add --name "$GATEWAY_NAME" "$GATEWAY_ENDPOINT" --local
-        else
-            "$OPENSHELL_BIN" gateway add --name "$GATEWAY_NAME" "$GATEWAY_ENDPOINT" --local --gateway-insecure
-        fi
-        "$OPENSHELL_BIN" gateway select "$GATEWAY_NAME"
-    fi
-
-    local attempt
-    for attempt in $(seq 1 60); do
-        if "$OPENSHELL_BIN" status; then
-            return
-        fi
-        sleep 1
-    done
-
-    echo "OpenShell gateway log:"
-    LC_ALL=C tr -d '\000' </tmp/aiq-openshell-gateway.log 2>/dev/null | sed -n '1,220p' || true
-    fail "OpenShell gateway did not become reachable"
 }
 
 print_policy_menu() {
@@ -864,6 +618,13 @@ resolve_policy() {
     if [[ "$POLICY_ALLOWLIST" == *offline* && "$POLICY_ALLOWLIST" != "offline" ]]; then
         fail "Use either offline or a service allowlist, not both: $POLICY_ALLOWLIST"
     fi
+    case "$LANDLOCK_COMPATIBILITY" in
+        hard_requirement|best_effort)
+            ;;
+        *)
+            fail "Unsupported Landlock compatibility '$LANDLOCK_COMPATIBILITY'; use hard_requirement or best_effort"
+            ;;
+    esac
 }
 
 validate_service() {
@@ -877,23 +638,24 @@ validate_service() {
 }
 
 emit_policy_header() {
-    cat >"$POLICY_FILE" <<'EOF'
+    cat >"$POLICY_FILE" <<EOF
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 #
-# Generated by scripts/setup_openshell.sh.
+# Generated by scripts/openshell/setup_openshell.sh.
 
 version: 1
 
 filesystem_policy:
   include_workdir: true
+  # Declare the proxy baseline up front so OpenShell does not create an enriched
+  # revision whose content/hash differs from the policy AI-Q submitted.
   read_only:
     - /usr
     - /lib
     - /etc
-    - /app
     - /var/log
-    - /proc/self
+    - /proc
     - /dev/urandom
   read_write:
     - /sandbox
@@ -901,12 +663,10 @@ filesystem_policy:
     - /tmp
     - /dev/null
 
-# best_effort lets the sandbox start on hosts without Landlock (e.g. Docker Desktop on
-# macOS), but on those hosts filesystem confinement is silently dropped. This is acceptable
-# only for the local single-operator demo; production must use `hard_requirement` so a
-# missing LSM fails closed instead of running unconfined.
+# hard_requirement is the production default: a missing Landlock LSM fails closed. Set
+# best_effort only for an explicit local demo that accepts loss of filesystem confinement.
 landlock:
-  compatibility: best_effort
+  compatibility: $LANDLOCK_COMPATIBILITY
 
 process:
   run_as_user: sandbox
@@ -991,6 +751,7 @@ generate_policy() {
     echo "Policy file: $POLICY_FILE"
     echo "Policy: $POLICY_PRESET"
     echo "Allowed services: $POLICY_ALLOWLIST"
+    echo "Landlock compatibility: $LANDLOCK_COMPATIBILITY"
 }
 
 build_image() {
@@ -1003,60 +764,58 @@ build_image() {
         -f "$REPO_ROOT/deploy/openshell/Dockerfile.aiq-demo" "$REPO_ROOT/deploy/openshell"
 }
 
-create_sandbox() {
-    if [[ "$CREATE_SANDBOX" != "true" ]]; then
-        return
+diagnose_gateway_components() {
+    log "Inspecting packaged gateway components"
+    if ! "$VENV_DIR/bin/python" "$SCRIPT_DIR/check_versions.py" \
+        --gateway-name "${AIQ_OPENSHELL_GATEWAY_NAME:-openshell}" --skip-live; then
+        echo "Provisioning completed, but gateway remediation is required before readiness or AI-Q startup."
     fi
-    log "Creating named OpenShell sandbox: $SANDBOX_NAME"
-    "$OPENSHELL_BIN" sandbox delete "$SANDBOX_NAME" >/dev/null 2>&1 || true
-    local create_log="/tmp/${SANDBOX_NAME}-openshell-create.log"
-    local policy_label="${POLICY_PRESET//,/_}"
-    rm -f "$create_log"
-    "$OPENSHELL_BIN" sandbox create \
-        --name "$SANDBOX_NAME" \
-        --from "$IMAGE_NAME" \
-        --policy "$POLICY_FILE" \
-        --label aiq=openshell \
-        --label aiq-policy="$policy_label" \
-        --no-tty \
-        -- sleep infinity >"$create_log" 2>&1 &
-
-    local attempt
-    for attempt in $(seq 1 120); do
-        if "$OPENSHELL_BIN" sandbox list | grep -F "$SANDBOX_NAME" | grep -F "Ready" >/dev/null 2>&1; then
-            "$OPENSHELL_BIN" sandbox list | grep -F "$SANDBOX_NAME" || true
-            return
-        fi
-        sleep 1
-    done
-
-    echo "Sandbox create log:"
-    sed -n '1,220p' "$create_log" || true
-    fail "Timed out waiting for sandbox '$SANDBOX_NAME' to become Ready"
 }
 
 print_next_steps() {
+    local runtime_config="configs/config_openshell.yml"
+    local runtime_env=""
+    local landlock_note="Production defaults require hard Landlock; no runtime override is needed."
+    if [[ "$LANDLOCK_COMPATIBILITY" == "best_effort" ]]; then
+        runtime_env="AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK=false "
+        landlock_note="This is a local best_effort policy. Prefix validation, CLI, and E2E commands with
+AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK=false."
+    fi
     cat <<EOF
 
-OpenShell is ready for AI-Q.
+OpenShell dependencies, policy, and image are provisioned for AI-Q.
 
-Use these exports in shells where you run AI-Q:
+The default local gateway, image, policy path, and expected version are already
+wired into the launcher, config, and live suite. These are optional overrides
+for custom shells or remote gateways:
 
-  export AIQ_OPENSHELL_SANDBOX_NAME="$SANDBOX_NAME"
+  export AIQ_OPENSHELL_GATEWAY_NAME="openshell"
+  export AIQ_OPENSHELL_IMAGE="$IMAGE_NAME"
   export AIQ_OPENSHELL_POLICY_FILE="$POLICY_FILE"
+  export AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION="$OPENSHELL_VERSION"
 
-Start CLI mode:
+$landlock_note
 
-  ./scripts/start_cli.sh --config_file configs/config_openshell.yml --verbose
+Validate the AI-Q config:
 
-Start E2E mode:
+  ${runtime_env}.venv/bin/nat validate --config_file $runtime_config
 
-  ./scripts/start_e2e.sh --config_file configs/config_openshell.yml
+Start or verify an authenticated gateway and run its strict capability probe:
 
-Useful cleanup:
+  source .venv/bin/activate
+  ./scripts/openshell/start_openshell_gateway.sh
 
-  $OPENSHELL_BIN sandbox delete "$SANDBOX_NAME"
-  pkill -f openshell-gateway
+Start CLI mode after the gateway probe succeeds:
+
+  ${runtime_env}./scripts/start_cli.sh --config_file $runtime_config --verbose
+
+Start E2E mode after the gateway probe succeeds:
+
+  ${runtime_env}./scripts/start_e2e.sh --config_file $runtime_config
+
+Or combine the gateway probe with E2E startup:
+
+  ${runtime_env}./scripts/start_e2e.sh --start-openshell-gateway --config_file $runtime_config
 
 EOF
 }
@@ -1065,8 +824,7 @@ main() {
     detect_os
     require_uv
     if [[ "$LIST_OPENSHELL_VERSIONS" == "true" ]]; then
-        fetch_openshell_versions
-        echo "$OPENSHELL_AVAILABLE_VERSIONS" | tr ',' '\n'
+        echo "$DEFAULT_OPENSHELL_VERSION"
         exit 0
     fi
     resolve_openshell_version
@@ -1078,9 +836,8 @@ main() {
     configure_docker_host
     verify_docker_runtime
     generate_policy
-    start_or_verify_gateway
     build_image
-    create_sandbox
+    diagnose_gateway_components
     print_next_steps
 }
 

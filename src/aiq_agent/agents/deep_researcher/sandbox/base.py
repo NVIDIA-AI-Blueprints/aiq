@@ -45,6 +45,7 @@ from deepagents.backends.sandbox import BaseSandbox
 from .capabilities import SandboxCapabilities
 from .config import job_scoped_artifact_dir
 from .config import job_scoped_workdir
+from .logging_utils import log_sandbox_failure
 
 if TYPE_CHECKING:
     from .config import SandboxConfig
@@ -100,6 +101,10 @@ class SandboxProvider(BaseSandbox, ABC):
         # state lock, so the two can never deadlock.
         self._state_lock = threading.Lock()
         self._terminated = False
+        self._event_emit: Callable[[dict[str, object]], None] | None = None
+        self._cleanup_failed = False
+        self._cleanup_failure_reasons: set[str] = set()
+        self._cleanup_state_lock = threading.Lock()
 
     # ------------------------------------------------------------------ #
     # Required surface (the only things a provider must implement)
@@ -151,6 +156,26 @@ class SandboxProvider(BaseSandbox, ABC):
             if acquired:
                 self._lock.release()
 
+    def set_event_emitter(self, emit: Callable[[dict[str, object]], None] | None) -> None:
+        """Attach the job-scoped event sink used for sanitized lifecycle events."""
+        self._event_emit = emit
+
+    def _emit_event(self, event: dict[str, object]) -> None:
+        """Best-effort event delivery; observability must never break execution."""
+        if self._event_emit is None:
+            return
+        try:
+            self._event_emit(event)
+        except Exception as exc:  # noqa: BLE001 - event persistence is non-critical
+            log_sandbox_failure(
+                logger,
+                operation="event_emit",
+                reason_code="event_emit_failed",
+                exc=exc,
+                provider=self.provider_name,
+                sandbox=self.sandbox_name,
+            )
+
     def close(self) -> None:
         """Release the underlying sandbox session, if any (idempotent).
 
@@ -194,16 +219,49 @@ class SandboxProvider(BaseSandbox, ABC):
         command = f"mkdir -p {shlex.quote(self.workdir)} {shlex.quote(self.artifact_dir)}"
         try:
             session.execute(command, timeout=self._clamp_timeout(_WORKSPACE_PREP_TIMEOUT))
-        except Exception:  # noqa: BLE001 - workspace prep is best-effort; real failures resurface on first write
-            logger.warning("Sandbox %s workspace prep failed (%s)", self.sandbox_name, command, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - workspace prep is best-effort; real failures resurface on first write
+            log_sandbox_failure(
+                logger,
+                operation="workspace_prepare",
+                reason_code="workspace_prepare_failed",
+                exc=exc,
+                provider=self.provider_name,
+                sandbox=self.sandbox_name,
+            )
 
     def _safe_close(self, session: BaseSandbox | None) -> None:
         """Best-effort close of a session; never raises on the teardown path."""
         if session is not None and hasattr(session, "close"):
             try:
                 session.close()
-            except Exception:  # noqa: BLE001 - cleanup must never raise on the terminal path
-                logger.warning("Sandbox %s cleanup failed", self.sandbox_name, exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - cleanup must never raise on the terminal path
+                self._record_cleanup_failure("session_close_failed")
+                log_sandbox_failure(
+                    logger,
+                    operation="session_close",
+                    reason_code="session_close_failed",
+                    exc=exc,
+                    provider=self.provider_name,
+                    sandbox=self.sandbox_name,
+                )
+
+    def _record_cleanup_failure(self, reason_code: str) -> None:
+        """Record a monotonic, thread-safe cleanup failure reason."""
+        with self._cleanup_state_lock:
+            self._cleanup_failed = True
+            self._cleanup_failure_reasons.add(reason_code)
+
+    @property
+    def cleanup_succeeded(self) -> bool:
+        """Whether every cleanup attempt, including retry teardown, completed without an error."""
+        with self._cleanup_state_lock:
+            return not self._cleanup_failed
+
+    @property
+    def cleanup_failure_reason_codes(self) -> tuple[str, ...]:
+        """Return stable reason codes suitable for terminal lifecycle events."""
+        with self._cleanup_state_lock:
+            return tuple(sorted(self._cleanup_failure_reasons))
 
     @property
     def id(self) -> str:

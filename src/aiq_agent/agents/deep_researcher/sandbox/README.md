@@ -37,15 +37,25 @@ creates these on session start (`_prepare_workspace`, an idempotent `mkdir -p`) 
 runtime injects them into prompts/skills as `sandbox_workdir`/`sandbox_artifact_dir`. This
 prevents accidental filename collisions and keeps harvesting scoped to the current job.
 
-Modal creates a fresh sandbox for each job. The experimental OpenShell configuration instead
-attaches jobs to one pre-created named sandbox because the SDK cannot apply the configured
-policy when creating an anonymous sandbox. Per-job directories inside that sandbox are not
-an access-control boundary: executed code can access sibling job directories allowed by the
-shared policy. Use OpenShell only for local, single-operator testing, and do not run mutually
-untrusted jobs concurrently. Physical per-job OpenShell isolation and attach-time policy
-verification are follow-up work. The default policy also sets `landlock.compatibility:
-best_effort`, so on hosts without Landlock (e.g. Docker Desktop on macOS) filesystem
-confinement is silently dropped; production must use `hard_requirement` to fail closed.
+Modal and OpenShell both create a fresh physical sandbox for each job. OpenShell parses the
+configured policy with the installed SDK schema, applies it in the creation `SandboxSpec`,
+waits for `READY`, and verifies the authoritative effective policy source, protobuf content,
+OpenShell hash, and active revision before exposing the backend. A positive status version
+alone is never treated as attestation. An optional `expected_policy_version` provides an exact
+revision pin. Any creation or attestation failure closes the owning SDK context so the partially
+created sandbox is deleted.
+
+Zero generic `current_policy_version` or `active_version` values are treated as unreported only
+when the LOADED revision plus effective config agree on the same positive version, source,
+protobuf content, and deterministic hash. Every positive reported version remains subject to
+exact agreement. An effective policy that remains Pending beyond `policy_load_timeout_seconds`
+fails with `policy_status_inconsistent`; AI-Q never treats it as successful attestation.
+
+OpenShell shared attachment remains available only as an explicit debug escape hatch:
+`existing_sandbox_name` plus `allow_shared_sandbox: true`. It is not a job isolation boundary
+and must not be used for mutually untrusted jobs. Production policy validation also requires
+`landlock.compatibility: hard_requirement`; a local demo may explicitly set both the policy
+and `require_hard_landlock: false` to accept `best_effort`.
 
 The agent only ever sees a `read_file`/`write_file`/`edit_file`/`execute` tool surface
 plus `/shared/` for durable text. Binary artifacts are harvested host-side via
@@ -60,7 +70,7 @@ plus `/shared/` for durable text. Binary artifacts are harvested host-side via
 | `config.py` | `SandboxConfig`: common fields + nested `providers.<name>` + `artifact_capture` + `lifecycle_scope`; legacy flat-config shim; provider validated against the registry. |
 | `capabilities.py` | `SandboxCapabilities` + `verify_capabilities` (fail-closed: refuse to run if a required guarantee like `block_network` is unsupported). |
 | `providers/modal.py` | Modal provider (cloud). Create-fresh semantics (no silent attach-by-name). |
-| `providers/openshell.py` | OpenShell provider (enterprise/on-prem). Lazy, ad-hoc deps; policy requires a named sandbox. |
+| `providers/openshell.py` | OpenShell provider (enterprise/on-prem). Lazy, ad-hoc deps; per-job policy creation, readiness/revision attestation, and confined transfer. |
 | `artifacts/models.py` | `Artifact` record (id, mime, sha256, size, provenance, status). Metadata only. |
 | `artifacts/manifest.py` | `manifest.json` schema + parser. |
 | `artifacts/store.py` | `SqlArtifactStore` coordinates SQL metadata with the configured byte provider. |
@@ -125,8 +135,8 @@ sandbox:
   provider: openshell          # registry key
   workdir: /sandbox            # injected into prompts + skills
   network:                     # normalized, provider-neutral egress policy
-    mode: blocked              # blocked | allowlist | open  (legacy `block_network: true` => blocked)
-    # allow: [pypi.org]        # required for mode: allowlist; needs supports_network_allowlist
+    mode: allowlist            # blocked | allowlist | open  (legacy `block_network: true` => blocked)
+    allow: [api.github.com, github.com]  # policy grants must be a subset of this list
   timeout: 1200
   idle_timeout: 1800
   resources:                   # optional CPU/memory caps; omit for no limit
@@ -143,8 +153,14 @@ sandbox:
       python_packages: [matplotlib, numpy, pandas, pillow, tabulate]
     openshell:
       gateway: null            # null = locally selected gateway
-      sandbox_name: aiq-openshell-demo
+      image: aiq-openshell-demo:latest
       policy: configs/openshell/generated/aiq-openshell-policy.yaml
+      delete_on_exit: true
+      attest: true
+      policy_load_timeout_seconds: 30
+      cleanup_timeout_seconds: 30
+      # expected_policy_version: 1
+      require_hard_landlock: true
 ```
 
 The legacy flat shape (top-level `app_name`/`image`/`python_packages`) still loads and
@@ -207,42 +223,31 @@ shared helper, `MarkdownRenderer/artifact-url.ts`, builds the content path):
 Requires `modal` + `langchain-modal` (in `pyproject`) and `modal setup`. See
 `docs/source/examples/skills-sandbox/index.md`.
 
-### OpenShell (experimental, local single-operator)
+### OpenShell (experimental)
 
-> OpenShell jobs currently attach to one pre-created named sandbox. Its policy is applied by
-> the setup command and is not verified when AI-Q attaches. Job directories prevent accidental
-> collisions but do not isolate mutually untrusted jobs. Do not use this path as a multi-tenant
-> security boundary.
+Each job creates a new policy-bound OpenShell sandbox and deletes it on terminal cleanup.
+AI-Q refuses startup if the YAML does not match the installed SDK schema, the policy grants a
+host or hostless/CIDR override outside the declared public network contract, production Landlock
+mode is not fail-closed, or the gateway cannot prove the submitted policy is effective. The
+creation spec deliberately has no copied host environment or credential providers.
+Owned sandboxes carry `aiq=deep-research` and a normalized `aiq-job-id` in both OpenShell
+gateway metadata and runtime template metadata so operators can use label selectors reliably.
 
 Two ad-hoc deps (never in `pyproject`): the `openshell` SDK and the official
 `langchain-nvidia-openshell` adapter (`OpenShellSandbox`), the OpenShell partner package in
 [`langchain-ai/langchain-nvidia`](https://github.com/langchain-ai/langchain-nvidia/pull/303).
-The adapter is published on PyPI as `langchain-nvidia-openshell` — `./scripts/setup_openshell.sh`
-installs it for you (override the source with `LANGCHAIN_NVIDIA_REPO` to use a git spec or local
-checkout). To install it into your `.venv` manually:
+They remain lazy so selecting another provider does not install or import OpenShell.
+The provider config supports per-job policy creation and an explicit shared-debug attachment;
+policy-configured shared attachment is strictly attested, while policy-free attachment emits
+`assurance=reduced`.
 
-```bash
-uv pip install 'langchain-nvidia-openshell==0.1.0'
-```
-
-One-command setup:
-
-```bash
-./scripts/setup_openshell.sh --policy offline
-./scripts/start_e2e.sh --config_file configs/config_openshell.yml
-```
-
-The setup script prints the environment variables needed by any later shell that starts
-AI-Q. If you start the backend in a different terminal/session, export the printed values
-before running `start_e2e.sh` (or put them in your local env file):
-
-```bash
-export AIQ_OPENSHELL_SANDBOX_NAME="aiq-openshell-demo"
-export AIQ_OPENSHELL_POLICY_FILE="$PWD/configs/openshell/generated/aiq-openshell-policy.yaml"
-```
+Use the canonical [OpenShell deployment guide](../../../../../docs/source/deployment/openshell.md)
+for installation, platform support, authenticated gateway ownership, policy/config pairing,
+startup, live acceptance, and troubleshooting. Operator commands are intentionally not
+duplicated in this implementation reference.
 
 Inference is routed host-side (e.g. NVIDIA Build or an internal inference hub set in the
-config); the network-blocked sandbox never sees the key.
+config); sandbox policy egress never requires or receives the inference key.
 
 **File-transfer gotcha:** the provider overrides file transfer with an env-free shim that
 passes the path via `argv`. OpenShell 0.0.57-0.0.67 strip
@@ -302,9 +307,10 @@ Custom endpoints use path-style bucket addressing for MinIO compatibility.
 - In-container OpenShell log verbosity (opt-in): `agent.execute()` calls and their output are
   already logged on the AI-Q side (the `execute` tool-call events). To also see what runs
   inside the OpenShell container, rebuild the sandbox image with a higher `RUST_LOG`:
-  `./scripts/setup_openshell.sh --sandbox-log-level debug` (or `--build-arg
+  `./scripts/openshell/setup_openshell.sh --sandbox-log-level debug` (or `--build-arg
   OPENSHELL_SANDBOX_LOG_LEVEL=debug`). Default `warn` keeps OpenShell's stock behavior.
-  Read the container logs with `openshell logs <sandbox-name>`, the OpenShell TUI, or inside
+  Read the generated sandbox name from AI-Q's attestation/cleanup events, then use
+  `openshell logs <sandbox-name>`, the OpenShell TUI, or inside
   the sandbox at `/var/log/openshell.*.log` (e.g. `grep "OCSF PROC:"` for process activity).
 
 ## Testing
@@ -313,8 +319,10 @@ Custom endpoints use path-style bucket addressing for MinIO compatibility.
 pytest tests/aiq_agent/agents/deep_researcher/sandbox/ -q
 ```
 
-All provider/artifact tests run without a live Modal/OpenShell gateway (OpenShell
-compliance auto-skips when the SDK is absent).
+Core provider/artifact tests use fake SDK objects and run without a live Modal/OpenShell
+gateway. The exact checked-policy/protobuf schema assertion is optional when the SDK is absent.
+The opt-in gateway acceptance suite and its environment contract are documented in the
+[OpenShell deployment guide](../../../../../docs/source/deployment/openshell.md#acceptance-tests).
 
 ## Troubleshooting
 
@@ -322,12 +330,8 @@ compliance auto-skips when the SDK is absent).
   the workspace plugin packages aren't installed. Install them (don't re-run `setup.sh`,
   which recreates `.venv`):
   `uv pip install -e ./frontends/aiq_api -e ./sources/tavily_web_search -e "./sources/knowledge_layer[llamaindex,foundational_rag]" -e ./sources/exa_web_search -e ./sources/google_scholar_paper_search`
-- **`langchain-nvidia-openshell was not found in the package registry`**: the adapter is
-  the OpenShell partner package in `langchain-ai/langchain-nvidia` (PR #303), not yet on
-  PyPI. The setup script installs it from a git spec by default; override with
-  `LANGCHAIN_NVIDIA_REPO=<git-spec-or-index>` or `--langchain-nvidia /path/to/checkout`.
-- **`unbound variable` in `setup_openshell.sh` on macOS**: the system bash is 3.2; run under
-  bash 5 (`brew install bash` then `/opt/homebrew/bin/bash ./scripts/setup_openshell.sh ...`).
+- **OpenShell installation, gateway, policy, readiness, or cleanup failures**: follow the
+  canonical [OpenShell troubleshooting contract](../../../../../docs/source/deployment/openshell.md#inspection-and-troubleshooting).
 - **`network.mode` rejected at startup**: the selected provider doesn't declare the
   matching capability (`supports_network_policy` for `blocked`, `supports_network_allowlist`
   for `allowlist`). Choose a capable provider or relax `network.mode` (e.g. to `open`).

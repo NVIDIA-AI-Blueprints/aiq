@@ -55,8 +55,12 @@ outfit. A polished chart of wrong or sparse numbers misleads more than it inform
 1. Assemble the normalized rows (prefer explicit records embedded in the script). If the
    inputs live in `/shared/...`, `read_file` them first and embed the values; sandbox
    code cannot open `/shared/...`.
-2. Use `write_file` to create the chart script under the `sandbox_workdir` from your
-   instructions (e.g. `<sandbox_workdir>/make_chart.py`), then `execute` that exact path.
+2. Use `write_file` to create the chart script under the exact `sandbox_workdir` from your
+   instructions, then `execute` it with the exact `sandbox_artifact_dir` as its first argument.
+   For example, when your instructions provide `/sandbox/JOB/` and
+   `/sandbox/JOB/aiq-artifacts`, run
+   `python3 /sandbox/JOB/make_chart.py /sandbox/JOB/aiq-artifacts`. Never execute a literal
+   `<sandbox_workdir>` or `<sandbox_artifact_dir>` token.
    `sandbox_workdir` is already per-job, so scripts there cannot collide with another job's
    leftovers. Only ever execute a script you wrote this session. The script must:
    - import pandas and matplotlib (use the non-interactive `Agg` backend),
@@ -88,40 +92,28 @@ Each figure must appear where it is discussed, not buried in a file list:
 
 Write a `manifest.json` in your `sandbox_artifact_dir` so the runtime captures the chart
 with metadata. Manifest `path` values must be absolute and inside your `sandbox_artifact_dir`
-(the per-job path from your instructions, e.g. `/sandbox/<job_id>/aiq-artifacts`):
-
-```json
-{
-  "version": 1,
-  "artifacts": [
-    {
-      "path": "<sandbox_artifact_dir>/revenue_chart.png",
-      "kind": "image",
-      "title": "2024 Semiconductor Revenue Comparison",
-      "caption": "Revenue normalized to USD billions.",
-      "inline": true,
-      "source_files": ["/shared/semiconductor_revenue_normalized.csv"]
-    }
-  ]
-}
-```
+(the per-job path from your instructions). Construct every manifest path from the runtime
+argument as shown below; do not hand-copy an angle-bracket placeholder into JSON. Set
+`inline: true` only for a raster image intended to appear in the report.
 
 ## Example Script
 
 ```python
 import json
-import os
+import sys
+from pathlib import Path
 
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# ARTIFACT_DIR MUST be the exact sandbox_artifact_dir from your instructions - a per-job
-# path such as /sandbox/<job_id>/aiq-artifacts. Copy that value here verbatim. Do NOT use a
-# bare /sandbox/aiq-artifacts: the runtime only harvests files under sandbox_artifact_dir.
-ARTIFACT_DIR = "<sandbox_artifact_dir>"  # replace with the path from your instructions
-os.makedirs(ARTIFACT_DIR, exist_ok=True)
+if len(sys.argv) != 2:
+    raise SystemExit("usage: make_chart.py ABSOLUTE_SANDBOX_ARTIFACT_DIR")
+ARTIFACT_DIR = Path(sys.argv[1])
+if not ARTIFACT_DIR.is_absolute():
+    raise SystemExit("artifact directory must be an absolute path")
+ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
 rows = [
     {"company": "ExampleCo", "revenue_usd_billions": 12.4, "source": "https://example.com/filing"},
@@ -135,8 +127,8 @@ ax.set_ylabel("Revenue (USD billions)")
 ax.set_title("2024 Revenue Comparison")
 fig.tight_layout()
 
-png_path = f"{ARTIFACT_DIR}/revenue_chart.png"
-csv_path = f"{ARTIFACT_DIR}/revenue_chart.csv"
+png_path = ARTIFACT_DIR / "revenue_chart.png"
+csv_path = ARTIFACT_DIR / "revenue_chart.csv"
 fig.savefig(png_path, dpi=150)
 df.to_csv(csv_path, index=False)
 
@@ -144,7 +136,7 @@ manifest = {
     "version": 1,
     "artifacts": [
         {
-            "path": png_path,
+            "path": str(png_path),
             "kind": "image",
             "title": "2024 Revenue Comparison",
             "caption": "Revenue normalized to USD billions.",
@@ -153,16 +145,24 @@ manifest = {
         }
     ],
 }
-with open(f"{ARTIFACT_DIR}/manifest.json", "w") as handle:
+with (ARTIFACT_DIR / "manifest.json").open("w", encoding="utf-8") as handle:
     json.dump(manifest, handle)
 
 print(f"wrote {png_path}")
 ```
 
+Run the script with the two exact per-job paths given in your instructions. The second argument
+must be the real absolute artifact directory, not an angle-bracket placeholder. Treat the
+artifact-checkpoint response after `execute` as authoritative: reference the exact confirmed
+filename in the report and do not invent or rename it later.
+
 ## Notes and Limitations
 
 - Use the `Agg` backend; the sandbox has no display.
 - Keep charts legible: labeled axes, a title, and a legend when multiple series are shown.
+- Do not call `read_file` on the generated PNG merely to verify it; binary reads return base64
+  and waste model context. Inspect `manifest.json` with `read_file(file_path=...)` when needed,
+  then rely on the artifact-checkpoint response to confirm the accepted filename and inline state.
 - If matplotlib or pandas is unavailable, report that the sandbox image needs them rather
   than fabricating a chart.
 - Reference charts only by `artifact://<filename>`; the runtime assigns the durable id and

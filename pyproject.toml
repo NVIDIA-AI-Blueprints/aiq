@@ -82,6 +82,11 @@ viz = [
     "pygraphviz>=1.11",
 ]
 
+[tool.aiq.openshell]
+release-tag = "v0.0.80"
+adapter-version = "0.1.0"
+installer-sha256 = "c15d6cb8090e1c7c8d79a320b5bcbdaf1c15c2363942d81e84b56e03b836249e" # pragma: allowlist secret
+
 # -----------------------------------------------------------------------------
 # Workspace members are installed via: uv sync
 # Individual packages: uv pip install -e ./frontends/cli

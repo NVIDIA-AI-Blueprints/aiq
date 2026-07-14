@@ -424,6 +424,12 @@ Events streamed during job execution. Refer to the [Data Flow](../architecture/d
 | `artifact.update` | Structured updates for todos, citations, output content, legacy text files, and durable generated-file metadata with a job-scoped content URL |
 | `artifact.warning` | Durable file candidate was rejected; contains its sandbox path and rejection reason, but no file bytes |
 
+Sandbox-generated files also use `artifact.update` with `data.type: "file"`.
+Their metadata includes `artifact_id`, `job_id`, `file_path`, authenticated
+`content_url`, `kind`, validated `mime_type`, `size_bytes`, `sha256`, `title`,
+`caption`, and `inline`. File bytes are never included in SSE; fetch them through
+the authenticated `content_url`.
+
 ## Agent Registration
 
 Agents are registered by type so the async job runner can load them dynamically. Registration happens at import time (typically in a NeMo Agent Toolkit plugin module):
