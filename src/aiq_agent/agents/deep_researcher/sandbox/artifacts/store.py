@@ -37,6 +37,7 @@ from abc import abstractmethod
 from collections.abc import Iterator
 from typing import Any
 
+from ..logging_utils import log_sandbox_failure
 from .blob_store import ArtifactBlobStore
 from .blob_store import SqlArtifactBlobStore
 from .models import Artifact
@@ -219,12 +220,24 @@ class SqlArtifactStore(ArtifactStore):
             content = self._blob_store.put(prepared, data)
             stored = prepared.model_copy(update={"status": ArtifactStatus.AVAILABLE})
             self._insert_metadata(stored, content=content)
-        except Exception:
-            logger.exception("Artifact storage failed for artifact=%s", prepared.artifact_id)
+        except Exception as exc:
+            log_sandbox_failure(
+                logger,
+                operation="artifact_store",
+                reason_code="artifact_storage_failed",
+                exc=exc,
+                sandbox=prepared.job_id,
+            )
             try:
                 self._blob_store.delete(prepared)
-            except Exception:
-                logger.warning("Failed to remove artifact bytes after storage failure: %s", prepared.storage_uri)
+            except Exception as cleanup_exc:
+                log_sandbox_failure(
+                    logger,
+                    operation="artifact_store_rollback",
+                    reason_code="artifact_rollback_failed",
+                    exc=cleanup_exc,
+                    sandbox=prepared.job_id,
+                )
             raise
 
         return stored
@@ -368,8 +381,14 @@ class SqlArtifactStore(ArtifactStore):
 
         try:
             self._blob_store.delete(artifact)
-        except Exception:
-            logger.exception("Artifact byte deletion failed; retaining metadata for %s", artifact.artifact_id)
+        except Exception as exc:
+            log_sandbox_failure(
+                logger,
+                operation="artifact_byte_delete",
+                reason_code="artifact_delete_failed",
+                exc=exc,
+                sandbox=artifact.job_id,
+            )
             return 0
         try:
             with self._engine.connect() as conn:
@@ -379,9 +398,13 @@ class SqlArtifactStore(ArtifactStore):
                 )
                 conn.commit()
                 return result.rowcount
-        except Exception:
-            logger.exception(
-                "Artifact metadata deletion failed; retaining metadata for retry: %s", artifact.artifact_id
+        except Exception as exc:
+            log_sandbox_failure(
+                logger,
+                operation="artifact_metadata_delete",
+                reason_code="artifact_metadata_delete_failed",
+                exc=exc,
+                sandbox=artifact.job_id,
             )
             return 0
 

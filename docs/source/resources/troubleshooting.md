@@ -37,6 +37,7 @@ Common issues and solutions for the AI-Q blueprint.
 | Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns`, or set `enable_clarifier: false` in the workflow to disable clarification |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
 | Job status stuck on RUNNING | Dask worker crashed | Check Dask logs; the ghost job reaper will eventually mark it FAILURE |
+| OpenShell setup, attestation, readiness, or deletion fails | Gateway, version, policy/config, image, or service-owner mismatch | Follow the canonical [OpenShell inspection and troubleshooting guide](../deployment/openshell.md#inspection-and-troubleshooting) |
 
 ## Nemotron Super — Build Endpoint Availability
 

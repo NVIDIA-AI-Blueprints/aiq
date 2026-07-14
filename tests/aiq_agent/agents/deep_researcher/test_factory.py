@@ -24,6 +24,8 @@ from langchain.agents.middleware import AgentMiddleware
 from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import ArtifactHarvestMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import FilesystemToolCallGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import RequiredOutputFileMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
@@ -242,6 +244,7 @@ def test_subagents_route_tools_and_writer_skills():
     assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["planner-agent"]["middleware"])
     assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["writer-agent"]["middleware"])
     assert any(isinstance(item, TodoSuppressionMiddleware) for item in by_name["writer-agent"]["middleware"])
+    assert any(isinstance(item, RequiredOutputFileMiddleware) for item in by_name["writer-agent"]["middleware"])
 
 
 def test_skill_filesystem_permissions_filter_unassigned_skill_collections():
@@ -288,6 +291,38 @@ def test_graph_uses_researcher_config_key_for_researcher_skills():
     researcher_middleware = create_researcher.call_args.kwargs["middleware"]
     skills_middleware = [item for item in researcher_middleware if item.__class__.__name__ == "SkillsMiddleware"]
     assert skills_middleware[0].sources == ["/skills/research/"]
+
+
+def test_graph_wires_filesystem_tool_call_guard_cross_cutting():
+    """Every agent receives the filesystem path guard, even when execution is hidden."""
+    registry, tool_set, middleware_set = _tool_set_and_middleware()
+    runtime = DeepAgentsRuntime()
+    fake_graph = MagicMock()
+    fake_graph.with_config.return_value = fake_graph
+
+    with (
+        patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=fake_graph) as create_graph,
+        patch("aiq_agent.agents.deep_researcher.factory.create_agent", return_value=MagicMock()),
+        patch("aiq_agent.agents.deep_researcher.factory.create_summarization_middleware", return_value=MagicMock()),
+    ):
+        build_deep_research_graph(
+            llm_provider=_llm_provider(),
+            state=DeepResearchAgentState(messages=[]),
+            prompts=_prompts(),
+            tools=[web_search_tool],
+            runtime=runtime,
+            tool_set=tool_set,
+            middleware_set=middleware_set,
+            source_registry_middleware=registry,
+            callbacks=[],
+            domain_catalog_path=None,
+            max_research_concurrency=6,
+        )
+
+    assert any(
+        isinstance(middleware, FilesystemToolCallGuardMiddleware)
+        for middleware in create_graph.call_args.kwargs["middleware"]
+    )
 
 
 def test_subagents_can_disable_source_router():

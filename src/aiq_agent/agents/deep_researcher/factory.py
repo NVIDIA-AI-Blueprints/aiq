@@ -44,7 +44,9 @@ from aiq_agent.common import render_prompt_template
 from .custom_middleware import ArtifactHarvestMiddleware
 from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import ExecuteTimeoutClampMiddleware
+from .custom_middleware import FilesystemToolCallGuardMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
+from .custom_middleware import RequiredOutputFileMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import SourceRoutingGuardMiddleware
 from .custom_middleware import TodoSuppressionMiddleware
@@ -469,6 +471,7 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
             middleware=[
                 *context.middleware_set.writer,
                 TodoSuppressionMiddleware(),
+                RequiredOutputFileMiddleware(),
             ],
             prompt_values={"parent_report_context_available": context.parent_report_context_available},
             skills=context.skill_sources(WRITER_AGENT),
@@ -497,7 +500,10 @@ def build_deep_research_graph(
     # Agent-supplied execute timeouts are unreliable (LLMs pass milliseconds or arbitrarily
     # large values); clamp them to the configured sandbox lifetime so a single execute never
     # exceeds the provider's hard cap and silently fails every code run.
-    cross_cutting_middleware = runtime_visibility_middleware(runtime)
+    cross_cutting_middleware = [
+        FilesystemToolCallGuardMiddleware(),
+        *runtime_visibility_middleware(runtime),
+    ]
     execute_ceiling = runtime.execute_timeout_seconds
     if execute_ceiling:
         cross_cutting_middleware = [

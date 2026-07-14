@@ -102,6 +102,7 @@ Authentication <./deployment/authentication.md>
 Async Job Content Encryption <./deployment/content-encryption.md>
 Observability <./deployment/observability.md>
 Production <./deployment/production.md>
+OpenShell <./deployment/openshell.md>
 Kubernetes <./deployment/kubernetes.md>
 Amazon OpenSearch Serverless <./deployment/aws-opensearch-serverless.md>
 ```
