@@ -524,6 +524,11 @@ async def test_expired_job_deletion_becomes_stable_not_found(postgres_url: str) 
             result="answer",
             ttl_seconds=-1,
         )
+        await _ensure_checkpoint_tables(postgres_url)
+        unrelated_thread_id = str(uuid.uuid4())
+        await _seed_checkpoint_thread(postgres_url, job_id)
+        await _seed_checkpoint_thread(postgres_url, unrelated_thread_id)
+
         assert await store.delete_expired() == 1
         assert await manager.poll(job_id, "anonymous") == {
             "state": "not_found",
@@ -533,8 +538,34 @@ async def test_expired_job_deletion_becomes_stable_not_found(postgres_url: str) 
             "state": "not_found",
             "error": "job_not_found",
         }
+        assert await _checkpoint_row_counts(postgres_url, job_id) == (0, 0, 0)
+        assert await _checkpoint_row_counts(postgres_url, unrelated_thread_id) == (1, 1, 1)
     finally:
         await manager.stop()
+
+
+@pytest.mark.asyncio
+async def test_expired_job_cleanup_is_idempotent_across_stores(postgres_url: str) -> None:
+    stores = [JobStore(postgres_url, min_pool_size=1, max_pool_size=1) for _ in range(2)]
+    await asyncio.gather(*(store.init() for store in stores))
+    try:
+        job_id = await stores[0].create(
+            principal="anonymous",
+            query="query",
+            depth="shallow",
+            state="complete",
+            result="answer",
+            ttl_seconds=-1,
+        )
+        await _seed_checkpoint_thread(postgres_url, job_id)
+
+        deleted = await asyncio.gather(*(store.delete_expired() for store in stores))
+
+        assert sorted(deleted) == [0, 1]
+        assert await stores[0].get(job_id) is None
+        assert await _checkpoint_row_counts(postgres_url, job_id) == (0, 0, 0)
+    finally:
+        await asyncio.gather(*(store.close() for store in stores))
 
 
 @pytest.mark.asyncio
@@ -657,6 +688,107 @@ async def _reset_schema(db_url: str) -> None:
     try:
         await conn.execute("DROP TABLE IF EXISTS public.mcp_jobs")
         await conn.execute("DROP TABLE IF EXISTS public.mcp_schema_migrations")
+    finally:
+        await conn.close()
+    await _ensure_checkpoint_tables(db_url)
+
+
+async def _ensure_checkpoint_tables(db_url: str) -> None:
+    """Create the production LangGraph tables needed by the expiry test."""
+    conn = await asyncpg.connect(db_url)
+    try:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.checkpoints (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                parent_checkpoint_id TEXT,
+                type TEXT,
+                checkpoint JSONB NOT NULL,
+                metadata JSONB NOT NULL DEFAULT '{}',
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id)
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.checkpoint_blobs (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                channel TEXT NOT NULL,
+                version TEXT NOT NULL,
+                type TEXT NOT NULL,
+                blob BYTEA,
+                PRIMARY KEY (thread_id, checkpoint_ns, channel, version)
+            )
+            """
+        )
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS public.checkpoint_writes (
+                thread_id TEXT NOT NULL,
+                checkpoint_ns TEXT NOT NULL DEFAULT '',
+                checkpoint_id TEXT NOT NULL,
+                task_id TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                channel TEXT NOT NULL,
+                type TEXT,
+                blob BYTEA NOT NULL,
+                PRIMARY KEY (thread_id, checkpoint_ns, checkpoint_id, task_id, idx)
+            )
+            """
+        )
+    finally:
+        await conn.close()
+
+
+async def _seed_checkpoint_thread(db_url: str, thread_id: str) -> None:
+    conn = await asyncpg.connect(db_url)
+    try:
+        await conn.execute(
+            """
+            INSERT INTO public.checkpoints (thread_id, checkpoint_ns, checkpoint_id, checkpoint, metadata)
+            VALUES ($1, '', 'checkpoint-1', '{}', '{}')
+            """,
+            thread_id,
+        )
+        await conn.execute(
+            """
+            INSERT INTO public.checkpoint_blobs (thread_id, checkpoint_ns, channel, version, type, blob)
+            VALUES ($1, '', 'channel', 'version-1', 'bytes', $2)
+            """,
+            thread_id,
+            b"checkpoint blob",
+        )
+        await conn.execute(
+            """
+            INSERT INTO public.checkpoint_writes (
+                thread_id, checkpoint_ns, checkpoint_id, task_id, idx, channel, type, blob
+            )
+            VALUES ($1, '', 'checkpoint-1', 'task-1', 0, 'channel', 'bytes', $2)
+            """,
+            thread_id,
+            b"checkpoint write",
+        )
+    finally:
+        await conn.close()
+
+
+async def _checkpoint_row_counts(db_url: str, thread_id: str) -> tuple[int, int, int]:
+    conn = await asyncpg.connect(db_url)
+    try:
+        rows = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM public.checkpoints WHERE thread_id = $1) AS checkpoints,
+                (SELECT COUNT(*) FROM public.checkpoint_blobs WHERE thread_id = $1) AS blobs,
+                (SELECT COUNT(*) FROM public.checkpoint_writes WHERE thread_id = $1) AS writes
+            """,
+            thread_id,
+        )
+        assert rows is not None
+        return rows["checkpoints"], rows["blobs"], rows["writes"]
     finally:
         await conn.close()
 

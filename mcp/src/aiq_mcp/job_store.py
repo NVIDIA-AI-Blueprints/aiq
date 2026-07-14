@@ -73,6 +73,13 @@ class JobStore:
         self._schema_ident = _quote_identifier(schema)
         self._jobs_table = f"{self._schema_ident}.mcp_jobs"
         self._migrations_table = f"{self._schema_ident}.mcp_schema_migrations"
+        # MCP runs each job with its UUID as the LangGraph ``thread_id``. Keep
+        # these table names alongside the ledger names so expiry can remove the
+        # complete MCP-owned thread, rather than leaving research state behind
+        # after the public job capability has expired.
+        self._checkpoints_table = f"{self._schema_ident}.checkpoints"
+        self._checkpoint_blobs_table = f"{self._schema_ident}.checkpoint_blobs"
+        self._checkpoint_writes_table = f"{self._schema_ident}.checkpoint_writes"
         self._min_pool_size = min_pool_size
         self._max_pool_size = max_pool_size
         self._pool: asyncpg.Pool | None = None
@@ -273,9 +280,44 @@ class JobStore:
         return await self.get(job_id)
 
     async def delete_expired(self) -> int:
+        """Delete expired MCP jobs and their LangGraph checkpoint threads.
+
+        The ledger job ID is the workflow's checkpoint ``thread_id``. Select
+        the expired rows under lock before removing their checkpoint writes,
+        blobs, and snapshots, then delete the ledger rows in the same
+        transaction. ``SKIP LOCKED`` makes concurrent sweepers on separate MCP
+        replicas divide expired jobs without blocking one another.
+        """
         pool = self._require_pool()
-        status = await pool.execute(f"DELETE FROM {self._jobs_table} WHERE expires_at < NOW()")
-        return _rows_changed(status)
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                rows = await conn.fetch(
+                    f"""
+                    SELECT job_id::text AS job_id
+                      FROM {self._jobs_table}
+                     WHERE expires_at < NOW()
+                     FOR UPDATE SKIP LOCKED
+                    """
+                )
+                job_ids = [row["job_id"] for row in rows]
+                if not job_ids:
+                    return 0
+
+                for table in (
+                    self._checkpoint_writes_table,
+                    self._checkpoint_blobs_table,
+                    self._checkpoints_table,
+                ):
+                    await conn.execute(
+                        f"DELETE FROM {table} WHERE thread_id = ANY($1::text[])",
+                        job_ids,
+                    )
+
+                status = await conn.execute(
+                    f"DELETE FROM {self._jobs_table} WHERE job_id = ANY($1::uuid[])",
+                    job_ids,
+                )
+                return _rows_changed(status)
 
     async def mark_stale_running_failed(self, *, stale_after_seconds: int, error: str) -> int:
         pool = self._require_pool()
