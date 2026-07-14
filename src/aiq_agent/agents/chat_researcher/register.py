@@ -136,7 +136,7 @@ async def _answer_from_report_context(
         response = await asyncio.wait_for(llm.ainvoke([HumanMessage(content=prompt)]), timeout=_REPORT_ASK_TIMEOUT_S)
     except TimeoutError:
         logger.warning("Report ask LLM call timed out after %ss", _REPORT_ASK_TIMEOUT_S)
-        return "The report service took too long to respond. Please try again."
+        raise
     content = response.content if hasattr(response, "content") else response
     answer = content if isinstance(content, str) else str(content)
     if not answer.strip():

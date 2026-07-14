@@ -134,6 +134,22 @@ class TestReportFollowUpHelpers:
         assert answer.strip()
         assert "does not contain enough information" in answer.lower()
 
+    @pytest.mark.asyncio
+    async def test_answer_from_report_context_reraises_timeout(self):
+        from aiq_agent.agents.chat_researcher.register import _answer_from_report_context
+
+        class TimedOutLLM:
+            async def ainvoke(self, messages):
+                raise TimeoutError
+
+        with pytest.raises(TimeoutError):
+            await _answer_from_report_context(
+                TimedOutLLM(),
+                question="What is the risk?",
+                report_markdown="# Report",
+                source_summary_markdown="",
+            )
+
 
 class TestExtractTextFromMessageString:
     """Tests for _extract_text_from_message with string inputs."""

@@ -585,13 +585,13 @@ class TestChatResearcherAgent:
         assert "writer-agent" not in result["workflow_outcome"].error
 
     @pytest.mark.asyncio
-    async def test_report_ask_degrades_gracefully_when_hook_raises(
+    async def test_report_ask_timeout_sets_terminal_failure(
         self,
         mock_shallow_research,
         mock_deep_research,
         mock_clarifier,
     ):
-        """A failing report-ask hook returns a user-facing message, not an unhandled error."""
+        """A report-ask timeout returns user-safe text and a terminal failure."""
 
         async def report_orchestration(state):
             return {
@@ -604,7 +604,7 @@ class TestChatResearcherAgent:
             }
 
         async def report_ask_raises(_state):
-            raise RuntimeError("Report follow-up requires an authenticated user")
+            raise TimeoutError
 
         agent = ChatResearcherAgent(
             intent_classifier_fn=report_orchestration,
@@ -622,7 +622,9 @@ class TestChatResearcherAgent:
 
         content = result["messages"][-1].content
         assert isinstance(content, str) and content.strip()
-        assert "couldn't" in content.lower() or "could not" in content.lower()
+        assert content == "The report service took too long to respond. Please try again."
+
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
     @pytest.mark.asyncio
     async def test_report_edit_degrades_gracefully_when_hook_raises(
@@ -663,6 +665,7 @@ class TestChatResearcherAgent:
         content = result["messages"][-1].content
         assert isinstance(content, str) and content.strip()
         assert "couldn't" in content.lower() or "could not" in content.lower()
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
     @pytest.mark.asyncio
     async def test_run_with_empty_messages(

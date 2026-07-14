@@ -401,9 +401,18 @@ class ChatResearcherAgent:
 
         async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
             if self.report_ask_fn is None:
-                return {"messages": [AIMessage(content="Report follow-up is not available in this workflow.")]}
+                return {
+                    "messages": [AIMessage(content="Report follow-up is not available in this workflow.")],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
             try:
                 answer = await self.report_ask_fn(state)
+            except TimeoutError:
+                logger.warning("Report ask timed out for report %s", state.active_report_job_id)
+                return {
+                    "messages": [AIMessage(content="The report service took too long to respond. Please try again.")],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
             except Exception as e:
                 # The node has no HTTP scope, so a raised exception would surface as an
                 # opaque workflow error / empty completion. Degrade to a chat message.
@@ -415,7 +424,8 @@ class ChatResearcherAgent:
                 return {
                     "messages": [
                         AIMessage(content="I couldn't access that report to answer your question. Please try again.")
-                    ]
+                    ],
+                    "workflow_outcome": _research_workflow_failure(),
                 }
             return {"messages": [AIMessage(content=answer)]}
 
@@ -430,7 +440,10 @@ class ChatResearcherAgent:
                         state.active_report_job_id,
                         type(e).__name__,
                     )
-                    return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
+                    return {
+                        "messages": [AIMessage(content="I couldn't start the report edit. Please try again.")],
+                        "workflow_outcome": _research_workflow_failure(),
+                    }
                 escalation = _job_escalation_message(_ESCALATION_KIND_REPORT_EDIT, job_id)
                 return {"messages": [AIMessage(content=escalation)]}
             # Inline path (synchronous CLI): rewrite the in-session report directly -- no job or
@@ -441,9 +454,15 @@ class ChatResearcherAgent:
                     revised = await self.report_edit_fn(state)
                 except Exception as e:
                     logger.warning("Inline report edit failed (error_type=%s)", type(e).__name__)
-                    return {"messages": [AIMessage(content="I couldn't edit the report. Please try again.")]}
+                    return {
+                        "messages": [AIMessage(content="I couldn't edit the report. Please try again.")],
+                        "workflow_outcome": _research_workflow_failure(),
+                    }
                 return {"messages": [AIMessage(content=revised)], "last_report_markdown": revised}
-            return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
+            return {
+                "messages": [AIMessage(content="Report edit is not available in this workflow.")],
+                "workflow_outcome": _research_workflow_failure(),
+            }
 
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
