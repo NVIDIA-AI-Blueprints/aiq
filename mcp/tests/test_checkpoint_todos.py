@@ -33,6 +33,7 @@ from aiq_mcp.checkpoint_todos import _decode_todo_blob
 from aiq_mcp.checkpoint_todos import decode_todos_value
 from aiq_mcp.checkpoint_todos import normalize_todos
 from aiq_mcp.db_url import normalize_postgres_url
+from aiq_mcp.db_url import require_test_database_url
 
 _DB_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
@@ -418,6 +419,7 @@ async def test_checkpoint_reader_fails_soft_on_non_sortable_checkpoint_id(postgr
 
 
 async def _ensure_database(db_url: str) -> None:
+    db_url = require_test_database_url(db_url, label="AIQ_MCP_TEST_DB_URL")
     maintenance_url, db_name = _maintenance_url(db_url)
     conn = await asyncpg.connect(maintenance_url)
     try:
@@ -429,6 +431,7 @@ async def _ensure_database(db_url: str) -> None:
 
 
 async def _reset_checkpoint_tables(db_url: str) -> None:
+    db_url = require_test_database_url(db_url, label="AIQ_MCP_TEST_DB_URL")
     conn = await asyncpg.connect(db_url)
     try:
         await conn.execute("DROP TABLE IF EXISTS public.checkpoint_blobs")

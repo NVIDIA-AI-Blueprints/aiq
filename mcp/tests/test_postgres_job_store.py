@@ -21,6 +21,7 @@ import pytest
 
 from aiq_agent.agents.chat_researcher.models import WorkflowSuccess
 from aiq_mcp.db_url import normalize_postgres_url
+from aiq_mcp.db_url import require_test_database_url
 from aiq_mcp.job_store import JobStore
 from aiq_mcp.jobs import JobManager
 
@@ -639,6 +640,7 @@ async def test_periodic_reconciler_reaps_stale_running_job(postgres_url: str) ->
 
 
 async def _ensure_database(db_url: str) -> None:
+    db_url = require_test_database_url(db_url, label="AIQ_MCP_TEST_DB_URL")
     maintenance_url, db_name = _maintenance_url(db_url)
     conn = await asyncpg.connect(maintenance_url)
     try:
@@ -650,6 +652,7 @@ async def _ensure_database(db_url: str) -> None:
 
 
 async def _reset_schema(db_url: str) -> None:
+    db_url = require_test_database_url(db_url, label="AIQ_MCP_TEST_DB_URL")
     conn = await asyncpg.connect(db_url)
     try:
         await conn.execute("DROP TABLE IF EXISTS public.mcp_jobs")
