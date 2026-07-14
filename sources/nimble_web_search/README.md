@@ -62,7 +62,7 @@ uv run ruff format --check sources/nimble_web_search
 
 - **Mocked unit tests** (`test_nimble_register.py`) cover: config defaults / all fields / invalid `search_depth` rejection, missing-key stub + warn-once, direct config-key passthrough to the SDK, successful render + description fallback, deep depth passthrough, query/content truncation, empty/error handling, retry-then-success, final-retry failure, 401, 403 enterprise-tier, non-default country/locale passthrough, and renderer behavior on titles containing special characters.
 - **Recorded-response replay** (`test_nimble_recorded_replay.py`) replays real, redacted `NimbleSearchRetriever` responses ([`tests/fixtures/README.md`](tests/fixtures/README.md)) through the full provider pipeline — a deterministic test mode that needs no network and no key.
-- **Live integration** (`test_nimble_live_integration.py`) runs the canned query `NVIDIA CUDA Toolkit documentation` once against the real API with the shipped defaults and asserts the structural output contract: a non-error response containing 1..`max_results` `<Document>` blocks, every block with an http(s) `href` and a title, every block XML-parseable, and at least one non-empty body. Assertions are structural — never content-exact — so ordinary result variation cannot flake the run. Suitable for CI: add `NIMBLE_API_KEY` as a repository secret and set `AIQ_NIMBLE_LIVE_TESTS=1` in the job.
+- **Live integration** (`test_nimble_live_integration.py`) runs the canned query `NVIDIA CUDA Toolkit documentation` once against the real API with the shipped defaults and asserts the structural output contract: a non-error response containing 1..`max_results` `<Document>` blocks, every block with an http(s) `href` and a title, every block XML-parseable, and at least one non-empty body. Assertions are structural — never content-exact — so ordinary result variation cannot flake the run. To run it in a dedicated opt-in CI job, add `NIMBLE_API_KEY` as a repository secret and set `AIQ_NIMBLE_LIVE_TESTS=1` in the job.
 
 ## Verification
 
@@ -126,5 +126,5 @@ If you do not know your tier, leave `search_depth: lite` and let the description
 
 - API key handling follows the existing `EXA_API_KEY` / `TAVILY_API_KEY` pattern: env var or `SecretStr` config; never logged.
 - Untrusted API fields (`url`, `title`, body) are HTML-escaped before being rendered into the `<Document>` markup, so a result can't break the block or inject into downstream parsers.
-- Tests are mocked; no live network in CI.
+- Default CI is credential-free and network-free. An explicitly configured live-test job may access Nimble when `NIMBLE_API_KEY` and `AIQ_NIMBLE_LIVE_TESTS=1` are set.
 - The optional live smoke is documented in the PR description and uses a redacted output pattern.
