@@ -45,9 +45,12 @@ class _Runner:
         self.failure = failure
         self.raise_on_run = raise_on_run
         self.run_calls: list[tuple[str, str]] = []
+        self.run_depths: list[str | None] = []
+        self.classify_calls = 0
 
     async def classify(self, query: str) -> dict[str, Any]:
         del query
+        self.classify_calls += 1
         result: dict[str, Any] = {
             "user_intent": IntentResult(intent=self.intent),
             "depth_decision": DepthDecision(decision=self.depth),
@@ -56,8 +59,9 @@ class _Runner:
             result["messages"] = [AIMessage(content="Hello from AI-Q")]
         return result
 
-    async def run_query(self, query: str, *, conversation_id: str) -> WorkflowOutcome:
+    async def run_query(self, query: str, *, conversation_id: str, depth: str | None = None) -> WorkflowOutcome:
         self.run_calls.append((query, conversation_id))
+        self.run_depths.append(depth)
         if self.gate is not None:
             await self.gate.wait()
         if self.raise_on_run:
@@ -235,6 +239,42 @@ async def test_submit_accepts_target_models_and_completes_meta_inline() -> None:
         "result": "Hello from AI-Q",
     }
     assert uuid.UUID(result["job_id"]).version == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("depth", ["shallow", "deep"])
+async def test_submit_classifies_once_and_reuses_depth_for_run(depth: str) -> None:
+    """AIQ-001: the classification made (and persisted) in submit() is the same decision
+    handed to the workflow run, and the query is classified exactly once.
+
+    Guards against the duplicate-classification regression where run_query re-entered the
+    graph's intent classifier and could pick a different route than the persisted depth.
+    """
+    runner = _Runner(depth=depth)
+    store = _MemoryJobStore()
+    manager = JobManager(
+        runner,  # type: ignore[arg-type]
+        store,  # type: ignore[arg-type]
+        heartbeat_interval_seconds=0,
+        ttl_sweep_interval_seconds=0,
+    )
+    await manager.start()
+    try:
+        submitted = await manager.submit("who founded nvidia", "anonymous")
+        job_id = submitted["job_id"]
+        result = await manager.wait_for_completion(job_id, "anonymous", timeout=1)
+        job = await store.get(job_id)
+    finally:
+        await manager.stop()
+
+    assert result is not None and result["state"] == "complete"
+    # Classified exactly once (in submit()); the workflow run does not re-classify.
+    assert runner.classify_calls == 1
+    # The public contract depth, the persisted depth, and the depth handed to the
+    # workflow run are all the same single decision.
+    assert submitted["depth"] == depth
+    assert job is not None and job.depth == depth
+    assert runner.run_depths == [depth]
 
 
 @pytest.mark.asyncio
@@ -638,8 +678,8 @@ async def test_job_logs_use_opaque_reference_not_capability_uuid(caplog) -> None
 @pytest.mark.asyncio
 async def test_workflow_exception_does_not_log_capability_uuid(caplog) -> None:
     class _CapabilityEchoingRunner(_Runner):
-        async def run_query(self, query: str, *, conversation_id: str) -> WorkflowOutcome:
-            del query
+        async def run_query(self, query: str, *, conversation_id: str, depth: str | None = None) -> WorkflowOutcome:
+            del query, depth
             raise RuntimeError(f"workflow failed for conversation {conversation_id}")
 
     manager = _manager(_CapabilityEchoingRunner())

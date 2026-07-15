@@ -72,7 +72,7 @@ class _ProtocolRunner:
             "depth_decision": {"decision": "deep"},
         }
 
-    async def run_query(self, query: str, *, conversation_id: str) -> WorkflowSuccess:
+    async def run_query(self, query: str, *, conversation_id: str, depth: str | None = None) -> WorkflowSuccess:
         self.run_calls.append((query, conversation_id))
         self.background_started.set()
         await self.release.wait()
@@ -81,7 +81,7 @@ class _ProtocolRunner:
 
 
 class _ProtocolFailureRunner(_ProtocolRunner):
-    async def run_query(self, query: str, *, conversation_id: str) -> WorkflowFailure:
+    async def run_query(self, query: str, *, conversation_id: str, depth: str | None = None) -> WorkflowFailure:
         self.run_calls.append((query, conversation_id))
         self.background_started.set()
         await self.release.wait()

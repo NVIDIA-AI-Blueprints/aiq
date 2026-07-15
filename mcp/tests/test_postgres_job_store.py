@@ -48,7 +48,7 @@ class _Runner:
             "depth_decision": {"decision": self.depth},
         }
 
-    async def run_query(self, query: str, *, conversation_id: str) -> WorkflowSuccess:
+    async def run_query(self, query: str, *, conversation_id: str, depth: str | None = None) -> WorkflowSuccess:
         self.run_calls.append((query, conversation_id))
         if self.gate is not None:
             await self.gate.wait()

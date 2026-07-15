@@ -23,6 +23,7 @@ from typing import Any
 
 from aiq_agent.agents.chat_researcher.models import ChatResearcherResponse
 from aiq_agent.agents.chat_researcher.models import WorkflowOutcome
+from aiq_agent.agents.chat_researcher.preclassification import preclassified_depth
 from aiq_agent.common.logging_utils import log_identifier_ref
 from nat.builder.context import Context
 from nat.runtime.loader import load_workflow
@@ -111,6 +112,7 @@ class WorkflowRunner:
         query: str,
         *,
         conversation_id: str,
+        depth: str | None = None,
     ) -> WorkflowOutcome:
         """Run the full workflow and return its explicit terminal outcome.
 
@@ -118,6 +120,12 @@ class WorkflowRunner:
         async jobs pass their ``job_id`` so NAT resume/checkpoint state lines up
         with the MCP job ledger. Swallowed agent exceptions arrive as a typed
         failure instead of fallback text that could be mistaken for success.
+
+        ``depth`` reuses a classification the caller already made (the JobManager
+        classifies once in ``submit()`` to persist depth and pick a poll cadence).
+        When set to ``shallow``/``deep`` the ``intent_classifier`` node skips its
+        redundant LLM call and routes by this decision, so the persisted depth and
+        the executed route stay identical. ``None`` leaves the graph to classify.
         """
         if self._session_manager is None:
             raise RuntimeError("WorkflowRunner.start() must be called before run_query()")
@@ -125,9 +133,10 @@ class WorkflowRunner:
         logger.info("Running NAT workflow: conversation_ref=%s", log_identifier_ref(conversation_id))
 
         with Context.scope(conversation_id=conversation_id):
-            async with self._session_manager.session(conversation_id=conversation_id) as session:
-                async with session.run(query) as runner:
-                    response = await runner.result(to_type=ChatResearcherResponse)
+            with preclassified_depth(depth):
+                async with self._session_manager.session(conversation_id=conversation_id) as session:
+                    async with session.run(query) as runner:
+                        response = await runner.result(to_type=ChatResearcherResponse)
 
         return response.workflow_outcome
 

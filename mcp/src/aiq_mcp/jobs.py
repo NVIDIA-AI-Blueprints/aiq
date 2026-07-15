@@ -176,7 +176,7 @@ class JobManager:
             state="queued",
         )
         task = asyncio.create_task(
-            self._run_job(job_id, query),
+            self._run_job(job_id, query, depth),
             name=f"aiq-mcp-job-{log_identifier_ref(job_id)}",
         )
         self._active_tasks[job_id] = task
@@ -233,7 +233,7 @@ class JobManager:
             return None
         return _render_final_report(job)
 
-    async def _run_job(self, job_id: str, query: str) -> None:
+    async def _run_job(self, job_id: str, query: str, depth: str) -> None:
         job_ref = log_identifier_ref(job_id)
         heartbeat_task: asyncio.Task | None = None
         try:
@@ -246,7 +246,9 @@ class JobManager:
                 name=f"aiq-mcp-heartbeat-{job_ref}",
             )
             logger.info("Job %s: running workflow", job_ref)
-            outcome = await self._runner.run_query(query, conversation_id=job_id)
+            # Reuse the depth chosen (and persisted) in submit() so the executed route
+            # matches the public job contract instead of re-classifying at temperature.
+            outcome = await self._runner.run_query(query, conversation_id=job_id, depth=depth)
             if isinstance(outcome, WorkflowFailure):
                 logger.info("Job %s: workflow returned a failed outcome", job_ref)
                 await self._store.update(
