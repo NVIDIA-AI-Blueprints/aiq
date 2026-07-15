@@ -21,6 +21,8 @@ _WEAK_COPYLEFT = _NAMESPACE["_WEAK_COPYLEFT"]
 _evidence_fingerprint = _NAMESPACE["_evidence_fingerprint"]
 validate_inventory = _NAMESPACE["validate_inventory"]
 validate_sbom = _NAMESPACE["validate_sbom"]
+validate_lock_sources = _NAMESPACE["validate_lock_sources"]
+_MCP_LOCK_PATH = _NAMESPACE["_MCP_LOCK_PATH"]
 
 
 def _row(name: str, version: str = "1.0", **overrides: Any) -> dict[str, Any]:
@@ -236,3 +238,121 @@ def test_sbom_contract_rejects_private_sdk_name_from_public_index() -> None:
 
     with pytest.raises(ValueError, match="forbidden private SDK dependency"):
         validate_sbom(sbom)
+
+
+# --- validate_lock_sources: MCP public-source contract ------------------------
+
+# The exact approved lock contract: the four editable path sources plus a
+# representative public-PyPI registry dependency. Each test copies this baseline
+# and mutates a single entry to exercise one branch of the contract at a time.
+_APPROVED_LOCK_PACKAGES = [
+    ("aiq-agent", "2.0.0", '{ editable = "../" }'),
+    ("knowledge-layer", "1.0.0", '{ editable = "../sources/knowledge_layer" }'),
+    ("tavily-web-search", "1.0.0", '{ editable = "../sources/tavily_web_search" }'),
+    ("aiq-mcp-server", "0.1.0", '{ editable = "." }'),
+    ("asyncpg", "0.31.0", '{ registry = "https://pypi.org/simple" }'),
+]
+
+
+def _write_lock(tmp_path: Path, packages: list[tuple[str, str, str]]) -> Path:
+    blocks = [
+        f'[[package]]\nname = "{name}"\nversion = "{version}"\nsource = {source}\n'
+        for name, version, source in packages
+    ]
+    lock_path = tmp_path / "uv.lock"
+    lock_path.write_text("\n".join(blocks))
+    return lock_path
+
+
+def _without(name: str) -> list[tuple[str, str, str]]:
+    return [package for package in _APPROVED_LOCK_PACKAGES if package[0] != name]
+
+
+def test_lock_sources_accepts_the_exact_approved_contract(tmp_path: Path) -> None:
+    validate_lock_sources(_write_lock(tmp_path, _APPROVED_LOCK_PACKAGES))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '{ registry = "https://private.example.com/simple" }',
+        '{ registry = "https://pypi.org/simple", subdirectory = "vendor" }',
+    ],
+)
+def test_lock_sources_reject_unapproved_registry(tmp_path: Path, source: str) -> None:
+    packages = _APPROVED_LOCK_PACKAGES + [("some-dependency", "1.0.0", source)]
+    with pytest.raises(ValueError, match="unapproved registry source"):
+        validate_lock_sources(_write_lock(tmp_path, packages))
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        '{ git = "https://github.com/example/some-dependency" }',
+        '{ url = "https://example.com/some-dependency-1.0.0-py3-none-any.whl" }',
+        '{ directory = "../vendor/some_dependency" }',
+        "{ editable = true }",
+        "{}",
+    ],
+)
+def test_lock_sources_reject_non_editable_local_source(tmp_path: Path, source: str) -> None:
+    packages = _APPROVED_LOCK_PACKAGES + [("some-dependency", "1.0.0", source)]
+    with pytest.raises(ValueError, match="unapproved lock source"):
+        validate_lock_sources(_write_lock(tmp_path, packages))
+
+
+@pytest.mark.parametrize(
+    "packages",
+    [
+        pytest.param(_without("aiq-mcp-server"), id="missing-approved-source"),
+        pytest.param(
+            _APPROVED_LOCK_PACKAGES + [("exa-web-search", "1.0.0", '{ editable = "../sources/exa_web_search" }')],
+            id="extra-unapproved-editable",
+        ),
+        pytest.param(
+            _without("aiq-agent") + [("aiq-agent", "2.0.0", '{ editable = "../wrong" }')],
+            id="approved-name-wrong-path",
+        ),
+        pytest.param(
+            _without("aiq-agent") + [("aiq-agent", "9.9.9", '{ editable = "../" }')],
+            id="approved-source-wrong-version",
+        ),
+    ],
+)
+def test_lock_sources_reject_local_set_mismatch(tmp_path: Path, packages: list[tuple[str, str, str]]) -> None:
+    with pytest.raises(ValueError, match="local sources differ"):
+        validate_lock_sources(_write_lock(tmp_path, packages))
+
+
+@pytest.mark.parametrize(
+    ("name", "version", "path"),
+    [
+        ("aiq-agent", "2.0.0", ".."),
+        ("aiq-mcp-server", "0.1.0", "./"),
+    ],
+)
+def test_lock_sources_do_not_normalize_editable_paths(tmp_path: Path, name: str, version: str, path: str) -> None:
+    # Characterization: the contract compares editable strings literally, so `..`
+    # is not treated as `../` and `./` is not treated as `.`. This pins the
+    # intentional exact-match behavior; tolerant path normalization would be a
+    # deliberate change to validate_lock_sources, not an accident.
+    packages = _without(name) + [(name, version, f'{{ editable = "{path}" }}')]
+    with pytest.raises(ValueError, match="local sources differ"):
+        validate_lock_sources(_write_lock(tmp_path, packages))
+
+
+def test_lock_sources_canonicalize_dependency_names(tmp_path: Path) -> None:
+    # uv may emit either dashed or underscored project names; the approved
+    # contract is keyed on canonical (dashed) names, so an underscored spelling
+    # of an approved source must still satisfy the contract.
+    packages = _without("tavily-web-search") + [
+        ("tavily_web_search", "1.0.0", '{ editable = "../sources/tavily_web_search" }')
+    ]
+    validate_lock_sources(_write_lock(tmp_path, packages))
+
+
+def test_committed_mcp_lock_satisfies_source_contract() -> None:
+    # Regression guard: the real, committed MCP lock must always satisfy the
+    # public-source contract. Fails fast at unit-test time instead of only in
+    # the full CI license-inventory job.
+    validate_lock_sources(_MCP_LOCK_PATH)
