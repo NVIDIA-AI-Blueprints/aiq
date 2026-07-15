@@ -278,8 +278,7 @@ async def test_poll_count_and_timestamps_preserve_stale_reconciliation_semantics
 
         await asyncio.sleep(0.02)
         wrong_principal = await store.record_poll(job_id, "principal-b")
-        assert wrong_principal is not None
-        assert wrong_principal.poll_count == 0
+        assert wrong_principal is None
         after_poll = await store.record_poll(job_id, "principal-a")
         assert after_poll is not None
         assert after_poll.poll_count == 1
@@ -303,6 +302,24 @@ async def test_poll_count_and_timestamps_preserve_stale_reconciliation_semantics
         terminal_poll = await store.record_poll(job_id, "principal-a")
         assert terminal_poll is not None
         assert terminal_poll.poll_count == 1
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
+async def test_record_poll_does_not_expose_terminal_job_to_wrong_principal(postgres_url: str) -> None:
+    store = JobStore(postgres_url, min_pool_size=1, max_pool_size=1)
+    await store.init()
+    try:
+        job_id = await store.create(
+            principal="principal-a",
+            query="q",
+            depth="shallow",
+            state="complete",
+            result="answer",
+        )
+        result = await store.record_poll(job_id, "principal-b")
+        assert result is None
     finally:
         await store.close()
 

@@ -277,7 +277,20 @@ class JobStore:
         )
         if row is not None:
             return _row_to_job(row)
-        return await self.get(job_id)
+        # Don't fall back to get(): it has no principal filter and would expose terminal
+        # jobs owned by a different principal. Repeat the SELECT with AND principal = $2.
+        row = await pool.fetchrow(
+            f"""
+            SELECT job_id::text AS job_id, principal, query, depth, state, result, error,
+                   poll_count, created_at, updated_at, expires_at, runner_id, heartbeat_at
+              FROM {self._jobs_table}
+             WHERE job_id = $1::uuid
+               AND principal = $2
+            """,
+            job_id,
+            principal,
+        )
+        return _row_to_job(row) if row is not None else None
 
     async def delete_expired(self) -> int:
         """Delete expired MCP jobs and their LangGraph checkpoint threads.
