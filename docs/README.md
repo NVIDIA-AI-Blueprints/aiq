@@ -40,6 +40,7 @@ The version switcher reads the publisher-managed index at
 stale and relative switcher URLs resolve differently on top-level and nested pages.
 
 The publisher-managed index does not allow cross-origin browser requests, so a preview served from a loopback host
-cannot read it directly. For local previews, `source/_static/js/version-switcher-local.js` replaces the switcher URL
-at runtime with the bundled `source/versions-local.json`. Keep its preferred entry aligned with `source/project.json`;
-the Sphinx build fails when they diverge. Deployed documentation continues to use the publisher-managed index.
+cannot read it directly. For local previews, `source/_static/js/local-preview.js` replaces the switcher URL at runtime
+with the bundled `source/versions-local.json` and rejects optional cookies so the production consent overlay does not
+block page controls. Keep the local index's preferred entry aligned with `source/project.json`; the Sphinx build fails
+when they diverge. Deployed documentation continues to use the publisher-managed index and consent behavior.

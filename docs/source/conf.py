@@ -78,7 +78,7 @@ html_extra_path = ["project.json", "versions-local.json"]
 html_static_path = ["_static"]
 html_favicon = "_static/favicon.ico"
 html_css_files = ["css/custom.css"]
-html_js_files = ["js/version-switcher-local.js", "js/mermaid-fullscreen.js"]
+html_js_files = ["js/local-preview.js", "js/mermaid-fullscreen.js"]
 html_show_sourcelink = False
 
 # Suppress warnings for missing toctree references during incremental builds
