@@ -1,10 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-project = "NVIDIA AI-Q Blueprint"
+import json
+from pathlib import Path
+
+_DOCS_SOURCE_DIR = Path(__file__).resolve().parent
+_PROJECT_METADATA = json.loads((_DOCS_SOURCE_DIR / "project.json").read_text(encoding="utf-8"))
+_PUBLISHED_DOCS_URL = "https://docs.nvidia.com/aiq-blueprint"
+
+project = _PROJECT_METADATA["name"]
 copyright = "2025-%Y, NVIDIA Corporation"
 author = "NVIDIA Corporation"
-release = "1.2.1"
+release = _PROJECT_METADATA["version"]
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -48,7 +55,7 @@ copybutton_prompt_text = ">>> |$ "
 
 html_theme = "nvidia_sphinx_theme"
 html_theme_options = {
-    "switcher": {"json_url": "../versions1.json", "version_match": release},
+    "switcher": {"json_url": f"{_PUBLISHED_DOCS_URL}/versions1.json", "version_match": release},
     "public_docs_features": True,
     "icon_links": [
         {
@@ -62,7 +69,7 @@ html_theme_options = {
     "show_nav_level": 1,
 }
 
-html_extra_path = ["project.json", "versions1.json"]
+html_extra_path = ["project.json"]
 html_static_path = ["_static"]
 html_favicon = "_static/favicon.ico"
 html_css_files = ["css/custom.css"]
@@ -78,4 +85,7 @@ linkcheck_ignore = [
     r"http://127\.0\.0\.1.*",
     r".*github\.com.*",
     r".*githubusercontent\.com.*",
+    # Nimble's certificate chain is not accepted by Python/OpenSSL linkcheck,
+    # although the official site and docs remain browser-accessible.
+    r"https://(?:www\.|docs\.)?nimbleway\.com.*",
 ]

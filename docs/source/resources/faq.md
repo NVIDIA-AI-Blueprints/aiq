@@ -60,6 +60,7 @@ prompted to follow the recorded order.
 **What search tools are available?**
 
 - **Tavily Web Search** — General web search (requires `TAVILY_API_KEY`)
+- **You.com APIs** — Web search, page contents, cited general research, and finance research (requires `YDC_API_KEY`)
 - **Exa Web Search** — General web search via Exa (requires `EXA_API_KEY`)
 - **Nimble Web Search** — General web search via Nimble (requires `NIMBLE_API_KEY`)
 - **DuckDuckGo News Search** — Recent news search (no API key)
@@ -81,6 +82,7 @@ Yes. Refer to [Adding a Tool](../extending/adding-a-tool.md) for an end-to-end g
 - **Foundational RAG** for production — connects to NVIDIA RAG Blueprint, supports multi-user with Milvus
 - **OpenSearch** for an existing OpenSearch deployment or AWS-managed vector retrieval — supports self-hosted/basic auth,
   Amazon OpenSearch Service, and Amazon OpenSearch Serverless with SigV4
+- **Azure AI Search** for managed hybrid retrieval — supports API-key authentication or Azure managed identity
 
 Refer to [Knowledge Layer](../customization/knowledge-layer.md). For AOSS on EKS, use the
 [Amazon OpenSearch Serverless guide](../deployment/aws-opensearch-serverless.md).

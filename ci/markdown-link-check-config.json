@@ -25,6 +25,9 @@
             "pattern": "^https?://modal\\.com/docs/reference/modal\\.config$"
         },
         {
+            "pattern": "^https://(?:www\\.|docs\\.)?nimbleway\\.com(?:/.*)?$"
+        },
+        {
             "pattern": "^https?://huggingface\\.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard$"
         }
     ],

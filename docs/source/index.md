@@ -51,6 +51,7 @@ Overview <./customization/index.md>
 Configuration Reference <./customization/configuration-reference.md>
 Swapping Models <./customization/swapping-models.md>
 Tools and Sources <./customization/tools-and-sources.md>
+You.com API Suite <./customization/you-com.md>
 MCP Tools <./customization/mcp-tools.md>
 Guardrails <./customization/guardrails.md>
 Knowledge Layer <./customization/knowledge-layer.md>

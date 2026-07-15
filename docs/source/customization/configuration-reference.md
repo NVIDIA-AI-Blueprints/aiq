@@ -204,7 +204,8 @@ functions:
 
 ### `nimble_web_search`
 
-Web search powered by the [Nimble API](https://nimbleway.com/) via `langchain-nimble`.
+Web search powered by the [Nimble Search API](https://docs.nimbleway.com/nimble-sdk/web-tools/search) via
+`langchain-nimble`.
 
 ```yaml
 functions:
@@ -636,7 +637,7 @@ workflow:
 
 ## Provided Config Files
 
-The repository includes nine top-level workflow configurations. They are focused reference profiles, not cumulative
+The repository includes eleven top-level workflow configurations. They are focused reference profiles, not cumulative
 layers, and no single profile enables every capability. Start from the profile closest to the deployment and merge
 only the additional sections you need.
 
@@ -652,6 +653,7 @@ only the additional sections you need.
 | `configs/config_web_frag_mcp_auth.yml` | Web API | Foundational RAG plus a protected per-user OAuth MCP source example. Requires a real protected MCP endpoint and shared token-store configuration; it is not a zero-config default. |
 | `configs/config_domain_routing_and_skills.yml` | Direct deep-research workflow | Automatic domain routing, Tavily, DuckDuckGo news, Polymarket, LlamaIndex, enabled Serper paper search, built-in skills, and a Modal sandbox. Requires the corresponding service credentials and Modal setup. |
 | `configs/config_openshell.yml` | Web API, experimental | Skills and artifact capture over one pre-provisioned named OpenShell sandbox. Intended for trusted single-operator use; per-job directories are not multi-tenant isolation. |
+| `configs/config_mcp.yml` | Standalone MCP server | Public NIM and Tavily research over stateless submit, poll, and final-report tools with PostgreSQL-backed job state. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Related
 
