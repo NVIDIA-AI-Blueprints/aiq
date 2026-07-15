@@ -31,6 +31,7 @@ from aiq_agent.common import is_verbose
 from aiq_agent.common.citation_verification import get_or_create_session_registry
 from aiq_agent.common.citation_verification import reset_session_registry
 from aiq_agent.common.citation_verification import set_session_registry
+from aiq_agent.observability.monocle_exporter import ensure_registered as _ensure_monocle_registered
 from aiq_agent.observability.otel_header_redaction_exporter import (
     ensure_registered as _ensure_otel_redaction_registered,
 )
@@ -55,6 +56,7 @@ logger = logging.getLogger(__name__)
 _REPORT_ASK_TIMEOUT_S = 120
 
 _ensure_otel_redaction_registered()
+_ensure_monocle_registered()
 
 
 def _build_report_ask_prompt(

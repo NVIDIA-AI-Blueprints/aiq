@@ -418,6 +418,12 @@ def main() -> None:
         except Exception as e:
             print(f"Warning: Failed to load .env file: {e}")
 
+    # Optional Monocle observability via the deer-flow-style MONOCLE_TRACING gate.
+    # No-op (and never imports monocle_apptrace) unless MONOCLE_TRACING is truthy.
+    from aiq_agent.observability.monocle_exporter import setup_monocle_tracing_if_enabled
+
+    setup_monocle_tracing_if_enabled()
+
     # Validate LLM API keys based on config
     try:
         config_path = Path(args.config_file)
@@ -455,6 +461,11 @@ def main() -> None:
         loop = asyncio.get_event_loop()
         loop.run_until_complete(_run())
     finally:
+        # os._exit skips normal interpreter shutdown, so flush pending Monocle/OTel
+        # spans first — otherwise the last spans of a run are dropped on exit.
+        from aiq_agent.observability.monocle_exporter import flush_monocle_if_enabled
+
+        flush_monocle_if_enabled()
         os._exit(0)
 
 

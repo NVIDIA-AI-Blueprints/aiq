@@ -255,6 +255,67 @@ general:
         shutdown_timeout: 30000
 ```
 
+## Monocle
+
+[Monocle](https://github.com/monocle2ai/monocle) is an open-source, OpenTelemetry-based tracer for agentic applications. It instruments the frameworks already in use (LangChain, LangGraph, and others) and records each run end-to-end -- LLM calls, agent steps, and tool and MCP invocations, with their inputs, outputs, timings, and token counts. It is packaged as an **optional** tracing backend and is disabled unless you both install it and enable it -- the default install and default behavior are unchanged.
+
+Each run writes one trace file to `.monocle/` in the working directory; open it in the [Monocle VS Code extension](https://marketplace.visualstudio.com/items?itemName=OkahuAI.monocle-apptrace) to inspect the span timeline and token counts. Connect to [Okahu](https://www.okahu.ai), an agent-observability platform, to analyze traces across runs and run trace-based and agentic evaluations (via the `okahu` exporter).
+
+### Install
+
+Monocle ships as an optional extra, so a default install does not pull the OpenTelemetry stack:
+
+```bash
+uv sync --extra monocle
+# or, in an existing environment:
+pip install 'aiq-agent[monocle]'
+```
+
+Enabling Monocle without the extra installed fails fast with an actionable error naming the install command; when Monocle is not enabled, `monocle_apptrace` is never imported.
+
+### Enable
+
+There are two ways to opt in. Both forward the exporter list to `setup_monocle_telemetry(workflow_name="nvidia-aiq", monocle_exporters_list=...)` and Monocle initializes at most once per process.
+
+**Environment gate (matches the other demos).** Add the following to your `.env` file (`deploy/.env` for the CLI):
+
+```bash
+MONOCLE_TRACING=true
+MONOCLE_EXPORTERS=file          # file, console, okahu, s3, blob, gcs (default: file)
+OKAHU_API_KEY=okh_xxxxxxxx      # required only for the `okahu` exporter
+```
+
+The CLI reads these at startup and initializes Monocle before the workflow runs.
+
+**NAT telemetry exporter (canonical).** Add the `monocle` exporter to your workflow YAML; it initializes when the workflow builds:
+
+```yaml
+general:
+  telemetry:
+    tracing:
+      monocle:
+        _type: monocle
+        workflow_name: nvidia-aiq   # optional, stamped on spans
+        exporters: file             # optional; comma-separated, e.g. "file" or "file,okahu"
+```
+
+`OKAHU_API_KEY` is always read from the environment. `MONOCLE_EXPORTERS` is the default for the YAML `exporters` field, so the two paths agree unless you override it in YAML.
+
+**Precedence.** The environment gate runs at CLI startup, before the workflow (and any YAML `monocle` exporter) is built. When both are set, the env gate wins and the YAML exporter finds Monocle already initialized. To drive the exporter list purely from YAML, leave `MONOCLE_TRACING` unset.
+
+### Data handling
+
+Traces capture span inputs and outputs verbatim -- prompts, tool arguments, and model responses -- plus token usage and timings. The `file` exporter keeps them on local disk and never rotates or cleans them up, so prune `.monocle/` periodically; the remote exporters (`okahu`, `s3`, `blob`, `gcs`) send that same data off-box, so enable only destinations you trust -- a warning is logged whenever an off-box exporter is active. An unknown exporter name fails fast with a clear error before any instrumentation. A missing `OKAHU_API_KEY` does **not** fail fast: the `okahu` exporter is skipped with a warning and the remaining exporters continue (if none remain, Monocle is skipped), so check the logs to confirm remote export is actually active.
+
+### Configuration Reference
+
+| Setting | Env / field | Default | Description |
+| :-- | :-- | :-- | :-- |
+| Enable | `MONOCLE_TRACING` (env) | off | Truthy gate for the environment opt-in path. |
+| Exporters | `MONOCLE_EXPORTERS` (env) / `exporters` (YAML) | `file` | Comma-separated Monocle exporters, validated against `file, console, okahu, s3, blob, gcs`. |
+| Okahu key | `OKAHU_API_KEY` (env) | -- | Required only when the `okahu` exporter is selected. |
+| Workflow name | `workflow_name` (YAML) | `nvidia-aiq` | Workflow name Monocle stamps onto emitted spans. |
+
 ## Verbose Logging
 
 For quick debugging without any external services, enable the built-in verbose callback logger. This prints detailed agent execution information directly to the console.

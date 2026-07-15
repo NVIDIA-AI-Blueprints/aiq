@@ -57,6 +57,13 @@ dependencies = [
 s3 = [
     "boto3>=1.35.0,<2",
 ]
+# Optional Monocle observability backend, exposed as the `monocle` NAT tracing
+# exporter (see src/aiq_agent/observability/monocle_exporter.py). Not required
+# for normal operation; install only when you want Monocle tracing:
+#   uv sync --extra monocle   (or)   pip install 'aiq-agent[monocle]'
+monocle = [
+    "monocle_apptrace>=0.8.8,<0.9",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
