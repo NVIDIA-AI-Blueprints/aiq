@@ -295,11 +295,12 @@ class JobStore:
     async def delete_expired(self) -> int:
         """Delete expired MCP jobs and their LangGraph checkpoint threads.
 
-        The ledger job ID is the workflow's checkpoint ``thread_id``. Select
-        the expired rows under lock before removing their checkpoint writes,
-        blobs, and snapshots, then delete the ledger rows in the same
-        transaction. ``SKIP LOCKED`` makes concurrent sweepers on separate MCP
-        replicas divide expired jobs without blocking one another.
+        A workflow may outlive its fixed job TTL, so only terminal ledger rows
+        are eligible. The ledger job ID is the workflow's checkpoint
+        ``thread_id``. Select eligible rows under lock before removing their
+        checkpoint writes, blobs, and snapshots, then delete the ledger rows in
+        the same transaction. ``SKIP LOCKED`` makes concurrent sweepers on
+        separate MCP replicas divide expired jobs without blocking one another.
         """
         pool = self._require_pool()
         async with pool.acquire() as conn:
@@ -309,6 +310,7 @@ class JobStore:
                     SELECT job_id::text AS job_id
                       FROM {self._jobs_table}
                      WHERE expires_at < NOW()
+                       AND state IN ('complete', 'failed')
                      FOR UPDATE SKIP LOCKED
                     """
                 )

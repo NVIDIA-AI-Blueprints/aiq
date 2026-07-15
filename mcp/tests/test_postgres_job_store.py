@@ -562,6 +562,48 @@ async def test_expired_job_deletion_becomes_stable_not_found(postgres_url: str) 
 
 
 @pytest.mark.asyncio
+async def test_expired_running_job_is_preserved_until_terminal(postgres_url: str) -> None:
+    store = JobStore(postgres_url, min_pool_size=1, max_pool_size=1)
+    await store.init()
+    try:
+        job_id = await store.create(
+            principal="anonymous",
+            query="query",
+            depth="deep",
+            state="running",
+            ttl_seconds=-1,
+        )
+        await _seed_checkpoint_thread(postgres_url, job_id)
+
+        assert await store.delete_expired() == 0
+        job = await store.get(job_id)
+        assert job is not None
+        assert job.state == "running"
+        assert await _checkpoint_row_counts(postgres_url, job_id) == (1, 1, 1)
+
+        writer = await asyncpg.connect(postgres_url)
+        try:
+            await writer.execute(
+                """
+                INSERT INTO public.checkpoints (
+                    thread_id, checkpoint_ns, checkpoint_id, checkpoint, metadata
+                )
+                VALUES ($1, '', 'checkpoint-2', '{}', '{}')
+                """,
+                job_id,
+            )
+        finally:
+            await writer.close()
+
+        assert await store.update(job_id, state="complete", from_states=("running",)) is True
+        assert await store.delete_expired() == 1
+        assert await store.get(job_id) is None
+        assert await _checkpoint_row_counts(postgres_url, job_id) == (0, 0, 0)
+    finally:
+        await store.close()
+
+
+@pytest.mark.asyncio
 async def test_expired_job_cleanup_is_idempotent_across_stores(postgres_url: str) -> None:
     stores = [JobStore(postgres_url, min_pool_size=1, max_pool_size=1) for _ in range(2)]
     await asyncio.gather(*(store.init() for store in stores))
