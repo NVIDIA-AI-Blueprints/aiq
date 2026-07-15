@@ -63,17 +63,18 @@ class WorkflowRunner:
             self._session_manager = None
 
     async def _close_owned_checkpointers(self) -> None:
-        if not self._owned_checkpointer_keys:
-            return
-        try:
-            from aiq_agent import common as aiq_common
-        except Exception as exc:  # pragma: no cover - defensive shutdown path
-            logger.debug("Unable to import aiq_agent.common for checkpointer cleanup: %s", exc)
+        # Resolve the caches before the empty-keys guard: if aiq_agent renamed them,
+        # start() recorded no owned keys (the snapshot read the old name), so an
+        # early return here would hide the very failure we want to surface.
+        caches = _resolve_checkpointer_caches()
+        if caches is None:
+            # Already warned. Drop ownership so a second stop() does not warn again.
             self._owned_checkpointer_keys.clear()
             return
+        if not self._owned_checkpointer_keys:
+            return
 
-        checkpointers = getattr(aiq_common, "_checkpointers", {})
-        postgres_pools = getattr(aiq_common, "_postgres_pools", {})
+        checkpointers, postgres_pools = caches
         for key in list(self._owned_checkpointer_keys):
             checkpointer = checkpointers.pop(key, None)
             conn = getattr(checkpointer, "conn", None)
@@ -139,6 +140,41 @@ class WorkflowRunner:
                         response = await runner.result(to_type=ChatResearcherResponse)
 
         return response.workflow_outcome
+
+
+def _resolve_checkpointer_caches() -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """Return aiq_agent.common's ``(_checkpointers, _postgres_pools)`` caches, or ``None``.
+
+    MCP shutdown reaches into these module-private dicts to close the checkpointer
+    handles this runner created; there is no public cleanup API to use instead. If
+    aiq_agent renames, removes, or restructures either cache, cleanup would silently
+    become a no-op and leak connections/pools — so warn and return ``None`` rather than
+    letting a ``getattr(..., {})`` default hide the breakage.
+    """
+    try:
+        from aiq_agent import common as aiq_common
+    except Exception as exc:  # pragma: no cover - defensive shutdown path
+        logger.warning(
+            "aiq_agent.common is unavailable; MCP checkpointer cleanup skipped and owned handles may leak: %s",
+            exc,
+        )
+        return None
+
+    checkpointers = getattr(aiq_common, "_checkpointers", None)
+    postgres_pools = getattr(aiq_common, "_postgres_pools", None)
+    missing = [
+        name
+        for name, cache in (("_checkpointers", checkpointers), ("_postgres_pools", postgres_pools))
+        if not isinstance(cache, dict)
+    ]
+    if missing:
+        logger.warning(
+            "aiq_agent.common is missing expected checkpointer cache(s) %s; MCP checkpointer "
+            "cleanup is a no-op and owned handles may leak (aiq_agent internals may have changed).",
+            missing,
+        )
+        return None
+    return checkpointers, postgres_pools
 
 
 def _current_checkpointer_keys() -> set[str]:

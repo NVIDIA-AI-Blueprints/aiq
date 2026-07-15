@@ -191,3 +191,59 @@ async def test_workflow_runner_closes_only_owned_checkpointers(monkeypatch, tmp_
     assert aiq_common._checkpointers == {"preexisting": preexisting}
     assert aiq_common._postgres_pools == {}
     assert runner._owned_checkpointer_keys == set()
+
+
+@pytest.mark.asyncio
+async def test_close_owned_checkpointers_warns_when_expected_caches_missing(monkeypatch, tmp_path, caplog) -> None:
+    """If aiq_agent renames/removes the private caches, cleanup must warn, not silently no-op."""
+    from aiq_agent import common as aiq_common
+
+    monkeypatch.delattr(aiq_common, "_checkpointers", raising=False)
+    monkeypatch.delattr(aiq_common, "_postgres_pools", raising=False)
+
+    runner = WorkflowRunner(tmp_path / "config.yml")
+    runner._owned_checkpointer_keys = {"owned"}
+
+    caplog.set_level(logging.WARNING, logger="aiq_mcp.workflow_runner")
+    await runner._close_owned_checkpointers()
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings, "expected a warning when the checkpointer caches are unavailable"
+    assert "_checkpointers" in caplog.text and "_postgres_pools" in caplog.text
+    assert "may leak" in caplog.text
+    assert runner._owned_checkpointer_keys == set()
+
+
+@pytest.mark.asyncio
+async def test_close_owned_checkpointers_warns_even_without_recorded_owned_keys(monkeypatch, tmp_path, caplog) -> None:
+    """The rename case: start() records no owned keys because the snapshot read the old
+    name, so the warning must fire even though _owned_checkpointer_keys is empty."""
+    from aiq_agent import common as aiq_common
+
+    monkeypatch.delattr(aiq_common, "_checkpointers", raising=False)
+    monkeypatch.delattr(aiq_common, "_postgres_pools", raising=False)
+
+    runner = WorkflowRunner(tmp_path / "config.yml")
+    assert runner._owned_checkpointer_keys == set()
+
+    caplog.set_level(logging.WARNING, logger="aiq_mcp.workflow_runner")
+    await runner._close_owned_checkpointers()
+
+    assert [r for r in caplog.records if r.levelno == logging.WARNING], "rename must still warn"
+
+
+@pytest.mark.asyncio
+async def test_close_owned_checkpointers_silent_when_caches_present_but_unowned(monkeypatch, tmp_path, caplog) -> None:
+    """Present-but-empty caches with nothing owned is normal — must not warn (no false positive)."""
+    from aiq_agent import common as aiq_common
+
+    monkeypatch.setattr(aiq_common, "_checkpointers", {})
+    monkeypatch.setattr(aiq_common, "_postgres_pools", {})
+
+    runner = WorkflowRunner(tmp_path / "config.yml")
+    assert runner._owned_checkpointer_keys == set()
+
+    caplog.set_level(logging.WARNING, logger="aiq_mcp.workflow_runner")
+    await runner._close_owned_checkpointers()
+
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
