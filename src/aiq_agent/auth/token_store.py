@@ -157,19 +157,16 @@ class SqlTokenStore(TokenStore):
         }
         # Atomic upsert keyed by session_id: a single INSERT ... ON CONFLICT DO
         # UPDATE, so concurrent writers for the same session can't race a
-        # delete-then-insert gap. Both SQLite and Postgres support it.
+        # delete-then-insert gap. The dialect only selects which insert()
+        # construct exposes on_conflict_do_update; the statement is identical.
         if engine.dialect.name == "postgresql":
-            from sqlalchemy.dialects.postgresql import insert as _pg_insert
-
-            stmt = _pg_insert(table).values(**row)
-            update_cols = {c: stmt.excluded[c] for c in row if c != "session_id"}
-            stmt = stmt.on_conflict_do_update(index_elements=[table.c.session_id], set_=update_cols)
+            from sqlalchemy.dialects.postgresql import insert as _dialect_insert
         else:
-            from sqlalchemy.dialects.sqlite import insert as _sqlite_insert
+            from sqlalchemy.dialects.sqlite import insert as _dialect_insert
 
-            stmt = _sqlite_insert(table).values(**row)
-            update_cols = {c: stmt.excluded[c] for c in row if c != "session_id"}
-            stmt = stmt.on_conflict_do_update(index_elements=[table.c.session_id], set_=update_cols)
+        stmt = _dialect_insert(table).values(**row)
+        update_cols = {c: stmt.excluded[c] for c in row if c != "session_id"}
+        stmt = stmt.on_conflict_do_update(index_elements=[table.c.session_id], set_=update_cols)
         with engine.begin() as conn:
             conn.execute(stmt)
 
