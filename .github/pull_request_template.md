@@ -10,7 +10,11 @@ commit. Replace the placeholder below with your name and the commit email
 configured for your GitHub account. If you keep your email private, use the
 GitHub-provided `@users.noreply.github.com` address shown in your email settings.
 
-Do not delete the sign-off line or leave the placeholder unchanged.
+Keep the angle brackets around the email address. They are part of the required
+DCO format: `Signed-off-by: Full Name <email@example.com>`.
+
+Do not delete the sign-off line, leave the placeholder unchanged, or remove the
+angle brackets.
 -->
 
 Signed-off-by: FULL NAME <EMAIL>
@@ -24,7 +28,7 @@ Signed-off-by: FULL NAME <EMAIL>
 - [ ] I updated documentation for user-facing or contributor-facing changes.
 - [ ] I confirmed this PR does not include secrets, credentials, or internal-only data.
 - [ ] I certify this contribution under the Developer Certificate of Origin (DCO) and signed my commits with `git commit -s` or an equivalent sign-off.
-- [ ] I replaced the DCO sign-off placeholder above with the identity GitHub will use for the squash commit.
+- [ ] I replaced the DCO sign-off placeholder above with the identity GitHub will use for the squash commit and kept the required angle brackets around the email address.
 
 #### Where should reviewers start?
 
