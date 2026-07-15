@@ -87,7 +87,7 @@ All four functions accept these shared fields:
 |---|---|---|
 | `api_key` | `null` | Optional inline API key. Prefer `YDC_API_KEY`. |
 | `max_retries` | `3` | Maximum attempts for a failed request. |
-| `timeout` | `null` | Per-attempt timeout in seconds. `null` uses the provider default. |
+| `timeout` | `null` | Per-attempt timeout in seconds. `null` disables the timeout. |
 
 `you_web_search` also accepts:
 

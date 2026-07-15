@@ -60,7 +60,8 @@ prompted to follow the recorded order.
 **What search tools are available?**
 
 - **Tavily Web Search** — General web search (requires `TAVILY_API_KEY`)
-- **You.com APIs** — Web search, page contents, cited general research, and finance research (requires `YDC_API_KEY`)
+- **You.com APIs** — Web search, page contents, cited general research, and finance research (`YDC_API_KEY` is
+  required for live API calls; without it, AI-Q starts with diagnostic stubs for these tools)
 - **Exa Web Search** — General web search via Exa (requires `EXA_API_KEY`)
 - **Nimble Web Search** — General web search via Nimble (requires `NIMBLE_API_KEY`)
 - **DuckDuckGo News Search** — Recent news search (no API key)
