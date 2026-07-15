@@ -15,23 +15,21 @@
     ).href;
   }
 
-  const rejectOptionalCookies = () => {
-    const rejectButton = document.getElementById("onetrust-reject-all-handler");
-    if (!rejectButton) {
-      return false;
+  const localPreviewStyles = document.createElement("style");
+  localPreviewStyles.dataset.aiqLocalPreview = "true";
+  localPreviewStyles.textContent = `
+    #onetrust-consent-sdk,
+    #onetrust-banner-sdk,
+    #onetrust-pc-sdk,
+    .onetrust-pc-dark-filter {
+      display: none !important;
+      pointer-events: none !important;
     }
 
-    rejectButton.click();
-    return true;
-  };
-
-  if (!rejectOptionalCookies()) {
-    const observer = new MutationObserver(() => {
-      if (rejectOptionalCookies()) {
-        observer.disconnect();
-      }
-    });
-    observer.observe(document.documentElement, {childList: true, subtree: true});
-    window.setTimeout(() => observer.disconnect(), 10000);
-  }
+    html,
+    body {
+      overflow: auto !important;
+    }
+  `;
+  document.head.append(localPreviewStyles);
 })();
