@@ -31,6 +31,7 @@ Mitigation: Review and scan skill before deployment. <br>
 
 
 ## Skill Output: <br>
+
 **Output Type(s):** [API Calls, Analysis] <br>
 **Output Format:** [JSON and Markdown research reports with citations] <br>
 **Output Parameters:** [1D] <br>

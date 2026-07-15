@@ -12,7 +12,7 @@ This guide walks through setting up the AI-Q blueprint for local development. Fo
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | Python | 3.11 -- 3.13 | 3.13 recommended |
-| [uv](https://github.com/astral-sh/uv) | latest | Python package manager (installed automatically by the setup script if missing) |
+| [uv](https://github.com/astral-sh/uv) | 0.11.25+ | Python package manager (installed automatically by the setup script if missing; CI uses 0.11.26) |
 | Git | 2.x+ | |
 | Node.js | 22+ | Optional -- only needed for the web UI |
 
@@ -46,7 +46,7 @@ cd aiq
 
 The script performs the following steps:
 
-1. Installs `uv` if not already present
+1. Installs `uv` if not already present and rejects versions older than 0.11.25
 2. Creates a Python 3.13 virtual environment at `.venv/`
 3. Installs the core package with dev dependencies
 4. Installs all frontends (CLI, debug console, API server)

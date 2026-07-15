@@ -29,6 +29,17 @@ uv run ruff format --check .
 uv run pytest
 ```
 
+The MCP server is an independent uv project. For changes under `mcp/`, also
+run:
+
+```bash
+uv sync --project mcp --extra dev
+uv run --project mcp --extra dev pytest mcp/tests
+```
+
+Dependency changes must leave both project locks current: check the root with
+`uv lock --check` and MCP with `uv lock --project mcp --check`.
+
 For UI changes:
 
 ```bash

@@ -5,8 +5,10 @@ COMMAND=${1:-help}
 
 case "$COMMAND" in
     test)
-        echo "Running tests..."
-        uv run pytest
+        echo "Running root tests..."
+        uv run --group dev pytest
+        echo "Running MCP tests in the isolated MCP project..."
+        uv run --project mcp --extra dev pytest mcp/tests
         echo "Tests complete"
         ;;
     format)
@@ -56,7 +58,7 @@ case "$COMMAND" in
         echo "Usage: ./scripts/dev.sh <command>"
         echo ""
         echo "Commands:"
-        echo "  test        - Run tests with pytest"
+        echo "  test        - Run root and isolated MCP tests with pytest"
         echo "  format      - Format code with ruff (imports) and yapf"
         echo "  lint        - Check code with ruff and yapf (no changes)"
         echo "  pre-commit  - Format code and run lint checks"

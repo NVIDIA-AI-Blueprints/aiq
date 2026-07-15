@@ -885,10 +885,12 @@ class TestRunAgentJobEncryption:
 
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
         assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        # The persisted error is sanitized to the exception class name so raw
+        # messages cannot leak credentials or internal hostnames to callers.
         mock_job_store.update_status.assert_awaited_with(
             "job-1",
             JobStatus.FAILURE,
-            error="transient database failure",
+            error="job failed (RuntimeError); check server logs for details",
         )
         update_job_output.assert_not_awaited()
 

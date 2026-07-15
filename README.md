@@ -39,6 +39,7 @@ limitations under the License.
   - [Command-line interface (CLI)](#command-line-interface-cli)
   - [Web UI](#web-ui)
   - [Async Deep Research Jobs](#async-deep-research-jobs)
+  - [MCP Server](#mcp-server)
   - [Benchmarks](#benchmarks)
   - [Jupyter Notebooks](#jupyter-notebooks)
 - [Evaluating the Workflow](#evaluating-the-workflow)
@@ -274,6 +275,7 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 | `config_web_frag_mcp_auth.yml` | Nemotron 3 Super | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
 | `config_domain_routing_and_skills.yml` | Nemotron 3 Super; Nemotron Mini summary | Direct deep-research profile with domain routing, DuckDuckGo news, Polymarket, enabled Serper paper search, LlamaIndex, built-in skills, and a fresh per-job Modal sandbox. |
 | `config_openshell.yml` | GPT-OSS-120B; Nemotron 3 Super; Nemotron Mini summary | Experimental web/API skills profile with artifact capture over one shared, pre-provisioned OpenShell sandbox; trusted single-operator use only. |
+| `config_mcp.yml` | Nemotron 3 Super 120B | Standalone MCP server. Public NIM + Tavily research with PostgreSQL-backed stateless submit/poll/report. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Ways to Run the Agents
 
@@ -334,6 +336,28 @@ For more details, refer to:
 
 For public endpoints, SSE replay, report follow-up, and durable artifact access, refer to the
 [REST API documentation](docs/source/integration/rest-api.md).
+
+### MCP Server
+
+Expose AI-Q to MCP clients through the standalone, stateless Streamable HTTP server:
+
+```bash
+: "${NVIDIA_API_KEY:?Set NVIDIA_API_KEY}"
+: "${TAVILY_API_KEY:?Set TAVILY_API_KEY}"
+uv sync --project mcp --frozen
+AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs \
+  uv run --project mcp --frozen aiq-mcp-server
+```
+
+The endpoint defaults to `http://localhost:9001/mcp` and advertises exactly `submit_query`, `poll_query`, and
+`get_final_report`. This public server intentionally has no authentication; job UUIDs are bearer capabilities and
+the endpoint must not be exposed directly to an untrusted network. See [Expose AI-Q as an MCP Server](docs/source/integration/mcp-server.md)
+for the exact JSON protocol, health contracts, security model, and container deployment.
+
+MCP is an independent uv project with its own `mcp/uv.lock`. The root lock remains compatible with NAT's
+`cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==48.0.1` as a
+security hardening measure. The supported distribution paths are this source checkout and the release container;
+the MCP package's local path dependency closure is not published as a standalone wheel.
 
 ### Benchmarks
 
