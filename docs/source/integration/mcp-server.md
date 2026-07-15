@@ -256,6 +256,9 @@ Run the supported-client smoke test:
 uv run --project mcp --frozen python mcp/scripts/protocol_smoke.py --url http://127.0.0.1:9001/mcp
 ```
 
+The smoke client rejects URLs containing userinfo, query parameters, or fragments before making a request and does
+not echo the rejected URL.
+
 Stop the local stack with:
 
 ```bash

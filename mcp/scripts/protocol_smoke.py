@@ -30,6 +30,8 @@ def _health_url(endpoint: str) -> str:
     parts = urlsplit(endpoint)
     if parts.scheme not in {"http", "https"} or not parts.netloc:
         raise ValueError("--url must be an absolute HTTP or HTTPS URL")
+    if parts.username is not None or parts.password is not None or parts.query or parts.fragment:
+        raise ValueError("--url must not include credentials, query parameters, or fragments")
     return urlunsplit((parts.scheme, parts.netloc, "/health", "", ""))
 
 
@@ -53,6 +55,7 @@ async def _wait_for_health(client: httpx.AsyncClient, url: str, timeout_seconds:
 
 
 async def _smoke(endpoint: str, timeout_seconds: float) -> dict[str, object]:
+    health_url = _health_url(endpoint)
     observed_headers: list[set[str]] = []
 
     async def record_request(request: httpx.Request) -> None:
@@ -60,7 +63,7 @@ async def _smoke(endpoint: str, timeout_seconds: float) -> dict[str, object]:
 
     timeout = httpx.Timeout(30, connect=5)
     async with httpx.AsyncClient(timeout=timeout, event_hooks={"request": [record_request]}) as client:
-        await _wait_for_health(client, _health_url(endpoint), timeout_seconds)
+        await _wait_for_health(client, health_url, timeout_seconds)
 
         async with streamable_http_client(
             endpoint,

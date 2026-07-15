@@ -156,6 +156,9 @@ Run the supported-client, no-authentication smoke test:
 uv run --project mcp --frozen python mcp/scripts/protocol_smoke.py --url http://127.0.0.1:9001/mcp
 ```
 
+The smoke client rejects URLs containing userinfo, query parameters, or fragments before making a request and does
+not echo the rejected URL.
+
 The check waits for readiness, initializes MCP, asserts that exactly the three documented tools are advertised,
 and calls `poll_query` for an unknown UUID without sending `Authorization`. It must return
 `{"state":"not_found","error":"job_not_found"}` as a successful tool result.

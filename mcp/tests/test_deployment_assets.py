@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import hashlib
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 
+import pytest
 import yaml
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -49,6 +52,11 @@ _EXPECTED_COPY_LINES = (
     "COPY --chown=10001:10001 configs/config_mcp.yml /app/configs/config_mcp.yml",
     "COPY --chown=10001:10001 LICENSE /licenses/LICENSE",
 )
+
+
+@pytest.fixture(scope="module")
+def protocol_smoke_namespace() -> dict[str, object]:
+    return runpy.run_path(str(_SMOKE_SCRIPT), run_name="deployment_smoke_test")
 
 
 def _normalized_sql() -> str:
@@ -152,10 +160,108 @@ def test_deployment_context_excludes_env_files_and_includes_package_readmes() ->
     } <= lines
 
 
-def test_protocol_smoke_script_is_importable_without_running() -> None:
-    namespace = runpy.run_path(str(_SMOKE_SCRIPT), run_name="deployment_smoke_test")
+def test_protocol_smoke_script_is_importable_without_running(protocol_smoke_namespace: dict[str, object]) -> None:
+    namespace = protocol_smoke_namespace
     assert namespace["EXPECTED_SERVER_NAME"] == "aiq_deep_research"
     assert namespace["EXPECTED_TOOLS"] == {"get_final_report", "poll_query", "submit_query"}
     assert namespace["EXPECTED_HEALTH_STATUS"] == "ready"
     assert namespace["UNKNOWN_JOB_ID"] == "00000000-0000-4000-8000-000000000000"
     assert namespace["FORBIDDEN_REQUEST_HEADERS"] == {"authorization"}
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "expected"),
+    [
+        ("http://127.0.0.1:9001/mcp", "http://127.0.0.1:9001/health"),
+        ("https://example.com/nested/mcp", "https://example.com/health"),
+        ("http://[::1]:9001/mcp", "http://[::1]:9001/health"),
+    ],
+)
+def test_protocol_smoke_accepts_safe_endpoint_forms(
+    protocol_smoke_namespace: dict[str, object],
+    endpoint: str,
+    expected: str,
+) -> None:
+    health_url = protocol_smoke_namespace["_health_url"]
+    assert callable(health_url)
+    assert health_url(endpoint) == expected
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://alice@example.com/mcp",
+        "https://alice:sensitive-password@example.com/mcp",  # pragma: allowlist secret
+        "https://example.com/mcp?token=sensitive-query-token",
+        "https://example.com/mcp#sensitive-fragment",
+        (
+            "https://alice:sensitive-password@example.com/mcp"  # pragma: allowlist secret
+            "?token=sensitive-query-token#sensitive-fragment"
+        ),
+    ],
+)
+def test_protocol_smoke_rejects_sensitive_endpoint_forms(
+    protocol_smoke_namespace: dict[str, object],
+    endpoint: str,
+) -> None:
+    health_url = protocol_smoke_namespace["_health_url"]
+    assert callable(health_url)
+    with pytest.raises(ValueError, match="must not include credentials, query parameters, or fragments") as exc_info:
+        health_url(endpoint)
+    assert endpoint not in str(exc_info.value)
+
+
+def test_protocol_smoke_rejects_sensitive_url_before_client_construction_or_output(
+    protocol_smoke_namespace: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    endpoint = (
+        "https://sensitive-user:sensitive-password@127.0.0.1:1/mcp"  # pragma: allowlist secret
+        "?token=sensitive-query-token#sensitive-fragment"
+    )
+
+    def unexpected_async_client(*args: object, **kwargs: object) -> None:
+        raise AssertionError("HTTP client constructed before URL validation")
+
+    httpx = protocol_smoke_namespace["httpx"]
+    monkeypatch.setattr(httpx, "AsyncClient", unexpected_async_client)
+    main = protocol_smoke_namespace["main"]
+    assert callable(main)
+    with pytest.raises(ValueError, match="must not include credentials, query parameters, or fragments") as exc_info:
+        main(["--url", endpoint])
+
+    captured = capsys.readouterr()
+    for sensitive_value in (
+        "sensitive-user",
+        "sensitive-password",
+        "sensitive-query-token",
+        "sensitive-fragment",
+    ):
+        assert sensitive_value not in str(exc_info.value)
+        assert sensitive_value not in captured.out
+        assert sensitive_value not in captured.err
+
+
+def test_protocol_smoke_cli_does_not_echo_rejected_url() -> None:
+    endpoint = (
+        "https://sensitive-user:sensitive-password@127.0.0.1:1/mcp"  # pragma: allowlist secret
+        "?token=sensitive-query-token#sensitive-fragment"
+    )
+    completed = subprocess.run(
+        [sys.executable, str(_SMOKE_SCRIPT), "--url", endpoint, "--health-timeout", "0.01"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "must not include credentials, query parameters, or fragments" in completed.stderr
+    for sensitive_value in (
+        "sensitive-user",
+        "sensitive-password",
+        "sensitive-query-token",
+        "sensitive-fragment",
+    ):
+        assert sensitive_value not in completed.stdout
+        assert sensitive_value not in completed.stderr
