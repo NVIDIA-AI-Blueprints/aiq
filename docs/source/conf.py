@@ -6,12 +6,17 @@ from pathlib import Path
 
 _DOCS_SOURCE_DIR = Path(__file__).resolve().parent
 _PROJECT_METADATA = json.loads((_DOCS_SOURCE_DIR / "project.json").read_text(encoding="utf-8"))
+_LOCAL_VERSIONS = json.loads((_DOCS_SOURCE_DIR / "versions-local.json").read_text(encoding="utf-8"))
 _PUBLISHED_DOCS_URL = "https://docs.nvidia.com/aiq-blueprint"
 
 project = _PROJECT_METADATA["name"]
 copyright = "2025-%Y, NVIDIA Corporation"
 author = "NVIDIA Corporation"
 release = _PROJECT_METADATA["version"]
+
+_LOCAL_PREFERRED_VERSIONS = [entry["version"] for entry in _LOCAL_VERSIONS if entry.get("preferred")]
+if _LOCAL_PREFERRED_VERSIONS != [release]:
+    raise ValueError("versions-local.json must mark the project.json version as the single preferred version")
 
 # -- General configuration ---------------------------------------------------
 # https://www.sphinx-doc.org/en/master/usage/configuration.html#general-configuration
@@ -69,11 +74,11 @@ html_theme_options = {
     "show_nav_level": 1,
 }
 
-html_extra_path = ["project.json"]
+html_extra_path = ["project.json", "versions-local.json"]
 html_static_path = ["_static"]
 html_favicon = "_static/favicon.ico"
 html_css_files = ["css/custom.css"]
-html_js_files = ["js/mermaid-fullscreen.js"]
+html_js_files = ["js/version-switcher-local.js", "js/mermaid-fullscreen.js"]
 html_show_sourcelink = False
 
 # Suppress warnings for missing toctree references during incremental builds
