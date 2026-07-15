@@ -88,6 +88,5 @@ linkcheck_ignore = [
     # These specific Nimble URLs have a certificate chain that Python/OpenSSL
     # linkcheck cannot validate, although they remain browser-accessible.
     r"^https://nimbleway\.com/?$",
-    r"^https://docs\.nimbleway\.com/nimble-sdk/getting-started/quickstart/?$",
     r"^https://docs\.nimbleway\.com/nimble-sdk/web-tools/search/?$",
 ]

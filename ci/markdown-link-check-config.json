@@ -28,9 +28,6 @@
             "pattern": "^https://nimbleway\\.com/?$"
         },
         {
-            "pattern": "^https://docs\\.nimbleway\\.com/nimble-sdk/getting-started/quickstart/?$"
-        },
-        {
             "pattern": "^https://docs\\.nimbleway\\.com/nimble-sdk/web-tools/search/?$"
         },
         {

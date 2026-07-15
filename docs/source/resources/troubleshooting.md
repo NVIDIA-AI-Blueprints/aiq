@@ -26,7 +26,7 @@ Common issues and solutions for the AI-Q blueprint.
 | Tavily search returns empty | Invalid `TAVILY_API_KEY` | Verify key at [tavily.com](https://tavily.com) |
 | You.com tools return an unavailable or 401 error | Missing or invalid `YDC_API_KEY` | Create or verify the key using the [You.com quickstart](https://you.com/docs/quickstart) and restart AI-Q |
 | Exa search returns empty or 401 | Invalid or missing `EXA_API_KEY` | Verify key at [exa.ai](https://exa.ai) |
-| Nimble search returns empty or 401 | Invalid or missing `NIMBLE_API_KEY` | Verify the key using the [Nimble quickstart](https://docs.nimbleway.com/nimble-sdk/getting-started/quickstart) |
+| Nimble search returns empty or 401 | Invalid or missing `NIMBLE_API_KEY` | Verify the key through [Nimble](https://nimbleway.com/) |
 | Nimble search returns 403 with "enterprise" | `search_depth: fast` requires an Enterprise plan | Switch to `search_depth: lite` (default) or `deep`, or upgrade your Nimble plan |
 | Serper search fails | Missing `SERPER_API_KEY` | Set key or remove `paper_search_tool` from config |
 
