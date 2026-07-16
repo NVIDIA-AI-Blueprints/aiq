@@ -19,6 +19,7 @@ These tests verify that the shallow-agent middleware can use inherited NAT
 Guardrails field selection to target configured shallow-agent message content.
 """
 
+import logging
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -390,3 +391,38 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _ShallowAgentGuar
     assert output_text not in [message.content for message in context.output.messages]
     guardrails._llm_rails.generate_async.assert_awaited_once()
     assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_point", ["bind", "evaluate"])
+async def test_post_invoke_refuses_when_output_rail_fails(
+    guardrails: _ShallowAgentGuardrails,
+    caplog: pytest.LogCaptureFixture,
+    failure_point: str,
+):
+    """An output-rail runtime failure replaces shallow-agent output with a refusal."""
+    user_text = "Please summarize this issue."
+    output_text = "Please follow up with customer@example.com about this issue."
+    output = ShallowResearchAgentState(messages=[HumanMessage(content=user_text), AIMessage(content=output_text)])
+    rail_error = RuntimeError("rail backend failed")
+
+    caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.interface.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock(side_effect=rail_error if failure_point == "bind" else None)
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(side_effect=rail_error if failure_point == "evaluate" else None)
+    )
+    context = _post_invoke_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert context.output is output
+    assert output.messages[0].content == user_text
+    assert output.messages[1].content == _GUARDRAILS_FAILURE_REFUSAL
+    assert output_text not in output.messages[1].content
+    assert "Output Guardrails failed while evaluating selected fields" in caplog.text
+    if failure_point == "evaluate":
+        guardrails._llm_rails.generate_async.assert_awaited_once()
+        assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
+    else:
+        guardrails._llm_rails.generate_async.assert_not_awaited()

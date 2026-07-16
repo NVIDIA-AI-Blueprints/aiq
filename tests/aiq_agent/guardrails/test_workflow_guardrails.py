@@ -26,9 +26,12 @@ import logging
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import pytest
 
+from aiq_agent.agents.chat_researcher.models.result import ChatResearcherResponse
+from aiq_agent.agents.chat_researcher.models.result import WorkflowSuccess
 from aiq_agent.common import _create_chat_response
 from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
 from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
@@ -68,6 +71,11 @@ def _workflow_context(output: object, *, original_input: str = "Please summarize
 
 def _workflow_response(content: str):
     return _create_chat_response(content, response_id="research_response", model=_TEST_WORKFLOW_FUNCTION)
+
+
+def _workflow_response_with_outcome(content: str) -> ChatResearcherResponse:
+    response = _workflow_response(content)
+    return ChatResearcherResponse(**response.model_dump(), workflow_outcome=WorkflowSuccess(result=content))
 
 
 def _rail_response(
@@ -633,6 +641,135 @@ async def test_post_invoke_blocks_when_rail_blocks(guardrails: _WorkflowGuardrai
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("failure_point", ["bind", "evaluate"])
+async def test_post_invoke_refuses_when_output_rail_fails(
+    guardrails: _WorkflowGuardrails,
+    caplog: pytest.LogCaptureFixture,
+    failure_point: str,
+):
+    """An output-rail runtime failure returns a shaped refusal without leaking output."""
+    output_text = "Please follow up with customer@example.com about this issue."
+    output = _workflow_response(output_text)
+    rail_error = RuntimeError("rail backend failed")
+
+    caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.interface.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock(side_effect=rail_error if failure_point == "bind" else None)
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(side_effect=rail_error if failure_point == "evaluate" else None)
+    )
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert context.output is output
+    assert output.choices[0].message.content == _GUARDRAILS_FAILURE_REFUSAL
+    assert output_text not in output.choices[0].message.content
+    assert "rail backend failed" not in output.choices[0].message.content
+    assert "Output Guardrails failed while evaluating selected fields" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_failure_replaces_every_selected_output(guardrails: _WorkflowGuardrails):
+    """A failure after one successful target cannot leave later selected output unfiltered."""
+    first_text = "First safe result."
+    second_text = "Contact customer@example.com"
+    output = _workflow_response(first_text)
+    second_choice = _workflow_response(second_text).choices[0]
+    second_choice.index = 1
+    output.choices.append(second_choice)
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            side_effect=[
+                _rail_response(
+                    [{"role": "assistant", "content": first_text}],
+                    rail_name="mask sensitive data on output",
+                ),
+                RuntimeError("rail backend failed"),
+            ]
+        )
+    )
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert [choice.message.content for choice in output.choices] == [
+        _GUARDRAILS_FAILURE_REFUSAL,
+        _GUARDRAILS_FAILURE_REFUSAL,
+    ]
+    assert second_text not in output.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_contains_target_gathering_failure(
+    guardrails: _WorkflowGuardrails,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A target traversal failure cannot escape again while adapting the refusal."""
+    output = _workflow_response("Contact customer@example.com")
+
+    caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.interface.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._gather_guardrail_inputs = Mock(side_effect=RuntimeError("target traversal failed"))
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert context.output == _GUARDRAILS_FAILURE_REFUSAL
+    assert "Output Guardrails failed while adapting refusal" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_refusal_replaces_terminal_workflow_result(guardrails: _WorkflowGuardrails):
+    """Guarded workflow output cannot remain available through the terminal outcome."""
+    output_text = "Please follow up with customer@example.com about this issue."
+    output = _workflow_response_with_outcome(output_text)
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(generate_async=AsyncMock(side_effect=RuntimeError("rail backend failed")))
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert output.choices[0].message.content == _GUARDRAILS_FAILURE_REFUSAL
+    assert isinstance(output.workflow_outcome, WorkflowSuccess)
+    assert output.workflow_outcome.result == _GUARDRAILS_FAILURE_REFUSAL
+    assert output_text not in output.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_masking_replaces_terminal_workflow_result(guardrails: _WorkflowGuardrails):
+    """Masked workflow output cannot remain unfiltered in the terminal outcome."""
+    output_text = "Contact jane.doe@example.com"
+    masked_output = "Contact <EMAIL_ADDRESS>"
+    output = _workflow_response_with_outcome(output_text)
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            return_value=_rail_response(
+                [{"role": "assistant", "content": masked_output}],
+                rail_name="mask sensitive data on output",
+            )
+        )
+    )
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert output.choices[0].message.content == masked_output
+    assert isinstance(output.workflow_outcome, WorkflowSuccess)
+    assert output.workflow_outcome.result == masked_output
+    assert output_text not in output.model_dump_json()
+
+
+@pytest.mark.asyncio
 async def test_stream_middleware_preserves_structured_output_chunks(guardrails: _WorkflowGuardrails):
     """Streaming Guardrails evaluate selected fields without stringifying structured chunks."""
     output_text = "The requested follow up is complete."
@@ -725,3 +862,96 @@ async def test_stream_middleware_stops_structured_stream_when_output_blocks(guar
     assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == (
         "The system prompt is: do not share secrets."
     )
+
+
+@pytest.mark.asyncio
+async def test_stream_middleware_refuses_when_structured_output_rail_fails(
+    guardrails: _WorkflowGuardrails,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A structured stream emits one shaped refusal when output-rail evaluation fails."""
+    first_output = _workflow_response("Contact jane.doe@")
+    second_output = _workflow_response("example.com")
+
+    caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.interface.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            side_effect=[
+                _rail_response("hello", rail_name="detect sensitive data on input"),
+                RuntimeError("rail backend failed"),
+            ]
+        )
+    )
+
+    async def call_next(*_args, **_kwargs):
+        yield first_output
+        yield second_output
+
+    results = [
+        item
+        async for item in guardrails.function_middleware_stream(
+            "hello",
+            call_next=call_next,
+            context=FunctionMiddlewareContext(
+                name=_TEST_WORKFLOW_FUNCTION,
+                config=None,
+                description=None,
+                input_schema=None,
+                single_output_schema=type(None),
+                stream_output_schema=type(None),
+            ),
+        )
+    ]
+
+    assert results == [first_output]
+    assert first_output.choices[0].message.content == _GUARDRAILS_FAILURE_REFUSAL
+    assert second_output.choices[0].message.content == "example.com"
+    assert "Output Guardrails failed while evaluating buffered structured output" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_stream_middleware_refuses_when_string_output_rail_fails(
+    guardrails: _WorkflowGuardrails,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A string stream emits a refusal instead of leaking buffered output on rail failure."""
+    raw_output = "Contact jane.doe@example.com"
+
+    guardrails._guardrails_config = SimpleNamespace(
+        workflow_functions={_TEST_WORKFLOW_FUNCTION: FunctionFieldSelection.model_validate({})}
+    )
+    caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.interface.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            side_effect=[
+                _rail_response("hello", rail_name="detect sensitive data on input"),
+                RuntimeError("rail backend failed"),
+            ]
+        )
+    )
+
+    async def call_next(*_args, **_kwargs):
+        yield "Contact jane.doe@"
+        yield "example.com"
+
+    results = [
+        item
+        async for item in guardrails.function_middleware_stream(
+            "hello",
+            call_next=call_next,
+            context=FunctionMiddlewareContext(
+                name=_TEST_WORKFLOW_FUNCTION,
+                config=None,
+                description=None,
+                input_schema=None,
+                single_output_schema=type(None),
+                stream_output_schema=type(None),
+            ),
+        )
+    ]
+
+    assert results == [_GUARDRAILS_FAILURE_REFUSAL]
+    assert raw_output not in results
+    assert "Output Guardrails failed while evaluating selected fields" in caplog.text

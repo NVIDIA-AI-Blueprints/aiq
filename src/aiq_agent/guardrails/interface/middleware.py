@@ -67,7 +67,18 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
 
     async def post_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run output rails and adapt blocked outputs for the intercepted boundary."""
-        return await super().post_invoke(context)
+        try:
+            result = await super().post_invoke(context)
+        except Exception:
+            logger.exception(
+                "Output Guardrails failed while evaluating selected fields for function %s; refusing response",
+                context.function_context.name,
+            )
+            context.output = self._refuse_output_safely(context, context.output)
+            return context
+        if result is not None:
+            self._synchronize_terminal_output(context)
+        return result
 
     async def function_middleware_stream(
         self,
@@ -107,7 +118,17 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
             yield ctx.output
             return
 
-        output, blocked = await self._apply_output_rails_to_structured_stream(ctx, buffered)
+        try:
+            output, blocked = await self._apply_output_rails_to_structured_stream(ctx, buffered)
+        except Exception:
+            logger.exception(
+                "Output Guardrails failed while evaluating buffered structured output for function %s; "
+                "refusing response",
+                context.name,
+            )
+            ctx.output = self._refuse_output_safely(ctx, buffered[0])
+            yield ctx.output
+            return
         if blocked:
             yield output
             return
@@ -161,6 +182,7 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
             selections[0][1](result_text)
             for _text, apply_to_field in selections[1:]:
                 apply_to_field("")
+            self._replace_terminal_output_text(buffered[0], result_text)
 
         return buffered[0], False
 
@@ -188,7 +210,36 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
         """Adapt output-rail block output for the intercepted boundary."""
         if not isinstance(original_output, str):
             paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "post_invoke")
+            modified = False
             for _text, apply_to_field in self._gather_guardrail_inputs(original_output, paths, lambda _value: None):
                 apply_to_field(block_message)
+                modified = True
+            if modified:
+                self._replace_terminal_output_text(original_output, block_message)
                 return original_output
         return block_message
+
+    def _refuse_output_safely(self, context: InvocationContext, original_output: object) -> object:
+        """Adapt a refusal without allowing a failing target traversal to escape."""
+        try:
+            return self._on_post_invoke_blocked(context, _GUARDRAILS_FAILURE_REFUSAL, original_output)
+        except Exception:
+            logger.exception(
+                "Output Guardrails failed while adapting refusal for function %s; returning scalar refusal",
+                context.function_context.name,
+            )
+            return _GUARDRAILS_FAILURE_REFUSAL
+
+    @staticmethod
+    def _replace_terminal_output_text(output: object, block_message: str) -> None:
+        """Keep a structured workflow's terminal result aligned with its guarded public output."""
+        workflow_outcome = getattr(output, "workflow_outcome", None)
+        if getattr(workflow_outcome, "status", None) == "success":
+            setattr(workflow_outcome, "result", block_message)
+
+    def _synchronize_terminal_output(self, context: InvocationContext) -> None:
+        """Copy guarded public output into a successful structured terminal outcome."""
+        paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "post_invoke")
+        for text, _apply_to_field in self._gather_guardrail_inputs(context.output, paths, lambda _value: None):
+            self._replace_terminal_output_text(context.output, text)
+            return

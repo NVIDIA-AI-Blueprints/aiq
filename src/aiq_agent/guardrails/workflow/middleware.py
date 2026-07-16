@@ -33,7 +33,6 @@ from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
 from aiq_agent.guardrails.workflow.config import WorkflowGuardrailsConfig
 from nat.builder.builder import Builder
 from nat.middleware.middleware import InvocationContext
-from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GuardrailsMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +104,7 @@ class _WorkflowGuardrails(GuardrailsMixin):
 
     async def post_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run output rails for the configured workflow result fields."""
-        return await GuardrailsMiddleware.post_invoke(self, context)
+        return await super().post_invoke(context)
 
     def _extract_guardrail_target(self, raw_input: object) -> str | None:
         """Extract the normalized user query text from a raw workflow input."""

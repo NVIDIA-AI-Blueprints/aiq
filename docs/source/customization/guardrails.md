@@ -34,8 +34,8 @@ At each configured boundary, guardrails can make one of three decisions:
 | Modify | Replace the selected input or output field with the modified content returned by the rail. |
 | Block | Return the configured refusal response instead of continuing with the blocked content. |
 
-Input-rail evaluation exceptions are caught, logged, and converted to the middleware refusal response. Output-rail
-evaluation exceptions are not converted to a refusal; they propagate and fail the invocation.
+Input- and output-rail evaluation exceptions are caught, logged, and converted to the middleware refusal response.
+Output failures preserve the intercepted response schema and do not return the original unfiltered output.
 
 ## Configuration Shape
 

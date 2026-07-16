@@ -90,11 +90,12 @@ RUN uv pip install --no-sources --no-deps -e . \
     && uv pip install --no-deps -e ./frontends/aiq_api \
     && uv pip install "psycopg[binary]>=3.0.0"
 
-RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; print('✓ Base packages installed')"
+RUN /app/.venv/bin/python -c \
+    "import aiq_api; import knowledge_layer; import presidio_analyzer; import presidio_anonymizer; import spacy; from nemoguardrails.library.sensitive_data_detection.actions import _get_analyzer; assert spacy.util.is_package('en_core_web_lg'); assert any(item.entity_type == 'EMAIL_ADDRESS' for item in _get_analyzer().analyze(text='Contact customer@example.com', language='en', entities=['EMAIL_ADDRESS'])); print('✓ Base packages and PII runtime installed')"
 
 RUN chmod +x /app/deploy/start_web.py \
     && mkdir -p /app/data \
-    && chown -R 1000:1000 /app
+    && chown 1000:1000 /app/data
 
 # =============================================================================
 # Stage 2: Development (includes CLI)
