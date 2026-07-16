@@ -667,6 +667,7 @@ async def test_post_invoke_refuses_when_output_rail_fails(
     assert output_text not in output.choices[0].message.content
     assert "rail backend failed" not in output.choices[0].message.content
     assert "Output Guardrails failed while evaluating selected fields" in caplog.text
+    assert "rail backend failed" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -709,9 +710,34 @@ async def test_post_invoke_contains_target_gathering_failure(
     caplog: pytest.LogCaptureFixture,
 ):
     """A target traversal failure cannot escape again while adapting the refusal."""
-    output = _workflow_response("Contact customer@example.com")
+    output = _workflow_response_with_outcome("Contact customer@example.com")
 
     caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.interface.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock()
+    log_sentinel = "target traversal failed for jane.doe@example.com"
+    guardrails._gather_guardrail_inputs = Mock(side_effect=RuntimeError(log_sentinel))
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert isinstance(context.output, type(output))
+    assert context.output.choices[0].message.content == _GUARDRAILS_FAILURE_REFUSAL
+    assert isinstance(context.output.workflow_outcome, WorkflowSuccess)
+    assert context.output.workflow_outcome.result == _GUARDRAILS_FAILURE_REFUSAL
+    assert "customer@example.com" not in context.output.model_dump_json()
+    assert "Output Guardrails failed while adapting refusal" in caplog.text
+    assert log_sentinel not in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_uses_schema_safe_emergency_refusal_for_chat_response(
+    guardrails: _WorkflowGuardrails,
+):
+    """Traversal failure preserves a workflow ChatResponse without terminal metadata."""
+    output_text = "Contact customer@example.com"
+    output = _workflow_response(output_text)
+
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._gather_guardrail_inputs = Mock(side_effect=RuntimeError("target traversal failed"))
     context = _workflow_context(output)
@@ -719,8 +745,44 @@ async def test_post_invoke_contains_target_gathering_failure(
     result = await guardrails.post_invoke(context)
 
     assert result is context
-    assert context.output == _GUARDRAILS_FAILURE_REFUSAL
-    assert "Output Guardrails failed while adapting refusal" in caplog.text
+    assert isinstance(context.output, type(output))
+    assert context.output.choices[0].message.content == _GUARDRAILS_FAILURE_REFUSAL
+    assert output_text not in context.output.model_dump_json()
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_contains_terminal_synchronization_failure(
+    guardrails: _WorkflowGuardrails,
+    caplog: pytest.LogCaptureFixture,
+):
+    """A terminal synchronization failure returns a shaped refusal without leaking output."""
+    output_text = "Contact customer@example.com"
+    masked_output = "Contact <EMAIL_ADDRESS>"
+    output = _workflow_response_with_outcome(output_text)
+    log_sentinel = "synchronization failed for jane.doe@example.com"
+
+    caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.interface.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            return_value=_rail_response(
+                [{"role": "assistant", "content": masked_output}],
+                rail_name="mask sensitive data on output",
+            )
+        )
+    )
+    guardrails._synchronize_terminal_output = Mock(side_effect=RuntimeError(log_sentinel))
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert isinstance(context.output, ChatResearcherResponse)
+    assert context.output.choices[0].message.content == _GUARDRAILS_FAILURE_REFUSAL
+    assert isinstance(context.output.workflow_outcome, WorkflowSuccess)
+    assert context.output.workflow_outcome.result == _GUARDRAILS_FAILURE_REFUSAL
+    assert output_text not in context.output.model_dump_json()
+    assert log_sentinel not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -816,6 +878,164 @@ async def test_stream_middleware_preserves_structured_output_chunks(guardrails: 
 
 
 @pytest.mark.asyncio
+async def test_stream_middleware_synchronizes_every_structured_terminal_outcome(
+    guardrails: _WorkflowGuardrails,
+):
+    """Masking a multi-chunk stream removes raw output from every serialized chunk."""
+    first_output = _workflow_response_with_outcome("Contact jane.doe@")
+    second_output = _workflow_response_with_outcome("example.com")
+    masked_output = "Contact <EMAIL_ADDRESS>"
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            side_effect=[
+                _rail_response("hello", rail_name="detect sensitive data on input"),
+                _rail_response(
+                    [{"role": "assistant", "content": masked_output}],
+                    rail_name="mask sensitive data on output",
+                ),
+            ]
+        )
+    )
+
+    async def call_next(*_args, **_kwargs):
+        yield first_output
+        yield second_output
+
+    results = [
+        item
+        async for item in guardrails.function_middleware_stream(
+            "hello",
+            call_next=call_next,
+            context=FunctionMiddlewareContext(
+                name=_TEST_WORKFLOW_FUNCTION,
+                config=None,
+                description=None,
+                input_schema=None,
+                single_output_schema=type(None),
+                stream_output_schema=type(None),
+            ),
+        )
+    ]
+
+    serialized = json.dumps([item.model_dump(mode="json") for item in results])
+    assert [item.choices[0].message.content for item in results] == [masked_output, ""]
+    assert [item.workflow_outcome.result for item in results] == [masked_output, ""]
+    assert "jane.doe@example.com" not in serialized
+    assert "jane.doe@" not in serialized
+    assert "example.com" not in serialized
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("rail_response", "expected"),
+    [
+        pytest.param("The result is safe.", ["The result ", "is safe."], id="pass"),
+        pytest.param("The result is masked.", ["The result is masked.", ""], id="modify"),
+    ],
+)
+async def test_stream_middleware_guards_mixed_string_and_structured_output(
+    guardrails: _WorkflowGuardrails,
+    rail_response: str,
+    expected: list[str],
+):
+    """Mixed string and structured chunks are evaluated as one guarded logical output."""
+    structured_output = _workflow_response_with_outcome("is safe.")
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            side_effect=[
+                _rail_response("hello", rail_name="detect sensitive data on input"),
+                _rail_response(
+                    [{"role": "assistant", "content": rail_response}],
+                    rail_name="mask sensitive data on output",
+                ),
+            ]
+        )
+    )
+
+    async def call_next(*_args, **_kwargs):
+        yield "The result "
+        yield structured_output
+
+    results = [
+        item
+        async for item in guardrails.function_middleware_stream(
+            "hello",
+            call_next=call_next,
+            context=FunctionMiddlewareContext(
+                name=_TEST_WORKFLOW_FUNCTION,
+                config=None,
+                description=None,
+                input_schema=None,
+                single_output_schema=type(None),
+                stream_output_schema=type(None),
+            ),
+        )
+    ]
+
+    assert results[0] == expected[0]
+    assert results[1].choices[0].message.content == expected[1]
+    assert results[1].workflow_outcome.result == expected[1]
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == "The result is safe."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure_mode", ["block", "exception"])
+async def test_stream_middleware_refuses_mixed_output_without_emitting_raw_chunks(
+    guardrails: _WorkflowGuardrails,
+    failure_mode: str,
+):
+    """A blocked or failed mixed stream emits one refusal and no buffered content."""
+    structured_output = _workflow_response_with_outcome("example.com")
+    output_result = (
+        _rail_response(
+            [{"role": "assistant", "content": TEST_REFUSAL}],
+            rail_name="detect sensitive data on output",
+            stopped=True,
+            bot_message=TEST_REFUSAL,
+        )
+        if failure_mode == "block"
+        else RuntimeError("rail failure for jane.doe@example.com")
+    )
+
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(
+        generate_async=AsyncMock(
+            side_effect=[
+                _rail_response("hello", rail_name="detect sensitive data on input"),
+                output_result,
+            ]
+        )
+    )
+
+    async def call_next(*_args, **_kwargs):
+        yield "Contact jane.doe@"
+        yield structured_output
+
+    results = [
+        item
+        async for item in guardrails.function_middleware_stream(
+            "hello",
+            call_next=call_next,
+            context=FunctionMiddlewareContext(
+                name=_TEST_WORKFLOW_FUNCTION,
+                config=None,
+                description=None,
+                input_schema=None,
+                single_output_schema=type(None),
+                stream_output_schema=type(None),
+            ),
+        )
+    ]
+
+    assert results == [TEST_REFUSAL if failure_mode == "block" else _GUARDRAILS_FAILURE_REFUSAL]
+    assert "jane.doe@example.com" not in str(results)
+
+
+@pytest.mark.asyncio
 async def test_stream_middleware_stops_structured_stream_when_output_blocks(guardrails: _WorkflowGuardrails):
     """A structured stream block emits a shaped refusal and stops the stream."""
     first_output = _workflow_response("The system ")
@@ -908,6 +1128,7 @@ async def test_stream_middleware_refuses_when_structured_output_rail_fails(
     assert first_output.choices[0].message.content == _GUARDRAILS_FAILURE_REFUSAL
     assert second_output.choices[0].message.content == "example.com"
     assert "Output Guardrails failed while evaluating buffered structured output" in caplog.text
+    assert "rail backend failed" not in caplog.text
 
 
 @pytest.mark.asyncio
@@ -955,3 +1176,4 @@ async def test_stream_middleware_refuses_when_string_output_rail_fails(
     assert results == [_GUARDRAILS_FAILURE_REFUSAL]
     assert raw_output not in results
     assert "Output Guardrails failed while evaluating selected fields" in caplog.text
+    assert "rail backend failed" not in caplog.text

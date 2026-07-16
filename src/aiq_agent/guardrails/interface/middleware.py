@@ -49,8 +49,11 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
         """Run input rails and adapt blocked outputs for the intercepted boundary."""
         try:
             result = await super().pre_invoke(context)
-        except Exception:
-            logger.exception("Input Guardrails failed while evaluating selected fields; refusing request")
+        except Exception as exc:
+            logger.error(
+                "Input Guardrails failed while evaluating selected fields; refusing request; error_type=%s",
+                type(exc).__name__,
+            )
             context.output = self._on_pre_invoke_blocked(context, _GUARDRAILS_FAILURE_REFUSAL)
             return context
 
@@ -69,16 +72,18 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
         """Run output rails and adapt blocked outputs for the intercepted boundary."""
         try:
             result = await super().post_invoke(context)
-        except Exception:
-            logger.exception(
-                "Output Guardrails failed while evaluating selected fields for function %s; refusing response",
+            if result is not None:
+                self._synchronize_terminal_output(context)
+            return result
+        except Exception as exc:
+            logger.error(
+                "Output Guardrails failed while evaluating selected fields for function %s; "
+                "refusing response; error_type=%s",
                 context.function_context.name,
+                type(exc).__name__,
             )
             context.output = self._refuse_output_safely(context, context.output)
             return context
-        if result is not None:
-            self._synchronize_terminal_output(context)
-        return result
 
     async def function_middleware_stream(
         self,
@@ -120,11 +125,12 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
 
         try:
             output, blocked = await self._apply_output_rails_to_structured_stream(ctx, buffered)
-        except Exception:
-            logger.exception(
+        except Exception as exc:
+            logger.error(
                 "Output Guardrails failed while evaluating buffered structured output for function %s; "
-                "refusing response",
+                "refusing response; error_type=%s",
                 context.name,
+                type(exc).__name__,
             )
             ctx.output = self._refuse_output_safely(ctx, buffered[0])
             yield ctx.output
@@ -155,7 +161,7 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
             input_text = getattr(raw, "input_message", None) or (raw if isinstance(raw, str) else str(raw))
 
         paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "post_invoke")
-        selections = self._structured_stream_output_selections(buffered, paths)
+        selections = self._stream_output_selections(buffered, paths)
         if not selections:
             return buffered[0], False
 
@@ -182,20 +188,32 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
             selections[0][1](result_text)
             for _text, apply_to_field in selections[1:]:
                 apply_to_field("")
-            self._replace_terminal_output_text(buffered[0], result_text)
+            self._synchronize_buffered_terminal_outputs(buffered, paths)
 
         return buffered[0], False
 
-    def _structured_stream_output_selections(
+    def _stream_output_selections(
         self,
         buffered: list[object],
         paths: list[str],
     ) -> list[tuple[str, Callable[[str], None]]]:
-        """Return selected text fields from buffered structured stream chunks."""
+        """Return writable text selections from string and structured stream chunks."""
         selections: list[tuple[str, Callable[[str], None]]] = []
-        for chunk in buffered:
-            selections.extend(self._gather_guardrail_inputs(chunk, paths, lambda _value: None))
+        for index, chunk in enumerate(buffered):
+            if isinstance(chunk, str):
+                selections.append((chunk, lambda value, index=index: buffered.__setitem__(index, value)))
+            else:
+                selections.extend(self._gather_guardrail_inputs(chunk, paths, lambda _value: None))
         return selections
+
+    def _synchronize_buffered_terminal_outputs(self, buffered: list[object], paths: list[str]) -> None:
+        """Align each structured chunk's terminal outcome with its rewritten public output."""
+        for chunk in buffered:
+            if isinstance(chunk, str):
+                continue
+            for text, _apply_to_field in self._gather_guardrail_inputs(chunk, paths, lambda _value: None):
+                self._replace_terminal_output_text(chunk, text)
+                break
 
     def on_post_invoke_blocked(self, context: InvocationContext, block_message: str) -> object:
         """Adapt blocked output before the intercepted result is returned."""
@@ -223,12 +241,18 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
         """Adapt a refusal without allowing a failing target traversal to escape."""
         try:
             return self._on_post_invoke_blocked(context, _GUARDRAILS_FAILURE_REFUSAL, original_output)
-        except Exception:
-            logger.exception(
-                "Output Guardrails failed while adapting refusal for function %s; returning scalar refusal",
+        except Exception as exc:
+            logger.error(
+                "Output Guardrails failed while adapting refusal for function %s; "
+                "using emergency refusal; error_type=%s",
                 context.function_context.name,
+                type(exc).__name__,
             )
-            return _GUARDRAILS_FAILURE_REFUSAL
+            return self._build_emergency_output_refusal(context, original_output)
+
+    def _build_emergency_output_refusal(self, context: InvocationContext, original_output: object) -> object:
+        """Return the traversal-independent refusal for this intercepted boundary."""
+        return _GUARDRAILS_FAILURE_REFUSAL
 
     @staticmethod
     def _replace_terminal_output_text(output: object, block_message: str) -> None:

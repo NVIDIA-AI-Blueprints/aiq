@@ -76,7 +76,7 @@ COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
 # import-fail at runtime. Syncing with the dev group installs those deps from the
 # frozen lock (still pinned, no re-resolve). TODO(deploy): move the source
 # packages to a dedicated non-dev group to keep test-only tooling out of the image.
-RUN uv sync --frozen --extra s3
+RUN uv sync --frozen --extra pii --extra s3
 
 # Install workspace packages (without CLI for base). The root install does not
 # need workspace source overrides because dependencies were synced above; avoid
@@ -93,6 +93,7 @@ RUN uv pip install --no-sources --no-deps -e . \
 RUN /app/.venv/bin/python -c \
     "import aiq_api; import knowledge_layer; import presidio_analyzer; import presidio_anonymizer; import spacy; from nemoguardrails.library.sensitive_data_detection.actions import _get_analyzer; assert spacy.util.is_package('en_core_web_lg'); assert any(item.entity_type == 'EMAIL_ADDRESS' for item in _get_analyzer().analyze(text='Contact customer@example.com', language='en', entities=['EMAIL_ADDRESS'])); print('✓ Base packages and PII runtime installed')"
 
+# Keep immutable application assets root-owned; only runtime data is writable by the service user.
 RUN chmod +x /app/deploy/start_web.py \
     && mkdir -p /app/data \
     && chown 1000:1000 /app/data

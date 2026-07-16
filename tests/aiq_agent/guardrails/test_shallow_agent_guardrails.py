@@ -23,6 +23,7 @@ import logging
 from collections.abc import Callable
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import Mock
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -421,8 +422,33 @@ async def test_post_invoke_refuses_when_output_rail_fails(
     assert output.messages[1].content == _GUARDRAILS_FAILURE_REFUSAL
     assert output_text not in output.messages[1].content
     assert "Output Guardrails failed while evaluating selected fields" in caplog.text
+    assert "rail backend failed" not in caplog.text
     if failure_point == "evaluate":
         guardrails._llm_rails.generate_async.assert_awaited_once()
         assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == output_text
     else:
         guardrails._llm_rails.generate_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_post_invoke_uses_schema_safe_emergency_refusal(
+    guardrails: _ShallowAgentGuardrails,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Traversal failure returns a minimal shallow-agent state without protected output."""
+    output_text = "Contact customer@example.com"
+    log_sentinel = "traversal failed for jane.doe@example.com"
+    output = ShallowResearchAgentState(messages=[AIMessage(content=output_text)])
+
+    caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.interface.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._gather_guardrail_inputs = Mock(side_effect=RuntimeError(log_sentinel))
+    context = _post_invoke_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert isinstance(context.output, ShallowResearchAgentState)
+    assert [message.content for message in context.output.messages] == [_GUARDRAILS_FAILURE_REFUSAL]
+    assert output_text not in context.output.model_dump_json()
+    assert log_sentinel not in caplog.text

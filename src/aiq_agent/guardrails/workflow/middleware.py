@@ -26,8 +26,11 @@ from nemoguardrails.rails.llm.options import GenerationLogOptions
 from nemoguardrails.rails.llm.options import GenerationOptions
 from nemoguardrails.rails.llm.options import GenerationResponse
 
+from aiq_agent.agents.chat_researcher.models.result import ChatResearcherResponse
+from aiq_agent.agents.chat_researcher.models.result import WorkflowSuccess
 from aiq_agent.agents.chat_researcher.utils import _extract_context_from_text
 from aiq_agent.agents.chat_researcher.utils import _is_user_role
+from aiq_agent.common import _create_chat_response
 from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
 from aiq_agent.guardrails.workflow.config import WorkflowGuardrailsConfig
@@ -97,14 +100,29 @@ class _WorkflowGuardrails(GuardrailsMixin):
                 modified = True
 
             return context if modified else None
-        except Exception:
-            logger.exception("Workflow input Guardrails failed while evaluating query text; refusing request")
+        except Exception as exc:
+            logger.error(
+                "Workflow input Guardrails failed while evaluating query text; refusing request; error_type=%s",
+                type(exc).__name__,
+            )
             context.output = self._on_pre_invoke_blocked(context, _GUARDRAILS_FAILURE_REFUSAL)
             return context
 
     async def post_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run output rails for the configured workflow result fields."""
         return await super().post_invoke(context)
+
+    def _build_emergency_output_refusal(self, context: InvocationContext, original_output: object) -> object:
+        """Return a fresh refusal preserving the workflow response schema."""
+        model = getattr(original_output, "model", None)
+        response_id = getattr(original_output, "id", "guardrails_refusal")
+        response = _create_chat_response(_GUARDRAILS_FAILURE_REFUSAL, response_id=response_id, model=model)
+        if isinstance(original_output, ChatResearcherResponse):
+            return ChatResearcherResponse(
+                **response.model_dump(),
+                workflow_outcome=WorkflowSuccess(result=_GUARDRAILS_FAILURE_REFUSAL),
+            )
+        return response
 
     def _extract_guardrail_target(self, raw_input: object) -> str | None:
         """Extract the normalized user query text from a raw workflow input."""
@@ -120,10 +138,12 @@ class _WorkflowGuardrails(GuardrailsMixin):
         """Extract guardrail targets that each map to one writable string leaf."""
         try:
             targets = self._extract_guardrail_targets_for_rewrite_unchecked(raw_input)
-        except Exception:
-            logger.exception(
-                "Workflow input Guardrails could not extract query text from input type %s; continuing without rails",
+        except Exception as exc:
+            logger.error(
+                "Workflow input Guardrails could not extract query text from input type %s; "
+                "continuing without rails; error_type=%s",
                 type(raw_input).__name__,
+                type(exc).__name__,
             )
             return []
 
