@@ -198,6 +198,7 @@ requires-dist = [
     { name = "asyncpg", specifier = ">=0.29.0" },
     { name = "boto3", marker = "extra == 's3'", specifier = ">=1.35.0,<2" },
     { name = "deepagents", specifier = ">=0.6.5" },
+    { name = "en-core-web-lg", marker = "extra == 'pii'", url = "https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl" },
     { name = "knowledge-layer", extras = ["all"], editable = "../sources/knowledge_layer" },
     { name = "langchain-modal", specifier = "==0.0.5" },
     { name = "langgraph-checkpoint-postgres", specifier = ">=3.0.0" },
@@ -209,6 +210,7 @@ requires-dist = [
     { name = "nvidia-nat-eval", specifier = "==1.8.0" },
     { name = "nvidia-nat-profiler", specifier = "==1.8.0" },
     { name = "nvidia-nat-redis", specifier = "==1.8.0" },
+    { name = "nvidia-nat-security", extras = ["defense"], marker = "extra == 'pii'", specifier = "==1.8.0" },
     { name = "nvidia-nat-security", extras = ["guardrails"], specifier = "==1.8.0" },
     { name = "nvidia-sphinx-theme", marker = "extra == 'docs'", specifier = ">=0.0.9.post1" },
     { name = "pillow", specifier = ">=12.2.0,<13" },
@@ -231,7 +233,7 @@ requires-dist = [
     { name = "sphinxcontrib-mermaid", marker = "extra == 'docs'", specifier = ">=2.0.1" },
     { name = "yapf", marker = "extra == 'dev'", specifier = ">=0.40.0" },
 ]
-provides-extras = ["s3", "dev", "docs", "viz"]
+provides-extras = ["pii", "s3", "dev", "docs", "viz"]
 
 [package.metadata.requires-dev]
 dev = [
