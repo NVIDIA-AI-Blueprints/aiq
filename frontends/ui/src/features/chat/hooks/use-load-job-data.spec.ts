@@ -95,6 +95,14 @@ vi.mock('@/adapters/api', () => ({
   getJobReport: (...args: unknown[]) => mockGetJobReport(...args),
   getJobState: (...args: unknown[]) => mockGetJobState(...args),
   createDeepResearchClient: (...args: unknown[]) => mockCreateDeepResearchClient(...args),
+  reportWithCitationVerificationWarning: (
+    report: string,
+    citationVerificationStatus?: { warning?: string | null } | null
+  ) => {
+    const warning = citationVerificationStatus?.warning
+    if (!warning || report.startsWith(warning)) return report
+    return `${warning}\n\n${report}`
+  },
 }))
 
 vi.mock('../store', () => ({
@@ -176,6 +184,31 @@ describe('useLoadJobData', () => {
     expect(mockGetJobReport).toHaveBeenCalledWith('job-123', 'token-123')
     expect(mockSetReportContent).toHaveBeenCalledWith('Loaded report', 'final_report')
     expect(mockCreateDeepResearchClient).not.toHaveBeenCalled()
+  })
+
+  test('prefixes unverified citation warning when loading report tab data', async () => {
+    const warning =
+      'Warning: This report could not be citation-verified because no sources were captured.'
+    mockGetJobStatus.mockResolvedValue({ job_id: 'job-123', status: 'success', error: null })
+    mockGetJobReport.mockResolvedValue({
+      job_id: 'job-123',
+      has_report: true,
+      report: 'Loaded report',
+      citation_verification_status: {
+        status: 'unverified',
+        reason: 'sources_not_captured',
+        warning,
+      },
+    })
+    mockGetJobState.mockResolvedValue({ job_id: 'job-123', has_state: false, artifacts: null })
+
+    const { result } = renderHook(() => useLoadJobData())
+
+    await act(async () => {
+      await result.current.loadResearchPanelTab('job-123', 'report')
+    })
+
+    expect(mockSetReportContent).toHaveBeenCalledWith(`${warning}\n\nLoaded report`, 'final_report')
   })
 
   test('does not reload report tab data when the current job already has report content', async () => {
@@ -400,7 +433,10 @@ describe('useLoadJobData', () => {
 
   test('imports root-level todos from full stream replay', async () => {
     let streamCallbacks: {
-      onTodoUpdate: (todos: Array<{ id: string; content: string; status: 'pending' }>, workflow?: string) => void
+      onTodoUpdate: (
+        todos: Array<{ id: string; content: string; status: 'pending' }>,
+        workflow?: string
+      ) => void
       onComplete: () => void
     } | null = null
 
@@ -422,9 +458,7 @@ describe('useLoadJobData', () => {
       await Promise.resolve()
 
       expect(streamCallbacks).not.toBeNull()
-      streamCallbacks!.onTodoUpdate(
-        [{ id: '1', content: 'Replay task', status: 'pending' }]
-      )
+      streamCallbacks!.onTodoUpdate([{ id: '1', content: 'Replay task', status: 'pending' }])
       streamCallbacks!.onComplete()
 
       await replay
@@ -433,7 +467,9 @@ describe('useLoadJobData', () => {
     const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
     expect(replayCommit).toEqual(expect.any(Function))
 
-    const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+    const updates = (
+      replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>
+    )({
       currentStatus: 'researching',
     })
     expect(updates.deepResearchTodos).toEqual([
@@ -443,7 +479,10 @@ describe('useLoadJobData', () => {
 
   test('does not import workflow-scoped sub-agent todos from full stream replay', async () => {
     let streamCallbacks: {
-      onTodoUpdate: (todos: Array<{ id: string; content: string; status: 'pending' }>, workflow?: string) => void
+      onTodoUpdate: (
+        todos: Array<{ id: string; content: string; status: 'pending' }>,
+        workflow?: string
+      ) => void
       onComplete: () => void
     } | null = null
 
@@ -477,7 +516,9 @@ describe('useLoadJobData', () => {
     const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
     expect(replayCommit).toEqual(expect.any(Function))
 
-    const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+    const updates = (
+      replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>
+    )({
       currentStatus: 'researching',
     })
     expect(updates).not.toHaveProperty('deepResearchTodos')

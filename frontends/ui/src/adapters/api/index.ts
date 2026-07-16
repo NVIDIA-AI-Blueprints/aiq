@@ -30,7 +30,11 @@ export type {
   NATWebSocketClientOptions,
 } from './websocket-client'
 export { NATMessageType, NATSchemaType, HumanPromptType } from './websocket-client'
-export type { NATHumanPrompt, NATIntermediateStepContent, NATErrorContent } from './websocket-client'
+export type {
+  NATHumanPrompt,
+  NATIntermediateStepContent,
+  NATErrorContent,
+} from './websocket-client'
 
 // Schemas and Types
 export {
@@ -106,8 +110,17 @@ export type {
 } from './documents-schemas'
 
 // Deep Research Client (SSE Streaming for async jobs)
-export { createDeepResearchClient, getJobStatus, getJobState, getJobReport, cancelJob } from './deep-research-client'
+export {
+  createDeepResearchClient,
+  getJobStatus,
+  getJobState,
+  getJobReport,
+  reportWithCitationVerificationWarning,
+  cancelJob,
+} from './deep-research-client'
 export type {
+  CitationVerificationStatus,
+  JobReportResponse,
   DeepResearchJobStatus,
   DeepResearchEventType,
   ArtifactType,

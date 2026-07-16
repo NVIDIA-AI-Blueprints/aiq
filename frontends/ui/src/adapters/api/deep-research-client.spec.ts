@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { createDeepResearchClient, getJobStatus } from './deep-research-client'
+import {
+  createDeepResearchClient,
+  getJobStatus,
+  reportWithCitationVerificationWarning,
+} from './deep-research-client'
 
 class FakeEventSource {
   static latest: FakeEventSource | null = null
@@ -29,6 +33,26 @@ class FakeEventSource {
 describe('deep research REST client', () => {
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  test('prefixes citation verification warning once', () => {
+    const warning = 'Warning: This report could not be citation-verified.'
+
+    expect(
+      reportWithCitationVerificationWarning('Report body', {
+        status: 'unverified',
+        reason: 'sources_not_captured',
+        warning,
+      })
+    ).toBe(`${warning}\n\nReport body`)
+
+    expect(
+      reportWithCitationVerificationWarning(`${warning}\n\nReport body`, {
+        status: 'unverified',
+        reason: 'sources_not_captured',
+        warning,
+      })
+    ).toBe(`${warning}\n\nReport body`)
   })
 
   test('includes proxy error details when job status lookup fails', async () => {

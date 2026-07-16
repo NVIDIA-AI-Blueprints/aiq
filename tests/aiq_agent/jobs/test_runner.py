@@ -603,6 +603,31 @@ class TestSubmitDeepResearchJob:
 class TestRunAgentJobEncryption:
     """Tests for async worker encryption preflight behavior."""
 
+    def test_extract_citation_verification_status_sanitizes_internal_diagnostics(self):
+        from types import SimpleNamespace
+
+        from aiq_api.jobs.runner import _extract_citation_verification_status
+
+        result = SimpleNamespace(
+            citation_verification_status={
+                "status": "unverified",
+                "reason": "sources_not_captured",
+                "available_tool_count": 1,
+                "unavailable_tools": ["internal_search (missing INTERNAL_TOKEN)"],
+            }
+        )
+
+        status = _extract_citation_verification_status(result)
+
+        assert status == {
+            "status": "unverified",
+            "reason": "sources_not_captured",
+            "warning": (
+                "Warning: This report could not be citation-verified because no sources were captured. "
+                "Review the findings before relying on them."
+            ),
+        }
+
     @pytest.mark.asyncio
     async def test_encryption_preflight_failure_marks_failure_before_running(self):
         from aiq_api.jobs.crypto import ContentEncryptionConfig

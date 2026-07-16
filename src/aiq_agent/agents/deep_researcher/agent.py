@@ -41,7 +41,11 @@ from .deepagents_runtime import DeepResearchSkillsConfig
 from .factory import build_deep_research_graph
 from .factory import build_deep_research_middleware_set
 from .factory import build_deep_research_tool_set
+from .models import NO_TOOLS_AVAILABLE_REASON
+from .models import SOURCES_NOT_CAPTURED_REASON
+from .models import UNVERIFIED_CITATION_STATUS
 from .models import DeepResearchAgentState
+from .models import prepend_citation_verification_warning
 from .tools.source_tool_batching import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
 from .tools.source_tool_batching import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
 
@@ -272,6 +276,14 @@ class DeepResearcherAgent:
         else:
             messages[-1] = type(last_msg)(content=content)
 
+    @staticmethod
+    def _set_citation_verification_status(result: dict | Any, status: dict[str, Any]) -> None:
+        """Attach citation-verification status to dict or model-like graph results."""
+        if isinstance(result, dict):
+            result["citation_verification_status"] = status
+        else:
+            setattr(result, "citation_verification_status", status)
+
     async def run(self, state: DeepResearchAgentState) -> DeepResearchAgentState:
         """
         Execute deep research with multi-phase workflow.
@@ -346,13 +358,17 @@ class DeepResearcherAgent:
                         "without using search results. Returning the report unverified.",
                         available_count,
                     )
+                reason = NO_TOOLS_AVAILABLE_REASON if available_count == 0 else SOURCES_NOT_CAPTURED_REASON
                 if result is not None:
-                    result["citation_verification_status"] = {
-                        "status": "unverified",
-                        "reason": "empty_source_registry",
-                        "available_tool_count": available_count,
-                        "unavailable_tools": unavailable,
-                    }
+                    self._set_citation_verification_status(
+                        result,
+                        {
+                            "status": UNVERIFIED_CITATION_STATUS,
+                            "reason": reason,
+                            "available_tool_count": available_count,
+                            "unavailable_tools": unavailable,
+                        },
+                    )
 
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
@@ -378,6 +394,13 @@ class DeepResearcherAgent:
                         "Artifact post-processing failed; returning report without embedded artifacts",
                         exc_info=True,
                     )
+
+            citation_verification_status = (
+                result.get("citation_verification_status")
+                if isinstance(result, dict)
+                else getattr(result, "citation_verification_status", None)
+            )
+            final_message = prepend_citation_verification_warning(final_message, citation_verification_status)
 
             # Re-emit the verified/sanitized report so the frontend overwrites
             # the raw version that on_llm_end auto-emitted during ainvoke().

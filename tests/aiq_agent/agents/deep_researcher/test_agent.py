@@ -1258,9 +1258,42 @@ class TestDeepResearcherAgent:
             assert result.messages, "Report should be preserved even when sources are missing"
             assert result.citation_verification_status is not None
             assert result.citation_verification_status["status"] == "unverified"
-            assert result.citation_verification_status["reason"] == "empty_source_registry"
+            assert result.citation_verification_status["reason"] == "sources_not_captured"
             assert "available_tool_count" in result.citation_verification_status
             assert "unavailable_tools" in result.citation_verification_status
+            assert result.messages[-1].content.startswith(
+                "Warning: This report could not be citation-verified because no sources were captured."
+            )
+
+    @pytest.mark.asyncio
+    async def test_run_sets_unverified_status_on_state_result_object(self, mock_llm_provider):
+        """The unverified status path handles model-like results as well as dictionaries."""
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(
+            return_value=DeepResearchAgentState(
+                messages=[AIMessage(content="done")],
+                files=output_markdown_file("# Deep Report\n\nFindings without captured sources."),
+            )
+        )
+
+        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[],
+            )
+
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Test query")])
+            result = await agent.run(state)
+
+            assert result.citation_verification_status is not None
+            assert result.citation_verification_status["status"] == "unverified"
+            assert result.citation_verification_status["reason"] == "no_tools_available"
+            assert result.messages[-1].content.startswith(
+                "Warning: This report could not be citation-verified because no research tools were available."
+            )
 
     @pytest.mark.asyncio
     async def test_run_with_sources_leaves_verification_status_none(

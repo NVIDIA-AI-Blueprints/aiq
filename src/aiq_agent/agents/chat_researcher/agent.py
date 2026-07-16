@@ -43,6 +43,7 @@ from langgraph.types import Command
 from aiq_agent.agents.clarifier.models import ClarifierAgentState
 from aiq_agent.agents.clarifier.models import ClarifierResult
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
+from aiq_agent.agents.deep_researcher.models import prepend_citation_verification_warning
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
@@ -332,28 +333,6 @@ class ChatResearcherAgent:
             )
             try:
                 result = await self.deep_research_fn(deep_state)
-            # Deep researcher no longer raises EmptySourceRegistryError when the source
-            # registry is empty (issue #235): it now returns the report with
-            # `citation_verification_status` set so the report isn't lost. Block kept
-            # commented for reference until that flag is wired through to surface
-            # unverified-report UX here.
-            # except EmptySourceRegistryError as exc:
-            #     logger.warning("Deep research produced no verifiable sources")
-            #     if exc.unavailable_tools:
-            #         from aiq_agent.common.tool_validation import format_user_facing_tool_error
-            #
-            #         err_msg = format_user_facing_tool_error(
-            #             "deep research",
-            #             exc.unavailable_tools,
-            #             exc.available_count,
-            #         )
-            #     else:
-            #         err_msg = (
-            #             "The search tools did not return any results for this question. "
-            #             "This may be due to a temporary issue or the question may need to be rephrased. "
-            #             "Please try again."
-            #         )
-            #     return {"messages": [AIMessage(content=err_msg)]}
             except Exception as e:
                 if _AuthError and isinstance(e, _AuthError):
                     logger.warning("Auth error in deep research: %s", e)
@@ -374,11 +353,21 @@ class ChatResearcherAgent:
             else:
                 report_message = result.messages[-1]
                 report_md = report_message.content
+                report_text = report_md if isinstance(report_md, str) else str(report_md)
+                visible_report = prepend_citation_verification_warning(
+                    report_text,
+                    getattr(result, "citation_verification_status", None),
+                )
+                if visible_report != report_text:
+                    if hasattr(report_message, "model_copy"):
+                        report_message = report_message.model_copy(update={"content": visible_report})
+                    else:
+                        report_message = AIMessage(content=visible_report)
                 # Capture the inline report so follow-up turns in this (synchronous) session can
                 # reference it without an async job. Checkpointed via the keep-if-set reducer.
                 return {
                     "messages": [report_message],
-                    "last_report_markdown": report_md if isinstance(report_md, str) else str(report_md),
+                    "last_report_markdown": report_text,
                 }
 
         async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:

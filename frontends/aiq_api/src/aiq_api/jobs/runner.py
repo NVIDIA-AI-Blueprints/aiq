@@ -824,6 +824,9 @@ async def run_agent_job(
                     # Apply caller metadata first, then set the canonical report last so a
                     # stray "report" key in output_metadata can never overwrite the real report.
                     output = {**(output_metadata or {}), "report": report}
+                    citation_verification_status = _extract_citation_verification_status(result)
+                    if citation_verification_status is not None:
+                        output["citation_verification_status"] = citation_verification_status
                     try:
                         await update_job_output(
                             job_store,
@@ -1242,6 +1245,17 @@ def _extract_result(result: Any) -> str:
             return str(result["output"])
 
     return str(result) if result else ""
+
+
+def _extract_citation_verification_status(result: Any) -> dict[str, str] | None:
+    """Extract the public citation-verification disposition from an agent result."""
+    from aiq_agent.agents.deep_researcher.models import public_citation_verification_status
+
+    if isinstance(result, dict):
+        status = result.get("citation_verification_status")
+    else:
+        status = getattr(result, "citation_verification_status", None)
+    return public_citation_verification_status(status)
 
 
 # Backwards compatibility alias

@@ -48,6 +48,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
 
+from aiq_agent.agents.deep_researcher.models import public_citation_verification_status
 from aiq_agent.common.data_source_registry import get_all_sources
 from aiq_agent.common.data_source_registry import get_all_tool_refs
 from aiq_agent.common.data_source_registry import get_source_id_for_tool
@@ -397,12 +398,24 @@ class JobStateResponse(BaseModel):
     artifacts: dict | None = Field(None, description="Tool calls, outputs, and sources collected during execution")
 
 
+class CitationVerificationStatusResponse(BaseModel):
+    """Public citation-verification disposition for a generated report."""
+
+    status: str = Field(..., description="Citation verification status, for example 'unverified'")
+    reason: str = Field(..., description="Machine-readable reason for the status")
+    warning: str = Field(..., description="User-facing warning for this report")
+
+
 class JobReportResponse(BaseModel):
     """Final report response."""
 
     job_id: str = Field(..., description="Unique job identifier")
     has_report: bool = Field(..., description="Whether the final report is available")
     report: str | None = Field(None, description="Final research report from the agent")
+    citation_verification_status: CitationVerificationStatusResponse | None = Field(
+        None,
+        description="Citation verification disposition when the report could not be verified",
+    )
     parent_job_id: str | None = Field(None, description="Parent report job ID for report follow-up outputs")
     interaction_action: str | None = Field(None, description="Report interaction action that produced this output")
     result_kind: str | None = Field(None, description="Kind of result returned by the child job")
@@ -1150,6 +1163,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             job_id=job_id,
             has_report=bool(report),
             report=report,
+            citation_verification_status=public_citation_verification_status(
+                output.get("citation_verification_status")
+            ),
             parent_job_id=output.get("parent_job_id"),
             interaction_action=output.get("interaction_action"),
             result_kind=output.get("result_kind"),

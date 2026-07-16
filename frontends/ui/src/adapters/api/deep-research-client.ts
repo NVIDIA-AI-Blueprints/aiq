@@ -39,6 +39,19 @@ export type DeepResearchEventType =
 /** Artifact types in artifact.update events */
 export type ArtifactType = 'todo' | 'citation_source' | 'citation_use' | 'file' | 'output'
 
+export interface CitationVerificationStatus {
+  status: string
+  reason: string
+  warning: string
+}
+
+export interface JobReportResponse {
+  job_id: string
+  has_report: boolean
+  report: string | null
+  citation_verification_status?: CitationVerificationStatus | null
+}
+
 /** Base SSE event structure */
 export interface DeepResearchSSEEvent {
   event: DeepResearchEventType
@@ -763,7 +776,7 @@ export const getJobStatus = async (
 export const getJobReport = async (
   jobId: string,
   authToken?: string
-): Promise<{ job_id: string; has_report: boolean; report: string | null }> => {
+): Promise<JobReportResponse> => {
   const url = `${getDeepResearchBaseUrl()}/job/${jobId}/report`
   const headers: HeadersInit = {
     'Content-Type': 'application/json',
@@ -780,6 +793,17 @@ export const getJobReport = async (
   }
 
   return response.json()
+}
+
+export const reportWithCitationVerificationWarning = (
+  report: string,
+  citationVerificationStatus?: CitationVerificationStatus | null
+): string => {
+  const warning = citationVerificationStatus?.warning
+  if (!warning || report.startsWith(warning)) {
+    return report
+  }
+  return `${warning}\n\n${report}`
 }
 
 /** Cancel a running job */

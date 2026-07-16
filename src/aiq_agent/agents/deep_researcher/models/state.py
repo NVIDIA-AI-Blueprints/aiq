@@ -25,6 +25,21 @@ from pydantic import Field
 
 from aiq_agent.knowledge import AvailableDocument
 
+UNVERIFIED_CITATION_STATUS = "unverified"
+NO_TOOLS_AVAILABLE_REASON = "no_tools_available"
+SOURCES_NOT_CAPTURED_REASON = "sources_not_captured"
+
+_UNVERIFIED_CITATION_WARNINGS = {
+    NO_TOOLS_AVAILABLE_REASON: (
+        "Warning: This report could not be citation-verified because no research tools were available. "
+        "Review the findings before relying on them."
+    ),
+    SOURCES_NOT_CAPTURED_REASON: (
+        "Warning: This report could not be citation-verified because no sources were captured. "
+        "Review the findings before relying on them."
+    ),
+}
+
 
 def _merge_dict_state(left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
     if not left:
@@ -34,6 +49,40 @@ def _merge_dict_state(left: dict[str, Any] | None, right: dict[str, Any] | None)
     merged = dict(left)
     merged.update(right)
     return merged
+
+
+def citation_verification_warning(reason: str | None) -> str:
+    """Return a user-facing warning for an unverified citation disposition."""
+    return _UNVERIFIED_CITATION_WARNINGS.get(
+        reason or "",
+        "Warning: This report could not be citation-verified. Review the findings before relying on them.",
+    )
+
+
+def public_citation_verification_status(status: Any) -> dict[str, str] | None:
+    """Convert internal citation-verification diagnostics into a safe public disposition."""
+    if not isinstance(status, dict) or status.get("status") != UNVERIFIED_CITATION_STATUS:
+        return None
+
+    raw_reason = status.get("reason")
+    reason = raw_reason if isinstance(raw_reason, str) and raw_reason else "unknown"
+    return {
+        "status": UNVERIFIED_CITATION_STATUS,
+        "reason": reason,
+        "warning": citation_verification_warning(reason),
+    }
+
+
+def prepend_citation_verification_warning(content: str, status: Any) -> str:
+    """Prefix report content with the public unverified warning, once."""
+    public_status = public_citation_verification_status(status)
+    if public_status is None:
+        return content
+
+    warning = public_status["warning"]
+    if content.startswith(warning):
+        return content
+    return f"{warning}\n\n{content}"
 
 
 class DeepResearchAgentState(BaseModel):

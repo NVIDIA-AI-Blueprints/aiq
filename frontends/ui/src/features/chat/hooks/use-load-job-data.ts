@@ -26,6 +26,7 @@ import {
   getJobStatus,
   getJobState,
   createDeepResearchClient,
+  reportWithCitationVerificationWarning,
   type DeepResearchClient,
   type DeepResearchJobStatus,
   type FileArtifactUpdate,
@@ -258,7 +259,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       const response = await getJobReport(jobId, idToken || undefined)
 
       if (response.has_report && response.report) {
-        setReportContent(response.report, 'final_report')
+        setReportContent(
+          reportWithCitationVerificationWarning(
+            response.report,
+            response.citation_verification_status
+          ),
+          'final_report'
+        )
         return true
       }
 
@@ -326,7 +333,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         reportResult.value.has_report &&
         reportResult.value.report
       ) {
-        setReportContent(reportResult.value.report, 'final_report')
+        setReportContent(
+          reportWithCitationVerificationWarning(
+            reportResult.value.report,
+            reportResult.value.citation_verification_status
+          ),
+          'final_report'
+        )
       }
     },
     [idToken, loadJobState, setReportContent]

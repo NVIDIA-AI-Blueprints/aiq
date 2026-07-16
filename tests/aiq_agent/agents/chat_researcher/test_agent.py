@@ -845,3 +845,44 @@ class TestChatResearcherAgent:
         result = await agent.run(state, thread_id="test-thread-capture")
 
         assert result["last_report_markdown"] == "# Deep Report\n\nFindings."
+
+    @pytest.mark.asyncio
+    async def test_deep_research_surfaces_unverified_warning(
+        self,
+        mock_shallow_research,
+        mock_clarifier,
+    ):
+        """Inline deep research warns users when citation verification was skipped."""
+
+        async def deep_orchestration(state):
+            return {
+                "user_intent": IntentResult(intent="research", raw=None),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="complex"),
+            }
+
+        async def deep(state):
+            result = MagicMock()
+            result.messages = list(state.messages) + [AIMessage(content="# Deep Report\n\nFindings.")]
+            result.citation_verification_status = {
+                "status": "unverified",
+                "reason": "sources_not_captured",
+                "available_tool_count": 1,
+                "unavailable_tools": ["example_search (missing API key)"],
+            }
+            return result
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=deep,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+        )
+
+        state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
+        result = await agent.run(state, thread_id="test-thread-unverified-warning")
+
+        assert result["messages"][-1].content.startswith(
+            "Warning: This report could not be citation-verified because no sources were captured."
+        )
+        assert result["last_report_markdown"] == "# Deep Report\n\nFindings."

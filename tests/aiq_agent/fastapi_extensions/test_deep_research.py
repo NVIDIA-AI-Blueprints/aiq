@@ -186,6 +186,25 @@ class TestJobReportResponse:
         assert resp.has_report is True
         assert resp.report == "# Report\n\nContent here"
 
+    def test_with_citation_verification_status(self):
+        """Test report response exposes an unverified citation disposition."""
+        warning = "Warning: This report could not be citation-verified."
+        resp = JobReportResponse(
+            job_id="123",
+            has_report=True,
+            report="# Report\n\nContent here",
+            citation_verification_status={
+                "status": "unverified",
+                "reason": "sources_not_captured",
+                "warning": warning,
+            },
+        )
+
+        assert resp.citation_verification_status is not None
+        assert resp.citation_verification_status.status == "unverified"
+        assert resp.citation_verification_status.reason == "sources_not_captured"
+        assert resp.citation_verification_status.warning == warning
+
 
 class TestRegisterRoutes:
     """Tests for the register_routes function."""
