@@ -978,7 +978,7 @@ class TestChatResearcherAgent:
         state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
         result = await agent.run(state, thread_id="test-thread-unverified-warning")
 
-        warning = "Warning: This report could not be citation-verified because no sources were captured."
+        warning = citation_verification_warning("sources_not_captured")
         assert result["messages"][-1].content.startswith(warning)
         assert result["messages"][-1].content.count(warning) == 1
         assert result["last_report_markdown"] == "# Deep Report\n\nFindings."
