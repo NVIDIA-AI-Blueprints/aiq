@@ -73,6 +73,7 @@ class FakeSearchClient:
         self.search_filters: list[str | None] = []
         self.search_requests: list[dict] = []
         self.fail_upload_ids: set[str] = set()
+        self.upload_response_failures_remaining = 0
         self.delete_failures_remaining: dict[str, int] = {}
         self.hidden_searches_remaining = 0
         self.stale_deleted_searches_remaining = 0
@@ -103,6 +104,9 @@ class FakeSearchClient:
                     self.pending_uploads.pop(key, None)
                     self._publish(pending)
             results.append(FakeIndexingResult(key, succeeded, None if succeeded else "rejected"))
+        if self.upload_response_failures_remaining:
+            self.upload_response_failures_remaining -= 1
+            raise ServiceRequestError("response lost after Azure accepted the upload")
         return results
 
     def delete_documents(self, documents: list[dict]):
@@ -139,12 +143,15 @@ class FakeSearchClient:
         }
         excluded_record_type = _literal(filter, "record_type", "ne")
         after_id = _literal(filter, "id", "gt")
+        search_in = re.search(r"search\.in\(file_id, '((?:''|[^'])*)', ','\)", filter or "")
+        included_file_ids = set(search_in.group(1).replace("''", "'").split(",")) if search_in else None
 
         def matches(document):
             return (
                 not any(value is not None and document.get(field) != value for field, value in equals.items())
                 and (excluded_record_type is None or document.get("record_type") != excluded_record_type)
                 and (after_id is None or document["id"] > after_id)
+                and (included_file_ids is None or document.get("file_id") in included_file_ids)
             )
 
         for key, (document, remaining) in list(self.pending_uploads.items()):
@@ -176,6 +183,8 @@ class FakeSearchClient:
             documents = [document for document in documents if document.get("record_type") != excluded_record_type]
         if after_id is not None:
             documents = [document for document in documents if document["id"] > after_id]
+        if included_file_ids is not None:
+            documents = [document for document in documents if document.get("file_id") in included_file_ids]
         facet_documents = documents
         if top is not None:
             documents = documents[:top]
@@ -278,10 +287,10 @@ def _config(**overrides):
     return config
 
 
-def _ingestor(**overrides):
+def _ingestor(*, index_client=None, search_client=None, **overrides):
     ingestor = AzureAISearchIngestor(_config(**overrides))
-    ingestor._index_client = FakeIndexClient()
-    search_client = FakeSearchClient()
+    ingestor._index_client = index_client or FakeIndexClient()
+    search_client = search_client or FakeSearchClient()
     ingestor._search_client = search_client
     ingestor._index_validated = False
     return ingestor, search_client
@@ -323,6 +332,19 @@ def _install_reader(monkeypatch):
             return [object()]
 
     monkeypatch.setattr("llama_index.core.SimpleDirectoryReader", FakeReader)
+
+
+def _run_threads_synchronously(monkeypatch):
+    class SynchronousThread:
+        def __init__(self, *, target, args, **kwargs):
+            del kwargs
+            self.target = target
+            self.args = args
+
+        def start(self):
+            self.target(*self.args)
+
+    monkeypatch.setattr(azure_adapter.threading, "Thread", SynchronousThread)
 
 
 def test_backend_registered_and_implements_sdk_contracts():
@@ -643,16 +665,7 @@ def test_submit_job_uses_one_canonical_file_id(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize("rollback_fails", [False, True])
 def test_submit_job_rolls_back_manifests_when_second_write_fails(monkeypatch, tmp_path, rollback_fails):
-    class SynchronousThread:
-        def __init__(self, *, target, args, **kwargs):
-            del kwargs
-            self.target = target
-            self.args = args
-
-        def start(self):
-            self.target(*self.args)
-
-    monkeypatch.setattr(azure_adapter.threading, "Thread", SynchronousThread)
+    _run_threads_synchronously(monkeypatch)
     paths = [tmp_path / "first.txt", tmp_path / "second.txt"]
     for path in paths:
         path.write_text("content", encoding="utf-8")
@@ -716,17 +729,8 @@ def test_submit_job_records_thread_start_failure(monkeypatch, tmp_path):
 
 
 def test_upload_file_preserves_caller_owned_source_by_default(monkeypatch, tmp_path):
-    class SynchronousThread:
-        def __init__(self, *, target, args, **kwargs):
-            del kwargs
-            self.target = target
-            self.args = args
-
-        def start(self):
-            self.target(*self.args)
-
     _install_reader(monkeypatch)
-    monkeypatch.setattr(azure_adapter.threading, "Thread", SynchronousThread)
+    _run_threads_synchronously(monkeypatch)
     path = tmp_path / "document.txt"
     path.write_text("content", encoding="utf-8")
     ingestor, _client = _ingestor()
@@ -739,17 +743,8 @@ def test_upload_file_preserves_caller_owned_source_by_default(monkeypatch, tmp_p
 
 
 def test_job_completion_waits_for_terminal_manifest_and_chunks(monkeypatch, tmp_path):
-    class SynchronousThread:
-        def __init__(self, *, target, args, **kwargs):
-            del kwargs
-            self.target = target
-            self.args = args
-
-        def start(self):
-            self.target(*self.args)
-
     _install_reader(monkeypatch)
-    monkeypatch.setattr(azure_adapter.threading, "Thread", SynchronousThread)
+    _run_threads_synchronously(monkeypatch)
     monkeypatch.setattr(azure_adapter, "_CONSISTENCY_DELAY_SECONDS", 0)
     path = tmp_path / "document.txt"
     path.write_text("content", encoding="utf-8")
@@ -775,6 +770,91 @@ def test_job_completion_waits_for_terminal_manifest_and_chunks(monkeypatch, tmp_
     assert ingestor.delete_collection("docs")
 
 
+def test_finalization_timeout_does_not_leave_retryable_success(monkeypatch, tmp_path):
+    _install_reader(monkeypatch)
+    _run_threads_synchronously(monkeypatch)
+    path = tmp_path / "document.txt"
+    path.write_text("content", encoding="utf-8")
+    ingestor, _client = _ingestor()
+    ingestor._embedding = FakeEmbedding()
+    ingestor._splitter = FakeSplitter([FakeNode("content")])
+
+    wait_for_visibility = ingestor._wait_for_job_visibility
+    attempts = 0
+
+    def timeout_once(job_id):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("visibility timeout")
+        wait_for_visibility(job_id)
+
+    monkeypatch.setattr(ingestor, "_wait_for_job_visibility", timeout_once)
+    job_ids = [ingestor.submit_job([str(path)], "docs") for _ in range(2)]
+    jobs = [ingestor.get_job_status(job_id) for job_id in job_ids]
+    successful_ids = [file.file_id for file in ingestor.list_files("docs") if file.status == FileStatus.SUCCESS]
+
+    assert {
+        "states": [(job.status, job.file_details[0].status) for job in jobs],
+        "successful_ids": successful_ids,
+    } == {
+        "states": [(JobState.FAILED, FileStatus.FAILED), (JobState.COMPLETED, FileStatus.SUCCESS)],
+        "successful_ids": [jobs[1].file_details[0].file_id],
+    }
+
+
+def test_multi_file_visibility_polling_uses_bounded_wait_rounds(monkeypatch):
+    ingestor, client = _ingestor()
+    ingestor.create_collection("docs")
+    _write_file_manifest(ingestor, "unrelated", chunk_count=1)
+    unrelated_chunk_id = "chunk-unrelated-00000000"
+    client.pending_uploads[unrelated_chunk_id] = (
+        {
+            "id": unrelated_chunk_id,
+            "record_type": "chunk",
+            "collection_id": "docs",
+            "file_id": "unrelated",
+        },
+        5,
+    )
+    file_details = []
+    for index in range(3):
+        file_id = f"file-{index}"
+        _write_file_manifest(ingestor, file_id, chunk_count=1)
+        client.documents[f"chunk-{file_id}-00000000"] = {
+            "id": f"chunk-{file_id}-00000000",
+            "record_type": "chunk",
+            "collection_id": "docs",
+            "file_id": file_id,
+        }
+        file_details.append(
+            azure_adapter.FileProgress(
+                file_id=file_id,
+                file_name=f"file-{index}.txt",
+                status=FileStatus.SUCCESS,
+                chunks_created=1,
+            )
+        )
+    ingestor._jobs["job"] = azure_adapter.IngestionJobStatus(
+        job_id="job",
+        status=JobState.PROCESSING,
+        collection_name="docs",
+        backend="azure_ai_search",
+        submitted_at=datetime.now(UTC),
+        total_files=len(file_details),
+        file_details=file_details,
+    )
+    waits = []
+    monkeypatch.setattr(azure_adapter.time, "sleep", waits.append)
+
+    ingestor._wait_for_job_visibility("job")
+
+    assert len(waits) <= 2 * (azure_adapter._CONSISTENCY_STABLE_READS - 1)
+    assert client.pending_uploads[unrelated_chunk_id][1] == 5
+    assert "search.in(file_id" in client.search_filters[-1]
+    assert "unrelated" not in client.search_filters[-1]
+
+
 def test_collection_delete_prefers_tracked_terminal_file_state():
     ingestor, client = _ingestor()
     ingestor.create_collection("docs")
@@ -791,18 +871,29 @@ def test_collection_delete_prefers_tracked_terminal_file_state():
     assert not [document for document in client.documents.values() if document.get("collection_id") == "docs"]
 
 
+def test_restarted_collection_delete_waits_for_hidden_children():
+    ingestor, client = _ingestor()
+    ingestor.create_collection("docs")
+    _write_file_manifest(ingestor, "file-1", chunk_count=1)
+    client.documents["chunk-file-1-00000000"] = {
+        "id": "chunk-file-1-00000000",
+        "record_type": "chunk",
+        "collection_id": "docs",
+        "file_id": "file-1",
+    }
+    restarted, _client = _ingestor(index_client=ingestor._index_client, search_client=client)
+    client.hidden_searches_remaining = 2
+
+    assert restarted.delete_collection("docs")
+    remaining_ids = {
+        document["id"] for document in client.documents.values() if document.get("collection_id") == "docs"
+    }
+    assert remaining_ids == set()
+
+
 def test_post_upload_failure_rolls_back_chunks_and_retains_failed_manifest(monkeypatch, tmp_path):
-    class SynchronousThread:
-        def __init__(self, *, target, args, **kwargs):
-            del kwargs
-            self.target = target
-            self.args = args
-
-        def start(self):
-            self.target(*self.args)
-
     _install_reader(monkeypatch)
-    monkeypatch.setattr(azure_adapter.threading, "Thread", SynchronousThread)
+    _run_threads_synchronously(monkeypatch)
     path = tmp_path / "document.txt"
     path.write_text("content", encoding="utf-8")
     ingestor, client = _ingestor()
@@ -822,6 +913,31 @@ def test_post_upload_failure_rolls_back_chunks_and_retains_failed_manifest(monke
     assert status.status == FileStatus.FAILED
     assert client.pending_uploads == {}
     assert not [document for document in client.documents.values() if document.get("record_type") == "chunk"]
+
+
+def test_response_loss_rolls_back_all_attempted_chunk_ids(monkeypatch, tmp_path):
+    _install_reader(monkeypatch)
+    path = tmp_path / "document.txt"
+    path.write_text("content", encoding="utf-8")
+    ingestor, client = _ingestor()
+    ingestor.create_collection("docs")
+    ingestor._embedding = FakeEmbedding()
+    ingestor._splitter = FakeSplitter([FakeNode("first"), FakeNode("second")])
+    client.upload_response_failures_remaining = 1
+
+    with pytest.raises(ServiceRequestError, match="response lost"):
+        ingestor._process_file(
+            path=str(path),
+            collection_name="docs",
+            file_id="new",
+            file_name="document.txt",
+            file_size=7,
+            uploaded_at=datetime.now(UTC),
+            metadata={},
+        )
+
+    attempted_ids = {"chunk-new-00000000", "chunk-new-00000001"}
+    assert attempted_ids & client.documents.keys() == set()
 
 
 def test_batches_respect_action_count_and_payload_size():

@@ -878,26 +878,44 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
 
     def _wait_for_job_visibility(self, job_id: str) -> None:
         job = self.get_job_status(job_id)
+        expected: dict[str, tuple[str, int]] = {}
         for detail in job.file_details:
             if detail.status not in {FileStatus.SUCCESS, FileStatus.FAILED}:
                 raise RuntimeError(f"File {detail.file_id!r} did not reach a terminal ingestion state")
-            self._wait_for_search_state(
-                _record_filter(
-                    _RECORD_FILE,
-                    job.collection_name,
-                    file_id=detail.file_id,
-                    status=detail.status.value,
-                ),
-                present=True,
-                label=f"file {detail.file_id!r} manifest",
-                stable_reads=_CONSISTENCY_STABLE_READS,
-            )
-            self._wait_for_search_count(
-                _record_filter(_RECORD_CHUNK, job.collection_name, file_id=detail.file_id),
-                expected_count=detail.chunks_created,
-                label=f"file {detail.file_id!r} chunks",
-                stable_reads=_CONSISTENCY_STABLE_READS,
-            )
+            expected[detail.file_id] = (detail.status.value, detail.chunks_created)
+
+        client = self._get_validated_search_client()
+        file_ids = ",".join(expected)
+        filter_text = _and_filter(
+            f"collection_id eq {_odata_literal(job.collection_name)}",
+            f"search.in(file_id, {_odata_literal(file_ids)}, ',')",
+        )
+        matching_reads = 0
+        for attempt in range(_CONSISTENCY_ATTEMPTS):
+            manifests: dict[str, str] = {}
+            chunk_counts: dict[str, int] = {}
+            for document in self._iter_documents(
+                client,
+                filter_text=filter_text,
+                select=["id", "record_type", "file_id", "status"],
+            ):
+                file_id = str(document.get("file_id") or "")
+                if document.get("record_type") == _RECORD_FILE:
+                    manifests[file_id] = str(document.get("status") or "")
+                elif document.get("record_type") == _RECORD_CHUNK:
+                    chunk_counts[file_id] = chunk_counts.get(file_id, 0) + 1
+            if all(
+                manifests.get(file_id) == status and chunk_counts.get(file_id, 0) == chunk_count
+                for file_id, (status, chunk_count) in expected.items()
+            ):
+                matching_reads += 1
+                if matching_reads >= _CONSISTENCY_STABLE_READS:
+                    return
+            else:
+                matching_reads = 0
+            if attempt + 1 < _CONSISTENCY_ATTEMPTS:
+                time.sleep(_CONSISTENCY_DELAY_SECONDS)
+        raise RuntimeError(f"Timed out waiting for job {job_id!r} manifests and chunks in Azure AI Search")
 
     def _process_job(
         self,
@@ -983,7 +1001,26 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         try:
             self._wait_for_job_visibility(job_id)
         except Exception as error:  # noqa: BLE001
-            self._fail_job(job_id, f"Failed to finalize ingestion: {self._translate_error(error)}")
+            message = f"Failed to finalize ingestion: {self._translate_error(error)}"
+            for index, detail in enumerate(self.get_job_status(job_id).file_details):
+                if detail.status != FileStatus.SUCCESS:
+                    continue
+                try:
+                    self.delete_file(detail.file_id, collection_name)
+                except Exception as rollback_error:  # noqa: BLE001
+                    message = f"{message}; rollback failed: {self._translate_error(rollback_error)}"
+                try:
+                    self._update_file_progress(
+                        job_id,
+                        index,
+                        status=FileStatus.FAILED,
+                        progress_percent=0.0,
+                        chunks_created=0,
+                        error_message=message,
+                    )
+                except Exception as rollback_error:  # noqa: BLE001
+                    message = f"{message}; failed-status update failed: {self._translate_error(rollback_error)}"
+            self._fail_job(job_id, message)
             logger.exception("Failed to finalize Azure AI Search ingestion job %s", job_id)
         else:
             if failed == len(file_paths):
@@ -1058,18 +1095,18 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         return len(search_documents), summary, ingested_at
 
     def _upload_documents(self, client: SearchClient, documents: list[dict[str, Any]]) -> None:
-        uploaded_ids: list[str] = []
+        attempted_ids: list[str] = []
         try:
             for batch in _iter_index_batches(documents, "upload"):
+                attempted_ids.extend(str(document["id"]) for document in batch)
                 results = client.upload_documents(documents=batch)
-                succeeded, failures = _indexing_outcome(results, batch)
-                uploaded_ids.extend(succeeded)
+                _succeeded, failures = _indexing_outcome(results, batch)
                 if failures:
                     raise RuntimeError(f"Azure AI Search rejected upload actions: {'; '.join(failures)}")
         except Exception as upload_error:  # noqa: BLE001
-            if uploaded_ids:
+            if attempted_ids:
                 try:
-                    self._delete_document_ids(client, uploaded_ids)
+                    self._delete_document_ids(client, attempted_ids)
                 except Exception as rollback_error:  # noqa: BLE001
                     raise RuntimeError(
                         f"Upload failed ({upload_error}); rollback failed ({rollback_error})"
@@ -1118,6 +1155,30 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             if not next_id or next_id == last_id:
                 raise RuntimeError("Azure AI Search pagination did not advance")
             last_id = next_id
+
+    def _stable_documents(
+        self,
+        client: SearchClient,
+        *,
+        filter_text: str,
+        select: list[str] | None = None,
+        label: str,
+    ) -> list[dict[str, Any]]:
+        previous_ids: set[str] | None = None
+        matching_reads = 0
+        for attempt in range(_CONSISTENCY_ATTEMPTS):
+            documents = list(self._iter_documents(client, filter_text=filter_text, select=select))
+            document_ids = {str(document["id"]) for document in documents if document.get("id")}
+            if document_ids == previous_ids:
+                matching_reads += 1
+            else:
+                previous_ids = document_ids
+                matching_reads = 1
+            if matching_reads >= _CONSISTENCY_STABLE_READS:
+                return documents
+            if attempt + 1 < _CONSISTENCY_ATTEMPTS:
+                time.sleep(_CONSISTENCY_DELAY_SECONDS)
+        raise RuntimeError(f"Timed out waiting for stable {label} in Azure AI Search")
 
     def _delete_file_documents(
         self,
@@ -1253,11 +1314,11 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         manifest = self._get_collection_manifest(name)
         if manifest is None:
             return False
-        file_manifests = list(
-            self._iter_documents(
-                self._get_validated_search_client(),
-                filter_text=_record_filter(_RECORD_FILE, name),
-            )
+        client = self._get_validated_search_client()
+        file_manifests = self._stable_documents(
+            client,
+            filter_text=_record_filter(_RECORD_FILE, name),
+            label=f"collection {name!r} file manifests",
         )
         files = {
             str(document["file_id"]): self._file_info_from_manifest(document)
@@ -1280,14 +1341,18 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             raise ValueError(f"Cannot delete collection {name!r} while files are ingesting")
 
         self._write_collection_manifest(name, status=_COLLECTION_DELETING)
-        client = self._get_validated_search_client()
         content_filter = _and_filter(
             f"collection_id eq {_odata_literal(name)}",
             f"record_type ne {_odata_literal(_RECORD_COLLECTION)}",
         )
         document_ids = {
             str(document["id"])
-            for document in self._iter_documents(client, filter_text=content_filter, select=["id"])
+            for document in self._stable_documents(
+                client,
+                filter_text=content_filter or "",
+                select=["id"],
+                label=f"collection {name!r} child documents",
+            )
             if document.get("id")
         }
         for info in files.values():
@@ -1296,6 +1361,12 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
                 document_ids.update(_chunk_id(info.file_id, index) for index in range(info.chunk_count))
         if document_ids:
             self._delete_document_ids(client, sorted(document_ids))
+        self._wait_for_search_count(
+            content_filter or "",
+            expected_count=0,
+            label=f"collection {name!r} child documents",
+            stable_reads=_CONSISTENCY_STABLE_READS,
+        )
         self._delete_document_ids(client, [str(manifest["id"])])
         with self._jobs_lock:
             self._deleted_collections.add(name)
