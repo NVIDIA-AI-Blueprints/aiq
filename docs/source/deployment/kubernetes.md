@@ -276,6 +276,7 @@ For complete examples with NGC-specific flags, refer to `deploy/helm/README.md` 
 | Key | Description |
 |-----|-------------|
 | `EXA_API_KEY` | Exa API key for web search |
+| `NIMBLE_API_KEY` | Nimble API key for web search |
 | `SERPER_API_KEY` | Serper API key for Google search |
 | `JINA_API_KEY` | Jina API key |
 | `WANDB_API_KEY` | Weights & Biases API key |

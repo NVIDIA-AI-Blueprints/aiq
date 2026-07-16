@@ -910,10 +910,12 @@ class TestRunAgentJobEncryption:
 
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
         assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        # The persisted error is sanitized to the exception class name so raw
+        # messages cannot leak credentials or internal hostnames to callers.
         mock_job_store.update_status.assert_awaited_with(
             "job-1",
             JobStatus.FAILURE,
-            error="transient database failure",
+            error="job failed (RuntimeError); check server logs for details",
         )
         update_job_output.assert_not_awaited()
 
@@ -1211,17 +1213,23 @@ class TestToolArtifactMapping:
 
 
 def test_get_worker_function_type_maps_async_deep_research_flag():
-    """Async deep research selects the deep research function type."""
+    """Async deep research selects the deep research function type for supported workflows."""
     from types import SimpleNamespace
 
+    from aiq_agent.agents.deep_researcher.register import DeepResearchWorkflowConfig
     from aiq_api.jobs.runner import _get_worker_function_type
 
-    enabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=True))
-    disabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=False))
+    workflow = DeepResearchWorkflowConfig(use_async_deep_research=True)
+    enabled_config = SimpleNamespace(workflow=workflow)
+    disabled_config = SimpleNamespace(workflow=DeepResearchWorkflowConfig())
+    missing_flag_config = SimpleNamespace(workflow=SimpleNamespace())
     no_workflow_config = SimpleNamespace(workflow=None)
 
+    assert workflow.use_async_deep_research is True
+    assert workflow.model_dump()["use_async_deep_research"] is True
     assert _get_worker_function_type(enabled_config) == "deep_research_agent"
     assert _get_worker_function_type(disabled_config) is None
+    assert _get_worker_function_type(missing_flag_config) is None
     assert _get_worker_function_type(no_workflow_config) is None
 
 

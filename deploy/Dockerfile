@@ -78,11 +78,14 @@ COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
 # packages to a dedicated non-dev group to keep test-only tooling out of the image.
 RUN uv sync --frozen --extra s3
 
-# Install workspace packages (without CLI for base)
-RUN uv pip install --no-deps -e . \
+# Install workspace packages (without CLI for base). The root install does not
+# need workspace source overrides because dependencies were synced above; avoid
+# parsing opt-in workspace groups whose source trees are intentionally absent.
+RUN uv pip install --no-sources --no-deps -e . \
     && uv pip install --no-deps -e ./sources/google_scholar_paper_search \
     && uv pip install --no-deps -e ./sources/tavily_web_search \
     && uv pip install --no-deps -e ./sources/exa_web_search \
+    && uv pip install --no-deps -e ./sources/nimble_web_search \
     && uv pip install --no-deps -e "./sources/knowledge_layer[all]" \
     && uv pip install --no-deps -e ./frontends/aiq_api \
     && uv pip install "psycopg[binary]>=3.0.0"

@@ -12,6 +12,7 @@
 **/.env.*
 !.env.example
 !**/.env.example
+**/certs/
 
 # ---- Python ----
 __pycache__/
@@ -54,12 +55,14 @@ htmlcov/
 .tox/
 .ruff_cache/
 tests/
-frontends/benchmarks/
 
 # ---- Documentation (not needed at runtime) ----
 *.md
+!README.md
+!mcp/README.md
+!sources/knowledge_layer/README.md
+!sources/tavily_web_search/README.md
 docs/
-LICENSE
 license_report.pdf
 
 # ---- CI/CD & Deployment (not needed inside image) ----

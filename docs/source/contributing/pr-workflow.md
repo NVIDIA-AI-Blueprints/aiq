@@ -27,6 +27,13 @@ uv run ruff format --check .
 uv run pytest
 ```
 
+For MCP changes, validate its independent project as well:
+
+```bash
+uv sync --project mcp --extra dev
+uv run --project mcp --extra dev pytest mcp/tests
+```
+
 For UI changes:
 
 ```bash

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import logging
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -11,6 +12,7 @@ from langchain_core.messages import HumanMessage
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common.logging_utils import log_identifier_ref
 
 
 class FakeWriterLLM:
@@ -200,6 +202,56 @@ async def test_rewrite_report_core_rejects_empty_instruction():
 
     with pytest.raises(ValueError, match="non-empty edit instruction"):
         await rewrite_report(llm=FakeWriterLLM(), original_report="# R", edit_instruction="   ")
+
+
+@pytest.mark.asyncio
+async def test_report_rewriter_redacts_job_uuid_in_completion_log(caplog):
+    """The success-path completion log must emit a redacted ref, never the raw job UUID."""
+    from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
+    from aiq_agent.agents.report_rewriter.models import ReportRewriterAgentState
+
+    provider = LLMProvider()
+    provider.configure(LLMRole.REPORT_WRITER, FakeWriterLLM())
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[], job_id="job-1")
+
+    state = ReportRewriterAgentState(
+        messages=[HumanMessage(content="Remove the appendix.")],
+        files={
+            "/shared/original_report.md": "# Parent Report\n\nBody.",
+            "/shared/edit_instruction.txt": "Remove the appendix.",
+        },
+    )
+
+    with caplog.at_level(logging.INFO):
+        await agent.run(state)
+
+    assert "Report rewrite complete" in caplog.text
+    assert "job-1" not in caplog.text
+    assert log_identifier_ref("job-1") in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_report_rewriter_completion_log_omits_job_id_when_unset(caplog):
+    """A ``None`` job id must not hash to a ref or crash; it logs the ``none`` sentinel."""
+    from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
+    from aiq_agent.agents.report_rewriter.models import ReportRewriterAgentState
+
+    provider = LLMProvider()
+    provider.configure(LLMRole.REPORT_WRITER, FakeWriterLLM())
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+
+    state = ReportRewriterAgentState(
+        messages=[HumanMessage(content="Remove the appendix.")],
+        files={
+            "/shared/original_report.md": "# Parent Report\n\nBody.",
+            "/shared/edit_instruction.txt": "Remove the appendix.",
+        },
+    )
+
+    with caplog.at_level(logging.INFO):
+        await agent.run(state)
+
+    assert "job_ref=none" in caplog.text
 
 
 @pytest.mark.asyncio

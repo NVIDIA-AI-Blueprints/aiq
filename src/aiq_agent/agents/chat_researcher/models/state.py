@@ -27,6 +27,7 @@ from aiq_agent.knowledge import AvailableDocument
 from .depth import DepthDecision
 from .intent import IntentResult
 from .result import ShallowResult
+from .result import WorkflowOutcome
 
 
 def _keep_if_set(old: str | None, new: str | None) -> str | None:
@@ -58,6 +59,8 @@ class ChatResearcherState(BaseModel):
         skip_clarifier: When True the clarifier node is bypassed regardless of
             ``enable_clarifier``.  Set automatically for API-key and anonymous
             callers so headless workflows do not stall waiting for user input.
+        workflow_outcome: Explicit terminal workflow failure when a node
+            degrades an exception to fallback text; reset at each turn boundary.
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
@@ -75,3 +78,4 @@ class ChatResearcherState(BaseModel):
     # The most recent report produced inline in this session (synchronous CLI mode), carried
     # across turns by the keep-if-set reducer so report follow-up works without an async job.
     last_report_markdown: Annotated[str | None, _keep_if_set] = None
+    workflow_outcome: WorkflowOutcome | None = None
