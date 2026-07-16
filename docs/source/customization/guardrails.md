@@ -40,7 +40,9 @@ evaluation exceptions are not converted to a refusal; they propagate and fail th
 ## Configuration Shape
 
 The guardrails configuration is placed in the top-level `middleware` section. Defining an entry makes that middleware
-available; attach it to the workflow or function that should be guarded. The `guardrails` block uses NAT/NeMo
+available; attach it to the workflow or function that should be guarded, and use its `workflow_functions` block to
+select which fields it evaluates. Attaching a middleware without a matching `workflow_functions` selection resolves to
+zero guarded fields, so the boundary appears configured but is not enforced. The `guardrails` block uses NAT/NeMo
 Guardrails configuration. Refer to `configs/config_web_default_guardrails.yml` for the full field-selection paths used by
 each boundary.
 
@@ -48,11 +50,25 @@ each boundary.
 middleware:
   workflow_guardrails:
     _type: workflow_guardrails
+    workflow_functions:
+      "<workflow>":
+        choices:
+          - message.content
     guardrails:
       # NeMo Guardrails configuration.
 
   shallow_agent_guardrails:
     _type: shallow_agent_guardrails
+    workflow_functions:
+      shallow_research_agent:
+        pre_invoke:
+          messages:
+            HumanMessage:
+              - content
+        post_invoke:
+          messages:
+            AIMessage:
+              - content
     guardrails:
       # NeMo Guardrails configuration.
 
