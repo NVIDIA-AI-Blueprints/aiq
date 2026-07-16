@@ -28,6 +28,7 @@ from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
 from aiq_agent.agents.chat_researcher.models import WorkflowFailure
+from aiq_agent.agents.deep_researcher.models import citation_verification_warning
 from aiq_agent.common.logging_utils import log_identifier_ref
 
 
@@ -955,8 +956,9 @@ class TestChatResearcherAgent:
             }
 
         async def deep(state):
+            warning = citation_verification_warning("sources_not_captured")
             result = MagicMock()
-            result.messages = list(state.messages) + [AIMessage(content="# Deep Report\n\nFindings.")]
+            result.messages = list(state.messages) + [AIMessage(content=f"{warning}\n\n# Deep Report\n\nFindings.")]
             result.citation_verification_status = {
                 "status": "unverified",
                 "reason": "sources_not_captured",
@@ -976,7 +978,7 @@ class TestChatResearcherAgent:
         state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
         result = await agent.run(state, thread_id="test-thread-unverified-warning")
 
-        assert result["messages"][-1].content.startswith(
-            "Warning: This report could not be citation-verified because no sources were captured."
-        )
+        warning = "Warning: This report could not be citation-verified because no sources were captured."
+        assert result["messages"][-1].content.startswith(warning)
+        assert result["messages"][-1].content.count(warning) == 1
         assert result["last_report_markdown"] == "# Deep Report\n\nFindings."

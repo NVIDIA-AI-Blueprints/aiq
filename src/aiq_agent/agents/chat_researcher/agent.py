@@ -44,6 +44,7 @@ from aiq_agent.agents.clarifier.models import ClarifierAgentState
 from aiq_agent.agents.clarifier.models import ClarifierResult
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import prepend_citation_verification_warning
+from aiq_agent.agents.deep_researcher.models import strip_citation_verification_warning
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
@@ -385,9 +386,11 @@ class ChatResearcherAgent:
                 report_message = result.messages[-1]
                 report_md = report_message.content
                 report_text = report_md if isinstance(report_md, str) else str(report_md)
+                citation_verification_status = getattr(result, "citation_verification_status", None)
+                clean_report_text = strip_citation_verification_warning(report_text, citation_verification_status)
                 visible_report = prepend_citation_verification_warning(
-                    report_text,
-                    getattr(result, "citation_verification_status", None),
+                    clean_report_text,
+                    citation_verification_status,
                 )
                 if visible_report != report_text:
                     if hasattr(report_message, "model_copy"):
@@ -398,7 +401,7 @@ class ChatResearcherAgent:
                 # reference it without an async job. Checkpointed via the keep-if-set reducer.
                 return {
                     "messages": [report_message],
-                    "last_report_markdown": report_text,
+                    "last_report_markdown": clean_report_text,
                 }
 
         async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:

@@ -85,6 +85,18 @@ def prepend_citation_verification_warning(content: str, status: Any) -> str:
     return f"{warning}\n\n{content}"
 
 
+def strip_citation_verification_warning(content: str, status: Any) -> str:
+    """Remove a public unverified warning prefix from report content."""
+    public_status = public_citation_verification_status(status)
+    if public_status is None:
+        return content
+
+    warning = public_status["warning"]
+    if not content.startswith(warning):
+        return content
+    return content.removeprefix(warning).lstrip("\n")
+
+
 class DeepResearchAgentState(BaseModel):
     """
     State for deep research agent.

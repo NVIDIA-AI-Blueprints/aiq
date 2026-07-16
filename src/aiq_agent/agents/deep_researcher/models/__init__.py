@@ -20,6 +20,7 @@ from .state import DeepResearchAgentState
 from .state import citation_verification_warning
 from .state import prepend_citation_verification_warning
 from .state import public_citation_verification_status
+from .state import strip_citation_verification_warning
 from .subagent_contracts import AnswerComponent
 from .subagent_contracts import AnswerStrategy
 from .subagent_contracts import Constraint
@@ -55,4 +56,5 @@ __all__ = [
     "citation_verification_warning",
     "prepend_citation_verification_warning",
     "public_citation_verification_status",
+    "strip_citation_verification_warning",
 ]
