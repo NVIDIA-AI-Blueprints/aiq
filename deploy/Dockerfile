@@ -91,7 +91,7 @@ RUN uv pip install --no-sources --no-deps -e . \
     && uv pip install "psycopg[binary]>=3.0.0"
 
 RUN /app/.venv/bin/python -c \
-    "import aiq_api; import knowledge_layer; import presidio_analyzer; import presidio_anonymizer; import spacy; from nemoguardrails.library.sensitive_data_detection.actions import _get_analyzer; assert spacy.util.is_package('en_core_web_lg'); assert any(item.entity_type == 'EMAIL_ADDRESS' for item in _get_analyzer().analyze(text='Contact customer@example.com', language='en', entities=['EMAIL_ADDRESS'])); print('✓ Base packages and PII runtime installed')"
+    "import asyncio; import aiq_api; import knowledge_layer; import presidio_analyzer; import presidio_anonymizer; import spacy; from nemoguardrails.library.sensitive_data_detection.actions import mask_sensitive_data; from nemoguardrails.rails.llm.config import RailsConfig; config = RailsConfig.from_content(yaml_content='rails:\n  config:\n    sensitive_data_detection:\n      output:\n        entities:\n          - EMAIL_ADDRESS\n'); assert spacy.util.is_package('en_core_web_lg'); assert asyncio.run(mask_sensitive_data(source='output', text='Contact customer@example.com', config=config)) == 'Contact <EMAIL_ADDRESS>'; print('✓ Base packages and PII runtime installed')"
 
 # Keep immutable application assets root-owned; only runtime data is writable by the service user.
 RUN chmod +x /app/deploy/start_web.py \

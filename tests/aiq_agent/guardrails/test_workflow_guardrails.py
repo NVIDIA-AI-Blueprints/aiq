@@ -751,6 +751,26 @@ async def test_post_invoke_uses_schema_safe_emergency_refusal_for_chat_response(
 
 
 @pytest.mark.asyncio
+async def test_post_invoke_uses_schema_safe_emergency_refusal_when_no_target_can_be_adapted(
+    guardrails: _WorkflowGuardrails,
+):
+    """An empty traversal result cannot degrade a workflow response to a scalar refusal."""
+    output_text = "Contact customer@example.com"
+    output = _workflow_response(output_text)
+
+    guardrails.bind_llms_to_rail = AsyncMock(side_effect=RuntimeError("rail failed"))
+    guardrails._gather_guardrail_inputs = Mock(return_value=[])
+    context = _workflow_context(output)
+
+    result = await guardrails.post_invoke(context)
+
+    assert result is context
+    assert isinstance(context.output, type(output))
+    assert context.output.choices[0].message.content == _GUARDRAILS_FAILURE_REFUSAL
+    assert output_text not in context.output.model_dump_json()
+
+
+@pytest.mark.asyncio
 async def test_post_invoke_contains_terminal_synchronization_failure(
     guardrails: _WorkflowGuardrails,
     caplog: pytest.LogCaptureFixture,
@@ -929,19 +949,24 @@ async def test_stream_middleware_synchronizes_every_structured_terminal_outcome(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    ("rail_response", "expected"),
+    ("structured_first", "rail_response", "expected"),
     [
-        pytest.param("The result is safe.", ["The result ", "is safe."], id="pass"),
-        pytest.param("The result is masked.", ["The result is masked.", ""], id="modify"),
+        pytest.param(False, "The result is safe.", ["The result ", "is safe."], id="pass-string-first"),
+        pytest.param(False, "The result is masked.", ["The result is masked.", ""], id="modify-string-first"),
+        pytest.param(True, "The result is safe. tail", ["The result is safe.", " tail"], id="pass-structured-first"),
+        pytest.param(True, "The result is masked.", ["The result is masked.", ""], id="modify-structured-first"),
     ],
 )
 async def test_stream_middleware_guards_mixed_string_and_structured_output(
     guardrails: _WorkflowGuardrails,
+    structured_first: bool,
     rail_response: str,
     expected: list[str],
 ):
     """Mixed string and structured chunks are evaluated as one guarded logical output."""
-    structured_output = _workflow_response_with_outcome("is safe.")
+    structured_text = "The result is safe." if structured_first else "is safe."
+    raw_text = " tail" if structured_first else "The result "
+    structured_output = _workflow_response_with_outcome(structured_text)
 
     guardrails.bind_llms_to_rail = AsyncMock()
     guardrails._llm_rails = SimpleNamespace(
@@ -957,8 +982,8 @@ async def test_stream_middleware_guards_mixed_string_and_structured_output(
     )
 
     async def call_next(*_args, **_kwargs):
-        yield "The result "
-        yield structured_output
+        for chunk in [structured_output, raw_text] if structured_first else [raw_text, structured_output]:
+            yield chunk
 
     results = [
         item
@@ -976,17 +1001,33 @@ async def test_stream_middleware_guards_mixed_string_and_structured_output(
         )
     ]
 
-    assert results[0] == expected[0]
-    assert results[1].choices[0].message.content == expected[1]
-    assert results[1].workflow_outcome.result == expected[1]
-    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == "The result is safe."
+    if structured_first:
+        assert results[0].choices[0].message.content == expected[0]
+        assert results[0].workflow_outcome.result == expected[0]
+        assert results[1] == expected[1]
+        logical_output = "The result is safe. tail"
+    else:
+        assert results[0] == expected[0]
+        assert results[1].choices[0].message.content == expected[1]
+        assert results[1].workflow_outcome.result == expected[1]
+        logical_output = "The result is safe."
+    assert guardrails._llm_rails.generate_async.await_args.kwargs["messages"][-1]["content"] == logical_output
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure_mode", ["block", "exception"])
+@pytest.mark.parametrize(
+    ("failure_mode", "structured_first"),
+    [
+        pytest.param("block", False, id="block-string-first"),
+        pytest.param("exception", False, id="exception-string-first"),
+        pytest.param("block", True, id="block-structured-first"),
+        pytest.param("exception", True, id="exception-structured-first"),
+    ],
+)
 async def test_stream_middleware_refuses_mixed_output_without_emitting_raw_chunks(
     guardrails: _WorkflowGuardrails,
     failure_mode: str,
+    structured_first: bool,
 ):
     """A blocked or failed mixed stream emits one refusal and no buffered content."""
     structured_output = _workflow_response_with_outcome("example.com")
@@ -1012,8 +1053,11 @@ async def test_stream_middleware_refuses_mixed_output_without_emitting_raw_chunk
     )
 
     async def call_next(*_args, **_kwargs):
-        yield "Contact jane.doe@"
-        yield structured_output
+        chunks = (
+            [structured_output, "Contact jane.doe@"] if structured_first else ["Contact jane.doe@", structured_output]
+        )
+        for chunk in chunks:
+            yield chunk
 
     results = [
         item
@@ -1031,8 +1075,17 @@ async def test_stream_middleware_refuses_mixed_output_without_emitting_raw_chunk
         )
     ]
 
-    assert results == [TEST_REFUSAL if failure_mode == "block" else _GUARDRAILS_FAILURE_REFUSAL]
-    assert "jane.doe@example.com" not in str(results)
+    serialized = json.dumps([item if isinstance(item, str) else item.model_dump(mode="json") for item in results])
+    assert len(results) == 1
+    if structured_first:
+        expected = TEST_REFUSAL if failure_mode == "block" else _GUARDRAILS_FAILURE_REFUSAL
+        assert results[0].choices[0].message.content == expected
+        assert results[0].workflow_outcome.result == expected
+    else:
+        assert results == [TEST_REFUSAL if failure_mode == "block" else _GUARDRAILS_FAILURE_REFUSAL]
+    assert "jane.doe@example.com" not in serialized
+    assert "jane.doe@" not in serialized
+    assert "example.com" not in serialized
 
 
 @pytest.mark.asyncio

@@ -188,7 +188,7 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
             selections[0][1](result_text)
             for _text, apply_to_field in selections[1:]:
                 apply_to_field("")
-            self._synchronize_buffered_terminal_outputs(buffered, paths)
+            self._synchronize_buffered_outputs(buffered, paths)
 
         return buffered[0], False
 
@@ -206,14 +206,11 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
                 selections.extend(self._gather_guardrail_inputs(chunk, paths, lambda _value: None))
         return selections
 
-    def _synchronize_buffered_terminal_outputs(self, buffered: list[object], paths: list[str]) -> None:
-        """Align each structured chunk's terminal outcome with its rewritten public output."""
-        for chunk in buffered:
-            if isinstance(chunk, str):
-                continue
-            for text, _apply_to_field in self._gather_guardrail_inputs(chunk, paths, lambda _value: None):
-                self._replace_terminal_output_text(chunk, text)
-                break
+    def _synchronize_buffered_outputs(self, buffered: list[object], paths: list[str]) -> None:
+        """Let a concrete boundary align auxiliary fields with rewritten public output."""
+
+    def _synchronize_terminal_output(self, context: InvocationContext) -> None:
+        """Let a concrete boundary align auxiliary fields with guarded public output."""
 
     def on_post_invoke_blocked(self, context: InvocationContext, block_message: str) -> object:
         """Adapt blocked output before the intercepted result is returned."""
@@ -233,9 +230,13 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
                 apply_to_field(block_message)
                 modified = True
             if modified:
-                self._replace_terminal_output_text(original_output, block_message)
+                self._synchronize_blocked_output(original_output, block_message)
                 return original_output
+            return self._build_emergency_output_refusal(context, original_output)
         return block_message
+
+    def _synchronize_blocked_output(self, output: object, block_message: str) -> None:
+        """Let a concrete boundary align auxiliary fields with a blocked public output."""
 
     def _refuse_output_safely(self, context: InvocationContext, original_output: object) -> object:
         """Adapt a refusal without allowing a failing target traversal to escape."""
@@ -253,17 +254,3 @@ class GuardrailsMixin(DynamicFieldSelectionMixin, GuardrailsMiddleware):
     def _build_emergency_output_refusal(self, context: InvocationContext, original_output: object) -> object:
         """Return the traversal-independent refusal for this intercepted boundary."""
         return _GUARDRAILS_FAILURE_REFUSAL
-
-    @staticmethod
-    def _replace_terminal_output_text(output: object, block_message: str) -> None:
-        """Keep a structured workflow's terminal result aligned with its guarded public output."""
-        workflow_outcome = getattr(output, "workflow_outcome", None)
-        if getattr(workflow_outcome, "status", None) == "success":
-            setattr(workflow_outcome, "result", block_message)
-
-    def _synchronize_terminal_output(self, context: InvocationContext) -> None:
-        """Copy guarded public output into a successful structured terminal outcome."""
-        paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "post_invoke")
-        for text, _apply_to_field in self._gather_guardrail_inputs(context.output, paths, lambda _value: None):
-            self._replace_terminal_output_text(context.output, text)
-            return

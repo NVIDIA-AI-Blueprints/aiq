@@ -124,6 +124,33 @@ class _WorkflowGuardrails(GuardrailsMixin):
             )
         return response
 
+    @staticmethod
+    def _replace_terminal_output_text(output: object, guarded_text: str) -> None:
+        """Keep a workflow's successful terminal result aligned with guarded public output."""
+        workflow_outcome = getattr(output, "workflow_outcome", None)
+        if getattr(workflow_outcome, "status", None) == "success":
+            setattr(workflow_outcome, "result", guarded_text)
+
+    def _synchronize_blocked_output(self, output: object, block_message: str) -> None:
+        """Synchronize a blocked workflow's terminal outcome."""
+        self._replace_terminal_output_text(output, block_message)
+
+    def _synchronize_buffered_outputs(self, buffered: list[object], paths: list[str]) -> None:
+        """Synchronize every rewritten structured stream chunk's terminal outcome."""
+        for chunk in buffered:
+            if isinstance(chunk, str):
+                continue
+            for text, _apply_to_field in self._gather_guardrail_inputs(chunk, paths, lambda _value: None):
+                self._replace_terminal_output_text(chunk, text)
+                break
+
+    def _synchronize_terminal_output(self, context: InvocationContext) -> None:
+        """Copy guarded workflow output into its successful terminal outcome."""
+        paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "post_invoke")
+        for text, _apply_to_field in self._gather_guardrail_inputs(context.output, paths, lambda _value: None):
+            self._replace_terminal_output_text(context.output, text)
+            return
+
     def _extract_guardrail_target(self, raw_input: object) -> str | None:
         """Extract the normalized user query text from a raw workflow input."""
         targets = self._extract_guardrail_targets_for_rewrite(raw_input)
