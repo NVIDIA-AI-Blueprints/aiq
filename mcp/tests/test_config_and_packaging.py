@@ -152,6 +152,7 @@ def test_root_workspace_excludes_the_independent_mcp_project() -> None:
             continue
         if "url" in source:
             assert package["name"] == "en-core-web-lg"
+            assert package["version"] == "3.8.0"
             assert source == {
                 "url": (
                     "https://github.com/explosion/spacy-models/releases/download/"
