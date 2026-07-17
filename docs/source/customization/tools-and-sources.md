@@ -4,6 +4,13 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Tools and Sources
 
+AI-Q ships provider integrations for Tavily, Google Scholar search providers, Exa, DuckDuckGo News, Polymarket, and
+the [You.com API Suite](./you-com.md). Knowledge retrieval is configured separately through the
+[Knowledge Layer](./knowledge-layer.md).
+
+Nimble provides configurable web search with lite and deep modes, plus an Enterprise-only fast mode. Refer to the
+[configuration reference](./configuration-reference.md) for its focus, country, and locale controls.
+
 ## Data Source Registry
 
 The `data_source_registry` function is the **single source of truth** for which tools exist and which data source they belong to. It controls the UI toggles, per-message filtering, and -- by default -- which tools each agent receives.

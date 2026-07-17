@@ -26,6 +26,7 @@ from langchain_core.messages import SystemMessage
 
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.nodes.intent_classifier import IntentClassifier
+from aiq_agent.agents.chat_researcher.preclassification import preclassified_depth
 
 
 class TestIntentClassifier:
@@ -494,3 +495,39 @@ class TestIntentClassifier:
             classifier = IntentClassifier(llm=mock_llm)
             prompt_lower = classifier.prompt.lower()
             assert "meta" in prompt_lower or "research" in prompt_lower
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("preset", ["shallow", "deep"])
+    async def test_run_reuses_preclassified_depth_without_llm(self, preset):
+        """A caller-supplied depth short-circuits: research intent, preset depth, no LLM call."""
+        llm = MagicMock()
+        llm.ainvoke = AsyncMock(side_effect=AssertionError("intent LLM must not be invoked when preclassified"))
+
+        classifier = IntentClassifier(llm=llm)
+        state = ChatResearcherState(messages=[HumanMessage(content="Who founded NVIDIA?")])
+
+        with preclassified_depth(preset):
+            result = await classifier.run(state)
+
+        llm.ainvoke.assert_not_called()
+        assert result["user_intent"].intent == "research"
+        assert result["user_intent"].target == "new_research"
+        assert result["depth_decision"].decision == preset
+        assert "messages" not in result
+
+    @pytest.mark.asyncio
+    async def test_run_ignores_invalid_preclassified_depth(self, mock_llm):
+        """An out-of-range preclassified depth coerces to None, so the LLM classifies normally."""
+        mock_response = MagicMock()
+        mock_response.content = '{"intent":"research","research_depth":"shallow"}'
+        mock_llm.ainvoke = AsyncMock(return_value=mock_response)
+
+        classifier = IntentClassifier(llm=mock_llm)
+        state = ChatResearcherState(messages=[HumanMessage(content="Who founded NVIDIA?")])
+
+        with preclassified_depth("sideways"):
+            result = await classifier.run(state)
+
+        mock_llm.ainvoke.assert_called_once()
+        assert result["user_intent"].intent == "research"
+        assert result["depth_decision"].decision == "shallow"

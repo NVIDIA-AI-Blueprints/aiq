@@ -2,7 +2,7 @@
 
 Unreleased changes targeting AI-Q v2.2.0
 
-These entries track candidate work merged to `develop`. AI-Q `v2.1.0` remains the latest stable
+These entries track candidate work on `release/2.2`. AI-Q `v2.1.0` remains the latest stable
 release; the candidate will be stabilized before the final `v2.2.0` release.
 
 **Research and reports**
@@ -14,8 +14,12 @@ release; the candidate will be stabilized before the final `v2.2.0` release.
 **Sources and integrations**
 
 - OpenSearch is a first-class knowledge backend for self-hosted, Amazon OpenSearch Service, and Amazon OpenSearch Serverless deployments
+- Azure AI Search is a managed knowledge backend with API-key or Azure identity authentication, namespaced index ownership, and hybrid retrieval
 - Paper search adds SerpAPI and SearchAPI providers alongside Serper; the routed-research profile adds DuckDuckGo news and Polymarket sources
+- You.com adds configurable web search, page-content extraction, cited open-domain research, and finance-focused research tools
+- Nimble adds configurable web search with lite and deep modes, plus an Enterprise-only fast mode and optional focus, country, and locale controls
 - Per-user MCP OAuth adds status, connect, callback, and reconnect flows backed by a token store shared by the API and workers; disconnect and in-worker token refresh are not included
+- A standalone public MCP server exposes stateless submit, poll, and final-report tools over Streamable HTTP with PostgreSQL-backed job state
 
 **Sandboxes, artifacts, and policy**
 
@@ -33,12 +37,12 @@ release; the candidate will be stabilized before the final `v2.2.0` release.
 
 **Agent Skills, UX, and developer workflow**
 
-- Consumer Agent Skills now include `aiq-deploy` and `aiq-research`; maintainer skills cover data sources, tools, release QA, PR preparation, prompt/model customization, and CI maintenance
+- Consumer Agent Skills now include `aiq-deploy` and `aiq-research`; maintainer skills cover workflow configuration, data sources, tools, release QA, PR preparation, prompt/model customization, and CI maintenance
 - The UI surfaces batched researcher activity and improves research-session recovery, expiry handling, and WebSocket delivery reliability
 - Contributor governance and product-level Agent Skill evaluation checks expand release and contribution tooling
 - Pinned to NeMo Agent Toolkit (NAT) v1.8.0
 
-The nine checked-in workflow configurations are focused profiles; no single profile enables every 2.2 capability.
+The eleven checked-in workflow configurations are focused profiles; no single profile enables every 2.2 capability.
 
 Release v2.1.0
 

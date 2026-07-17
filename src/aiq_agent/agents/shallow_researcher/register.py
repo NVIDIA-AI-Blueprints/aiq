@@ -115,10 +115,21 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
             # can't (the agent would be a shared, user-less instance) — see
             # aiq_api.mcp_auth.runtime_tools. The client stays open via mcp_stack for the run.
             async with AsyncExitStack() as mcp_stack:
+                # Per-user MCP tools require ``aiq_api`` (the API/auth layer under
+                # frontends/aiq_api), which the standalone public MCP image intentionally does
+                # not bundle — mcp/Dockerfile copies only aiq_agent, select sources, and aiq_mcp.
+                # That profile runs anonymous with no per-user OAuth, so per-user sources never
+                # apply there. Resolve the reconnect exception type up front (guarded) so the
+                # handler below can never reference an unbound name when the ``aiq_api`` import
+                # fails; a missing ``aiq_api`` is an expected skip, not a failure.
+                try:
+                    from aiq_api.mcp_auth.runtime_tools import PerUserMcpSourceUnavailableError
+                except ImportError:
+                    PerUserMcpSourceUnavailableError = None
+
                 try:
                     from aiq_api.jobs.access import require_verified_principal
                     from aiq_api.mcp_auth.provider import principal_user_id
-                    from aiq_api.mcp_auth.runtime_tools import PerUserMcpSourceUnavailableError
                     from aiq_api.mcp_auth.runtime_tools import open_per_user_mcp_tools
                     from nat.builder.context import ContextState
 
@@ -136,14 +147,19 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                     )
                     if mcp_tools:
                         selected_tools = [*selected_tools, *mcp_tools]
-                except PerUserMcpSourceUnavailableError as exc:
-                    # The user explicitly selected a protected source we can't resolve
-                    # (e.g. token expired). Surface a reconnect message instead of
-                    # silently answering without it.
-                    from langchain_core.messages import AIMessage
+                except ImportError:
+                    # Standalone MCP profile without aiq_api: expected — continue with base tools.
+                    logger.debug("aiq_api unavailable; skipping per-user MCP tools for shallow research")
+                except Exception as exc:
+                    if PerUserMcpSourceUnavailableError is not None and isinstance(
+                        exc, PerUserMcpSourceUnavailableError
+                    ):
+                        # The user explicitly selected a protected source we can't resolve
+                        # (e.g. token expired). Surface a reconnect message instead of
+                        # silently answering without it.
+                        from langchain_core.messages import AIMessage
 
-                    return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=str(exc))])
-                except Exception:
+                        return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=str(exc))])
                     logger.exception("Failed to resolve per-user MCP tools for shallow research; continuing")
 
                 # Build the agent with this turn's tool set.

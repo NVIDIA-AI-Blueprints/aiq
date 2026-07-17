@@ -12,7 +12,7 @@ This guide walks through setting up the AI-Q blueprint for local development. Fo
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | Python | 3.11 -- 3.13 | 3.13 recommended |
-| [uv](https://github.com/astral-sh/uv) | latest | Python package manager (installed automatically by the setup script if missing) |
+| [uv](https://github.com/astral-sh/uv) | 0.11.25+ | Python package manager (installed automatically by the setup script if missing; CI uses 0.11.26) |
 | Git | 2.x+ | |
 | Node.js | 22+ | Optional -- only needed for the web UI |
 
@@ -46,12 +46,12 @@ cd aiq
 
 The script performs the following steps:
 
-1. Installs `uv` if not already present
+1. Installs `uv` if not already present and rejects versions older than 0.11.25
 2. Creates a Python 3.13 virtual environment at `.venv/`
 3. Installs the core package with dev dependencies
 4. Installs all frontends (CLI, debug console, API server)
 5. Installs benchmark packages (freshqa, deepsearch_qa)
-6. Installs Tavily, Exa, Google Scholar, and the LlamaIndex and Foundational RAG knowledge extras
+6. Installs the data source plugins (Tavily, Exa, Nimble, Google Scholar) and the LlamaIndex and Foundational RAG knowledge extras
 7. Sets up pre-commit hooks
 8. Copies `deploy/.env.example` to `deploy/.env` if no `.env` file exists
 9. Installs UI npm dependencies (if Node.js is available)
@@ -96,6 +96,7 @@ uv pip install -e ./frontends/aiq_api      # Unified API server (includes debug)
 # Data sources (pick what you need)
 uv pip install -e ./sources/tavily_web_search
 uv pip install -e ./sources/exa_web_search
+uv pip install -e ./sources/nimble_web_search
 uv pip install -e ./sources/duckduckgo_news_search
 uv pip install -e ./sources/polymarket_prediction_market
 uv pip install -e ./sources/google_scholar_paper_search
@@ -136,6 +137,7 @@ Then edit `deploy/.env` and fill in your keys.
 |----------|----------|---------|
 | `TAVILY_API_KEY` | [Tavily](https://tavily.com/) | Web search (Tavily provider) |
 | `EXA_API_KEY` | [Exa](https://exa.ai/) | Web search (Exa provider) |
+| `NIMBLE_API_KEY` | [Nimble](https://nimbleway.com/) | Web search (Nimble provider) |
 | `SERPER_API_KEY` | [Serper](https://serper.dev/) | Google Scholar paper search with `provider: serper` (the default) |
 | `SERPAPI_API_KEY` | [SerpAPI](https://serpapi.com/) | Google Scholar paper search with `provider: serpapi` |
 | `SEARCHAPI_API_KEY` | [SearchAPI](https://www.searchapi.io/) | Google Scholar paper search with `provider: searchapi` |

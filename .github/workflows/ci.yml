@@ -34,6 +34,10 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
+          version: "0.11.26"
+          cache-dependency-glob: |
+            uv.lock
+            mcp/uv.lock
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -46,7 +50,7 @@ jobs:
       - name: Install dev dependencies
         run: |
           uv venv --python 3.13 .venv
-          uv sync --group dev
+          uv sync --frozen --group dev
           uv pip install nbconvert
 
       - name: Ruff checks
@@ -58,11 +62,27 @@ jobs:
       - name: Run remaining pre-commit hooks
         run: |
           . .venv/bin/activate
-          SKIP=ruff-check,ruff-format,pytest,helm-lint pre-commit run --all-files
+          SKIP=ruff-check,ruff-format,pytest-root,pytest-mcp,helm-lint pre-commit run --all-files
 
   test:
     name: Pytest and Coverage
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine@sha256:57c72fd2a128e416c7fcc499958864df5301e940bca0a56f58fddf30ffc07777
+        env:
+          POSTGRES_USER: aiq
+          POSTGRES_PASSWORD: aiq_mcp_ci_password # pragma: allowlist secret
+          POSTGRES_DB: aiq_mcp_tests
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -p 5432 -U aiq -d aiq_mcp_tests"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      AIQ_MCP_TEST_DB_URL: postgresql://aiq:aiq_mcp_ci_password@127.0.0.1:5432/aiq_mcp_tests # pragma: allowlist secret
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -76,17 +96,52 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
+          version: "0.11.26"
+          cache-dependency-glob: |
+            uv.lock
+            mcp/uv.lock
 
       - name: Install test dependencies
         run: |
+          set -euo pipefail
           uv venv --python 3.13 .venv
-          uv sync --group dev
+          uv sync --frozen --group dev
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/aiq-mcp-test-venv" \
+            uv sync --project mcp --frozen --extra dev
 
-      - name: Run tests with coverage
+      - name: Validate isolated dependency environments
         run: |
           set -euo pipefail
           . .venv/bin/activate
-          python -X faulthandler -m pytest tests/ -v \
+          uv pip check
+          "$RUNNER_TEMP/aiq-mcp-test-venv/bin/python" \
+            mcp/scripts/check_runtime_dependencies.py
+
+      - name: Run mandatory MCP PostgreSQL tests
+        run: |
+          set -euo pipefail
+          "$RUNNER_TEMP/aiq-mcp-test-venv/bin/python" -X faulthandler -m pytest mcp/tests -v \
+            --junitxml=mcp-report.xml \
+            --cov=mcp/src/aiq_mcp \
+            --cov-report=xml:mcp-coverage.xml \
+            --cov-report=html:mcp-htmlcov \
+            --cov-report=term \
+            --cov-fail-under=90
+          "$RUNNER_TEMP/aiq-mcp-test-venv/bin/python" - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("mcp-report.xml").getroot()
+          suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+          skipped = sum(int(suite.attrib.get("skipped", 0)) for suite in suites)
+          if skipped:
+              raise SystemExit(f"MCP PostgreSQL lane unexpectedly skipped {skipped} tests")
+          PY
+
+      - name: Run repository tests with coverage
+        run: |
+          set -euo pipefail
+          . .venv/bin/activate
+          python -X faulthandler -m pytest tests/ sources/ -v \
             --junitxml=report.xml \
             --cov=src/aiq_agent \
             --cov-report=xml \
@@ -103,6 +158,9 @@ jobs:
             report.xml
             coverage.xml
             htmlcov/
+            mcp-report.xml
+            mcp-coverage.xml
+            mcp-htmlcov/
           retention-days: 7
 
   helm-lint:
@@ -126,6 +184,10 @@ jobs:
   test-scripts:
     name: Script Validation
     runs-on: ubuntu-latest
+    env:
+      NVIDIA_API_KEY: ci-not-a-real-key # pragma: allowlist secret
+      TAVILY_API_KEY: ci-not-a-real-key # pragma: allowlist secret
+      AIQ_MCP_IMAGE: aiq-mcp-server:ci
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -139,13 +201,17 @@ jobs:
         uses: astral-sh/setup-uv@v4
         with:
           enable-cache: true
+          version: "0.11.26"
+          cache-dependency-glob: |
+            uv.lock
+            mcp/uv.lock
 
       - name: Install script test dependencies
         shell: bash
         run: |
           set -euo pipefail
           uv venv --python 3.13 .venv
-          uv sync --group dev
+          uv sync --frozen --group dev
           for pkg in \
             ./frontends/benchmarks/freshqa \
             ./frontends/benchmarks/intent_classifier
@@ -160,3 +226,99 @@ jobs:
           . .venv/bin/activate
           chmod +x ci/scripts/test_scripts.sh
           ci/scripts/test_scripts.sh --skip-setup
+
+      - name: Create MCP production environment
+        run: |
+          set -euo pipefail
+          UV_PROJECT_ENVIRONMENT="$RUNNER_TEMP/aiq-mcp-venv" \
+            uv sync --project mcp --frozen --no-dev --no-default-groups --no-editable
+          "$RUNNER_TEMP/aiq-mcp-venv/bin/python" \
+            mcp/scripts/check_runtime_dependencies.py
+
+      - name: Capture complete vulnerability evidence
+        run: |
+          set -euo pipefail
+          audit_status=0
+          uv audit --preview-features audit-command,json-output \
+            --project mcp --frozen --no-dev --no-default-groups \
+            --output-format json > aiq-mcp-vulnerabilities.json || audit_status=$?
+          if [ "$audit_status" -gt 1 ]; then
+            exit "$audit_status"
+          fi
+
+      - name: Gate production dependency lock
+        run: |
+          set -euo pipefail
+          uv audit --preview-features audit-command,json-output \
+            --project mcp --frozen --no-dev --no-default-groups \
+            --ignore-until-fixed GHSA-f4j7-r4q5-qw2c \
+            --output-format json > "$RUNNER_TEMP/aiq-mcp-vulnerability-gate.json"
+
+      - name: Generate MCP SBOM and license evidence
+        run: |
+          set -euo pipefail
+          uv export --preview-features sbom-export \
+            --project mcp --frozen --no-dev --no-default-groups \
+            --format cyclonedx1.5 --output-file aiq-mcp.cdx.json >/dev/null
+          "$RUNNER_TEMP/aiq-mcp-venv/bin/python" \
+            mcp/scripts/check_license_inventory.py \
+            aiq-mcp.cdx.json aiq-mcp-licenses.json
+
+      # This locally built wheel is an internal package/license check, not a
+      # published release artifact. Supported distribution uses the frozen
+      # source project or the release container built below.
+      - name: Verify MCP package license metadata
+        run: |
+          set -euo pipefail
+          uv build mcp --wheel --out-dir "$RUNNER_TEMP/mcp-dist"
+          python - <<'PY'
+          import os
+          import zipfile
+          from pathlib import Path
+
+          wheel = next((Path(os.environ["RUNNER_TEMP"]) / "mcp-dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel) as archive:
+              names = archive.namelist()
+          assert any(name.endswith(".dist-info/licenses/LICENSE") for name in names), names
+          PY
+
+      - name: Upload MCP release evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mcp-release-evidence
+          path: |
+            aiq-mcp.cdx.json
+            aiq-mcp-vulnerabilities.json
+            aiq-mcp-licenses.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Build and boot MCP Compose stack
+        run: |
+          set -euo pipefail
+          docker compose -f deploy/compose/docker-compose.mcp.yaml up --detach --build --wait --wait-timeout 300
+
+      - name: Verify MCP health and protocol
+        run: |
+          set -euo pipefail
+          test "$(curl --fail --silent http://127.0.0.1:9001/live)" = '{"status":"alive"}'
+          test "$(curl --fail --silent http://127.0.0.1:9001/health)" = '{"status":"ready"}'
+          "$RUNNER_TEMP/aiq-mcp-venv/bin/python" \
+            mcp/scripts/protocol_smoke.py --url http://127.0.0.1:9001/mcp
+
+      - name: Capture MCP container logs
+        if: failure()
+        run: docker compose -f deploy/compose/docker-compose.mcp.yaml logs --no-color > mcp-compose.log || true
+
+      - name: Upload MCP failure logs
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mcp-compose-logs
+          path: mcp-compose.log
+          retention-days: 7
+
+      - name: Tear down MCP Compose stack
+        if: always()
+        run: docker compose -f deploy/compose/docker-compose.mcp.yaml down --volumes --remove-orphans

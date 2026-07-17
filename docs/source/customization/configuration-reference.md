@@ -202,6 +202,49 @@ functions:
 - **`fast`** -- Optimized for low latency. Returns results quickly at the cost of recall and semantic depth. Use for interactive UIs, high-volume calls, or when the query is narrow and keyword-like.
 - **`deep`** -- Optimized for thoroughness. Runs a more expensive semantic search with broader retrieval. Use for research-quality queries where completeness matters more than speed.
 
+### `nimble_web_search`
+
+Web search powered by the [Nimble Search API](https://docs.nimbleway.com/nimble-sdk/web-tools/search) via
+`langchain-nimble`.
+
+```yaml
+functions:
+  web_search_tool:
+    _type: nimble_web_search
+    max_results: 5
+    max_content_length: 10000
+
+  advanced_web_search_tool:
+    _type: nimble_web_search
+    max_results: 5
+    search_depth: deep
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_results` | `int` | `5` | Maximum number of search results to return. |
+| `api_key` | `str` | `None` | Nimble API key. Falls back to `NIMBLE_API_KEY` environment variable. |
+| `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
+| `search_depth` | `str` | `"lite"` | Nimble search depth. See options below. |
+| `focus` | `str` | `"general"` | Nimble focus mode. See options below. |
+| `country` | `str` | `"US"` | ISO 3166 country code passed to Nimble (e.g. `US`, `GB`, `FR`). |
+| `locale` | `str` | `"en"` | Language/locale passed to Nimble (e.g. `en`, `fr`, `es`). |
+| `max_content_length` | `int \| None` | `10000` | Max characters per result's page content. Set to `None` to disable truncation. |
+
+**`search_depth` options:**
+
+- **`lite`** (default) -- Returns metadata only (title, URL, description). Fastest, lowest token cost, safe default for general lookups.
+- **`fast`** -- Returns rich content at low latency. **Enterprise-tier only**; non-enterprise accounts receive a 403 with a clear entitlement message.
+- **`deep`** -- Returns full page content for each result. Use for research workflows that need the body text, not just URLs.
+
+**`focus` options:**
+
+- **`general`** (default) -- Broad web/research queries. The right choice for almost all agent use.
+- **`news`** -- Restricts results to news-publisher sources, ordered by recency. There is no recency threshold -- older articles still appear; it changes the source mix, not the time window. (Recency windowing is a separate Nimble `time_range` capability that also works with `focus=general`; not exposed in this initial integration.)
+- **`location`**, **`shopping`**, **`geo`**, **`social`** -- Domain-specific routing; set only when the tool targets that domain.
+
+`focus` is a workflow-config setting, not an agent-chosen parameter -- the model only passes a query, so general research queries cannot silently switch to `news`. Answer generation (`include_answer`) is **not exposed** in this initial integration.
+
 ### `paper_search`
 
 Academic paper search through Google Scholar using [Serper](https://serper.dev/),
@@ -594,7 +637,7 @@ workflow:
 
 ## Provided Config Files
 
-The repository includes nine top-level workflow configurations. They are focused reference profiles, not cumulative
+The repository includes eleven top-level workflow configurations. They are focused reference profiles, not cumulative
 layers, and no single profile enables every capability. Start from the profile closest to the deployment and merge
 only the additional sections you need.
 
@@ -610,6 +653,7 @@ only the additional sections you need.
 | `configs/config_web_frag_mcp_auth.yml` | Web API | Foundational RAG plus a protected per-user OAuth MCP source example. Requires a real protected MCP endpoint and shared token-store configuration; it is not a zero-config default. |
 | `configs/config_domain_routing_and_skills.yml` | Direct deep-research workflow | Automatic domain routing, Tavily, DuckDuckGo news, Polymarket, LlamaIndex, enabled Serper paper search, built-in skills, and a Modal sandbox. Requires the corresponding service credentials and Modal setup. |
 | `configs/config_openshell.yml` | Web API, experimental | Skills and artifact capture over one pre-provisioned named OpenShell sandbox. Intended for trusted single-operator use; per-job directories are not multi-tenant isolation. |
+| `configs/config_mcp.yml` | Standalone MCP server | Public NIM and Tavily research over stateless submit, poll, and final-report tools with PostgreSQL-backed job state. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Related
 

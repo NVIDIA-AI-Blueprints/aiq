@@ -27,6 +27,8 @@ import time
 from typing import TYPE_CHECKING
 from typing import Any
 
+from aiq_agent.common.logging_utils import log_identifier_ref
+
 if TYPE_CHECKING:
     from .schema import AvailableDocument
 
@@ -103,6 +105,7 @@ class SummaryStore:
                 pool_size=1 if is_sqlite else 5,
                 max_overflow=0 if is_sqlite else 10,
                 connect_args=connect_args,
+                hide_parameters=True,
             )
             cls._sync_engine_cache[db_url] = (engine, time.monotonic())
             logger.debug("Created sync engine for %s", _redact_db_url(db_url))
@@ -129,6 +132,7 @@ class SummaryStore:
                 pool_pre_ping=True,
                 pool_size=1 if is_sqlite else 5,
                 max_overflow=0 if is_sqlite else 10,
+                hide_parameters=True,
             )
             cls._async_engine_cache[db_url] = (engine, time.monotonic())
             logger.debug("Created async engine for %s", _redact_db_url(db_url))
@@ -146,7 +150,7 @@ class SummaryStore:
                     engine.dispose()
                     logger.debug("Disposed stale engine for %s", _redact_db_url(key))
                 except Exception as e:
-                    logger.warning("Failed to dispose engine: %s", e)
+                    logger.warning("Failed to dispose engine (%s)", type(e).__name__)
 
         if len(cache) > ENGINE_CACHE_MAX_SIZE:
             sorted_entries = sorted(cache.items(), key=lambda x: x[1][1])
@@ -257,9 +261,13 @@ class SummaryStore:
                         {"collection": collection, "filename": filename, "summary": summary},
                     )
                 conn.commit()
-                logger.debug("Registered summary for %s in %s", filename, collection)
+                logger.debug(
+                    "Registered summary for %s in collection_ref=%s",
+                    filename,
+                    log_identifier_ref(collection),
+                )
         except Exception as e:
-            logger.warning("Failed to register summary for %s: %s", filename, e)
+            logger.warning("Failed to register summary for %s (%s)", filename, type(e).__name__)
 
     def get_all(self, collection: str) -> list[AvailableDocument]:
         """Get all documents with summaries for a collection (sync)."""
@@ -275,7 +283,11 @@ class SummaryStore:
                 )
                 return [AvailableDocument(file_name=row[0], summary=row[1]) for row in result]
         except Exception as e:
-            logger.warning("Failed to get summaries for %s: %s", collection, e)
+            logger.warning(
+                "Failed to get summaries for collection_ref=%s (%s)",
+                log_identifier_ref(collection),
+                type(e).__name__,
+            )
             return []
 
     async def get_all_async(self, collection: str) -> list[AvailableDocument]:
@@ -294,7 +306,11 @@ class SummaryStore:
                 )
                 return [AvailableDocument(file_name=row[0], summary=row[1]) for row in result]
         except Exception as e:
-            logger.warning("Failed to get summaries async for %s: %s", collection, e)
+            logger.warning(
+                "Failed to get summaries async for collection_ref=%s (%s)",
+                log_identifier_ref(collection),
+                type(e).__name__,
+            )
             # Fallback to sync
             return self.get_all(collection)
 
@@ -309,9 +325,13 @@ class SummaryStore:
                     {"collection": collection, "filename": filename},
                 )
                 conn.commit()
-                logger.debug("Unregistered summary for %s in %s", filename, collection)
+                logger.debug(
+                    "Unregistered summary for %s in collection_ref=%s",
+                    filename,
+                    log_identifier_ref(collection),
+                )
         except Exception as e:
-            logger.warning("Failed to unregister summary for %s: %s", filename, e)
+            logger.warning("Failed to unregister summary for %s (%s)", filename, type(e).__name__)
 
     def clear_collection(self, collection: str) -> None:
         """Remove all summaries for a collection (sync)."""
@@ -324,9 +344,13 @@ class SummaryStore:
                     {"collection": collection},
                 )
                 conn.commit()
-                logger.debug("Cleared summaries for collection %s", collection)
+                logger.debug("Cleared summaries for collection_ref=%s", log_identifier_ref(collection))
         except Exception as e:
-            logger.warning("Failed to clear summaries for %s: %s", collection, e)
+            logger.warning(
+                "Failed to clear summaries for collection_ref=%s (%s)",
+                log_identifier_ref(collection),
+                type(e).__name__,
+            )
 
     def clear_all(self) -> None:
         """Remove all summaries (sync)."""
@@ -338,7 +362,7 @@ class SummaryStore:
                 conn.commit()
                 logger.debug("Cleared all summaries")
         except Exception as e:
-            logger.warning("Failed to clear all summaries: %s", e)
+            logger.warning("Failed to clear all summaries (%s)", type(e).__name__)
 
     @classmethod
     def dispose_all_engines(cls):

@@ -31,6 +31,7 @@ from aiq_agent.common import is_verbose
 from aiq_agent.common.citation_verification import get_or_create_session_registry
 from aiq_agent.common.citation_verification import reset_session_registry
 from aiq_agent.common.citation_verification import set_session_registry
+from aiq_agent.common.logging_utils import log_identifier_ref
 from aiq_agent.observability.otel_header_redaction_exporter import (
     ensure_registered as _ensure_otel_redaction_registered,
 )
@@ -39,13 +40,16 @@ from nat.builder.context import Context
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
-from nat.data_models.api_server import ChatResponse
 from nat.data_models.component_ref import FunctionGroupRef
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.component_ref import LLMRef
 from nat.data_models.function import FunctionBaseConfig
 
+from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
+from .models import ChatResearcherResponse
 from .models import ChatResearcherState
+from .models import WorkflowFailure
+from .models import WorkflowSuccess
 from .utils import _extract_query_context
 
 logger = logging.getLogger(__name__)
@@ -55,6 +59,41 @@ logger = logging.getLogger(__name__)
 _REPORT_ASK_TIMEOUT_S = 120
 
 _ensure_otel_redaction_registered()
+
+
+def _log_conversation_reference(message: str, conversation_id: str) -> None:
+    """Log a correlation reference without exposing the conversation identifier."""
+    logger.info(message, log_identifier_ref(conversation_id))
+
+
+def _render_workflow_response(
+    result: ChatResearcherState | dict[str, Any],
+    *,
+    model: str,
+    response_id: str = "research_response",
+) -> ChatResearcherResponse:
+    """Render chat text and an explicit terminal outcome at the workflow boundary."""
+    if isinstance(result, dict):
+        messages = result.get("messages", [])
+        raw_outcome = result.get("workflow_outcome")
+    else:
+        messages = result.messages
+        raw_outcome = result.workflow_outcome
+
+    if messages:
+        response_content = messages[-1].content
+    else:
+        response_content = "No response generated."
+        raw_outcome = raw_outcome or WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    if not isinstance(response_content, str):
+        response_content = str(response_content)
+
+    if isinstance(raw_outcome, dict) and raw_outcome.get("status") == "failed":
+        raw_outcome = WorkflowFailure.model_validate(raw_outcome)
+    outcome = raw_outcome if isinstance(raw_outcome, WorkflowFailure) else WorkflowSuccess(result=response_content)
+    response = _create_chat_response(response_content, response_id=response_id, model=model)
+    return ChatResearcherResponse(**response.model_dump(), workflow_outcome=outcome)
 
 
 def _build_report_ask_prompt(
@@ -97,7 +136,7 @@ async def _answer_from_report_context(
         response = await asyncio.wait_for(llm.ainvoke([HumanMessage(content=prompt)]), timeout=_REPORT_ASK_TIMEOUT_S)
     except TimeoutError:
         logger.warning("Report ask LLM call timed out after %ss", _REPORT_ASK_TIMEOUT_S)
-        return "The report service took too long to respond. Please try again."
+        raise
     content = response.content if hasattr(response, "content") else response
     answer = content if isinstance(content, str) else str(content)
     if not answer.strip():
@@ -528,7 +567,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
 
-    async def _run(query: object) -> ChatResponse:
+    async def _run(query: object) -> ChatResearcherResponse:
         import os
         import sys
         import uuid
@@ -546,20 +585,29 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
                 threading.Thread(target=exit_after_error, daemon=False).start()
 
-            return api_key_error_response
+            return ChatResearcherResponse(
+                **api_key_error_response.model_dump(),
+                workflow_outcome=WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            )
 
         # For --input mode, use a fresh conversation_id to avoid loading old checkpoint state
         # This ensures each run starts with a clean conversation history
         if "--input" in sys.argv:
             nat_context_conversation_id = str(uuid.uuid4())
-            logger.info("Using fresh conversation ID for --input mode: %s", nat_context_conversation_id)
+            _log_conversation_reference(
+                "Using fresh conversation reference for --input mode: %s",
+                nat_context_conversation_id,
+            )
         else:
             nat_context_conversation_id = Context.get().conversation_id
             if not nat_context_conversation_id:
                 nat_context_conversation_id = str(uuid.uuid4())
-                logger.info("No conversation-id header; generated thread ID: %s", nat_context_conversation_id)
+                _log_conversation_reference(
+                    "No conversation-id header; generated thread reference: %s",
+                    nat_context_conversation_id,
+                )
             else:
-                logger.info("Thread ID for checkpointing: %s", nat_context_conversation_id)
+                _log_conversation_reference("Thread reference for checkpointing: %s", nat_context_conversation_id)
 
         from aiq_agent.auth import get_current_principal
 
@@ -603,21 +651,22 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             collection_name = Context.get().conversation_id if Context.get() else None
 
             if collection_name:
+                collection_ref = log_identifier_ref(collection_name)
                 available_documents = await get_available_documents_async(collection_name)
                 if available_documents:
                     logger.info(
-                        "Loaded %d document summaries from DB for collection %s",
+                        "Loaded %d document summaries from DB for collection_ref=%s",
                         len(available_documents),
-                        collection_name,
+                        collection_ref,
                     )
                     for doc in available_documents:
                         logger.debug("  [summary] [file]: %s", "available" if doc.summary else "none")
                 else:
-                    logger.info("No document summaries in DB for collection %s", collection_name)
+                    logger.info("No document summaries in DB for collection_ref=%s", collection_ref)
             else:
                 logger.debug("No session context - cannot determine collection")
         except Exception as e:
-            logger.warning("Could not fetch available documents: %s", e)
+            logger.warning("Could not fetch available documents (%s)", type(e).__name__)
         # Resolve the report to follow up on: client-supplied id wins, else default to the last
         # completed report in this conversation (server-side, so any client gets follow-up).
         _ctx = Context.get()
@@ -629,7 +678,10 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             is_input_mode="--input" in sys.argv,
         )
         if effective_report_job_id and not request_context.active_report_job_id:
-            logger.info("Defaulting report follow-up to last report %s in conversation", effective_report_job_id)
+            logger.info(
+                "Defaulting report follow-up to report_ref=%s",
+                log_identifier_ref(effective_report_job_id),
+            )
 
         # Set session-scoped source registry for citation verification across turns.
         # When no conversation ID is available, get_or_create_session_registry returns a
@@ -649,16 +701,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         finally:
             reset_session_registry(token)
 
-        if isinstance(result, dict):
-            messages = result.get("messages", [])
-        else:
-            messages = getattr(result, "messages", [])
-
-        if messages:
-            response_content = messages[-1].content
-        else:
-            response_content = "No response generated."
-        # return _create_chat_response(response_content, response_id="research_response")
+        response = _render_workflow_response(result, model=workflow_id)
 
         # Exit after response when --input is provided
         if "--input" in sys.argv:
@@ -671,6 +714,6 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
             threading.Thread(target=exit_after_response, daemon=False).start()
 
-        return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
+        return response
 
     yield FunctionInfo.from_fn(_run, description="Chat deep researcher with intent routing and escalation.")

@@ -1,0 +1,91 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Local public MCP stack. Run from the repository root:
+#   docker compose -f deploy/compose/docker-compose.mcp.yaml up -d --build --wait
+#
+# Use --env-file deploy/.env (or exported variables) for NVIDIA_API_KEY and
+# TAVILY_API_KEY. Compose interpolation is used deliberately; no service-level
+# env_file leaks unrelated variables into the MCP container.
+
+name: aiq-mcp
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: aiq
+      # This stack is loopback-only and intentionally uses a fixed local
+      # password. Interpolating an arbitrary raw password into a URL would be
+      # unsafe because reserved URI characters require percent-encoding.
+      POSTGRES_PASSWORD: local_mcp_password # pragma: allowlist secret
+      POSTGRES_DB: aiq_jobs
+    ports:
+      - "127.0.0.1:${AIQ_MCP_POSTGRES_PORT:-1234}:5432"
+    volumes:
+      - mcp-postgres-data:/var/lib/postgresql/data
+      - ../../mcp/deploy/init-mcp-db.sql:/docker-entrypoint-initdb.d/init-mcp-db.sql:ro
+    networks:
+      - aiq-mcp-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -p 5432 -U aiq -d aiq_jobs"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
+  aiq-mcp:
+    image: "${AIQ_MCP_IMAGE:-aiq-mcp-server:local}"
+    build:
+      context: ../..
+      dockerfile: mcp/Dockerfile
+      target: release
+    init: true
+    environment:
+      AIQ_CHECKPOINT_DB: "postgresql://aiq:local_mcp_password@postgres:5432/aiq_jobs" # pragma: allowlist secret
+      AIQ_MCP_CONFIG: /app/configs/config_mcp.yml
+      AIQ_MCP_HOST: 0.0.0.0
+      AIQ_MCP_PORT: "9001"
+      AIQ_MCP_PATH: "${AIQ_MCP_PATH:-/mcp}"
+      AIQ_MCP_WORKERS: "${AIQ_MCP_WORKERS:-1}"
+      AIQ_MCP_LOG_LEVEL: "${AIQ_MCP_LOG_LEVEL:-INFO}"
+      AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS: "${AIQ_MCP_SHALLOW_INLINE_WAIT_SECONDS:-30}"
+      AIQ_MCP_MAX_QUERY_CHARS: "${AIQ_MCP_MAX_QUERY_CHARS:-8000}"
+      AIQ_MCP_CORS_ORIGINS: "${AIQ_MCP_CORS_ORIGINS-http://localhost:6274}"
+      AIQ_MCP_ALLOWED_HOSTS: "${AIQ_MCP_ALLOWED_HOSTS:-localhost,localhost:*,127.0.0.1,127.0.0.1:*,[::1],[::1]:*,0.0.0.0,0.0.0.0:*,aiq-mcp,aiq-mcp:*}"
+      AIQ_MCP_ALLOWED_ORIGINS: "${AIQ_MCP_ALLOWED_ORIGINS:-http://localhost:*,http://127.0.0.1:*,http://[::1]:*,http://0.0.0.0:*}"
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY:?Set NVIDIA_API_KEY in the shell or Compose env file}"
+      TAVILY_API_KEY: "${TAVILY_API_KEY:?Set TAVILY_API_KEY in the shell or Compose env file}"
+    ports:
+      - "127.0.0.1:${AIQ_MCP_PUBLISHED_PORT:-9001}:9001"
+    networks:
+      - aiq-mcp-network
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - >-
+          import urllib.request;
+          response = urllib.request.urlopen('http://127.0.0.1:9001/health', timeout=5);
+          raise SystemExit(0 if response.status == 200 else 1)
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+
+volumes:
+  mcp-postgres-data:
+    driver: local
+
+networks:
+  aiq-mcp-network:
+    driver: bridge

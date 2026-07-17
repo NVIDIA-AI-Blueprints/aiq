@@ -39,6 +39,7 @@ limitations under the License.
   - [Command-line interface (CLI)](#command-line-interface-cli)
   - [Web UI](#web-ui)
   - [Async Deep Research Jobs](#async-deep-research-jobs)
+  - [MCP Server](#mcp-server)
   - [Benchmarks](#benchmarks)
   - [Jupyter Notebooks](#jupyter-notebooks)
 - [Evaluating the Workflow](#evaluating-the-workflow)
@@ -68,8 +69,8 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 - **Skills, sandbox execution, and durable outputs** — Built-in research/synthesis skills run code through a provider-neutral sandbox contract. Modal is fresh per job; the experimental OpenShell profile uses one shared, pre-provisioned sandbox and is not a multi-tenant isolation boundary. Opt-in rich-file capture checkpoints manifest-declared files after successful sandbox commands, finalizes on success/failure, stores bytes in SQL or S3-compatible storage, and delivers metadata to the Files tab live and on replay.
 - **Portable Agent Skills** — `aiq-deploy` selects, starts, and validates an AI-Q deployment; `aiq-research` calls routed chat and async research from compatible coding harnesses.
 - **Data source registry** — UI toggles and request payloads can select web, paper, enterprise, collaboration, and knowledge-layer sources per message.
-- **Expanded sources** — Paper search supports Serper, SerpAPI, and SearchAPI; focused profiles demonstrate DuckDuckGo news, Polymarket, and OpenSearch knowledge retrieval.
-- **Production API and auth** — REST endpoints, async job ownership, per-user OAuth-protected MCP sources, token validator entry points, and provider lifecycle hooks support authenticated deployments.
+- **Expanded sources** — Paper search supports Serper, SerpAPI, and SearchAPI; You.com adds web, contents, general-research, and finance-research tools; Nimble adds configurable web search; focused profiles demonstrate DuckDuckGo news, Polymarket, OpenSearch, and Azure AI Search knowledge retrieval.
+- **Production API and auth** — REST endpoints, async job ownership, per-user OAuth-protected MCP sources, token validator entry points, and provider lifecycle hooks support authenticated deployments; a separate public MCP server exposes stateless research tools for trusted networks.
 - **Opt-in policy controls** — NeMo Guardrails middleware covers selected workflow and agent boundaries, and narrow application-level encryption can protect final async output plus selected artifact-event content.
 - **Observability, profiling, and cost analysis** — NAT-exported async traces preserve task, named-agent, and model/tool hierarchy across concurrent researchers. Tokenomics reports combine profiler traces with pricing configuration for cost, latency, and cache analysis.
 - **Evaluation harnesses** — Built-in benchmarks (for example, FreshQA, DeepResearch) and evaluation scripts to measure quality and iterate on prompts and agent architecture.
@@ -89,7 +90,8 @@ Recent changes include:
   the new `aiq-deploy` skill, expanded `aiq-research` workflows, opt-in artifact capture, SQL or
   S3-compatible storage, and live or replayed Files-tab access turn generated files into durable
   outputs.
-- **Enterprise data and policy controls** — OpenSearch joins the knowledge backends; per-user MCP
+- **Sources, integrations, and policy controls** — OpenSearch and Azure AI Search join the knowledge backends;
+  You.com adds four search and research tools, Nimble adds configurable web search, and the standalone public MCP server exposes submit/poll/report operations; per-user MCP
   OAuth, opt-in NeMo Guardrails middleware, and narrowly scoped async-content encryption add
   deployment controls without making them universal defaults.
 - **Operations and user experience** — Async traces preserve the agent hierarchy, the source Helm
@@ -211,6 +213,8 @@ uv pip install -e ./frontends/benchmarks/freshqa
 # Install data sources (pick what you need)
 uv pip install -e ./sources/tavily_web_search
 uv pip install -e ./sources/google_scholar_paper_search
+uv pip install -e ./sources/nimble_web_search
+uv pip install -e ./sources/you_com
 uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 ```
 
@@ -221,6 +225,8 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 | ---------- | -------------------- | ------------------------- | ----------------------------------------------------------- |
 | NVIDIA API | `NVIDIA_API_KEY`     | LLM inference through NIM | Yes                                                         |
 | Tavily     | `TAVILY_API_KEY`     | Web search                | No (if not specified, agent continues without web search)   |
+| Nimble     | `NIMBLE_API_KEY`     | Configurable web search   | No (required only when Nimble search is configured)         |
+| You.com    | `YDC_API_KEY`        | Web, contents, and research APIs | No (required only when You.com tools are configured)   |
 | Serper     | `SERPER_API_KEY`     | Academic paper search     | No (if not specified, agent continues without paper search) |
 
 
@@ -234,6 +240,11 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 1. Sign in to [Tavily](https://tavily.com/)
 2. Navigate to your dashboard
 3. Generate an API key
+
+#### Obtain a You.com API Key
+
+Follow the [You.com quickstart](https://you.com/docs/quickstart) to create an API key and add it to `deploy/.env` as
+`YDC_API_KEY`. Refer to [You.com API Suite](docs/source/customization/you-com.md) for tool configuration.
 
 #### Obtain a Paper Search API Key
 
@@ -269,11 +280,13 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 | `config_web_default_llamaindex.yml` | Nemotron 3 Super; Nemotron Mini summary | Default web/API chat pipeline with LlamaIndex/ChromaDB and Tavily. Paper search is commented out. |
 | `config_web_frag.yml` | Nemotron 3 Super | Web/API and Helm base with Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. |
 | `config_web_opensearch.yml` | Nemotron 3 Super; NVIDIA embedding model | Web/API with built-in OpenSearch knowledge retrieval plus Tavily; supports self-hosted, `es`, and `aoss` authentication modes. |
+| `config_web_azure_ai_search.yml` | Nemotron 3 Super; NVIDIA embedding model | Web/API with Azure AI Search knowledge retrieval plus Tavily; supports API-key and Azure identity authentication. |
 | `config_frontier_models.yml` | GPT-5.2; Nemotron 3 Super; Nemotron Mini summary | LlamaIndex profile using GPT-5.2 for orchestration/planning/writing and Nemotron Super for routing/research. Requires `OPENAI_API_KEY`. |
 | `config_web_default_guardrails.yml` | GPT-OSS-120B; Nemotron 3 Super; Nemotron Mini summary | LlamaIndex profile with workflow Guardrails attached and async deep-agent Guardrails selected; shallow middleware is defined but not attached. |
 | `config_web_frag_mcp_auth.yml` | Nemotron 3 Super | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
 | `config_domain_routing_and_skills.yml` | Nemotron 3 Super; Nemotron Mini summary | Direct deep-research profile with domain routing, DuckDuckGo news, Polymarket, enabled Serper paper search, LlamaIndex, built-in skills, and a fresh per-job Modal sandbox. |
 | `config_openshell.yml` | GPT-OSS-120B; Nemotron 3 Super; Nemotron Mini summary | Experimental web/API skills profile with artifact capture over one shared, pre-provisioned OpenShell sandbox; trusted single-operator use only. |
+| `config_mcp.yml` | Nemotron 3 Super 120B | Standalone MCP server. Public NIM + Tavily research with PostgreSQL-backed stateless submit/poll/report. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Ways to Run the Agents
 
@@ -334,6 +347,28 @@ For more details, refer to:
 
 For public endpoints, SSE replay, report follow-up, and durable artifact access, refer to the
 [REST API documentation](docs/source/integration/rest-api.md).
+
+### MCP Server
+
+Expose AI-Q to MCP clients through the standalone, stateless Streamable HTTP server:
+
+```bash
+: "${NVIDIA_API_KEY:?Set NVIDIA_API_KEY}"
+: "${TAVILY_API_KEY:?Set TAVILY_API_KEY}"
+uv sync --project mcp --frozen
+AIQ_CHECKPOINT_DB=postgresql://localhost/aiq_jobs \
+  uv run --project mcp --frozen aiq-mcp-server
+```
+
+The endpoint defaults to `http://localhost:9001/mcp` and advertises exactly `submit_query`, `poll_query`, and
+`get_final_report`. This public server intentionally has no authentication; job UUIDs are bearer capabilities and
+the endpoint must not be exposed directly to an untrusted network. See [Expose AI-Q as an MCP Server](docs/source/integration/mcp-server.md)
+for the exact JSON protocol, health contracts, security model, and container deployment.
+
+MCP is an independent uv project with its own `mcp/uv.lock`. The root lock remains compatible with NAT's
+`cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==48.0.1` as a
+security hardening measure. The supported distribution paths are this source checkout and the release container;
+the MCP package's local path dependency closure is not published as a standalone wheel.
 
 ### Benchmarks
 

@@ -89,6 +89,7 @@ format failures for the new source package.
 
 ## Related Skills
 
+- `aiq-configure-workflow`
 - `aiq-add-tool`
 - `aiq-release-qa`
 - `aiq-prepare-pr`

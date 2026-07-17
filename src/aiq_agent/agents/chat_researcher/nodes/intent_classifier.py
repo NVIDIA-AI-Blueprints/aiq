@@ -34,6 +34,7 @@ from aiq_agent.common import render_prompt_template
 from ..models import ChatResearcherState
 from ..models import DepthDecision
 from ..models import IntentResult
+from ..preclassification import get_preclassified_depth
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,18 @@ class IntentClassifier:
             return {
                 "user_intent": IntentResult(intent="research", raw=None),
                 "depth_decision": DepthDecision(decision="deep", raw_reasoning="No query"),
+            }
+
+        # Reuse a caller-supplied depth when present (e.g. the MCP JobManager, which
+        # already classified this query once to persist depth and pick a poll cadence).
+        # This keeps the persisted decision and the executed route identical and skips a
+        # redundant intent-LLM call. Only research depth is threaded; meta short-circuits
+        # before the caller ever reaches this path, so target defaults to "new_research".
+        preset_depth = get_preclassified_depth()
+        if preset_depth is not None:
+            return {
+                "user_intent": IntentResult(intent="research", raw=None),
+                "depth_decision": DepthDecision(decision=preset_depth, raw_reasoning="preclassified by caller"),
             }
 
         user_info = state.user_info or {}
