@@ -150,6 +150,16 @@ def test_root_workspace_excludes_the_independent_mcp_project() -> None:
         if "registry" in source:
             assert source == {"registry": "https://pypi.org/simple"}
             continue
+        if "url" in source:
+            assert package["name"] == "en-core-web-lg"
+            assert package["version"] == "3.8.0"
+            assert source == {
+                "url": (
+                    "https://github.com/explosion/spacy-models/releases/download/"
+                    "en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl"
+                )
+            }
+            continue
         editable = source.get("editable")
         assert isinstance(editable, str)
         assert not Path(editable).is_absolute()

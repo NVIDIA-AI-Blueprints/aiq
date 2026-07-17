@@ -289,8 +289,12 @@ For the broader auth context (UI sign-in flow, validator registration, headless 
 Use per-user MCP OAuth when each AIQ user must authorize the upstream MCP server with their own
 identity. The reference configuration is
 [`configs/config_web_frag_mcp_auth.yml`](../../../configs/config_web_frag_mcp_auth.yml). It combines
-an OAuth-protected data source, NAT's `per_user_mcp_client`, an `mcp_oauth2` provider, and a shared
-token object store.
+an OAuth-protected data source (declared with a `per_user_auth` block), an `mcp_oauth2` authentication
+provider, and a shared token object store. The config deliberately does **not** declare a
+`per_user_mcp_client` function group: AIQ builds the per-user MCP client in code, per job, from the
+`mcp_oauth2` provider's server URL and the signed-in user's stored token. A config-declared
+`per_user_mcp_client` is built by NAT's interactive-session builder, which fails for a user with no
+token and breaks the interactive WebSocket chat path.
 
 Set these values before starting AIQ:
 
@@ -338,8 +342,18 @@ for protocol details.
 - Store secrets in environment variables or a secret manager, not in YAML checked into source
   control.
 - Use service-account MCP auth only when shared app-level access is acceptable.
-- Use `per_user_auth: true` for upstream MCP OAuth; `requires_auth: true` only gates a source on
-  AIQ sign-in and does not authorize the upstream MCP server.
+- Use a nested `per_user_auth` block (the `PerUserAuthConfig` object, not a bare boolean) for upstream
+  MCP OAuth; `requires_auth: true` only gates a source on AIQ sign-in and does not authorize the
+  upstream MCP server:
+
+  ```yaml
+  per_user_auth:
+    required: true                     # gate job submission until the user connects
+    provider: google                   # provider identifier
+    mcp_server_id: gdrive              # key used to look up the user's token in NAT token storage
+    auth_provider: mcp_oauth2_gdrive   # the `authentication` (mcp_oauth2) provider for this source
+  ```
+
 - Keep token forwarding scoped to trusted internal services and HTTPS endpoints.
 - Use `requires_auth: true` for sources that depend on AIQ sign-in but do not have a separate
   upstream OAuth connection.

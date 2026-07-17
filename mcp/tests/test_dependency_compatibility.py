@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Focused NAT 1.8 and MCP 1.27.2 compatibility contracts."""
+"""Focused NAT 1.8 and MCP 1.28.1 compatibility contracts."""
 
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ _PARITY_DOCUMENT = _REPO_ROOT / "mcp" / "REFERENCE_PARITY.md"
 
 
 def test_runtime_dependency_versions_are_the_validated_compatibility_baseline() -> None:
-    assert version("mcp") == "1.27.2"
+    assert version("mcp") == "1.28.1"
     assert version("nvidia-nat") == "1.8.0"
     assert version("nvidia-nat-core") == "1.8.0"
     assert version("aiq-agent") == "2.0.0"

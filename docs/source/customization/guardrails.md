@@ -34,13 +34,27 @@ At each configured boundary, guardrails can make one of three decisions:
 | Modify | Replace the selected input or output field with the modified content returned by the rail. |
 | Block | Return the configured refusal response instead of continuing with the blocked content. |
 
-Input-rail evaluation exceptions are caught, logged, and converted to the middleware refusal response. Output-rail
-evaluation exceptions are not converted to a refusal; they propagate and fail the invocation.
+Input- and output-rail evaluation exceptions are caught, logged, and converted to the middleware refusal response.
+Output failures preserve the intercepted response schema and do not return the original unfiltered output.
+
+Buffered output streams are evaluated as one logical assistant response before any chunk is emitted. This includes
+streams that mix raw strings and structured response chunks. Modified output is redistributed across the buffered
+chunks, terminal workflow outcomes are synchronized with every rewritten structured chunk, and blocked or failed
+streams emit only a safe refusal.
+
+## PII Runtime Dependencies
+
+The built-in `sensitive_data_detection` action requires Presidio, spaCy, and a compatible spaCy language model. These
+large dependencies are available through the `pii` project extra rather than the base Python package. Install AI-Q with
+`--extra pii` when running PII rails. The release Docker image includes this extra and verifies during the build that the
+Presidio analyzer and anonymizer import, `en_core_web_lg` is installed, and email analysis succeeds.
 
 ## Configuration Shape
 
 The guardrails configuration is placed in the top-level `middleware` section. Defining an entry makes that middleware
-available; attach it to the workflow or function that should be guarded. The `guardrails` block uses NAT/NeMo
+available; attach it to the workflow or function that should be guarded, and use its `workflow_functions` block to
+select which fields it evaluates. Attaching a middleware without a matching `workflow_functions` selection resolves to
+zero guarded fields, so the boundary appears configured but is not enforced. The `guardrails` block uses NAT/NeMo
 Guardrails configuration. Refer to `configs/config_web_default_guardrails.yml` for the full field-selection paths used by
 each boundary.
 
@@ -48,11 +62,25 @@ each boundary.
 middleware:
   workflow_guardrails:
     _type: workflow_guardrails
+    workflow_functions:
+      "<workflow>":
+        choices:
+          - message.content
     guardrails:
       # NeMo Guardrails configuration.
 
   shallow_agent_guardrails:
     _type: shallow_agent_guardrails
+    workflow_functions:
+      shallow_research_agent:
+        pre_invoke:
+          messages:
+            HumanMessage:
+              - content
+        post_invoke:
+          messages:
+            AIMessage:
+              - content
     guardrails:
       # NeMo Guardrails configuration.
 
