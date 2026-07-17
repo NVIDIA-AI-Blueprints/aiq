@@ -421,6 +421,57 @@ class TestChatResearcherAgent:
         assert result["last_report_markdown"] == revised_report
 
     @pytest.mark.asyncio
+    async def test_run_report_edit_inline_preserves_unverified_warning(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """Inline edits keep stored markdown clean but keep the visible warning banner."""
+
+        async def report_orchestration(state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research",
+                    target="report",
+                    report_action="edit",
+                    raw=None,
+                )
+            }
+
+        revised_report = "# FIFA World Cup 2026\n\nUpdated body."
+        citation_status = {
+            "status": "unverified",
+            "reason": "no_sources",
+        }
+
+        async def inline_edit(state):
+            return revised_report
+
+        async def fail_if_called(_state):
+            raise AssertionError("research path should not run for report edit")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=report_orchestration,
+            shallow_research_fn=fail_if_called,
+            deep_research_fn=fail_if_called,
+            clarifier_fn=mock_clarifier,
+            report_edit_fn=inline_edit,
+        )
+
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="tighten the report")],
+            last_report_markdown="# FIFA World Cup 2026\n\nBody.",
+            last_report_citation_verification_status=citation_status,
+        )
+        result = await agent.run(state, thread_id="test-inline-edit-unverified-warning")
+
+        warning = citation_verification_warning("no_sources")
+        assert result["messages"][-1].content == f"{warning}\n\n{revised_report}"
+        assert result["last_report_markdown"] == revised_report
+        assert result["last_report_citation_verification_status"] == citation_status
+
+    @pytest.mark.asyncio
     async def test_run_deep_research_submitter_emits_structured_escalation(
         self,
         mock_shallow_research,

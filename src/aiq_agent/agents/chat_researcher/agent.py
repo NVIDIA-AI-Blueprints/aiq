@@ -49,6 +49,7 @@ from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import citation_verification_outcome_dict
+from aiq_agent.common.citation_verification import combine_citation_verification_outcomes
 from aiq_agent.common.logging_utils import log_identifier_ref
 
 try:
@@ -469,15 +470,21 @@ class ChatResearcherAgent:
                     }
                 revised = getattr(revised_result, "report", revised_result)
                 revised = revised if isinstance(revised, str) else str(revised)
-                citation_verification_status = citation_verification_outcome_dict(
+                child_citation_verification_status = citation_verification_outcome_dict(
                     getattr(revised_result, "citation_verification_status", None)
                 )
+                citation_verification_status = combine_citation_verification_outcomes(
+                    state.last_report_citation_verification_status,
+                    child_citation_verification_status,
+                )
+                visible_revised = prepend_citation_verification_warning(
+                    revised,
+                    citation_verification_status,
+                )
                 return {
-                    "messages": [AIMessage(content=revised)],
+                    "messages": [AIMessage(content=visible_revised)],
                     "last_report_markdown": revised,
-                    "last_report_citation_verification_status": (
-                        citation_verification_status or state.last_report_citation_verification_status
-                    ),
+                    "last_report_citation_verification_status": citation_verification_status,
                 }
             return {
                 "messages": [AIMessage(content="Report edit is not available in this workflow.")],
