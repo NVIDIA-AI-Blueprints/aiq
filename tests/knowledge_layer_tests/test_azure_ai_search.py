@@ -775,7 +775,7 @@ def test_finalization_timeout_does_not_leave_retryable_success(monkeypatch, tmp_
     _run_threads_synchronously(monkeypatch)
     path = tmp_path / "document.txt"
     path.write_text("content", encoding="utf-8")
-    ingestor, _client = _ingestor()
+    ingestor, client = _ingestor()
     ingestor._embedding = FakeEmbedding()
     ingestor._splitter = FakeSplitter([FakeNode("content")])
 
@@ -801,6 +801,8 @@ def test_finalization_timeout_does_not_leave_retryable_success(monkeypatch, tmp_
         "states": [(JobState.FAILED, FileStatus.FAILED), (JobState.COMPLETED, FileStatus.SUCCESS)],
         "successful_ids": [jobs[1].file_details[0].file_id],
     }
+    failed_file_id = jobs[0].file_details[0].file_id
+    assert not [document for document in client.documents.values() if document.get("file_id") == failed_file_id]
 
 
 def test_multi_file_visibility_polling_uses_bounded_wait_rounds(monkeypatch):
@@ -891,6 +893,39 @@ def test_restarted_collection_delete_waits_for_hidden_children():
     assert remaining_ids == set()
 
 
+def test_collection_delete_fences_concurrent_submission(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        azure_adapter.threading,
+        "Thread",
+        lambda *args, **kwargs: SimpleNamespace(start=lambda: None),
+    )
+    path = tmp_path / "document.txt"
+    path.write_text("content", encoding="utf-8")
+    ingestor, client = _ingestor()
+    ingestor.create_collection("docs")
+    write_manifest = ingestor._write_collection_manifest
+    submitted_jobs = []
+    submission_errors = []
+
+    def submit_after_fence(*args, **kwargs):
+        manifest = write_manifest(*args, **kwargs)
+        if kwargs.get("status") == azure_adapter._COLLECTION_DELETING:
+            try:
+                submitted_jobs.append(ingestor.submit_job([str(path)], "docs"))
+            except ValueError as error:
+                submission_errors.append(str(error))
+        return manifest
+
+    monkeypatch.setattr(ingestor, "_write_collection_manifest", submit_after_fence)
+
+    assert ingestor.delete_collection("docs")
+    assert submitted_jobs == []
+    assert submission_errors == ["Collection 'docs' is being deleted"]
+    assert not [document for document in client.documents.values() if document.get("collection_id") == "docs"]
+    assert ingestor._jobs == {}
+    assert ingestor._files == {}
+
+
 def test_post_upload_failure_rolls_back_chunks_and_retains_failed_manifest(monkeypatch, tmp_path):
     _install_reader(monkeypatch)
     _run_threads_synchronously(monkeypatch)
@@ -923,6 +958,7 @@ def test_response_loss_rolls_back_all_attempted_chunk_ids(monkeypatch, tmp_path)
     ingestor.create_collection("docs")
     ingestor._embedding = FakeEmbedding()
     ingestor._splitter = FakeSplitter([FakeNode("first"), FakeNode("second")])
+    client.upload_visibility_delays[("chunk", None)] = 4
     client.upload_response_failures_remaining = 1
 
     with pytest.raises(ServiceRequestError, match="response lost"):
@@ -938,6 +974,7 @@ def test_response_loss_rolls_back_all_attempted_chunk_ids(monkeypatch, tmp_path)
 
     attempted_ids = {"chunk-new-00000000", "chunk-new-00000001"}
     assert attempted_ids & client.documents.keys() == set()
+    assert attempted_ids & client.pending_uploads.keys() == set()
 
 
 def test_batches_respect_action_count_and_payload_size():
@@ -1327,6 +1364,7 @@ def test_active_file_and_collection_deletion_are_rejected():
         ingestor.delete_file("active", "docs")
     with pytest.raises(ValueError, match="while files are ingesting"):
         ingestor.delete_collection("docs")
+    assert ingestor.get_collection("docs") is not None
 
 
 @pytest.mark.asyncio

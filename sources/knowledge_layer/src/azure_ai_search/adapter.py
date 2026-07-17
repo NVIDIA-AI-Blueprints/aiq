@@ -835,6 +835,9 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             )
 
         with self._jobs_lock:
+            collection = self._get_collection_manifest(collection_name)
+            if collection is not None and collection.get("status") != _COLLECTION_ACTIVE:
+                raise ValueError(f"Collection {collection_name!r} is being deleted")
             self._files.update(files)
             self._jobs[job_id] = IngestionJobStatus(
                 job_id=job_id,
@@ -1315,6 +1318,21 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         if manifest is None:
             return False
         client = self._get_validated_search_client()
+        with self._jobs_lock:
+            if any(
+                info.collection_name == name
+                and info.status in {FileStatus.UPLOADING, FileStatus.INGESTING}
+                and (name, file_id) not in self._deleted_files
+                for file_id, info in self._files.items()
+            ):
+                raise ValueError(f"Cannot delete collection {name!r} while files are ingesting")
+            self._write_collection_manifest(name, status=_COLLECTION_DELETING)
+            tracked_files = {
+                file_id: info.model_copy(deep=True)
+                for file_id, info in self._files.items()
+                if info.collection_name == name
+            }
+
         file_manifests = self._stable_documents(
             client,
             filter_text=_record_filter(_RECORD_FILE, name),
@@ -1325,22 +1343,17 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             for document in file_manifests
             if document.get("file_id")
         }
-        with self._jobs_lock:
-            files.update(
-                {
-                    file_id: info.model_copy(deep=True)
-                    for file_id, info in self._files.items()
-                    if info.collection_name == name
-                }
-            )
+        files.update(tracked_files)
         if any(
             info.status in {FileStatus.UPLOADING, FileStatus.INGESTING}
             for file_id, info in files.items()
             if (name, file_id) not in self._deleted_files
         ):
+            if manifest.get("status") == _COLLECTION_ACTIVE:
+                manifest["updated_at"] = _utc_now()
+                self._write_document(manifest)
             raise ValueError(f"Cannot delete collection {name!r} while files are ingesting")
 
-        self._write_collection_manifest(name, status=_COLLECTION_DELETING)
         content_filter = _and_filter(
             f"collection_id eq {_odata_literal(name)}",
             f"record_type ne {_odata_literal(_RECORD_COLLECTION)}",
