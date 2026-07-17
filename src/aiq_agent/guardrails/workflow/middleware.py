@@ -26,14 +26,16 @@ from nemoguardrails.rails.llm.options import GenerationLogOptions
 from nemoguardrails.rails.llm.options import GenerationOptions
 from nemoguardrails.rails.llm.options import GenerationResponse
 
+from aiq_agent.agents.chat_researcher.models.result import ChatResearcherResponse
+from aiq_agent.agents.chat_researcher.models.result import WorkflowSuccess
 from aiq_agent.agents.chat_researcher.utils import _extract_context_from_text
 from aiq_agent.agents.chat_researcher.utils import _is_user_role
+from aiq_agent.common import _create_chat_response
 from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
 from aiq_agent.guardrails.workflow.config import WorkflowGuardrailsConfig
 from nat.builder.builder import Builder
 from nat.middleware.middleware import InvocationContext
-from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GuardrailsMiddleware
 
 logger = logging.getLogger(__name__)
 
@@ -65,11 +67,11 @@ class _WorkflowGuardrails(GuardrailsMixin):
 
         input: Any = context.modified_args[0]
 
-        targets = self._extract_guardrail_targets_for_rewrite(input)
-        if not targets:
-            return None
-
         try:
+            targets = self._extract_guardrail_targets_for_rewrite(input)
+            if not targets:
+                return None
+
             await self.bind_llms_to_rail()
 
             modified = False
@@ -98,14 +100,56 @@ class _WorkflowGuardrails(GuardrailsMixin):
                 modified = True
 
             return context if modified else None
-        except Exception:
-            logger.exception("Workflow input Guardrails failed while evaluating query text; refusing request")
+        except Exception as exc:
+            logger.error(
+                "Workflow input Guardrails failed while evaluating query text; refusing request; error_type=%s",
+                type(exc).__name__,
+            )
             context.output = self._on_pre_invoke_blocked(context, _GUARDRAILS_FAILURE_REFUSAL)
             return context
 
     async def post_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run output rails for the configured workflow result fields."""
-        return await GuardrailsMiddleware.post_invoke(self, context)
+        return await super().post_invoke(context)
+
+    def _build_emergency_output_refusal(self, context: InvocationContext, original_output: object) -> object:
+        """Return a fresh refusal preserving the workflow response schema."""
+        model = getattr(original_output, "model", None)
+        response_id = getattr(original_output, "id", "guardrails_refusal")
+        response = _create_chat_response(_GUARDRAILS_FAILURE_REFUSAL, response_id=response_id, model=model)
+        if isinstance(original_output, ChatResearcherResponse):
+            return ChatResearcherResponse(
+                **response.model_dump(),
+                workflow_outcome=WorkflowSuccess(result=_GUARDRAILS_FAILURE_REFUSAL),
+            )
+        return response
+
+    @staticmethod
+    def _replace_terminal_output_text(output: object, guarded_text: str) -> None:
+        """Keep a workflow's successful terminal result aligned with guarded public output."""
+        workflow_outcome = getattr(output, "workflow_outcome", None)
+        if getattr(workflow_outcome, "status", None) == "success":
+            setattr(workflow_outcome, "result", guarded_text)
+
+    def _synchronize_blocked_output(self, output: object, block_message: str) -> None:
+        """Synchronize a blocked workflow's terminal outcome."""
+        self._replace_terminal_output_text(output, block_message)
+
+    def _synchronize_buffered_outputs(self, buffered: list[object], paths: list[str]) -> None:
+        """Synchronize every rewritten structured stream chunk's terminal outcome."""
+        for chunk in buffered:
+            if isinstance(chunk, str):
+                continue
+            for text, _apply_to_field in self._gather_guardrail_inputs(chunk, paths, lambda _value: None):
+                self._replace_terminal_output_text(chunk, text)
+                break
+
+    def _synchronize_terminal_output(self, context: InvocationContext) -> None:
+        """Copy guarded workflow output into its successful terminal outcome."""
+        paths = self._resolve_guarded_targets_for_phase(context.function_context.name, "post_invoke")
+        for text, _apply_to_field in self._gather_guardrail_inputs(context.output, paths, lambda _value: None):
+            self._replace_terminal_output_text(context.output, text)
+            return
 
     def _extract_guardrail_target(self, raw_input: object) -> str | None:
         """Extract the normalized user query text from a raw workflow input."""
@@ -119,15 +163,7 @@ class _WorkflowGuardrails(GuardrailsMixin):
         raw_input: object,
     ) -> list[tuple[str, Callable[[str], object]]]:
         """Extract guardrail targets that each map to one writable string leaf."""
-        try:
-            targets = self._extract_guardrail_targets_for_rewrite_unchecked(raw_input)
-        except Exception:
-            logger.exception(
-                "Workflow input Guardrails could not extract query text from input type %s; continuing without rails",
-                type(raw_input).__name__,
-            )
-            return []
-
+        targets = self._extract_guardrail_targets_for_rewrite_unchecked(raw_input)
         targets = [(text, replace_text) for text, replace_text in targets if text]
         if not targets:
             logger.warning(
