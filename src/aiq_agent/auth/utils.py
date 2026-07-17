@@ -21,9 +21,13 @@ raw JWT payload decoding.
 
 Token sources checked in priority order by ``get_auth_token()``:
 
-1. **NAT/AIQ Context cookies** — ``idToken`` cookie set by the frontend auth layer
+1. **Registered token fetchers** — job-scoped sources such as the Dask worker
+   auth context.
+2. **AIQ auth middleware context** — the request token already validated by the
+   configured ``TokenValidator``.
+3. **NAT/AIQ Context cookies** — ``idToken`` cookie set by the frontend auth layer
    (server / web-UI mode).
-2. **NAT/AIQ Context Authorization header** — ``Authorization: Bearer <jwt>`` sent
+4. **NAT/AIQ Context Authorization header** — ``Authorization: Bearer <jwt>`` sent
    by API callers who authenticate with a JWT directly.
 """
 
@@ -152,10 +156,10 @@ def get_auth_token() -> str | None:
 
     Sources checked in order:
 
-    Tries registered token fetchers in priority order (highest first),
-    then falls back to the idToken cookie set by the frontend auth layer.
-    1. NAT ``Context`` cookies — ``idToken`` key (server / web-UI mode).
-    2. NAT ``Context`` Authorization header — ``Bearer <jwt>`` (API callers with JWT).
+    1. Registered token fetchers in priority order (highest first).
+    2. AIQ auth middleware's current request token.
+    3. NAT ``Context`` cookies — ``idToken`` key (server / web-UI mode).
+    4. NAT ``Context`` Authorization header — ``Bearer <jwt>`` (API callers with JWT).
 
     Returns:
         ID token string, or ``None`` if no valid token is available.
@@ -172,7 +176,23 @@ def get_auth_token() -> str | None:
         except Exception as e:
             logger.debug("Registered token fetcher failed: %s", e)
 
-    # Default: Context cookies
+    # Custom AIQ FastAPI routes run under AuthMiddleware but outside a NAT
+    # SessionManager session, so their headers/cookies are not represented in
+    # NAT Context. TokenValidator's contract preserves the validated raw token
+    # in the middleware user context; use that request-scoped value before
+    # falling back to NAT Context.
+    try:
+        from aiq_api.auth.middleware import get_current_user
+
+        current_user = get_current_user()
+        middleware_token = current_user.get("token") if isinstance(current_user, dict) else None
+        if isinstance(middleware_token, str) and middleware_token.strip():
+            logger.debug("Using token from AIQ auth middleware context")
+            return middleware_token.strip()
+    except Exception:
+        logger.debug("Failed to retrieve token from AIQ auth middleware context")
+
+    # Fall back to NAT Context cookies and headers.
     try:
         from nat.builder.context import Context
 

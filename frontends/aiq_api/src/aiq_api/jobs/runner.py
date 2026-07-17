@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import threading
 import uuid
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -177,6 +178,79 @@ class CancellationMonitor:
 
 # Interval for emitting heartbeat events
 HEARTBEAT_INTERVAL_SECONDS = 30
+
+# The ghost-job reaper treats a RUNNING job with no recent activity as a dead
+# worker. But a worker can spend minutes in pre-event initialization (config,
+# providers, tools, MCP, sandbox) before it stores its first event, so from the
+# moment the job enters RUNNING we refresh a lightweight lease — job_info's
+# updated_at, the same column the reaper falls back to for a zero-event job — on
+# this interval. A slow-but-live worker keeps its lease fresh and is not reaped;
+# a genuinely dead worker stops refreshing and its lease goes stale. Keep this
+# well under GHOST_JOB_TIMEOUT_SECONDS so a live worker refreshes several times
+# before the reaper's timeout.
+LEASE_REFRESH_INTERVAL_SECONDS = 60
+
+
+def _db_now_expr(db_url: str) -> str:
+    """Return the DB current-time SQL expression for this backend.
+
+    Accepts both ``postgresql://`` and the legacy ``postgres://`` scheme.
+    """
+    return "NOW()" if db_url.startswith(("postgresql", "postgres")) else "CURRENT_TIMESTAMP"
+
+
+def _touch_job_lease_sync(db_url: str, job_id: str) -> None:
+    """Refresh the running-job lease by bumping job_info.updated_at.
+
+    Scoped to ``status = 'running'`` so it can never resurrect the timestamp of
+    a job that has already reached a terminal state.
+    """
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET updated_at = {_db_now_expr(db_url)} WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt, {"job_id": job_id})
+
+
+def _write_job_success_if_running_sync(db_url: str, job_id: str, stored_output: str) -> bool:
+    """Compare-and-set the job to SUCCESS with its output, only if still RUNNING.
+
+    A single guarded ``UPDATE ... WHERE status = 'running'`` so a job the reaper
+    already moved to a terminal state (e.g. it was reaped while slow to finish)
+    is never resurrected. Returns True iff this call performed the write.
+    """
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'success', output = :output, updated_at = {_db_now_expr(db_url)} "
+        "WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(stmt, {"output": stored_output, "job_id": job_id})
+        return (result.rowcount or 0) == 1
+
+
+def _run_lease_refresher(db_url: str, job_id: str, stop_event: threading.Event) -> None:
+    """Refresh the running-job lease on a dedicated thread until signalled.
+
+    Runs in its own OS thread — not the worker event loop — so it cannot be
+    starved by synchronous cold-start work (config load, agent import) that
+    holds the loop. ``stop_event.wait`` returns True when the job ends (exit) or
+    False on timeout (refresh, then loop).
+    """
+    while not stop_event.wait(LEASE_REFRESH_INTERVAL_SECONDS):
+        try:
+            _touch_job_lease_sync(db_url, job_id)
+        except Exception as exc:  # noqa: BLE001 - a failed lease refresh must never kill the job
+            logger.debug("Lease refresh for job %s failed: %s", job_id, exc)
 
 
 async def run_with_cancellation(
@@ -530,6 +604,8 @@ async def run_agent_job(
     job_store: JobStore | None = None
     job_output_cipher = None
     cancellation_monitor: CancellationMonitor | None = None
+    lease_stop: threading.Event | None = None
+    lease_thread: threading.Thread | None = None
     event_store: EventStore | BatchingEventStore | None = None
     # Sandbox runtime is released on the terminal path; interrupted forces terminate() over close().
     sandbox_runtime: Any | None = None
@@ -566,6 +642,19 @@ async def run_agent_job(
             return
 
         await job_store.update_status(job_id, JobStatus.RUNNING)
+
+        # Start refreshing the reaper lease immediately, before the slow
+        # initialization below stores any event, so a live worker in a long
+        # cold start is not mistaken for a dead one. It runs on a dedicated
+        # thread so synchronous init work can't starve it.
+        lease_stop = threading.Event()
+        lease_thread = threading.Thread(
+            target=_run_lease_refresher,
+            args=(db_url, job_id, lease_stop),
+            name=f"job-lease-{job_id}",
+            daemon=True,
+        )
+        lease_thread.start()
 
         cancellation_monitor = CancellationMonitor(
             scheduler_address=scheduler_address,
@@ -817,20 +906,22 @@ async def run_agent_job(
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
-                    from .crypto import update_job_output
+                    from .crypto import serialize_job_output_for_storage
 
                     if job_output_cipher is None:
                         raise RuntimeError("job output cipher was not initialized")
                     # Apply caller metadata first, then set the canonical report last so a
                     # stray "report" key in output_metadata can never overwrite the real report.
                     output = {**(output_metadata or {}), "report": report}
+                    # Terminal state is immutable: write SUCCESS with a single
+                    # compare-and-set (WHERE status='running'), so if the ghost
+                    # reaper already marked this job FAILURE it is never
+                    # resurrected. Serialize/encrypt exactly as update_job_output
+                    # would, then do the guarded write.
                     try:
-                        await update_job_output(
-                            job_store,
-                            job_id,
-                            JobStatus.SUCCESS,
-                            output=output,
-                            cipher=job_output_cipher,
+                        stored_output = serialize_job_output_for_storage(output, job_output_cipher)
+                        wrote = await asyncio.get_running_loop().run_in_executor(
+                            None, _write_job_success_if_running_sync, db_url, job_id, stored_output
                         )
                     except Exception as exc:
                         logger.warning(
@@ -839,7 +930,10 @@ async def run_agent_job(
                             exc.__class__.__name__,
                         )
                         raise
-                    logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    if wrote:
+                        logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    else:
+                        logger.warning("Job %s already terminal; skipping success write", job_id)
 
     except asyncio.CancelledError:
         logger.info("Job %s cancelled", job_id)
@@ -890,6 +984,10 @@ async def run_agent_job(
     finally:
         # Ensure terminal-path events are not left in the batch buffer.
         await _flush_event_store(event_store, job_id=job_id)
+        if lease_stop is not None:
+            lease_stop.set()
+        if lease_thread is not None:
+            await asyncio.to_thread(lease_thread.join, 5)
         if cancellation_monitor:
             cancellation_monitor.stop()
         # Idempotent fallback for failures before a terminal branch finalized the runtime.

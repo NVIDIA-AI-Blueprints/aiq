@@ -53,6 +53,25 @@ def test_get_auth_token_default_returns_none():
     assert get_auth_token() is None
 
 
+def test_get_auth_token_uses_middleware_request_token():
+    """Custom FastAPI routes can read the token already validated by AuthMiddleware."""
+    with patch(
+        "aiq_api.auth.middleware.get_current_user",
+        return_value={"type": "jwt", "sub": "user-1", "token": "request-token"},
+    ):
+        assert get_auth_token() == "request-token"
+
+
+def test_registered_token_fetcher_precedes_middleware_request_token():
+    """A worker's job-scoped token remains authoritative over ambient request context."""
+    register_token_fetcher(lambda: "worker-token", priority=5)
+    with patch(
+        "aiq_api.auth.middleware.get_current_user",
+        return_value={"type": "jwt", "sub": "user-1", "token": "request-token"},
+    ):
+        assert get_auth_token() == "worker-token"
+
+
 def test_register_token_fetcher_basic():
     """A registered fetcher that returns a token is used by get_auth_token."""
     register_token_fetcher(lambda: "my-token")

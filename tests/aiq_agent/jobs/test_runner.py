@@ -725,7 +725,10 @@ class TestRunAgentJobEncryption:
 
         mock_job_store = MagicMock()
         mock_job_store.update_status = AsyncMock()
-        update_job_output = AsyncMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        # The success output is serialized/encrypted via serialize_job_output_for_storage
+        # before the conditional write; simulate encryption failing there.
+        serialize_output = MagicMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        write_success = MagicMock()  # the raw-SQL success writer; must never run on failure
         db_url = f"sqlite:///{tmp_path / 'test.db'}"
 
         config = SimpleNamespace(workflow=None, functions={}, middleware={})
@@ -749,7 +752,16 @@ class TestRunAgentJobEncryption:
                                         "aiq_api.jobs.runner._run_agent",
                                         AsyncMock(return_value="secret report"),
                                     ):
-                                        with patch("aiq_api.jobs.crypto.update_job_output", update_job_output):
+                                        with (
+                                            patch(
+                                                "aiq_api.jobs.crypto.serialize_job_output_for_storage",
+                                                serialize_output,
+                                            ),
+                                            patch(
+                                                "aiq_api.jobs.runner._write_job_success_if_running_sync",
+                                                write_success,
+                                            ),
+                                        ):
                                             await run_agent_job(
                                                 False,
                                                 20,
@@ -773,8 +785,12 @@ class TestRunAgentJobEncryption:
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
         assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
         assert all("output" not in call.kwargs for call in mock_job_store.update_status.await_args_list)
-        update_job_output.assert_awaited_once()
-        assert update_job_output.await_args.kwargs["output"] == {
+        # The output was assembled with the real report (never the output_metadata
+        # "report" decoy) and handed to serialization; when that failed the job was
+        # marked FAILURE and the success writer never ran, so nothing was persisted.
+        write_success.assert_not_called()
+        serialize_output.assert_called_once()
+        assert serialize_output.call_args.args[0] == {
             "parent_job_id": "parent-job",
             "interaction_action": "edit",
             "report": "secret report",
