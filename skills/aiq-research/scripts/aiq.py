@@ -498,8 +498,13 @@ def _command_chat(args: list[str]) -> None:
         return
     match = _CHAT_JOB_ID_RE.search(content)
     if match:
-        print(json.dumps({"status": _STATUS_DEEP_RESEARCH_RUNNING, "job_id": match.group(CAPTURE_GROUP_JOB_ID)}))
-        return
+        try:
+            legacy_job_id = _validate_job_id(match.group(CAPTURE_GROUP_JOB_ID))
+        except RuntimeError:
+            legacy_job_id = None
+        if legacy_job_id is not None:
+            print(json.dumps({"status": _STATUS_DEEP_RESEARCH_RUNNING, "job_id": legacy_job_id}))
+            return
     print(json.dumps(result, indent=JSON_INDENT_SPACES))
 
 

@@ -117,6 +117,19 @@ def test_legacy_job_id_format_still_detected(aiq: ModuleType, monkeypatch: pytes
     assert out == {"status": "deep_research_running", "job_id": _VALID_JOB_ID}
 
 
+def test_malformed_legacy_job_id_falls_through_to_raw(aiq: ModuleType, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    # 36 chars of [0-9a-f-] so _CHAT_JOB_ID_RE matches, but not a valid UUID layout.
+    bogus = "a" * 36
+    content = f"Deep research started. Job ID: {bogus}"
+    result = {"choices": [{"message": {"content": content}}]}
+    monkeypatch.setattr(aiq, "chat_request", lambda _query: result)
+
+    aiq._command_chat(["legacy malformed query"])
+
+    out = json.loads(capsys.readouterr().out)
+    assert out == result
+
+
 # --- SK-2 guards: no false positives ---------------------------------------------
 
 
