@@ -67,11 +67,11 @@ class _WorkflowGuardrails(GuardrailsMixin):
 
         input: Any = context.modified_args[0]
 
-        targets = self._extract_guardrail_targets_for_rewrite(input)
-        if not targets:
-            return None
-
         try:
+            targets = self._extract_guardrail_targets_for_rewrite(input)
+            if not targets:
+                return None
+
             await self.bind_llms_to_rail()
 
             modified = False
@@ -163,17 +163,7 @@ class _WorkflowGuardrails(GuardrailsMixin):
         raw_input: object,
     ) -> list[tuple[str, Callable[[str], object]]]:
         """Extract guardrail targets that each map to one writable string leaf."""
-        try:
-            targets = self._extract_guardrail_targets_for_rewrite_unchecked(raw_input)
-        except Exception as exc:
-            logger.error(
-                "Workflow input Guardrails could not extract query text from input type %s; "
-                "continuing without rails; error_type=%s",
-                type(raw_input).__name__,
-                type(exc).__name__,
-            )
-            return []
-
+        targets = self._extract_guardrail_targets_for_rewrite_unchecked(raw_input)
         targets = [(text, replace_text) for text, replace_text in targets if text]
         if not targets:
             logger.warning(

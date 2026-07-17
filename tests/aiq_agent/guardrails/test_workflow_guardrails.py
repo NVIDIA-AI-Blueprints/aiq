@@ -558,6 +558,46 @@ async def test_pre_invoke_refuses_when_rail_evaluation_fails(
 
 
 @pytest.mark.asyncio
+async def test_pre_invoke_refuses_when_input_target_traversal_fails(
+    guardrails: _WorkflowGuardrails,
+    caplog: pytest.LogCaptureFixture,
+):
+    """An input traversal failure refuses instead of running the workflow unguarded."""
+
+    class RaisingInput:
+        @property
+        def messages(self) -> list[object]:
+            raise RuntimeError("input traversal failed for jane.doe@example.com")
+
+    caplog.set_level(logging.ERROR, logger="aiq_agent.guardrails.workflow.middleware")
+    guardrails.bind_llms_to_rail = AsyncMock()
+    guardrails._llm_rails = SimpleNamespace(generate_async=AsyncMock())
+    call_next = AsyncMock(return_value="workflow result")
+
+    result = await guardrails.function_middleware_invoke(
+        RaisingInput(),
+        call_next=call_next,
+        context=FunctionMiddlewareContext(
+            name=_TEST_WORKFLOW_FUNCTION,
+            config=None,
+            description=None,
+            input_schema=None,
+            single_output_schema=type(None),
+            stream_output_schema=type(None),
+        ),
+    )
+
+    assert result == _GUARDRAILS_FAILURE_REFUSAL
+    call_next.assert_not_awaited()
+    guardrails.bind_llms_to_rail.assert_not_awaited()
+    guardrails._llm_rails.generate_async.assert_not_awaited()
+    assert "Workflow input Guardrails failed while evaluating query text" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
+    assert "input traversal failed" not in caplog.text
+    assert "jane.doe@example.com" not in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_post_invoke_passes_when_rail_passes(guardrails: _WorkflowGuardrails):
     """A passing output rail leaves configured ChatResponse message content unchanged."""
     output_text = "The requested follow up is complete."
