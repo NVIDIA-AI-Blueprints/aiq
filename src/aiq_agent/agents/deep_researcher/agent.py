@@ -126,33 +126,50 @@ class DeepResearcherAgent:
             artifact_emit=artifact_emit,
         )
 
-        self._prompts = self._load_prompts()
-        source_tool_names = {tool.name for tool in self.tools}
-        self.source_registry_middleware = SourceRegistryMiddleware(source_tool_names=source_tool_names)
-        self.tool_set = build_deep_research_tool_set(
-            self.tools,
-            source_registry_middleware=self.source_registry_middleware,
-            max_concurrent_source_tool_calls=self.max_concurrent_source_tool_calls,
-            max_source_tool_batch_size=self.max_source_tool_batch_size,
-        )
-        self.middleware_set = build_deep_research_middleware_set(
-            tool_set=self.tool_set,
-            source_registry_middleware=self.source_registry_middleware,
-            enable_source_router=self.enable_source_router,
-            artifact_manager=self.deepagents_runtime.artifact_manager,
-        )
+        try:
+            self._prompts = self._load_prompts()
+            source_tool_names = {tool.name for tool in self.tools}
+            self.source_registry_middleware = SourceRegistryMiddleware(source_tool_names=source_tool_names)
+            self.tool_set = build_deep_research_tool_set(
+                self.tools,
+                source_registry_middleware=self.source_registry_middleware,
+                max_concurrent_source_tool_calls=self.max_concurrent_source_tool_calls,
+                max_source_tool_batch_size=self.max_source_tool_batch_size,
+            )
+            self.middleware_set = build_deep_research_middleware_set(
+                tool_set=self.tool_set,
+                source_registry_middleware=self.source_registry_middleware,
+                enable_source_router=self.enable_source_router,
+                artifact_manager=self.deepagents_runtime.artifact_manager,
+            )
 
-        self.source_tool_names = self.tool_set.source_tool_names
-        self.tools_info = self.tool_set.tools_info
-        self.non_search_tools = self.tool_set.helper_tools
-        self.all_tools = self.tool_set.all_tools
-        self.research_source_tools = self.tool_set.research_source_tools
-        self.researcher_tools = self.tool_set.researcher_tools
-        self.writer_tools = self.tool_set.writer_tools
-        self.researcher_middleware = self.middleware_set.researcher
-        self.writer_middleware = self.middleware_set.writer
-        self.orchestrator_middleware = self.middleware_set.orchestrator
-        self.middleware = self.researcher_middleware
+            self.source_tool_names = self.tool_set.source_tool_names
+            self.tools_info = self.tool_set.tools_info
+            self.non_search_tools = self.tool_set.helper_tools
+            self.all_tools = self.tool_set.all_tools
+            self.research_source_tools = self.tool_set.research_source_tools
+            self.researcher_tools = self.tool_set.researcher_tools
+            self.writer_tools = self.tool_set.writer_tools
+            self.researcher_middleware = self.middleware_set.researcher
+            self.writer_middleware = self.middleware_set.writer
+            self.orchestrator_middleware = self.middleware_set.orchestrator
+            self.middleware = self.researcher_middleware
+        except Exception:
+            try:
+                cleanup_succeeded = self.deepagents_runtime.finalize(interrupted=False)
+            except Exception as cleanup_error:  # noqa: BLE001 - preserve the original construction failure
+                logger.warning(
+                    "Deep research runtime cleanup failed during agent construction (%s)",
+                    type(cleanup_error).__name__,
+                )
+            else:
+                if not cleanup_succeeded:
+                    logger.warning("Deep research runtime cleanup reported failure during agent construction")
+            raise
+
+    def finalize(self, *, interrupted: bool) -> bool:
+        """Release this request's sandbox runtime exactly once."""
+        return self.deepagents_runtime.finalize(interrupted=interrupted)
 
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""

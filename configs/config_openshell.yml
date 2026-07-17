@@ -1,7 +1,5 @@
-# EXPERIMENTAL: AI-Q deep research over a local, single-operator OpenShell sandbox.
-# Run ./scripts/setup_openshell.sh first to provision the gateway and named sandbox.
-# Jobs attach to that shared sandbox; per-job directories prevent filename collisions
-# but are not a security boundary. Do not run mutually untrusted jobs concurrently.
+# EXPERIMENTAL: one policy-bound OpenShell sandbox per deep-research job.
+# Canonical operator guide: docs/source/deployment/openshell.md
 
 general:
   use_uvloop: true
@@ -51,16 +49,6 @@ llms:
     num_retries: 5
     chat_template_kwargs:
       enable_thinking: true
-
-  gpt_oss_llm:
-    _type: nim
-    model_name: openai/gpt-oss-120b
-    base_url: https://integrate.api.nvidia.com/v1
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 256000
-    api_key: ${NVIDIA_API_KEY}
-    max_retries: 10
 
   summary_llm:
     _type: nim
@@ -139,13 +127,31 @@ functions:
   deep_research_sandbox:
     _type: deep_research_sandbox
     provider: openshell
-    sandbox_name: ${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}
+    openshell_image: ${AIQ_OPENSHELL_IMAGE:-aiq-openshell-demo:latest}
     policy: ${AIQ_OPENSHELL_POLICY_FILE:-configs/openshell/generated/aiq-openshell-policy.yaml}
     workdir: /sandbox
-    network: blocked
+    # The OpenShell policy is authoritative. This declaration is an upper bound:
+    # startup fails if the policy grants a hostname not listed here.
+    network: allowlist
+    network_allow:
+      - api.github.com
+      - github.com
+      - integrate.api.nvidia.com
+      - api.tavily.com
+      - google.serper.dev
+      - pypi.org
+      - files.pythonhosted.org
+      - huggingface.co
+      - cdn-lfs.huggingface.co
+      - export.arxiv.org
+      - api.semanticscholar.org
+      - registry.npmjs.org
     timeout: 1200
     idle_timeout: 1800
-    delete_on_exit: false
+    policy_load_timeout_seconds: 30
+    delete_on_exit: true
+    attest: true
+    require_hard_landlock: ${AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK:-true}
     artifact_capture:
       enabled: true
       max_file_bytes: 50000000
@@ -154,11 +160,11 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     enable_citation_verification: true
-    orchestrator_llm: gpt_oss_llm
+    orchestrator_llm: nemotron_super_llm
     source_router_llm: nemotron_super_llm
     researcher_llm: nemotron_super_llm
-    planner_llm: gpt_oss_llm
-    writer_llm: gpt_oss_llm
+    planner_llm: nemotron_super_llm
+    writer_llm: nemotron_super_llm
     exclude_tools:
       - web_search_tool
     verbose: true

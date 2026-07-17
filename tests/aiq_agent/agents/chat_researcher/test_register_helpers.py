@@ -15,14 +15,57 @@
 
 """Tests for chat_researcher register.py helper functions."""
 
+import logging
+import uuid
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 
+from aiq_agent.agents.chat_researcher.models import RESEARCH_WORKFLOW_FAILURE_ERROR
+from aiq_agent.agents.chat_researcher.models import WorkflowFailure
+from aiq_agent.agents.chat_researcher.models import WorkflowSuccess
 from aiq_agent.agents.chat_researcher.utils import _extract_query_and_sources
 from aiq_agent.agents.chat_researcher.utils import _extract_text_from_message
+from aiq_agent.common.logging_utils import log_identifier_ref
+
+
+def test_conversation_log_uses_opaque_reference(caplog) -> None:
+    from aiq_agent.agents.chat_researcher.register import _log_conversation_reference
+
+    conversation_id = str(uuid.uuid4())
+    caplog.set_level(logging.INFO, logger="aiq_agent.agents.chat_researcher.register")
+
+    _log_conversation_reference("Thread reference for checkpointing: %s", conversation_id)
+
+    assert conversation_id not in caplog.text
+    assert log_identifier_ref(conversation_id) in caplog.text
+
+
+class TestWorkflowResponse:
+    def test_success_contains_explicit_result(self):
+        from aiq_agent.agents.chat_researcher.register import _render_workflow_response
+
+        response = _render_workflow_response(
+            {"messages": [AIMessage(content="research answer")]},
+            model="workflow",
+        )
+
+        assert response.workflow_outcome == WorkflowSuccess(result="research answer")
+        assert response.choices[0].message.content == "research answer"
+
+    def test_failure_preserves_fallback_text_and_public_error(self):
+        from aiq_agent.agents.chat_researcher.register import _render_workflow_response
+
+        failure = WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        response = _render_workflow_response(
+            {"messages": [AIMessage(content="Please try again.")], "workflow_outcome": failure},
+            model="workflow",
+        )
+
+        assert response.workflow_outcome == failure
+        assert response.choices[0].message.content == "Please try again."
 
 
 class TestReportFollowUpHelpers:
@@ -90,6 +133,22 @@ class TestReportFollowUpHelpers:
 
         assert answer.strip()
         assert "does not contain enough information" in answer.lower()
+
+    @pytest.mark.asyncio
+    async def test_answer_from_report_context_reraises_timeout(self):
+        from aiq_agent.agents.chat_researcher.register import _answer_from_report_context
+
+        class TimedOutLLM:
+            async def ainvoke(self, messages):
+                raise TimeoutError
+
+        with pytest.raises(TimeoutError):
+            await _answer_from_report_context(
+                TimedOutLLM(),
+                question="What is the risk?",
+                report_markdown="# Report",
+                source_summary_markdown="",
+            )
 
 
 class TestExtractTextFromMessageString:

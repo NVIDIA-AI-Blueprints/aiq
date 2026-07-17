@@ -12,7 +12,7 @@ This guide walks through setting up the AI-Q blueprint for local development. Fo
 | Requirement | Version | Notes |
 |-------------|---------|-------|
 | Python | 3.11 -- 3.13 | 3.13 recommended |
-| [uv](https://github.com/astral-sh/uv) | latest | Python package manager (installed automatically by the setup script if missing) |
+| [uv](https://github.com/astral-sh/uv) | 0.11.25+ | Python package manager (installed automatically by the setup script if missing; CI uses 0.11.26) |
 | Git | 2.x+ | |
 | Node.js | 22+ | Optional -- only needed for the web UI |
 
@@ -25,12 +25,12 @@ When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), infere
 
 | Component | Default Model | Self-Hosted Hardware Reference |
 |-----------|---------------|-------------------------------|
-| LLM (intent classifier, orchestrator, planner) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-super) |
-| LLM (deep research researcher) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#nvidia-nemotron-3-super) |
-| LLM (deep research orchestrator/planner, optional) | `openai/gpt-oss-120b` | [GPT OSS support matrix](https://docs.nvidia.com/nim/large-language-models/latest/supported-models.html#gpt-oss-120b) |
+| LLM (intent classifier, orchestrator, planner) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super model card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
+| LLM (deep research researcher) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super model card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
+| LLM (deep research orchestrator/planner, optional) | `openai/gpt-oss-120b` | [GPT OSS model card](https://build.nvidia.com/openai/gpt-oss-120b/modelcard) |
 | Document summary (optional) | `nvidia/nemotron-mini-4b-instruct` | [Nemotron Mini 4B](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/) |
 | Text embedding | `nvidia/llama-nemotron-embed-vl-1b-v2` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
-| VLM (image/chart extraction, optional) | `nvidia/nemotron-nano-12b-v2-vl` | [Vision language model support matrix](https://docs.nvidia.com/nim/vision-language-models/latest/support-matrix.html#nemotron-nano-12b-v2-vl) |
+| VLM (image/chart extraction, optional) | `nvidia/nemotron-nano-12b-v2-vl` | [Nemotron Nano VLM model card](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl/modelcard) |
 | Knowledge layer (Foundational RAG, optional) | -- | [RAG Blueprint support matrix](https://docs.nvidia.com/rag/latest/support-matrix.html) |
 
 ## Automated Setup (Recommended)
@@ -46,12 +46,12 @@ cd aiq
 
 The script performs the following steps:
 
-1. Installs `uv` if not already present
+1. Installs `uv` if not already present and rejects versions older than 0.11.25
 2. Creates a Python 3.13 virtual environment at `.venv/`
 3. Installs the core package with dev dependencies
 4. Installs all frontends (CLI, debug console, API server)
 5. Installs benchmark packages (freshqa, deepsearch_qa)
-6. Installs all data source plugins (Tavily, Exa, Google Scholar, knowledge layer)
+6. Installs the data source plugins (Tavily, Exa, Nimble, Google Scholar) and the LlamaIndex and Foundational RAG knowledge extras
 7. Sets up pre-commit hooks
 8. Copies `deploy/.env.example` to `deploy/.env` if no `.env` file exists
 9. Installs UI npm dependencies (if Node.js is available)
@@ -96,8 +96,13 @@ uv pip install -e ./frontends/aiq_api      # Unified API server (includes debug)
 # Data sources (pick what you need)
 uv pip install -e ./sources/tavily_web_search
 uv pip install -e ./sources/exa_web_search
+uv pip install -e ./sources/nimble_web_search
+uv pip install -e ./sources/duckduckgo_news_search
+uv pip install -e ./sources/polymarket_prediction_market
 uv pip install -e ./sources/google_scholar_paper_search
 uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
+# Or include the OpenSearch backend as well:
+uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag,opensearch]"
 
 # Benchmarks (optional)
 uv pip install -e ./frontends/benchmarks/freshqa
@@ -132,9 +137,19 @@ Then edit `deploy/.env` and fill in your keys.
 |----------|----------|---------|
 | `TAVILY_API_KEY` | [Tavily](https://tavily.com/) | Web search (Tavily provider) |
 | `EXA_API_KEY` | [Exa](https://exa.ai/) | Web search (Exa provider) |
-| `SERPER_API_KEY` | [Serper](https://serper.dev/) | Academic paper search (Google Scholar). To enable, uncomment `paper_search_tool` in your config file |
+| `NIMBLE_API_KEY` | [Nimble](https://nimbleway.com/) | Web search (Nimble provider) |
+| `SERPER_API_KEY` | [Serper](https://serper.dev/) | Google Scholar paper search with `provider: serper` (the default) |
+| `SERPAPI_API_KEY` | [SerpAPI](https://serpapi.com/) | Google Scholar paper search with `provider: serpapi` |
+| `SEARCHAPI_API_KEY` | [SearchAPI](https://www.searchapi.io/) | Google Scholar paper search with `provider: searchapi` |
 
-At minimum, you need `NVIDIA_API_KEY` for LLM inference and one of `TAVILY_API_KEY` or `EXA_API_KEY` for web search. Paper search (`SERPER_API_KEY`) is disabled by default in the shipped configs -- refer to the comments in your config file to enable it.
+At minimum, you need `NVIDIA_API_KEY` for LLM inference and a credential for the web provider selected by your config.
+Paper search requires one provider-specific key. It is commented out in the standard CLI and web profiles, while
+`configs/config_domain_routing_and_skills.yml` enables the default Serper provider. DuckDuckGo News and Polymarket use
+public endpoints and do not require API keys.
+
+OpenSearch uses endpoint-specific authentication rather than one universal API key. Install the `opensearch` extra,
+start from `configs/config_web_opensearch.yml`, and configure `none`, `basic`, or SigV4 authentication. For Amazon
+OpenSearch Serverless, follow the [AOSS deployment guide](../deployment/aws-opensearch-serverless.md).
 
 ## Verify Installation
 

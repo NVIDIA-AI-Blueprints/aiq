@@ -18,11 +18,15 @@
 import asyncio
 import json
 import logging
+import re
 from pathlib import Path
+from pathlib import PurePosixPath
 
 from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import hook_config
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
@@ -43,6 +47,9 @@ _SOURCE_ROUTING_PATH = "/shared/source_routing.json"
 # route-local key. The guard reads raw state, so it must accept both forms or it
 # blocks the orchestrator forever on sandboxed runs.
 _SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
+_UNRESOLVED_SANDBOX_PATH_PATTERN = re.compile(
+    r"<\s*sandbox_(?:artifact_dir|workdir)\s*>|\{\{\s*sandbox_(?:artifact_dir|workdir)\s*\}\}"
+)
 
 
 class SourceRoutingGuardMiddleware(AgentMiddleware):
@@ -155,6 +162,130 @@ class ExecuteTimeoutClampMiddleware(AgentMiddleware):
         )
         modified = {**tool_call, "args": {**args, "timeout": self.max_timeout_seconds}}
         return await handler(request.override(tool_call=modified))
+
+
+class FilesystemToolCallGuardMiddleware(AgentMiddleware):
+    """Normalize safe filesystem aliases and reject unresolved sandbox path templates."""
+
+    async def awrap_tool_call(self, request, handler):
+        """Repair ``read_file(path=...)`` and fail before executing placeholder paths."""
+        tool_call = request.tool_call
+        if not isinstance(tool_call, dict):
+            return await handler(request)
+        args = tool_call.get("args")
+        if not isinstance(args, dict):
+            return await handler(request)
+
+        if tool_call.get("name") == "read_file" and isinstance(args.get("path"), str):
+            normalized_args = {key: value for key, value in args.items() if key != "path"}
+            normalized_args.setdefault("file_path", args["path"])
+            modified = {**tool_call, "args": normalized_args}
+            return await handler(request.override(tool_call=modified))
+
+        if tool_call.get("name") == "execute" and isinstance(args.get("command"), str):
+            command = args["command"]
+            unresolved = _UNRESOLVED_SANDBOX_PATH_PATTERN.search(command)
+            if unresolved is not None:
+                return ToolMessage(
+                    content=(
+                        f"Command not executed: unresolved sandbox path placeholder {unresolved.group(0)}. "
+                        "Use the exact sandbox_workdir or sandbox_artifact_dir path from your instructions."
+                    ),
+                    tool_call_id=tool_call.get("id", "filesystem-tool-call-guard"),
+                    name="execute",
+                    status="error",
+                )
+
+        return await handler(request)
+
+
+class RequiredOutputFileMiddleware(AgentMiddleware):
+    """Verify a model's file-backed completion marker before ending its run.
+
+    A model can claim that it wrote a file without making the filesystem tool call.
+    Keep recovery local to that agent: request one corrective model turn, then fail
+    with a stable reason code instead of restarting the surrounding workflow.
+    """
+
+    def __init__(
+        self,
+        *,
+        paths: tuple[str, ...] = ("/shared/output.md", "/output.md"),
+        completion_marker: str = "Wrote /shared/output.md",
+        max_retries: int = 1,
+        reason_code: str = "writer_output_missing",
+    ) -> None:
+        """Configure the accepted state paths and bounded corrective turns."""
+        if not paths:
+            raise ValueError("paths must not be empty")
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        self.paths = paths
+        self.completion_marker = completion_marker
+        self.max_retries = max_retries
+        self.reason_code = reason_code
+        self._retry_message = (
+            "The required final output file is missing or empty. Do not repeat research or regenerate artifacts. "
+            f"Call write_file with file_path={paths[0]} and the complete final Markdown, confirm the tool "
+            f"succeeds, and only then return `{completion_marker}`."
+        )
+
+    @staticmethod
+    def _files_from_state(state: object) -> object:
+        return state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+
+    @staticmethod
+    def _entry_has_content(entry: object) -> bool:
+        if isinstance(entry, dict):
+            entry = entry.get("content")
+        if isinstance(entry, bytes):
+            return bool(entry.strip())
+        if isinstance(entry, str):
+            return bool(entry.strip())
+        if isinstance(entry, list):
+            return any(isinstance(line, str) and line.strip() for line in entry)
+        return False
+
+    def _required_output_exists(self, state: object) -> bool:
+        files = self._files_from_state(state)
+        return isinstance(files, dict) and any(self._entry_has_content(files.get(path)) for path in self.paths)
+
+    def _retry_count(self, messages: list[object]) -> int:
+        return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
+
+    def _check_after_model(self, state: object) -> dict[str, object] | None:
+        messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+        if not isinstance(messages, list) or not messages:
+            return None
+        last_message = messages[-1]
+        if not isinstance(last_message, AIMessage) or last_message.tool_calls:
+            return None
+        if last_message.text.strip() != self.completion_marker:
+            return None
+        if self._required_output_exists(state):
+            return None
+
+        retry_count = self._retry_count(messages)
+        if retry_count >= self.max_retries:
+            raise RuntimeError(self.reason_code)
+
+        logger.warning(
+            "Agent reported file-backed completion before the required output existed; requesting corrective turn"
+        )
+        return {
+            "messages": [HumanMessage(content=self._retry_message)],
+            "jump_to": "model",
+        }
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state, runtime):
+        """Verify synchronous writer completion and request one local repair when needed."""
+        return self._check_after_model(state)
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        """Verify asynchronous writer completion and request one local repair when needed."""
+        return self._check_after_model(state)
 
 
 # Common hallucinated tool name mappings
@@ -563,10 +694,34 @@ class ArtifactHarvestMiddleware(AgentMiddleware):
         result_status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
         if tool_name == "execute" and result_status != "error":
             try:
-                await asyncio.to_thread(self.artifact_manager.harvest_after_execute)
+                captured = await asyncio.to_thread(self.artifact_manager.harvest_after_execute)
             except Exception as exc:  # noqa: BLE001 - artifact capture must not fail the agent
                 logger.warning("Artifact checkpoint harvest failed (%s)", type(exc).__name__)
+            else:
+                result = self._append_checkpoint_result(result, captured)
         return result
+
+    @staticmethod
+    def _append_checkpoint_result(result: object, captured: object) -> object:
+        """Tell the model the exact safe filenames captured from a valid manifest."""
+        if not isinstance(result, ToolMessage) or not isinstance(result.content, str):
+            return result
+        if not isinstance(captured, (list, tuple)) or not captured:
+            return result
+
+        lines = ["Artifact checkpoint captured these exact filenames:"]
+        for artifact in captured[:10]:
+            filename = PurePosixPath(str(getattr(artifact, "filename", ""))).name
+            if not filename:
+                continue
+            if bool(getattr(artifact, "inline", False)):
+                lines.append(f"- {filename} (inline): embed as ![caption](artifact://{filename})")
+            else:
+                lines.append(f"- {filename} (downloadable; not marked inline)")
+        if len(lines) == 1:
+            return result
+        content = result.content.rstrip() + "\n\n" + "\n".join(lines)
+        return result.model_copy(update={"content": content})
 
 
 class PlanPersistenceMiddleware(AgentMiddleware):

@@ -5,109 +5,157 @@ SPDX-License-Identifier: Apache-2.0
 
 # Deep Researcher Agent
 
-The Deep Researcher produces publication-ready research reports through a
-multi-phase iterative workflow. It coordinates specialized subagents under
-an orchestrator using the [`deepagents`](https://docs.langchain.com/oss/python/deepagents/overview) library.
+The Deep Researcher coordinates a structured research pipeline that separates
+source routing, planning, evidence collection, and final synthesis. It uses
+task subagents under an orchestrator plus reusable researcher workers created
+with the [`deepagents`](https://docs.langchain.com/oss/python/deepagents/overview)
+and [LangChain](https://docs.langchain.com/) libraries.
 
 **Location:** `src/aiq_agent/agents/deep_researcher/agent.py`
 
-For optional DeepAgents sandbox execution (Modal) and operational notes, see
+For optional DeepAgents sandbox execution and operational notes, refer to
 [Deep Research Sandbox](./sandbox.md).
 
 ## Purpose
 
 The deep path handles queries that require comprehensive investigation:
 multi-step research, comparative analyses, and topics that benefit from
-structured planning and iterative refinement. It produces long-form reports
-with inline citations and numbered references.
+structured planning and evidence gathered from multiple sources. It produces
+the output shape requested by the user, including long-form reports, brief
+answers, tables, comparisons, predictions, and data extractions.
 
 ## Internal Flow
 
 ```mermaid
 graph TD
-    A[Receive DeepResearchAgentState] --> B[Load orchestrator.j2<br/>with datetime, clarifier_result,<br/>available_documents, tools]
-    B --> C[Initialize middleware stack]
-    C --> D[Orchestrator dispatches<br/>to Planner Subagent]
-
-    D --> E[Planner: Analyze query]
-    E --> F[Planner: Execute search<br/>queries using tools]
-    F --> G[Planner: Build evidence-grounded<br/>outline with sections]
-    G --> H[Return plan to Orchestrator]
-
-    H --> I[Begin Research Loop<br/>default: 2 iterations]
-
-    I --> J[Orchestrator dispatches<br/>to Researcher Subagent]
-    J --> K[Researcher: Execute<br/>search queries]
-    K --> L[Researcher: Synthesize<br/>relevant content]
-    L --> M[Return findings<br/>to Orchestrator]
-
-    M --> N[Orchestrator: Create/update<br/>draft report sections]
-    N --> O[Orchestrator: Analyze gaps<br/>and identify follow-up queries]
-    O --> P{More iterations?}
-    P -->|yes| J
-    P -->|no| Q[Orchestrator: Catalog<br/>and number citations]
-
-    Q --> R[Orchestrator: Produce<br/>final polished report]
-    R --> S[Return DeepResearchAgentState<br/>with report in messages]
+    A[Receive DeepResearchAgentState] --> B[Filter registry-mapped tools by data_sources<br/>retain unmapped configured tools]
+    B --> C[Build orchestrator and shared runtime]
+    C --> D{Source router enabled?}
+    D -->|yes| E[task: source-router-agent]
+    E --> F[Write advisory SourceRoutingPlan<br/>to /shared/source_routing.json]
+    D -->|no| G[task: planner-agent]
+    F --> G
+    G --> H[Return structured ResearchPlan<br/>persisted to /shared/plan.json]
+    H --> I[Orchestrator calls run_research_batch<br/>with planned ResearchQuery objects]
+    I --> J[Concurrent reusable researcher workers<br/>one worker per ResearchQuery]
+    J --> K[Return structured ResearchNotes<br/>and persist /shared/research_note_*.json]
+    K --> L[Normative task: writer-agent]
+    L --> M[Writer reads plan, notes, and captured sources<br/>then writes /shared/output.md]
+    M --> O[Runtime loads writer output]
+    K -.->|Defensive path if writer delegation is missed| S[Orchestrator emits inline Markdown]
+    S --> U{Passes substantive report gate?}
+    U -->|yes| O
+    U -->|no| V[Error: no final Markdown]
+    O --> T{Citation verification enabled?}
+    T -->|yes| P[Verify citations against captured sources]
+    T -->|no| Q[Skip citation verification]
+    P --> R[Sanitize and return final Markdown]
+    Q --> R
 
     style A fill:#e1f5fe
-    style S fill:#e8f5e9
-    style D fill:#e8eaf6
-    style E fill:#fff8e1
+    style E fill:#e8eaf6
+    style G fill:#fff8e1
     style J fill:#fce4ec
+    style L fill:#e8eaf6
+    style R fill:#e8f5e9
 ```
 
-### Orchestrator-Subagent Interaction
+### Coordination and Data Handoffs
 
 ```mermaid
 sequenceDiagram
     participant O as Orchestrator
-    participant P as Planner Subagent
-    participant R as Researcher Subagent
-    participant T as Research Tools
+    participant S as source-router-agent
+    participant P as planner-agent
+    participant B as run_research_batch
+    participant R as Researcher workers
+    participant T as Allowed source tools
+    participant W as writer-agent
+    participant X as Runtime
 
-    O->>P: Generate research plan
-    P->>T: Execute search queries
-    T-->>P: Search results
-    P-->>O: Outline + sections
-
-    loop Research iterations (default: 2)
-        O->>R: Execute research queries
-        R->>T: Search queries
-        T-->>R: Results
-        R-->>O: Synthesized findings
-        O->>O: Update draft, identify gaps
+    opt enable_source_router
+        O->>S: task(user request and context)
+        S-->>O: /shared/source_routing.json
     end
-
-    O->>O: Catalog citations
-    O->>O: Produce final report
+    O->>P: task(user request and advisory route)
+    P->>T: Ground the plan with allowed tools
+    T-->>P: Discovery results
+    P-->>O: ResearchPlan in /shared/plan.json
+    O->>B: ResearchQuery objects from the plan
+    par One invocation per independent query
+        B->>R: Invoke reusable researcher runnable
+        R->>T: Use preferred and fallback tools
+        T-->>R: Source results
+        R-->>B: Structured ResearchNotes
+    end
+    B-->>O: Notes plus /shared/research_note_*.json
+    O->>W: task(plan, notes, captured sources)
+    W-->>O: Write /shared/output.md
+    O-->>X: Writer completion marker
+    X->>X: Load, optionally verify citations, and sanitize
 ```
 
-## Subagent Roles
+The orchestrator serializes dependent stages and tracks progress. It does not
+call source tools directly. The normative flow delegates final synthesis to
+the writer; source access is delegated to the planner and researcher workers.
+If the writer output file is missing, the runtime has a defensive fallback for
+a substantive report emitted inline by the orchestrator.
 
-| Subagent | LLM Role | Description |
-| -------- | -------- | ----------- |
-| Orchestrator | `ORCHESTRATOR` | Coordinates subagents, manages research loops, synthesizes drafts, catalogs citations, produces the final report |
-| `planner-agent` | `PLANNER` | Iteratively builds evidence-grounded outlines through interleaved search and outline optimization; creates 4-6 strategic search queries mapped to report sections |
-| `researcher-agent` | `RESEARCHER` | Executes search queries using configured tools and synthesizes relevant content from available sources |
+## Runtime Roles
 
-All subagents and the orchestrator share a `think` tool in addition to the
-configured research tools. The `think` tool lets the agent record reasoning,
-verify constraints, or plan next steps without taking any external action.
+| Participant | Invocation | Responsibility and output |
+| ----------- | ---------- | ------------------------- |
+| Orchestrator | Root `create_deep_agent` graph | Coordinates stage order, reads the persisted plan, dispatches research batches, and normally delegates final synthesis. It has `run_research_batch` and helper tools, but no direct source tools. |
+| `source-router-agent` | Optional DeepAgents `task()` subagent | Looks up the configured source catalog, chooses one advisory domain route, and writes a `SourceRoutingPlan` to `/shared/source_routing.json`. It does not research. |
+| `planner-agent` | DeepAgents `task()` subagent | Grounds the requested answer strategy with available source tools and returns a structured `ResearchPlan`. The runtime persists it to `/shared/plan.json`. |
+| Researcher workers | Reusable LangChain runnable invoked by `run_research_batch` | Each worker executes one self-contained `ResearchQuery` and returns structured `ResearchNotes`. Independent workers run concurrently up to the configured limit. |
+| `writer-agent` | DeepAgents `task()` subagent | Reads the plan, research-note files, and captured sources; performs final-answer synthesis on the normative path; and writes `/shared/output.md`. It has no source-search tools and performs no new research. |
 
-## Middleware Stack
+The source router, planner, and writer are task subagents registered with the
+DeepAgents root graph. Researcher workers are different: they are invocations
+of one reusable, structured-output runnable behind the orchestrator-only
+`run_research_batch` tool. They do not appear as `task()` subagents and do
+not manage top-level workflow todos.
 
-The orchestrator and all subagents share a common middleware stack:
+## Data Source Boundary
 
-| Middleware | Purpose |
-| ---------- | ------- |
-| `EmptyContentFixMiddleware` | Replaces empty `ToolMessage` content with a placeholder to prevent LLM API rejections (custom) |
-| `ToolNameSanitizationMiddleware` | Sanitizes corrupted or hallucinated tool names from LLM responses (custom) |
-| `ModelRetryMiddleware` | Retries model calls with exponential backoff (max 10 retries) on transient failures |
+`DeepResearchAgentState.data_sources` is a hard per-request boundary for
+tools mapped in `data_source_registry`. The registration layer filters those
+mapped tools before constructing the active deep-research agent. Configured
+tools that are not mapped to a registry source remain active:
 
-The agent is constructed with `create_deep_agent` from the [`deepagents`](https://docs.langchain.com/oss/python/deepagents/overview) library (a [LangChain](https://docs.langchain.com/) library),
-which manages subagent coordination internally. Subagents are passed directly
-to `create_deep_agent` rather than being routed through middleware.
+- `None` makes all configured tools available.
+- `[]` removes mapped data-source tools while retaining unmapped configured
+  tools, including utilities.
+- A populated list admits only tools mapped to those source IDs, plus unmapped
+  configured tools, including utilities.
+
+The optional source router receives a catalog containing only mapped sources
+within this boundary. Unmapped configured or utility tools do not appear in
+that catalog even though they remain active. Router recommendations are
+advisory and cannot restore a filtered-out mapped source.
+
+The planner records exact available tool names in each
+`ResearchQuery.preferred_tools` and `fallback_tools` as structured guidance.
+Those fields do not narrow the callable tool set at runtime. Every researcher
+worker is bound to the full request-filtered tool set and is prompted to try
+the preferred and fallback tools in the recorded order.
+
+## Middleware and Tool Boundaries
+
+The roles use middleware appropriate to their contracts:
+
+| Role | Relevant behavior |
+| ---- | ----------------- |
+| Orchestrator | DeepAgents task, todo, and filesystem support; source-routing guard; tool-name validation restricted to helpers and `run_research_batch`; tool and model retry handling |
+| Source router | Minimal filesystem and retry middleware; catalog lookup and `write_file` only |
+| Planner | Source capture, retries, filesystem access, todo suppression, structured `ResearchPlan` validation, and automatic plan persistence |
+| Researcher worker | Filesystem context, optional skills, summarization, source capture, retries, and structured `ResearchNotes` validation |
+| Writer | Filesystem context, optional synthesis skills, source-registry access, retries, and todo suppression; no source-search tools |
+
+The root graph is constructed with `create_deep_agent`. The reusable
+researcher runnable is constructed separately with `create_agent`, which is
+what lets `run_research_batch` invoke independent queries concurrently.
 
 ## State Model
 
@@ -115,35 +163,43 @@ to `create_deep_agent` rather than being routed through middleware.
 
 | Field | Type | Default | Description |
 | ----- | ---- | ------- | ----------- |
-| `messages` | `Annotated[list[AnyMessage], add_messages]` | required | Conversation history with LangGraph message reducer |
-| `data_sources` | `list[str]` or `None` | `None` | User-selected data source IDs for tool filtering. `None` uses all configured tools; `[]` keeps only unmapped utility tools; a populated list scopes to the named sources plus unmapped utility tools. |
-| `user_info` | `dict` or `None` | `None` | User information |
-| `tools_info` | `list[dict]` or `None` | `None` | Available tools information |
-| `todos` | `list[dict]` | `[]` | Todo list for research task tracking |
-| `files` | `dict` | `{}` | Virtual filesystem for state persistence (uses merge reducer) |
-| `subagents` | `list[dict]` | `[]` | Subagent status tracking |
-| `clarifier_result` | `str` or `None` | `None` | Clarification log and approved plan context from the Clarifier |
-| `available_documents` | `list[AvailableDocument]` or `None` | `None` | User-uploaded documents with summaries |
+| `messages` | `Annotated[list[AnyMessage], add_messages]` | required | Input query and conversation messages managed by the LangGraph message reducer |
+| `data_sources` | `list[str]` or `None` | `None` | Hard per-request filter for registry-mapped source tools; unmapped configured tools remain active |
+| `user_info` | `dict` or `None` | `None` | Authenticated user context available to prompts |
+| `tools_info` | `list[dict]` or `None` | `None` | Available-tool metadata |
+| `todos` | `list[dict]` | `[]` | Top-level progress list managed by the orchestrator |
+| `files` | `dict` | `{}` | Merge-reduced virtual filesystem containing plans, notes, output, and optional parent-report context |
+| `subagents` | `list[dict]` | `[]` | Status of configured DeepAgents task subagents; researcher worker invocations are not stored here |
+| `rubric` | `str` or `None` | `None` | Optional DeepAgents rubric state |
+| `clarifier_result` | `str` or `None` | `None` | Clarification log containing missing context or requested output-shape preferences gathered before research |
+| `available_documents` | `list[AvailableDocument]` or `None` | `None` | User-uploaded documents and summaries available as research context |
 
-The `clarifier_result` field is injected into the orchestrator prompt when
-present, giving the deep researcher access to the approved research plan and
-any clarification context.
+When present, `clarifier_result` is injected as context. The planner
+independently creates the `ResearchPlan` inside the deep-research workflow.
 
 ## Configuration
 
-Configured through `DeepResearchAgentConfig` (NeMo Agent Toolkit type name: `deep_research_agent`):
+The architecture is configured through `DeepResearchAgentConfig` (NeMo Agent
+Toolkit type name: `deep_research_agent`). The workflow-shaping parameters
+are summarized here; refer to the
+[Configuration Reference](../../customization/configuration-reference.md)
+for configuration details.
 
 | Parameter | Type | Default | Description |
 | --------- | ---- | ------- | ----------- |
-| `orchestrator_llm` | `LLMRef` | required | LLM for orchestrator coordination |
-| `source_router_llm` | `LLMRef` or `None` | `None` | LLM for source-router subagent; falls back to `orchestrator_llm` if unset |
-| `researcher_llm` | `LLMRef` or `None` | `None` | LLM for researcher subagent; falls back to `orchestrator_llm` if unset |
-| `planner_llm` | `LLMRef` or `None` | `None` | LLM for planner subagent; falls back to `orchestrator_llm` if unset |
-| `writer_llm` | `LLMRef` or `None` | `None` | LLM for writer subagent; falls back to `orchestrator_llm` if unset |
-| `tools` | `list[FunctionRef \| FunctionGroupRef]` | `[]` | Research tools (web search, paper search, etc.) |
-| `skills` | `FunctionRef`, inline `deep_research_skills`, or `None` | `None` | Optional built-in skill collection assignments by agent name |
+| `orchestrator_llm` | `LLMRef` | required | LLM for workflow coordination |
+| `source_router_llm` | `LLMRef` or `None` | `None` | LLM for optional advisory routing; falls back to `orchestrator_llm` |
+| `planner_llm` | `LLMRef` or `None` | `None` | LLM for structured planning; falls back to `orchestrator_llm` |
+| `researcher_llm` | `LLMRef` or `None` | `None` | LLM used by every researcher worker; falls back to `orchestrator_llm` |
+| `writer_llm` | `LLMRef` or `None` | `None` | LLM for final synthesis; falls back to `orchestrator_llm` |
+| `tools` | `list[FunctionRef \| FunctionGroupRef]` | `[]` | Explicit source tools; an empty list inherits tools from the data-source registry |
+| `exclude_tools` | `list[str]` | `[]` | Tool names removed from inherited tools |
+| `domain_catalog_path` | `str` or `None` | `None` | Optional YAML or JSON domain catalog used by the source router |
+| `enable_source_router` | `bool` | `true` | Run the advisory source-router stage before planning |
+| `max_research_concurrency` | `int` | `6` | Maximum `ResearchQuery` items accepted and run concurrently per batch call |
+| `skills` | `FunctionRef`, inline `deep_research_skills`, or `None` | `None` | Optional built-in skill assignments by agent name |
 | `sandbox` | `FunctionRef`, inline `deep_research_sandbox`, or `None` | `None` | Optional sandbox profile for DeepAgents `execute` support |
-| `enable_citation_verification` | `bool` | `true` | Verify generated citations against sources captured from tools |
+| `enable_citation_verification` | `bool` | `true` | Verify generated citations against captured sources after final report extraction |
 | `verbose` | `bool` | `true` | Enable detailed logging |
 
 **Example YAML:**
@@ -154,130 +210,147 @@ functions:
     _type: deep_research_agent
     orchestrator_llm: nemotron_llm
     source_router_llm: nemotron_super_llm
-    researcher_llm: nemotron_llm
     planner_llm: nemotron_llm
+    researcher_llm: nemotron_llm
     writer_llm: nemotron_super_llm
+    enable_source_router: true
+    enable_citation_verification: true
+    max_research_concurrency: 6
     verbose: true
     tools:
       - web_search_tool
 ```
 
 ```{note}
-**Nemotron Super — Build Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429/503 responses). The default configs use Nemotron Super for the `researcher_llm` role. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended. See [Troubleshooting](../../resources/troubleshooting.md#nemotron-super--build-endpoint-availability) for details.
+**Nemotron Super — Build Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429/503 responses). The default configs use Nemotron Super for the `researcher_llm` role. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended. Refer to [Troubleshooting](../../resources/troubleshooting.md#nemotron-super--build-endpoint-availability) for details.
 ```
 
 ## Prompt Templates
 
 Located in `src/aiq_agent/agents/deep_researcher/prompts/`:
 
-| Template | Purpose | Key Variables |
-| -------- | ------- | ------------- |
-| `orchestrator.j2` | Main orchestrator instructions for coordinating subagents, synthesizing drafts, and producing the final report | `current_datetime`, `clarifier_result`, `available_documents`, `tools` |
-| `planner.j2` | Instructions for the planning subagent to build evidence-grounded outlines | `tools`, `available_documents` |
-| `researcher.j2` | Instructions for the researcher subagent to execute queries and synthesize content | `current_datetime`, `tools`, `available_documents` |
+| Template | Purpose |
+| -------- | ------- |
+| `orchestrator.j2` | Coordinates the ordered router, planner, batch-research, and writer handoffs |
+| `source_router.j2` | Selects an advisory route from the allowed source catalog and writes `SourceRoutingPlan` |
+| `planner.j2` | Builds the structured `ResearchPlan` and makes the final `ResearchQuery` tool choices |
+| `researcher.j2` | Executes one `ResearchQuery` and returns structured `ResearchNotes` |
+| `writer.j2` | Reads persisted artifacts and captured sources, then performs final synthesis into `/shared/output.md` |
 
 ## Workflow Phases
 
-### Phase 1: Research Planning
+### Phase 1: Advisory Source Routing
 
-The planner subagent analyzes the user query and generates a structured
-research plan:
+When `enable_source_router` is true, `source-router-agent` selects one
+domain route and source ordering from the already-allowed source catalog. It
+writes `/shared/source_routing.json`. Planning continues without this stage
+when it is disabled, and the route does not override the user's source
+selection.
 
-- Creates 4-6 strategic search queries
-- Maps queries to report sections
-- Builds evidence-grounded outlines through interleaved search and
-  outline optimization
+### Phase 2: Research Planning
 
-### Phase 2: Iterative Research
+The planner uses available source tools to ground a structured
+`ResearchPlan` containing:
 
-The workflow executes configurable research loops (default: 2):
+- Task analysis and the intended answer shape
+- Required answer components and constraints
+- Self-contained `ResearchQuery` objects
+- Preferred and fallback tool guidance for each query
 
-1. Researcher subagent executes search queries using configured tools
-2. Gathers and synthesizes relevant content from available sources
-3. Orchestrator creates or updates draft report sections
-4. Orchestrator analyzes the draft and identifies gaps for follow-up queries
+The planner reads source-routing guidance when available and records the final
+query-level tool preference order. This is prompt guidance rather than runtime
+tool enforcement. The runtime persists the validated plan to
+`/shared/plan.json`.
 
-### Phase 3: Citation Management
+### Phase 3: Concurrent Evidence Collection
 
-The orchestrator catalogs all sources:
+The orchestrator passes the plan's independent `ResearchQuery` objects to
+`run_research_batch`. The tool invokes one reusable researcher worker per
+query concurrently, bounded by `max_research_concurrency`. Each worker:
 
-- Numbers citations sequentially
-- Formats references for the final report
+1. Reads the relevant plan context
+2. Is prompted to follow the query's preferred and fallback tool order while
+   remaining bound to the full request-filtered tool set
+3. Returns validated `ResearchNotes` with findings, sources, gaps, and an
+   evidence judgment
 
-### Phase 4: Final Report
+The batch tool returns the notes to the orchestrator and persists them under
+`/shared/research_note_*.json`. If only part of a batch fails, successful
+notes remain registered and persisted; only failed or missing queries are
+eligible for another call.
 
-The orchestrator produces the polished report:
+### Phase 4: Writer-First Final Synthesis
 
-- Inline citations with numbered references
-- Structured sections based on the research plan
-- Publication-ready formatting
+The orchestrator delegates once the plan and research notes are available.
+The writer reads `/shared/plan.json`, all research-note files, and the
+captured source registry. It may also read parent-report context for a report
+edit. The writer performs no new research, writes the complete final answer to
+`/shared/output.md`, and returns a short completion marker. The runtime loads
+the Markdown from that file.
+
+This is the normative synthesis contract. As a defensive compatibility path,
+`_salvage_inline_report()` accepts the orchestrator's final message when the
+output file is missing, but only if the message is substantive Markdown: at
+least 400 characters with a Markdown heading and not merely the writer
+completion marker. Otherwise, missing writer output remains an error.
 
 ### Phase 5: Citation Verification (Post-Processing)
 
-After the orchestrator produces the final report, a deterministic
-post-processing pipeline verifies all citations against the actual sources
-retrieved during research. This provides auditability over generated
-content — every citation in the output is traceable to a source that was
-actually retrieved, and all verification decisions are logged. This step
-is always enabled and requires no configuration.
+Citation verification is enabled by default and configurable with
+`enable_citation_verification`. When enabled, a deterministic
+post-processing pipeline checks citations against sources captured from
+configured tools. Report sanitization runs after final report extraction
+regardless of this setting.
 
 **Location:** `src/aiq_agent/common/citation_verification.py`
 
 #### Source Registry
 
-During research, a `SourceRegistryMiddleware` intercepts every tool call and
-records the URLs and citation keys returned by search tools (Tavily, Google
-Scholar, knowledge layer, etc.) into a per-session `SourceRegistry`. This
-creates a ground-truth record of what sources were actually retrieved.
+During planning and research, `SourceRegistryMiddleware` records URLs and
+citation keys returned by allowed source tools in a per-session
+`SourceRegistry`. Research-note source locators identify the compact set
+carried forward for writer-facing citation selection.
 
 #### Citation Verification
 
-The `verify_citations()` function validates every citation in the report
-against the source registry using a five-level URL matching strategy:
+The `verify_citations()` function validates citations in the report against
+the source registry using five URL matching strategies:
 
 1. **Exact match** -- raw or normalized URL
 2. **Truncation match** -- report URL is a prefix of exactly one registry URL
 3. **Prefix match** -- normalized report URL is a prefix of a registry URL
-4. **Child-path match** -- report URL path is a subpath of a registry URL (requires 2+ path segments)
-5. **Query-subset match** -- same host and path, report query parameters are a subset of registry parameters
+4. **Child-path match** -- report URL path is a subpath of a registry URL
+5. **Query-subset match** -- same host and path, with a subset of query parameters
 
-Citations that cannot be matched to any source in the registry are removed.
-Each removal is recorded with an audit reason (`url_not_in_registry`,
-`citation_key_not_in_registry`, or `unverifiable`).
-
-Knowledge-layer citations (for example, `report.pdf, p.15`) are matched
-against citation keys with lenient page-number comparison.
+Unmatched citations are removed and recorded with an audit reason. Knowledge
+layer citations, such as `report.pdf, p.15`, are matched against citation
+keys with lenient page-number comparison.
 
 #### Report Sanitization
 
 The `sanitize_report()` function removes potentially unsafe or unreliable
 URLs from the report body:
 
-- **Shortened URLs** (bit.ly, t.co, tinyurl.com, and 13 other shortener domains)
-- **Truncated or garbled URLs** (ending in `...` or ellipsis characters)
-- **IP-address URLs** (security concern)
-- **Non-HTTP schemes** (`javascript:`, `data:`, `vbscript:`, `file:`)
+- Shortened URLs
+- Truncated or garbled URLs
+- IP-address URLs
+- Non-HTTP schemes such as `javascript:`, `data:`, `vbscript:`, and `file:`
 
-After removals, citations are renumbered to close any gaps in the reference
-list.
+After removals, citations are renumbered to close gaps in the reference list.
 
-#### Audit Trail
+#### Verification Result
 
 The verification result includes:
 
 | Field | Description |
 | ----- | ----------- |
-| `verified_report` | Cleaned report text with invalid citations removed |
-| `removed_citations` | List of removed citations with reasons |
-| `valid_citations` | List of retained citations with reference numbers |
-
-This provides a complete audit trail of which citations were kept, which
-were removed, and why -- enabling downstream systems or reviewers to inspect
-verification decisions.
+| `verified_report` | Report text after citation verification |
+| `removed_citations` | Removed citations with reasons |
+| `valid_citations` | Retained citations with reference numbers |
 
 ## Evaluation
 
-The Deep Researcher is evaluated using the Deep Research Bench (DRB) which
+The Deep Researcher is evaluated using the Deep Research Bench (DRB), which
 measures research reports using RACE and FACT metrics. Refer to
 [Deep Research Bench](../../evaluation/benchmarks/deep-research-bench.md)
 for full documentation.

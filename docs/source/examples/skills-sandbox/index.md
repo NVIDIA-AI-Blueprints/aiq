@@ -5,11 +5,12 @@ SPDX-License-Identifier: Apache-2.0
 
 # Example: Deep Research Skills and Sandbox
 
-This example shows how to run AI-Q deep research with DeepAgents skills and a Modal-backed sandbox.
+This example shows how to run AI-Q deep research with DeepAgents skills and a provider-backed sandbox. The reference
+profile uses Modal; AI-Q also includes an experimental OpenShell profile for a trusted, single-operator environment.
 
-Skills let a research agent discover task-specific instructions only when they are relevant. A skill can teach the agent a repeatable workflow, such as extracting numeric facts, normalizing a table, running calculations, and producing reusable text artifacts. The sandbox gives the agent an isolated execution environment for code-based work, such as Python/pandas calculations, without running that code in the AI-Q process.
+Skills let a research agent discover task-specific instructions only when they are relevant. A skill can teach the agent a repeatable workflow, such as extracting numeric facts, normalizing a table, running calculations, and producing reusable text artifacts. The sandbox runs code-based work outside the AI-Q process. Isolation depends on the provider: Modal creates a fresh sandbox for each job, while the experimental OpenShell profile attaches jobs to one pre-provisioned shared sandbox.
 
-For more background, see the LangChain DeepAgents docs:
+For more background, refer to the LangChain DeepAgents docs:
 
 - [Deep Agents overview](https://docs.langchain.com/oss/python/deepagents/overview)
 - [DeepAgents skills](https://docs.langchain.com/oss/python/deepagents/skills)
@@ -19,7 +20,7 @@ For more background, see the LangChain DeepAgents docs:
 The example config enables:
 
 - built-in DeepAgents skills from `src/aiq_agent/agents/deep_researcher/skills/`
-- a Modal sandbox for job-scoped Python execution
+- a fresh per-job Modal sandbox for Python execution
 - Python packages useful for analysis, including `pandas`, `numpy`, `matplotlib`, and `pillow`
 - virtual `/shared/` files for text artifacts that the orchestrator and subagents can read during the report workflow
 
@@ -49,7 +50,7 @@ You can also configure Modal locally with:
 modal token set --token-id "$MODAL_TOKEN_ID" --token-secret "$MODAL_TOKEN_SECRET"
 ```
 
-See Modal's token configuration docs for details: [modal.config](https://modal.com/docs/reference/modal.config).
+Refer to Modal's token configuration docs for details: [modal.config](https://modal.com/docs/reference/modal.config).
 
 ## Configuration
 
@@ -71,7 +72,7 @@ functions:
     _type: deep_research_sandbox
     provider: modal
     app_name: aiq-deep-research
-    image: python:3.12-slim
+    image: python:3.13-slim
     packages:
       - matplotlib
       - numpy
@@ -81,12 +82,17 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    enable_citation_verification: true
+    enable_citation_verification: false
     skills: deep_research_skills
     sandbox: deep_research_sandbox
 ```
 
-AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run inside a job-scoped Modal sandbox.
+AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run in the configured provider. Modal creates a fresh sandbox named for the job.
+
+To evaluate OpenShell instead, use `configs/config_openshell.yml` after running `scripts/setup_openshell.sh`. That profile
+is experimental: it attaches every job to one named, pre-provisioned sandbox. Per-job working directories avoid ordinary
+filename collisions but are not an access-control or multi-tenant isolation boundary. Do not run mutually untrusted jobs
+concurrently in that profile.
 
 ## Run AI-Q
 
@@ -131,8 +137,8 @@ Expected behavior:
 
 1. The planner identifies that a skill should be used for structured quantitative analysis.
 2. Researchers gather source-grounded input figures.
-3. During synthesis, the orchestrator reads the relevant `SKILL.md`.
-4. The agent calls `execute` to run Python/pandas in the Modal sandbox.
+3. A matching researcher or writer reads the relevant `SKILL.md`.
+4. The agent calls `execute` to run Python/pandas in the configured sandbox provider.
 5. The agent writes markdown, CSV, or JSON text artifacts to `/shared/...` with `write_file`.
 6. The final report cites the original sources for input figures and labels computed columns as calculations.
 
@@ -193,7 +199,12 @@ No config change is required for additional built-in skills inside an enabled co
 
 ## Notes and Limitations
 
-- The Modal sandbox is used for code execution. Text artifacts that need to survive for the report should be written through DeepAgents filesystem tools to `/shared/...`.
+- The reference config uses a fresh Modal sandbox for code execution. The experimental OpenShell config uses one shared,
+  pre-provisioned sandbox and is suitable only for trusted single-operator use, not multi-tenant isolation.
+- Text artifacts that need to survive for the report should be written through DeepAgents filesystem tools to `/shared/...`.
 - `/shared/` is a virtual DeepAgents filesystem path. Use `ls`, `read_file`, `write_file`, and `edit_file` for `/shared/`; do not inspect `/shared/` with shell commands through `execute`.
 - The sandbox is configured with `network: blocked`, so research should happen through AI-Q search tools, not from sandbox code.
-- For the first release, sandbox lifecycle cleanup, persistence policy, quotas, and production capacity controls are tracked as follow-up work.
+- Durable sandbox artifact capture is opt-in (`artifact_capture.enabled: true`) and also requires an artifact store.
+  Successful `execute` calls checkpoint manifest-declared files, and success/failure terminal paths perform one final
+  best-effort scan. A busy cancellation skips that scan and preserves earlier checkpoints. Adding a sandbox alone does
+  not guarantee that every generated file is persisted or embedded in the report.

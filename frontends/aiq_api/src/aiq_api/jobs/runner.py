@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import threading
 import uuid
 from collections.abc import Awaitable
 from collections.abc import Callable
@@ -178,6 +179,79 @@ class CancellationMonitor:
 # Interval for emitting heartbeat events
 HEARTBEAT_INTERVAL_SECONDS = 30
 
+# The ghost-job reaper treats a RUNNING job with no recent activity as a dead
+# worker. But a worker can spend minutes in pre-event initialization (config,
+# providers, tools, MCP, sandbox) before it stores its first event, so from the
+# moment the job enters RUNNING we refresh a lightweight lease — job_info's
+# updated_at, the same column the reaper falls back to for a zero-event job — on
+# this interval. A slow-but-live worker keeps its lease fresh and is not reaped;
+# a genuinely dead worker stops refreshing and its lease goes stale. Keep this
+# well under GHOST_JOB_TIMEOUT_SECONDS so a live worker refreshes several times
+# before the reaper's timeout.
+LEASE_REFRESH_INTERVAL_SECONDS = 60
+
+
+def _db_now_expr(db_url: str) -> str:
+    """Return the DB current-time SQL expression for this backend.
+
+    Accepts both ``postgresql://`` and the legacy ``postgres://`` scheme.
+    """
+    return "NOW()" if db_url.startswith(("postgresql", "postgres")) else "CURRENT_TIMESTAMP"
+
+
+def _touch_job_lease_sync(db_url: str, job_id: str) -> None:
+    """Refresh the running-job lease by bumping job_info.updated_at.
+
+    Scoped to ``status = 'running'`` so it can never resurrect the timestamp of
+    a job that has already reached a terminal state.
+    """
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET updated_at = {_db_now_expr(db_url)} WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt, {"job_id": job_id})
+
+
+def _write_job_success_if_running_sync(db_url: str, job_id: str, stored_output: str) -> bool:
+    """Compare-and-set the job to SUCCESS with its output, only if still RUNNING.
+
+    A single guarded ``UPDATE ... WHERE status = 'running'`` so a job the reaper
+    already moved to a terminal state (e.g. it was reaped while slow to finish)
+    is never resurrected. Returns True iff this call performed the write.
+    """
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'success', output = :output, updated_at = {_db_now_expr(db_url)} "
+        "WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(stmt, {"output": stored_output, "job_id": job_id})
+        return (result.rowcount or 0) == 1
+
+
+def _run_lease_refresher(db_url: str, job_id: str, stop_event: threading.Event) -> None:
+    """Refresh the running-job lease on a dedicated thread until signalled.
+
+    Runs in its own OS thread — not the worker event loop — so it cannot be
+    starved by synchronous cold-start work (config load, agent import) that
+    holds the loop. ``stop_event.wait`` returns True when the job ends (exit) or
+    False on timeout (refresh, then loop).
+    """
+    while not stop_event.wait(LEASE_REFRESH_INTERVAL_SECONDS):
+        try:
+            _touch_job_lease_sync(db_url, job_id)
+        except Exception as exc:  # noqa: BLE001 - a failed lease refresh must never kill the job
+            logger.debug("Lease refresh for job %s failed: %s", job_id, exc)
+
 
 async def run_with_cancellation(
     coro,
@@ -254,7 +328,7 @@ def _get_worker_function_type(config: Any) -> str | None:
     if config.workflow is None:
         return None
 
-    if config.workflow.use_async_deep_research:
+    if getattr(config.workflow, "use_async_deep_research", False):
         return _DEEP_RESEARCH_FUNCTION_TYPE
     return None
 
@@ -530,6 +604,8 @@ async def run_agent_job(
     job_store: JobStore | None = None
     job_output_cipher = None
     cancellation_monitor: CancellationMonitor | None = None
+    lease_stop: threading.Event | None = None
+    lease_thread: threading.Thread | None = None
     event_store: EventStore | BatchingEventStore | None = None
     # Sandbox runtime is released on the terminal path; interrupted forces terminate() over close().
     sandbox_runtime: Any | None = None
@@ -566,6 +642,19 @@ async def run_agent_job(
             return
 
         await job_store.update_status(job_id, JobStatus.RUNNING)
+
+        # Start refreshing the reaper lease immediately, before the slow
+        # initialization below stores any event, so a live worker in a long
+        # cold start is not mistaken for a dead one. It runs on a dedicated
+        # thread so synchronous init work can't starve it.
+        lease_stop = threading.Event()
+        lease_thread = threading.Thread(
+            target=_run_lease_refresher,
+            args=(db_url, job_id, lease_stop),
+            name=f"job-lease-{job_id}",
+            daemon=True,
+        )
+        lease_thread.start()
 
         cancellation_monitor = CancellationMonitor(
             scheduler_address=scheduler_address,
@@ -817,20 +906,22 @@ async def run_agent_job(
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
-                    from .crypto import update_job_output
+                    from .crypto import serialize_job_output_for_storage
 
                     if job_output_cipher is None:
                         raise RuntimeError("job output cipher was not initialized")
                     # Apply caller metadata first, then set the canonical report last so a
                     # stray "report" key in output_metadata can never overwrite the real report.
                     output = {**(output_metadata or {}), "report": report}
+                    # Terminal state is immutable: write SUCCESS with a single
+                    # compare-and-set (WHERE status='running'), so if the ghost
+                    # reaper already marked this job FAILURE it is never
+                    # resurrected. Serialize/encrypt exactly as update_job_output
+                    # would, then do the guarded write.
                     try:
-                        await update_job_output(
-                            job_store,
-                            job_id,
-                            JobStatus.SUCCESS,
-                            output=output,
-                            cipher=job_output_cipher,
+                        stored_output = serialize_job_output_for_storage(output, job_output_cipher)
+                        wrote = await asyncio.get_running_loop().run_in_executor(
+                            None, _write_job_success_if_running_sync, db_url, job_id, stored_output
                         )
                     except Exception as exc:
                         logger.warning(
@@ -839,7 +930,10 @@ async def run_agent_job(
                             exc.__class__.__name__,
                         )
                         raise
-                    logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    if wrote:
+                        logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    else:
+                        logger.warning("Job %s already terminal; skipping success write", job_id)
 
     except asyncio.CancelledError:
         logger.info("Job %s cancelled", job_id)
@@ -869,35 +963,36 @@ async def run_agent_job(
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
+        # Persist only the exception class name: raw messages can embed
+        # credentials or internal hostnames, and both the event stream and the
+        # stored status are surfaced to the job's caller.
+        sanitized_error = f"job failed ({type(e).__name__}); check server logs for details"
         await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
         _store_terminal_event_best_effort(
             event_store,
             {
                 "type": "job.error",
                 "data": {
-                    "error": str(e),
+                    "error": sanitized_error,
                     "error_type": type(e).__name__,
                 },
             },
         )
         if job_store:
-            await job_store.update_status(job_id, JobStatus.FAILURE, error=str(e))
+            await job_store.update_status(job_id, JobStatus.FAILURE, error=sanitized_error)
 
     finally:
         # Ensure terminal-path events are not left in the batch buffer.
-        if event_store is not None and hasattr(event_store, "flush"):
-            try:
-                event_store.flush()
-            except Exception as exc:
-                logger.warning(
-                    "Final event flush failed for job %s exception=%s",
-                    job_id,
-                    exc.__class__.__name__,
-                )
+        await _flush_event_store(event_store, job_id=job_id)
+        if lease_stop is not None:
+            lease_stop.set()
+        if lease_thread is not None:
+            await asyncio.to_thread(lease_thread.join, 5)
         if cancellation_monitor:
             cancellation_monitor.stop()
         # Idempotent fallback for failures before a terminal branch finalized the runtime.
         await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=interrupted)
+        await _flush_event_store(event_store, job_id=job_id)
         # Clean up job-scoped auth token
         if _auth_token_reset is not None:
             from ._auth_context import job_auth_token
@@ -921,13 +1016,7 @@ def _store_terminal_event_best_effort(event_store, event: dict) -> None:
 
 
 def _harvest_sandbox_artifacts(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
-    """Persist captured artifacts on a terminal path without releasing the sandbox.
-
-    Callable before the terminal job status so artifact metadata is durable, yet it never invokes
-    the provider's unbounded ``close()``/``terminate()``. Resource release stays in
-    ``_teardown_sandbox`` (run from ``finally``) so a hanging SDK cleanup cannot strand a finished
-    job in ``RUNNING`` with a stream that never terminates. The harvest is idempotent.
-    """
+    """Persist captured artifacts on a terminal path without releasing the sandbox."""
     if sandbox_runtime is None:
         return
     finalize_artifacts = getattr(sandbox_runtime, "finalize_artifacts", None)
@@ -942,16 +1031,35 @@ def _harvest_sandbox_artifacts(sandbox_runtime: Any | None, *, job_id: str, inte
             )
 
 
+async def _flush_event_store(event_store: Any | None, *, job_id: str) -> None:
+    """Flush terminal events off-loop without replacing the job result."""
+    if event_store is None or not hasattr(event_store, "flush"):
+        return
+    try:
+        await asyncio.to_thread(event_store.flush)
+    except Exception as exc:  # noqa: BLE001 - terminal observability must not replace the job result
+        logger.warning("Event store flush failed for job %s (%s)", job_id, type(exc).__name__)
+
+
 def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
     """Harvest artifacts and release sandbox resources on a terminal path.
 
-    Interrupted jobs (cancel/timeout) call ``terminate()`` so a still-running ``execute`` is
-    forcibly preempted; normal paths call ``close()`` gracefully. Both are idempotent. This runs
-    off the event loop (``asyncio.to_thread``) so the SDK session close cannot block the worker.
+    Prefers ``finalize(interrupted=...)`` when available. On the legacy fallback,
+    interrupted/cancelled jobs call ``terminate()`` so a still-running ``execute`` is forcibly
+    preempted; normal failure and success paths call ``close()`` gracefully. Both are idempotent.
+    This runs off the event loop (``asyncio.to_thread``) so SDK cleanup cannot block the worker.
     """
     if sandbox_runtime is None:
         return
     _harvest_sandbox_artifacts(sandbox_runtime, job_id=job_id, interrupted=interrupted)
+    finalize = getattr(sandbox_runtime, "finalize", None)
+    if callable(finalize):
+        try:
+            if not finalize(interrupted=interrupted):
+                logger.warning("Sandbox cleanup reported failure for job %s", job_id)
+        except Exception as exc:  # noqa: BLE001 - cleanup must never replace the job result
+            logger.warning("Sandbox cleanup failed for job %s (%s)", job_id, type(exc).__name__)
+        return
     teardown = getattr(sandbox_runtime, "terminate", None) if interrupted else None
     if teardown is None:
         teardown = getattr(sandbox_runtime, "close", None)
@@ -963,7 +1071,7 @@ def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: 
         # Secret-safe: log only the exception type. A provider cleanup error can carry a
         # credential or internal hostname, which must never reach the logs (matches the
         # finalize_artifacts handler above).
-        logger.warning("Sandbox cleanup failed for job %s exception=%s", job_id, exc.__class__.__name__)
+        logger.warning("Sandbox cleanup failed for job %s (%s)", job_id, type(exc).__name__)
 
 
 def _create_agent_instance(

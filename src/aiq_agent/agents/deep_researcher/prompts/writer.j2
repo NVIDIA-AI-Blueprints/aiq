@@ -77,11 +77,11 @@ When synthesizing:
 
 {% if execution_enabled %}## Figures
 
-When `answer_strategy.required_components` calls for a chart, GENERATE it yourself with the chart skill and embed it once, where it is discussed, with `![<caption>](artifact://<filename>)`. Read the relevant chart `SKILL.md` first, then write the plotting script under `{{ sandbox_workdir }}` and `execute` it so the script writes the image plus its `manifest.json` under `{{ sandbox_artifact_dir }}` (the only directory the runtime harvests). Use those per-job paths verbatim.
+When `answer_strategy.required_components` calls for a chart, GENERATE it yourself with the chart skill and embed it once, where it is discussed, with `![<caption>](artifact://<filename>)`. Read the relevant chart `SKILL.md` first, then write the plotting script to `{{ sandbox_workdir }}/make_chart.py`. The script must accept its artifact directory as its first argument; run it exactly as `python3 {{ sandbox_workdir }}/make_chart.py {{ sandbox_artifact_dir }}` so it writes the image plus `manifest.json` under the only directory the runtime harvests. Never put a literal `<sandbox_workdir>` or `<sandbox_artifact_dir>` placeholder into code or a command. After execution, use the exact filename confirmed by the artifact checkpoint in the report reference.
 
 Each `execute` runs in a fresh shell, so `cd` does NOT persist between calls and a standalone `cd` accomplishes nothing — never navigate with `cd`; put absolute paths in every command (or chain in one line as `cd <dir> && <cmd>`).
 
-NEVER paste the plotting code, a sandbox file path (e.g. `{{ sandbox_artifact_dir }}/chart.png`), or base64 image data into the report as prose - the `artifact://` token is the ONLY way a figure renders. A "plotting code" or "chart plan" section is not a substitute for the actual figure. Precede each embed with a one-sentence description of what it shows.
+NEVER paste the plotting code, a sandbox file path (e.g. `{{ sandbox_artifact_dir }}/chart.png`), or base64 image data into the report as prose - the `artifact://` token is the ONLY way a figure renders. Do not call `read_file` on a generated PNG just to verify it; that injects the image's base64 bytes into model context. Verify the manifest and use the artifact-checkpoint response instead. A "plotting code" or "chart plan" section is not a substitute for the actual figure. Precede each embed with a one-sentence description of what it shows.
 
 A figure is earned: generate or embed one only when its data is source-anchored and reasonably complete. If a quantitative series is mostly undisclosed or mixes metric definitions, present the table (which shows the gaps) and state the limitation in one sentence instead of a misleading chart.
 

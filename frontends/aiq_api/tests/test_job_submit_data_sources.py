@@ -166,6 +166,75 @@ async def test_submit_job_forwards_selected_data_sources(submit_app):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credential_source", "expected_token"),
+    [
+        pytest.param(
+            "bearer-header",
+            "bearer-token",
+            id="bearer-header",
+        ),
+        pytest.param(
+            "id-token-cookie",
+            "cookie-token",
+            id="id-token-cookie",
+        ),
+    ],
+)
+async def test_submit_job_forwards_authenticated_request_token(
+    submit_app,
+    monkeypatch,
+    credential_source,
+    expected_token,
+):
+    """REST submit captures the validated request token without requiring NAT Context."""
+    import aiq_agent.auth
+    from aiq_agent.auth.utils import get_auth_token as real_get_auth_token
+    from aiq_api.auth.middleware import AuthMiddleware
+
+    class AcceptTokenValidator:
+        def can_handle(self, token: str) -> bool:  # noqa: ARG002 - accepts both test credentials
+            return True
+
+        async def validate(self, token: str):
+            return (
+                {
+                    "type": "jwt",
+                    "sub": "user-1",
+                    "email": "user@example.com",
+                    "name": "Test User",
+                    "token": token,
+                    "skip_clarifier": False,
+                },
+                None,
+            )
+
+    app, submitted_job, _builder = submit_app
+    monkeypatch.setattr(aiq_agent.auth, "get_auth_token", real_get_auth_token)
+    app.add_middleware(
+        AuthMiddleware,
+        validators=[AcceptTokenValidator()],
+        require_auth=True,
+        external_hostnames={"testserver"},
+    )
+
+    with TestClient(app) as client:
+        headers = None
+        if credential_source == "bearer-header":
+            headers = {"Authorization": f"Bearer {expected_token}"}
+        else:
+            client.cookies.set("idToken", expected_token)
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "deep_researcher", "input": "query"},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert submitted_job.await_args.kwargs["auth_token"] == expected_token
+
+
+@pytest.mark.asyncio
 async def test_submit_job_rejects_internal_agent(submit_app, monkeypatch):
     app, submitted_job, _builder = submit_app
     import aiq_api.routes.jobs as jobs_routes

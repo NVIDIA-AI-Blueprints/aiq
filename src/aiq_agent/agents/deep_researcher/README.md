@@ -1,268 +1,57 @@
-# Deep Researcher Agent Architecture
-
-This document describes the deep agents implementation using the [LangChain DeepAgents](https://docs.langchain.com/oss/python/deepagents/overview) library for multi-phase research workflows.
-
-## Overview
-
-The deep agents architecture provides a publication-ready research report generation system through an iterative multi-agent workflow. It uses specialized subagents coordinated by an orchestrator to produce comprehensive, cited research reports.
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                  DeepResearcherAgent                            │
-│                 (Orchestrator Agent)                            │
-│                  ORCHESTRATOR LLM                               │
-│                                                                 │
-│  Coordinates subagents in a multi-phase research workflow      │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-        ┌─────────────────────┴─────────────────────┐
-        │                                           │
-        ▼                                           ▼
-┌───────────────────────┐             ┌───────────────────────┐
-│     planner-agent     │             │   researcher-agent    │
-│      PLANNER LLM      │             │    RESEARCHER LLM     │
-│                       │             │                       │
-│ Content-driven        │             │ Information gathering │
-│ research planning -   │             │ - executes search     │
-│ iteratively builds    │             │ queries and           │
-│ evidence-grounded     │             │ synthesizes relevant  │
-│ outlines              │             │ content from sources  │
-└───────────────────────┘             └───────────────────────┘
-        │                                           │
-        └─────────────────────┬─────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                       Research Tools                            │
-│  - Tavily Web Search (tavily_web_search)                        │
-│  - Paper search (optional)                                      │
-│  - Custom tools via configuration                               │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-## Middleware Stack
-
-The orchestrator and subagents use middleware for task management and state persistence:
-
-### Orchestrator Middleware
-
-| Middleware | Purpose |
-|------------|---------|
-| `TodoListMiddleware` | Tracks research tasks and progress |
-| `FilesystemMiddleware` | Manages state persistence with configurable backend |
-| `EmptyContentFixMiddleware` | Handles empty content from subagents |
-| `ModelRetryMiddleware` | Retries model calls with backoff |
-| `SubAgentMiddleware` | Coordinates subagent execution and routing |
-
-### Subagent Middleware
-
-Declarative subagents such as planner-agent and writer-agent receive DeepAgents runtime middleware:
-
-| Middleware | Purpose |
-|------------|---------|
-| `TodoListMiddleware` | Tracks subtasks within the subagent |
-| `FilesystemMiddleware` | Manages subagent-level state |
-| `EmptyContentFixMiddleware` | Handles empty content |
-| `ModelRetryMiddleware` | Retries model calls with backoff |
-
-Isolated researcher workers launched by `run_research_batch` do not use `TodoListMiddleware`; they return structured `ResearchNotes` directly.
-
-## Workflow Phases
-
-### Phase 1: Research Planning
-
-The **planner-agent** analyzes the user query and generates a structured research plan:
-
-- Creates 4-6 strategic search queries
-- Maps queries to report sections
-- Builds evidence-grounded outlines through interleaved search and optimization
-
-### Phase 2: Iterative Research
-
-The workflow executes configurable research loops (default: 2):
-
-1. **researcher-agent** executes search queries via configured tools
-2. Gathers and synthesizes relevant content from available sources
-3. **Orchestrator** creates/updates draft report sections
-4. **Orchestrator** analyzes draft and identifies gaps for follow-up queries
-
-### Phase 3: Citation Management
-
-The **orchestrator** catalogs all sources:
-
-- Numbers citations sequentially
-- Formats references for the final report
-
-### Phase 4: Final Report
-
-The **orchestrator** produces the polished report:
-
-- Inline citations with numbered references
-- Structured sections based on the research plan
-- Publication-ready formatting
-
-## Components
-
-### Function: `deep_research_agent`
-
-The core deep research agent using the DeepAgents library.
-
-**Location**: `src/aiq_agent/agents/deep_researcher/`
-
-For optional DeepAgents sandbox behavior and v1 operational notes, see
-[`docs/source/architecture/agents/sandbox.md`](../../../../docs/source/architecture/agents/sandbox.md).
-
-**Configuration:**
-
-```yaml
-functions:
-  deep_research_agent:
-    _type: deep_research_agent
-    orchestrator_llm: nemotron_nano_llm   # LLM for orchestrator; replace with nemotron_super_llm if available
-    source_router_llm: nemotron_nano_llm  # optional source-router model
-    researcher_llm: nemotron_nano_llm    # optional; replace with nemotron_super_llm if available
-    planner_llm: nemotron_nano_llm        # optional; replace with nemotron_super_llm if available
-    writer_llm: nemotron_nano_llm         # optional final writer model
-    enable_source_router: true            # set false to skip advisory source routing
-    verbose: true                    # Enable detailed logging
-    tools:
-      - web_search_tool              # Search tools (e.g. tavily_web_search, paper_search)
-```
-
-**Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `orchestrator_llm` | LLMRef | required | LLM for orchestrator and report generation |
-| `source_router_llm` | LLMRef | optional | LLM for source-router subagent; falls back to default if unset |
-| `researcher_llm` | LLMRef | optional | LLM for researcher subagent; falls back to default if unset |
-| `planner_llm` | LLMRef | optional | LLM for planner subagent; falls back to default if unset |
-| `writer_llm` | LLMRef | optional | LLM for final writer subagent; falls back to default if unset |
-| `enable_source_router` | bool | `true` | Enable advisory source routing before planning |
-| `tools` | list | `[]` | Research tools (web search, paper search, etc.) |
-| `verbose` | bool | `true` | Enable detailed logging |
-
-### Workflow: `deep_research_workflow`
-
-A wrapper workflow that accepts string queries for evaluation and CLI use.
-
-**Configuration:**
-
-```yaml
-workflow:
-  _type: deep_research_workflow
-```
-
-This wrapper:
-- Accepts a string query as input
-- Converts it to the message format expected by `deep_research_agent`
-- Returns the final report as a string
-
-## LLM Roles
-
-The agent uses role-based LLM access via `LLMProvider`:
-
-| Role | Usage | Configured By |
-|------|-------|---------------|
-| `ORCHESTRATOR` | Orchestrator, final report generation | `orchestrator_llm` config |
-| `RESEARCHER` | researcher-agent subagent | `researcher_llm` config (optional; falls back to default) |
-| `PLANNER` | planner-agent subagent | `planner_llm` config (optional; falls back to default) |
-
-## Configuration Example
-
-```yaml
-general:
-  telemetry:
-    logging:
-      console:
-        _type: console
-        level: INFO
-  use_uvloop: true
-
-llms:
-  nemotron_nano_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
-    num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: true
-
-  # Nemotron Super is compatible and tested with AIQ but has limited availability
-  # on the Build API due to high demand.
-  # Uncomment nemotron_super_llm below if the endpoint is accessible.
-  # nemotron_super_llm:
-  #   _type: nim
-  #   model_name: nvidia/nemotron-3-super-120b-a12b
-  #   base_url: "https://integrate.api.nvidia.com/v1"
-  #   temperature: 1.0
-  #   top_p: 1.0
-  #   max_tokens: 128000
-  #   num_retries: 5
-  #   chat_template_kwargs:
-  #     enable_thinking: true
-
-functions:
-  web_search_tool:
-    _type: tavily_web_search
-    max_results: 10
-
-  deep_research_agent:
-    _type: deep_research_agent
-    orchestrator_llm: nemotron_nano_llm  # replace with nemotron_super_llm if available
-    tools:
-      - web_search_tool
-
-workflow:
-  _type: deep_research_workflow
-```
-
-
-## Prompts
-
-The agent loads prompts from `src/aiq_agent/agents/deep_researcher/prompts/`:
-
-| Prompt | Purpose |
-|--------|---------|
-| `planner.j2` | Instructions for the planning subagent |
-| `researcher.j2` | Instructions for the researcher subagent |
-| `orchestrator.j2` | Main orchestrator instructions (includes current datetime, clarifier_result, available_documents) |
-
-
-## State and context
-
-`DeepResearchAgentState` includes optional context passed from the chat researcher workflow:
-
-- **`clarifier_result`**: When the user goes through the clarifier (plan approval) before deep research, the approved plan or clarification log is passed here and injected into the orchestrator prompt.
-- **`available_documents`**: User-uploaded documents with summaries; injected into subagent prompts for context.
-
-
-## Evaluation
-
-### Deep Research Bench (DRB)
-
-The benchmark evaluates research reports using RACE and FACT metrics.
-
-See [frontends/benchmarks/deepresearch_bench/README.md](../../../../frontends/benchmarks/deepresearch_bench/README.md) for full documentation (path from this file to repo root).
-
-**Quick start:**
+# Deep Researcher Package
+
+This package implements the DeepAgents-backed deep-research path. The
+[Deep Researcher architecture guide](../../../../docs/source/architecture/agents/deep-researcher.md)
+is the canonical description of its runtime flow, state, middleware, and
+configuration. Keep detailed behavior in the architecture guide so the public and package-local
+documentation do not diverge.
+
+## Runtime Contract
+
+- The orchestrator coordinates stage order. It does not call source tools
+  directly and normally delegates final synthesis to `writer-agent`.
+- When enabled, `source-router-agent` writes advisory routing guidance before
+  planning. Routing cannot restore a source excluded by the request boundary.
+- `planner-agent` returns a structured `ResearchPlan` containing independent
+  `ResearchQuery` objects. Their `preferred_tools` and `fallback_tools` fields
+  are prompt guidance; every worker retains the full request-filtered tool set.
+- `run_research_batch` runs independent researcher workers concurrently up to
+  `max_research_concurrency`. Source-tool calls and concrete batched inputs have
+  separate configured bounds.
+- Each worker returns structured `ResearchNotes`. The writer reads the plan,
+  notes, and captured sources, then writes the normative final answer to
+  `/shared/output.md`.
+- `_salvage_inline_report()` is a defensive compatibility path when writer
+  delegation is missed. An orchestrator-authored report is not the normative
+  synthesis path.
+- Clarification happens before deep research only when request scope or output
+  shape is materially ambiguous. The clarifier does not create or approve the
+  internal research plan.
+
+## Package Map
+
+| Path | Responsibility |
+| ---- | -------------- |
+| `agent.py` | Per-run agent lifecycle, final report extraction, citation verification, and defensive report salvage |
+| `register.py` | NeMo Agent Toolkit configuration and component registration |
+| `factory.py` | Role-specific graph, middleware, tool, and permission assembly |
+| `deepagents_runtime.py` | Optional skills and sandbox runtime wiring |
+| `models/subagent_contracts.py` | Structured routing, planning, and research-note contracts |
+| `tools/source_routing.py` | Advisory source catalog lookup and route persistence |
+| `tools/research.py` | Concurrent `ResearchQuery` worker dispatch and note persistence |
+| `custom_middleware.py` | Plan persistence, source capture, retries, and role guards |
+| `prompts/` | Orchestrator, router, planner, researcher, writer, and source-list templates |
+| `sandbox/` | Sandbox providers and durable artifact collection |
+
+## Related Documentation
+
+- [Configuration Reference](../../../../docs/source/customization/configuration-reference.md)
+- [Prompt Customization](../../../../docs/source/customization/prompts.md)
+- [Deep Research Sandbox Notes](../../../../docs/source/architecture/agents/sandbox.md)
+- [Deep Research Bench](../../../../frontends/benchmarks/deepresearch_bench/README.md)
+
+Run the package tests from the repository root:
 
 ```bash
-# Install the evaluator (from repo root)
-uv pip install -e ./frontends/benchmarks/deepresearch_bench
-
-# Run evaluation (use one of the provided configs)
-dotenv -f deploy/.env run nat eval --config_file frontends/benchmarks/deepresearch_bench/configs/config_nemotron_only.yml
+uv run pytest tests/aiq_agent/agents/deep_researcher
 ```
-
-
-## References
-
-- [LangChain DeepAgents documentation](https://docs.langchain.com/oss/python/deepagents/overview)
-- [NeMo Agent Toolkit documentation](https://docs.nvidia.com/nemo/agent-toolkit/latest/index.html)
-- [Deep Research Bench](../../../../frontends/benchmarks/deepresearch_bench/README.md)

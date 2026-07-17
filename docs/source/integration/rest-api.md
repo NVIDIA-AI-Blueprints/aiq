@@ -14,6 +14,7 @@ The API is served when running in **web mode** (`nat serve`). CLI mode (`nat run
 NeMo Agent Toolkit provides the core infrastructure: job tracking, [Dask](https://www.dask.org/) scheduling, and SQLite/PostgreSQL persistence. The AI-Q API plugin (`aiq_api`) extends this with:
 
 - **Async Jobs API** -- submit research queries to any registered agent, track progress through SSE
+- **Durable Artifact API** -- list metadata and stream generated files captured from configured sandboxes
 - **Knowledge API** -- manage document collections and trigger ingestion (when a knowledge function is configured)
 - **Event replay** -- reconnect to an in-progress job and replay historical events from any point
 
@@ -32,7 +33,9 @@ Base path: `/v1/jobs/async`
 | `GET` | `/v1/jobs/async/job/{job_id}/stream/{last_event_id}` | SSE stream from event ID (reconnection) |
 | `POST` | `/v1/jobs/async/job/{job_id}/cancel` | Cancel a running job |
 | `POST` | `/v1/jobs/async/job/{job_id}/report/edit` | Create a revised report from a completed report job |
-| `GET` | `/v1/jobs/async/job/{job_id}/state` | Get accumulated job artifacts |
+| `GET` | `/v1/jobs/async/job/{job_id}/state` | Get event-derived tool calls, outputs, and citations |
+| `GET` | `/v1/jobs/async/job/{job_id}/artifacts` | List durable sandbox artifact metadata |
+| `GET` | `/v1/jobs/async/job/{job_id}/artifacts/{artifact_id}/content` | Stream one durable artifact's bytes |
 | `GET` | `/v1/jobs/async/job/{job_id}/report` | Get final research report |
 | `GET` | `/v1/data_sources` | List available data sources |
 | `GET` | `/live` | Process liveness check (no dependency checks) |
@@ -232,9 +235,11 @@ curl -X POST http://localhost:8000/v1/jobs/async/job/{job_id}/cancel
 | `400` | Job is not in `RUNNING` state |
 | `404` | Job not found |
 
-### Get Job Artifacts
+### Get Event-Derived Job State
 
-Returns accumulated tool calls, outputs, and source citations from a job.
+Returns accumulated tool calls, outputs, and source citations reconstructed from job
+events. This is distinct from the durable sandbox artifact endpoints, which store file
+metadata and bytes outside the event-derived state document.
 
 ```bash
 curl http://localhost:8000/v1/jobs/async/job/{job_id}/state
@@ -275,6 +280,106 @@ curl http://localhost:8000/v1/jobs/async/job/{job_id}/state
 }
 ```
 
+### Durable Sandbox Artifacts
+
+Durable artifacts are generated files such as charts, CSVs, notebooks, or documents
+harvested from a configured deep-research sandbox. Capture is opt-in: the deep researcher
+must have a sandbox and `artifact_capture.enabled: true`, and the API/worker must be able
+to open the artifact store. Successful `execute` calls checkpoint manifest-declared files.
+Success and failure paths perform one idempotent final manifest-plus-directory scan before
+cleanup. Cancellation performs that scan only when the provider is idle; a busy provider
+is terminated without waiting and artifacts from earlier checkpoints remain durable.
+Capture remains best-effort, so sandbox execution alone does not guarantee that every
+generated file is persisted.
+
+#### Live and Replayed File Events
+
+After storing a file, the worker emits a metadata-only `artifact.update` event with nested
+`data.type: "file"`. It includes the artifact and job IDs, display filename, kind, MIME type,
+size, digest, optional title/caption/inline metadata, and the job-scoped content URL. It does
+not contain file bytes, the storage URI, or the sandbox path. These stored events drive both
+live delivery and replay into the web UI Files tab, whose **Open file** action uses the
+job-scoped content endpoint below. When `artifact_id` is present, the UI derives that
+same-origin path from the current job and artifact IDs instead of trusting an arbitrary
+event URL. Rejected candidates emit `artifact.warning` with
+`data.path` and `data.reason` instead. Refer to [Data Flow](../architecture/data-flow.md#event-structure)
+for the canonical payload.
+
+#### List Artifact Metadata
+
+```bash
+curl http://localhost:8000/v1/jobs/async/job/{job_id}/artifacts
+```
+
+**Response:**
+
+```json
+{
+  "job_id": "abc123",
+  "artifacts": [
+    {
+      "artifact_id": "a1b2c3d4",
+      "job_id": "abc123",
+      "kind": "image",
+      "mime_type": "image/png",
+      "filename": "market-share.png",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size_bytes": 184320,
+      "title": "Market share",
+      "caption": "Market share by vendor",
+      "inline": true,
+      "workflow": "researcher-agent",
+      "source_tool_call_id": "call_123",
+      "provenance": {
+        "command": "python /tmp/chart.py",
+        "script_sha256": null,
+        "input_file_hashes": {},
+        "package_snapshot": []
+      },
+      "created_at": "2026-07-08T12:00:00Z",
+      "status": "available"
+    }
+  ]
+}
+```
+
+Each item contains `artifact_id`, `job_id`, `kind`, `mime_type`, `filename`,
+`sha256`, `size_bytes`, optional `title` and `caption`, `inline`, optional
+`workflow` and `source_tool_call_id`, `provenance`, `created_at`, and `status`.
+The response intentionally excludes `storage_uri` and `sandbox_path`; clients fetch
+bytes through the content endpoint rather than learning storage credentials, hostnames,
+or internal sandbox layout.
+
+#### Get Artifact Content
+
+```bash
+curl -OJ http://localhost:8000/v1/jobs/async/job/{job_id}/artifacts/{artifact_id}/content
+```
+
+Both durable artifact endpoints first load the owning job. With `REQUIRE_AUTH=true`,
+access is scoped to that job's owning principal. Missing or invalid authentication can
+return `401` or `403`, depending on the configured authentication middleware and principal
+gate; a cross-owner lookup is hidden as `404`. With the default `REQUIRE_AUTH=false`, job
+ownership is not enforced, so any caller with a valid job ID can access its artifacts.
+Treat no-auth mode as trusted-local development only; do not expose it on a shared or
+untrusted network. Enable authentication before serving durable artifacts in multi-user or
+externally reachable deployments.
+
+The list endpoint returns `404` when the owning job is not found; the content endpoint
+returns `404` when either the job or artifact is not found.
+
+Artifact cleanup is not tied to each job's `expiry_seconds`. The background cleanup uses
+one server-wide configured/default retention duration and compares it with each artifact's
+`created_at`. Stored artifacts can therefore outlive a shorter-expiry job, while artifacts
+for a longer-expiry job can be removed before that job expires. Do not rely on per-job
+artifact retention alignment unless the runtime contract changes.
+
+Raster images require matching content magic. PDF and allowed text/data formats such as
+CSV, JSON, Markdown, and notebooks may fall back to allowlisted extension-based MIME
+classification. Only magic-confirmed PNG, JPEG, and WebP images are served with
+`Content-Disposition: inline`; SVG, HTML, notebooks, PDFs, and all other types are forced
+to `attachment`. Every content response sets `X-Content-Type-Options: nosniff`.
+
 ### Get Final Report
 
 ```bash
@@ -294,7 +399,7 @@ curl http://localhost:8000/v1/jobs/async/job/{job_id}/report
 }
 ```
 
-For report follow-up child jobs (see [Edit a Report](#edit-a-report-report-follow-up)),
+For report follow-up child jobs (refer to [Edit a Report](#edit-a-report-report-follow-up)),
 `parent_job_id`, `interaction_action` (for example `edit`), and `result_kind` (for example
 `report`) identify the originating report and interaction. They are `null` for root research
 jobs.
@@ -316,7 +421,14 @@ Events streamed during job execution. Refer to the [Data Flow](../architecture/d
 | `workflow.start` / `workflow.end` | Workflow lifecycle boundaries |
 | `llm.start` / `llm.chunk` / `llm.end` | LLM inference progress. `llm.chunk` contains streaming token content |
 | `tool.start` / `tool.end` | Tool invocation lifecycle. Includes tool name, input, and output |
-| `artifact.update` | Structured updates: todos, files, citations (`citation_source`, `citation_use`), output content |
+| `artifact.update` | Structured updates for todos, citations, output content, legacy text files, and durable generated-file metadata with a job-scoped content URL |
+| `artifact.warning` | Durable file candidate was rejected; contains its sandbox path and rejection reason, but no file bytes |
+
+Sandbox-generated files also use `artifact.update` with `data.type: "file"`.
+Their metadata includes `artifact_id`, `job_id`, `file_path`, authenticated
+`content_url`, `kind`, validated `mime_type`, `size_bytes`, `sha256`, `title`,
+`caption`, and `inline`. File bytes are never included in SSE; fetch them through
+the authenticated `content_url`.
 
 ## Agent Registration
 

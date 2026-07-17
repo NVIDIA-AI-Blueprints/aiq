@@ -79,7 +79,7 @@ general:
 | `front_end.cors` | `object` | -- | CORS settings for the API server. |
 
 For `aiq_api`, request tag enrichment for NAT-exported spans is configured via
-environment variables rather than YAML fields. See `frontends/aiq_api/README.md`
+environment variables rather than YAML fields. Refer to `frontends/aiq_api/README.md`
 and the [Observability](../deployment/observability.md) guide for:
 
 - `AIQ_TRACE_USER_IDENTITY_MODE`
@@ -152,6 +152,10 @@ functions:
     _type: tavily_web_search
     max_results: 2
     advanced_search: true
+
+  proxied_web_search_tool:
+    _type: tavily_web_search
+    api_base_url: https://search-proxy.example.com
 ```
 
 | Parameter | Type | Default | Description |
@@ -162,6 +166,7 @@ functions:
 | `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
 | `advanced_search` | `bool` | `false` | Use Tavily's advanced search mode for deeper, more thorough results. |
 | `max_content_length` | `int` | `None` | Truncate each result's content to this many characters. Reduces token usage. |
+| `api_base_url` | `str` | `None` | Optional custom or proxy-compatible Tavily API base URL. A non-empty value is passed to the Tavily client; `None` uses the client's default endpoint. |
 
 ### `exa_web_search`
 
@@ -197,27 +202,77 @@ functions:
 - **`fast`** -- Optimized for low latency. Returns results quickly at the cost of recall and semantic depth. Use for interactive UIs, high-volume calls, or when the query is narrow and keyword-like.
 - **`deep`** -- Optimized for thoroughness. Runs a more expensive semantic search with broader retrieval. Use for research-quality queries where completeness matters more than speed.
 
+### `nimble_web_search`
+
+Web search powered by the [Nimble Search API](https://docs.nimbleway.com/nimble-sdk/web-tools/search) via
+`langchain-nimble`.
+
+```yaml
+functions:
+  web_search_tool:
+    _type: nimble_web_search
+    max_results: 5
+    max_content_length: 10000
+
+  advanced_web_search_tool:
+    _type: nimble_web_search
+    max_results: 5
+    search_depth: deep
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_results` | `int` | `5` | Maximum number of search results to return. |
+| `api_key` | `str` | `None` | Nimble API key. Falls back to `NIMBLE_API_KEY` environment variable. |
+| `max_retries` | `int` | `3` | Number of retry attempts on search failure. |
+| `search_depth` | `str` | `"lite"` | Nimble search depth. See options below. |
+| `focus` | `str` | `"general"` | Nimble focus mode. See options below. |
+| `country` | `str` | `"US"` | ISO 3166 country code passed to Nimble (e.g. `US`, `GB`, `FR`). |
+| `locale` | `str` | `"en"` | Language/locale passed to Nimble (e.g. `en`, `fr`, `es`). |
+| `max_content_length` | `int \| None` | `10000` | Max characters per result's page content. Set to `None` to disable truncation. |
+
+**`search_depth` options:**
+
+- **`lite`** (default) -- Returns metadata only (title, URL, description). Fastest, lowest token cost, safe default for general lookups.
+- **`fast`** -- Returns rich content at low latency. **Enterprise-tier only**; non-enterprise accounts receive a 403 with a clear entitlement message.
+- **`deep`** -- Returns full page content for each result. Use for research workflows that need the body text, not just URLs.
+
+**`focus` options:**
+
+- **`general`** (default) -- Broad web/research queries. The right choice for almost all agent use.
+- **`news`** -- Restricts results to news-publisher sources, ordered by recency. There is no recency threshold -- older articles still appear; it changes the source mix, not the time window. (Recency windowing is a separate Nimble `time_range` capability that also works with `focus=general`; not exposed in this initial integration.)
+- **`location`**, **`shopping`**, **`geo`**, **`social`** -- Domain-specific routing; set only when the tool targets that domain.
+
+`focus` is a workflow-config setting, not an agent-chosen parameter -- the model only passes a query, so general research queries cannot silently switch to `news`. Answer generation (`include_answer`) is **not exposed** in this initial integration.
+
 ### `paper_search`
 
-Academic paper search through Google Scholar (using the [Serper API](https://serper.dev/)).
+Academic paper search through Google Scholar using [Serper](https://serper.dev/),
+[SerpAPI](https://serpapi.com/), or [SearchAPI](https://www.searchapi.io/). All three providers are normalized to the
+same agent-facing result shape. Serper is the default.
 
 ```yaml
 functions:
   paper_search_tool:
     _type: paper_search
+    provider: serper
     max_results: 5
     serper_api_key: ${SERPER_API_KEY}
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
+| `provider` | `str` | `serper` | Google Scholar backend: `serper`, `serpapi`, or `searchapi`. |
 | `max_results` | `int` | `10` | Maximum number of paper results. |
-| `serper_api_key` | `str` | `None` | Serper API key. Falls back to `SERPER_API_KEY` environment variable. |
+| `serper_api_key` | `str` | `None` | Serper key for `provider: serper`. The tool also reads `SERPER_API_KEY`. |
+| `serpapi_api_key` | `str` | `None` | SerpAPI key for `provider: serpapi`. The tool also reads `SERPAPI_API_KEY`. |
+| `searchapi_api_key` | `str` | `None` | SearchAPI key for `provider: searchapi`. The tool also reads `SEARCHAPI_API_KEY`. |
 | `timeout` | `int` | `30` | Timeout in seconds for search requests. |
 
 ### `knowledge_retrieval`
 
-Semantic search over ingested documents. Supports two backends: LlamaIndex (local ChromaDB) and Foundational RAG (hosted NVIDIA RAG Blueprint).
+Semantic search over ingested documents. Supports LlamaIndex (local ChromaDB), Foundational RAG
+(hosted NVIDIA RAG Blueprint), OpenSearch (self-hosted OpenSearch or Amazon OpenSearch Serverless), and Azure AI Search.
 
 ```yaml
 functions:
@@ -244,12 +299,42 @@ functions:
     rag_url: ${RAG_SERVER_URL:-http://localhost:8081/v1}
     ingest_url: ${RAG_INGEST_URL:-http://localhost:8082/v1}
     timeout: 300
-    # verify_ssl: false            # Only set to false for self-signed certs
+    # verify_ssl: false # Only set to false for self-signed certs
+```
+
+```yaml
+functions:
+  # Azure AI Search backend
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: azure_ai_search
+    collection_name: ${COLLECTION_NAME:-test_collection}
+```
+
+This example reads `AZURE_SEARCH_ENDPOINT` and `NVIDIA_API_KEY` from the
+environment. `AZURE_SEARCH_API_KEY` is optional; when absent, the adapter uses
+`DefaultAzureCredential`.
+
+```yaml
+functions:
+  # OpenSearch backend
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: opensearch
+    collection_name: ${COLLECTION_NAME:-test_collection}
+    top_k: 5
+    opensearch_url: ${OPENSEARCH_URL:-http://localhost:9200}
+    opensearch_auth_type: ${OPENSEARCH_AUTH_TYPE:-none}
+    opensearch_aws_region: ${AWS_REGION:-us-east-1}
+    opensearch_aws_service: ${OPENSEARCH_AWS_SERVICE:-aoss}
+    opensearch_index_prefix: ${OPENSEARCH_INDEX_PREFIX:-aiq}
+    opensearch_ingestion_mode: ${OPENSEARCH_INGESTION_MODE:-auto}
+    embed_model: ${AIQ_EMBED_MODEL:-nvidia/llama-nemotron-embed-vl-1b-v2}
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `backend` | `str` | `llamaindex` | Backend type: `llamaindex` or `foundational_rag`. |
+| `backend` | `str` | `llamaindex` | Backend type: `llamaindex`, `opensearch`, `foundational_rag`, or `azure_ai_search`. |
 | `collection_name` | `str` | `default` | Name of the document collection/index. |
 | `top_k` | `int` | `5` | Number of results to return per query. |
 | `generate_summary` | `bool` | `false` | Generate one-sentence summaries for ingested documents. |
@@ -260,6 +345,28 @@ functions:
 | `ingest_url` | `str` | `http://localhost:8082/v1` | RAG ingestion server URL. Foundational RAG backend only. |
 | `timeout` | `int` | `120` | Request timeout in seconds. Foundational RAG backend only. |
 | `verify_ssl` | `bool` | `true` | Verify SSL certificates. Set `false` for self-signed certs. Foundational RAG backend only. |
+| `azure_search_endpoint` | `URL` | `AZURE_SEARCH_ENDPOINT` | Azure AI Search service endpoint. Required for Azure AI Search. |
+| `azure_search_api_key` | `SecretStr` | `AZURE_SEARCH_API_KEY` | Optional admin API key. |
+| `azure_search_index_prefix` | `str` | `AIQ_AZURE_SEARCH_INDEX_PREFIX` or `aiq` | Deployment-unique namespace for the shared AI-Q index. |
+| `embed_dim` | `int` | `AIQ_EMBED_DIM` or `2048` | Embedding dimensions; must match the model and existing index schema. |
+| `opensearch_url` | `str` | `http://localhost:9200` | OpenSearch endpoint. OpenSearch backend only. |
+| `opensearch_auth_type` | `str` | `none` | Authentication mode: `none`, `basic`, or `sigv4`. |
+| `opensearch_username` | `str` | `None` | Username for basic authentication. Also read from `OPENSEARCH_USERNAME`. |
+| `opensearch_password` | `str` | `None` | Password for basic authentication. Also read from `OPENSEARCH_PASSWORD`. |
+| `opensearch_verify_certs` | `bool` | `true` | Verify OpenSearch TLS certificates. Disable only for a trusted development cluster. |
+| `opensearch_ca_certs` | `str` | `None` | Optional custom CA bundle path. |
+| `opensearch_aws_region` | `str` | `us-east-1` | AWS region for SigV4 authentication. |
+| `opensearch_aws_service` | `str` | `aoss` | SigV4 service: `aoss` for Serverless or `es` for managed OpenSearch Service. |
+| `opensearch_index_prefix` | `str` | `aiq` | Prefix for the physical index created for each AI-Q collection. |
+| `opensearch_embedding_dim` | `int` | `2048` | Vector dimension; must match the configured embedding model. |
+| `opensearch_ingestion_mode` | `str` | `local` | Ingestion executor: `local`, `dask`, or `auto`. `auto` uses Dask only when a scheduler address is configured. |
+| `opensearch_dask_scheduler_address` | `str` | `None` | Dask scheduler for distributed ingestion. Also reads `NAT_DASK_SCHEDULER_ADDRESS`. |
+| `opensearch_dask_file_transfer` | `str` | `bytes` | Send uploads to Dask workers as `bytes` or shared filesystem `paths`. |
+| `embed_model` | `str` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model for OpenSearch ingestion and retrieval. |
+| `embed_base_url` | `str` | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible embeddings endpoint. |
+
+Refer to [Knowledge Layer](./knowledge-layer.md) for backend selection and the
+[Amazon OpenSearch Serverless](../deployment/aws-opensearch-serverless.md) guide for SigV4, IAM, and AOSS setup.
 
 ### `intent_classifier`
 
@@ -336,7 +443,9 @@ functions:
 
 ### `deep_research_agent`
 
-Multi-phase research agent with separate orchestrator, planner, and researcher sub-agents that produces long-form reports.
+Multi-phase research agent with an orchestrator, optional advisory source router, planner, concurrent researcher workers,
+and final writer. The planner records an answer strategy plus structured `ResearchQuery` objects; the orchestrator
+batches those queries for researcher workers and delegates final synthesis to the writer.
 
 ```yaml
 functions:
@@ -347,10 +456,18 @@ functions:
     researcher_llm: nemotron_super_llm
     planner_llm: nemotron_super_llm
     writer_llm: nemotron_super_llm
-    tools:
-      - paper_search_tool
-      - advanced_web_search_tool
-      - knowledge_search
+    # tools omitted -> inherit every tool in data_source_registry
+    exclude_tools:
+      - web_search_tool
+    enable_source_router: true
+    domain_catalog_path: configs/domain_catalogs/deep_research_domain_catalog.yml
+    enable_citation_verification: true
+    # Optional config-function references; define these functions before enabling:
+    # skills: deep_research_skills
+    # sandbox: deep_research_sandbox
+    max_research_concurrency: 6
+    max_concurrent_source_tool_calls: 5
+    max_source_tool_batch_size: 4
     verbose: true
 ```
 
@@ -361,8 +478,23 @@ functions:
 | `researcher_llm` | `str` | `None` | LLM for the researcher sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `planner_llm` | `str` | `None` | LLM for the planner sub-agent. Falls back to `orchestrator_llm` if not specified. |
 | `writer_llm` | `str` | `None` | LLM for the final writer/synthesis sub-agent. Falls back to `orchestrator_llm` if not specified. |
-| `tools` | `list[str]` | `[]` | Search tools available to the researcher sub-agent. |
+| `tools` | `list[str]` | `[]` | Explicit callable tools. An empty list inherits all tool and function-group references in `data_source_registry`; a non-empty list bypasses inheritance. |
+| `exclude_tools` | `list[str]` | `[]` | Exact runtime tool names removed after inherited or explicit tools are resolved. |
+| `domain_catalog_path` | `str` | `None` | Optional YAML or JSON domain catalog used by the source router. Without one, AI-Q generates a general route from available mapped sources. |
+| `enable_source_router` | `bool` | `true` | Run the advisory source-router sub-agent before planning. It recommends available mapped sources but does not restrict worker tool bindings. |
+| `enable_citation_verification` | `bool` | `true` | Verify final citations against sources captured from configured tool results. Set `false` only when the active source formats are not compatible with verification. |
+| `skills` | object or function ref | `None` | Inline `deep_research_skills` config or a reference to a config-only function of that type. Skill assignments are keyed by `researcher-agent` and `writer-agent`. |
+| `sandbox` | object or function ref | `None` | Inline `deep_research_sandbox` config or a reference to a config-only function of that type. Enables the DeepAgents execution backend. |
+| `max_research_concurrency` | `int` | `6` | Maximum `ResearchQuery` objects accepted and run concurrently by one `run_research_batch` call. |
+| `max_concurrent_source_tool_calls` | `int` | `5` | Shared cap on concurrent source-tool calls across all researcher workers in the run. |
+| `max_source_tool_batch_size` | `int` | `4` | Maximum concrete inputs accepted by a batch-capable source-tool wrapper in one call. |
 | `verbose` | `bool` | `true` | Enable verbose logging. |
+
+`data_sources` request filtering happens after this configured tool set is resolved. It removes tools mapped to
+unselected registry sources but preserves configured tools with no source mapping. Router recommendations become
+ordered `preferred_tools` and `fallback_tools` guidance on each `ResearchQuery`; workers still receive the full
+request-filtered callable set. Refer to [Tools and Sources](./tools-and-sources.md#automatic-source-routing) and the
+[`config_domain_routing_and_skills.yml`](../../../configs/config_domain_routing_and_skills.yml) reference profile.
 
 ---
 
@@ -395,9 +527,11 @@ workflow:
 
 ---
 
-## Complete Annotated Example
+## Annotated Core Pipeline Example
 
-Below is a complete configuration for CLI mode with web search, paper search, and clarification enabled:
+Below is a self-contained CLI configuration with web search, paper search, and clarification enabled. It intentionally
+does not combine the knowledge backends, MCP OAuth, guardrails, domain routing, or skills/sandbox examples; use the
+provided profiles in the next section as focused starting points for those capabilities.
 
 ```yaml
 # General settings
@@ -503,13 +637,23 @@ workflow:
 
 ## Provided Config Files
 
-The repository includes several pre-built configurations:
+The repository includes eleven top-level workflow configurations. They are focused reference profiles, not cumulative
+layers, and no single profile enables every capability. Start from the profile closest to the deployment and merge
+only the additional sections you need.
 
-| File | Mode | Features |
-|------|------|----------|
-| `configs/config_cli_default.yml` | CLI | Web search, paper search, clarifier |
-| `configs/config_web_default_llamaindex.yml` | Web API | LlamaIndex knowledge retrieval, web search, paper search |
-| `configs/config_web_frag.yml` | Web API | Foundational RAG knowledge retrieval, web search, paper search |
+| File | Mode | Enabled behavior and opt-ins |
+|------|------|------------------------------|
+| `configs/config_cli_default.yml` | CLI | Chat pipeline with Tavily web search and clarification. No knowledge backend. Paper search is present only as a commented opt-in. |
+| `configs/config_web_default_llamaindex.yml` | Web API | Default chat pipeline with LlamaIndex/ChromaDB knowledge retrieval and Tavily. Paper search is commented out. |
+| `configs/config_web_azure_ai_search.yml` | Web API | Azure AI Search knowledge retrieval and web search |
+| `configs/config_web_frag.yml` | Web API / Helm base | Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. Paper search is commented out. |
+| `configs/config_web_opensearch.yml` | Web API | Built-in OpenSearch knowledge backend plus Tavily. Supports unauthenticated or basic self-hosted OpenSearch and SigV4 (`es` or `aoss`); infrastructure and credentials are deployment opt-ins. |
+| `configs/config_frontier_models.yml` | Web API | LlamaIndex plus explicit per-agent tools, Nemotron researcher roles, and an OpenAI frontier model for orchestration/planning/writing. Requires `OPENAI_API_KEY`; paper search is commented out. |
+| `configs/config_web_default_guardrails.yml` | Web API | LlamaIndex plus workflow Guardrails attachment. Shallow/deep middleware types are defined as capability examples; refer to [Guardrails](./guardrails.md) for the active attachment semantics. |
+| `configs/config_web_frag_mcp_auth.yml` | Web API | Foundational RAG plus a protected per-user OAuth MCP source example. Requires a real protected MCP endpoint and shared token-store configuration; it is not a zero-config default. |
+| `configs/config_domain_routing_and_skills.yml` | Direct deep-research workflow | Automatic domain routing, Tavily, DuckDuckGo news, Polymarket, LlamaIndex, enabled Serper paper search, built-in skills, and a Modal sandbox. Requires the corresponding service credentials and Modal setup. |
+| `configs/config_openshell.yml` | Web API, experimental | Skills and artifact capture over one pre-provisioned named OpenShell sandbox. Intended for trusted single-operator use; per-job directories are not multi-tenant isolation. |
+| `configs/config_mcp.yml` | Standalone MCP server | Public NIM and Tavily research over stateless submit, poll, and final-report tools with PostgreSQL-backed job state. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Related
 

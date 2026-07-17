@@ -18,7 +18,7 @@ build-backend = "setuptools.build_meta"
 requires = ["setuptools >= 64", "setuptools-scm>=8"]
 
 [tool.setuptools]
-packages = ["knowledge_layer", "knowledge_layer.llamaindex", "knowledge_layer.foundational_rag", "knowledge_layer.opensearch"]
+packages = ["knowledge_layer", "knowledge_layer.llamaindex", "knowledge_layer.foundational_rag", "knowledge_layer.opensearch", "knowledge_layer.azure_ai_search"]
 package-dir = {"knowledge_layer" = "src"}
 
 [project]
@@ -61,8 +61,17 @@ opensearch = [
     "python-pptx>=0.6.21",
     "distributed>=2024.1.0",
 ]
+azure_ai_search = [
+    "azure-identity>=1.15.0,<1.26",
+    "azure-search-documents>=11.6.0,<11.7",
+    "docx2txt>=0.8",
+    "llama-index-core>=0.11.0",
+    "llama-index-embeddings-nvidia>=0.2.0",
+    "llama-index-readers-file>=0.2.0",
+    "pypdf>=4.0.0",
+]
 all = [
-    "knowledge-layer[llamaindex,foundational_rag,opensearch]",
+    "knowledge-layer[llamaindex,foundational_rag,opensearch,azure_ai_search]",
 ]
 
 [project.entry-points."nat.plugins"]

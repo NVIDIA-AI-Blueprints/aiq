@@ -23,6 +23,7 @@ sequenceDiagram
     participant D as Dask Worker
     participant A as Agent Workflow
     participant ES as Event Store
+    participant AS as Durable Artifact Store
     participant SSE as SSE Stream
 
     C->>API: POST /v1/jobs/async/submit
@@ -40,14 +41,30 @@ sequenceDiagram
         A->>ES: Store intermediate events
         ES-->>SSE: Push events to client
         SSE-->>C: SSE event data
+        opt Successful sandbox execute with artifact capture enabled
+            A->>AS: Checkpoint manifest-declared files
+            A->>ES: Store artifact.update metadata
+            ES-->>SSE: Push artifact.update
+            SSE-->>C: File metadata + content URL
+        end
     end
 
     A-->>D: Final result
+    opt Artifact capture enabled
+        D->>AS: Finalize artifacts (idempotent)
+        D->>ES: Store new artifact.update events
+    end
     D->>ES: Store final events
     D->>JS: Update status (SUCCESS)
     JS-->>SSE: Push job.status
     SSE-->>C: job.status {status: SUCCESS}
 ```
+
+Artifact checkpoints run after successful sandbox `execute` calls. On a terminal
+success or failure path, the worker performs one idempotent manifest-plus-directory
+scan before sandbox cleanup. Cancellation performs that scan only when the provider
+operation lease is immediately available; otherwise the provider is terminated without
+waiting and artifacts from earlier checkpoints remain durable.
 
 ## Async Job States
 
@@ -79,9 +96,10 @@ crashed workers.
 
 ## SSE Event Types
 
-Events use a `category.state` naming convention aligned with NeMo Agent Toolkit's
+Most lifecycle events use a `category.state` naming convention aligned with NeMo Agent Toolkit's
 `IntermediateStep` structure. The `AgentEventCallback` (a [LangChain](https://docs.langchain.com/) callback
-handler) translates LangChain lifecycle events into these SSE events.
+handler) translates LangChain lifecycle events into this shape. Durable file captures also use
+`artifact.update`; rejected candidates use the separate top-level `artifact.warning` event.
 
 | Event Type | Category | State | Description |
 | ---------- | -------- | ----- | ----------- |
@@ -94,7 +112,8 @@ handler) translates LangChain lifecycle events into these SSE events.
 | `llm.end` | `llm` | `end` | LLM invocation completes; includes usage metadata and optional thinking/reasoning |
 | `tool.start` | `tool` | `start` | Tool execution begins; includes tool name and input |
 | `tool.end` | `tool` | `end` | Tool execution completes; may emit `citation_source` artifacts for search tools |
-| `artifact.update` | `artifact` | `update` | Artifact created or updated (files, citations, todos, outputs) |
+| `artifact.update` | `artifact` | `update` | File, citation, todo, or output update; durable files contain metadata and a content URL, never bytes |
+| `artifact.warning` | -- | -- | Durable artifact candidate was rejected; includes its path and the rejection reason |
 | `job.update` | `job` | `update` | Retry notification when a chain (LLM call) fails and is retried |
 | `job.error` | `job` | -- | Error during job execution |
 | `job.heartbeat` | `job` | -- | Periodic heartbeat from Dask worker (every 30s); keeps SSE alive and aids ghost job detection |
@@ -104,7 +123,7 @@ handler) translates LangChain lifecycle events into these SSE events.
 
 ### Event Structure
 
-Every SSE event follows the `IntermediateStepEvent` schema:
+Lifecycle events produced by `AgentEventCallback` follow the `IntermediateStepEvent` schema:
 
 ```json
 {
@@ -120,17 +139,58 @@ Every SSE event follows the `IntermediateStepEvent` schema:
 }
 ```
 
-### Artifact Types
+Captured durable files use the same `artifact.update` envelope as other file updates. Their
+nested `data.type` is `file`, and the payload contains metadata rather than file bytes:
 
-The `artifact.update` event carries a `type` field indicating the artifact kind:
+```json
+{
+  "type": "artifact.update",
+  "name": "market-share.png",
+  "data": {
+    "type": "file",
+    "url": "/v1/jobs/async/job/job-uuid/artifacts/artifact-uuid/content",
+    "content_url": "/v1/jobs/async/job/job-uuid/artifacts/artifact-uuid/content",
+    "file_path": "market-share.png",
+    "artifact_id": "artifact-uuid",
+    "job_id": "job-uuid",
+    "kind": "image",
+    "mime_type": "image/png",
+    "size_bytes": 184320,
+    "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+    "title": "Market share",
+    "caption": "Market share by vendor",
+    "inline": true
+  }
+}
+```
+
+An `artifact.warning` payload instead contains `data.path` and `data.reason` for the rejected candidate.
+
+### Event-Derived and Durable Artifacts
+
+`artifact.update` events carry event-derived state used for live UI updates and replay. Their nested `data.type`
+is one of the following values. The
+`GET /v1/jobs/async/job/{job_id}/state` endpoint reconstructs tool calls, outputs, and citations from those stored
+events.
 
 | Artifact Type | Description |
 | ------------- | ----------- |
-| `file` | Virtual filesystem file created by the deep researcher |
+| `file` | Legacy virtual-filesystem content or durable generated-file metadata with a job-scoped content URL |
 | `output` | Intermediate output (draft section, summary) |
 | `citation_source` | A source URL or reference discovered during research |
 | `citation_use` | An inline citation placed in the report |
 | `todo` | A research task tracked by `TodoListMiddleware` |
+
+Durable sandbox artifacts are a separate persistence contract for generated files such as charts, CSVs,
+notebooks, and documents. Capture is opt-in and best-effort. Successful `execute` calls checkpoint
+manifest-declared files; success/failure terminal paths perform one final manifest-plus-directory scan, while a
+busy cancellation skips that scan rather than waiting on the provider. The durable store, not the replayed event,
+is authoritative for artifact records and bytes. Stored `artifact.update` events provide metadata-only live and
+replayed delivery to clients, including the web UI Files tab. A rejected candidate instead emits top-level
+`artifact.warning`. List authoritative metadata with `GET /v1/jobs/async/job/{job_id}/artifacts` and fetch content with
+`GET /v1/jobs/async/job/{job_id}/artifacts/{artifact_id}/content`. Refer to the
+[REST API](../integration/rest-api.md#durable-sandbox-artifacts) for the complete capture, authorization, retention,
+and content-serving contract.
 
 ## Reconnection and Replay
 
@@ -181,18 +241,20 @@ sequenceDiagram
    reconnects, the stream replays all stored events and immediately sends the
    terminal `job.status` event.
 
-## API Endpoints
+## Representative API Endpoints
+
+These are the endpoints that drive the core lifecycle shown above. The [REST API](../integration/rest-api.md) is
+the canonical, complete endpoint inventory, including report follow-up, final-report retrieval, durable artifacts,
+data sources, health checks, and their error and authorization semantics.
 
 | Method | Endpoint | Description |
 | ------ | -------- | ----------- |
-| `GET` | `/v1/jobs/async/agents` | List available agent types |
 | `POST` | `/v1/jobs/async/submit` | Submit a new async job |
 | `GET` | `/v1/jobs/async/job/{job_id}` | Get job status |
 | `GET` | `/v1/jobs/async/job/{job_id}/stream` | SSE stream from beginning |
 | `GET` | `/v1/jobs/async/job/{job_id}/stream/{last_event_id}` | SSE stream from event ID (reconnection) |
 | `POST` | `/v1/jobs/async/job/{job_id}/cancel` | Cancel a running job |
-| `GET` | `/v1/jobs/async/job/{job_id}/state` | Get artifacts from event store |
-| `GET` | `/v1/jobs/async/job/{job_id}/report` | Get final report |
+| `GET` | `/v1/jobs/async/job/{job_id}/state` | Reconstruct event-derived tool calls, outputs, and citations |
 
 ## Cancellation
 

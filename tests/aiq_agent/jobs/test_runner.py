@@ -725,7 +725,10 @@ class TestRunAgentJobEncryption:
 
         mock_job_store = MagicMock()
         mock_job_store.update_status = AsyncMock()
-        update_job_output = AsyncMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        # The success output is serialized/encrypted via serialize_job_output_for_storage
+        # before the conditional write; simulate encryption failing there.
+        serialize_output = MagicMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        write_success = MagicMock()  # the raw-SQL success writer; must never run on failure
         db_url = f"sqlite:///{tmp_path / 'test.db'}"
 
         config = SimpleNamespace(workflow=None, functions={}, middleware={})
@@ -749,7 +752,16 @@ class TestRunAgentJobEncryption:
                                         "aiq_api.jobs.runner._run_agent",
                                         AsyncMock(return_value="secret report"),
                                     ):
-                                        with patch("aiq_api.jobs.crypto.update_job_output", update_job_output):
+                                        with (
+                                            patch(
+                                                "aiq_api.jobs.crypto.serialize_job_output_for_storage",
+                                                serialize_output,
+                                            ),
+                                            patch(
+                                                "aiq_api.jobs.runner._write_job_success_if_running_sync",
+                                                write_success,
+                                            ),
+                                        ):
                                             await run_agent_job(
                                                 False,
                                                 20,
@@ -773,8 +785,12 @@ class TestRunAgentJobEncryption:
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
         assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
         assert all("output" not in call.kwargs for call in mock_job_store.update_status.await_args_list)
-        update_job_output.assert_awaited_once()
-        assert update_job_output.await_args.kwargs["output"] == {
+        # The output was assembled with the real report (never the output_metadata
+        # "report" decoy) and handed to serialization; when that failed the job was
+        # marked FAILURE and the success writer never ran, so nothing was persisted.
+        write_success.assert_not_called()
+        serialize_output.assert_called_once()
+        assert serialize_output.call_args.args[0] == {
             "parent_job_id": "parent-job",
             "interaction_action": "edit",
             "report": "secret report",
@@ -885,10 +901,12 @@ class TestRunAgentJobEncryption:
 
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
         assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        # The persisted error is sanitized to the exception class name so raw
+        # messages cannot leak credentials or internal hostnames to callers.
         mock_job_store.update_status.assert_awaited_with(
             "job-1",
             JobStatus.FAILURE,
-            error="transient database failure",
+            error="job failed (RuntimeError); check server logs for details",
         )
         update_job_output.assert_not_awaited()
 
@@ -1186,17 +1204,23 @@ class TestToolArtifactMapping:
 
 
 def test_get_worker_function_type_maps_async_deep_research_flag():
-    """Async deep research selects the deep research function type."""
+    """Async deep research selects the deep research function type for supported workflows."""
     from types import SimpleNamespace
 
+    from aiq_agent.agents.deep_researcher.register import DeepResearchWorkflowConfig
     from aiq_api.jobs.runner import _get_worker_function_type
 
-    enabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=True))
-    disabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=False))
+    workflow = DeepResearchWorkflowConfig(use_async_deep_research=True)
+    enabled_config = SimpleNamespace(workflow=workflow)
+    disabled_config = SimpleNamespace(workflow=DeepResearchWorkflowConfig())
+    missing_flag_config = SimpleNamespace(workflow=SimpleNamespace())
     no_workflow_config = SimpleNamespace(workflow=None)
 
+    assert workflow.use_async_deep_research is True
+    assert workflow.model_dump()["use_async_deep_research"] is True
     assert _get_worker_function_type(enabled_config) == "deep_research_agent"
     assert _get_worker_function_type(disabled_config) is None
+    assert _get_worker_function_type(missing_flag_config) is None
     assert _get_worker_function_type(no_workflow_config) is None
 
 
@@ -2444,6 +2468,53 @@ class TestTerminalTeardown:
         # Must not raise when no sandbox runtime is present (non-sandbox agents).
         _teardown_sandbox(None, job_id="job-1", interrupted=False)
 
+    @pytest.mark.asyncio
+    async def test_terminal_event_flush_failure_is_nonfatal_and_sanitized(self, caplog):
+        from aiq_api.jobs.runner import _flush_event_store
+
+        event_store = MagicMock()
+        event_store.flush.side_effect = RuntimeError("secret-bearing database detail")
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            await _flush_event_store(event_store, job_id="job-1")
+
+        event_store.flush.assert_called_once_with()
+        assert "Event store flush failed for job job-1 (RuntimeError)" in caplog.text
+        assert "secret-bearing database detail" not in caplog.text
+
+    def test_runtime_finalizer_owns_cleanup_when_available(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize", "close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.finalize.assert_called_once_with(interrupted=True)
+        runtime.close.assert_not_called()
+        runtime.terminate.assert_not_called()
+
+    def test_runtime_finalizer_false_result_is_logged(self, caplog):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize"])
+        runtime.finalize.return_value = False
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup reported failure for job job-1" in caplog.text
+
+    def test_runtime_finalizer_exception_is_nonfatal_and_sanitized(self, caplog):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize"])
+        runtime.finalize.side_effect = RuntimeError("credential=do-not-log")
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup failed for job job-1 (RuntimeError)" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+
     def test_normal_path_calls_close(self):
         from aiq_api.jobs.runner import _teardown_sandbox
 
@@ -2470,13 +2541,17 @@ class TestTerminalTeardown:
 
         runtime.close.assert_called_once_with()
 
-    def test_never_raises_when_teardown_fails(self):
+    def test_fallback_teardown_exception_is_nonfatal_and_sanitized(self, caplog):
         from aiq_api.jobs.runner import _teardown_sandbox
 
         runtime = MagicMock(spec=["close", "terminate"])
-        runtime.close.side_effect = RuntimeError("sdk session close failed")
-        # Must swallow the error; teardown is best-effort on the terminal path.
-        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+        runtime.close.side_effect = RuntimeError("credential=do-not-log")
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup failed for job job-1 (RuntimeError)" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
 
     def test_finalizes_artifacts_before_close(self):
         from aiq_api.jobs.runner import _teardown_sandbox

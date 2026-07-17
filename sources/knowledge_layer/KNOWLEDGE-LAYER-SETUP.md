@@ -9,7 +9,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 - **Collection Management** - create/delete/list collections per session or use case
 - **File Management** - upload/delete/list files with status tracking (UPLOADING → INGESTING → SUCCESS/FAILED)
 - **Content Typing** - TEXT, TABLE, CHART, IMAGE enums for frontend rendering
-- **Backend Agnostic** - Swap between local (LlamaIndex), OpenSearch, and hosted RAG Blueprint without core agent code changes
+- **Backend Agnostic** - Swap between local (LlamaIndex), OpenSearch, Azure AI Search, and hosted RAG Blueprint without core agent code changes
 
 ---
 
@@ -36,6 +36,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 | `llamaindex` | `"llamaindex"` | Local Library | ChromaDB | Dev, prototyping, macOS/Linux |
 | `opensearch` | `"opensearch"` | Direct Client | OpenSearch k-NN | Self-hosted OpenSearch, Amazon OpenSearch Serverless |
 | `foundational_rag` | `"foundational_rag"` | Hosted Service | Remote Milvus | Production, multi-user |
+| `azure_ai_search` | `"azure_ai_search"` | Managed Service | Azure AI Search | Managed hybrid retrieval |
 
 **Local Library Mode** - Everything runs in your Python process. No external services needed.
 - **`llamaindex`** - LlamaIndex + ChromaDB. Lightweight, great for development. Works on macOS and Linux.
@@ -43,6 +44,9 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 **Hosted Service Mode** - Connects to deployed services via HTTP. Requires infrastructure but scales better.
 - **`foundational_rag`** - Connects to [NVIDIA RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag) via HTTP.
   - [Deployment Guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/deploy-docker-self-hosted.md)
+- **`azure_ai_search`** - Uses one AI-Q-owned shared index in a managed Azure AI Search service. Collection and file
+  manifests isolate logical collections. Canonical UUID file IDs support status and deletion, while same-name uploads
+  coexist independently. See [`src/azure_ai_search/README.md`](src/azure_ai_search/README.md).
 
 **OpenSearch Mode** - Stores AIQ collections directly in OpenSearch vector indexes.
 - **`opensearch`** - Uses one OpenSearch index per AIQ collection/session. Supports unauthenticated local clusters,
@@ -64,6 +68,7 @@ export NVIDIA_API_KEY=nvapi-your-key-here
 uv pip install -e "sources/knowledge_layer[llamaindex]"        # Recommended for local dev - works on macOS/Linux
 uv pip install -e "sources/knowledge_layer[foundational_rag]"  # Requires deployed server
 uv pip install -e "sources/knowledge_layer[opensearch]"        # Requires OpenSearch/OpenSearch Serverless
+uv pip install -e "sources/knowledge_layer[azure_ai_search]"   # Requires an Azure AI Search service
 ```
 
 > **New to Knowledge Layer?** Start with `llamaindex` - it requires no external services and works on macOS and Linux.
@@ -183,6 +188,7 @@ functions:
 > **Separate Docker stacks:** When AI-Q and RAG run as separate Docker Compose stacks, connect the AI-Q backend to the RAG network: `docker network connect nvidia-rag aiq-agent`. See the [Docker Compose README](../../deploy/compose/README.md#networking-when-aiq-and-rag-run-as-separate-compose-stacks) for details.
 
 **OpenSearch (Self-hosted)**
+
 ```yaml
 functions:
   knowledge_search:
@@ -1038,6 +1044,13 @@ Configuration values are resolved in the following order (highest to lowest prio
 | `KNOWLEDGE_RETRIEVER_BACKEND` | All | Default retriever backend (fallback if not in YAML) |
 | `KNOWLEDGE_INGESTOR_BACKEND` | All | Default ingestor backend (fallback if not in YAML) |
 | `AIQ_CHROMA_DIR` | llamaindex | ChromaDB persistence path |
+| `AZURE_SEARCH_ENDPOINT` | azure_ai_search | Azure AI Search service endpoint |
+| `AZURE_SEARCH_API_KEY` | azure_ai_search | Optional admin key; omit to use `DefaultAzureCredential` |
+| `AZURE_CLIENT_ID` | azure_ai_search | Client ID for the user-assigned managed identity used by `DefaultAzureCredential` |
+| `AIQ_AZURE_SEARCH_INDEX_PREFIX` | azure_ai_search | Deployment-unique prefix for the shared AI-Q index (default: `aiq`) |
+| `AIQ_EMBED_MODEL` | llamaindex, azure_ai_search | Embedding model name |
+| `AIQ_EMBED_BASE_URL` | llamaindex, azure_ai_search | Embedding API base URL |
+| `AIQ_EMBED_DIM` | azure_ai_search | Embedding dimensions (default: `2048`) |
 | `AIQ_SUMMARY_DB` | All | Summary database URL (SQLite or PostgreSQL) |
 | `RAG_SERVER_URL` | foundational_rag | Query server URL (port 8081) |
 | `RAG_INGEST_URL` | foundational_rag | Ingestion server URL (port 8082) |

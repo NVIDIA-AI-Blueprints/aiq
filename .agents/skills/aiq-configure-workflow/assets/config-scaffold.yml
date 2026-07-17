@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+#
+# Fallback scaffold only — prefer copying the closest configs/*.yml profile
+# (see .agents/skills/aiq-configure-workflow/references/config-profiles.md).
+# Merge feature blocks from other shipped profiles; do not invent fields.
+#
+# Usage:
+#   cp .agents/skills/aiq-configure-workflow/assets/config-scaffold.yml configs/my_workflow.yml
+
+general:
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+  # Web/API: copy general.front_end from config_web_default_llamaindex.yml
+
+llms:
+  main_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.7
+    max_tokens: 65536
+    num_retries: 5
+
+functions:
+  data_sources:
+    _type: data_source_registry
+    sources: []   # add sources — see aiq-add-data-source registry reference
+
+  intent_classifier:
+    _type: intent_classifier
+    llm: main_llm
+
+  shallow_research_agent:
+    _type: shallow_research_agent
+    llm: main_llm
+
+  deep_research_agent:
+    _type: deep_research_agent
+    orchestrator_llm: main_llm
+    planner_llm: main_llm
+    researcher_llm: main_llm
+    writer_llm: main_llm
+
+workflow:
+  _type: chat_deepresearcher_agent
+  enable_escalation: true
+  enable_clarifier: false   # set true and add clarifier_agent under functions: to enable
+  checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}

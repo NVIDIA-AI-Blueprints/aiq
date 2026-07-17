@@ -27,13 +27,20 @@ deploy/helm/
 | [NGC Helm chart](#install-from-ngc-helm-repository) | Install a pre-built chart from the NGC Helm repository |
 | [Source chart](deployment-k8s/README.md) | You cloned the repository and want to build/deploy from source |
 
+All examples use `ns-aiq`. The repository source chart derives every namespaced
+resource from Helm's `.Release.Namespace`, supplied with `-n`; use a different namespace
+consistently across Helm, Secrets, `kubectl`, and external identity bindings. The
+`aiq.namespace.create` value controls whether the source chart renders a Namespace object
+and does not override `-n`. The NGC instructions below install published chart 2.0.0. Use
+the source chart when you need behavior from the checked-out repository.
+
 ## Prerequisites
 
 - Kubernetes cluster (EKS, GKE, AKS, or a local cluster such as Kind or Minikube)
 - `kubectl` configured with cluster access
 - `helm` v3.x installed
 - NGC API key (`NGC_API_KEY` environment variable)
-- Required API keys (see [Secrets](#secrets) below)
+- Required API keys (refer to [Secrets](#secrets) below)
 
 ## Install from NGC Helm Repository
 
@@ -165,10 +172,10 @@ aiq:
 A complete example is available at
 [`deploy/helm/examples/aws-opensearch-serverless-values.yaml`](examples/aws-opensearch-serverless-values.yaml).
 
-For EKS Pod Identity, associate the IAM role with the backend service account for this release. With the default chart
-names, the namespace is `ns-aiq` and the backend service account is `aiq-backend`. EKS Pod Identity associations are
-created through EKS, not by annotating the service account. The role also needs OpenSearch Serverless IAM access and a
-data access policy for the target collection/index pattern.
+For EKS Pod Identity, associate the IAM role with the backend service account for this release. These examples install
+into `ns-aiq`, and the backend service account is `aiq-backend`. If you change `-n`, create the association in that same
+release namespace. EKS Pod Identity associations are created through EKS, not by annotating the service account. The role
+also needs OpenSearch Serverless IAM access and a data access policy for the target collection/index pattern.
 
 ### Verify
 
@@ -283,7 +290,7 @@ Configure `MCP_GDRIVE_URL`, `AIQ_PUBLIC_URL`, and any OAuth client credentials r
 
 ## FRAG Integration
 
-To use the Foundational RAG (FRAG) config, you need a running NVIDIA RAG Blueprint deployment. See the [RAG Blueprint Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/develop/docs/deploy-helm.md) for setup instructions.
+To use the Foundational RAG (FRAG) config, you need a running NVIDIA RAG Blueprint deployment. Refer to the [RAG Blueprint Helm deployment guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/develop/docs/deploy-helm.md) for setup instructions.
 
 ### Same-cluster RAG connection
 
@@ -405,4 +412,4 @@ kubectl logs -n ns-aiq <backend-pod> -c db-init
 
 ## Source Chart Deployment
 
-For deploying from the cloned repository (building from source charts, local images, NGC images), see the [deployment-k8s README](deployment-k8s/README.md).
+For deploying from the cloned repository (building from source charts, local images, NGC images), refer to the [deployment-k8s README](deployment-k8s/README.md).

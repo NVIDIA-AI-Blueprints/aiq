@@ -7,12 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 
 AI-Q can use the built-in OpenSearch knowledge backend with Amazon OpenSearch Serverless vector collections. The backend
 uses SigV4 service `aoss`, creates one OpenSearch index per AI-Q collection/session, and supports Dask ingestion workers
-by creating the OpenSearch client inside the worker process.
+by creating the OpenSearch client inside the worker process. Refer to [Knowledge Layer](../customization/knowledge-layer.md)
+for how OpenSearch compares with the LlamaIndex and Foundational RAG backends.
 
 ```{note}
 **Migrating from AI-Q v1.0.** On v1.0, OpenSearch support shipped through a custom Docker image
-built from [`awslabs/ai-on-eks`](https://github.com/awslabs/ai-on-eks) via `./deploy.sh build`. On
-v2.0, OpenSearch is a built-in knowledge backend selected through workflow YAML
+built from [`awslabs/ai-on-eks`](https://github.com/awslabs/ai-on-eks) via `./deploy.sh build`. In
+the current implementation, OpenSearch is now a built-in knowledge backend selected through workflow
+YAML
 (`backend: opensearch`). You no longer need to maintain a custom image build pipeline.
 ```
 
@@ -65,6 +67,12 @@ aws eks describe-addon --cluster-name <cluster-name> --addon-name eks-pod-identi
 
 Expected: `ACTIVE`.
 
+For a source checkout or custom image, install the backend dependencies with:
+
+```bash
+uv pip install -e "sources/knowledge_layer[opensearch]"
+```
+
 ## Create the OpenSearch Serverless collection
 
 AOSS requires an encryption policy and a network policy before the collection can be created.
@@ -94,7 +102,7 @@ aws opensearchserverless create-security-policy \
   --policy "[{\"Rules\":[{\"ResourceType\":\"collection\",\"Resource\":[\"collection/${COLLECTION}\"]},{\"ResourceType\":\"dashboard\",\"Resource\":[\"collection/${COLLECTION}\"]}],\"AllowFromPublic\":true}]"
 ```
 
-For private VPC access, replace `AllowFromPublic` with `SourceVPCEs`. See the
+For private VPC access, replace `AllowFromPublic` with `SourceVPCEs`. Refer to the
 [AOSS network policy docs](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/serverless-network.html).
 
 ### 3. Create the collection
@@ -231,8 +239,10 @@ collections).
 
 ## Associate the role with the AIQ service account
 
-EKS Pod Identity binds an IAM role to a Kubernetes service account. With the default Helm
-release names, the namespace is `ns-aiq` and the backend service account is `aiq-backend`.
+EKS Pod Identity binds an IAM role to a Kubernetes service account. The commands in this
+guide install the source chart into `ns-aiq`, and the backend service account is
+`aiq-backend`. The source chart honors the namespace passed with `helm -n`; if you choose
+another namespace, use it for this association and every Secret and `kubectl` command.
 
 ```bash
 aws eks create-pod-identity-association \
