@@ -353,6 +353,7 @@ for protocol details.
     mcp_server_id: gdrive              # key used to look up the user's token in NAT token storage
     auth_provider: mcp_oauth2_gdrive   # the `authentication` (mcp_oauth2) provider for this source
   ```
+
 - Keep token forwarding scoped to trusted internal services and HTTPS endpoints.
 - Use `requires_auth: true` for sources that depend on AIQ sign-in but do not have a separate
   upstream OAuth connection.
