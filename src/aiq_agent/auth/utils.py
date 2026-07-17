@@ -189,8 +189,8 @@ def get_auth_token() -> str | None:
         if isinstance(middleware_token, str) and middleware_token.strip():
             logger.debug("Using token from AIQ auth middleware context")
             return middleware_token.strip()
-    except Exception as e:
-        logger.debug("Failed to retrieve token from AIQ auth middleware context: %s", e)
+    except Exception:
+        logger.debug("Failed to retrieve token from AIQ auth middleware context")
 
     # Fall back to NAT Context cookies and headers.
     try:
