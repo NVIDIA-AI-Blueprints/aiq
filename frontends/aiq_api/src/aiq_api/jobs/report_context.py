@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from aiq_agent.auth import Principal
+from aiq_agent.common.citation_verification import citation_verification_outcome_dict
 
 from .access import authorize_job_access
 from .crypto import read_job_output_async
@@ -45,6 +46,7 @@ class ReportContext(BaseModel):
     report_markdown: str
     source_summary_markdown: str
     sources: list[ReportContextSource] = Field(default_factory=list)
+    citation_verification_status: dict[str, str] | None = None
 
 
 def _decode_job_output(output: Any) -> dict[str, Any]:
@@ -63,6 +65,11 @@ def _extract_report_from_output(output: Any) -> str | None:
     output = _decode_job_output(output)
     report = output.get("report")
     return report.strip() if isinstance(report, str) and report.strip() else None
+
+
+def _extract_citation_verification_status_from_output(output: Any) -> dict[str, str] | None:
+    output = _decode_job_output(output)
+    return citation_verification_outcome_dict(output.get("citation_verification_status"))
 
 
 def _event_data(event: dict[str, Any]) -> dict[str, Any]:
@@ -185,7 +192,12 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
     """Build report context from a previously authorized parent job."""
 
     output = await read_job_output_async(parent_job_id, getattr(job, "output", None))
+    citation_verification_status = _extract_citation_verification_status_from_output(output)
     report = _extract_report_from_output(output)
+    if report and citation_verification_status:
+        from aiq_agent.agents.deep_researcher.models import strip_citation_verification_warning
+
+        report = strip_citation_verification_warning(report, citation_verification_status)
     # Durable events are only needed when the report isn't already in job output,
     # or to reconstruct sources. Fetch the (potentially large) event log at most once.
     events: list[dict[str, Any]] | None = None
@@ -218,22 +230,33 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
         report_markdown=report,
         source_summary_markdown=_source_summary_markdown(sources),
         sources=sources,
+        citation_verification_status=citation_verification_status,
     )
 
 
-def report_context_from_markdown(report_markdown: str, parent_job_id: str = "in-session") -> ReportContext:
+def report_context_from_markdown(
+    report_markdown: str,
+    parent_job_id: str = "in-session",
+    citation_verification_status: dict[str, str] | None = None,
+) -> ReportContext:
     """Build report context directly from report markdown — no job store, auth, or scheduler.
 
     Used for report follow-up in the synchronous CLI, where the report was produced inline in the
     current session rather than as a durable async job. Sources are reconstructed from the report's
     own ``## Sources`` section via the same parser used for job-backed reports.
     """
+    citation_verification_status = citation_verification_outcome_dict(citation_verification_status)
+    if citation_verification_status:
+        from aiq_agent.agents.deep_researcher.models import strip_citation_verification_warning
+
+        report_markdown = strip_citation_verification_warning(report_markdown, citation_verification_status)
     sources = _dedupe_sources(_extract_sources_from_report_markdown(report_markdown))
     return ReportContext(
         parent_job_id=parent_job_id,
         report_markdown=report_markdown,
         source_summary_markdown=_source_summary_markdown(sources),
         sources=sources,
+        citation_verification_status=citation_verification_status,
     )
 
 
@@ -288,10 +311,18 @@ def to_initial_files(context: ReportContext, instruction: str | None = None) -> 
     return files
 
 
-def report_output_metadata(parent_job_id: str, action: str) -> dict[str, str]:
+def report_output_metadata(
+    parent_job_id: str,
+    action: str,
+    citation_verification_status: dict[str, str] | None = None,
+) -> dict[str, Any]:
     """Durable output metadata persisted with a report follow-up child job."""
-    return {
+    metadata: dict[str, Any] = {
         "parent_job_id": parent_job_id,
         "interaction_action": action,
         "result_kind": "report",
     }
+    citation_verification_status = citation_verification_outcome_dict(citation_verification_status)
+    if citation_verification_status is not None:
+        metadata["citation_verification_status"] = citation_verification_status
+    return metadata

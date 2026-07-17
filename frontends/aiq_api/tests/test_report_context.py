@@ -183,6 +183,35 @@ async def test_resolve_report_context_skips_event_scan_when_output_has_inline_so
 
 
 @pytest.mark.asyncio
+async def test_resolve_report_context_carries_citation_status_and_strips_warning(monkeypatch):
+    from aiq_agent.agents.deep_researcher.models import citation_verification_warning
+    from aiq_api.jobs import report_context
+
+    async def _events(_db_url: str, _job_id: str, _after_id: int, _limit: int):
+        return []
+
+    monkeypatch.setattr(report_context.EventStore, "get_events_async", _events)
+
+    status = {"status": "unverified", "reason": "no_sources"}
+    warning = citation_verification_warning("no_sources")
+    job = type(
+        "Job",
+        (),
+        {
+            "output": {
+                "report": f"{warning}\n\n# Report\n\nNo sources section here.\n",
+                "citation_verification_status": status,
+            }
+        },
+    )()
+
+    ctx = await report_context.resolve_report_context(job, "sqlite:///unused.db", "job-1")
+
+    assert ctx.report_markdown == "# Report\n\nNo sources section here."
+    assert ctx.citation_verification_status == status
+
+
+@pytest.mark.asyncio
 async def test_resolve_report_context_decrypts_encrypted_parent_output(monkeypatch):
     """Report follow-up reads the encrypted parent output instead of relying on event fallback."""
     import base64
@@ -261,6 +290,18 @@ def test_to_initial_files_uses_shared_paths_only():
     assert files["/shared/source_summary.md"] == "- https://example.com"
     assert files["/shared/edit_instruction.txt"] == "Remove the appendix."
     assert "/report.md" not in files
+
+
+def test_report_output_metadata_carries_citation_status():
+    from aiq_api.jobs.report_context import report_output_metadata
+
+    metadata = report_output_metadata(
+        "job-1",
+        "edit",
+        citation_verification_status={"status": "unverified", "reason": "no_sources"},
+    )
+
+    assert metadata["citation_verification_status"] == {"status": "unverified", "reason": "no_sources"}
 
 
 def test_report_context_from_markdown_builds_jobless_context():

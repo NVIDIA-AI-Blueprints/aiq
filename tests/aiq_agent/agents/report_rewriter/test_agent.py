@@ -119,6 +119,30 @@ async def test_report_rewriter_verifies_and_sanitizes_revised_report_against_par
     assert "[2]" not in revised_report
     assert "Unsupported claim." in revised_report
     assert result.messages[-1].content == revised_report
+    assert result.citation_verification_status == {
+        "status": "verified",
+        "reason": "valid_citations",
+    }
+
+
+@pytest.mark.asyncio
+async def test_rewrite_report_preserves_unverified_parent_status_without_reverification():
+    from aiq_agent.agents.report_rewriter.agent import rewrite_report_with_status
+
+    result = await rewrite_report_with_status(
+        llm=FakeWriterLLM(content="# Revised Report\n\nUpdated body without citations."),
+        original_report="# Parent Report\n\nUnverified body.",
+        edit_instruction="Make it clearer.",
+        parent_context=json.dumps(
+            {
+                "parent_job_id": "parent-job",
+                "citation_verification_status": {"status": "unverified", "reason": "no_sources"},
+            }
+        ),
+    )
+
+    assert result.report == "# Revised Report\n\nUpdated body without citations."
+    assert result.citation_verification_status == {"status": "unverified", "reason": "no_sources"}
 
 
 @pytest.mark.asyncio

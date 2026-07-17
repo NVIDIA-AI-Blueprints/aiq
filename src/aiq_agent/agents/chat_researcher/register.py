@@ -416,7 +416,10 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             principal = require_verified_principal()
             return await resolve_authorized_report_context(state.active_report_job_id, principal)
         if state.last_report_markdown:
-            return report_context_from_markdown(state.last_report_markdown)
+            return report_context_from_markdown(
+                state.last_report_markdown,
+                citation_verification_status=state.last_report_citation_verification_status,
+            )
         raise RuntimeError("Report follow-up requires an active report")
 
     async def _answer_report_question(state: ChatResearcherState) -> str:
@@ -450,23 +453,27 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             data_sources=[],
             auth_token=get_auth_token(),
             initial_files=to_initial_files(report_context, instruction=instruction),
-            output_metadata=report_output_metadata(report_context.parent_job_id, "edit"),
+            output_metadata=report_output_metadata(
+                report_context.parent_job_id,
+                "edit",
+                citation_verification_status=report_context.citation_verification_status,
+            ),
             allow_internal=True,
         )
 
-    async def _inline_report_edit(state: ChatResearcherState) -> str:
+    async def _inline_report_edit(state: ChatResearcherState):
         """Rewrite the in-session report inline (synchronous CLI, no scheduler/job).
 
         Mirrors the report_rewriter job's single bounded LLM call, sourced from the in-session
         report (or, if present, the explicit job-backed report) resolved by the same precedence
         as report ask.
         """
-        from aiq_agent.agents.report_rewriter.agent import rewrite_report
+        from aiq_agent.agents.report_rewriter.agent import rewrite_report_with_status
         from aiq_agent.common import get_latest_user_query
 
         report_context = await _resolve_report_context_for_state(state)
         instruction = get_latest_user_query(state.messages)
-        return await rewrite_report(
+        return await rewrite_report_with_status(
             llm=report_qa_llm,
             original_report=report_context.report_markdown,
             edit_instruction=instruction,
@@ -525,7 +532,11 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
                     report_context = await _resolve_report_context_for_state(state)
                     initial_files = to_initial_files(report_context)
-                    output_metadata = report_output_metadata(report_context.parent_job_id, "research")
+                    output_metadata = report_output_metadata(
+                        report_context.parent_job_id,
+                        "research",
+                        citation_verification_status=report_context.citation_verification_status,
+                    )
 
                 return await submit_agent_job(
                     agent_type="deep_researcher",

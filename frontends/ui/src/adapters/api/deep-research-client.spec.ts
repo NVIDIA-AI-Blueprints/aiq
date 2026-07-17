@@ -41,7 +41,7 @@ describe('deep research REST client', () => {
     expect(
       reportWithCitationVerificationWarning('Report body', {
         status: 'unverified',
-        reason: 'sources_not_captured',
+        reason: 'no_sources',
         warning,
       })
     ).toBe(`${warning}\n\nReport body`)
@@ -49,7 +49,7 @@ describe('deep research REST client', () => {
     expect(
       reportWithCitationVerificationWarning(`${warning}\n\nReport body`, {
         status: 'unverified',
-        reason: 'sources_not_captured',
+        reason: 'no_sources',
         warning,
       })
     ).toBe(`${warning}\n\nReport body`)

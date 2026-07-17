@@ -547,18 +547,24 @@ class TestVerifyCitations:
         report = "Some report with [1] citations.\n\n## Sources\n[1] Fake: https://fake.com"
         result = verify_citations(report, registry)
         assert result.verified_report == report
+        assert result.outcome.status == "unverified"
+        assert result.outcome.reason == "no_sources"
         assert len(result.removed_citations) == 0
 
     def test_no_references_section_returns_unchanged(self, registry):
         report = "A report without any references section."
         result = verify_citations(report, registry)
         assert result.verified_report == report
+        assert result.outcome.status == "unverified"
+        assert result.outcome.reason == "no_valid_citations"
 
     def test_missing_references_section_with_inline_citations_does_not_guess_from_registry_order(self, registry):
         report = "Finding one [1]. Finding two [2]."
         result = verify_citations(report, registry)
 
         assert result.verified_report == report
+        assert result.outcome.status == "unverified"
+        assert result.outcome.reason == "no_valid_citations"
         assert not result.valid_citations
         assert not result.removed_citations
 
@@ -570,6 +576,8 @@ class TestVerifyCitations:
         assert "## Sources" in result.verified_report
         assert "[1] Article 1: https://valid.com/article1" in result.verified_report
         assert "[2] Article 2: https://valid.com/article2" in result.verified_report
+        assert result.outcome.status == "verified"
+        assert result.outcome.reason == "valid_citations"
         assert len(result.valid_citations) == 2
         assert not result.removed_citations
 
@@ -1094,6 +1102,25 @@ class TestVerifyCitationsBackfill:
         assert len(result.valid_citations) == 2
         assert not result.removed_citations
         assert "https://amd.com/q1-2024" in result.verified_report
+
+
+def test_combine_citation_verification_outcomes_preserves_unverified_parent():
+    from aiq_agent.common.citation_verification import combine_citation_verification_outcomes
+
+    parent = {"status": "unverified", "reason": "no_sources"}
+
+    assert combine_citation_verification_outcomes(parent, None) == parent
+    assert (
+        combine_citation_verification_outcomes(
+            parent,
+            {"status": "disabled", "reason": "verification_disabled"},
+        )
+        == parent
+    )
+    assert combine_citation_verification_outcomes(
+        parent,
+        {"status": "verified", "reason": "valid_citations"},
+    ) == {"status": "verified", "reason": "valid_citations"}
 
 
 # ---------------------------------------------------------------------------

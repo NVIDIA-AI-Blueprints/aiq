@@ -956,14 +956,12 @@ class TestChatResearcherAgent:
             }
 
         async def deep(state):
-            warning = citation_verification_warning("sources_not_captured")
+            warning = citation_verification_warning("no_sources")
             result = MagicMock()
             result.messages = list(state.messages) + [AIMessage(content=f"{warning}\n\n# Deep Report\n\nFindings.")]
             result.citation_verification_status = {
                 "status": "unverified",
-                "reason": "sources_not_captured",
-                "available_tool_count": 1,
-                "unavailable_tools": ["example_search (missing API key)"],
+                "reason": "no_sources",
             }
             return result
 
@@ -978,7 +976,11 @@ class TestChatResearcherAgent:
         state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
         result = await agent.run(state, thread_id="test-thread-unverified-warning")
 
-        warning = citation_verification_warning("sources_not_captured")
+        warning = citation_verification_warning("no_sources")
         assert result["messages"][-1].content.startswith(warning)
         assert result["messages"][-1].content.count(warning) == 1
         assert result["last_report_markdown"] == "# Deep Report\n\nFindings."
+        assert result["last_report_citation_verification_status"] == {
+            "status": "unverified",
+            "reason": "no_sources",
+        }

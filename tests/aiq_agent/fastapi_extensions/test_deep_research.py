@@ -195,14 +195,14 @@ class TestJobReportResponse:
             report="# Report\n\nContent here",
             citation_verification_status={
                 "status": "unverified",
-                "reason": "sources_not_captured",
+                "reason": "no_sources",
                 "warning": warning,
             },
         )
 
         assert resp.citation_verification_status is not None
         assert resp.citation_verification_status.status == "unverified"
-        assert resp.citation_verification_status.reason == "sources_not_captured"
+        assert resp.citation_verification_status.reason == "no_sources"
         assert resp.citation_verification_status.warning == warning
 
 

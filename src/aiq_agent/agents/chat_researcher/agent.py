@@ -48,6 +48,7 @@ from aiq_agent.agents.deep_researcher.models import strip_citation_verification_
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import citation_verification_outcome_dict
 from aiq_agent.common.logging_utils import log_identifier_ref
 
 try:
@@ -123,7 +124,7 @@ class ChatResearcherAgent:
         deep_research_job_submitter: Callable[[Any], Awaitable[str]] | None = None,
         report_ask_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
         report_edit_job_submitter: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
-        report_edit_fn: Callable[[ChatResearcherState], Awaitable[str]] | None = None,
+        report_edit_fn: Callable[[ChatResearcherState], Awaitable[Any]] | None = None,
         report_seed_files_fn: Callable[[ChatResearcherState], Awaitable[dict[str, Any] | None]] | None = None,
         checkpointer: BaseCheckpointSaver | None = None,
         validate_deep_research_tools_fn: Callable[[list[str] | None], tuple[bool, str]] | None = None,
@@ -386,7 +387,9 @@ class ChatResearcherAgent:
                 report_message = result.messages[-1]
                 report_md = report_message.content
                 report_text = report_md if isinstance(report_md, str) else str(report_md)
-                citation_verification_status = getattr(result, "citation_verification_status", None)
+                citation_verification_status = citation_verification_outcome_dict(
+                    getattr(result, "citation_verification_status", None)
+                )
                 clean_report_text = strip_citation_verification_warning(report_text, citation_verification_status)
                 visible_report = prepend_citation_verification_warning(
                     clean_report_text,
@@ -402,6 +405,7 @@ class ChatResearcherAgent:
                 return {
                     "messages": [report_message],
                     "last_report_markdown": clean_report_text,
+                    "last_report_citation_verification_status": citation_verification_status,
                 }
 
         async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
@@ -456,14 +460,25 @@ class ChatResearcherAgent:
             # subsequent follow-ups operate on the edited copy.
             if self.report_edit_fn is not None:
                 try:
-                    revised = await self.report_edit_fn(state)
+                    revised_result = await self.report_edit_fn(state)
                 except Exception as e:
                     logger.warning("Inline report edit failed (error_type=%s)", type(e).__name__)
                     return {
                         "messages": [AIMessage(content="I couldn't edit the report. Please try again.")],
                         "workflow_outcome": _research_workflow_failure(),
                     }
-                return {"messages": [AIMessage(content=revised)], "last_report_markdown": revised}
+                revised = getattr(revised_result, "report", revised_result)
+                revised = revised if isinstance(revised, str) else str(revised)
+                citation_verification_status = citation_verification_outcome_dict(
+                    getattr(revised_result, "citation_verification_status", None)
+                )
+                return {
+                    "messages": [AIMessage(content=revised)],
+                    "last_report_markdown": revised,
+                    "last_report_citation_verification_status": (
+                        citation_verification_status or state.last_report_citation_verification_status
+                    ),
+                }
             return {
                 "messages": [AIMessage(content="Report edit is not available in this workflow.")],
                 "workflow_outcome": _research_workflow_failure(),
@@ -588,6 +603,7 @@ class ChatResearcherAgent:
                 # Pass through; the keep-if-set reducer preserves a prior in-session report when
                 # this turn supplies None, so report follow-up works across turns without a job.
                 "last_report_markdown": state.last_report_markdown,
+                "last_report_citation_verification_status": state.last_report_citation_verification_status,
             }
             messages = state.messages
 

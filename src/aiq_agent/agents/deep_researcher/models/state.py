@@ -23,19 +23,28 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 from pydantic import Field
 
+from aiq_agent.common.citation_verification import NO_SOURCES_REASON
+from aiq_agent.common.citation_verification import NO_TOOLS_AVAILABLE_REASON
+from aiq_agent.common.citation_verification import NO_VALID_CITATIONS_REASON
+from aiq_agent.common.citation_verification import UNVERIFIED_CITATION_STATUS
+from aiq_agent.common.citation_verification import citation_verification_outcome_dict
+from aiq_agent.common.citation_verification import coerce_citation_verification_outcome
 from aiq_agent.knowledge import AvailableDocument
 
-UNVERIFIED_CITATION_STATUS = "unverified"
-NO_TOOLS_AVAILABLE_REASON = "no_tools_available"
-SOURCES_NOT_CAPTURED_REASON = "sources_not_captured"
+# Backward-compatible name for older callers; the closed reason is now ``no_sources``.
+SOURCES_NOT_CAPTURED_REASON = NO_SOURCES_REASON
 
 _UNVERIFIED_CITATION_WARNINGS = {
     NO_TOOLS_AVAILABLE_REASON: (
         "Warning: This report could not be citation-verified because no research tools were available. "
         "Review the findings before relying on them."
     ),
-    SOURCES_NOT_CAPTURED_REASON: (
+    NO_SOURCES_REASON: (
         "Warning: This report could not be citation-verified because no sources were captured. "
+        "Review the findings before relying on them."
+    ),
+    NO_VALID_CITATIONS_REASON: (
+        "Warning: This report could not be citation-verified because no valid citations were found. "
         "Review the findings before relying on them."
     ),
 }
@@ -59,27 +68,27 @@ def citation_verification_warning(reason: str | None) -> str:
     )
 
 
-def public_citation_verification_status(status: Any) -> dict[str, str] | None:
+def public_citation_verification_status(status: Any) -> dict[str, str | None] | None:
     """Convert internal citation-verification diagnostics into a safe public disposition."""
-    if not isinstance(status, dict) or status.get("status") != UNVERIFIED_CITATION_STATUS:
+    outcome = coerce_citation_verification_outcome(status)
+    if outcome is None:
         return None
 
-    raw_reason = status.get("reason")
-    reason = raw_reason if isinstance(raw_reason, str) and raw_reason else "unknown"
-    return {
-        "status": UNVERIFIED_CITATION_STATUS,
-        "reason": reason,
-        "warning": citation_verification_warning(reason),
-    }
+    public_status: dict[str, str | None] = citation_verification_outcome_dict(outcome) or {}
+    if outcome.status == UNVERIFIED_CITATION_STATUS:
+        public_status["warning"] = citation_verification_warning(outcome.reason)
+    return public_status
 
 
 def prepend_citation_verification_warning(content: str, status: Any) -> str:
     """Prefix report content with the public unverified warning, once."""
     public_status = public_citation_verification_status(status)
-    if public_status is None:
+    if public_status is None or public_status.get("status") != UNVERIFIED_CITATION_STATUS:
         return content
 
-    warning = public_status["warning"]
+    warning = public_status.get("warning")
+    if not warning:
+        return content
     if content.startswith(warning):
         return content
     return f"{warning}\n\n{content}"
@@ -88,10 +97,12 @@ def prepend_citation_verification_warning(content: str, status: Any) -> str:
 def strip_citation_verification_warning(content: str, status: Any) -> str:
     """Remove a public unverified warning prefix from report content."""
     public_status = public_citation_verification_status(status)
-    if public_status is None:
+    if public_status is None or public_status.get("status") != UNVERIFIED_CITATION_STATUS:
         return content
 
-    warning = public_status["warning"]
+    warning = public_status.get("warning")
+    if not warning:
+        return content
     if not content.startswith(warning):
         return content
     return content.removeprefix(warning).lstrip("\n")
@@ -116,12 +127,11 @@ class DeepResearchAgentState(BaseModel):
         rubric: DeepAgents rubric used by RubricMiddleware when available.
         clarifier_result: Log from clarifier agent dialog.
         available_documents: User-uploaded documents with summaries for context.
-        citation_verification_status: Set when citation verification was skipped
-            because the source registry was empty. ``None`` means the report was
-            verified normally. When populated, contains keys: ``status``
-            (``"unverified"``), ``reason``, ``available_tool_count``,
-            ``unavailable_tools``. Downstream consumers can read this to flag
-            unverified results.
+        citation_verification_status: Closed citation-verification disposition
+            for the generated report. Contains ``status`` (``"verified"``,
+            ``"unverified"``, or ``"disabled"``) and a machine-readable
+            ``reason``. Downstream consumers can read this instead of inferring
+            verification from missing state.
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
@@ -134,4 +144,4 @@ class DeepResearchAgentState(BaseModel):
     rubric: str | None = None
     clarifier_result: str | None = None
     available_documents: list[AvailableDocument] | None = None
-    citation_verification_status: dict[str, Any] | None = None
+    citation_verification_status: dict[str, str] | None = None

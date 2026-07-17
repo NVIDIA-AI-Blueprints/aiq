@@ -1258,9 +1258,9 @@ class TestDeepResearcherAgent:
             assert result.messages, "Report should be preserved even when sources are missing"
             assert result.citation_verification_status is not None
             assert result.citation_verification_status["status"] == "unverified"
-            assert result.citation_verification_status["reason"] == "sources_not_captured"
-            assert "available_tool_count" in result.citation_verification_status
-            assert "unavailable_tools" in result.citation_verification_status
+            assert result.citation_verification_status["reason"] == "no_sources"
+            assert "available_tool_count" not in result.citation_verification_status
+            assert "unavailable_tools" not in result.citation_verification_status
             assert result.messages[-1].content.startswith(
                 "Warning: This report could not be citation-verified because no sources were captured."
             )
@@ -1296,10 +1296,34 @@ class TestDeepResearcherAgent:
             )
 
     @pytest.mark.asyncio
-    async def test_run_with_sources_leaves_verification_status_none(
+    async def test_run_sets_disabled_status_when_citation_verification_disabled(
         self, mock_llm_provider, real_tool, mock_create_deep_agent
     ):
-        """When sources are captured, citation_verification_status stays None (verified path)."""
+        """Disabled verification is explicit rather than represented by missing status."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_create_deep_agent,
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                enable_citation_verification=False,
+            )
+
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Test query")])
+            result = await agent.run(state)
+
+            assert result.citation_verification_status == {
+                "status": "disabled",
+                "reason": "verification_disabled",
+            }
+            assert not result.messages[-1].content.startswith("Warning:")
+
+    @pytest.mark.asyncio
+    async def test_run_with_sources_sets_verified_status(self, mock_llm_provider, real_tool, mock_create_deep_agent):
+        """When sources are captured, citation_verification_status records the verified path."""
         with patch(
             "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
             return_value=mock_create_deep_agent,
@@ -1317,7 +1341,10 @@ class TestDeepResearcherAgent:
             result = await agent.run(state)
 
             assert result is not None
-            assert result.citation_verification_status is None
+            assert result.citation_verification_status == {
+                "status": "verified",
+                "reason": "valid_citations",
+            }
 
     @pytest.mark.asyncio
     async def test_run_replaces_final_message_with_writer_markdown(self, mock_llm_provider, real_tool):
@@ -1652,6 +1679,7 @@ class TestDeepResearcherCitationVerification:
                     "aiq_agent.agents.deep_researcher.agent.verify_citations",
                     return_value=MagicMock(
                         verified_report=report,
+                        outcome={"status": "unverified", "reason": "no_valid_citations"},
                         removed_citations=[],
                         valid_citations=[],
                     ),
@@ -1665,7 +1693,14 @@ class TestDeepResearcherCitationVerification:
                 state = DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
                 result = await agent.run(state)
 
-        assert result.messages[-1].content == sanitized_report
+        assert result.citation_verification_status == {
+            "status": "unverified",
+            "reason": "no_valid_citations",
+        }
+        assert result.messages[-1].content.startswith(
+            "Warning: This report could not be citation-verified because no valid citations were found."
+        )
+        assert sanitized_report in result.messages[-1].content
         assert "Citation verification found no valid citations" in caplog.text
 
     @pytest.mark.asyncio
@@ -1698,6 +1733,7 @@ class TestDeepResearcherCitationVerification:
                     "aiq_agent.agents.deep_researcher.agent.verify_citations",
                     return_value=MagicMock(
                         verified_report=verified_answer,
+                        outcome={"status": "verified", "reason": "valid_citations"},
                         removed_citations=[],
                         valid_citations=[MagicMock()],
                     ),
@@ -1713,3 +1749,7 @@ class TestDeepResearcherCitationVerification:
         verify.assert_called_once()
         sanitize.assert_called_once_with(verified_answer)
         assert result.messages[-1].content == sanitized_answer
+        assert result.citation_verification_status == {
+            "status": "verified",
+            "reason": "valid_citations",
+        }

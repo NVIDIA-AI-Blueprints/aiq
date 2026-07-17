@@ -30,6 +30,12 @@ from langchain_core.tools import BaseTool
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
+from aiq_agent.common.citation_verification import DISABLED_CITATION_STATUS
+from aiq_agent.common.citation_verification import NO_SOURCES_REASON
+from aiq_agent.common.citation_verification import NO_TOOLS_AVAILABLE_REASON
+from aiq_agent.common.citation_verification import UNVERIFIED_CITATION_STATUS
+from aiq_agent.common.citation_verification import VERIFICATION_DISABLED_REASON
+from aiq_agent.common.citation_verification import citation_verification_outcome_dict
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
@@ -41,9 +47,6 @@ from .deepagents_runtime import DeepResearchSkillsConfig
 from .factory import build_deep_research_graph
 from .factory import build_deep_research_middleware_set
 from .factory import build_deep_research_tool_set
-from .models import NO_TOOLS_AVAILABLE_REASON
-from .models import SOURCES_NOT_CAPTURED_REASON
-from .models import UNVERIFIED_CITATION_STATUS
 from .models import DeepResearchAgentState
 from .models import prepend_citation_verification_warning
 from .tools.source_tool_batching import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
@@ -277,7 +280,7 @@ class DeepResearcherAgent:
             messages[-1] = type(last_msg)(content=content)
 
     @staticmethod
-    def _set_citation_verification_status(result: dict | Any, status: dict[str, Any]) -> None:
+    def _set_citation_verification_status(result: dict | Any, status: dict[str, str]) -> None:
         """Attach citation-verification status to dict or model-like graph results."""
         if isinstance(result, dict):
             result["citation_verification_status"] = status
@@ -330,6 +333,9 @@ class DeepResearcherAgent:
                         "\n  ".join(removed_details),
                     )
                 final_message = verification.verified_report
+                status = citation_verification_outcome_dict(verification.outcome)
+                if status is not None:
+                    self._set_citation_verification_status(result, status)
                 if not verification.valid_citations:
                     logger.warning(
                         "Citation verification found no valid citations in writer-agent output; "
@@ -358,17 +364,23 @@ class DeepResearcherAgent:
                         "without using search results. Returning the report unverified.",
                         available_count,
                     )
-                reason = NO_TOOLS_AVAILABLE_REASON if available_count == 0 else SOURCES_NOT_CAPTURED_REASON
+                reason = NO_TOOLS_AVAILABLE_REASON if available_count == 0 else NO_SOURCES_REASON
                 if result is not None:
                     self._set_citation_verification_status(
                         result,
                         {
                             "status": UNVERIFIED_CITATION_STATUS,
                             "reason": reason,
-                            "available_tool_count": available_count,
-                            "unavailable_tools": unavailable,
                         },
                     )
+            else:
+                self._set_citation_verification_status(
+                    result,
+                    {
+                        "status": DISABLED_CITATION_STATUS,
+                        "reason": VERIFICATION_DISABLED_REASON,
+                    },
+                )
 
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)

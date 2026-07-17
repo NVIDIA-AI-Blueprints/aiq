@@ -611,7 +611,7 @@ class TestRunAgentJobEncryption:
         result = SimpleNamespace(
             citation_verification_status={
                 "status": "unverified",
-                "reason": "sources_not_captured",
+                "reason": "no_sources",
                 "available_tool_count": 1,
                 "unavailable_tools": ["internal_search (missing INTERNAL_TOKEN)"],
             }
@@ -621,11 +621,7 @@ class TestRunAgentJobEncryption:
 
         assert status == {
             "status": "unverified",
-            "reason": "sources_not_captured",
-            "warning": (
-                "Warning: This report could not be citation-verified because no sources were captured. "
-                "Review the findings before relying on them."
-            ),
+            "reason": "no_sources",
         }
 
     @pytest.mark.asyncio

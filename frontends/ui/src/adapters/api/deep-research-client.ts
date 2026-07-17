@@ -40,9 +40,14 @@ export type DeepResearchEventType =
 export type ArtifactType = 'todo' | 'citation_source' | 'citation_use' | 'file' | 'output'
 
 export interface CitationVerificationStatus {
-  status: string
-  reason: string
-  warning: string
+  status: 'verified' | 'unverified' | 'disabled'
+  reason:
+    | 'valid_citations'
+    | 'no_sources'
+    | 'no_valid_citations'
+    | 'verification_disabled'
+    | 'no_tools_available'
+  warning?: string | null
 }
 
 export interface JobReportResponse {

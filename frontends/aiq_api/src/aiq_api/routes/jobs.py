@@ -49,6 +49,8 @@ from pydantic import Field
 from pydantic import field_validator
 
 from aiq_agent.agents.deep_researcher.models import public_citation_verification_status
+from aiq_agent.common.citation_verification import CitationVerificationReason
+from aiq_agent.common.citation_verification import CitationVerificationStatus
 from aiq_agent.common.data_source_registry import get_all_sources
 from aiq_agent.common.data_source_registry import get_all_tool_refs
 from aiq_agent.common.data_source_registry import get_source_id_for_tool
@@ -401,9 +403,9 @@ class JobStateResponse(BaseModel):
 class CitationVerificationStatusResponse(BaseModel):
     """Public citation-verification disposition for a generated report."""
 
-    status: str = Field(..., description="Citation verification status, for example 'unverified'")
-    reason: str = Field(..., description="Machine-readable reason for the status")
-    warning: str = Field(..., description="User-facing warning for this report")
+    status: CitationVerificationStatus = Field(..., description="Citation verification status")
+    reason: CitationVerificationReason = Field(..., description="Machine-readable reason for the status")
+    warning: str | None = Field(None, description="User-facing warning when the report is unverified")
 
 
 class JobReportResponse(BaseModel):
@@ -414,7 +416,7 @@ class JobReportResponse(BaseModel):
     report: str | None = Field(None, description="Final research report from the agent")
     citation_verification_status: CitationVerificationStatusResponse | None = Field(
         None,
-        description="Citation verification disposition when the report could not be verified",
+        description="Citation verification disposition for the report",
     )
     parent_job_id: str | None = Field(None, description="Parent report job ID for report follow-up outputs")
     interaction_action: str | None = Field(None, description="Report interaction action that produced this output")
@@ -889,7 +891,11 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 data_sources=[],
                 auth_token=auth_token,
                 initial_files=to_initial_files(context, instruction=req.input),
-                output_metadata=report_output_metadata(job_id, "edit"),
+                output_metadata=report_output_metadata(
+                    job_id,
+                    "edit",
+                    citation_verification_status=context.citation_verification_status,
+                ),
                 allow_internal=True,
             )
         except ContentEncryptionUnavailable as e:

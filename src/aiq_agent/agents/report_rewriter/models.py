@@ -29,3 +29,4 @@ class ReportRewriterAgentState(BaseModel):
 
     messages: Annotated[list[AnyMessage], add_messages]
     files: Annotated[dict[str, Any], _merge_dict_state] = Field(default_factory=dict)
+    citation_verification_status: dict[str, str] | None = None

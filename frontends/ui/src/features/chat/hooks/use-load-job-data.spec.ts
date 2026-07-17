@@ -196,7 +196,7 @@ describe('useLoadJobData', () => {
       report: 'Loaded report',
       citation_verification_status: {
         status: 'unverified',
-        reason: 'sources_not_captured',
+        reason: 'no_sources',
         warning,
       },
     })

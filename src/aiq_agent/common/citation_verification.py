@@ -41,6 +41,8 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from html import unescape
+from typing import Any
+from typing import Literal
 from urllib.parse import parse_qs
 from urllib.parse import unquote
 from urllib.parse import urlparse
@@ -51,6 +53,38 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Data classes
 # ---------------------------------------------------------------------------
+
+VERIFIED_CITATION_STATUS = "verified"
+UNVERIFIED_CITATION_STATUS = "unverified"
+DISABLED_CITATION_STATUS = "disabled"
+
+VALID_CITATIONS_REASON = "valid_citations"
+NO_SOURCES_REASON = "no_sources"
+NO_VALID_CITATIONS_REASON = "no_valid_citations"
+VERIFICATION_DISABLED_REASON = "verification_disabled"
+NO_TOOLS_AVAILABLE_REASON = "no_tools_available"
+
+CitationVerificationStatus = Literal["verified", "unverified", "disabled"]
+CitationVerificationReason = Literal[
+    "valid_citations",
+    "no_sources",
+    "no_valid_citations",
+    "verification_disabled",
+    "no_tools_available",
+]
+
+_VALID_CITATION_VERIFICATION_STATUSES = {
+    VERIFIED_CITATION_STATUS,
+    UNVERIFIED_CITATION_STATUS,
+    DISABLED_CITATION_STATUS,
+}
+_VALID_CITATION_VERIFICATION_REASONS = {
+    VALID_CITATIONS_REASON,
+    NO_SOURCES_REASON,
+    NO_VALID_CITATIONS_REASON,
+    VERIFICATION_DISABLED_REASON,
+    NO_TOOLS_AVAILABLE_REASON,
+}
 
 
 @dataclass
@@ -96,11 +130,72 @@ def source_entries_from_parent_context(parent_context: str) -> list[SourceEntry]
     return entries
 
 
+@dataclass(frozen=True)
+class CitationVerificationOutcome:
+    """Closed citation-verification disposition for a generated report."""
+
+    status: CitationVerificationStatus
+    reason: CitationVerificationReason
+
+    def to_dict(self) -> dict[str, str]:
+        """Serialize the closed outcome for state and API metadata."""
+        return {"status": self.status, "reason": self.reason}
+
+
+def verified_citation_outcome() -> CitationVerificationOutcome:
+    """Return the canonical verified disposition."""
+    return CitationVerificationOutcome(status=VERIFIED_CITATION_STATUS, reason=VALID_CITATIONS_REASON)
+
+
+def disabled_citation_outcome() -> CitationVerificationOutcome:
+    """Return the canonical disabled disposition."""
+    return CitationVerificationOutcome(status=DISABLED_CITATION_STATUS, reason=VERIFICATION_DISABLED_REASON)
+
+
+def coerce_citation_verification_outcome(value: Any) -> CitationVerificationOutcome | None:
+    """Parse a trusted serialized citation-verification outcome."""
+    if isinstance(value, CitationVerificationOutcome):
+        return value
+    if isinstance(value, CitationVerificationResult):
+        return value.outcome
+    if not isinstance(value, dict):
+        return None
+
+    status = value.get("status")
+    reason = value.get("reason")
+    if status not in _VALID_CITATION_VERIFICATION_STATUSES or reason not in _VALID_CITATION_VERIFICATION_REASONS:
+        return None
+    return CitationVerificationOutcome(status=status, reason=reason)
+
+
+def citation_verification_outcome_dict(value: Any) -> dict[str, str] | None:
+    """Serialize a citation-verification outcome if it matches the closed domain."""
+    outcome = coerce_citation_verification_outcome(value)
+    return outcome.to_dict() if outcome is not None else None
+
+
+def combine_citation_verification_outcomes(parent: Any, child: Any) -> dict[str, str] | None:
+    """Combine parent/child outcomes while preserving unverified trust state.
+
+    A derived report may only clear an unverified parent disposition when the
+    complete child report is explicitly verified.
+    """
+    parent_outcome = coerce_citation_verification_outcome(parent)
+    child_outcome = coerce_citation_verification_outcome(child)
+    if parent_outcome is not None and parent_outcome.status == UNVERIFIED_CITATION_STATUS:
+        if child_outcome is None or child_outcome.status != VERIFIED_CITATION_STATUS:
+            return parent_outcome.to_dict()
+    if child_outcome is not None:
+        return child_outcome.to_dict()
+    return parent_outcome.to_dict() if parent_outcome is not None else None
+
+
 @dataclass
 class CitationVerificationResult:
     """Result of running verify_citations()."""
 
     verified_report: str
+    outcome: CitationVerificationOutcome = field(default_factory=verified_citation_outcome)
     removed_citations: list[dict] = field(default_factory=list)
     valid_citations: list[dict] = field(default_factory=list)
 
@@ -985,7 +1080,10 @@ def verify_citations(
     all_sources = registry.all_sources()
     if not all_sources:
         logger.debug("[CitationVerify] Skipping — registry is empty (no tool calls captured)")
-        return CitationVerificationResult(verified_report=report_text)
+        return CitationVerificationResult(
+            verified_report=report_text,
+            outcome=CitationVerificationOutcome(status=UNVERIFIED_CITATION_STATUS, reason=NO_SOURCES_REASON),
+        )
 
     logger.info(
         "[CitationVerify] Starting verification against %d registered source(s)",
@@ -1001,14 +1099,26 @@ def verify_citations(
     if not ref_match:
         if not _INLINE_CITATION_RE.search(report_text):
             logger.warning("[CitationVerify] No source section found in report; skipping")
-            return CitationVerificationResult(verified_report=report_text)
+            return CitationVerificationResult(
+                verified_report=report_text,
+                outcome=CitationVerificationOutcome(
+                    status=UNVERIFIED_CITATION_STATUS,
+                    reason=NO_VALID_CITATIONS_REASON,
+                ),
+            )
 
         if reference_sources is None:
             logger.warning(
                 "[CitationVerify] No source section found; cannot safely synthesize sources "
                 "without the writer-facing source list"
             )
-            return CitationVerificationResult(verified_report=report_text)
+            return CitationVerificationResult(
+                verified_report=report_text,
+                outcome=CitationVerificationOutcome(
+                    status=UNVERIFIED_CITATION_STATUS,
+                    reason=NO_VALID_CITATIONS_REASON,
+                ),
+            )
 
         writer_sources = list(reference_sources)
         cited_numbers = sorted(_inline_citation_numbers(report_text))
@@ -1020,7 +1130,13 @@ def verify_citations(
         ]
         if not reference_lines:
             logger.warning("[CitationVerify] No source section found and no renderable writer-facing sources")
-            return CitationVerificationResult(verified_report=_strip_inline_citations_not_in(report_text, set()))
+            return CitationVerificationResult(
+                verified_report=_strip_inline_citations_not_in(report_text, set()),
+                outcome=CitationVerificationOutcome(
+                    status=UNVERIFIED_CITATION_STATUS,
+                    reason=NO_VALID_CITATIONS_REASON,
+                ),
+            )
 
         logger.warning(
             "[CitationVerify] No source section found; appending %d inline-cited registered source(s)",
@@ -1029,7 +1145,13 @@ def verify_citations(
         report_text = report_text.rstrip() + "\n\n## Sources\n" + "\n".join(reference_lines)
         ref_match = _REFERENCE_SECTION_RE.search(report_text)
         if ref_match is None:
-            return CitationVerificationResult(verified_report=report_text)
+            return CitationVerificationResult(
+                verified_report=report_text,
+                outcome=CitationVerificationOutcome(
+                    status=UNVERIFIED_CITATION_STATUS,
+                    reason=NO_VALID_CITATIONS_REASON,
+                ),
+            )
 
     ref_start = ref_match.start()
     body = report_text[:ref_start]
@@ -1179,8 +1301,14 @@ def verify_citations(
         len(removed_citations),
     )
 
+    outcome = CitationVerificationOutcome(
+        status=VERIFIED_CITATION_STATUS if valid_citations else UNVERIFIED_CITATION_STATUS,
+        reason=VALID_CITATIONS_REASON if valid_citations else NO_VALID_CITATIONS_REASON,
+    )
+
     return CitationVerificationResult(
         verified_report=verified_report,
+        outcome=outcome,
         removed_citations=removed_citations,
         valid_citations=valid_citations,
     )

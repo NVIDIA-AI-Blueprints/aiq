@@ -816,15 +816,23 @@ async def run_agent_job(
 
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
-                    report = _extract_result(result)
+                    raw_report = _extract_result(result)
                     from .crypto import update_job_output
 
                     if job_output_cipher is None:
                         raise RuntimeError("job output cipher was not initialized")
                     # Apply caller metadata first, then set the canonical report last so a
                     # stray "report" key in output_metadata can never overwrite the real report.
-                    output = {**(output_metadata or {}), "report": report}
-                    citation_verification_status = _extract_citation_verification_status(result)
+                    output = {**(output_metadata or {})}
+                    from aiq_agent.agents.deep_researcher.models import strip_citation_verification_warning
+                    from aiq_agent.common.citation_verification import combine_citation_verification_outcomes
+
+                    citation_verification_status = combine_citation_verification_outcomes(
+                        output.get("citation_verification_status"),
+                        _extract_citation_verification_status(result),
+                    )
+                    report = strip_citation_verification_warning(raw_report, citation_verification_status)
+                    output["report"] = report
                     if citation_verification_status is not None:
                         output["citation_verification_status"] = citation_verification_status
                     try:
@@ -1252,14 +1260,14 @@ def _extract_result(result: Any) -> str:
 
 
 def _extract_citation_verification_status(result: Any) -> dict[str, str] | None:
-    """Extract the public citation-verification disposition from an agent result."""
-    from aiq_agent.agents.deep_researcher.models import public_citation_verification_status
+    """Extract the canonical citation-verification disposition from an agent result."""
+    from aiq_agent.common.citation_verification import citation_verification_outcome_dict
 
     if isinstance(result, dict):
         status = result.get("citation_verification_status")
     else:
         status = getattr(result, "citation_verification_status", None)
-    return public_citation_verification_status(status)
+    return citation_verification_outcome_dict(status)
 
 
 # Backwards compatibility alias

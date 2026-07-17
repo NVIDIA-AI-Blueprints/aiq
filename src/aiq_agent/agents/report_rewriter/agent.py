@@ -5,8 +5,10 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +22,8 @@ from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
+from aiq_agent.common.citation_verification import citation_verification_outcome_dict
+from aiq_agent.common.citation_verification import combine_citation_verification_outcomes
 from aiq_agent.common.citation_verification import extract_source_entries_from_report
 from aiq_agent.common.citation_verification import report_has_citations
 from aiq_agent.common.citation_verification import sanitize_report
@@ -52,6 +56,14 @@ OUTPUT_REPORT_PATH = "/shared/output.md"
 _DEFAULT_SOURCE_SUMMARY = "No durable source metadata was found for the parent report."
 
 
+@dataclass(frozen=True)
+class ReportRewriteResult:
+    """Canonical report rewrite output plus citation-verification disposition."""
+
+    report: str
+    citation_verification_status: dict[str, str] | None
+
+
 def _effective_parent_sources(original_report: str, parent_context: str) -> list[SourceEntry]:
     """Build the rewrite allowlist from the canonical report and durable context."""
     report_sources = extract_source_entries_from_report(original_report)
@@ -65,12 +77,28 @@ def _effective_parent_sources(original_report: str, parent_context: str) -> list
     return registry.all_sources()
 
 
-def _post_process_revised_report(revised_report: str, parent_sources: Sequence[SourceEntry]) -> str:
+def _parent_citation_verification_status(parent_context: str) -> dict[str, str] | None:
+    try:
+        payload = json.loads(parent_context)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return citation_verification_outcome_dict(payload.get("citation_verification_status"))
+
+
+def _post_process_revised_report(
+    revised_report: str,
+    parent_sources: Sequence[SourceEntry],
+    parent_citation_verification_status: dict[str, str] | None,
+) -> ReportRewriteResult:
+    child_citation_verification_status = None
     if parent_sources:
         registry = SourceRegistry()
         for source in parent_sources:
             registry.add(source)
         verification = verify_citations(revised_report, registry, reference_sources=parent_sources)
+        child_citation_verification_status = citation_verification_outcome_dict(verification.outcome)
         if verification.removed_citations:
             logger.info(
                 "Report rewrite citation verification removed %d invalid citation(s)",
@@ -80,7 +108,14 @@ def _post_process_revised_report(revised_report: str, parent_sources: Sequence[S
     elif report_has_citations(revised_report):
         raise ValueError("Cannot publish a rewritten report with citations without a verified parent source registry")
 
-    return sanitize_report(revised_report).sanitized_report
+    citation_verification_status = combine_citation_verification_outcomes(
+        parent_citation_verification_status,
+        child_citation_verification_status,
+    )
+    return ReportRewriteResult(
+        report=sanitize_report(revised_report).sanitized_report,
+        citation_verification_status=citation_verification_status,
+    )
 
 
 async def rewrite_report(
@@ -97,6 +132,27 @@ async def rewrite_report(
     Shared by the async ``report_rewriter`` job and the synchronous in-session CLI edit path so
     both produce identical revisions. Needs no filesystem, job store, or scheduler.
     """
+    result = await rewrite_report_with_status(
+        llm=llm,
+        original_report=original_report,
+        edit_instruction=edit_instruction,
+        source_summary=source_summary,
+        parent_context=parent_context,
+        system_prompt=system_prompt,
+    )
+    return result.report
+
+
+async def rewrite_report_with_status(
+    *,
+    llm: Any,
+    original_report: str,
+    edit_instruction: str,
+    source_summary: str = _DEFAULT_SOURCE_SUMMARY,
+    parent_context: str = "{}",
+    system_prompt: str | None = None,
+) -> ReportRewriteResult:
+    """Rewrite a report and return the canonical citation disposition."""
     instruction = (edit_instruction or "").strip()
     if not instruction:
         raise ValueError("Report rewrite requires a non-empty edit instruction")
@@ -123,6 +179,7 @@ async def rewrite_report(
     return _post_process_revised_report(
         revised_report,
         parent_sources=_effective_parent_sources(original_report, parent_context),
+        parent_citation_verification_status=_parent_citation_verification_status(parent_context),
     )
 
 
@@ -175,7 +232,7 @@ class ReportRewriterAgent:
         source_summary = self._read_text_file(state.files, SOURCE_SUMMARY_PATH) or _DEFAULT_SOURCE_SUMMARY
         parent_context = self._read_text_file(state.files, PARENT_CONTEXT_PATH) or "{}"
 
-        revised_report = await rewrite_report(
+        rewrite_result = await rewrite_report_with_status(
             llm=self.llm_provider.get(LLMRole.REPORT_WRITER),
             original_report=original_report,
             edit_instruction=instruction,
@@ -183,6 +240,7 @@ class ReportRewriterAgent:
             parent_context=parent_context,
             system_prompt=self.system_prompt,
         )
+        revised_report = rewrite_result.report
 
         for callback in self.callbacks:
             if hasattr(callback, "emit_final_report"):
@@ -194,4 +252,5 @@ class ReportRewriterAgent:
         return ReportRewriterAgentState(
             messages=[*state.messages, AIMessage(content=revised_report)],
             files=files,
+            citation_verification_status=rewrite_result.citation_verification_status,
         )

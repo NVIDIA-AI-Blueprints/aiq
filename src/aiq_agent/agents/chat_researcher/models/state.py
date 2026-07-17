@@ -40,6 +40,11 @@ def _keep_if_set(old: str | None, new: str | None) -> str | None:
     return new if new else old
 
 
+def _keep_dict_if_set(old: dict[str, str] | None, new: dict[str, str] | None) -> dict[str, str] | None:
+    """Reducer that keeps the prior dict unless a new non-empty dict is provided."""
+    return new if new else old
+
+
 class ChatResearcherState(BaseModel):
     """
     State for the main chat researcher workflow graph.
@@ -78,4 +83,5 @@ class ChatResearcherState(BaseModel):
     # The most recent report produced inline in this session (synchronous CLI mode), carried
     # across turns by the keep-if-set reducer so report follow-up works without an async job.
     last_report_markdown: Annotated[str | None, _keep_if_set] = None
+    last_report_citation_verification_status: Annotated[dict[str, str] | None, _keep_dict_if_set] = None
     workflow_outcome: WorkflowOutcome | None = None
