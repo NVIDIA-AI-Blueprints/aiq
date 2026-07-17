@@ -81,11 +81,15 @@ ERROR_INCREMENT = 1
 FIRST_RETRY_ATTEMPT = 1
 CAPTURE_GROUP_JOB_ID = 1
 
-_DONE_JOB_STATES = frozenset({"completed", "success", "failed", "cancelled", "failure"})
+_DONE_JOB_STATES = frozenset({"completed", "success", "failed", "cancelled", "failure", "interrupted"})
 _SUCCESS_JOB_STATES = frozenset({"completed", "success"})
-_FAILED_JOB_STATES = frozenset({"failed", "failure", "cancelled"})
+_FAILED_JOB_STATES = frozenset({"failed", "failure", "cancelled", "interrupted"})
 _STREAM_TERMINAL_EVENTS = frozenset({"complete", "error", "done"})
 _CHAT_JOB_ID_RE = re.compile(rf"Job ID:\s*([0-9a-f-]{{{JOB_ID_HEX_DASH_LENGTH}}})", re.IGNORECASE)
+
+_ESCALATION_TYPE = "job_escalation"
+_ESCALATION_KIND_DEEP_RESEARCH = "deep_research"
+_STATUS_DEEP_RESEARCH_RUNNING = "deep_research_running"
 
 
 class McpAuthRequiredError(RuntimeError):
@@ -450,14 +454,57 @@ def _command_health(_args: list[str]) -> None:
     print(json.dumps(health(), indent=JSON_INDENT_SPACES))
 
 
+def _escalation_job_id(payload: Any) -> str | None:
+    """Return a validated deep-research job_id from a job_escalation object, else None."""
+    if not isinstance(payload, dict):
+        return None
+    if payload.get("type") != _ESCALATION_TYPE or payload.get("kind") != _ESCALATION_KIND_DEEP_RESEARCH:
+        return None
+    job_id = payload.get("job_id")
+    if not isinstance(job_id, str):
+        return None
+    try:
+        return _validate_job_id(job_id)
+    except RuntimeError:
+        return None
+
+
+def _detect_deep_research_escalation(result: dict[str, Any], content: str) -> str | None:
+    """Detect a 26.07 JSON job_escalation contract for deep research.
+
+    Recognizes the escalation object either as the top-level /chat result or as a
+    JSON string embedded in the OpenAI-style message content. Returns a validated
+    job_id, or None for malformed, non-escalation, or invalid payloads.
+    """
+    job_id = _escalation_job_id(result)
+    if job_id is not None:
+        return job_id
+    if content:
+        try:
+            embedded = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            return None
+        return _escalation_job_id(embedded)
+    return None
+
+
 def _command_chat(args: list[str]) -> None:
     query = _require_arg(args, "Usage: aiq.py chat <query>")
     result = chat_request(query)
     content = _extract_chat_content(result)
+    job_id = _detect_deep_research_escalation(result, content)
+    if job_id is not None:
+        print(json.dumps({"status": _STATUS_DEEP_RESEARCH_RUNNING, "job_id": job_id}))
+        return
     match = _CHAT_JOB_ID_RE.search(content)
     if match:
-        print(json.dumps({"status": "deep_research_running", "job_id": match.group(CAPTURE_GROUP_JOB_ID)}))
-        return
+        try:
+            legacy_job_id = _validate_job_id(match.group(CAPTURE_GROUP_JOB_ID))
+        except RuntimeError:
+            legacy_job_id = None
+        if legacy_job_id is not None:
+            print(json.dumps({"status": _STATUS_DEEP_RESEARCH_RUNNING, "job_id": legacy_job_id}))
+            return
     print(json.dumps(result, indent=JSON_INDENT_SPACES))
 
 

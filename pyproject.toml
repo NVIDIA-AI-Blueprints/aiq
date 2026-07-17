@@ -48,12 +48,15 @@ dependencies = [
     "python-multipart>=0.0.27,<0.1",
     "knowledge-layer[all]",
     # CVE version floors for transitive dependencies
-    "cryptography>=46.0.6,<47",
     "pillow>=12.2.0,<13",
     "pygments>=2.20.0,<3",
 ]
 
 [project.optional-dependencies]
+pii = [
+    "nvidia-nat-security[defense]==1.8.0",
+    "en-core-web-lg @ https://github.com/explosion/spacy-models/releases/download/en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl",
+]
 s3 = [
     "boto3>=1.35.0,<2",
 ]
@@ -160,7 +163,7 @@ extend-ignore = [
 combine-as-imports = true
 default-section = "third-party"
 force-single-line = true
-known-first-party = ["aiq", "aiq_api", "nat", "nat_*", "_utils"]
+known-first-party = ["aiq", "aiq_api", "aiq_mcp", "nat", "nat_*", "_utils"]
 known-third-party = [
   "agno",
   "autogen",
@@ -187,7 +190,8 @@ indent_dictionary_value = true
 # Auto-discovers packages in sources/ and frontends/ directories
 #
 # Usage:
-#   uv sync                              # Install root + all workspace members
+#   uv sync --group dev                 # Install AI-Q development dependencies
+#   uv sync --project mcp --extra dev   # Install the isolated MCP test environment
 #   uv sync --package aiq-agent  # Install only the root package
 #   uv pip install -e ./frontends/cli    # Install a specific package
 #   uv pip install -e "./frontends/aiq_api[postgres]"  # With extras
@@ -207,6 +211,8 @@ dev = [
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
+    "nimble-web-search",
+    "you-com",
     "duckduckgo-news-search",
     "polymarket-prediction-market",
     "knowledge-layer[all]",
@@ -214,7 +220,6 @@ dev = [
     "aiq-research-cli",
     "aiq-debug",
 ]
-
 [tool.uv]
 prerelease = "allow"
 override-dependencies = [
@@ -228,7 +233,8 @@ override-dependencies = [
     "mako>=1.3.12,<2",
     "banks>=2.4.2,<3",
     "lxml>=6.1.0,<7",
-    "nltk>=3.9.4,<4",
+    "defusedxml>=0.7.1,<0.8",
+    "nltk>=3.10.0,<4",
     "pyasn1>=0.6.3,<0.7",
 ]
 
@@ -244,12 +250,15 @@ members = [
     "frontends/benchmarks/freshqa",
     "frontends/benchmarks/deepsearch_qa",
 ]
+exclude = ["mcp"]
 
 [tool.uv.sources]
 aiq-agent = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }
+nimble-web-search = { workspace = true }
+you-com = { workspace = true }
 duckduckgo-news-search = { workspace = true }
 polymarket-prediction-market = { workspace = true }
 knowledge-layer = { workspace = true }

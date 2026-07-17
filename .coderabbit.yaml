@@ -96,7 +96,7 @@ reviews:
         Review Agent Skill and skill-eval changes for valid skill metadata, deterministic eval specs, safe handling of
         credentials, and clear generated-output boundaries. Do not flag SKILL.md files for missing SPDX headers when the
         entrypoint intentionally starts with YAML frontmatter.
-    - path: "{.github/**,ci/**,.pre-commit-config.yaml,pyproject.toml,uv.lock}"
+    - path: "{.github/**,ci/**,.pre-commit-config.yaml,pyproject.toml,uv.lock,mcp/pyproject.toml,mcp/uv.lock}"
       instructions: |
         Review automation and packaging changes for least-privilege permissions, pinned versions where appropriate,
         copy-pr-bot pull-request/<N> branch behavior, reproducible uv/npm setup, secret handling, and consistency with

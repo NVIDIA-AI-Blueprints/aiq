@@ -51,6 +51,7 @@ Overview <./customization/index.md>
 Configuration Reference <./customization/configuration-reference.md>
 Swapping Models <./customization/swapping-models.md>
 Tools and Sources <./customization/tools-and-sources.md>
+You.com API Suite <./customization/you-com.md>
 MCP Tools <./customization/mcp-tools.md>
 Guardrails <./customization/guardrails.md>
 Knowledge Layer <./customization/knowledge-layer.md>
@@ -74,6 +75,7 @@ Adding a Data Source <./extending/adding-a-data-source.md>
 Overview <./integration/index.md>
 Agent Skills <./integration/agent-skills.md>
 REST API <./integration/rest-api.md>
+MCP Server <./integration/mcp-server.md>
 ```
 
 ```{toctree}

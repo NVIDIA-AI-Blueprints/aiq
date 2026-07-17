@@ -24,6 +24,7 @@ from typing import Any
 from langchain_core.messages import AIMessage
 
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
+from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
 from aiq_agent.guardrails.shallow_agent.config import ShallowAgentGuardrailsConfig
 from nat.builder.builder import Builder
@@ -133,6 +134,14 @@ class _ShallowAgentGuardrails(GuardrailsMixin):
     ) -> ShallowResearchAgentState | str:
         """Replace blocked shallow-agent output content with the refusal."""
         return super()._on_post_invoke_blocked(context, block_message, original_output)
+
+    def _build_emergency_output_refusal(
+        self,
+        context: InvocationContext,
+        original_output: object,
+    ) -> ShallowResearchAgentState:
+        """Return a minimal refusal state without traversing protected output."""
+        return ShallowResearchAgentState(messages=[AIMessage(content=_GUARDRAILS_FAILURE_REFUSAL)])
 
     def _iter_targets_at_path(self, value: Any, path: str) -> Iterator[tuple[str, Callable[[str], None]]]:
         """Yield the latest shallow-agent message for the inherited field-selection hook."""

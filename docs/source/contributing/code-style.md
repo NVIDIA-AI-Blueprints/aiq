@@ -21,6 +21,7 @@ Otherwise run `pre-commit run --all-files`, `pytest`, and formatters directly (r
 ## Code Quality
 
 - **Formatting:** `ruff` (imports/linting) + `yapf` (PEP 8 base, `column_limit=120`). The `./scripts/dev.sh format` command runs both.
-- **Pre-commit:** `pre-commit run --all-files` (runs `ruff check --fix`, `ruff format`, `uv-lock`, `detect-secrets`, notebook output clearing, and `markdown-link-check`)
+- **Pre-commit:** `pre-commit run --all-files` (runs `ruff check --fix`, `ruff format`, root and MCP lock checks,
+  `detect-secrets`, notebook output clearing, and `markdown-link-check`)
 - **Line length:** 120 characters
 - **Style:** PEP 8, type hints for public APIs, Google-style docstrings. Ruff and yapf are configured in `pyproject.toml`.

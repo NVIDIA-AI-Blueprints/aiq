@@ -25,10 +25,22 @@ from aiq_agent.common.citation_verification import report_has_citations
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
+from aiq_agent.common.logging_utils import log_identifier_ref
 
 from .models import ReportRewriterAgentState
 
 logger = logging.getLogger(__name__)
+
+
+def _job_ref(job_id: str | None) -> str:
+    """Redacted correlation ref for the rewriter job UUID (an opaque bearer capability).
+
+    The raw UUID must never enter logs; ``log_identifier_ref`` yields a stable
+    ``sha256:<12hex>`` reference instead. ``job_id`` is optional, so fall back to
+    ``"none"`` rather than hashing ``None``.
+    """
+    return log_identifier_ref(job_id) if job_id else "none"
+
 
 AGENT_DIR = Path(__file__).parent
 ORIGINAL_REPORT_PATH = "/shared/original_report.md"
@@ -178,7 +190,7 @@ class ReportRewriterAgent:
 
         files = dict(state.files)
         files[OUTPUT_REPORT_PATH] = revised_report
-        logger.info("Report rewrite complete (job_id=%s, chars=%d)", self.job_id, len(revised_report))
+        logger.info("Report rewrite complete (job_ref=%s, chars=%d)", _job_ref(self.job_id), len(revised_report))
         return ReportRewriterAgentState(
             messages=[*state.messages, AIMessage(content=revised_report)],
             files=files,
