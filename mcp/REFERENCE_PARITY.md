@@ -11,7 +11,7 @@ specification for compatibility reviews and future changes.
 
 ## Validated baseline
 
-The public implementation validates MCP 1.27.2, NAT Core 1.8.0, and AI-Q 2.0.
+The public implementation validates MCP 1.28.1, NAT Core 1.8.0, and AI-Q 2.0.
 The ordered contract over tool name, input schema, output schema, annotations,
 title, metadata, icons, and execution fields has the frozen SHA-256
 `81eba67fadd56e64b58a84b700b202841f8636c93c6cbf63752507c8bf5ca96a`
@@ -49,7 +49,7 @@ lookup-only synthetic states: not_ready | not_found
 | Authentication and principal | The standalone server has no authentication provider or actor-token propagation. Every call uses the constant `anonymous` principal; the UUID is the bearer capability. Authorization-like headers are ignored. |
 | Malformed or noncanonical capability IDs | The public server requires exact lowercase canonical UUID spelling and returns the same stable `not_found/job_not_found` shape used for unknown UUIDs. |
 | Transport path and health | The public endpoint defaults to configurable `/mcp`, with explicit `/live` and `/health`. The optional standalone SSE GET is rejected with 405. Host/Origin checks are DNS-rebinding/browser safeguards, not identity. |
-| Lifecycle ownership | MCP 1.27.2 is mounted beneath one outer Starlette lifespan that owns the NAT workflow, job manager, and MCP session manager once per worker. Stateless request teardown cannot stop process-owned work. |
+| Lifecycle ownership | MCP 1.28.1 is mounted beneath one outer Starlette lifespan that owns the NAT workflow, job manager, and MCP session manager once per worker. Stateless request teardown cannot stop process-owned work. |
 | Startup and environment | Startup validates the public workflow file and `AIQ_CHECKPOINT_DB`; public model/search credentials are `NVIDIA_API_KEY` and `TAVILY_API_KEY`, while transport settings use the `AIQ_MCP_*` namespace. |
 | Public workflow surface | The default workflow uses public NIM and Tavily configuration. Enterprise integrations and paper search are not part of this standalone profile. |
 | Certificates | No CA bundle or certificate-mount behavior is bundled. Ordinary platform trust and deployment-level TLS termination are outside this component. |
@@ -61,7 +61,7 @@ this document and its golden tests.
 
 ## Compatibility adaptations
 
-- The destination validates `mcp==1.27.2`, `nvidia-nat==1.8.0`, and
+- The destination validates `mcp==1.28.1`, `nvidia-nat==1.8.0`, and
   `nvidia-nat-core==1.8.0`.
 - MCP protocol `2025-11-25` is exercised with the supported
   `streamable_http_client` and `ClientSession`, including stateless
