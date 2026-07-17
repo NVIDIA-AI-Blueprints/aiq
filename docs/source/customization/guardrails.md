@@ -34,8 +34,20 @@ At each configured boundary, guardrails can make one of three decisions:
 | Modify | Replace the selected input or output field with the modified content returned by the rail. |
 | Block | Return the configured refusal response instead of continuing with the blocked content. |
 
-Input-rail evaluation exceptions are caught, logged, and converted to the middleware refusal response. Output-rail
-evaluation exceptions are not converted to a refusal; they propagate and fail the invocation.
+Input- and output-rail evaluation exceptions are caught, logged, and converted to the middleware refusal response.
+Output failures preserve the intercepted response schema and do not return the original unfiltered output.
+
+Buffered output streams are evaluated as one logical assistant response before any chunk is emitted. This includes
+streams that mix raw strings and structured response chunks. Modified output is redistributed across the buffered
+chunks, terminal workflow outcomes are synchronized with every rewritten structured chunk, and blocked or failed
+streams emit only a safe refusal.
+
+## PII Runtime Dependencies
+
+The built-in `sensitive_data_detection` action requires Presidio, spaCy, and a compatible spaCy language model. These
+large dependencies are available through the `pii` project extra rather than the base Python package. Install AI-Q with
+`--extra pii` when running PII rails. The release Docker image includes this extra and verifies during the build that the
+Presidio analyzer and anonymizer import, `en_core_web_lg` is installed, and email analysis succeeds.
 
 ## Configuration Shape
 
