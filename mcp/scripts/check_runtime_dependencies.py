@@ -37,7 +37,7 @@ _REQUIRED_IMPORTS = (
     "asyncpg",
 )
 _PINNED_RELEASE_VERSIONS = {
-    "mcp": "1.27.2",
+    "mcp": "1.28.1",
     "nvidia-nat-core": "1.8.0",
 }
 _REQUIRED_ENTRY_POINTS = (("nat.plugins", "tavily_web_search"),)

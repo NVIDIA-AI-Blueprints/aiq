@@ -92,7 +92,7 @@ def test_verify_runtime_imports_rejects_release_pin_mismatch(monkeypatch: pytest
         return real_version(name)
 
     monkeypatch.setattr("importlib.metadata.version", fake_version)
-    with pytest.raises(ValueError, match="release pin mismatch: mcp==0.0.0, expected 1.27.2"):
+    with pytest.raises(ValueError, match="release pin mismatch: mcp==0.0.0, expected 1.28.1"):
         verify_runtime_imports()
 
 
