@@ -965,6 +965,7 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             detail = job.file_details[index]
             tracked = self._files[detail.file_id]
             self._update_file_progress(job_id, index, status=FileStatus.INGESTING)
+            chunk_count = 0
             try:
                 chunk_count, summary, ingested_at = self._process_file(
                     path=path,
@@ -987,6 +988,11 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             except Exception as error:  # noqa: BLE001
                 failed += 1
                 message = self._translate_error(error)
+                if chunk_count:
+                    try:
+                        self._delete_file_documents(detail.file_id, collection_name, chunk_count)
+                    except Exception as rollback_error:  # noqa: BLE001
+                        message = f"{message}; chunk rollback failed: {self._translate_error(rollback_error)}"
                 self._update_file_progress(
                     job_id,
                     index,

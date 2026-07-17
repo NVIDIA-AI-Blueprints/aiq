@@ -950,6 +950,42 @@ def test_post_upload_failure_rolls_back_chunks_and_retains_failed_manifest(monke
     assert not [document for document in client.documents.values() if document.get("record_type") == "chunk"]
 
 
+def test_success_manifest_failure_rolls_back_uploaded_chunks(monkeypatch, tmp_path):
+    _install_reader(monkeypatch)
+    _run_threads_synchronously(monkeypatch)
+    monkeypatch.setattr(azure_adapter, "_CONSISTENCY_DELAY_SECONDS", 0)
+    path = tmp_path / "document.txt"
+    path.write_text("content", encoding="utf-8")
+    ingestor, client = _ingestor()
+    ingestor._embedding = FakeEmbedding()
+    ingestor._splitter = FakeSplitter([FakeNode("content")])
+    client.upload_visibility_delays[("chunk", None)] = azure_adapter._CONSISTENCY_ATTEMPTS + 1
+    write_manifest = ingestor._write_file_manifest
+
+    def fail_success_manifest(info, **kwargs):
+        if info.status == FileStatus.SUCCESS:
+            raise RuntimeError("success manifest failed")
+        return write_manifest(info, **kwargs)
+
+    monkeypatch.setattr(ingestor, "_write_file_manifest", fail_success_manifest)
+
+    job = ingestor.get_job_status(ingestor.submit_job([str(path)], "docs"))
+    file_id = job.file_details[0].file_id
+
+    assert (job.status, job.file_details[0].status) == (JobState.FAILED, FileStatus.FAILED)
+    assert "success manifest failed" in job.file_details[0].error_message
+    assert not [
+        document
+        for document in client.documents.values()
+        if document.get("record_type") == "chunk" and document.get("file_id") == file_id
+    ]
+    assert not [
+        document
+        for document, _remaining in client.pending_uploads.values()
+        if document.get("record_type") == "chunk" and document.get("file_id") == file_id
+    ]
+
+
 def test_response_loss_rolls_back_all_attempted_chunk_ids(monkeypatch, tmp_path):
     _install_reader(monkeypatch)
     path = tmp_path / "document.txt"
