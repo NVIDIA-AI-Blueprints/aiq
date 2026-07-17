@@ -1083,10 +1083,10 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
                 }
             )
 
-        client = self._get_validated_search_client()
-        self._upload_documents(client, search_documents)
         chunk_ids = [str(document["id"]) for document in search_documents]
+        client = self._get_validated_search_client()
         try:
+            self._upload_documents(client, search_documents)
             collection = self._get_collection_manifest(collection_name)
             if collection is None or collection.get("status") != _COLLECTION_ACTIVE:
                 raise RuntimeError(f"Collection {collection_name!r} became unavailable during ingestion")
@@ -1104,18 +1104,18 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         return len(search_documents), summary, ingested_at
 
     def _upload_documents(self, client: SearchClient, documents: list[dict[str, Any]]) -> None:
-        attempted_ids: list[str] = []
+        uploaded_ids: list[str] = []
         try:
             for batch in _iter_index_batches(documents, "upload"):
-                attempted_ids.extend(str(document["id"]) for document in batch)
                 results = client.upload_documents(documents=batch)
-                _succeeded, failures = _indexing_outcome(results, batch)
+                succeeded, failures = _indexing_outcome(results, batch)
+                uploaded_ids.extend(succeeded)
                 if failures:
                     raise RuntimeError(f"Azure AI Search rejected upload actions: {'; '.join(failures)}")
         except Exception as upload_error:  # noqa: BLE001
-            if attempted_ids:
+            if uploaded_ids:
                 try:
-                    self._delete_document_ids(client, attempted_ids)
+                    self._delete_document_ids(client, uploaded_ids)
                 except Exception as rollback_error:  # noqa: BLE001
                     raise RuntimeError(
                         f"Upload failed ({upload_error}); rollback failed ({rollback_error})"
@@ -1173,21 +1173,23 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         select: list[str] | None = None,
         label: str,
     ) -> list[dict[str, Any]]:
+        observed_documents: dict[str, dict[str, Any]] = {}
         previous_ids: set[str] | None = None
         matching_reads = 0
         for attempt in range(_CONSISTENCY_ATTEMPTS):
             documents = list(self._iter_documents(client, filter_text=filter_text, select=select))
             document_ids = {str(document["id"]) for document in documents if document.get("id")}
+            observed_documents.update((str(document["id"]), document) for document in documents if document.get("id"))
             if document_ids == previous_ids:
                 matching_reads += 1
             else:
                 previous_ids = document_ids
                 matching_reads = 1
-            if matching_reads >= _CONSISTENCY_STABLE_READS:
-                return documents
             if attempt + 1 < _CONSISTENCY_ATTEMPTS:
                 time.sleep(_CONSISTENCY_DELAY_SECONDS)
-        raise RuntimeError(f"Timed out waiting for stable {label} in Azure AI Search")
+        if matching_reads < _CONSISTENCY_STABLE_READS:
+            raise RuntimeError(f"Timed out waiting for stable {label} in Azure AI Search")
+        return list(observed_documents.values())
 
     def _delete_file_documents(
         self,
@@ -1339,15 +1341,33 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
                 if info.collection_name == name
             }
 
-        file_manifests = self._stable_documents(
+        content_filter = _and_filter(
+            f"collection_id eq {_odata_literal(name)}",
+            f"record_type ne {_odata_literal(_RECORD_COLLECTION)}",
+        )
+        child_documents = self._stable_documents(
             client,
-            filter_text=_record_filter(_RECORD_FILE, name),
-            label=f"collection {name!r} file manifests",
+            filter_text=content_filter or "",
+            select=[
+                "id",
+                "record_type",
+                "file_id",
+                "file_name",
+                "status",
+                "error_message",
+                "summary",
+                "chunk_count",
+                "file_size",
+                "uploaded_at",
+                "ingested_at",
+                "metadata",
+            ],
+            label=f"collection {name!r} child documents",
         )
         files = {
             str(document["file_id"]): self._file_info_from_manifest(document)
-            for document in file_manifests
-            if document.get("file_id")
+            for document in child_documents
+            if document.get("record_type") == _RECORD_FILE and document.get("file_id")
         }
         files.update(tracked_files)
         if any(
@@ -1360,20 +1380,7 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
                 self._write_document(manifest)
             raise ValueError(f"Cannot delete collection {name!r} while files are ingesting")
 
-        content_filter = _and_filter(
-            f"collection_id eq {_odata_literal(name)}",
-            f"record_type ne {_odata_literal(_RECORD_COLLECTION)}",
-        )
-        document_ids = {
-            str(document["id"])
-            for document in self._stable_documents(
-                client,
-                filter_text=content_filter or "",
-                select=["id"],
-                label=f"collection {name!r} child documents",
-            )
-            if document.get("id")
-        }
+        document_ids = {str(document["id"]) for document in child_documents if document.get("id")}
         for info in files.values():
             document_ids.add(_record_id(_RECORD_FILE, name, info.file_id))
             if info.status == FileStatus.SUCCESS:

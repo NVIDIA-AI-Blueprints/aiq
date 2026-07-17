@@ -873,7 +873,8 @@ def test_collection_delete_prefers_tracked_terminal_file_state():
     assert not [document for document in client.documents.values() if document.get("collection_id") == "docs"]
 
 
-def test_restarted_collection_delete_waits_for_hidden_children():
+def test_restarted_collection_delete_waits_for_hidden_children(monkeypatch):
+    monkeypatch.setattr(azure_adapter, "_CONSISTENCY_DELAY_SECONDS", 0)
     ingestor, client = _ingestor()
     ingestor.create_collection("docs")
     _write_file_manifest(ingestor, "file-1", chunk_count=1)
@@ -884,9 +885,10 @@ def test_restarted_collection_delete_waits_for_hidden_children():
         "file_id": "file-1",
     }
     restarted, _client = _ingestor(index_client=ingestor._index_client, search_client=client)
-    client.hidden_searches_remaining = 2
+    client.hidden_searches_remaining = 10
 
     assert restarted.delete_collection("docs")
+    assert client.hidden_searches_remaining == 0
     remaining_ids = {
         document["id"] for document in client.documents.values() if document.get("collection_id") == "docs"
     }
@@ -1011,6 +1013,18 @@ def test_response_loss_rolls_back_all_attempted_chunk_ids(monkeypatch, tmp_path)
     attempted_ids = {"chunk-new-00000000", "chunk-new-00000001"}
     assert attempted_ids & client.documents.keys() == set()
     assert attempted_ids & client.pending_uploads.keys() == set()
+
+
+def test_response_loss_during_manifest_update_preserves_collection():
+    ingestor, client = _ingestor()
+    ingestor.create_collection("docs", description="before")
+    manifest_id = ingestor._get_collection_manifest("docs")["id"]
+    client.upload_response_failures_remaining = 1
+
+    with pytest.raises(ServiceRequestError, match="response lost"):
+        ingestor._write_collection_manifest("docs", description="after")
+
+    assert client.documents[manifest_id]["description"] == "after"
 
 
 def test_batches_respect_action_count_and_payload_size():
