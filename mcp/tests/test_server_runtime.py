@@ -441,7 +441,7 @@ async def test_fastmcp_settings_and_exact_tool_schemas(tmp_path: Path) -> None:
             }
         )
     serialized_contract = json.dumps(schema_contract, sort_keys=True, separators=(",", ":")).encode()
-    # Frozen public compatibility contract for FastMCP 1.27.2. Descriptions
+    # Frozen public compatibility contract for FastMCP 1.28.1. Descriptions
     # use semantic assertions below so anonymous-capability wording stays clear.
     assert hashlib.sha256(serialized_contract).hexdigest() == (
         "81eba67fadd56e64b58a84b700b202841f8636c93c6cbf63752507c8bf5ca96a"  # pragma: allowlist secret

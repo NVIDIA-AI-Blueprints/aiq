@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Real MCP 1.27.2 client coverage for the complete asynchronous protocol."""
+"""Real MCP 1.28.1 client coverage for the complete asynchronous protocol."""
 
 from __future__ import annotations
 
@@ -306,7 +306,7 @@ async def _exercise_complete_client_flow(
         ):
             assert initialized.protocolVersion == LATEST_PROTOCOL_VERSION == "2025-11-25"
             assert initialized.serverInfo.name == "aiq_deep_research"
-            assert initialized.serverInfo.version == "1.27.2"
+            assert initialized.serverInfo.version == "1.28.1"
             assert initialized.capabilities.tools is not None
             assert initialized.capabilities.tools.listChanged is False
             assert get_submit_session_id() is None
