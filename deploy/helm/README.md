@@ -363,6 +363,15 @@ helm upgrade --install aiq aiq2-web-2.0.0.tgz -n ns-aiq \
 | `SERPER_API_KEY` | Serper API key for Google search |
 | `JINA_API_KEY` | Jina API key |
 | `WANDB_API_KEY` | Weights & Biases API key |
+| `MODAL_TOKEN_ID` | Modal sandbox token ID |
+| `MODAL_TOKEN_SECRET` | Modal sandbox token secret |
+| `AIQ_ARTIFACT_BLOB_PROVIDER` | Artifact byte storage provider; unset or `sql` keeps bytes in SQL, `s3` uses S3-compatible storage |
+| `AIQ_ARTIFACT_S3_BUCKET` | Required when `AIQ_ARTIFACT_BLOB_PROVIDER=s3` |
+| `AIQ_ARTIFACT_S3_ENDPOINT_URL` | Unset for AWS S3; set for MinIO or compatible storage |
+| `AIQ_ARTIFACT_S3_REGION` | Optional S3 region |
+| `AIQ_ARTIFACT_S3_PREFIX` | Optional object-key prefix; defaults to `artifacts/v1` |
+| `AWS_ACCESS_KEY_ID` | Optional S3 access key |
+| `AWS_SECRET_ACCESS_KEY` | Optional S3 secret key |
 
 ### Updating secrets
 
