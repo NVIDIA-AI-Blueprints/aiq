@@ -32,7 +32,7 @@ allowed-tools: Read Bash
 
 # AIQ Research Skill
 
-## Purpose
+## When to Use This Skill
 
 Use this skill to call a locally running NVIDIA AI-Q Blueprint server through the helper script at
 `scripts/aiq.py`.
@@ -64,7 +64,7 @@ Users need:
 
 The helper script has no third-party Python package dependencies; it uses Python standard-library HTTP modules.
 
-## Instructions
+## Workflow
 
 1. Resolve the target backend URL.
 2. Run `health` before sending research requests.

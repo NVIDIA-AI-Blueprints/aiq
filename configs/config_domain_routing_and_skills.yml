@@ -182,6 +182,10 @@ functions:
       - pillow
       - tabulate  # required by pandas.DataFrame.to_markdown(), used by data-table-analysis skill
     network: blocked
+    artifact_capture:
+      enabled: true
+      max_file_bytes: 50000000
+      allow_extensions: [.png, .jpg, .jpeg, .webp, .csv, .json, .md, .ipynb, .pdf]
 
   # =========================================================================
   # Agents

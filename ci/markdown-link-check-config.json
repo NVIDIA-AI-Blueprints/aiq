@@ -22,6 +22,9 @@
             "pattern": "^https?://tavily\\.com/?$"
         },
         {
+            "pattern": "^https://exa\\.ai/?$"
+        },
+        {
             "pattern": "^https?://modal\\.com/docs/reference/modal\\.config$"
         },
         {
