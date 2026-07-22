@@ -30,7 +30,7 @@ _DIRECT_RUNTIME_DEPENDENCIES = {
 }
 _FORBIDDEN_COMPONENTS = {"maas-sdk", "mos-sdk"}
 _LOCAL_SOURCE_COMPONENTS = {
-    ("aiq-agent", "2.0.0"): "../",
+    ("aiq-agent", "2.2.0"): "../",
     ("knowledge-layer", "1.0.0"): "../sources/knowledge_layer",
     ("tavily-web-search", "1.0.0"): "../sources/tavily_web_search",
 }

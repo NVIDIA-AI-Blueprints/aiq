@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
+import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -14,13 +16,58 @@ from nat.utils.io.yaml_tools import yaml_load
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PATH = REPO_ROOT / "deploy" / "compose" / "docker-compose.yaml"
+COMPOSE_README_PATH = REPO_ROOT / "deploy" / "compose" / "README.md"
+DOCS_COMPOSE_PATH = REPO_ROOT / "docs" / "source" / "deployment" / "docker-compose.md"
+DOCS_PROJECT_PATH = REPO_ROOT / "docs" / "source" / "project.json"
+DOCS_VERSIONS_PATH = REPO_ROOT / "docs" / "source" / "versions1.json"
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 PER_USER_AUTH_COMPOSE_PATH = REPO_ROOT / "deploy" / "compose" / "docker-compose.per-user-auth.yaml"
 MCP_CONFIG_PATH = REPO_ROOT / "configs" / "config_web_frag_mcp_auth.yml"
+EXPECTED_RELEASE_VERSION = "2.2.0"
 
 
 def load_compose() -> dict[str, Any]:
     with COMPOSE_PATH.open(encoding="utf-8") as compose_file:
         return yaml.safe_load(compose_file)
+
+
+def test_release_version_matches_default_compose_images():
+    with PYPROJECT_PATH.open("rb") as pyproject_file:
+        package_version = tomllib.load(pyproject_file)["project"]["version"]
+
+    compose = load_compose()
+
+    assert package_version == EXPECTED_RELEASE_VERSION
+    assert compose["services"]["aiq-agent"]["image"] == (
+        f"${{BACKEND_IMAGE:-nvcr.io/nvidia/blueprint/aiq-agent:{package_version}}}"
+    )
+    assert compose["services"]["frontend"]["image"] == (
+        f"${{FRONTEND_IMAGE:-nvcr.io/nvidia/blueprint/aiq-frontend:{package_version}}}"
+    )
+
+    expected_backend_image = f"nvcr.io/nvidia/blueprint/aiq-agent:{package_version}"
+    expected_frontend_image = f"nvcr.io/nvidia/blueprint/aiq-frontend:{package_version}"
+    for release_path in (COMPOSE_PATH, COMPOSE_README_PATH, DOCS_COMPOSE_PATH):
+        release_text = release_path.read_text(encoding="utf-8")
+        backend_images = set(re.findall(r"nvcr\.io/nvidia/blueprint/aiq-agent:[\w.-]+", release_text))
+        frontend_images = set(re.findall(r"nvcr\.io/nvidia/blueprint/aiq-frontend:[\w.-]+", release_text))
+        assert backend_images == {expected_backend_image}
+        assert frontend_images == {expected_frontend_image}
+
+
+def test_release_version_matches_published_docs():
+    project_metadata = json.loads(DOCS_PROJECT_PATH.read_text(encoding="utf-8"))
+    published_versions = json.loads(DOCS_VERSIONS_PATH.read_text(encoding="utf-8"))
+    preferred_versions = [entry for entry in published_versions if entry.get("preferred")]
+
+    assert project_metadata["version"] == EXPECTED_RELEASE_VERSION
+    assert preferred_versions == [
+        {
+            "preferred": True,
+            "version": EXPECTED_RELEASE_VERSION,
+            "url": f"https://docs.nvidia.com/aiq-blueprint/{EXPECTED_RELEASE_VERSION}/",
+        }
+    ]
 
 
 def test_default_compose_does_not_provision_or_configure_redis():
