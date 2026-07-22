@@ -24,7 +24,7 @@ allowed-tools: Read Bash
 
 # AIQ Deploy Skill
 
-## Purpose
+## When to Use This Skill
 
 Use this skill to get a local or self-hosted NVIDIA AI-Q Blueprint server running and verified for use by
 `aiq-research`.
@@ -59,7 +59,7 @@ git check-ignore deploy/.env
 Expected output: `deploy/.env` or a matching ignore rule. If it is not ignored, stop and fix the ignore rule before
 placing credentials in the file.
 
-## Instructions
+## Workflow
 
 1. Locate or clone the AI-Q repository.
 2. Confirm the expected repository files exist.

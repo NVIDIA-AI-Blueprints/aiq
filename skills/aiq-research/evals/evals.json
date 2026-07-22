@@ -42,5 +42,17 @@
       "Returns a concise answer for Santa Clara, CA",
       "Does not force a deep_researcher job unless AI-Q returns an async job ID"
     ]
+  },
+  {
+    "id": "aiq-research-004-negative-deployment-request",
+    "question": "Set up AI-Q locally with Docker Compose and verify the backend health endpoint.",
+    "expected_skill": null,
+    "expected_script": null,
+    "ground_truth": "The agent does not use aiq-research for deployment or health setup. It should use aiq-deploy.",
+    "expected_behavior": [
+      "Does not route to aiq-research",
+      "Does not call scripts/aiq.py for the initial setup",
+      "Recognizes this as a deployment and validation request"
+    ]
   }
 ]
