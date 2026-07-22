@@ -34,8 +34,7 @@ allowed-tools: Read Bash
 
 ## When to Use This Skill
 
-Use this skill to call a locally running NVIDIA AI-Q Blueprint server through the helper script at
-`scripts/aiq.py`.
+Use this skill to call a locally running NVIDIA AI-Q Blueprint server through the helper script at `scripts/aiq.py`.
 
 Use this skill for research-shaped requests, including:
 

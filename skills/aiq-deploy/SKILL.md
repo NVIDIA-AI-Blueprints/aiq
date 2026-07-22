@@ -26,8 +26,7 @@ allowed-tools: Read Bash
 
 ## When to Use This Skill
 
-Use this skill to get a local or self-hosted NVIDIA AI-Q Blueprint server running and verified for use by
-`aiq-research`.
+Use this skill to get a local or self-hosted NVIDIA AI-Q Blueprint server running and verified for use by `aiq-research`.
 
 This skill owns setup, deployment, operational checks, troubleshooting, and shutdown. It does not run deep
 research itself. After deployment is healthy, hand off the verified server URL to `aiq-research`.
