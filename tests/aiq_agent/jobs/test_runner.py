@@ -70,6 +70,7 @@ from unittest.mock import patch
 
 import pytest
 
+from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommitTracker
 from aiq_agent.auth import Principal
 from aiq_api.jobs.callbacks import ArtifactType
 from aiq_api.jobs.callbacks import DeepResearchEventCallback
@@ -2340,7 +2341,7 @@ class TestAsyncJobRunnerAgentFactory:
                     )
                 ]
             )
-            agent._build_orchestrator_agent(state)
+            agent._build_orchestrator_agent(state, final_report_tracker=FinalReportCommitTracker())
 
         kwargs = create.call_args.kwargs
         assert "skills" not in kwargs
@@ -2399,7 +2400,7 @@ class TestAsyncJobRunnerAgentFactory:
                 job_id="async-job-123",
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Research without tools")])
-            agent._build_orchestrator_agent(state)
+            agent._build_orchestrator_agent(state, final_report_tracker=FinalReportCommitTracker())
 
         tool_names = [tool.name for tool in create.call_args.kwargs["tools"]]
         assert tool_names == ["think", "get_verified_sources", "run_research_batch"]

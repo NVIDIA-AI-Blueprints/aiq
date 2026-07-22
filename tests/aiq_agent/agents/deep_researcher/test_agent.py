@@ -32,6 +32,7 @@ from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import tool
 
+from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommitTracker
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
@@ -51,14 +52,24 @@ def web_search_tool(query: str) -> str:
     return f"Results for: {query}"
 
 
+DEFAULT_REPORT = "Deep research answer [1].\n\n## Sources\n[1] Example: https://example.com"
+
+
 def output_markdown_file(markdown: str | None = None) -> dict:
     """Return virtual filesystem content for /shared/output.md."""
     return {
         "/shared/output.md": {
-            "content": markdown or "Deep research answer [1].\n\n## Sources\n[1] Example: https://example.com",
+            "content": markdown or DEFAULT_REPORT,
             "encoding": "utf-8",
         }
     }
+
+
+def committed_tracker(markdown: str) -> FinalReportCommitTracker:
+    """Return a run-local tracker committed to the exact test report."""
+    tracker = FinalReportCommitTracker()
+    tracker.record(markdown)
+    return tracker
 
 
 @pytest.fixture(autouse=True)
@@ -410,7 +421,7 @@ class TestDeepResearcherAgent:
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Compare revenue growth")])
 
-            agent._build_orchestrator_agent(state)
+            agent._build_orchestrator_agent(state, final_report_tracker=FinalReportCommitTracker())
 
             assert create.call_count == 1
             assert create_researcher.call_count == 1
@@ -480,7 +491,7 @@ class TestDeepResearcherAgent:
             agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
             state = DeepResearchAgentState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
 
-            agent._build_orchestrator_agent(state)
+            agent._build_orchestrator_agent(state, final_report_tracker=FinalReportCommitTracker())
 
             assert create.call_count == 1
             assert create_researcher.call_count == 1
@@ -549,7 +560,7 @@ class TestDeepResearcherAgent:
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
 
-            agent._build_orchestrator_agent(state)
+            agent._build_orchestrator_agent(state, final_report_tracker=FinalReportCommitTracker())
 
             kwargs = create.call_args.kwargs
             subagents = {subagent["name"]: subagent for subagent in kwargs["subagents"]}
@@ -1107,7 +1118,13 @@ class TestDeepResearcherAgent:
     @pytest.mark.asyncio
     async def test_provider_roles_used_on_init(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test LLM roles (planner, researcher, orchestrator) are requested when run() is invoked."""
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(DEFAULT_REPORT),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(
@@ -1129,7 +1146,13 @@ class TestDeepResearcherAgent:
     @pytest.mark.asyncio
     async def test_run_basic_query(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test run() with a basic query."""
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(DEFAULT_REPORT),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(
@@ -1149,7 +1172,13 @@ class TestDeepResearcherAgent:
     @pytest.mark.asyncio
     async def test_run_empty_messages(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test run() with empty messages."""
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(DEFAULT_REPORT),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(
@@ -1167,7 +1196,13 @@ class TestDeepResearcherAgent:
     @pytest.mark.asyncio
     async def test_run_with_callbacks(self, mock_llm_provider, real_tool, mock_create_deep_agent):
         """Test run() uses callbacks."""
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(DEFAULT_REPORT),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             mock_callback = MagicMock()
@@ -1193,7 +1228,13 @@ class TestDeepResearcherAgent:
         mock_agent.with_config = MagicMock(return_value=mock_agent)
         mock_agent.ainvoke = AsyncMock(side_effect=Exception("Agent error"))
 
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(DEFAULT_REPORT),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(
@@ -1214,7 +1255,13 @@ class TestDeepResearcherAgent:
         mock_agent.with_config = MagicMock(return_value=mock_agent)
         mock_agent.ainvoke = AsyncMock(return_value={"messages": [], "files": output_markdown_file()})
 
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent):
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(DEFAULT_REPORT),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(
@@ -1249,7 +1296,14 @@ class TestDeepResearcherAgent:
             }
         )
 
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent):
+        writer_report = "Writer markdown [1].\n\n## Sources\n[1] Example: https://example.com"
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(writer_report),
+            ),
+        ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(
@@ -1306,7 +1360,10 @@ class TestFinalMarkdownExtraction:
             fake_backend = MagicMock()
             agent.deepagents_runtime._backend = fake_backend
 
-            output = agent._extract_final_markdown({"messages": [AIMessage(content="done")], "files": {}})
+            output = agent._extract_final_markdown(
+                {"messages": [AIMessage(content="done")], "files": {}},
+                final_report_tracker=FinalReportCommitTracker(),
+            )
 
             assert output is None
             fake_backend.download_files.assert_not_called()
@@ -1325,7 +1382,8 @@ class TestFinalMarkdownExtraction:
                 {
                     "messages": [AIMessage(content="done")],
                     "files": {"/shared/output.md": {"content": report}},
-                }
+                },
+                final_report_tracker=committed_tracker(report),
             )
 
             assert output == report
@@ -1346,13 +1404,18 @@ class TestFinalMarkdownExtraction:
                         AIMessage(content="Let's call get_verified_sources now."),
                     ],
                     "files": {},
-                }
+                },
+                final_report_tracker=FinalReportCommitTracker(),
             )
 
             assert output is None
 
-    def test_extract_final_markdown_salvages_substantive_inline_report(self, mock_llm_provider, real_tool):
-        """A substantive report emitted inline (no output file) is salvaged, unlike plain chatter."""
+    def test_extract_final_markdown_rejects_substantive_inline_non_writer_report(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """Substantive orchestrator prose cannot bypass writer ownership."""
         with patch(
             "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
             return_value=MagicMock(),
@@ -1365,9 +1428,12 @@ class TestFinalMarkdownExtraction:
                 + "NVIDIA and Samsung capital expenditure analysis across quarters. " * 12
                 + "\n\n## Sources\n[1] Example: https://example.com"
             )
-            output = agent._extract_final_markdown({"messages": [AIMessage(content=report)], "files": {}})
+            output = agent._extract_final_markdown(
+                {"messages": [AIMessage(content=report)], "files": {}},
+                final_report_tracker=FinalReportCommitTracker(),
+            )
 
-            assert output == report.strip()
+            assert output is None
 
     def test_extract_final_markdown_rejects_writer_completion_marker(self, mock_llm_provider, real_tool):
         """The short writer completion marker is never salvaged as the report."""
@@ -1379,7 +1445,27 @@ class TestFinalMarkdownExtraction:
 
             agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
             output = agent._extract_final_markdown(
-                {"messages": [AIMessage(content="Wrote /shared/output.md")], "files": {}}
+                {"messages": [AIMessage(content="Wrote /shared/output.md")], "files": {}},
+                final_report_tracker=FinalReportCommitTracker(),
+            )
+
+            assert output is None
+
+    def test_extract_final_markdown_rejects_uncommitted_stale_file(self, mock_llm_provider, real_tool):
+        """A pre-existing planner file is never accepted without a current writer mutation."""
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=MagicMock(),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            output = agent._extract_final_markdown(
+                {
+                    "messages": [AIMessage(content="Wrote /shared/output.md")],
+                    "files": {"/shared/output.md": {"content": "# Planner prose"}},
+                },
+                final_report_tracker=FinalReportCommitTracker(),
             )
 
             assert output is None
@@ -1410,12 +1496,12 @@ class TestFinalMarkdownExtraction:
             agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
 
             state = DeepResearchAgentState(messages=[HumanMessage(content="Write a report")])
-            with pytest.raises(ValueError, match="writer-agent did not produce a final Markdown answer"):
+            with pytest.raises(RuntimeError, match="^writer_output_not_committed$"):
                 await agent.run(state)
 
     @pytest.mark.asyncio
-    async def test_run_salvages_inline_report_when_writer_output_missing(self, mock_llm_provider, real_tool):
-        """A substantive inline report is salvaged into the final message when no output file exists."""
+    async def test_run_rejects_inline_report_when_writer_output_missing(self, mock_llm_provider, real_tool):
+        """Substantive orchestrator prose cannot replace a writer commit."""
         report = (
             "# CapEx Report\n\n"
             + "Detailed multi-quarter capital expenditure narrative for the comparison [1]. " * 12
@@ -1440,9 +1526,8 @@ class TestFinalMarkdownExtraction:
             agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
 
             state = DeepResearchAgentState(messages=[HumanMessage(content="Original query")])
-            result = await agent.run(state)
-
-            assert "# CapEx Report" in result.messages[-1].content
+            with pytest.raises(RuntimeError, match="^writer_output_not_committed$"):
+                await agent.run(state)
 
     @pytest.mark.asyncio
     async def test_run_seeds_parent_sources_for_delta_citation_verification(
@@ -1477,9 +1562,15 @@ class TestFinalMarkdownExtraction:
             }
         )
 
-        with patch(
-            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
-            return_value=mock_agent,
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+                return_value=mock_agent,
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(report),
+            ),
         ):
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
@@ -1538,9 +1629,15 @@ class TestDeepResearcherCitationVerification:
         mock_agent.with_config = MagicMock(return_value=mock_agent)
         mock_agent.ainvoke = AsyncMock(return_value=deep_result)
 
-        with patch(
-            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
-            return_value=mock_agent,
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+                return_value=mock_agent,
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(report),
+            ),
         ):
             agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
 
@@ -1595,9 +1692,15 @@ class TestDeepResearcherCitationVerification:
         mock_agent.with_config = MagicMock(return_value=mock_agent)
         mock_agent.ainvoke = AsyncMock(return_value=deep_result)
 
-        with patch(
-            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
-            return_value=mock_agent,
+        with (
+            patch(
+                "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+                return_value=mock_agent,
+            ),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(raw_answer),
+            ),
         ):
             agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
             agent.source_registry_middleware.registry.add(
