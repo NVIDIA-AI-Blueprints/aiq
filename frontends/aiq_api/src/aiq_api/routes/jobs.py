@@ -706,7 +706,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
             500: {
                 "description": (
-                    "Content encryption configuration is invalid or async job authorization persistence failed"
+                    "Content encryption configuration is invalid, async job authorization persistence failed, "
+                    "or agent/tool configuration lookup failed unexpectedly"
                 )
             },
             503: {"description": "Content encryption, Dask scheduler, or sandbox capacity is unavailable"},
