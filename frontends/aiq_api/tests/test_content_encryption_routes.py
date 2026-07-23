@@ -459,7 +459,7 @@ async def test_submit_openapi_documents_encryption_failures(monkeypatch, tmp_pat
 
     responses = app.openapi()["paths"]["/v1/jobs/async/submit"]["post"]["responses"]
 
-    assert responses["400"]["description"] == "Unknown agent type or invalid request"
+    assert responses["400"]["description"] == ("Unknown, internal-only, or unconfigured agent type, or invalid request")
     assert responses["422"]["description"] == "One or more unknown or agent-unavailable data source IDs"
     assert responses["500"]["description"] == (
         "Content encryption configuration is invalid or async job authorization persistence failed"

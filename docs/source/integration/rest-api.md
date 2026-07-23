@@ -26,7 +26,7 @@ Base path: `/v1/jobs/async`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/jobs/async/agents` | List registered agent types |
+| `GET` | `/v1/jobs/async/agents` | List public agents configured in the active workflow |
 | `POST` | `/v1/jobs/async/submit` | Submit a new research job |
 | `GET` | `/v1/jobs/async/job/{job_id}` | Get job status |
 | `GET` | `/v1/jobs/async/job/{job_id}/stream` | SSE event stream from beginning |
@@ -43,11 +43,15 @@ Base path: `/v1/jobs/async`
 
 ### List Available Agents
 
-Returns all **public** registered agent types that can be used with the submit endpoint.
+Returns all **public** registered agent types configured in the active workflow. The
+`deep_researcher` and `shallow_researcher` entries are part of the default catalog, but
+each is returned only when its corresponding function config is present in the loaded
+workflow. Discovery reflects configuration availability, not credentials, tool health,
+source connectivity, Dask readiness, or other runtime health checks.
+
 Internal-only agents (registered with `public=False`, for example the `report_rewriter`
 used by report follow-up) are intentionally omitted from this list and are rejected by
-`POST /v1/jobs/async/submit` with `400` and a `detail` of `Agent type is internal-only: <agent_type>`
-(the requested agent type is interpolated into the message).
+`POST /v1/jobs/async/submit` with `400`.
 
 ```bash
 curl http://localhost:8000/v1/jobs/async/agents
@@ -85,7 +89,7 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 | `input` | `string` | Yes | Research query. Must be non-blank after trimming (whitespace-only is rejected with 422) |
 | `job_id` | `string` | No | Custom job ID. Auto-generated UUID if omitted. Pattern: `[a-zA-Z0-9_-]`, max 64 chars |
 | `expiry_seconds` | `integer` | No | Job expiry in seconds. Range: 600--604800 (10 min to 7 days). Default from config |
-| `data_sources` | `list[string]` | No | Optional data source IDs (from `/v1/data_sources`) to scope the job. Omit or `null` for all data-source tools; `[]` for no data-source tools. Unmapped utility tools remain available. Unknown IDs return 422 |
+| `data_sources` | `list[string]` | No | Optional data source IDs (from `/v1/data_sources`) to scope the job. Omit or `null` for all data-source tools; `[]` for no data-source tools. Unmapped utility tools remain available. Unknown IDs or sources unavailable to the selected agent return 422 |
 
 **Response (`JobStatusResponse`):**
 
@@ -101,10 +105,25 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 
 | Status | Reason |
 |--------|--------|
-| `400` | Unknown agent type, **internal-only agent type**, or invalid request |
-| `409` | A custom `job_id` was supplied that collides with an existing job |
-| `422` | Validation error: blank/whitespace-only `input`, invalid request fields, or one or more unknown data source IDs. Data source errors include `message`, `invalid_ids`, and `known_ids` for client-side recovery UX |
-| `503` | Dask scheduler not available |
+| `400` | Unknown, **internal-only**, or registered-but-unconfigured agent type, or invalid request |
+| `409` | A custom `job_id` collides with an existing job, or a selected protected source requires per-user authentication |
+| `422` | Validation error: blank/whitespace-only `input`, invalid request fields, unknown data source IDs, or sources unavailable to the selected agent. Data source errors include `message`, `invalid_ids`, `unavailable_for_agent`, and `known_ids` |
+| `500` | Content encryption configuration is invalid, authorization persistence fails, or agent/tool configuration fails unexpectedly |
+| `503` | Content encryption, Dask, or configured sandbox capacity is unavailable |
+
+A public catalog entry that is not configured in the active workflow is rejected before
+source validation or job creation:
+
+```json
+{
+  "detail": {
+    "code": "agent_not_configured",
+    "message": "Agent 'shallow_researcher' is not configured in the active workflow",
+    "agent_type": "shallow_researcher",
+    "config_name": "shallow_research_agent"
+  }
+}
+```
 
 ### Edit a Report (Report Follow-up)
 
@@ -454,7 +473,7 @@ register_agent(
 | `config_name` | Must match a function name in the NeMo Agent Toolkit YAML config (for example, `deep_research_agent`) |
 | `description` | Human-readable description shown in the agent list |
 
-The default agents (`deep_researcher` and `shallow_researcher`) are registered automatically when the `aiq_api` plugin loads.
+The default agents (`deep_researcher` and `shallow_researcher`) are registered automatically when the `aiq_api` plugin loads. Registration adds them to the catalog; each agent must also have its `config_name` defined in the active workflow to appear in `GET /v1/jobs/async/agents` or be accepted by `POST /v1/jobs/async/submit`.
 
 ## Knowledge API
 
