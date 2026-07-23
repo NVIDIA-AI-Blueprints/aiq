@@ -1,8 +1,8 @@
 [
     {
         "preferred": true,
-        "version": "2.2.0-rc1",
-        "url": "https://docs.nvidia.com/aiq-blueprint/2.2.0-rc1/"
+        "version": "2.2.0",
+        "url": "https://docs.nvidia.com/aiq-blueprint/2.2.0/"
     },
     {
         "version": "2.1.0",

@@ -181,7 +181,7 @@ def test_sbom_contract_accepts_the_exact_approved_local_component_set() -> None:
         "specVersion": "1.5",
         "metadata": {"component": {"name": "aiq-mcp-server", "version": "0.1.0"}},
         "components": [
-            {"name": "aiq-agent", "version": "2.0.0"},
+            {"name": "aiq-agent", "version": "2.2.0"},
             {"name": "knowledge-layer", "version": "1.0.0"},
             {"name": "tavily-web-search", "version": "1.0.0"},
             {
@@ -201,7 +201,7 @@ def test_sbom_contract_requires_every_approved_local_component() -> None:
         "specVersion": "1.5",
         "metadata": {"component": {"name": "aiq-mcp-server", "version": "0.1.0"}},
         "components": [
-            {"name": "aiq-agent", "version": "2.0.0"},
+            {"name": "aiq-agent", "version": "2.2.0"},
             {"name": "knowledge-layer", "version": "1.0.0"},
         ],
     }
@@ -246,7 +246,7 @@ def test_sbom_contract_rejects_private_sdk_name_from_public_index() -> None:
 # representative public-PyPI registry dependency. Each test copies this baseline
 # and mutates a single entry to exercise one branch of the contract at a time.
 _APPROVED_LOCK_PACKAGES = [
-    ("aiq-agent", "2.0.0", '{ editable = "../" }'),
+    ("aiq-agent", "2.2.0", '{ editable = "../" }'),
     ("knowledge-layer", "1.0.0", '{ editable = "../sources/knowledge_layer" }'),
     ("tavily-web-search", "1.0.0", '{ editable = "../sources/tavily_web_search" }'),
     ("aiq-mcp-server", "0.1.0", '{ editable = "." }'),
@@ -310,7 +310,7 @@ def test_lock_sources_reject_non_editable_local_source(tmp_path: Path, source: s
             id="extra-unapproved-editable",
         ),
         pytest.param(
-            _without("aiq-agent") + [("aiq-agent", "2.0.0", '{ editable = "../wrong" }')],
+            _without("aiq-agent") + [("aiq-agent", "2.2.0", '{ editable = "../wrong" }')],
             id="approved-name-wrong-path",
         ),
         pytest.param(
@@ -327,7 +327,7 @@ def test_lock_sources_reject_local_set_mismatch(tmp_path: Path, packages: list[t
 @pytest.mark.parametrize(
     ("name", "version", "path"),
     [
-        ("aiq-agent", "2.0.0", ".."),
+        ("aiq-agent", "2.2.0", ".."),
         ("aiq-mcp-server", "0.1.0", "./"),
     ],
 )
