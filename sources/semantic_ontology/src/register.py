@@ -264,7 +264,7 @@ async def semantic_ontology_query(tool_config: SemanticOntologyQueryToolConfig, 
                             # ignored.
                             if not line.startswith("data:"):
                                 continue
-                            data = line[len("data:"):].strip()
+                            data = line[len("data:") :].strip()
                             if not data or data == "[DONE]":
                                 if data == "[DONE]":
                                     break
@@ -287,8 +287,9 @@ async def semantic_ontology_query(tool_config: SemanticOntologyQueryToolConfig, 
                                 # entities"). Surface each label to the AI-Q UI as
                                 # a live status under the running tool.
                                 label = event.get("label")
-                                logger.debug("semantic_ontology_query: received plan step %r (node=%s)",
-                                             label, event.get("node"))
+                                logger.debug(
+                                    "semantic_ontology_query: received plan step %r (node=%s)", label, event.get("node")
+                                )
                                 await _emit_status(label)
                             elif event_type == "error":
                                 error_message = event.get("message") or "Unknown error from Semantic Ontology."
