@@ -64,7 +64,7 @@ exit 2
         """#!/bin/bash
 if [[ "${1:-}" == *version_contract.py ]]; then
   case "${3:-}" in
-    release-tag) echo v0.0.80 ;;
+    release-tag) echo v0.0.88 ;;
     installer-sha256) echo "$EXPECTED_SHA256" ;;
   esac
   exit 0
@@ -108,7 +108,7 @@ def test_dry_run_is_non_mutating_and_names_certified_release(tmp_path: Path) -> 
     result = _run(tmp_path, "--dry-run", env=env)
 
     assert result.returncode == 0, result.stderr
-    assert "v0.0.80" in result.stdout
+    assert "v0.0.88" in result.stdout
     assert "no files, taps, packages, or services were changed" in result.stdout
     calls = log.read_text(encoding="utf-8") if log.exists() else ""
     assert "curl " not in calls
@@ -179,7 +179,7 @@ def test_colima_configuration_preserves_unrelated_values(tmp_path: Path) -> None
     ]
     assert stat.S_IMODE(config.stat().st_mode) == 0o640
     calls = log.read_text(encoding="utf-8")
-    assert "installer version=v0.0.80" in calls
+    assert "installer version=v0.0.88" in calls
     assert "check-versions " in calls
 
 

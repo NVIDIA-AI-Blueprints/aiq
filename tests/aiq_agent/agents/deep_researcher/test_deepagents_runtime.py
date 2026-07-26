@@ -68,6 +68,30 @@ def test_openshell_workflow_only_diverges_for_sandbox_wiring() -> None:
     assert openshell["workflow"] == standard["workflow"]
 
 
+def test_modal_reference_profile_enables_bounded_artifact_capture() -> None:
+    """Keep the shipped Modal profile's capture policy validated."""
+    config = yaml.safe_load(Path("configs/config_domain_routing_and_skills.yml").read_text(encoding="utf-8"))
+    sandbox_data = config["functions"]["deep_research_sandbox"].copy()
+
+    assert sandbox_data.pop("_type") == "deep_research_sandbox"
+    sandbox = DeepResearchSandboxConfig.model_validate(sandbox_data)
+
+    assert sandbox.provider == "modal"
+    assert sandbox.artifact_capture.enabled is True
+    assert sandbox.artifact_capture.max_file_bytes == 50_000_000
+    assert sandbox.artifact_capture.allow_extensions == (
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".csv",
+        ".json",
+        ".md",
+        ".ipynb",
+        ".pdf",
+    )
+
+
 class TestSkillCollections:
     """Public skill config uses collection names, not DeepAgents virtual paths."""
 
@@ -336,6 +360,7 @@ class TestDeepAgentsRuntimeJobId:
         public = DeepResearchSandboxConfig(
             policy="policy.yaml",
             openshell_image="aiq:test",
+            workspace="research",
             attest=True,
             expected_policy_version=3,
             policy_load_timeout_seconds=17,
@@ -353,6 +378,7 @@ class TestDeepAgentsRuntimeJobId:
         assert resolved.network.mode == "allowlist"
         assert resolved.network.allow == ("api.github.com",)
         assert resolved.providers.openshell.image == "aiq:test"
+        assert resolved.providers.openshell.workspace == "research"
         assert resolved.providers.openshell.attest is True
         assert resolved.providers.openshell.expected_policy_version == 3
         assert resolved.providers.openshell.policy_load_timeout_seconds == 17

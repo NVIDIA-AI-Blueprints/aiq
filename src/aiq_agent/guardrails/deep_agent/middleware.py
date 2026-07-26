@@ -25,6 +25,7 @@ from langchain_core.messages import AIMessage
 
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.guardrails.deep_agent.config import DeepAgentGuardrailsConfig
+from aiq_agent.guardrails.interface.middleware import _GUARDRAILS_FAILURE_REFUSAL
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
 from nat.builder.builder import Builder
 from nat.middleware.middleware import InvocationContext
@@ -133,6 +134,14 @@ class _DeepAgentGuardrails(GuardrailsMixin):
     ) -> DeepResearchAgentState | str:
         """Replace blocked deep-agent output content with the refusal."""
         return super()._on_post_invoke_blocked(context, block_message, original_output)
+
+    def _build_emergency_output_refusal(
+        self,
+        context: InvocationContext,
+        original_output: object,
+    ) -> DeepResearchAgentState:
+        """Return a minimal refusal state without traversing protected output."""
+        return DeepResearchAgentState(messages=[AIMessage(content=_GUARDRAILS_FAILURE_REFUSAL)])
 
     def _iter_targets_at_path(self, value: Any, path: str) -> Iterator[tuple[str, Callable[[str], None]]]:
         """Yield the latest deep-agent message for the inherited field-selection hook."""

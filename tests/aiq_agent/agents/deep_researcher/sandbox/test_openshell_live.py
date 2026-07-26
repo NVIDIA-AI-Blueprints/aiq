@@ -42,6 +42,7 @@ class LiveConfig:
     """Non-secret live-test settings."""
 
     gateway: str | None
+    workspace: str
     policy_path: Path
     image: str
     expected_gateway_version: str | None
@@ -77,6 +78,7 @@ def live_config() -> LiveConfig:
         policy_path = _REPO_ROOT / policy_path
     return LiveConfig(
         gateway=os.getenv("AIQ_OPENSHELL_GATEWAY_NAME") or None,
+        workspace=os.getenv("AIQ_OPENSHELL_WORKSPACE") or "default",
         policy_path=policy_path.resolve(),
         image=os.getenv("AIQ_OPENSHELL_IMAGE", "aiq-openshell-demo:latest"),
         expected_gateway_version=os.getenv("AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION") or None,
@@ -134,7 +136,7 @@ def _is_not_found(runtime: LiveRuntime, exc: BaseException) -> bool:
 
 def _assert_deleted(runtime: LiveRuntime, client: Any, name: str) -> None:
     try:
-        client.get(name)
+        client.get(name, workspace=runtime.config.workspace)
     except runtime.grpc.RpcError as exc:
         if _is_not_found(runtime, exc):
             return
@@ -186,14 +188,14 @@ class ResourceTracker:
             try:
                 with self.runtime.client() as client:
                     try:
-                        client.get(name)
+                        client.get(name, workspace=self.runtime.config.workspace)
                     except self.runtime.grpc.RpcError as exc:
                         if not _is_not_found(self.runtime, exc):
                             raise
                     else:
-                        if not client.delete(name):
+                        if not client.delete(name, workspace=self.runtime.config.workspace):
                             raise RuntimeError("delete_not_acknowledged")
-                        client.wait_deleted(name)
+                        client.wait_deleted(name, workspace=self.runtime.config.workspace)
                     _assert_deleted(self.runtime, client, name)
             except Exception as exc:  # noqa: BLE001 - report sanitized teardown metadata after all attempts
                 failures.append(f"direct_delete_verify:{type(exc).__name__}")
@@ -235,6 +237,7 @@ def provider_factory(
     ) -> Any:
         openshell_config: dict[str, object] = {
             "gateway": live_runtime.config.gateway,
+            "workspace": live_runtime.config.workspace,
             "policy": str(policy_path or live_runtime.config.policy_path),
             "image": live_runtime.config.image,
             "require_hard_landlock": not live_runtime.config.allow_best_effort,
@@ -266,6 +269,7 @@ def direct_sandbox_factory(
         with live_runtime.client() as client:
             labels = {"aiq": "shared-debug-test"}
             sandbox_ref = client.create(
+                workspace=live_runtime.config.workspace,
                 spec=live_runtime.build_sandbox_spec(
                     policy=live_runtime.expected_policy,
                     image=live_runtime.config.image,
@@ -275,7 +279,7 @@ def direct_sandbox_factory(
                 labels=labels,
             )
             name = resources.direct_sandbox(sandbox_ref.name)
-            client.wait_ready(name)
+            client.wait_ready(name, workspace=live_runtime.config.workspace)
         return name
 
     return create
@@ -300,10 +304,14 @@ def _attestation_success(events: list[dict[str, object]], runtime: LiveRuntime, 
 
 
 def _assert_authoritative_policy(runtime: LiveRuntime, client: Any, name: str) -> tuple[Any, int, str]:
-    sandbox = client.get(name)
+    sandbox = client.get(name, workspace=runtime.config.workspace)
     stub = client._stub
     status = stub.GetSandboxPolicyStatus(
-        runtime.openshell_pb2.GetSandboxPolicyStatusRequest(name=name, version=0),
+        runtime.openshell_pb2.GetSandboxPolicyStatusRequest(
+            name=name,
+            version=0,
+            workspace=runtime.config.workspace,
+        ),
         timeout=30,
     )
     config = stub.GetSandboxConfig(
@@ -353,7 +361,7 @@ def test_live_per_job_isolation_attestation_and_cancellation(
     assert names[0] != names[1]
 
     with live_runtime.client() as client:
-        selected = client.list(label_selector="aiq=deep-research")
+        selected = client.list(workspace=live_runtime.config.workspace, label_selector="aiq=deep-research")
         selected_by_name = {item.name: item for item in selected}
         assert set(names) <= selected_by_name.keys()
         for index, name in enumerate(names):
@@ -370,17 +378,23 @@ def test_live_per_job_isolation_attestation_and_cancellation(
 
         providers[0].terminate()
         _assert_deleted(live_runtime, client, names[0])
-        selected_names = {item.name for item in client.list(label_selector="aiq=deep-research")}
+        selected_names = {
+            item.name
+            for item in client.list(workspace=live_runtime.config.workspace, label_selector="aiq=deep-research")
+        }
         assert names[0] not in selected_names
         assert names[1] in selected_names
-        assert client.get(names[1]).id == second.id
+        assert client.get(names[1], workspace=live_runtime.config.workspace).id == second.id
         result = providers[1].execute("printf %s still-alive", timeout=30)
         assert result.exit_code == 0
         assert result.output.strip() == "still-alive"
 
         providers[1].close()
         _assert_deleted(live_runtime, client, names[1])
-        assert names[1] not in {item.name for item in client.list(label_selector="aiq=deep-research")}
+        assert names[1] not in {
+            item.name
+            for item in client.list(workspace=live_runtime.config.workspace, label_selector="aiq=deep-research")
+        }
 
 
 def test_live_failure_cleanup_and_log_redaction(
@@ -448,9 +462,10 @@ def test_live_shared_policy_mismatch_is_rejected(
     import openshell
 
     with live_runtime.client() as client:
-        shared = client.get(shared_name)
+        shared = client.get(shared_name, workspace=live_runtime.config.workspace)
         assert shared.name == shared_name
     with openshell.Sandbox(
+        workspace=live_runtime.config.workspace,
         cluster=live_runtime.config.gateway,
         sandbox=shared_name,
         delete_on_exit=False,

@@ -22,7 +22,16 @@
             "pattern": "^https?://tavily\\.com/?$"
         },
         {
+            "pattern": "^https://exa\\.ai/?$"
+        },
+        {
             "pattern": "^https?://modal\\.com/docs/reference/modal\\.config$"
+        },
+        {
+            "pattern": "^https://nimbleway\\.com/?$"
+        },
+        {
+            "pattern": "^https://docs\\.nimbleway\\.com/nimble-sdk/web-tools/search/?$"
         },
         {
             "pattern": "^https?://huggingface\\.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard$"

@@ -12,7 +12,7 @@ aiq:
       image:
         # Override this when testing a custom image that includes unreleased changes.
         repository: nvcr.io/nvidia/blueprint/aiq-agent
-        tag: "2.0.0"
+        tag: "2.2.0"
         pullPolicy: IfNotPresent
       imagePullSecrets:
         - name: ngc-image-pull-secret

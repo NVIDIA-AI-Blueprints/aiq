@@ -110,6 +110,11 @@ class DeepResearchSandboxConfig(FunctionBaseConfig, name="deep_research_sandbox"
         default=None,
         description="OpenShell gateway endpoint/name (null uses the locally selected gateway).",
     )
+    workspace: str = Field(
+        default="default",
+        min_length=1,
+        description="OpenShell workspace that scopes sandbox lifecycle operations.",
+    )
     policy: str | None = Field(default=None, description="OpenShell policy YAML applied at per-job creation.")
     ready_timeout_seconds: float = Field(
         default=300.0,
@@ -573,6 +578,7 @@ def _create_sandbox_backend(config: DeepResearchSandboxConfig, job_id: str) -> A
         providers = {
             "openshell": {
                 "gateway": config.gateway,
+                "workspace": config.workspace,
                 "existing_sandbox_name": config.existing_sandbox_name,
                 "sandbox_name": config.sandbox_name,
                 "allow_shared_sandbox": config.allow_shared_sandbox,

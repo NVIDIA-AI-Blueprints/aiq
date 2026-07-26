@@ -879,6 +879,25 @@ async def update_job_output(
     await job_store.update_status(job_id, status, output=encrypted_output)
 
 
+def serialize_job_output_for_storage(
+    output: BaseModel | dict[str, Any] | list[Any] | str,
+    cipher: JobContentCipher,
+) -> str:
+    """Return the exact string ``update_job_output`` would persist to job_info.output.
+
+    Encrypts in encrypted modes; otherwise mirrors NAT's JSON serialization. Used
+    by callers that need to write the output through their own (e.g. conditional)
+    UPDATE while keeping serialization identical to the normal path.
+    """
+    if not cipher.manager.config.encrypted:
+        if isinstance(output, BaseModel):
+            return output.model_dump_json(round_trip=True)
+        if isinstance(output, dict | list):
+            return json.dumps(output)
+        return output
+    return cipher.encrypt_output_json(_serialize_output_json(output))
+
+
 def read_job_output(job_id: str, stored_output: Any) -> Any:
     """Read job output, decrypting only when encrypted mode is configured."""
 

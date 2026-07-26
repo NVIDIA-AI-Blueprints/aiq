@@ -34,6 +34,15 @@ export default defineConfig({
         '**/test-utils/**',
         '**/*.d.ts',
       ],
+      thresholds: {
+        // The ResultChart module is held to full coverage so it cannot regress.
+        'src/shared/components/ResultChart/**': {
+          statements: 100,
+          branches: 100,
+          functions: 100,
+          lines: 100,
+        },
+      },
     },
   },
   resolve: {

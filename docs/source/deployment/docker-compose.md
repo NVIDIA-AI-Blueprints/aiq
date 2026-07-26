@@ -44,6 +44,7 @@ The sections below explain each group of variables.
 | `NVIDIA_API_KEY` | Yes | NVIDIA API key for NIM model access. |
 | `TAVILY_API_KEY` | Conditional | Web search provider key (required if using `tavily_web_search`). |
 | `EXA_API_KEY` | Conditional | Web search provider key (required if using `exa_web_search`). |
+| `NIMBLE_API_KEY` | Conditional | Web search provider key (required if using `nimble_web_search`). |
 | `SERPER_API_KEY` | No | Google Scholar paper search key (optional). |
 
 ### API keys (optional)
@@ -197,16 +198,16 @@ docker login nvcr.io
 
 # Run with pre-built images (no --build flag)
 cd deploy/compose
-BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.0.0 \
-FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.0.0 \
+BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.0 \
+FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0 \
 docker compose --env-file ../.env -f docker-compose.yaml up -d
 ```
 
 You can also add the image variables to `deploy/.env` instead of passing them on the command line:
 
 ```bash
-BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.0.0
-FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.0.0
+BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.0
+FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0
 ```
 
 ### Release Build

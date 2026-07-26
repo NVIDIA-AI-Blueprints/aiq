@@ -35,6 +35,7 @@ from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
 
+from .custom_middleware import FinalReportCommitTracker
 from .custom_middleware import SourceRegistryMiddleware
 from .deepagents_runtime import DeepAgentsRuntime
 from .deepagents_runtime import DeepResearchSandboxConfig
@@ -53,14 +54,6 @@ PARENT_REPORT_CONTEXT_PATH = "/shared/parent_report_context.json"
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
-
-# Salvage gate: when the orchestrator synthesizes the report inline instead of delegating to
-# writer-agent, no /shared/output.md is written. We accept the final message as the report only
-# when it is clearly a substantive report (long + has a markdown heading), so workflow chatter is
-# still rejected and the strict file-first contract is preserved.
-_WRITER_COMPLETION_MARKER = "Wrote /shared/output.md"
-_MIN_INLINE_REPORT_CHARS = 400
-_MD_HEADING_RE = re.compile(r"(?m)^#{1,6}\s")
 
 
 class DeepResearcherAgent:
@@ -181,7 +174,12 @@ class DeepResearcherAgent:
 
         return prompts
 
-    def _build_orchestrator_agent(self, state: DeepResearchAgentState) -> Any:
+    def _build_orchestrator_agent(
+        self,
+        state: DeepResearchAgentState,
+        *,
+        final_report_tracker: FinalReportCommitTracker,
+    ) -> Any:
         """Build the orchestrator graph for the current state."""
         return build_deep_research_graph(
             llm_provider=self.llm_provider,
@@ -196,51 +194,25 @@ class DeepResearcherAgent:
             domain_catalog_path=self.domain_catalog_path,
             enable_source_router=self.enable_source_router,
             max_research_concurrency=self.max_research_concurrency,
+            final_report_tracker=final_report_tracker,
         )
 
-    def _extract_final_markdown(self, result: dict | Any, files: dict[str, Any] | None = None) -> str | None:
-        """Extract final Markdown from output files."""
-        output_paths = ("/shared/output.md", "/output.md")
+    def _extract_final_markdown(
+        self,
+        result: dict | Any,
+        files: dict[str, Any] | None = None,
+        *,
+        final_report_tracker: FinalReportCommitTracker,
+    ) -> str | None:
+        """Extract only Markdown committed by the writer during this run."""
         # Resolve result files first, then fall back to the passed-in files (state.files) and
         # finally an empty dict. Without the explicit grouping, `or files or {}` bound only to
-        # the else branch, so a dict result lacking a usable "files" key silently discarded the
-        # fallback and skipped straight to inline salvage even when output files existed.
+        # the else branch, so a dict result lacking a usable "files" key silently discarded
+        # the fallback even when output files existed.
         result_files = result.get("files", None) if isinstance(result, dict) else getattr(result, "files", None)
         files = result_files or files or {}
-        if isinstance(files, dict):
-            for output_path in output_paths:
-                output_entry = files.get(output_path)
-                if isinstance(output_entry, dict):
-                    output_entry = output_entry.get("content")
-                if isinstance(output_entry, bytes):
-                    output_entry = output_entry.decode("utf-8")
-                if isinstance(output_entry, str) and output_entry.strip():
-                    return output_entry.strip()
-        return self._salvage_inline_report(result)
-
-    @staticmethod
-    def _salvage_inline_report(result: dict | Any) -> str | None:
-        """Salvage a report the orchestrator wrote inline instead of via writer-agent.
-
-        When the orchestrator skips the writer-agent delegation and emits the full report in its
-        final message, no output file exists. Accept that message only when it is clearly a
-        substantive report so plain workflow chatter is still rejected.
-        """
-        messages = result.get("messages") if isinstance(result, dict) else getattr(result, "messages", None)
-        if not messages:
-            return None
-        content = getattr(messages[-1], "content", None)
-        if not isinstance(content, str):
-            return None
-        stripped = content.strip()
-        if (
-            not stripped
-            or stripped == _WRITER_COMPLETION_MARKER
-            or len(stripped) < _MIN_INLINE_REPORT_CHARS
-            or not _MD_HEADING_RE.search(stripped)
-        ):
-            return None
-        return stripped
+        committed = final_report_tracker.committed_text(files)
+        return committed.strip() if committed is not None else None
 
     @staticmethod
     def _read_seed_file_text(files: dict[str, Any], path: str) -> str | None:
@@ -281,7 +253,8 @@ class DeepResearcherAgent:
         if prepared_files != state.files:
             state = state.model_copy(update={"files": prepared_files})
         self._seed_parent_sources(state.files)
-        agent = self._build_orchestrator_agent(state)
+        final_report_tracker = FinalReportCommitTracker()
+        agent = self._build_orchestrator_agent(state, final_report_tracker=final_report_tracker)
 
         messages = state.messages
         if messages:
@@ -295,9 +268,13 @@ class DeepResearcherAgent:
         try:
             result = await agent.ainvoke(state, config={"callbacks": self.callbacks} if self.callbacks else None)
 
-            final_message = self._extract_final_markdown(result, state.files)
+            final_message = self._extract_final_markdown(
+                result,
+                state.files,
+                final_report_tracker=final_report_tracker,
+            )
             if final_message is None:
-                raise ValueError("writer-agent did not produce a final Markdown answer")
+                raise RuntimeError("writer_output_not_committed")
 
             # Post-process: verify citations against source registry
             if self.enable_citation_verification and self.source_registry_middleware.has_sources():

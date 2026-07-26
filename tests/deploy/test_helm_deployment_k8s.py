@@ -13,7 +13,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import re
 import subprocess
+import tarfile
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +24,15 @@ import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CHART_PATH = REPO_ROOT / "deploy" / "helm" / "deployment-k8s"
+CHILD_CHART_DIR = REPO_ROOT / "deploy" / "helm" / "helm-charts-k8s" / "aiq"
+CHILD_CHART_PATH = CHILD_CHART_DIR / "Chart.yaml"
+PACKAGED_CHILD_CHART_PATH = CHART_PATH / "charts" / "aiq-0.0.5.tgz"
+HELM_README_PATH = REPO_ROOT / "deploy" / "helm" / "README.md"
+KUBERNETES_DOCS_PATH = REPO_ROOT / "docs" / "source" / "deployment" / "kubernetes.md"
+OPENSEARCH_VALUES_PATH = REPO_ROOT / "deploy" / "helm" / "examples" / "aws-opensearch-serverless-values.yaml"
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
+EXPECTED_RELEASE_VERSION = "2.2.0"
+EXPECTED_CHILD_CHART_VERSION = "0.0.5"
 
 
 def render_chart(*extra_args: str, namespace: str = "ns-aiq") -> list[dict[str, Any]]:
@@ -41,6 +53,63 @@ def walk_values(value: Any):
     elif isinstance(value, list):
         for item in value:
             yield from walk_values(item)
+
+
+def test_release_version_matches_helm_chart_images_and_docs():
+    with PYPROJECT_PATH.open("rb") as pyproject_file:
+        package_version = tomllib.load(pyproject_file)["project"]["version"]
+
+    parent_chart = yaml.safe_load((CHART_PATH / "Chart.yaml").read_text(encoding="utf-8"))
+    child_chart = yaml.safe_load(CHILD_CHART_PATH.read_text(encoding="utf-8"))
+    values = yaml.safe_load((CHART_PATH / "values.yaml").read_text(encoding="utf-8"))
+    opensearch_values = yaml.safe_load(OPENSEARCH_VALUES_PATH.read_text(encoding="utf-8"))
+
+    with tarfile.open(PACKAGED_CHILD_CHART_PATH, "r:gz") as archive:
+        packaged_files = {}
+        for member in archive.getmembers():
+            if not member.isfile():
+                continue
+            packaged_file = archive.extractfile(member)
+            assert packaged_file is not None
+            relative_path = Path(member.name).relative_to("aiq").as_posix()
+            packaged_files[relative_path] = packaged_file.read()
+
+    source_files = {
+        path.relative_to(CHILD_CHART_DIR).as_posix(): path.read_bytes()
+        for path in CHILD_CHART_DIR.rglob("*")
+        if path.is_file()
+    }
+    packaged_child_chart = yaml.safe_load(packaged_files["Chart.yaml"])
+
+    assert package_version == EXPECTED_RELEASE_VERSION
+    assert parent_chart["version"] == EXPECTED_RELEASE_VERSION
+    assert parent_chart["appVersion"] == EXPECTED_RELEASE_VERSION
+    assert child_chart["appVersion"] == EXPECTED_RELEASE_VERSION
+    assert child_chart["version"] == EXPECTED_CHILD_CHART_VERSION
+    assert packaged_child_chart == child_chart
+    assert packaged_files.keys() == source_files.keys()
+    assert {path: content for path, content in packaged_files.items() if path != "Chart.yaml"} == {
+        path: content for path, content in source_files.items() if path != "Chart.yaml"
+    }
+    assert parent_chart["dependencies"][0]["version"] == EXPECTED_CHILD_CHART_VERSION
+    assert values["aiq"]["apps"]["backend"]["image"]["tag"] == EXPECTED_RELEASE_VERSION
+    assert values["aiq"]["apps"]["frontend"]["image"]["tag"] == EXPECTED_RELEASE_VERSION
+    assert opensearch_values["aiq"]["apps"]["backend"]["image"]["tag"] == EXPECTED_RELEASE_VERSION
+
+    rendered_images = {
+        manifest["metadata"]["name"]: manifest["spec"]["template"]["spec"]["containers"][0]["image"]
+        for manifest in render_chart()
+        if manifest.get("kind") == "Deployment"
+    }
+    assert rendered_images["aiq-backend"] == f"nvcr.io/nvidia/blueprint/aiq-agent:{EXPECTED_RELEASE_VERSION}"
+    assert rendered_images["aiq-frontend"] == f"nvcr.io/nvidia/blueprint/aiq-frontend:{EXPECTED_RELEASE_VERSION}"
+
+    expected_chart_archive = f"aiq2-web-{EXPECTED_RELEASE_VERSION}.tgz"
+    chart_archive_pattern = re.compile(r"aiq2-web-[\w.-]+\.tgz")
+    for documentation_path in (HELM_README_PATH, KUBERNETES_DOCS_PATH):
+        documentation = documentation_path.read_text(encoding="utf-8")
+        assert set(chart_archive_pattern.findall(documentation)) == {expected_chart_archive}
+        assert f"**aiq2-web** version **{EXPECTED_RELEASE_VERSION}**" in documentation
 
 
 def test_default_chart_renders_referenced_configmaps_and_uses_user_supplied_secret():

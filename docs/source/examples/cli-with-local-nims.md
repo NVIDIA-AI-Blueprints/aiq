@@ -202,7 +202,8 @@ The CLI script starts an interactive session. Type your research query and the s
 
 ## Tips for Local NIMs
 
-- **GPU memory**: Monitor with `nvidia-smi`. The 30B model needs ~40 GB VRAM.
+- **GPU memory**: Monitor with `nvidia-smi`. Size GPUs for the
+  `nvidia/nemotron-3-super-120b-a12b` NIM using the model card and support matrix.
 - **Startup time**: NIM containers take 2--5 minutes to load the model on first start. Wait until `/v1/models` returns a response.
 - **Multiple GPUs**: Use `--gpus '"device=0,1"'` to spread across GPUs, or run separate containers per GPU for different model roles.
 - **Networking**: If running inside Docker Compose, use container names instead of `localhost` for `base_url`.

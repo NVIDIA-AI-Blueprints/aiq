@@ -7,10 +7,14 @@ SPDX-License-Identifier: Apache-2.0
 To run tests:
 
 ```bash
-pytest
-pytest --cov=src/aiq_agent --cov-report=html
-pytest tests/path/to/test_file.py
+uv sync --group dev
 uv run pytest
+uv run pytest --cov=src/aiq_agent --cov-report=html
+uv run pytest tests/path/to/test_file.py
+
+# MCP uses its own project, environment, and lockfile.
+uv sync --project mcp --extra dev
+uv run --project mcp --extra dev pytest mcp/tests
 ```
 
 Use mocks for external services; mark slow/integration tests with `@pytest.mark.slow` / `@pytest.mark.integration` as needed.

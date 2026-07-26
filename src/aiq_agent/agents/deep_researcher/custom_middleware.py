@@ -16,9 +16,12 @@
 """Custom middleware for the deep research agent."""
 
 import asyncio
+import hashlib
 import json
 import logging
+import posixpath
 import re
+import threading
 from pathlib import Path
 from pathlib import PurePosixPath
 
@@ -47,9 +50,90 @@ _SOURCE_ROUTING_PATH = "/shared/source_routing.json"
 # route-local key. The guard reads raw state, so it must accept both forms or it
 # blocks the orchestrator forever on sandboxed runs.
 _SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
+FINAL_REPORT_PATH = "/shared/output.md"
+FINAL_REPORT_STATE_PATHS = (FINAL_REPORT_PATH, "/output.md")
 _UNRESOLVED_SANDBOX_PATH_PATTERN = re.compile(
     r"<\s*sandbox_(?:artifact_dir|workdir)\s*>|\{\{\s*sandbox_(?:artifact_dir|workdir)\s*\}\}"
 )
+
+
+def _normalized_virtual_path(path: object) -> str | None:
+    """Return a canonical virtual path without weakening backend validation."""
+    if not isinstance(path, str) or not path:
+        return None
+    normalized = posixpath.normpath(path.replace("\\", "/"))
+    return normalized if normalized.startswith("/") else f"/{normalized}"
+
+
+def _tool_file_path(tool_call: object) -> str | None:
+    """Read and normalize a filesystem tool's target path."""
+    if not isinstance(tool_call, dict):
+        return None
+    args = tool_call.get("args")
+    if not isinstance(args, dict):
+        return None
+    return _normalized_virtual_path(args.get("file_path", args.get("path")))
+
+
+def _entry_text(entry: object) -> str | None:
+    """Read exact text from a DeepAgents state-file entry."""
+    if isinstance(entry, dict):
+        entry = entry.get("content")
+    if isinstance(entry, bytes):
+        try:
+            return entry.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(entry, str):
+        return entry
+    return None
+
+
+def _tool_result_failed(result: object) -> bool:
+    """Return whether a filesystem tool result reports an error."""
+    status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+    return status == "error"
+
+
+class FinalReportCommitTracker:
+    """Run-local proof of the writer's most recent successful report mutation."""
+
+    def __init__(self) -> None:
+        self._digest: str | None = None
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _digest_text(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def record(self, content: str) -> str:
+        """Record the exact UTF-8 digest after a successful writer mutation."""
+        digest = self._digest_text(content)
+        with self._lock:
+            self._digest = digest
+        return digest
+
+    @property
+    def digest(self) -> str | None:
+        """Return the most recently committed digest for this run."""
+        with self._lock:
+            return self._digest
+
+    def committed_text(
+        self,
+        files: object,
+        *,
+        paths: tuple[str, ...] = FINAL_REPORT_STATE_PATHS,
+    ) -> str | None:
+        """Return the non-empty state file matching the writer's exact digest."""
+        digest = self.digest
+        if digest is None or not isinstance(files, dict):
+            return None
+        for path in paths:
+            content = _entry_text(files.get(path))
+            if content is not None and content.strip() and self._digest_text(content) == digest:
+                return content
+        return None
 
 
 class SourceRoutingGuardMiddleware(AgentMiddleware):
@@ -199,6 +283,124 @@ class FilesystemToolCallGuardMiddleware(AgentMiddleware):
         return await handler(request)
 
 
+class FinalReportOwnershipGuardMiddleware(AgentMiddleware):
+    """Reserve final-report mutation for the writer role."""
+
+    async def awrap_tool_call(self, request, handler):
+        """Reject non-writer mutations of either final-report state path."""
+        tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
+        if tool_call.get("name") not in {"write_file", "edit_file"}:
+            return await handler(request)
+        if _tool_file_path(tool_call) not in FINAL_REPORT_STATE_PATHS:
+            return await handler(request)
+        return ToolMessage(
+            content=(
+                "final_report_writer_only: only writer-agent may write or edit "
+                f"{FINAL_REPORT_PATH}; hand off evidence through the normal research workflow."
+            ),
+            tool_call_id=tool_call.get("id", "final-report-ownership"),
+            name=tool_call.get("name"),
+            status="error",
+        )
+
+
+class FinalReportCommitMiddleware(AgentMiddleware):
+    """Commit writer-owned output with overwrite and exact-digest verification."""
+
+    def __init__(self, *, backend: object, tracker: FinalReportCommitTracker) -> None:
+        self.backend = backend
+        self.tracker = tracker
+        self._mutation_lock = asyncio.Lock()
+
+    @staticmethod
+    def _tool_error(tool_call: dict[str, object], reason: str, guidance: str) -> ToolMessage:
+        return ToolMessage(
+            content=f"{reason}: {guidance}",
+            tool_call_id=tool_call.get("id", "final-report-commit"),
+            name=tool_call.get("name"),
+            status="error",
+        )
+
+    @staticmethod
+    def _response_error(response: object) -> object:
+        return response.get("error") if isinstance(response, dict) else getattr(response, "error", None)
+
+    async def _commit_write(self, tool_call: dict[str, object]) -> ToolMessage:
+        args = tool_call.get("args")
+        content = args.get("content") if isinstance(args, dict) else None
+        if not isinstance(content, str):
+            return self._tool_error(tool_call, "writer_output_commit_failed", "report content must be text")
+        try:
+            responses = await self.backend.aupload_files([(FINAL_REPORT_PATH, content.encode("utf-8"))])
+        except Exception as exc:  # noqa: BLE001 - return a stable, sanitized tool error
+            logger.warning("Writer final-report commit failed (%s)", type(exc).__name__)
+            return self._tool_error(tool_call, "writer_output_commit_failed", "the backend rejected the write")
+        if not isinstance(responses, list) or len(responses) != 1 or self._response_error(responses[0]):
+            logger.warning("Writer final-report commit returned an unsuccessful upload response")
+            return self._tool_error(tool_call, "writer_output_commit_failed", "the backend rejected the write")
+        self.tracker.record(content)
+        return ToolMessage(
+            content=f"Updated file {FINAL_REPORT_PATH}",
+            tool_call_id=tool_call.get("id", "final-report-commit"),
+            name="write_file",
+            status="success",
+        )
+
+    async def _refresh_after_edit(self, tool_call: dict[str, object], result: object) -> object:
+        if _tool_result_failed(result):
+            return result
+        try:
+            responses = await self.backend.adownload_files([FINAL_REPORT_PATH])
+        except Exception as exc:  # noqa: BLE001 - return a stable, sanitized tool error
+            logger.warning("Writer final-report verification failed (%s)", type(exc).__name__)
+            return self._tool_error(
+                tool_call,
+                "writer_output_commit_failed",
+                "the edited report could not be verified",
+            )
+        response = responses[0] if isinstance(responses, list) and len(responses) == 1 else None
+        content = response.get("content") if isinstance(response, dict) else getattr(response, "content", None)
+        if response is None or self._response_error(response) or not isinstance(content, bytes):
+            logger.warning("Writer final-report verification returned an unsuccessful download response")
+            return self._tool_error(
+                tool_call,
+                "writer_output_commit_failed",
+                "the edited report could not be verified",
+            )
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            return self._tool_error(tool_call, "writer_output_commit_failed", "the edited report is not UTF-8")
+        self.tracker.record(text)
+        return result
+
+    async def awrap_tool_call(self, request, handler):
+        """Upsert writer output and track successful writes or edits only."""
+        tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
+        tool_name = tool_call.get("name")
+        if tool_name not in {"write_file", "edit_file"}:
+            return await handler(request)
+        target = _tool_file_path(tool_call)
+        if target not in FINAL_REPORT_STATE_PATHS:
+            return await handler(request)
+        if target != FINAL_REPORT_PATH:
+            return self._tool_error(
+                tool_call,
+                "writer_output_path_invalid",
+                f"write the final report to {FINAL_REPORT_PATH}",
+            )
+
+        async with self._mutation_lock:
+            if tool_name == "write_file":
+                return await self._commit_write(tool_call)
+            try:
+                result = await handler(request)
+            except Exception as exc:  # noqa: BLE001 - return a stable, sanitized tool error
+                logger.warning("Writer final-report edit failed (%s)", type(exc).__name__)
+                return self._tool_error(tool_call, "writer_output_commit_failed", "the backend rejected the edit")
+            return await self._refresh_after_edit(tool_call, result)
+
+
 class RequiredOutputFileMiddleware(AgentMiddleware):
     """Verify a model's file-backed completion marker before ending its run.
 
@@ -210,22 +412,25 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
     def __init__(
         self,
         *,
-        paths: tuple[str, ...] = ("/shared/output.md", "/output.md"),
+        tracker: FinalReportCommitTracker,
+        paths: tuple[str, ...] = FINAL_REPORT_STATE_PATHS,
         completion_marker: str = "Wrote /shared/output.md",
         max_retries: int = 1,
-        reason_code: str = "writer_output_missing",
+        reason_code: str = "writer_output_not_committed",
     ) -> None:
         """Configure the accepted state paths and bounded corrective turns."""
         if not paths:
             raise ValueError("paths must not be empty")
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
+        self.tracker = tracker
         self.paths = paths
         self.completion_marker = completion_marker
         self.max_retries = max_retries
         self.reason_code = reason_code
         self._retry_message = (
-            "The required final output file is missing or empty. Do not repeat research or regenerate artifacts. "
+            "The final report is missing, empty, or was not committed by this writer run. "
+            "Do not repeat research or regenerate artifacts. "
             f"Call write_file with file_path={paths[0]} and the complete final Markdown, confirm the tool "
             f"succeeds, and only then return `{completion_marker}`."
         )
@@ -234,21 +439,9 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
     def _files_from_state(state: object) -> object:
         return state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
 
-    @staticmethod
-    def _entry_has_content(entry: object) -> bool:
-        if isinstance(entry, dict):
-            entry = entry.get("content")
-        if isinstance(entry, bytes):
-            return bool(entry.strip())
-        if isinstance(entry, str):
-            return bool(entry.strip())
-        if isinstance(entry, list):
-            return any(isinstance(line, str) and line.strip() for line in entry)
-        return False
-
-    def _required_output_exists(self, state: object) -> bool:
+    def _required_output_is_committed(self, state: object) -> bool:
         files = self._files_from_state(state)
-        return isinstance(files, dict) and any(self._entry_has_content(files.get(path)) for path in self.paths)
+        return self.tracker.committed_text(files, paths=self.paths) is not None
 
     def _retry_count(self, messages: list[object]) -> int:
         return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
@@ -262,16 +455,14 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
             return None
         if last_message.text.strip() != self.completion_marker:
             return None
-        if self._required_output_exists(state):
+        if self._required_output_is_committed(state):
             return None
 
         retry_count = self._retry_count(messages)
         if retry_count >= self.max_retries:
             raise RuntimeError(self.reason_code)
 
-        logger.warning(
-            "Agent reported file-backed completion before the required output existed; requesting corrective turn"
-        )
+        logger.warning("Agent reported completion before committing the required output; requesting corrective turn")
         return {
             "messages": [HumanMessage(content=self._retry_message)],
             "jump_to": "model",

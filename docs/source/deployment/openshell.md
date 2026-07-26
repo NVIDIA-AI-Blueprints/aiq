@@ -117,15 +117,25 @@ Until that release exists, `pip check` reports the adapter's declared
 DeepAgents-range conflict; this PR must not describe that metadata state as
 clean even though the tested adapter surface works with AI-Q's locked runtime.
 
-AI-Q currently requires and defaults to OpenShell `0.0.80`. It is the first
-released version that acknowledges the initial sandbox-scoped policy revision as
-`LOADED` after successful policy-engine construction and exposes immutable
-request-level labels/selectors through the Python SDK. Earlier releases can leave
-the revision `PENDING` with `current_policy_version=0` or omit ownership labels,
-so they fail AI-Q's strict readiness checks.
+AI-Q currently requires and defaults to OpenShell `0.0.88`. It retains the
+policy-revision and request-label capabilities AI-Q requires, adds explicit
+workspace scoping to the SDK, and assigns file-compatible Landlock rights to
+non-directory paths. That path handling allows the shipped `/dev/urandom` and
+`/dev/null` rules to work on Linux while Landlock remains a
+`hard_requirement`; earlier releases can reject those rules during sandbox
+startup.
+
+Landlock mode never downgrades automatically. Linux production acceptance uses
+`hard_requirement`, so a gateway or host that cannot enforce the required
+filesystem policy fails sandbox readiness or creation closed, before research
+commands can run. `best_effort` is intended primarily for local macOS/Docker
+Desktop functional demos, where Landlock is unavailable: it requires an
+explicit AI-Q opt-in, permits the demo to run without the production
+filesystem-confinement guarantee, and cannot be reported as Linux production
+acceptance.
 
 The certified release is necessary but not sufficient: runtime security decisions
-remain capability-based. On the supported `0.0.80` stack, the current, active,
+remain capability-based. On the supported `0.0.88` stack, the current, active,
 revision, and effective-config versions must all be positive and agree. Any
 missing capability or version/content/hash/source mismatch fails closed.
 
@@ -177,6 +187,7 @@ The gateway launcher, AI-Q runtime, and live suite use these non-secret settings
 |---|---|---|
 | `AIQ_OPENSHELL_LIVE_TESTS` | unset | Must equal `1` to enable live tests |
 | `AIQ_OPENSHELL_GATEWAY_NAME` | active gateway | Registered gateway name |
+| `AIQ_OPENSHELL_WORKSPACE` | `default` | Optional non-default workspace override for sandbox lifecycle operations |
 | `AIQ_OPENSHELL_POLICY_FILE` | `configs/openshell/generated/aiq-openshell-policy.yaml` | Policy submitted and attested |
 | `AIQ_OPENSHELL_IMAGE` | `aiq-openshell-demo:latest` | Prebuilt sandbox image |
 | `AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION` | installed SDK version | Optional exact live-test override |
@@ -194,7 +205,7 @@ From the AI-Q repository root, provision the pinned SDK, hard policy, and image:
 
 ```bash
 ./scripts/openshell/setup_openshell.sh \
-  --openshell-version 0.0.80 \
+  --openshell-version 0.0.88 \
   --policy offline \
   --landlock-compatibility hard_requirement
 ```
@@ -221,7 +232,7 @@ Export the same image and policy for the AI-Q process:
 export AIQ_OPENSHELL_GATEWAY_NAME=openshell
 export AIQ_OPENSHELL_IMAGE=aiq-openshell-demo:latest
 export AIQ_OPENSHELL_POLICY_FILE="$PWD/configs/openshell/generated/aiq-openshell-policy.yaml"
-export AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION=0.0.80
+export AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION=0.0.88
 ```
 
 Validate and start AI-Q with the production pairing in
@@ -245,7 +256,7 @@ AIQ_OPENSHELL_LIVE_TESTS=1 \
 AIQ_OPENSHELL_GATEWAY_NAME=openshell \
 AIQ_OPENSHELL_POLICY_FILE=configs/openshell/generated/aiq-openshell-policy.yaml \
 AIQ_OPENSHELL_IMAGE=aiq-openshell-demo:latest \
-AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION=0.0.80 \
+AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION=0.0.88 \
 .venv/bin/python -m pytest -m integration -vv \
   tests/aiq_agent/agents/deep_researcher/sandbox/test_openshell_live.py
 ```
@@ -264,7 +275,7 @@ Bash behavior:
 ```bash
 brew install bash
 /opt/homebrew/bin/bash ./scripts/openshell/setup_openshell.sh \
-  --openshell-version 0.0.80 \
+  --openshell-version 0.0.88 \
   --local-demo \
   --policy offline
 ```
@@ -290,7 +301,7 @@ instead of the caller's transient launchd environment:
 
 The wrapper downloads the installer from the certified OpenShell tag to a
 temporary file, verifies its checked-in SHA-256, and invokes the official
-installer with `OPENSHELL_VERSION=v0.0.80`. It refuses root, non-Apple-Silicon
+installer with `OPENSHELL_VERSION=v0.0.88`. It refuses root, non-Apple-Silicon
 hosts, and ambiguous OpenShell installations. It never pipes a download into a
 shell, creates an AI-Q tap, launches a raw gateway, disables TLS, or stores
 credentials.
@@ -298,7 +309,7 @@ credentials.
 OpenShell's release installer stages its formula in a local `nvidia/openshell`
 tap created with Homebrew's `--no-git` mode. Because that tap has no Git remote,
 `brew upgrade openshell` cannot fetch a newly released formula; it can leave the
-packaged gateway on `0.0.72` while AI-Q's virtual-environment CLI/SDK is `0.0.80`.
+packaged gateway on `0.0.72` while AI-Q's virtual-environment CLI/SDK is `0.0.88`.
 Rerun the explicit pinned installer wrapper when directed. Do not copy a formula
 manually, create a custom AI-Q tap, use `launchctl setenv`, or keep multiple
 OpenShell service identities.
@@ -325,10 +336,10 @@ AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK=false \
 
 AIQ_OPENSHELL_POLICY_FILE=configs/openshell/generated/aiq-openshell-policy.yaml \
 AIQ_OPENSHELL_IMAGE=aiq-openshell-demo:latest \
-AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION=0.0.80 \
+AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION=0.0.88 \
 AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK=false \
 ./scripts/start_e2e.sh --config_file configs/config_openshell.yml \
-  2>&1 | tee e2e-openshell-0.0.80.log
+  2>&1 | tee e2e-openshell-0.0.88.log
 ```
 
 Run the same mechanics through the convenience wrapper with the explicit demo
@@ -339,7 +350,7 @@ opt-in:
   --gateway openshell \
   --policy configs/openshell/generated/aiq-openshell-policy.yaml \
   --image aiq-openshell-demo:latest \
-  --expected-gateway-version 0.0.80 \
+  --expected-gateway-version 0.0.88 \
   --allow-best-effort-landlock
 ```
 
@@ -360,9 +371,11 @@ to substitute a local gateway if the remote service is unavailable:
   --policy-file configs/openshell/generated/aiq-openshell-policy.yaml
 ```
 
-The disposable strict capability probe is mandatory. After it passes,
-export `AIQ_OPENSHELL_GATEWAY_NAME=enterprise` and run the live suite. Never fall
-back to a plaintext registration, insecure TLS, or a local raw gateway.
+The disposable strict capability probe is mandatory. After it passes, export
+`AIQ_OPENSHELL_GATEWAY_NAME=enterprise` and run the live suite. Set
+`AIQ_OPENSHELL_WORKSPACE` only when the registered gateway uses a non-default
+workspace. Never fall back to a plaintext registration, insecure TLS, or a
+local raw gateway.
 
 ## Shared Debug Attachment
 
@@ -425,7 +438,7 @@ AIQ_OPENSHELL_LIVE_TESTS=1 \
 AIQ_OPENSHELL_GATEWAY_NAME=openshell \
 AIQ_OPENSHELL_POLICY_FILE=configs/openshell/generated/aiq-openshell-policy.yaml \
 AIQ_OPENSHELL_IMAGE=aiq-openshell-demo:latest \
-AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION=0.0.80 \
+AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION=0.0.88 \
 .venv/bin/python -m pytest -m integration -vv \
   tests/aiq_agent/agents/deep_researcher/sandbox/test_openshell_live.py
 ```

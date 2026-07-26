@@ -218,7 +218,17 @@ def _source_ids_by_lowercase() -> tuple[list[str], dict[str, str]]:
     return known_ids, {source_id.lower(): source_id for source_id in known_ids}
 
 
-async def _get_agent_available_source_ids(builder: WorkflowBuilder, agent_config_name: str) -> list[str]:
+def _get_configured_agent_function_config(builder: WorkflowBuilder, config_name: str) -> Any | None:
+    """Return an active function config, or None for NAT's missing-function error."""
+    try:
+        return builder.get_function_config(config_name)
+    except ValueError as exc:
+        if str(exc) == f"Function `{config_name}` not found":
+            return None
+        raise
+
+
+async def _get_agent_available_source_ids(builder: WorkflowBuilder, fn_config: Any) -> list[str]:
     """Return mapped source IDs with at least one effective tool for an agent config.
 
     This mirrors the async job runner's effective tool resolution: explicit
@@ -234,8 +244,7 @@ async def _get_agent_available_source_ids(builder: WorkflowBuilder, agent_config
     A registered agent without these fields is a registration-time bug, not a
     runtime concern.
     """
-    fn_config = builder.get_function_config(agent_config_name)
-    tool_refs = fn_config.tools if fn_config.tools is not None else get_all_tool_refs()
+    tool_refs = fn_config.tools or get_all_tool_refs()
     tools = await builder.get_tools(tool_names=tool_refs, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
 
     excluded = set(fn_config.exclude_tools or [])
@@ -270,6 +279,7 @@ async def _validate_data_sources_for_agent(
     builder: WorkflowBuilder,
     agent_type: str,
     agent_config_name: str,
+    fn_config: Any,
     data_sources: list[str] | None,
 ) -> None:
     """Raise HTTP 422 if requested sources are unknown or unavailable to the selected agent."""
@@ -285,7 +295,7 @@ async def _validate_data_sources_for_agent(
     known_ids, known_by_lower = _source_ids_by_lowercase()
 
     try:
-        available_ids = await _get_agent_available_source_ids(builder, agent_config_name)
+        available_ids = await _get_agent_available_source_ids(builder, fn_config)
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -456,7 +466,7 @@ class AgentInfo(BaseModel):
 class AgentListResponse(BaseModel):
     """List of available agents."""
 
-    agents: list[AgentInfo] = Field(..., description="Registered agent types")
+    agents: list[AgentInfo] = Field(..., description="Public agent types configured in the active workflow")
 
 
 class DataSource(BaseModel):
@@ -617,15 +627,17 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         response_model=AgentListResponse,
         tags=["async jobs"],
         summary="List available agents",
-        description="Returns all registered agent types that can be used with the submit endpoint.",
+        description="Returns public agent types configured in the active workflow.",
     )
     async def list_agents() -> AgentListResponse:
         """List available agent types for async job submission."""
-        agents = [
-            AgentInfo(agent_type=agent_type, description=config.description)
-            for agent_type, config in AGENT_REGISTRY.items()
-            if config.public
-        ]
+        agents = []
+        for agent_type, config in AGENT_REGISTRY.items():
+            if not config.public:
+                continue
+            if _get_configured_agent_function_config(builder, config.config_name) is None:
+                continue
+            agents.append(AgentInfo(agent_type=agent_type, description=config.description))
         return AgentListResponse(agents=agents)
 
     @app.get(
@@ -684,7 +696,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             "Submit a research query to a registered agent. Returns a job ID for tracking progress via SSE stream."
         ),
         responses={
-            400: {"description": "Unknown agent type or invalid request"},
+            400: {"description": "Unknown, internal-only, or unconfigured agent type, or invalid request"},
             409: {
                 "description": (
                     "A custom job_id was supplied that collides with an existing job, or a selected "
@@ -694,7 +706,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
             500: {
                 "description": (
-                    "Content encryption configuration is invalid or async job authorization persistence failed"
+                    "Content encryption configuration is invalid, async job authorization persistence failed, "
+                    "or agent/tool configuration lookup failed unexpectedly"
                 )
             },
             503: {"description": "Content encryption, Dask scheduler, or sandbox capacity is unavailable"},
@@ -710,6 +723,18 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             raise HTTPException(400, str(e))
         if not agent_config.public:
             raise HTTPException(400, f"Agent type is internal-only and cannot be submitted directly: {req.agent_type}")
+
+        fn_config = _get_configured_agent_function_config(builder, agent_config.config_name)
+        if fn_config is None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "agent_not_configured",
+                    "message": f"Agent '{req.agent_type}' is not configured in the active workflow",
+                    "agent_type": req.agent_type,
+                    "config_name": agent_config.config_name,
+                },
+            )
 
         expiry = req.expiry_seconds if req.expiry_seconds is not None else default_expiry_seconds
         # Authenticate the caller (raises 401/403 if unverified). The returned principal
@@ -735,6 +760,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             builder=builder,
             agent_type=req.agent_type,
             agent_config_name=agent_config.config_name,
+            fn_config=fn_config,
             data_sources=req.data_sources,
         )
         logger.info(
@@ -1184,29 +1210,39 @@ def _find_stale_jobs(db_url: str, running_status: str) -> list[str]:
 
     from ..jobs.event_store import EventStore
 
+    # Ensure job_events exists so the LEFT JOIN resolves (it need not have rows).
     EventStore._ensure_table_exists(db_url)
     engine = EventStore._get_or_create_sync_engine(db_url)
     inspector = inspect(engine)
-    if not inspector.has_table("job_events"):
+    # The query is driven from job_info; without it there are no jobs to reap.
+    if not inspector.has_table("job_info"):
         return []
 
     with engine.connect() as conn:
-        if db_url.startswith("postgresql"):
+        # Drive from job_info with a LEFT JOIN so a RUNNING job that has not
+        # persisted any events yet is still considered. That is exactly the
+        # failure this reaper exists to catch: a worker that crashes/OOMs after
+        # the job is marked RUNNING but before its first event is stored leaves
+        # zero rows in job_events and would be invisible to an INNER JOIN,
+        # sticking the job in RUNNING forever. COALESCE falls back to
+        # job_info.updated_at (set when the job entered RUNNING) when there are
+        # no events, so both cases share one staleness check.
+        if db_url.startswith(("postgresql", "postgres")):
             stale_query = text(
-                "SELECT DISTINCT je.job_id FROM job_events je "
-                "INNER JOIN job_info ji ON je.job_id = ji.job_id "
+                "SELECT ji.job_id FROM job_info ji "
+                "LEFT JOIN job_events je ON je.job_id = ji.job_id "
                 "WHERE ji.status = :running_status "
-                "GROUP BY je.job_id "
-                "HAVING MAX(je.created_at) < NOW() - :timeout * INTERVAL '1 second'"
+                "GROUP BY ji.job_id, ji.updated_at "
+                "HAVING COALESCE(MAX(je.created_at), ji.updated_at) < NOW() - :timeout * INTERVAL '1 second'"
             )
             params = {"running_status": running_status, "timeout": GHOST_JOB_TIMEOUT_SECONDS}
         else:
             stale_query = text(
-                "SELECT DISTINCT je.job_id FROM job_events je "
-                "INNER JOIN job_info ji ON je.job_id = ji.job_id "
+                "SELECT ji.job_id FROM job_info ji "
+                "LEFT JOIN job_events je ON je.job_id = ji.job_id "
                 "WHERE ji.status = :running_status "
-                "GROUP BY je.job_id "
-                "HAVING MAX(je.created_at) < datetime('now', :timeout_interval)"
+                "GROUP BY ji.job_id, ji.updated_at "
+                "HAVING COALESCE(MAX(je.created_at), ji.updated_at) < datetime('now', :timeout_interval)"
             )
             params = {
                 "running_status": running_status,
@@ -1217,13 +1253,42 @@ def _find_stale_jobs(db_url: str, running_status: str) -> list[str]:
         return [row[0] for row in result]
 
 
+def _mark_job_failed_if_running(db_url: str, job_id: str, running_status: str, failure_status: str, error: str) -> bool:
+    """Atomically flip a job from RUNNING to FAILURE, only if still running.
+
+    Returns True iff this call performed the transition. The ``WHERE status =
+    running`` guard makes the write conditional in a single statement, so a job
+    that reached a terminal state (e.g. a slow worker that finished) between
+    detection and reaping is never clobbered.
+    """
+    from sqlalchemy import text
+
+    from ..jobs.event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    now_expr = "NOW()" if db_url.startswith(("postgresql", "postgres")) else "CURRENT_TIMESTAMP"
+    stmt = text(
+        f"UPDATE job_info SET status = :failure, error = :error, updated_at = {now_expr} "
+        "WHERE job_id = :job_id AND status = :running"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(
+            stmt,
+            {"failure": failure_status, "error": error, "job_id": job_id, "running": running_status},
+        )
+        return (result.rowcount or 0) == 1
+
+
 async def _reap_ghost_jobs(job_store, db_url: str) -> None:
     """
     Background task that periodically marks stale RUNNING jobs as FAILURE.
 
     A job is considered "ghost" if it has been RUNNING for over
-    GHOST_JOB_TIMEOUT_SECONDS with no new events in the job_events table.
-    This catches Dask worker crashes and OOM kills that bypass Python exception handling.
+    GHOST_JOB_TIMEOUT_SECONDS with no new events in the job_events table, OR if
+    it has been RUNNING that long without ever storing an event (measured from
+    job_info.updated_at). This catches Dask worker crashes and OOM kills that
+    bypass Python exception handling, including a crash before the first event
+    is persisted.
     """
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
 
@@ -1244,19 +1309,31 @@ async def _reap_ghost_jobs(job_store, db_url: str) -> None:
             stale_job_ids = await loop.run_in_executor(None, _find_stale_jobs, db_url, JobStatus.RUNNING.value)
 
             for stale_job_id in stale_job_ids:
-                logger.warning("Reaping ghost job %s (no events for %ds)", stale_job_id, GHOST_JOB_TIMEOUT_SECONDS)
+                error_msg = "Job timed out (no heartbeat received from worker)"
                 try:
-                    await job_store.update_status(
+                    transitioned = await loop.run_in_executor(
+                        None,
+                        _mark_job_failed_if_running,
+                        db_url,
                         stale_job_id,
-                        JobStatus.FAILURE,
-                        error="Job timed out (no heartbeat received from worker)",
+                        JobStatus.RUNNING.value,
+                        JobStatus.FAILURE.value,
+                        error_msg,
+                    )
+                    if not transitioned:
+                        # The job left RUNNING between detection and reaping
+                        # (e.g. a slow worker finished); leave its status intact.
+                        logger.info("Ghost reap skipped %s: no longer running", stale_job_id)
+                        continue
+                    logger.warning(
+                        "Reaped ghost job %s (no heartbeat for %ds)", stale_job_id, GHOST_JOB_TIMEOUT_SECONDS
                     )
                     event_store = EventStore(db_url, stale_job_id)
                     event_store.store(
                         {
                             "type": "job.error",
                             "data": {
-                                "error": "Job timed out (no heartbeat received from worker)",
+                                "error": error_msg,
                                 "error_type": "GhostJobTimeout",
                             },
                         }

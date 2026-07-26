@@ -140,6 +140,7 @@ class _FakeCreatedContext(_FakeOpenShellSandbox):
             phase=phase,
             current_policy_version=policy_version,
             name=name,
+            workspace="default",
         )
         revision_version = policy_version if policy_version > 0 else 1
         revision = SimpleNamespace(
@@ -158,7 +159,7 @@ class _FakeCreatedContext(_FakeOpenShellSandbox):
         )
         self._client = SimpleNamespace(
             get=MagicMock(return_value=self.sandbox),
-            health=MagicMock(return_value=SimpleNamespace(version="0.0.80")),
+            health=MagicMock(return_value=SimpleNamespace(version="0.0.88")),
             _stub=SimpleNamespace(
                 GetSandboxPolicyStatus=MagicMock(return_value=status),
                 GetSandboxConfig=MagicMock(return_value=config),
@@ -406,6 +407,7 @@ def test_per_job_session_uses_policy_spec_and_attests_before_return(
                         "policy": str(policy_path),
                         "image": "aiq:test",
                         "gateway": "sensitive-gateway-name",
+                        "workspace": "research",
                     }
                 },
             ),
@@ -420,6 +422,7 @@ def test_per_job_session_uses_policy_spec_and_attests_before_return(
     assert kwargs["spec"] == "job-spec"
     assert kwargs["labels"] == {"aiq": "deep-research", "aiq-job-id": "job-123"}
     assert kwargs["delete_on_exit"] is True
+    assert kwargs["workspace"] == "research"
     assert "sandbox" not in kwargs
     assert provider.physical_sandbox_name == "generated"
     assert "sensitive-gateway-name" not in caplog.text
@@ -434,11 +437,12 @@ def test_per_job_session_fails_before_creation_when_request_labels_are_unsupport
     def context_factory(
         *,
         cluster: str | None,
+        workspace: str,
         ready_timeout_seconds: float,
         spec: object,
         delete_on_exit: bool,
     ) -> _FakeCreatedContext:
-        del cluster, ready_timeout_seconds, spec, delete_on_exit
+        del cluster, workspace, ready_timeout_seconds, spec, delete_on_exit
         raise AssertionError("unsupported SDK must fail before creating a sandbox")
 
     with (
@@ -578,6 +582,7 @@ def test_attestation_reads_authoritative_policy_before_success(tmp_path: Path) -
     request = policy_status.call_args.args[0]
     assert request.name == context.sandbox.name
     assert request.version == 0
+    assert request.workspace == "default"
     config_request = sandbox_config.call_args.args[0]
     assert config_request.sandbox_id == context.sandbox.id
     succeeded = [event for event in events if event["data"]["status"] == "succeeded"]  # type: ignore[index]

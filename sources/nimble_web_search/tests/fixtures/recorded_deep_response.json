@@ -1,0 +1,45 @@
+{
+  "_description": "Recorded NimbleSearchRetriever.ainvoke() response, search_depth=deep",
+  "_captured": "2026-07-10",
+  "_query": "NVIDIA CUDA Toolkit documentation",
+  "_config": {
+    "max_results": 5,
+    "search_depth": "deep",
+    "focus": "general",
+    "country": "US",
+    "locale": "en"
+  },
+  "_redaction": "only url/title/description/position/entity_type/page_content kept; page_content truncated to 2000 chars; no headers/auth",
+  "documents": [
+    {
+      "page_content": "",
+      "metadata": {
+        "url": "https://docs.nvidia.com/cuda/",
+        "title": "CUDA Toolkit Documentation",
+        "description": "Find installation instructions, launch highlights, programming guides, compiler documentation, API references, CUDA libraries, profiling tools, samples, and ...",
+        "position": 1,
+        "entity_type": "OrganicResult"
+      }
+    },
+    {
+      "page_content": "Toggle Navigation\n\n* [Home](https://developer.nvidia.com/)\n* [Blog](https://developer.nvidia.com/blog/)\n* [Forums](https://forums.developer.nvidia.com/)\n* [Docs](https://docs.nvidia.com/)\n* [Downloads](https://developer.nvidia.com/downloads)\n* [Training](https://www.nvidia.com/en-us/deep-learning-ai/education/)\n\n* [Join](https://developer.nvidia.com/login)\n\n* Topics\n\n  + Artificial Intelligence\n  + [Overview](https://developer.nvidia.com/topics/ai/)\n  + [AI Inference](https://developer.nvidia.com/topics/ai/ai-inference/)\n  + [Conversational AI](https://developer.nvidia.com/topics/ai/conversational-ai/)\n  + [Cybersecurity](https://developer.nvidia.com/topics/ai/cybersecurity-ai/)\n  + [Data Science](https://developer.nvidia.com/topics/ai/data-science)\n  + [Generative AI](https://developer.nvidia.com/generative-ai)\n  + [Retrieval-Augmented Generation](https://developer.nvidia.com/topics/ai/retrieval-augmented-generation)\n  + [Vision AI](https://developer.nvidia.com/computer-vision)\n  + Cloud and Data Center\n  + [Cloud-Native Technologies](https://developer.nvidia.com/cloud-native)\n  + [IO Acceleration](https://developer.nvidia.com/magnum-io)\n  + [Networking](https://developer.nvidia.com/networking)\n  + Design and Simulation\n  + [Computer Aided Engineering](https://developer.nvidia.com/topics/cae)\n  + [Extended Reality (XR)](https://developer.nvidia.com/xr)\n  + [Physics and Dynamics Simulation](https://developer.nvidia.com/physx-sdk)\n  + [Robotics Simulation](https://developer.nvidia.com/isaac/sim)\n  + [Self-Driving Vehicles Simulation](https://developer.nvidia.com/drive/simulation)\n  + Graphics and Rendering\n  + [Ray Tracing](https://developer.nvidia.com/rtx/ray-tracing)\n  + [Video, Broadcast, and Display](https://developer.nvidia.com/video-and-audio-solutions)\n  + [Game Engines](https://developer.nvidia.com/game-engines)\n  + [Image Processing](https://developer.nvidia.com/image-processing)\n  + High-Performance Computing\n  + [Overview](https://developer.nvidia.com/hpc)",
+      "metadata": {
+        "url": "https://developer.nvidia.com/cuda-toolkit-archive",
+        "title": "CUDA Toolkit Archive",
+        "description": "Previous releases of the CUDA Toolkit, GPU Computing SDK, documentation and developer drivers can be found using the links below. Please select the release...",
+        "position": 2,
+        "entity_type": "OrganicResult"
+      }
+    },
+    {
+      "page_content": "NVIDIACUDA Toolkit Documentation\n\nSearch In:\nEntire Site\nJust This Document\nclear search\nsearch\n\n▼CUDA Toolkit\n\n* [Release Notes](cuda-toolkit-release-notes/index.html \"The Release Notes for the CUDA Toolkit from v4.0 to today.\")\n* [EULA](eula/index.html \"The End User License Agreements for the NVIDIA CUDA Toolkit, the NVIDIA CUDA Samples, the NVIDIA Display Driver, and NVIDIA NSight (Visual Studio Edition).\")\n\n▼[Getting Started Guides](#getting-started-guides)\n\n* [Getting Started Linux](cuda-getting-started-guide-for-linux/index.html \"This guide discusses how to install and check for correct operation of the CUDA Development Tools on GNU/Linux systems.\")\n* [Getting Started Mac OS X](cuda-getting-started-guide-for-mac-os-x/index.html \"This guide discusses how to install and check for correct operation of the CUDA Development Tools on Mac OS X systems.\")\n* [Getting Started Windows](cuda-getting-started-guide-for-microsoft-windows/index.html \"This guide discusses how to install and check for correct operation of the CUDA Development Tools on Microsoft Windows systems.\")\n\n▼[Programming Guides](#programming-guides)\n\n* [Programming Guide](cuda-c-programming-guide/index.html \"This guide provides a detailed discussion of the CUDA programming model and programming interface. It then describes the hardware implementation, and provides guidance on how to achieve maximum performance. The Appendixes include a list of all CUDA-enabled devices, detailed description of all extensions to the C language, listings of supported mathematical functions, C++ features supported in host and device code, details on texture fetching, technical specifications of various devices, and concludes by introducing the low-level driver API.\")\n* [Best Practices Guide](cuda-c-best-practices-guide/index.html \"This guide presents established parallelization and optimization techniques and explains coding metaphors and idioms that can greatly simplify programming for CUDA-capable GPU architectures. The in",
+      "metadata": {
+        "url": "https://cseweb.ucsd.edu/classes/wi15/cse262-a/static/cuda-5.5-doc/html/index.html",
+        "title": "CUDA Toolkit Documentation",
+        "description": "This guide presents established parallelization and optimization techniques and explains coding metaphors and idioms that can greatly simplify programming for...",
+        "position": 3,
+        "entity_type": "OrganicResult"
+      }
+    }
+  ]
+}

@@ -23,6 +23,7 @@ The example config enables:
 - a fresh per-job Modal sandbox for Python execution
 - Python packages useful for analysis, including `pandas`, `numpy`, `matplotlib`, and `pillow`
 - virtual `/shared/` files for text artifacts that the orchestrator and subagents can read during the report workflow
+- durable capture of supported charts and data files for async API jobs
 
 The current built-in example skill is `data-table-analysis`. It is intended for quantitative research tasks where the agent must normalize researched facts and compute tabular outputs such as growth rates, rankings, summary statistics, CSV, JSON, or markdown tables.
 
@@ -79,6 +80,10 @@ functions:
       - pandas
       - pillow
     network: blocked
+    artifact_capture:
+      enabled: true
+      max_file_bytes: 50000000
+      allow_extensions: [.png, .jpg, .jpeg, .webp, .csv, .json, .md, .ipynb, .pdf]
 
   deep_research_agent:
     _type: deep_research_agent
@@ -88,6 +93,13 @@ functions:
 ```
 
 AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run in the configured provider. Modal creates a fresh sandbox named for the job.
+
+In the reference async API flow, artifact capture uses the job database configured by
+`general.front_end.db_url` (`NAT_JOB_STORE_DB_URL`) for metadata. Without that job-scoped database URL, as in a direct
+`nat run`, Modal execution still works but durable capture remains inactive. Artifact bytes use SQL BLOB storage in the
+job database by default. For production, use S3-compatible object storage by setting `AIQ_ARTIFACT_BLOB_PROVIDER=s3`,
+`AIQ_ARTIFACT_S3_BUCKET`, and the standard AWS credentials; set `AIQ_ARTIFACT_S3_ENDPOINT_URL` for MinIO or another
+compatible service. See [Production Artifact Storage](../../deployment/production.md#artifact-storage) for all options.
 
 To evaluate OpenShell instead, use `configs/config_openshell.yml` after running `scripts/setup_openshell.sh`. That profile
 is experimental: it attaches every job to one named, pre-provisioned sandbox. Per-job working directories avoid ordinary
@@ -204,7 +216,8 @@ No config change is required for additional built-in skills inside an enabled co
 - Text artifacts that need to survive for the report should be written through DeepAgents filesystem tools to `/shared/...`.
 - `/shared/` is a virtual DeepAgents filesystem path. Use `ls`, `read_file`, `write_file`, and `edit_file` for `/shared/`; do not inspect `/shared/` with shell commands through `execute`.
 - The sandbox is configured with `network: blocked`, so research should happen through AI-Q search tools, not from sandbox code.
-- Durable sandbox artifact capture is opt-in (`artifact_capture.enabled: true`) and also requires an artifact store.
-  Successful `execute` calls checkpoint manifest-declared files, and success/failure terminal paths perform one final
-  best-effort scan. A busy cancellation skips that scan and preserves earlier checkpoints. Adding a sandbox alone does
-  not guarantee that every generated file is persisted or embedded in the report.
+- The reference profile enables durable sandbox artifact capture, which requires the async API's job-scoped artifact
+  store. Successful `execute` calls checkpoint manifest-declared files, and success/failure terminal paths perform one
+  final best-effort scan. A busy cancellation skips that scan and preserves earlier checkpoints. Direct `nat run` does
+  not provide that store, and adding a sandbox alone does not guarantee that every generated file is persisted or
+  embedded in the report.

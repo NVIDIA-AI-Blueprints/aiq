@@ -45,12 +45,14 @@ def test_wrapper_translates_arguments_and_preserves_environment(
         [
             "--gateway",
             "enterprise",
+            "--workspace",
+            "research",
             "--policy",
             "policy.yaml",
             "--image",
             "image:tag",
             "--expected-gateway-version",
-            "0.0.80",
+            "0.0.88",
             "--allow-best-effort-landlock",
         ]
     )
@@ -64,9 +66,10 @@ def test_wrapper_translates_arguments_and_preserves_environment(
     assert env["AIQ_EXISTING_SETTING"] == "preserved"
     assert env["AIQ_OPENSHELL_LIVE_TESTS"] == "1"
     assert env["AIQ_OPENSHELL_GATEWAY_NAME"] == "enterprise"
+    assert env["AIQ_OPENSHELL_WORKSPACE"] == "research"
     assert env["AIQ_OPENSHELL_POLICY_FILE"] == "policy.yaml"
     assert env["AIQ_OPENSHELL_IMAGE"] == "image:tag"
-    assert env["AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION"] == "0.0.80"
+    assert env["AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION"] == "0.0.88"
     assert env["AIQ_OPENSHELL_LIVE_ALLOW_BEST_EFFORT"] == "1"
 
 
@@ -76,8 +79,10 @@ def test_wrapper_uses_generated_policy_and_single_pytest_target(
 ) -> None:
     monkeypatch.delenv("AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION", raising=False)
     monkeypatch.delenv("AIQ_OPENSHELL_POLICY_FILE", raising=False)
+    monkeypatch.setenv("AIQ_OPENSHELL_WORKSPACE", "")
     args = wrapper._args([])
 
+    assert args.workspace == "default"
     assert args.policy == "configs/openshell/generated/aiq-openshell-policy.yaml"
     assert args.expected_gateway_version is None
     assert wrapper._command()[-1] == _LIVE_TEST

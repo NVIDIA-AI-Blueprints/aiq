@@ -318,7 +318,10 @@ class DeepResearchWorkflowConfig(FunctionBaseConfig, name="deep_research_workflo
     for the deep_research_agent. Use this as the workflow for evaluation.
     """
 
-    pass
+    use_async_deep_research: bool = Field(
+        default=False,
+        description="Submit deep research as an async job instead of running inline",
+    )
 
 
 @register_function(config_type=DeepResearchWorkflowConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])

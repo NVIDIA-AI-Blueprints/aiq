@@ -45,6 +45,9 @@ from .custom_middleware import ArtifactHarvestMiddleware
 from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import ExecuteTimeoutClampMiddleware
 from .custom_middleware import FilesystemToolCallGuardMiddleware
+from .custom_middleware import FinalReportCommitMiddleware
+from .custom_middleware import FinalReportCommitTracker
+from .custom_middleware import FinalReportOwnershipGuardMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import RequiredOutputFileMiddleware
 from .custom_middleware import SourceRegistryMiddleware
@@ -133,6 +136,7 @@ class DeepResearchGraphContext:
     enable_source_router: bool
     backend: Any
     visibility_middleware: list[Any]
+    final_report_tracker: FinalReportCommitTracker
 
     @property
     def available_documents(self) -> list[dict[str, Any]]:
@@ -428,7 +432,10 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
                 prompt_name="source_router",
                 role=LLMRole.ROUTER,
                 tools=[source_catalog_tool],
-                middleware=build_source_router_middleware(extra_valid_tool_names=[source_catalog_tool.name]),
+                middleware=[
+                    *build_source_router_middleware(extra_valid_tool_names=[source_catalog_tool.name]),
+                    FinalReportOwnershipGuardMiddleware(),
+                ],
                 prompt_values={"clarifier_result": context.state.clarifier_result},
             )
         )
@@ -446,6 +453,7 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
             tools=context.tool_set.researcher_tools,
             middleware=[
                 *context.middleware_set.planner,
+                FinalReportOwnershipGuardMiddleware(),
                 TodoSuppressionMiddleware(),
                 PlanPersistenceMiddleware(backend=context.backend),
             ],
@@ -470,8 +478,12 @@ def build_deep_research_subagents(context: DeepResearchGraphContext) -> list[dic
             tools=context.tool_set.writer_tools,
             middleware=[
                 *context.middleware_set.writer,
+                FinalReportCommitMiddleware(
+                    backend=context.backend,
+                    tracker=context.final_report_tracker,
+                ),
                 TodoSuppressionMiddleware(),
-                RequiredOutputFileMiddleware(),
+                RequiredOutputFileMiddleware(tracker=context.final_report_tracker),
             ],
             prompt_values={"parent_report_context_available": context.parent_report_context_available},
             skills=context.skill_sources(WRITER_AGENT),
@@ -493,6 +505,7 @@ def build_deep_research_graph(
     callbacks: list[Any],
     domain_catalog_path: str | None,
     max_research_concurrency: int,
+    final_report_tracker: FinalReportCommitTracker,
     enable_source_router: bool = True,
 ) -> Any:
     """Build the full DeepAgents graph for one deep research run."""
@@ -524,6 +537,7 @@ def build_deep_research_graph(
         enable_source_router=enable_source_router,
         backend=runtime.backend,
         visibility_middleware=cross_cutting_middleware,
+        final_report_tracker=final_report_tracker,
     )
     researcher_model = context.llm_provider.get(LLMRole.RESEARCHER)
     researcher_skill_sources = context.skill_sources(RESEARCHER_AGENT)
@@ -535,7 +549,10 @@ def build_deep_research_graph(
             tools=context.tool_set.tools_info,
             execution_enabled=context.runtime.execution_enabled,
         ),
-        researcher_middleware=context.middleware_set.researcher,
+        researcher_middleware=[
+            *context.middleware_set.researcher,
+            FinalReportOwnershipGuardMiddleware(),
+        ],
         skill_sources=researcher_skill_sources,
         backend=context.backend,
         visibility_middleware=context.visibility_middleware,
@@ -571,7 +588,12 @@ def build_deep_research_graph(
         ),
         subagents=build_deep_research_subagents(context),
         store=InMemoryStore(),
-        middleware=context.middleware(context.middleware_set.orchestrator),
+        middleware=context.middleware(
+            [
+                *context.middleware_set.orchestrator,
+                FinalReportOwnershipGuardMiddleware(),
+            ]
+        ),
         permissions=context.permissions(ORCHESTRATOR_AGENT),
         backend=context.backend,
     )
