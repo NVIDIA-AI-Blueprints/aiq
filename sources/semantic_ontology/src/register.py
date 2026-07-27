@@ -91,7 +91,7 @@ class SemanticOntologyQueryToolConfig(FunctionBaseConfig, name="semantic_ontolog
         description="Chat completions endpoint path on the Semantic Ontology frontend.",
     )
     timeout_seconds: float = Field(
-        default=120.0,
+        default=600.0,
         description="Overall request timeout. Semantic Ontology runs a text-to-SQL agent, so allow ample time.",
     )
 
