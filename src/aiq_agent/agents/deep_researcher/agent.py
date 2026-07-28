@@ -273,6 +273,25 @@ class DeepResearcherAgent:
                 state.files,
                 final_report_tracker=final_report_tracker,
             )
+            if self.enable_citation_verification and not self.source_registry_middleware.has_sources():
+                from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
+                from aiq_agent.common.tool_validation import validate_tool_availability
+
+                _, available_count, unavailable = validate_tool_availability(
+                    self.tools,
+                    research_type="deep research",
+                    enable_logging=False,
+                )
+                generated_answer = None
+                if final_message is not None:
+                    generated_answer = sanitize_report(final_message).sanitized_report
+                raise EmptySourceRegistryError(
+                    "deep research",
+                    unavailable_tools=unavailable,
+                    available_count=available_count,
+                    reason=classify_empty_source_registry_reason(state.data_sources, available_count, unavailable),
+                    generated_answer=generated_answer,
+                )
             if final_message is None:
                 raise RuntimeError("writer_output_not_committed")
 
@@ -302,20 +321,6 @@ class DeepResearcherAgent:
                         "returning the generated report without failing the job. "
                         "This may indicate unsupported citation formatting or over-aggressive verification."
                     )
-            elif self.enable_citation_verification:
-                from aiq_agent.common.tool_validation import validate_tool_availability
-
-                _, available_count, unavailable = validate_tool_availability(
-                    self.tools,
-                    research_type="deep research",
-                    enable_logging=False,
-                )
-                raise EmptySourceRegistryError(
-                    "deep research",
-                    unavailable_tools=unavailable,
-                    available_count=available_count,
-                )
-
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report

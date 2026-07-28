@@ -357,11 +357,29 @@ class ShallowResearcherAgent:
 
         # Post-process: verify citations against source registry
         validated_result = dict(result)
-        if validated_result.get("messages"):
-            last_msg = validated_result["messages"][-1]
-            if hasattr(last_msg, "content") and last_msg.content:
-                content = str(last_msg.content)
+        last_msg = validated_result["messages"][-1] if validated_result.get("messages") else None
+        content = str(last_msg.content) if last_msg is not None and getattr(last_msg, "content", None) else None
 
+        if not registry.all_sources():
+            from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
+            from aiq_agent.common.tool_validation import validate_tool_availability
+
+            _, available_count, unavailable = validate_tool_availability(
+                self.tools,
+                research_type="shallow research",
+                enable_logging=False,
+            )
+            generated_answer = sanitize_report(content).sanitized_report if content is not None else None
+            raise EmptySourceRegistryError(
+                "shallow research",
+                unavailable_tools=unavailable,
+                available_count=available_count,
+                reason=classify_empty_source_registry_reason(state.data_sources, available_count, unavailable),
+                generated_answer=generated_answer,
+            )
+
+        if validated_result.get("messages"):
+            if content is not None:
                 # Step 1: verify citations against registry
                 if registry.all_sources():
                     verification = verify_citations(content, registry)
@@ -376,20 +394,6 @@ class ShallowResearcherAgent:
                     sources = registry.all_sources()
                     if not verification.valid_citations and len(sources) == 1:
                         content = _append_minimal_citation(content, sources[0])
-                else:
-                    from aiq_agent.common.tool_validation import validate_tool_availability
-
-                    _, available_count, unavailable = validate_tool_availability(
-                        self.tools,
-                        research_type="shallow research",
-                        enable_logging=False,
-                    )
-                    raise EmptySourceRegistryError(
-                        "shallow research",
-                        unavailable_tools=unavailable,
-                        available_count=available_count,
-                    )
-
                 # Step 2: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
                 sanitization = sanitize_report(content)
                 content = sanitization.sanitized_report

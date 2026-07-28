@@ -26,6 +26,7 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -162,6 +163,15 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                         return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=str(exc))])
                     logger.exception("Failed to resolve per-user MCP tools for shallow research; continuing")
 
+                if data_sources == []:
+                    from aiq_agent.common.citation_verification import EmptySourceRegistryError
+                    from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+
+                    raise EmptySourceRegistryError(
+                        "shallow research",
+                        reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
+                    )
+
                 # Build the agent with this turn's tool set.
                 active_agent = ShallowResearcherAgent(
                     llm_provider=provider,
@@ -173,17 +183,21 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
 
                 # Require at least one available tool, else the agent would reason about
                 # tools it can't call. selected_tools already reflects filtering + MCP.
-                from aiq_agent.common import format_user_facing_tool_error
                 from aiq_agent.common import validate_tool_availability
 
-                is_valid, _, unavailable_tools = validate_tool_availability(
+                is_valid, available_count, unavailable_tools = validate_tool_availability(
                     selected_tools, research_type="shallow research"
                 )
                 if not is_valid:
-                    error_msg = format_user_facing_tool_error("shallow research", unavailable_tools)
-                    from langchain_core.messages import AIMessage
+                    from aiq_agent.common.citation_verification import EmptySourceRegistryError
+                    from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
 
-                    return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=error_msg)])
+                    raise EmptySourceRegistryError(
+                        "shallow research",
+                        unavailable_tools=unavailable_tools,
+                        available_count=available_count,
+                        reason=classify_empty_source_registry_reason(data_sources, available_count, unavailable_tools),
+                    )
 
                 return await active_agent.run(state)
         except Exception:
@@ -214,10 +228,13 @@ async def shallow_research_workflow(config: ShallowResearchWorkflowConfig, build
 
     async def _run(query: str) -> ChatResponse:
         """Run shallow research on a query string."""
-        result = await shallow_research_agent_fn.ainvoke(
-            ShallowResearchAgentState(messages=[HumanMessage(content=query)])
-        )
-        response_content = result.messages[-1].content
+        try:
+            result = await shallow_research_agent_fn.ainvoke(
+                ShallowResearchAgentState(messages=[HumanMessage(content=query)])
+            )
+            response_content = result.messages[-1].content
+        except EmptySourceRegistryError as exc:
+            response_content = exc.public_response
         return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
 
     yield FunctionInfo.from_fn(_run, description="Shallow research workflow for evaluation (accepts string query).")

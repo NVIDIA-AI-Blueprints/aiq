@@ -204,6 +204,13 @@ curl http://localhost:8000/v1/jobs/async/job/{job_id}
 
 Job statuses: `SUBMITTED`, `RUNNING`, `SUCCESS`, `FAILURE`, `INTERRUPTED`.
 
+Typed source-condition failures, such as running with no selected sources or receiving no
+results from the selected sources, remain in `FAILURE`. Their `error` is an actionable
+message describing how to correct the source selection or query. If the agent produced a
+sanitized answer before detecting the source condition, that report remains available from
+`GET /v1/jobs/async/job/{job_id}/report`. Unexpected failures continue to return a sanitized
+error and do not expose internal exception details or plaintext output.
+
 ### Stream Events (SSE)
 
 Stream real-time events from a running or completed job using Server-Sent Events.

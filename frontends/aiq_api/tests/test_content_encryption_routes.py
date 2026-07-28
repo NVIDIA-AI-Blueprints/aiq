@@ -80,7 +80,15 @@ def _enable_vault(monkeypatch) -> None:
     crypto.reset_content_encryption_manager_for_tests()
 
 
-async def _build_jobs_app(monkeypatch, tmp_path, *, job_output=None, submitted_job=None) -> FastAPI:
+async def _build_jobs_app(
+    monkeypatch,
+    tmp_path,
+    *,
+    job_output=None,
+    job_status="success",
+    job_error=None,
+    submitted_job=None,
+) -> FastAPI:
     import aiq_api.routes.jobs as jobs_routes
     from aiq_api.jobs import access
     from aiq_api.jobs import event_store
@@ -112,8 +120,8 @@ async def _build_jobs_app(monkeypatch, tmp_path, *, job_output=None, submitted_j
 
     job = SimpleNamespace(
         job_id="job-1",
-        status="success",
-        error=None,
+        status=job_status,
+        error=job_error,
         output=job_output,
         created_at=datetime.now(UTC),
     )
@@ -581,6 +589,53 @@ async def test_report_decrypts_encrypted_final_output(monkeypatch, tmp_path):
         "interaction_action": "edit",
         "result_kind": "report",
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("outcome_reason", "actionable_error"),
+    [
+        (
+            "no_sources_selected",
+            "No data sources are selected. Select at least one data source and run the research again.",
+        ),
+        (
+            "no_source_results",
+            "The selected data sources returned no results. "
+            "Try rephrasing the question or selecting different data sources.",
+        ),
+    ],
+)
+async def test_source_failure_status_is_actionable_and_preserved_report_is_available(
+    monkeypatch, tmp_path, outcome_reason, actionable_error
+):
+    _enable_static_key(monkeypatch)
+    stored = crypto.create_job_content_cipher("job-1").encrypt_output_json(
+        json.dumps(
+            {
+                "report": "# Preserved generated answer",
+                "outcome_reason": outcome_reason,
+            }
+        )
+    )
+    app = await _build_jobs_app(
+        monkeypatch,
+        tmp_path,
+        job_output=stored,
+        job_status="failure",
+        job_error=actionable_error,
+    )
+
+    with TestClient(app) as client:
+        status_response = client.get("/v1/jobs/async/job/job-1")
+        report_response = client.get("/v1/jobs/async/job/job-1/report")
+
+    assert status_response.status_code == 200
+    assert status_response.json()["status"] == "failure"
+    assert status_response.json()["error"] == actionable_error
+    assert report_response.status_code == 200
+    assert report_response.json()["has_report"] is True
+    assert report_response.json()["report"] == "# Preserved generated answer"
 
 
 @pytest.mark.asyncio
