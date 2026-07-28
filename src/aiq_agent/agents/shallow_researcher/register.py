@@ -105,6 +105,15 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
 
         try:
             data_sources = state.data_sources
+            if data_sources == []:
+                from aiq_agent.common.citation_verification import EmptySourceRegistryError
+                from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+
+                raise EmptySourceRegistryError(
+                    "shallow research",
+                    reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
+                )
+
             selected_tools = filter_tools_by_sources(tools, data_sources)
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
@@ -162,15 +171,6 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
 
                         return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=str(exc))])
                     logger.exception("Failed to resolve per-user MCP tools for shallow research; continuing")
-
-                if data_sources == []:
-                    from aiq_agent.common.citation_verification import EmptySourceRegistryError
-                    from aiq_agent.common.citation_verification import EmptySourceRegistryReason
-
-                    raise EmptySourceRegistryError(
-                        "shallow research",
-                        reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
-                    )
 
                 # Build the agent with this turn's tool set.
                 active_agent = ShallowResearcherAgent(

@@ -243,6 +243,15 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         interrupted = False
         try:
             data_sources = state.data_sources
+            if data_sources == []:
+                from aiq_agent.common.citation_verification import EmptySourceRegistryError
+                from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+
+                raise EmptySourceRegistryError(
+                    "deep research",
+                    reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
+                )
+
             selected_tools = filter_tools_by_sources(tools, data_sources)
             if sandbox_config is not None or (data_sources is not None and selected_tools != tools):
                 # Scope the Modal sandbox to the async job_id when one is in
@@ -274,15 +283,6 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
                 logger.warning("Deep research received data_sources with no matching tools")
-
-            if data_sources == []:
-                from aiq_agent.common.citation_verification import EmptySourceRegistryError
-                from aiq_agent.common.citation_verification import EmptySourceRegistryReason
-
-                raise EmptySourceRegistryError(
-                    "deep research",
-                    reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
-                )
 
             # Validate tool availability before starting deep research
             # At least one tool must be available

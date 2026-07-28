@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib
-import json
 import logging
 import threading
 import uuid
@@ -250,17 +249,12 @@ def _write_job_source_failure_if_running_sync(
     final_report_event: dict[str, Any] | None = None,
     job_output_cipher: Any | None = None,
 ) -> bool:
-    """Atomically persist a source failure and its optional final-report event."""
+    """Persist a source failure, then store its optional final-report event best-effort."""
     from sqlalchemy import text
 
     from .event_store import EventStore
 
-    event_store = EventStore(db_url, job_id, content_cipher=job_output_cipher)
-    stored_event: dict[str, Any] | None = None
-    if final_report_event is not None:
-        stored_event = event_store._prepare_event_for_storage(final_report_event)
-
-    engine = event_store._sync_engine
+    engine = EventStore._get_or_create_sync_engine(db_url)
     stmt = text(
         f"UPDATE job_info SET status = 'failure', error = :error, output = :output, "
         f"updated_at = {_db_now_expr(db_url)} WHERE job_id = :job_id AND status = 'running'"
@@ -273,30 +267,16 @@ def _write_job_source_failure_if_running_sync(
         if (result.rowcount or 0) != 1:
             return False
 
-        if stored_event is not None:
-            event_type = stored_event.get("type", "unknown")
-            event_json = json.dumps(stored_event)
-            if event_store._is_postgres:
-                inserted = conn.execute(
-                    text(
-                        "INSERT INTO job_events (job_id, event_type, event_data) "
-                        "VALUES (:job_id, :event_type, :event_data) RETURNING id"
-                    ),
-                    {"job_id": job_id, "event_type": event_type, "event_data": event_json},
-                )
-                event_id = inserted.scalar()
-                channel = f"job_events_{job_id.replace('-', '_')}"
-                payload = json.dumps({"id": event_id, "type": event_type})
-                conn.execute(text("SELECT pg_notify(:channel, :payload)"), {"channel": channel, "payload": payload})
-            else:
-                conn.execute(
-                    text(
-                        "INSERT INTO job_events (job_id, event_type, event_data) "
-                        "VALUES (:job_id, :event_type, :event_data)"
-                    ),
-                    {"job_id": job_id, "event_type": event_type, "event_data": event_json},
-                )
-        return True
+    if final_report_event is not None:
+        try:
+            EventStore(db_url, job_id, content_cipher=job_output_cipher).store(final_report_event)
+        except Exception as exc:
+            logger.warning(
+                "Job %s source-failure final-report event write failed exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
+    return True
 
 
 def _write_job_failure_if_running_sync(db_url: str, job_id: str, public_error: str) -> bool:

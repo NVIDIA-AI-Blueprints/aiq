@@ -104,18 +104,19 @@ async def test_shallow_run_surfaces_reconnect_when_source_unavailable():
 
 @pytest.mark.asyncio
 async def test_registered_shallow_run_raises_typed_no_sources_for_explicit_empty_selection():
-    """Production registration must reach the chat/runner typed-error catch."""
+    """Explicit empty selection fails before filtering or per-user setup."""
     run, agen = await _build_run()
     try:
         state = ShallowResearchAgentState(
             messages=[HumanMessage(content="research this")],
             data_sources=[],
         )
-        with patch.dict(sys.modules, {m: None for m in _AIQ_API_MODULES}):
+        with patch.object(shallow_register, "filter_tools_by_sources") as filter_tools:
             with pytest.raises(EmptySourceRegistryError) as exc_info:
                 await run(state)
 
         assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCES_SELECTED
+        filter_tools.assert_not_called()
     finally:
         await agen.aclose()
 

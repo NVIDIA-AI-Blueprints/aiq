@@ -90,6 +90,16 @@ def fixture_event_store_cache_guard():
     EventStore.dispose_all_engines()
 
 
+@pytest.fixture(name="content_encryption_manager_guard")
+def fixture_content_encryption_manager_guard():
+    """Reset content-encryption globals even when a test assertion fails."""
+    from aiq_api.jobs import crypto
+
+    crypto.reset_content_encryption_manager_for_tests()
+    yield
+    crypto.reset_content_encryption_manager_for_tests()
+
+
 class TestIntermediateStepEvent:
     """Tests for the IntermediateStepEvent model."""
 
@@ -921,7 +931,7 @@ class TestRunAgentJobEncryption:
     )
     @pytest.mark.asyncio
     async def test_empty_source_failure_persists_actionable_error_and_encrypted_outcome(
-        self, monkeypatch, tmp_path, reason, generated_answer, initial_status
+        self, monkeypatch, tmp_path, reason, generated_answer, initial_status, content_encryption_manager_guard
     ):
         import base64
         from contextlib import ExitStack
@@ -972,7 +982,6 @@ class TestRunAgentJobEncryption:
             base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
         )
         monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY_ID", "test-key")
-        crypto.reset_content_encryption_manager_for_tests()
         encryption_policy = crypto.get_content_encryption_policy_identity()
         db_url = f"sqlite:///{tmp_path / 'test.db'}"
         engine = EventStore._get_or_create_sync_engine(db_url)
@@ -1053,7 +1062,53 @@ class TestRunAgentJobEncryption:
             assert [event["data"]["content"] for event in final_reports] == [generated_answer]
         else:
             assert final_reports == []
-        crypto.reset_content_encryption_manager_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_source_failure_event_write_failure_preserves_typed_outcome(self, tmp_path):
+        from sqlalchemy import text
+
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _persist_empty_source_failure
+
+        db_url = f"sqlite:///{tmp_path / 'event-failure.db'}"
+        EventStore._ensure_table_exists(db_url)
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) "
+                    "VALUES ('job-1', 'running', 'original', 'kept')"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE TRIGGER reject_job_event BEFORE INSERT ON job_events "
+                    "BEGIN SELECT RAISE(FAIL, 'event insert failed'); END"
+                )
+            )
+
+        source_error = EmptySourceRegistryError(generated_answer="# Preserved report")
+        with patch("aiq_api.jobs.crypto.serialize_job_output_for_storage", return_value="stored-output"):
+            wrote = await _persist_empty_source_failure(
+                error=source_error,
+                job_output_cipher=None,
+                db_url=db_url,
+                job_id="job-1",
+            )
+
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT status, error, output FROM job_info WHERE job_id = 'job-1'")).one()
+
+        assert wrote is True
+        assert tuple(row) == ("failure", source_error.public_message, "stored-output")
+        assert EventStore.get_events(db_url, "job-1") == []
 
     @pytest.mark.asyncio
     async def test_empty_source_output_encryption_failure_uses_generic_sanitized_failure(self, tmp_path):

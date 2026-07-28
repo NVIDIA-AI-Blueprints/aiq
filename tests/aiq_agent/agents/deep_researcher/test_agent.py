@@ -389,6 +389,29 @@ class TestDeepResearcherAgent:
         assert exc_info.value.reason is expected_reason
 
     @pytest.mark.asyncio
+    async def test_explicit_empty_selection_skips_request_agent_setup(self):
+        from aiq_agent.agents.deep_researcher import register as deep_register
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.agents.deep_researcher.register import deep_research_agent
+
+        builder = MagicMock()
+        builder.get_tools = AsyncMock(return_value=[web_search_tool])
+        builder.get_llm = AsyncMock(return_value=MagicMock())
+        config = DeepResearchAgentConfig(orchestrator_llm="llm", tools=["web_search_tool"], verbose=False)
+        state = DeepResearchAgentState(messages=[HumanMessage(content="research this")], data_sources=[])
+
+        with patch.object(deep_register, "filter_tools_by_sources") as filter_tools:
+            registration = deep_research_agent.__wrapped__(config, builder)
+            function_info = await anext(registration)
+            try:
+                with pytest.raises(EmptySourceRegistryError):
+                    await function_info.single_fn(state)
+            finally:
+                await registration.aclose()
+
+        filter_tools.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_deep_evaluation_wrapper_returns_public_response_for_empty_sources(self):
         from aiq_agent.agents.deep_researcher.register import DeepResearchWorkflowConfig
         from aiq_agent.agents.deep_researcher.register import deep_research_workflow
