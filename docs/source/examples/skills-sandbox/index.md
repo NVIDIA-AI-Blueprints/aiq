@@ -166,7 +166,7 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
   }'
 ```
 
-Check the job until its status is either `SUCCESS` or `FAILURE`. If it reaches `FAILURE`, inspect the response's `error`
+Check the job until its status is either `success` or `failure`. If it reaches `failure`, inspect the response's `error`
 field for the actionable failure message:
 
 ```bash

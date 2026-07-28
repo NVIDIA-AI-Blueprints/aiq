@@ -26,6 +26,7 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
+from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
@@ -105,14 +106,7 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
 
         try:
             data_sources = state.data_sources
-            if data_sources == []:
-                from aiq_agent.common.citation_verification import EmptySourceRegistryError
-                from aiq_agent.common.citation_verification import EmptySourceRegistryReason
-
-                raise EmptySourceRegistryError(
-                    "shallow research",
-                    reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
-                )
+            validate_research_source_configuration(data_sources, "shallow research")
 
             selected_tools = filter_tools_by_sources(tools, data_sources)
 
@@ -181,23 +175,7 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                     callbacks=callbacks,
                 )
 
-                # Require at least one available tool, else the agent would reason about
-                # tools it can't call. selected_tools already reflects filtering + MCP.
-                from aiq_agent.common import validate_tool_availability
-
-                is_valid, available_count, unavailable_tools = validate_tool_availability(
-                    selected_tools, research_type="shallow research"
-                )
-                if not is_valid:
-                    from aiq_agent.common.citation_verification import EmptySourceRegistryError
-                    from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
-
-                    raise EmptySourceRegistryError(
-                        "shallow research",
-                        unavailable_tools=unavailable_tools,
-                        available_count=available_count,
-                        reason=classify_empty_source_registry_reason(data_sources, available_count, unavailable_tools),
-                    )
+                validate_research_source_configuration(data_sources, "shallow research", selected_tools)
 
                 return await active_agent.run(state)
         except Exception:

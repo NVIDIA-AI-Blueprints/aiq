@@ -31,6 +31,7 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
+from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
@@ -243,14 +244,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         interrupted = False
         try:
             data_sources = state.data_sources
-            if data_sources == []:
-                from aiq_agent.common.citation_verification import EmptySourceRegistryError
-                from aiq_agent.common.citation_verification import EmptySourceRegistryReason
-
-                raise EmptySourceRegistryError(
-                    "deep research",
-                    reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
-                )
+            validate_research_source_configuration(data_sources, "deep research")
 
             selected_tools = filter_tools_by_sources(tools, data_sources)
             if sandbox_config is not None or (data_sources is not None and selected_tools != tools):
@@ -284,27 +278,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
                 logger.warning("Deep research received data_sources with no matching tools")
 
-            # Validate tool availability before starting deep research
-            # At least one tool must be available
-            # This prevents the agent from trying to reason about unavailable tools
-            # Check selected_tools directly - they already reflect data_sources filtering
-            from aiq_agent.common import validate_tool_availability
-
-            is_valid, available_count, unavailable_tools = validate_tool_availability(
-                selected_tools, research_type="deep research"
-            )
-
-            # Fail if no tools are available
-            if not is_valid:
-                from aiq_agent.common.citation_verification import EmptySourceRegistryError
-                from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
-
-                raise EmptySourceRegistryError(
-                    "deep research",
-                    unavailable_tools=unavailable_tools,
-                    available_count=available_count,
-                    reason=classify_empty_source_registry_reason(data_sources, available_count, unavailable_tools),
-                )
+            validate_research_source_configuration(data_sources, "deep research", selected_tools)
 
             result = await active_agent.run(state)
             return result
