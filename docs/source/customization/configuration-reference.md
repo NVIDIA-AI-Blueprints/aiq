@@ -652,7 +652,7 @@ only the additional sections you need.
 | `configs/config_web_default_guardrails.yml` | Web API | LlamaIndex plus workflow Guardrails attachment. Shallow/deep middleware types are defined as capability examples; refer to [Guardrails](./guardrails.md) for the active attachment semantics. |
 | `configs/config_web_frag_mcp_auth.yml` | Web API | Foundational RAG plus a protected per-user OAuth MCP source example. Requires a real protected MCP endpoint and shared token-store configuration; it is not a zero-config default. |
 | `configs/config_domain_routing_and_skills.yml` | Direct deep-research workflow | Automatic domain routing, Tavily, DuckDuckGo news, Polymarket, LlamaIndex, enabled Serper paper search, built-in skills, and a Modal sandbox. Requires the corresponding service credentials and Modal setup. |
-| `configs/config_openshell.yml` | Web API, experimental | Skills and artifact capture over one pre-provisioned named OpenShell sandbox. Intended for trusted single-operator use; per-job directories are not multi-tenant isolation. |
+| `configs/config_openshell.yml` | Web API, experimental | Skills and artifact capture over one policy-bound OpenShell sandbox per deep-research job, with fail-closed policy attestation and terminal deletion. |
 | `configs/config_mcp.yml` | Standalone MCP server | Public NIM and Tavily research over stateless submit, poll, and final-report tools with PostgreSQL-backed job state. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Related

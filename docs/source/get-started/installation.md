@@ -51,7 +51,7 @@ The script performs the following steps:
 3. Installs the core package with dev dependencies
 4. Installs all frontends (CLI, debug console, API server)
 5. Installs benchmark packages (freshqa, deepsearch_qa)
-6. Installs the data source plugins (Tavily, Exa, Nimble, Google Scholar) and the LlamaIndex and Foundational RAG knowledge extras
+6. Installs the data source plugins (Tavily, Exa, Nimble, You.com, Google Scholar) and the LlamaIndex and Foundational RAG knowledge extras
 7. Sets up pre-commit hooks
 8. Copies `deploy/.env.example` to `deploy/.env` if no `.env` file exists
 9. Installs UI npm dependencies (if Node.js is available)
@@ -97,6 +97,7 @@ uv pip install -e ./frontends/aiq_api      # Unified API server (includes debug)
 uv pip install -e ./sources/tavily_web_search
 uv pip install -e ./sources/exa_web_search
 uv pip install -e ./sources/nimble_web_search
+uv pip install -e ./sources/you_com
 uv pip install -e ./sources/duckduckgo_news_search
 uv pip install -e ./sources/polymarket_prediction_market
 uv pip install -e ./sources/google_scholar_paper_search
