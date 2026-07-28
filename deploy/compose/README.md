@@ -84,7 +84,11 @@ bucket and SQL stores artifact metadata only. For MinIO, Ceph, R2, or another
 compatible service, set `AIQ_ARTIFACT_S3_ENDPOINT_URL`; leave it unset for AWS S3.
 Region and prefix are optional, with `artifacts/v1` as the default prefix.
 Credentials use the standard AWS credential chain. See `deploy/.env.example` for
-the complete variable list.
+the complete variable list. For production, use workload identity or a short-lived
+role rather than static access keys. The operator-owned bucket must block public
+access, restrict object operations to the AI-Q worker identity and configured prefix,
+require TLS, and enable storage-layer encryption. AI-Q does not application-encrypt
+artifact blob bytes before uploading them.
 
 ## Start Services
 

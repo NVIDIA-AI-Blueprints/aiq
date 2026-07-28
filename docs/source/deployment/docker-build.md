@@ -142,9 +142,11 @@ The container entrypoint is `python /app/deploy/entrypoint.py`, which orchestrat
 `entrypoint.py` is the Docker `ENTRYPOINT`. It performs the following:
 
 1. **Argument pass-through** -- If command-line arguments are provided, it `exec`s them directly (useful for running one-off commands in the container).
-2. **Dask scheduler** -- Starts a `dask-scheduler` process on the configured port (default `8786`) with a dashboard on port `8787`.
+2. **Dask scheduler** -- Starts a `dask-scheduler` process on loopback at the
+   configured port (default `8786`) with a loopback-only dashboard on port `8787`.
 3. **Wait for scheduler** -- Polls the scheduler with a Dask `Client` for up to 30 attempts (1 second apart).
-4. **Dask worker** -- Starts a `dask-worker` process connected to the scheduler.
+4. **Dask worker** -- Starts a `dask-worker` process connected to the scheduler,
+   with its RPC and diagnostics listeners restricted to loopback.
 5. **Environment variable** -- Sets `NAT_DASK_SCHEDULER_ADDRESS` so the web server can submit background jobs.
 6. **Web server** -- Launches `start_web.py` as a subprocess.
 7. **Signal handling** -- Installs SIGTERM/SIGINT handlers that gracefully shut down all three processes (web, worker, scheduler).

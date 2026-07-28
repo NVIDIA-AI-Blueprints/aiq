@@ -511,17 +511,22 @@ Other file types are ingested normally but do not receive summaries.
 ingestion the summary LLM is not worker-serializable, so `generate_summary` is forced off and a
 warning is logged; use `opensearch_ingestion_mode: local` if you require summaries.
 
-> **Frontend file types:** The frontend file picker defaults to `.pdf,.docx,.txt,.md` (matching LlamaIndex). Set `FILE_UPLOAD_ACCEPTED_TYPES` to match your backend:
+> **Upload controls:** The frontend file picker and backend API default to `.pdf,.docx,.txt,.md` (matching
+> LlamaIndex). Set `FILE_UPLOAD_ACCEPTED_TYPES` to match your selected backend. The API validates the extension,
+> declared media type, and file content. `FILE_UPLOAD_MAX_SIZE_MB` limits each file and all files combined in one
+> request; `FILE_UPLOAD_MAX_FILE_COUNT` limits the number of files in one request.
 >
 > | Deployment | Where to set |
 > |-----------|-------------|
-> | **CLI** (`start_e2e.sh`) | `deploy/.env`: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md` |
-> | **Docker Compose** | `deploy/.env` (passed to frontend container automatically) |
-> | **Helm** | `deploy/helm/deployment-k8s/values.yaml` under the frontend app's `env` section |
+> | **CLI** (`start_e2e.sh`) | `deploy/.env` |
+> | **Docker Compose** | `deploy/.env` (passed to the frontend and backend containers) |
+> | **Helm** | `deploy/helm/deployment-k8s/values.yaml` under both the backend and frontend apps' `env` sections |
 >
 > Example for Foundational RAG:
 > ```bash
 > FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md
+> FILE_UPLOAD_MAX_SIZE_MB=100
+> FILE_UPLOAD_MAX_FILE_COUNT=10
 > ```
 
 ### How It Works

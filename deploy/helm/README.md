@@ -370,8 +370,15 @@ helm upgrade --install aiq aiq2-web-2.2.0.tgz -n ns-aiq \
 | `AIQ_ARTIFACT_S3_ENDPOINT_URL` | Unset for AWS S3; set for MinIO or compatible storage |
 | `AIQ_ARTIFACT_S3_REGION` | Optional S3 region |
 | `AIQ_ARTIFACT_S3_PREFIX` | Optional object-key prefix; defaults to `artifacts/v1` |
-| `AWS_ACCESS_KEY_ID` | Optional S3 access key |
-| `AWS_SECRET_ACCESS_KEY` | Optional S3 secret key |
+| `AWS_ACCESS_KEY_ID` | Development-only S3-compatible access key; use workload identity in production |
+| `AWS_SECRET_ACCESS_KEY` | Development-only S3-compatible secret key; use workload identity in production |
+
+Production artifact storage is operator-managed infrastructure. Configure the
+service account or workload with a short-lived role, restrict object operations to
+the AI-Q worker identity and configured bucket prefix, enable Block Public Access
+and TLS-only access, and enable storage-layer encryption such as SSE-KMS. AI-Q API
+ownership checks do not protect direct bucket access, and AI-Q does not
+application-encrypt artifact blob bytes.
 
 ### Updating secrets
 

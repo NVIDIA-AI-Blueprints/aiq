@@ -18,11 +18,13 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
+from sqlalchemy import text
 
 from aiq_agent.auth import Principal
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
 from aiq_api.jobs import submit as submit_mod
+from aiq_api.jobs.event_store import EventStore
 from aiq_api.mcp_auth import active as active_mod
 from aiq_api.mcp_auth.nat_provider import NatMcpAuthProvider
 from aiq_api.mcp_auth.nat_provider import OAuthSourceSettings
@@ -81,10 +83,12 @@ def registry():
 
 
 @pytest.fixture
-def patched(monkeypatch):
+def patched(monkeypatch, tmp_path):
     import nat.front_ends.fastapi.async_jobs.job_store as js_mod
 
+    db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
     monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", "tcp://localhost:8786")
+    monkeypatch.setenv("NAT_JOB_STORE_DB_URL", db_url)
     monkeypatch.setattr(js_mod, "JobStore", _FakeJobStore)
     monkeypatch.setattr(
         submit_mod,
@@ -93,6 +97,10 @@ def patched(monkeypatch):
     )
     monkeypatch.setattr(submit_mod, "create_job_access", MagicMock())
     _FakeJobStore.submitted = False
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    with engine.connect() as conn:
+        conn.execute(text("CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, is_expired BOOLEAN DEFAULT 0)"))
+        conn.commit()
 
     store = InMemoryTokenStorage()
     provider = NatMcpAuthProvider(settings_by_source={"gdrive": _settings()}, token_storage_resolver=lambda _s: store)

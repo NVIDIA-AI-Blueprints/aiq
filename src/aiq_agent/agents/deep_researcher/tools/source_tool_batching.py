@@ -21,6 +21,10 @@ import asyncio
 import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from contextvars import Token
+from dataclasses import dataclass
+from dataclasses import field
 
 from langchain_core.tools import BaseTool
 from langchain_core.tools import StructuredTool
@@ -31,6 +35,57 @@ from pydantic import Field
 DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS = 5
 DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE = 4
 DEFAULT_SOURCE_TOOL_CONCURRENCY_TIMEOUT = 120.0
+
+
+class SourceToolBudgetExceeded(RuntimeError):
+    """Raised before an external call would exceed the per-job budget."""
+
+
+@dataclass
+class SourceToolCallBudget:
+    """Concurrency-safe per-job counter inherited by nested researcher tasks."""
+
+    max_calls: int
+    used_calls: int = 0
+    _lock: asyncio.Lock = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.max_calls < 1:
+            raise ValueError("max_calls must be >= 1")
+        self._lock = asyncio.Lock()
+
+    async def consume(self, count: int = 1) -> None:
+        """Reserve calls atomically before invoking an external provider."""
+        if count < 1:
+            raise ValueError("count must be >= 1")
+        async with self._lock:
+            if self.used_calls + count > self.max_calls:
+                raise SourceToolBudgetExceeded(
+                    f"Source-tool call budget exhausted ({self.used_calls}/{self.max_calls} calls used)"
+                )
+            self.used_calls += count
+
+
+_source_tool_budget: ContextVar[SourceToolCallBudget | None] = ContextVar(
+    "aiq_source_tool_budget",
+    default=None,
+)
+
+
+def activate_source_tool_budget(max_calls: int) -> Token[SourceToolCallBudget | None]:
+    """Install a fresh budget for one deep-research run."""
+    return _source_tool_budget.set(SourceToolCallBudget(max_calls=max_calls))
+
+
+def reset_source_tool_budget(token: Token[SourceToolCallBudget | None]) -> None:
+    """Restore the caller's prior budget context."""
+    _source_tool_budget.reset(token)
+
+
+async def _consume_source_tool_budget(count: int = 1) -> None:
+    budget = _source_tool_budget.get()
+    if budget is not None:
+        await budget.consume(count)
 
 
 class SourceToolConcurrencyLimiter:
@@ -89,7 +144,7 @@ class BatchSourceToolInput(BaseModel):
 
 def _single_string_input_field(tool: BaseTool) -> str | None:
     """Return the sole string input field for a compatible tool, otherwise None."""
-    schema = getattr(tool, "args_schema", None)
+    schema = getattr(tool, "args_schema", None) or tool.get_input_schema()
     fields = getattr(schema, "model_fields", None)
     if not fields or len(fields) != 1:
         return None
@@ -127,6 +182,7 @@ def _make_batch_source_tool(
                 f"ERROR: {original_tool.name} accepts at most {max_batch_size} queries per batch. "
                 f"Received {len(query_list)}."
             )
+        await _consume_source_tool_budget(len(query_list))
 
         async def _call_one(query: str) -> tuple[str, str | None, str | None]:
             try:
@@ -160,13 +216,12 @@ def _make_throttled_source_tool(
     """Create a same-name wrapper that throttles calls to a non-batchable source tool."""
 
     async def _run_throttled(**kwargs) -> object:
+        await _consume_source_tool_budget()
         async with limiter.limit():
             result = await original_tool.ainvoke(kwargs)
         return result
 
-    args_schema = getattr(original_tool, "args_schema", None)
-    if args_schema is None:
-        return original_tool
+    args_schema = getattr(original_tool, "args_schema", None) or original_tool.get_input_schema()
 
     return StructuredTool.from_function(
         coroutine=_run_throttled,

@@ -83,10 +83,12 @@ async def submit_app(monkeypatch):
     monkeypatch.setattr(aiq_agent.auth, "get_auth_token", lambda: "token-1")
 
     from aiq_api.jobs import access
+    from aiq_api.jobs import admission
     from aiq_api.jobs import event_store
     from aiq_api.jobs import submit
 
     monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())
+    monkeypatch.setattr(admission, "ensure_deep_research_admission_table", MagicMock())
     monkeypatch.setattr(
         jobs_routes,
         "require_verified_principal",
@@ -142,6 +144,15 @@ async def test_route_registration_validates_artifact_store(submit_app):
     jobs_routes._validate_artifact_store.assert_called_once_with("sqlite:///./test.db")
 
 
+@pytest.mark.asyncio
+async def test_route_registration_initializes_admission_schema(submit_app):
+    from aiq_api.jobs import admission
+
+    _app, _submitted_job, _builder = submit_app
+
+    admission.ensure_deep_research_admission_table.assert_called_once_with("sqlite:///./test.db")
+
+
 def test_artifact_store_validation_propagates_failure(monkeypatch):
     import aiq_api.routes.jobs as jobs_routes
     from aiq_agent.agents.deep_researcher.sandbox import artifacts
@@ -175,6 +186,71 @@ async def test_submit_job_accepts_source_when_empty_tools_inherit_and_partial_ex
         "knowledge_search_tool",
         "web_search_tool",
     ]
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail", "expected_retry_after"),
+    [
+        pytest.param(
+            "rate",
+            429,
+            "Deep research submission rate limit reached. Please try again shortly.",
+            "60",
+            id="rate-limit",
+        ),
+        pytest.param(
+            "principal",
+            429,
+            "Active deep research job limit reached. Wait for a running job to finish.",
+            "30",
+            id="principal-capacity",
+        ),
+        pytest.param(
+            "global",
+            503,
+            "The server is at deep research capacity. Please try again shortly.",
+            "30",
+            id="global-capacity",
+        ),
+        pytest.param(
+            "input",
+            413,
+            "Deep research input exceeds the 123-character limit.",
+            None,
+            id="input-limit",
+        ),
+    ],
+)
+def test_submit_job_maps_admission_failures(
+    submit_app,
+    error,
+    expected_status,
+    expected_detail,
+    expected_retry_after,
+):
+    from aiq_api.jobs.admission import JobGlobalCapacityExceededError
+    from aiq_api.jobs.admission import JobInputTooLargeError
+    from aiq_api.jobs.admission import JobPrincipalCapacityExceededError
+    from aiq_api.jobs.admission import JobSubmissionRateExceededError
+
+    errors = {
+        "rate": JobSubmissionRateExceededError(),
+        "principal": JobPrincipalCapacityExceededError(),
+        "global": JobGlobalCapacityExceededError(),
+        "input": JobInputTooLargeError(123),
+    }
+    app, submitted_job, _builder = submit_app
+    submitted_job.side_effect = errors[error]
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "deep_researcher", "input": "query"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert response.headers.get("retry-after") == expected_retry_after
 
 
 @pytest.mark.asyncio

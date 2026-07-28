@@ -468,6 +468,21 @@ functions:
     max_research_concurrency: 6
     max_concurrent_source_tool_calls: 5
     max_source_tool_batch_size: 4
+    resource_limits:
+      max_input_chars: 32768
+      max_execution_seconds: 3600
+      max_plan_bytes: 1048576
+      max_final_report_bytes: 2097152
+      max_state_file_count: 64
+      max_total_state_bytes: 25165824
+      max_research_queries: 20
+      max_total_query_chars: 10000
+      max_research_note_bytes: 524288
+      max_total_research_note_bytes: 10485760
+      max_source_tool_calls: 100
+      max_todo_items: 20
+      max_todo_item_chars: 2048
+      max_total_todo_chars: 10000
     verbose: true
 ```
 
@@ -488,7 +503,31 @@ functions:
 | `max_research_concurrency` | `int` | `6` | Maximum `ResearchQuery` objects accepted and run concurrently by one `run_research_batch` call. |
 | `max_concurrent_source_tool_calls` | `int` | `5` | Shared cap on concurrent source-tool calls across all researcher workers in the run. |
 | `max_source_tool_batch_size` | `int` | `4` | Maximum concrete inputs accepted by a batch-capable source-tool wrapper in one call. |
+| `resource_limits` | object | See below | Non-disableable per-job request, graph, state, and provider-call ceilings. Values may be reduced but cannot exceed the defaults. |
 | `verbose` | `bool` | `true` | Enable verbose logging. |
+
+`resource_limits` is enforced in both synchronous and async-job construction:
+
+| Parameter | Default and maximum | Enforcement boundary |
+|-----------|---------------------|----------------------|
+| `max_input_chars` | `32768` | Combined final user query and clarifier context, before state preparation or graph construction. |
+| `max_execution_seconds` | `3600` | Top-level deep-research graph execution timeout. |
+| `max_plan_bytes` | `1048576` | UTF-8 serialized `ResearchPlan`, before `/shared/plan.json` persistence. |
+| `max_final_report_bytes` | `2097152` | UTF-8 serialized writer output, before `/shared/output.md` persistence. |
+| `max_state_file_count` | `64` | Files held in the job's StateBackend filesystem, including resumed state. Sandbox workspace files are outside this state budget. |
+| `max_total_state_bytes` | `25165824` | Aggregate payload bytes held in the job's StateBackend filesystem, including resumed state. |
+| `max_research_queries` | `20` | Accepted researcher queries across every batch in the job. Each query returns at most one persisted note, so this also caps the job at 20 research-note files. |
+| `max_total_query_chars` | `10000` | Aggregate main-query and subquery characters across the job. |
+| `max_research_note_bytes` | `524288` | UTF-8 serialized size of one `ResearchNotes` payload. |
+| `max_total_research_note_bytes` | `10485760` | Aggregate serialized research-note bytes across the job. |
+| `max_source_tool_calls` | `100` | AI-Q source-tool attempts and concrete batch items across workers in this job. Retries hidden inside a provider SDK are not observable to this counter. |
+| `max_todo_items` | `20` | Top-level orchestrator todo items in one state replacement. Subagents cannot write todos. |
+| `max_todo_item_chars` | `2048` | Characters in one top-level todo item. |
+| `max_total_todo_chars` | `10000` | Aggregate todo content characters in one state replacement. |
+
+`max_research_concurrency` cannot exceed `resource_limits.max_research_queries`.
+When lowering the job-wide query budget below the default concurrency of `6`,
+lower `max_research_concurrency` in the same configuration.
 
 `data_sources` request filtering happens after this configured tool set is resolved. It removes tools mapped to
 unselected registry sources but preserves configured tools with no source mapping. Router recommendations become

@@ -337,17 +337,25 @@ File type support depends on the configured backend:
 
 For custom backends, supported types are determined by the backend implementation.
 
-> **Note:** The backends support more types than the frontend currently allows. The frontend only supports uploading
+> **Note:** The backends support more types than the default upload allowlist. The frontend and backend API default to
 > `.pdf,.docx,.txt,.md` (the common subset across all backends). Types like HTML, JSON, CSV, and images are supported by
-> some backends but the frontend upload flow does not handle them yet -- this is a separate task.
+> some backends but must be explicitly enabled and supported by the selected backend.
 
-To change the accepted types in the frontend, set `FILE_UPLOAD_ACCEPTED_TYPES` for your deployment method:
+The frontend and backend API use the same upload controls:
+
+| Variable | Effect |
+|----------|--------|
+| `FILE_UPLOAD_ACCEPTED_TYPES` | Comma-separated extension allowlist; the API also validates declared and actual content |
+| `FILE_UPLOAD_MAX_SIZE_MB` | Maximum size of each file and of all files combined in one request |
+| `FILE_UPLOAD_MAX_FILE_COUNT` | Maximum number of files in one request |
+
+Set identical values for both application components:
 
 | Deployment | Where to set |
 |-----------|-------------|
-| **CLI** (`start_e2e.sh`) | `deploy/.env`: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md` |
-| **Docker Compose** | `deploy/.env` (passed to frontend container automatically) |
-| **Helm** | `deploy/helm/deployment-k8s/values.yaml` under the frontend app's `env` section |
+| **CLI** (`start_e2e.sh`) | `deploy/.env` |
+| **Docker Compose** | `deploy/.env` (passed to the frontend and backend containers) |
+| **Helm** | `deploy/helm/deployment-k8s/values.yaml` under both the backend and frontend apps' `env` sections |
 
 For Foundational RAG, add `.pptx` to include PowerPoint support: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md`
 

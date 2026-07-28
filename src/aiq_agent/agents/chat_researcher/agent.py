@@ -53,6 +53,11 @@ try:
 except ImportError:
     _AuthError = None  # type: ignore[assignment,misc]
 
+try:
+    from aiq_api.jobs.admission import JobAdmissionError as _JobAdmissionError
+except ImportError:
+    _JobAdmissionError = None  # type: ignore[assignment,misc]
+
 from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from .models import ChatResearcherState
 from .models import ShallowResult
@@ -292,6 +297,15 @@ class ChatResearcherAgent:
                 try:
                     job_id = await self.deep_research_job_submitter(state)
                 except Exception as e:
+                    if _JobAdmissionError and isinstance(e, _JobAdmissionError):
+                        logger.warning(
+                            "Deep research submission rejected (error_type=%s)",
+                            type(e).__name__,
+                        )
+                        return {
+                            "messages": [AIMessage(content=e.public_message)],
+                            "workflow_outcome": _research_workflow_failure(),
+                        }
                     # Surface auth failures to the user verbatim instead of failing the
                     # turn — submit_agent_job raises McpAuthRequiredError (an AuthError)
                     # before enqueue when a selected source isn't connected.

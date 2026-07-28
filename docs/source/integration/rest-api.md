@@ -106,10 +106,18 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 | Status | Reason |
 |--------|--------|
 | `400` | Unknown, **internal-only**, or registered-but-unconfigured agent type, or invalid request |
+| `413` | Deep-research `input` exceeds `AIQ_MAX_DEEP_RESEARCH_INPUT_CHARS` |
 | `409` | A custom `job_id` collides with an existing job, or a selected protected source requires per-user authentication |
+| `429` | The caller reached the active deep-research job limit or rolling per-minute submission limit. The response includes `Retry-After` |
 | `422` | Validation error: blank/whitespace-only `input`, invalid request fields, unknown data source IDs, or sources unavailable to the selected agent. Data source errors include `message`, `invalid_ids`, `unavailable_for_agent`, and `known_ids` |
 | `500` | Content encryption configuration is invalid, authorization persistence fails, or agent/tool configuration fails unexpectedly |
-| `503` | Content encryption, Dask, or configured sandbox capacity is unavailable |
+| `503` | Content encryption, Dask, the admission database, or deployment-wide job capacity is unavailable. Capacity responses include `Retry-After` |
+
+Deep-research admission is enforced before enqueue for both REST submissions and
+deep-research jobs launched from chat. Limits are serialized in the configured
+`NAT_JOB_STORE_DB_URL`, so backend replicas sharing PostgreSQL cannot race past
+the configured capacity. See [Production Considerations](../deployment/production.md#deep-research-admission-control)
+for defaults and identity behavior.
 
 A public catalog entry that is not configured in the active workflow is rejected before
 source validation or job creation:
@@ -538,6 +546,11 @@ curl http://localhost:8000/v1/collections
 
 Document upload is asynchronous. The endpoint returns a job ID that you poll for ingestion status.
 
+The API streams uploads to private temporary files and enforces the deployment's
+`FILE_UPLOAD_ACCEPTED_TYPES`, `FILE_UPLOAD_MAX_SIZE_MB`, and `FILE_UPLOAD_MAX_FILE_COUNT` settings.
+It rejects requests that exceed the size or count limits with `413 Payload Too Large`, and rejects unsupported,
+malformed, or content-mismatched files with `415 Unsupported Media Type`.
+
 ```bash
 curl -X POST http://localhost:8000/v1/collections/research-papers/documents \
   -F "files=@paper1.pdf" \
@@ -553,6 +566,13 @@ curl -X POST http://localhost:8000/v1/collections/research-papers/documents \
   "message": "Ingestion job submitted for 2 file(s)"
 }
 ```
+
+The application does not provide per-client upload rate limiting. Production operators must put the endpoint behind
+an authenticated API gateway or ingress and configure a per-identity rate limit appropriate for their deployment.
+As a starting point, use 10 upload requests per minute with a burst of 20, then tune against expected document sizes,
+ingestion capacity, and tenant isolation requirements. Do not rely only on source IP when requests pass through shared
+proxies or NAT. Configure the gateway's maximum request-body size slightly above `FILE_UPLOAD_MAX_SIZE_MB` as well, so
+grossly oversized multipart requests are rejected before application-level parsing.
 
 #### Delete Documents
 
