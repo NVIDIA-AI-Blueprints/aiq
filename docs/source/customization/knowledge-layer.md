@@ -15,7 +15,8 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 - **Collection Management** - create/delete/list collections per session or use case
 - **File Management** - upload/delete/list files with status tracking (UPLOADING -> INGESTING -> SUCCESS/FAILED)
 - **Content Typing** - TEXT, TABLE, CHART, IMAGE enums for frontend rendering
-- **Backend Agnostic** - Swap among local LlamaIndex, hosted RAG Blueprint, and OpenSearch without core agent code changes
+- **Backend Agnostic** - Swap among LlamaIndex, hosted RAG Blueprint, Azure AI Search, and OpenSearch without core
+  agent code changes
 
 ---
 
@@ -25,6 +26,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 - [Quick Start](#quick-start)
 - [Usage](#usage)
   - [With YAML Config](#with-nemo-agent-toolkit-yaml-config---recommended)
+  - [Collection Routing](#collection-routing)
   - [Multimodal Extraction](#multimodal-extraction-llamaindex-only)
   - [Document Summaries](#document-summaries)
   - [Supported File Types](#supported-file-types)
@@ -105,7 +107,7 @@ functions:
   knowledge_search:
     _type: knowledge_retrieval      # NeMo Agent Toolkit function type
     backend: llamaindex             # Required: which adapter to use
-    collection_name: my_docs        # Required: target collection
+    collection_name: my_docs        # Retrieval fallback when no session context is present
     top_k: 5                        # Results to return
 
     # Summarization options (optional, all backends):
@@ -127,7 +129,7 @@ functions:
     # embed_model: nvidia/llama-nemotron-embed-vl-1b-v2
 ```
 
-You can also use environment variable substitution in YAML for sensitive values:
+You can also use environment variable substitution in YAML for deployment-specific values:
 
 ```yaml
 functions:
@@ -139,6 +141,39 @@ functions:
 ```
 
 > **Note:** Each backend has different config options. Only the options matching your `backend` value are used - others are ignored (a warning will be logged). To add new config fields, edit `KnowledgeRetrievalConfig` in `sources/knowledge_layer/src/register.py`.
+
+### Collection Routing
+
+AI-Q selects ingestion and retrieval collections independently. This routing policy applies consistently to all
+shipped knowledge backends: LlamaIndex, Foundational RAG, Azure AI Search, and OpenSearch.
+
+The storage mapping is backend-specific: LlamaIndex and Foundational RAG use named collections, OpenSearch maps each
+collection to a physical index, and Azure AI Search isolates logical collections with `collection_id` filters inside
+one AI-Q-owned physical index.
+
+| Usage | Ingestion target | Retrieval target |
+|-------|------------------|------------------|
+| Web UI | UI-created session collection (`s_<uuid>`) | Active UI session collection |
+| API with a `conversation-id` header | Collection named in `/v1/collections/{collection_name}/documents` | `conversation-id` header value |
+| API without conversation context | Collection named explicitly by the ingestion operation | Configured `collection_name` fallback |
+
+`collection_name` controls only the retrieval fallback. It does not choose an API ingestion destination, and it does
+not override an active UI session. Shipped profiles commonly populate it with
+`${COLLECTION_NAME:-test_collection}`; the environment value is resolved when the workflow configuration is loaded.
+
+Use `COLLECTION_NAME` for a deployment-wide retrieval default when API or CLI requests do not carry conversation
+context. To select a collection for an individual HTTP request, pass that collection name in the `conversation-id`
+header:
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "conversation-id: research-papers" \
+  -d '{"messages": [{"role": "user", "content": "Summarize the uploaded documents."}], "stream": false}'
+```
+
+For `/v1/chat/completions`, a `conversation_id` field in the JSON body is not used for collection routing. Use the
+`conversation-id` header instead.
 
 ### Switching Backends
 
@@ -381,7 +416,12 @@ Open `http://localhost:3000` in your browser.
 
 ### Session Collections
 
-LlamaIndex, Foundational RAG, and OpenSearch support session-based collections (`s_<uuid>`) created by the UI. Each browser session gets its own logical collection; OpenSearch stores each one in a separate prefixed index.
+All four shipped knowledge backends support session-based collections (`s_<uuid>`) created by the UI. Each UI
+conversation gets its own isolated logical collection; the physical storage mapping differs by backend as described in
+[Collection Routing](#collection-routing).
+
+The active session collection is used for both UI ingestion and retrieval and takes precedence over the configured
+`collection_name` fallback.
 
 ### TTL Cleanup
 
@@ -496,8 +536,8 @@ Configuration values are resolved in the following order (highest to lowest prio
 | `OPENSEARCH_INDEX_PREFIX` | opensearch | Prefix for AI-Q-managed indexes |
 | `OPENSEARCH_INGESTION_MODE` | opensearch | `local`, `dask`, or `auto` |
 | `OPENSEARCH_DASK_SCHEDULER_ADDRESS` | opensearch | Optional Dask scheduler for distributed ingestion |
-| `AIQ_EMBED_MODEL`, `AIQ_EMBED_BASE_URL` | llamaindex, opensearch | Embedding model and endpoint |
-| `COLLECTION_NAME` | All | Default collection name |
+| `AIQ_EMBED_MODEL`, `AIQ_EMBED_BASE_URL` | llamaindex, opensearch, azure_ai_search | Embedding model and endpoint |
+| `COLLECTION_NAME` | All | Default retrieval collection when no conversation or session context is present |
 
 ---
 

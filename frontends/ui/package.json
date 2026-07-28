@@ -26,8 +26,8 @@
     "@tailwindcss/postcss": "^4.1.18",
     "http-proxy": "^1.18.1",
     "marked": "^16.4.2",
-    "next": "^16.2.6",
-    "next-auth": "^4.24.7",
+    "next": "^16.2.12",
+    "next-auth": "^4.24.15",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-markdown": "^10.1.0",
@@ -47,23 +47,26 @@
     "@types/react-dom": "^18.2.0",
     "@types/uuid": "^10.0.0",
     "@vitejs/plugin-react": "^5.1.2",
-    "@vitest/coverage-v8": "^4.0.18",
+    "@vitest/coverage-v8": "4.1.0",
     "autoprefixer": "^10.4.14",
-    "concurrently": "^9.2.1",
-    "eslint": "^8.56.0",
-    "eslint-config-next": "15.5.15",
+    "concurrently": "^9.2.4",
+    "eslint": "^9.0.0",
+    "eslint-config-next": "16.2.12",
     "happy-dom": "^20.3.4",
     "husky": "^9.1.7",
     "msw": "^2.12.7",
-    "postcss": "^8.4.21",
+    "postcss": "^8.5.23",
     "prettier": "^3.0.0",
     "prettier-plugin-tailwindcss": "^0.5.0",
     "tailwindcss": "^4.0.0",
-    "vitest": "^4.0.18"
+    "vitest": "4.1.0"
   },
   "msw": {
     "workerDirectory": [
       "public"
     ]
+  },
+  "overrides": {
+    "postcss": "^8.5.23"
   }
 }

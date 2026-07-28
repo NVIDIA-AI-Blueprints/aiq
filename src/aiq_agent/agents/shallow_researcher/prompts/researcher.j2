@@ -33,6 +33,36 @@ Cite sources inline with [1], [2], etc. Include a `**References:**` section at t
 **References:**
 - [1] Q4_Review.pdf, p. 2 (Internal)"
 
+## Presenting Data (Charts)
+When a tool returns numbers that compare multiple things (a ranking or top-N across entities, a distribution or counts across categories, a trend over an ordered/time axis, or gains vs losses), present them as a chart, not just prose or a table. Lead with a one-sentence verdict, then the chart.
+
+- Emit the chart as a fenced code block tagged `chart` holding a SINGLE line of valid JSON (no comments, no trailing commas), right after the sentence that introduces it.
+- Chart to reveal a pattern; use a markdown table only to look up exact values the chart does not already show; use prose to state the verdict. Do not repeat the chart's numbers as a table unless the user asks.
+- Use the ACTUAL numbers from the tool result (top ~10 rows); never invent, pad, or round away data. If you show only the top rows of a larger set, say so.
+- At most 3 charts per answer, and put each chart before any table.
+- A single value or a one-entity yes/no result is NOT a chart: emit a KPI-only block, a fenced `chart` block whose JSON has just `title` and `kpis`.
+
+Chart types: `bar` (category magnitudes), `hbar` (rankings with long text labels), `line`/`area` (a trend across an ordered axis), `grouped-bar` (2-4 series per category), `delta` (gains vs losses around zero).
+
+Spec fields: `type`; `title` (short) and optional `subtitle`; `x` = `{ "key": "<field in each row>", "label": "optional" }`; optional `y` = `{ "label": "optional unit", "format": "number | compact | percent | currency" }`; `series` = `[ { "key": "<numeric field>", "label": "optional", "color": "green | blue | amber | red" } ]`; `data` = rows as objects with raw numbers (fractions 0-1 for `percent`); optional `kpis` = `[ { "label": "...", "value": "preformatted", "tone": "accent | warn | alarm" } ]`.
+
+Example (ranking):
+```chart
+{"type":"hbar","title":"Top suppliers by late shipments","x":{"key":"supplier"},"y":{"format":"number"},"series":[{"key":"late","color":"amber"}],"data":[{"supplier":"Acme","late":42},{"supplier":"Globex","late":31},{"supplier":"Initech","late":19}]}
+```
+
+Example (single value, KPI-only):
+```chart
+{"title":"On-time delivery rate","kpis":[{"label":"On-time","value":"92.4%","tone":"accent"}]}
+```
+
+For several related trends over time, emit one fenced `chart-carousel` block holding a SINGLE line of JSON with at least two line-chart specs: `{ "title": "...", "charts": [ <line chart spec>, ... ] }`.
+
+Example (related trends, carousel):
+```chart-carousel
+{"title":"Quarterly delivery trends","charts":[{"type":"line","title":"On-time delivery rate","x":{"key":"quarter"},"y":{"format":"percent"},"series":[{"key":"rate","color":"green"}],"data":[{"quarter":"Q1","rate":0.88},{"quarter":"Q2","rate":0.90},{"quarter":"Q3","rate":0.93}]},{"type":"line","title":"Late shipments","x":{"key":"quarter"},"y":{"format":"number"},"series":[{"key":"late","color":"amber"}],"data":[{"quarter":"Q1","late":52},{"quarter":"Q2","late":41},{"quarter":"Q3","late":28}]}]}
+```
+
 {#- === KV CACHE BOUNDARY — dynamic content below === -#}
 
 ## Context
