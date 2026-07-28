@@ -335,7 +335,7 @@ functions:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `backend` | `str` | `llamaindex` | Backend type: `llamaindex`, `opensearch`, `foundational_rag`, or `azure_ai_search`. |
-| `collection_name` | `str` | `default` | Name of the document collection/index. |
+| `collection_name` | `str` | `default` | Fallback retrieval collection when no conversation or session context is present. Request context takes precedence; ingestion selects its collection explicitly. |
 | `top_k` | `int` | `5` | Number of results to return per query. |
 | `generate_summary` | `bool` | `false` | Generate one-sentence summaries for ingested documents. |
 | `summary_model` | `str` | `None` | LLM reference from `llms` section. Required when `generate_summary: true`. |
@@ -362,8 +362,8 @@ functions:
 | `opensearch_ingestion_mode` | `str` | `local` | Ingestion executor: `local`, `dask`, or `auto`. `auto` uses Dask only when a scheduler address is configured. |
 | `opensearch_dask_scheduler_address` | `str` | `None` | Dask scheduler for distributed ingestion. Also reads `NAT_DASK_SCHEDULER_ADDRESS`. |
 | `opensearch_dask_file_transfer` | `str` | `bytes` | Send uploads to Dask workers as `bytes` or shared filesystem `paths`. |
-| `embed_model` | `str` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model for OpenSearch ingestion and retrieval. |
-| `embed_base_url` | `str` | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible embeddings endpoint. |
+| `embed_model` | `str` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model for OpenSearch and Azure AI Search ingestion and retrieval. |
+| `embed_base_url` | `str` | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible embeddings endpoint for OpenSearch and Azure AI Search. |
 
 Refer to [Knowledge Layer](./knowledge-layer.md) for backend selection and the
 [Amazon OpenSearch Serverless](../deployment/aws-opensearch-serverless.md) guide for SigV4, IAM, and AOSS setup.

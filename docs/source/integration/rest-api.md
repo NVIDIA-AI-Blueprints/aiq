@@ -479,6 +479,17 @@ The default agents (`deep_researcher` and `shallow_researcher`) are registered a
 
 The Knowledge API endpoints are **conditionally registered** -- they appear only when a `knowledge_retrieval` function is configured in the workflow. The backend (LlamaIndex, Foundational RAG, etc.) is determined by the knowledge config.
 
+### Collection Routing
+
+Knowledge ingestion and retrieval select collections independently. Collection and document endpoints use the
+collection named in the request path, while retrieval uses the `conversation-id` header when present and otherwise
+falls back to the configured `collection_name`. To query a collection after ingesting into it, reuse the exact
+collection name as the `conversation-id` header. A `conversation_id` field in the `/v1/chat/completions` JSON body is
+not used for collection routing.
+
+For UI behavior, environment-variable usage, and an end-to-end request example, see
+[Collection Routing](../customization/knowledge-layer.md#collection-routing).
+
 ### Collection Endpoints
 
 | Method | Path | Description |
