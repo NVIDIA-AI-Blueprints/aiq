@@ -226,9 +226,10 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 | ---------- | -------------------- | ------------------------- | ----------------------------------------------------------- |
 | NVIDIA API | `NVIDIA_API_KEY`     | LLM inference through NIM | Yes                                                         |
 | Tavily     | `TAVILY_API_KEY`     | Web search                | No (if not specified, agent continues without web search)   |
+| Exa        | `EXA_API_KEY`        | Web search                | No (required only when Exa search is configured)            |
 | Nimble     | `NIMBLE_API_KEY`     | Configurable web search   | No (required only when Nimble search is configured)         |
 | You.com    | `YDC_API_KEY`        | Web, contents, and research APIs | No (required only when You.com tools are configured)   |
-| Serper     | `SERPER_API_KEY`     | Academic paper search     | No (if not specified, agent continues without paper search) |
+| Paper search | `SERPER_API_KEY`, `SERPAPI_API_KEY`, or `SEARCHAPI_API_KEY` | Academic paper search | No (choose one matching the configured provider) |
 
 
 #### Obtain an NVIDIA API Key
@@ -241,6 +242,15 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 1. Sign in to [Tavily](https://tavily.com/)
 2. Navigate to your dashboard
 3. Generate an API key
+
+#### Obtain an Exa API Key
+
+1. Sign in to [Exa](https://exa.ai/)
+2. Create an API key from the dashboard
+3. Add it to `deploy/.env` as `EXA_API_KEY`
+
+Refer to the `exa_web_search` section in the
+[Configuration Reference](docs/source/customization/configuration-reference.md) for workflow usage.
 
 #### Obtain a You.com API Key
 
