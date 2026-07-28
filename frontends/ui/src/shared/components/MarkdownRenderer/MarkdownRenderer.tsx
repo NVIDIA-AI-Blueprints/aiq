@@ -10,6 +10,10 @@ import { Text, CodeSnippet, Anchor } from '@/adapters/ui'
 import type { MarkdownRendererProps } from './types'
 import { getLanguageFromClassName } from './utils'
 import { ARTIFACT_SCHEME, isArtifactRef, resolveArtifactUrl } from '@/shared/utils/artifact-url'
+import { ChartBlock, fenceBareSpecs } from '@/shared/components/ResultChart'
+
+// Fenced languages the agent uses for declarative result charts, routed to ChartBlock.
+const CHART_LANGUAGES = new Set(['chart', 'chart-carousel'])
 
 // react-markdown's default sanitizer strips non-standard URL schemes, which would blank the
 // src of `artifact://<id>` images before the `img` renderer can resolve them. Preserve that
@@ -46,6 +50,8 @@ function slugify(text: string): string {
  */
 export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
   ({ content, className = '', compact = false, artifactJobId }) => {
+    // Wrap any bare chart-spec line the agent forgot to fence so it still renders.
+    const prepared = useMemo(() => fenceBareSpecs(content), [content])
     // Custom component mappings
     const components: Components = useMemo(
       () => ({
@@ -61,8 +67,7 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
           if (isBlock) {
             const language = getLanguageFromClassName(codeClassName)
             const lineCount = codeContent.split('\n').length
-
-            return (
+            const fallback = (
               <CodeSnippet
                 value={codeContent}
                 language={language}
@@ -71,6 +76,13 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
                 rows={15}
               />
             )
+
+            const rawLang = codeClassName?.replace(/^language-/, '') ?? ''
+            if (CHART_LANGUAGES.has(rawLang)) {
+              return <ChartBlock raw={codeContent} fallback={fallback} />
+            }
+
+            return fallback
           }
 
           // Inline code
@@ -241,7 +253,7 @@ export const MarkdownRenderer: FC<MarkdownRendererProps> = memo(
     return (
       <div className={`markdown-content break-words [overflow-wrap:anywhere] [&>*:last-child]:mb-0 ${className}`}>
         <ReactMarkdown remarkPlugins={[remarkGfm]} components={components} urlTransform={urlTransform}>
-          {content}
+          {prepared}
         </ReactMarkdown>
       </div>
     )

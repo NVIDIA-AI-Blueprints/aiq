@@ -335,7 +335,7 @@ functions:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `backend` | `str` | `llamaindex` | Backend type: `llamaindex`, `opensearch`, `foundational_rag`, or `azure_ai_search`. |
-| `collection_name` | `str` | `default` | Name of the document collection/index. |
+| `collection_name` | `str` | `default` | Fallback retrieval collection when no conversation or session context is present. Request context takes precedence; ingestion selects its collection explicitly. |
 | `top_k` | `int` | `5` | Number of results to return per query. |
 | `generate_summary` | `bool` | `false` | Generate one-sentence summaries for ingested documents. |
 | `summary_model` | `str` | `None` | LLM reference from `llms` section. Required when `generate_summary: true`. |
@@ -362,8 +362,8 @@ functions:
 | `opensearch_ingestion_mode` | `str` | `local` | Ingestion executor: `local`, `dask`, or `auto`. `auto` uses Dask only when a scheduler address is configured. |
 | `opensearch_dask_scheduler_address` | `str` | `None` | Dask scheduler for distributed ingestion. Also reads `NAT_DASK_SCHEDULER_ADDRESS`. |
 | `opensearch_dask_file_transfer` | `str` | `bytes` | Send uploads to Dask workers as `bytes` or shared filesystem `paths`. |
-| `embed_model` | `str` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model for OpenSearch ingestion and retrieval. |
-| `embed_base_url` | `str` | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible embeddings endpoint. |
+| `embed_model` | `str` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model for OpenSearch and Azure AI Search ingestion and retrieval. |
+| `embed_base_url` | `str` | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible embeddings endpoint for OpenSearch and Azure AI Search. |
 
 Refer to [Knowledge Layer](./knowledge-layer.md) for backend selection and the
 [Amazon OpenSearch Serverless](../deployment/aws-opensearch-serverless.md) guide for SigV4, IAM, and AOSS setup.
@@ -652,7 +652,7 @@ only the additional sections you need.
 | `configs/config_web_default_guardrails.yml` | Web API | LlamaIndex plus workflow Guardrails attachment. Shallow/deep middleware types are defined as capability examples; refer to [Guardrails](./guardrails.md) for the active attachment semantics. |
 | `configs/config_web_frag_mcp_auth.yml` | Web API | Foundational RAG plus a protected per-user OAuth MCP source example. Requires a real protected MCP endpoint and shared token-store configuration; it is not a zero-config default. |
 | `configs/config_domain_routing_and_skills.yml` | Direct deep-research workflow | Automatic domain routing, Tavily, DuckDuckGo news, Polymarket, LlamaIndex, enabled Serper paper search, built-in skills, and a Modal sandbox. Requires the corresponding service credentials and Modal setup. |
-| `configs/config_openshell.yml` | Web API, experimental | Skills and artifact capture over one pre-provisioned named OpenShell sandbox. Intended for trusted single-operator use; per-job directories are not multi-tenant isolation. |
+| `configs/config_openshell.yml` | Web API, experimental | Skills and artifact capture over one policy-bound OpenShell sandbox per deep-research job, with fail-closed policy attestation and terminal deletion. |
 | `configs/config_mcp.yml` | Standalone MCP server | Public NIM and Tavily research over stateless submit, poll, and final-report tools with PostgreSQL-backed job state. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Related

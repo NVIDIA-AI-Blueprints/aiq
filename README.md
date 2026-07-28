@@ -66,7 +66,7 @@ The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NV
 - **Report follow-up** — Ask questions about a completed report, create a child-job cosmetic rewrite, or run delta research with the parent report as context.
 - **Workflow configuration** — YAML configs define agents, tools, LLMs, and routing behavior so you can tune workflows without code changes.
 - **Modular workflows** — All agents (orchestration node, shallow researcher, deep researcher, clarifier) are composable; each can run standalone or as part of the full pipeline.
-- **Skills, sandbox execution, and durable outputs** — Built-in research/synthesis skills run code through a provider-neutral sandbox contract. Modal is fresh per job; the experimental OpenShell profile uses one shared, pre-provisioned sandbox and is not a multi-tenant isolation boundary. Opt-in rich-file capture checkpoints manifest-declared files after successful sandbox commands, finalizes on success/failure, stores bytes in SQL or S3-compatible storage, and delivers metadata to the Files tab live and on replay.
+- **Skills, sandbox execution, and durable outputs** — Built-in research/synthesis skills are exposed as host-side, read-only definitions. Skills that invoke code use a provider-neutral sandbox contract; Modal and OpenShell create one physical sandbox per deep-research job. Opt-in rich-file capture checkpoints manifest-declared files after successful sandbox commands, finalizes on success/failure, stores bytes in SQL or S3-compatible storage, and delivers metadata to the Files tab live and on replay.
 - **Portable Agent Skills** — `aiq-deploy` selects, starts, and validates an AI-Q deployment; `aiq-research` calls routed chat and async research from compatible coding harnesses.
 - **Data source registry** — UI toggles and request payloads can select web, paper, enterprise, collaboration, and knowledge-layer sources per message.
 - **Expanded sources** — Paper search supports Serper, SerpAPI, and SearchAPI; You.com adds web, contents, general-research, and finance-research tools; Nimble adds configurable web search; focused profiles demonstrate DuckDuckGo news, Polymarket, OpenSearch, and Azure AI Search knowledge retrieval.
@@ -137,10 +137,10 @@ This project is for:
 
 
 **Optional requirements:**
-- Tavily API key (for web search functionality)
+- A web-search API key for the configured provider: Tavily, Exa, Nimble, or You.com
 - A paper search API key for one of the supported providers: Serper (`SERPER_API_KEY`), SerpAPI (`SERPAPI_API_KEY`), or SearchAPI (`SEARCHAPI_API_KEY`)
 
-> **Note:** Configure at least one data source (Tavily web search, Serper search tool, or knowledge layer) to enable research functionality.
+> **Note:** Configure at least one data source (web search, paper search, or knowledge layer) to enable research functionality.
 
 If these optional API keys are not provided, the agent continues to operate without the corresponding search capabilities. Refer to [Obtain API Keys](#obtain-api-keys) for details.
 
@@ -212,6 +212,7 @@ uv pip install -e ./frontends/benchmarks/freshqa
 
 # Install data sources (pick what you need)
 uv pip install -e ./sources/tavily_web_search
+uv pip install -e ./sources/exa_web_search
 uv pip install -e ./sources/google_scholar_paper_search
 uv pip install -e ./sources/nimble_web_search
 uv pip install -e ./sources/you_com
@@ -225,9 +226,10 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 | ---------- | -------------------- | ------------------------- | ----------------------------------------------------------- |
 | NVIDIA API | `NVIDIA_API_KEY`     | LLM inference through NIM | Yes                                                         |
 | Tavily     | `TAVILY_API_KEY`     | Web search                | No (if not specified, agent continues without web search)   |
+| Exa        | `EXA_API_KEY`        | Web search                | No (required only when Exa search is configured)            |
 | Nimble     | `NIMBLE_API_KEY`     | Configurable web search   | No (required only when Nimble search is configured)         |
 | You.com    | `YDC_API_KEY`        | Web, contents, and research APIs | No (required only when You.com tools are configured)   |
-| Serper     | `SERPER_API_KEY`     | Academic paper search     | No (if not specified, agent continues without paper search) |
+| Paper search | `SERPER_API_KEY`, `SERPAPI_API_KEY`, or `SEARCHAPI_API_KEY` | Academic paper search | No (choose one matching the configured provider) |
 
 
 #### Obtain an NVIDIA API Key
@@ -240,6 +242,15 @@ uv pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 1. Sign in to [Tavily](https://tavily.com/)
 2. Navigate to your dashboard
 3. Generate an API key
+
+#### Obtain an Exa API Key
+
+1. Sign in to [Exa](https://exa.ai/)
+2. Create an API key from the dashboard
+3. Add it to `deploy/.env` as `EXA_API_KEY`
+
+Refer to the `exa_web_search` section in the
+[Configuration Reference](docs/source/customization/configuration-reference.md) for workflow usage.
 
 #### Obtain a You.com API Key
 
@@ -285,7 +296,7 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 | `config_web_default_guardrails.yml` | GPT-OSS-120B; Nemotron 3 Super; Nemotron Mini summary | LlamaIndex profile with workflow Guardrails attached and async deep-agent Guardrails selected; shallow middleware is defined but not attached. |
 | `config_web_frag_mcp_auth.yml` | Nemotron 3 Super | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
 | `config_domain_routing_and_skills.yml` | Nemotron 3 Super; Nemotron Mini summary | Direct deep-research profile with domain routing, DuckDuckGo news, Polymarket, enabled Serper paper search, LlamaIndex, built-in skills, and a fresh per-job Modal sandbox. |
-| `config_openshell.yml` | GPT-OSS-120B; Nemotron 3 Super; Nemotron Mini summary | Experimental web/API skills profile with artifact capture over one shared, pre-provisioned OpenShell sandbox; trusted single-operator use only. |
+| `config_openshell.yml` | GPT-OSS-120B; Nemotron 3 Super; Nemotron Mini summary | Experimental web/API skills profile with artifact capture, fail-closed policy attestation, and one OpenShell sandbox per deep-research job. |
 | `config_mcp.yml` | Nemotron 3 Super 120B | Standalone MCP server. Public NIM + Tavily research with PostgreSQL-backed stateless submit/poll/report. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Ways to Run the Agents
@@ -461,13 +472,14 @@ indicate availability in a published release.
 - [x] **[NeMo Guardrails](docs/source/customization/guardrails.md) Integration:** Opt-in middleware for selected workflow, shallow-researcher, and deep-researcher boundaries.
 - [ ] **[NVIDIA Dynamo](https://github.com/ai-dynamo/dynamo) Integration:** Reduce latency via priority scheduling at scale.
 - [x] **Per-user MCP OAuth:** Connect each signed-in user to protected MCP data sources through the UI.
-- [x] **Skills & Sandboxing:** Support built-in deep-research skills through a provider-neutral contract. Modal is fresh per job; the experimental OpenShell profile is shared and not a multi-tenant isolation boundary.
+- [x] **Skills & Sandboxing:** Support host-side, role-assigned deep-research skills and provider-neutral execution. Modal and OpenShell create one physical sandbox per deep-research job.
 - [x] **Report Follow-up and Rewriting:** Answer against a completed report, submit cosmetic child rewrites, and run delta research with parent-report context.
 - [x] **Durable Sandbox Artifacts:** Opt-in manifest checkpoints after successful sandbox commands, terminal harvesting on success/failure, SQL or S3-compatible byte storage, and live/replayed Files-tab access.
 - [ ] **Custom Skill Management:** Add UI and lifecycle controls for user-provided skill bundles.
 - [ ] **Dynamic Model Routing:** Allow sub-agents to automatically select the optimal model per task.
 - [ ] **Resource Management:** Implement configurable token caps and tool-call budgets.
-- [ ] **Expanded Web Search:** Additional integration examples including Perplexity and You.com.
+- [x] **Expanded Web Search:** Tavily, Exa, You.com, and Nimble integrations with configurable source selection.
+- [ ] **Additional Search Providers:** Add integration examples including Perplexity.
 - [ ] **Multimedia Output:** Embed audio, video, and images directly into reports.
 - [ ] **Voice-to-Text Input:** Integrate [NVIDIA Riva](https://developer.nvidia.com/riva) for hands-free accessibility.
 
@@ -478,7 +490,7 @@ indicate availability in a published release.
 - AI-Q includes opt-in [NeMo Guardrails middleware](docs/source/customization/guardrails.md) for selected workflow and agent boundaries. Guardrails are not enabled universally; operators must attach and test the policies required for their deployment.
 - Optional [async job content encryption](docs/source/deployment/content-encryption.md) protects final job output and selected artifact-event content only. It is off by default and is not full database-level job-content encryption.
 - The AI-Q Blueprint doesn't require any privileged access to the system.
-- Deep research skills can invoke sandboxed code execution for analysis workflows. Keep sandbox credentials, quotas, lifecycle cleanup, and network policy aligned with your deployment's trust boundaries; do not use the shared OpenShell example as isolation between mutually untrusted jobs.
+- Deep research skills can invoke sandboxed code execution for analysis workflows. Keep sandbox credentials, quotas, lifecycle cleanup, attestation, and network policy aligned with your deployment's trust boundaries. Shared OpenShell attachment is an explicit debug-only mode and is not job-isolated.
 - End users are responsible for ensuring the availability of their deployment.
 - End users are responsible for building, and patching, the container images to keep them up to date.
 - The end users are responsible for ensuring that OSS packages used by the developer blueprint are current.

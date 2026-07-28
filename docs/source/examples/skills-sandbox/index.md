@@ -6,9 +6,13 @@ SPDX-License-Identifier: Apache-2.0
 # Example: Deep Research Skills and Sandbox
 
 This example shows how to run AI-Q deep research with DeepAgents skills and a provider-backed sandbox. The reference
-profile uses Modal; AI-Q also includes an experimental OpenShell profile for a trusted, single-operator environment.
+profile uses Modal; AI-Q also includes an experimental, policy-bound OpenShell profile.
 
-Skills let a research agent discover task-specific instructions only when they are relevant. A skill can teach the agent a repeatable workflow, such as extracting numeric facts, normalizing a table, running calculations, and producing reusable text artifacts. The sandbox runs code-based work outside the AI-Q process. Isolation depends on the provider: Modal creates a fresh sandbox for each job, while the experimental OpenShell profile attaches jobs to one pre-provisioned shared sandbox.
+Skills let a research agent discover task-specific instructions only when they are relevant. AI-Q mounts the assigned
+skill definitions read-only from the host. A skill can teach the agent a repeatable workflow, such as extracting numeric
+facts, normalizing a table, running calculations, and producing reusable text artifacts. When a skill invokes
+`execute`, the generated code runs outside the AI-Q process in one provider sandbox per deep-research job. Modal and
+OpenShell implement this job-scoped contract.
 
 For more background, refer to the LangChain DeepAgents docs:
 
@@ -25,7 +29,15 @@ The example config enables:
 - virtual `/shared/` files for text artifacts that the orchestrator and subagents can read during the report workflow
 - durable capture of supported charts and data files for async API jobs
 
-The current built-in example skill is `data-table-analysis`. It is intended for quantitative research tasks where the agent must normalize researched facts and compute tabular outputs such as growth rates, rankings, summary statistics, CSV, JSON, or markdown tables.
+The built-in collections currently expose these role-oriented skills:
+
+| Collection | Default assignment | Skills |
+| ---------- | ------------------ | ------ |
+| `research` | `researcher-agent` | `chart-generation`, `data-table-analysis`, `forecast-analysis`, `lightweight-calculation` |
+| `synthesis` | `writer-agent` | `long-form-report-writer`, `prediction-report-writer` |
+
+The assignment is configurable. Skill definitions stay host-side and read-only;
+only workflows that invoke `execute` require a sandbox.
 
 **Models and report quality:** For clearer tables, stronger reasoning over numbers, and more reliable use of the data-table-analysis skill end-to-end, prefer **frontier-class models** for the orchestrator, planner, and researcher in your config ([Swapping models](../../customization/swapping-models.md)). Smaller or faster models may complete runs but often produce weaker structured outputs and more formatting mistakes in long reports.
 
@@ -101,10 +113,12 @@ job database by default. For production, use S3-compatible object storage by set
 `AIQ_ARTIFACT_S3_BUCKET`, and the standard AWS credentials; set `AIQ_ARTIFACT_S3_ENDPOINT_URL` for MinIO or another
 compatible service. See [Production Artifact Storage](../../deployment/production.md#artifact-storage) for all options.
 
-To evaluate OpenShell instead, use `configs/config_openshell.yml` after running `scripts/setup_openshell.sh`. That profile
-is experimental: it attaches every job to one named, pre-provisioned sandbox. Per-job working directories avoid ordinary
-filename collisions but are not an access-control or multi-tenant isolation boundary. Do not run mutually untrusted jobs
-concurrently in that profile.
+To evaluate OpenShell instead, use `configs/config_openshell.yml` after running
+`scripts/openshell/setup_openshell.sh`. That profile creates one policy-bound
+sandbox per job, verifies the effective policy and revision before use, and
+deletes the sandbox at terminal cleanup. Attaching to an existing shared
+sandbox is available only through explicit debug settings and is not
+job-isolated.
 
 ## Run AI-Q
 
@@ -211,8 +225,8 @@ No config change is required for additional built-in skills inside an enabled co
 
 ## Notes and Limitations
 
-- The reference config uses a fresh Modal sandbox for code execution. The experimental OpenShell config uses one shared,
-  pre-provisioned sandbox and is suitable only for trusted single-operator use, not multi-tenant isolation.
+- The reference config uses a fresh Modal sandbox for code execution. The experimental OpenShell config also creates one
+  physical sandbox per job and requires policy attestation plus terminal deletion. Shared attachment is debug-only.
 - Text artifacts that need to survive for the report should be written through DeepAgents filesystem tools to `/shared/...`.
 - `/shared/` is a virtual DeepAgents filesystem path. Use `ls`, `read_file`, `write_file`, and `edit_file` for `/shared/`; do not inspect `/shared/` with shell commands through `execute`.
 - The sandbox is configured with `network: blocked`, so research should happen through AI-Q search tools, not from sandbox code.

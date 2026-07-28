@@ -124,6 +124,26 @@ of one reusable, structured-output runnable behind the orchestrator-only
 `run_research_batch` tool. They do not appear as `task()` subagents and do
 not manage top-level workflow todos.
 
+## Shared State, Skills, and Execution Boundary
+
+The shared-state and skills boxes in the architecture diagram represent
+runtime dependencies, not additional agents:
+
+| Boundary | Current implementation |
+| -------- | ---------------------- |
+| Shared research state | The host-side `StateBackend` mounted at `/shared/` stores the source-routing plan, research plan, structured notes, and `/shared/output.md`. DeepAgents graph state separately carries progress todos and file metadata. |
+| Skill definitions | Built-in skill collections are mounted from the host at `/skills/`. Filesystem permissions expose only the collections assigned to a role and deny writes to the skill tree. |
+| Sandbox workdir | When a sandbox is configured, the default filesystem route and `execute` tool use one provider sandbox per deep-research job. Agents within that job share the provider runtime; separate jobs receive separate sandboxes. |
+| Inference and source tools | LLM calls, source-tool calls, credentials, orchestration state, and `/shared/` remain in the AI-Q process. Only generated code and job-workspace files cross the sandbox boundary. |
+
+The shipped `config_domain_routing_and_skills.yml` profile assigns the
+`research` collection to researcher workers and the `synthesis` collection to
+the writer. The research collection currently includes chart generation,
+table analysis, forecast analysis, and lightweight calculations. The synthesis
+collection includes long-form and prediction report writers. A skill provides
+instructions; only skills that invoke `execute` require the optional sandbox.
+Modal and OpenShell implement the same provider-neutral job-scoped contract.
+
 ## Data Source Boundary
 
 `DeepResearchAgentState.data_sources` is a hard per-request boundary for

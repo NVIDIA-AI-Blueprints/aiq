@@ -78,7 +78,7 @@ llms:
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | `Unknown backend` | Adapter module not imported | Ensure backend package is installed: `uv pip install -e "sources/knowledge_layer[llamaindex]"` |
-| Empty retrieval results | Collection is empty or wrong name | Run ingestion first; verify `collection_name` matches |
+| Empty retrieval results | Ingestion and retrieval resolved different collections | Verify the upload-path collection and active `conversation-id`; without session context, verify the configured `collection_name` fallback |
 | Foundational RAG connection refused | RAG Blueprint not running | Start the RAG Blueprint server; verify `rag_url` and `ingest_url` |
 | `milvus-lite` required | Missing dependency | `uv pip install "pymilvus[milvus_lite]"` |
 
