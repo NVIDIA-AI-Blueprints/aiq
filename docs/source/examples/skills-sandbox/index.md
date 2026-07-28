@@ -142,6 +142,9 @@ or separately retrievable charts, CSVs, notebooks, or other generated files.
 To retain job information and retrieve supported generated files after a run, start the async API with `nat serve`.
 The configured `NAT_JOB_STORE_DB_URL` supplies the required job-scoped store. The reference config defaults to a local
 SQLite database; production deployments should configure PostgreSQL and appropriate artifact blob storage.
+For trusted local development, set `REQUIRE_AUTH=false` in `deploy/.env`; the commands below omit credentials on that
+basis. When `REQUIRE_AUTH=true`, these job routes require authentication, so configure authentication and add the same
+`Authorization: Bearer $AIQ_TOKEN` header to every `curl` command below.
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat serve \
@@ -163,7 +166,8 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
   }'
 ```
 
-Check the job until its status is `SUCCESS`:
+Check the job until its status is either `SUCCESS` or `FAILURE`. If it reaches `FAILURE`, inspect the response's `error`
+field for the actionable failure message:
 
 ```bash
 curl http://localhost:8000/v1/jobs/async/job/skills-sandbox-example
