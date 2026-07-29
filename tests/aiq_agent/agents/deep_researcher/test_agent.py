@@ -1302,7 +1302,7 @@ class TestDeepResearcherAgent:
             assert call_kwargs is not None
 
     @pytest.mark.asyncio
-    async def test_run_handles_error(self, mock_llm_provider, real_tool):
+    async def test_run_handles_error(self, mock_llm_provider, real_tool, caplog):
         """Test run() handles errors gracefully."""
         mock_agent = MagicMock()
         mock_agent.with_config = MagicMock(return_value=mock_agent)
@@ -1324,9 +1324,11 @@ class TestDeepResearcherAgent:
 
             state = DeepResearchAgentState(messages=[HumanMessage(content="Test query")])
 
-            with pytest.raises(Exception, match="Agent error"):
-                await agent.run(state)
+            with caplog.at_level("ERROR", logger="aiq_agent.agents.deep_researcher.agent"):
+                with pytest.raises(Exception, match="Agent error"):
+                    await agent.run(state)
             assert mock_agent.ainvoke.await_count == 1
+            assert caplog.messages.count("Deep Research Subagent failed: Agent error") == 1
 
     @pytest.mark.parametrize(
         ("data_sources", "enable_citation_verification", "expected_reason"),
@@ -1344,6 +1346,7 @@ class TestDeepResearcherAgent:
         data_sources,
         enable_citation_verification,
         expected_reason,
+        caplog,
     ):
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
@@ -1371,11 +1374,13 @@ class TestDeepResearcherAgent:
                 data_sources=data_sources,
             )
 
-            with pytest.raises(EmptySourceRegistryError) as exc_info:
-                await agent.run(state)
+            with caplog.at_level("ERROR", logger="aiq_agent.agents.deep_researcher.agent"):
+                with pytest.raises(EmptySourceRegistryError) as exc_info:
+                    await agent.run(state)
 
         assert exc_info.value.reason is expected_reason
         assert exc_info.value.generated_answer == "Draft answer with "
+        assert not any(message.startswith("Deep Research Subagent failed:") for message in caplog.messages)
 
     @pytest.mark.asyncio
     async def test_empty_registry_is_classified_without_committed_writer_output(

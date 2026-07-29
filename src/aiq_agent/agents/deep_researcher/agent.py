@@ -32,6 +32,7 @@ from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
@@ -368,6 +369,10 @@ class DeepResearcherAgent:
             logger.info("=" * 80)
             return DeepResearchAgentState.model_validate(result)
 
+        except EmptySourceRegistryError as ex:
+            if ex.reason is not EmptySourceRegistryReason.NO_SOURCE_RESULTS:
+                logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
+            raise
         except Exception as ex:
             logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
             raise
