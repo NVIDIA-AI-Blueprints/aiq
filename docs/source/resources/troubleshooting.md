@@ -50,7 +50,7 @@ Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested wi
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
 - Degraded agent workflow performance due to upstream model availability
 
-**Default Configuration:** The default configs use Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`). If hosted endpoints are saturated, retry after a short delay, reduce concurrency, or self-host for consistent throughput.
+**Default Configuration:** The default configs use Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`) for intent classification, shallow research, and deep-research writing, and Nemotron 3 Ultra for the other deep-research roles. If hosted endpoints are saturated, retry after a short delay, reduce concurrency, or self-host for consistent throughput.
 
 ### Recommended Mitigation: Self-Host via Brev Launchable
 

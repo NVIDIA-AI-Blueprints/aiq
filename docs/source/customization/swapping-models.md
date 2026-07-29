@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 LLMs are defined in the `llms` section and referenced by agents and tools. You can swap NIM models, change parameters, or add alternative providers.
 
-**Example: NIM model (default)**
+**Example: Nemotron 3 Super NIM (used for intent classification, shallow research, and deep-research writing)**
 
 ```yaml
 llms:
@@ -20,13 +20,13 @@ llms:
     num_retries: 5
 ```
 
-**Example: NIM with thinking (for example, for deep research)**
+**Example: Nemotron 3 Ultra NIM with thinking (used for deep-research routing, orchestration, planning, and research)**
 
 ```yaml
 llms:
-  nemotron_super_llm:
+  nemotron_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 1.0
     top_p: 1.0
@@ -35,7 +35,7 @@ llms:
       enable_thinking: true
 ```
 
-**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_super_llm`, `llm: nemotron_super_llm`). Use different keys in `llms` and point agents at them to swap models per role.
+**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_ultra_llm`, `writer_llm: nemotron_super_llm`). Use different keys in `llms` and point agents at them to swap models per role.
 
 ## Using Downloadable NIMs (Self-Hosted)
 
@@ -71,7 +71,7 @@ llms:
 ```
 
 ```{note}
-**Nemotron Super — Build Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429 or 503 responses). The default configs use Nemotron Super. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended.
+**Nemotron 3 Super — Build Endpoint Availability:** Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429 or 503 responses). The default configs use Nemotron 3 Super for intent classification, shallow research, and deep-research writing. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended.
 ```
 
 You can mix hosted and local NIMs in the same config -- for example, use a local NIM for the high-volume shallow researcher and a hosted NIM for the orchestrator:
