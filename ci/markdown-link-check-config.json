@@ -35,6 +35,9 @@
         },
         {
             "pattern": "^https?://huggingface\\.co/spaces/muset-ai/DeepResearch-Bench-Leaderboard$"
+        },
+        {
+            "pattern": "^https://you\\.com/docs/api-reference/contents/?$"
         }
     ],
     "replacementPatterns": [
