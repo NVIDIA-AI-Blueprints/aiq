@@ -563,9 +563,7 @@ class TestChatResearcherAgent:
         state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
         result = await agent.run(state, thread_id="test-thread-admission-failure")
 
-        assert result["messages"][-1].content == (
-            "Active deep research job limit reached. Wait for a running job to finish."
-        )
+        assert result["messages"][-1].content == JobPrincipalCapacityExceededError.public_message
         assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
     @pytest.mark.asyncio

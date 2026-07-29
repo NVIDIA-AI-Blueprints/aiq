@@ -1298,6 +1298,7 @@ class TestDeepResearchTimeoutLifecycle:
         error,
         expected_interrupted,
         tmp_path,
+        content_encryption_manager_guard,
     ):
         from types import SimpleNamespace
 

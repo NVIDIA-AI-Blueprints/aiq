@@ -305,10 +305,15 @@ class TestDeepResearcherAgent:
         config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
             max_research_concurrency=2,
-            resource_limits={"max_research_queries": 2, "max_source_tool_calls": 8},
+            resource_limits={
+                "max_research_queries": 2,
+                "max_source_routing_bytes": 2048,
+                "max_source_tool_calls": 8,
+            },
         )
 
         assert config.resource_limits.max_research_queries == 2
+        assert config.resource_limits.max_source_routing_bytes == 2048
         assert config.resource_limits.max_source_tool_calls == 8
         with pytest.raises(ValidationError, match="max_research_concurrency"):
             DeepResearchAgentConfig(
@@ -1171,6 +1176,53 @@ class TestDeepResearcherAgent:
             await batch_tool.ainvoke({"queries": [self._query_payload("three")]})
         assert fake_runnable.ainvoke.await_count == 3
         assert backend.upload_files.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_research_note_persistence_failure_restores_byte_capacity_for_retry(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        """A transient upload failure releases provisional note accounting for one retry."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        query = ResearchQuery.model_validate(self._query_payload("one"))
+        note = ResearchNotes.model_validate(self._structured_notes_response()["structured_response"])
+        note_size = len(research_module._research_note_files([query], [note])[0][1])
+        fake_runnable = MagicMock()
+        fake_runnable.ainvoke = AsyncMock(return_value=self._structured_notes_response())
+        backend = MagicMock()
+        upload_attempts = 0
+
+        def _upload(files):
+            nonlocal upload_attempts
+            upload_attempts += 1
+            if upload_attempts == 1:
+                raise RuntimeError("transient")
+            return [FileUploadResponse(path=path, error=None) for path, _content in files]
+
+        backend.upload_files.side_effect = _upload
+        agent = DeepResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[real_tool],
+            resource_limits=DeepResearchResourceLimits(
+                max_research_queries=2,
+                max_research_note_bytes=note_size,
+                max_total_research_note_bytes=note_size,
+            ),
+        )
+        register_sources = MagicMock(wraps=agent.source_registry_middleware.register_research_note_sources)
+        agent.source_registry_middleware.register_research_note_sources = register_sources
+        batch_tool = self._build_batch_tool(agent, fake_runnable, backend=backend)
+
+        with pytest.raises(RuntimeError, match="transient"):
+            await batch_tool.ainvoke({"queries": [self._query_payload("one")]})
+        register_sources.assert_not_called()
+        result = await batch_tool.ainvoke({"queries": [self._query_payload("two")]})
+
+        assert json.loads(result)[0]["query_topic"] == "Research Topic"
+        assert backend.upload_files.call_count == 2
+        register_sources.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_research_query_reservation_is_concurrency_safe_and_new_tool_resets_ledger(

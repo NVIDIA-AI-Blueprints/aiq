@@ -328,16 +328,16 @@ class StateMutationGuardMiddleware(AgentMiddleware):
             status="error",
         )
 
-    async def awrap_tool_call(self, request, handler):
-        """Reject unauthorized state writes before a filesystem backend is called."""
+    def _rejection(self, request: object) -> ToolMessage | None:
+        """Return a denial for a guarded mutation, otherwise allow delegation."""
         tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
         tool_name = tool_call.get("name")
         if tool_name not in {"write_file", "edit_file"}:
-            return await handler(request)
+            return None
 
         target = _tool_file_path(tool_call)
         if not self._is_state_backed(target):
-            return await handler(request)
+            return None
         if not self.writer:
             return self._tool_error(
                 tool_call,
@@ -356,6 +356,20 @@ class StateMutationGuardMiddleware(AgentMiddleware):
                 "writer_output_edit_not_supported",
                 f"use write_file with file_path={FINAL_REPORT_PATH} and the complete bounded report",
             )
+        return None
+
+    def wrap_tool_call(self, request, handler):
+        """Reject unauthorized state writes before a synchronous backend call."""
+        rejection = self._rejection(request)
+        if rejection is not None:
+            return rejection
+        return handler(request)
+
+    async def awrap_tool_call(self, request, handler):
+        """Reject unauthorized state writes before an asynchronous backend call."""
+        rejection = self._rejection(request)
+        if rejection is not None:
+            return rejection
         return await handler(request)
 
 
@@ -1074,9 +1088,9 @@ class SourceRoutingPersistenceMiddleware(AgentMiddleware):
             return
 
         content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
-        if len(content) > self.resource_limits.max_plan_bytes:
+        if len(content) > self.resource_limits.max_source_routing_bytes:
             raise ValueError(
-                f"Source routing exceeds the {self.resource_limits.max_plan_bytes}-byte serialized size limit"
+                f"Source routing exceeds the {self.resource_limits.max_source_routing_bytes}-byte serialized size limit"
             )
         reservation = self.state_budget.reserve([(self.path, content)])
         try:

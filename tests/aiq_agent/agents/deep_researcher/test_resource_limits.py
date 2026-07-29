@@ -13,6 +13,7 @@ from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_RESEARC
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_RESEARCH_PLAN_BYTES
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_RESEARCH_QUERIES
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_RESEARCH_QUERY_CHARS
+from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_SOURCE_ROUTING_BYTES
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_SOURCE_TOOL_CALLS
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_STATE_FILE_COUNT
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_TODO_ITEM_CHARS
@@ -33,6 +34,7 @@ def test_resource_limit_defaults_equal_non_disableable_security_ceiling():
         "max_input_chars": DEFAULT_MAX_RESEARCH_INPUT_CHARS,
         "max_execution_seconds": DEFAULT_MAX_RESEARCH_EXECUTION_SECONDS,
         "max_plan_bytes": DEFAULT_MAX_RESEARCH_PLAN_BYTES,
+        "max_source_routing_bytes": DEFAULT_MAX_SOURCE_ROUTING_BYTES,
         "max_final_report_bytes": DEFAULT_MAX_FINAL_REPORT_BYTES,
         "max_state_file_count": DEFAULT_MAX_STATE_FILE_COUNT,
         "max_total_state_bytes": DEFAULT_MAX_TOTAL_STATE_BYTES,
@@ -53,6 +55,7 @@ def test_resource_limit_defaults_equal_non_disableable_security_ceiling():
         ("max_input_chars", DEFAULT_MAX_RESEARCH_INPUT_CHARS),
         ("max_execution_seconds", DEFAULT_MAX_RESEARCH_EXECUTION_SECONDS),
         ("max_plan_bytes", DEFAULT_MAX_RESEARCH_PLAN_BYTES),
+        ("max_source_routing_bytes", DEFAULT_MAX_SOURCE_ROUTING_BYTES),
         ("max_final_report_bytes", DEFAULT_MAX_FINAL_REPORT_BYTES),
         ("max_state_file_count", DEFAULT_MAX_STATE_FILE_COUNT),
         ("max_total_state_bytes", DEFAULT_MAX_TOTAL_STATE_BYTES),
@@ -78,6 +81,7 @@ def test_resource_limits_accept_downward_overrides_and_are_frozen():
         max_input_chars=1024,
         max_execution_seconds=60,
         max_plan_bytes=4096,
+        max_source_routing_bytes=2048,
         max_final_report_bytes=8192,
         max_state_file_count=8,
         max_total_state_bytes=16_384,
@@ -166,3 +170,18 @@ def test_state_budget_reservation_is_replacement_aware_and_rollback_safe():
     with pytest.raises(ValueError, match="aggregate limit"):
         ledger.reserve([("/shared/output.md", b"345")])
     ledger.rollback(restored)
+
+
+def test_state_budget_reserve_uses_non_sandbox_path_canonicalization():
+    """Route-local mutations replace route-local seeds when StateBackend owns every path."""
+    ledger = StateBudgetLedger(
+        limits=DeepResearchResourceLimits(max_state_file_count=1, max_total_state_bytes=3),
+        files={"/output.md": "12"},
+        sandbox_enabled=False,
+    )
+
+    replacement = ledger.reserve([("/output.md", b"123")])
+
+    with pytest.raises(ValueError, match="aggregate limit"):
+        ledger.reserve([("/output.md", b"1234")])
+    ledger.rollback(replacement)

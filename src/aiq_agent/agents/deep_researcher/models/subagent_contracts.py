@@ -24,6 +24,8 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import StringConstraints
 
+from ..resource_limits import DEFAULT_MAX_RESEARCH_QUERIES
+
 ResearchQueryText = Annotated[str, StringConstraints(min_length=1, max_length=4096)]
 ResearchSubqueryText = Annotated[str, StringConstraints(min_length=1, max_length=2048)]
 ToolName = Annotated[str, StringConstraints(min_length=1, max_length=256)]
@@ -145,7 +147,7 @@ class ResearchPlan(_StrictContract):
     answer_strategy: AnswerStrategy = Field(description="Final answer shape and synthesis strategy.")
     constraints: list[Constraint] = Field(description="Lightweight requirements for the final answer.")
     queries: list[ResearchQuery] = Field(
-        max_length=20,
+        max_length=DEFAULT_MAX_RESEARCH_QUERIES,
         description="Queries for researcher workers to execute.",
     )
 

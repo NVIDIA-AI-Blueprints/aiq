@@ -12,8 +12,10 @@ AIQ behind a customer-managed authenticated gateway, and must own the correspond
 authorization policy, network isolation, and edge rate limits.
 
 When AIQ authentication is enabled, the web UI signs users in with an OAuth/OIDC
-provider and the backend validates the resulting JWT before serving protected API
-routes.
+provider. The backend validates the resulting JWT before serving protected API
+routes only when `REQUIRE_AUTH=true` and the request hostname is classified as
+external through `AIQ_EXTERNAL_HOSTNAMES`. Requests outside that external boundary
+remain on the trusted/internal path.
 
 Use this guide when you need to:
 

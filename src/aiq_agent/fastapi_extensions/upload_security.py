@@ -21,7 +21,6 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
-import aiofiles
 from fastapi import UploadFile
 
 logger = logging.getLogger(__name__)
@@ -539,6 +538,37 @@ def _validate_file_content(path: str, extension: str) -> None:
     raise UploadValidationError(415, f"No content validator is available for '{extension}' files")
 
 
+def _write_all_to_descriptor(descriptor: int, content: bytes) -> None:
+    """Write a complete chunk to the already-open private temporary file."""
+    remaining = memoryview(content)
+    while remaining:
+        written = os.write(descriptor, remaining)
+        if written == 0:
+            raise OSError("Temporary upload write made no progress")
+        remaining = remaining[written:]
+
+
+async def _write_upload_chunk(descriptor: int, content: bytes) -> None:
+    """Offload one descriptor write and let it quiesce before propagating cancellation."""
+    write_task = asyncio.create_task(asyncio.to_thread(_write_all_to_descriptor, descriptor, content))
+    try:
+        await asyncio.shield(write_task)
+    except asyncio.CancelledError:
+        # asyncio.to_thread cannot stop the underlying OS write. Keep the
+        # descriptor open until that write finishes so cleanup cannot close and
+        # reuse the fd underneath the worker thread.
+        while not write_task.done():
+            try:
+                await asyncio.shield(write_task)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
+        if not write_task.cancelled():
+            write_task.exception()
+        raise
+
+
 async def save_validated_upload(
     upload: UploadFile,
     *,
@@ -558,7 +588,6 @@ async def save_validated_upload(
         raise UploadValidationError(413, "Total upload size limit exceeded")
 
     descriptor, path = tempfile.mkstemp(prefix="aiq-upload-", suffix=extension)
-    os.close(descriptor)
     size_bytes = 0
     try:
         # Register request ownership before the first await. This closes the
@@ -566,21 +595,27 @@ async def save_validated_upload(
         # receives the SavedUpload return value.
         if on_temp_path_created is not None:
             on_temp_path_created(path)
-        async with aiofiles.open(path, "wb") as temp_file:
-            while chunk := await upload.read(UPLOAD_READ_CHUNK_BYTES):
-                size_bytes += len(chunk)
-                if size_bytes > effective_limit:
-                    if effective_limit == limits.max_file_bytes:
-                        raise UploadValidationError(
-                            413,
-                            f"File exceeds the maximum upload size of {limits.max_file_bytes} bytes",
-                        )
-                    raise UploadValidationError(413, "Total upload size limit exceeded")
-                await temp_file.write(chunk)
+        while chunk := await upload.read(UPLOAD_READ_CHUNK_BYTES):
+            size_bytes += len(chunk)
+            if size_bytes > effective_limit:
+                if effective_limit == limits.max_file_bytes:
+                    raise UploadValidationError(
+                        413,
+                        f"File exceeds the maximum upload size of {limits.max_file_bytes} bytes",
+                    )
+                raise UploadValidationError(413, "Total upload size limit exceeded")
+            await _write_upload_chunk(descriptor, chunk)
 
+        os.close(descriptor)
+        descriptor = -1
         await asyncio.to_thread(_validate_file_content, path, extension)
         return SavedUpload(path=path, original_filename=original_filename, size_bytes=size_bytes)
     except BaseException:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
         try:
             os.unlink(path)
         except OSError:

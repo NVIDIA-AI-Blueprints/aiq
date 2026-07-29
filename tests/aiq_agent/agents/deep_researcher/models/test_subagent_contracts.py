@@ -25,6 +25,7 @@ from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.agents.deep_researcher.models import ResearchQuery
 from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
+from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_RESEARCH_QUERIES
 
 
 def _answer_strategy() -> dict:
@@ -142,7 +143,7 @@ def test_research_query_text_boundaries_are_enforced_per_nested_item():
         ResearchQuery.model_validate(_research_query(subqueries=["s" * 2049]))
 
 
-def test_research_plan_accepts_twenty_queries_and_rejects_twenty_one():
+def test_research_plan_query_count_matches_shared_security_ceiling():
     """The structured schema matches the immutable per-job query-count ceiling."""
     base = {
         "task_analysis": _task_analysis(),
@@ -150,11 +151,15 @@ def test_research_plan_accepts_twenty_queries_and_rejects_twenty_one():
         "constraints": [],
     }
 
-    accepted = ResearchPlan.model_validate({**base, "queries": [_research_query() for _ in range(20)]})
+    accepted = ResearchPlan.model_validate(
+        {**base, "queries": [_research_query() for _ in range(DEFAULT_MAX_RESEARCH_QUERIES)]}
+    )
 
-    assert len(accepted.queries) == 20
+    assert len(accepted.queries) == DEFAULT_MAX_RESEARCH_QUERIES
     with pytest.raises(ValidationError):
-        ResearchPlan.model_validate({**base, "queries": [_research_query() for _ in range(21)]})
+        ResearchPlan.model_validate(
+            {**base, "queries": [_research_query() for _ in range(DEFAULT_MAX_RESEARCH_QUERIES + 1)]}
+        )
 
 
 def test_reduced_answer_strategy_contract_validates():

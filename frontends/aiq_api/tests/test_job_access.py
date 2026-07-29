@@ -20,6 +20,7 @@ from datetime import UTC
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
@@ -91,6 +92,40 @@ def _insert_job_info(
 
 
 class TestJobAccessStorage:
+    def test_schema_initialization_commits_before_caching(self, monkeypatch):
+        db_url = "postgresql://test"
+        conn = MagicMock()
+        conn.in_transaction.return_value = False
+        monkeypatch.setattr(job_access, "_ensure_extra_columns", MagicMock())
+
+        job_access._ensure_job_access_schema(conn, db_url)
+
+        conn.commit.assert_called_once_with()
+        assert db_url in job_access._job_access_schema_initialized
+
+    def test_schema_initialization_in_caller_transaction_is_not_cached(self, monkeypatch):
+        db_url = "postgresql://test"
+        conn = MagicMock()
+        conn.in_transaction.return_value = True
+        monkeypatch.setattr(job_access, "_ensure_extra_columns", MagicMock())
+
+        job_access._ensure_job_access_schema(conn, db_url)
+
+        conn.commit.assert_not_called()
+        assert db_url not in job_access._job_access_schema_initialized
+
+    def test_schema_initialization_commit_failure_is_not_cached(self, monkeypatch):
+        db_url = "postgresql://test"
+        conn = MagicMock()
+        conn.in_transaction.return_value = False
+        conn.commit.side_effect = RuntimeError("commit failed")
+        monkeypatch.setattr(job_access, "_ensure_extra_columns", MagicMock())
+
+        with pytest.raises(RuntimeError, match="commit failed"):
+            job_access._ensure_job_access_schema(conn, db_url)
+
+        assert db_url not in job_access._job_access_schema_initialized
+
     def test_create_and_get_job_access(self, db_url):
         principal = Principal(type="jwt", sub="user-1", email="alice@example.com")
 

@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import os
 import struct
+import threading
 import zipfile
 from collections.abc import Callable
 from io import BytesIO
@@ -272,6 +273,46 @@ async def test_accepts_file_at_exact_size_boundary() -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancellation_waits_for_descriptor_write_before_cleanup(monkeypatch: pytest.MonkeyPatch) -> None:
+    write_started = threading.Event()
+    release_write = threading.Event()
+    captured_descriptor: list[int] = []
+    created_paths: list[str] = []
+    real_write = upload_security_module._write_all_to_descriptor
+
+    def blocking_write(descriptor: int, content: bytes) -> None:
+        captured_descriptor.append(descriptor)
+        write_started.set()
+        if not release_write.wait(timeout=5):
+            raise AssertionError("test did not release descriptor write")
+        real_write(descriptor, content)
+
+    monkeypatch.setattr(upload_security_module, "_write_all_to_descriptor", blocking_write)
+    save_task = asyncio.create_task(
+        save_validated_upload(
+            _upload("cancelled.txt", b"research", "text/plain"),
+            limits=_limits(),
+            remaining_total_bytes=2048,
+            on_temp_path_created=created_paths.append,
+        )
+    )
+
+    assert await asyncio.to_thread(write_started.wait, 5)
+    save_task.cancel()
+    await asyncio.sleep(0)
+    assert not save_task.done()
+    os.fstat(captured_descriptor[0])
+
+    release_write.set()
+    with pytest.raises(asyncio.CancelledError):
+        await save_task
+
+    assert not Path(created_paths[0]).exists()
+    with pytest.raises(OSError):
+        os.fstat(captured_descriptor[0])
+
+
+@pytest.mark.asyncio
 async def test_rejects_file_larger_than_server_limit() -> None:
     with pytest.raises(UploadValidationError) as exc:
         await save_validated_upload(
@@ -395,6 +436,38 @@ async def test_rejects_docx_without_exact_required_document_member() -> None:
         )
 
     assert exc.value.status_code == 415
+
+
+@pytest.mark.asyncio
+async def test_rejects_office_archive_with_duplicate_entry_name() -> None:
+    with pytest.warns(UserWarning, match="Duplicate name"):
+        content = _office_document(extra_entries={"word/document.xml": b"<duplicate/>"})
+
+    with pytest.raises(UploadValidationError) as exc:
+        await save_validated_upload(
+            _upload("report.docx", content, _DOCX_CONTENT_TYPE),
+            limits=_limits(accepted_extensions=frozenset({".docx"})),
+            remaining_total_bytes=2048,
+        )
+
+    assert exc.value.status_code == 415
+    assert "duplicate entries" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_rejects_office_archive_over_entry_count_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(upload_security_module, "MAX_OFFICE_ARCHIVE_ENTRIES", 2)
+    content = _office_document(extra_entries={"word/extra.xml": b"<extra/>"})
+
+    with pytest.raises(UploadValidationError) as exc:
+        await save_validated_upload(
+            _upload("report.docx", content, _DOCX_CONTENT_TYPE),
+            limits=_limits(accepted_extensions=frozenset({".docx"})),
+            remaining_total_bytes=2048,
+        )
+
+    assert exc.value.status_code == 415
+    assert "structure" in exc.value.detail
 
 
 @pytest.mark.asyncio

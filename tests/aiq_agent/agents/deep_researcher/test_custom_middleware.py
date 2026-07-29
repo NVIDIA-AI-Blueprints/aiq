@@ -379,6 +379,48 @@ class TestStateMutationGuardMiddleware:
         assert str(result.content).startswith(reason)
         handler.assert_not_awaited()
 
+    @pytest.mark.parametrize(
+        ("writer", "tool_name", "path", "reason"),
+        [
+            (False, "write_file", "/shared/plan.json", "state_mutation_role_denied:"),
+            (True, "write_file", "/shared/plan.json", "writer_state_path_denied:"),
+            (True, "edit_file", "/shared/output.md", "writer_output_edit_not_supported:"),
+        ],
+    )
+    def test_sync_hook_enforces_same_state_mutation_policy(
+        self,
+        writer: bool,
+        tool_name: str,
+        path: str,
+        reason: str,
+    ) -> None:
+        middleware = StateMutationGuardMiddleware(writer=writer, sandbox_enabled=True)
+        handler = MagicMock()
+
+        result = middleware.wrap_tool_call(self._request(tool_name, path), handler)
+
+        assert result.status == "error"
+        assert str(result.content).startswith(reason)
+        handler.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("writer", "tool_name", "path"),
+        [
+            (False, "write_file", "/workspace/scratch.py"),
+            (False, "read_file", "/shared/plan.json"),
+            (True, "write_file", "/shared/output.md"),
+        ],
+    )
+    def test_sync_hook_delegates_allowed_calls(self, writer: bool, tool_name: str, path: str) -> None:
+        middleware = StateMutationGuardMiddleware(writer=writer, sandbox_enabled=True)
+        expected = ToolMessage(content="ok", tool_call_id="tc1")
+        handler = MagicMock(return_value=expected)
+
+        result = middleware.wrap_tool_call(self._request(tool_name, path), handler)
+
+        assert result is expected
+        handler.assert_called_once()
+
 
 class TestFinalReportCommitMiddleware:
     """Writer mutations are overwrite-capable and recorded only after success."""
@@ -1478,6 +1520,28 @@ class TestSourceRoutingPersistenceMiddleware:
             middleware.after_agent({"structured_response": self._routing()}, None)
 
         ledger.reserve([("/shared/plan.json", b"ok")])
+
+    def test_serialized_byte_boundary_uses_dedicated_source_routing_limit(self) -> None:
+        routing = self._routing()
+        serialized_size = len(json.dumps(routing, indent=2, ensure_ascii=False).encode("utf-8"))
+        accepted_backend = MagicMock()
+        accepted_backend.upload_files.return_value = [SimpleNamespace(path="/shared/source_routing.json", error=None)]
+        accepted = SourceRoutingPersistenceMiddleware(
+            backend=accepted_backend,
+            resource_limits=DeepResearchResourceLimits(max_source_routing_bytes=serialized_size),
+        )
+
+        accepted.after_agent({"structured_response": routing}, None)
+
+        accepted_backend.upload_files.assert_called_once()
+        rejected_backend = MagicMock()
+        rejected = SourceRoutingPersistenceMiddleware(
+            backend=rejected_backend,
+            resource_limits=DeepResearchResourceLimits(max_source_routing_bytes=serialized_size - 1),
+        )
+        with pytest.raises(ValueError, match=f"{serialized_size - 1}-byte serialized size limit"):
+            rejected.after_agent({"structured_response": routing}, None)
+        rejected_backend.upload_files.assert_not_called()
 
 
 class TestPlanPersistenceMiddleware:

@@ -395,14 +395,24 @@ def _job_access_connection(db_url: str):
 
 
 def _ensure_job_access_schema(conn: Connection, db_url: str) -> None:
-    """Create the ``job_access`` table and index once per database URL."""
+    """Create the ``job_access`` schema, caching only committed initialization.
+
+    Most callers pass a fresh connection, so this helper owns and commits the
+    DDL transaction before any job-level work begins. A caller may also pass a
+    connection with an active transaction (for example, coordinated cleanup).
+    In that case the caller retains transaction ownership and the URL is not
+    cached: a later rollback may undo transactional DDL on PostgreSQL.
+    """
     if db_url in _job_access_schema_initialized:
         return
+    caller_owns_transaction = conn.in_transaction()
     conn.execute(text(_job_access_table_sql(db_url)))
     _ensure_extra_columns(conn, db_url)
     conn.execute(text(_JOB_ACCESS_INDEX_SQL))
     conn.execute(text(_JOB_ACCESS_CONVERSATION_INDEX_SQL))
-    _job_access_schema_initialized.add(db_url)
+    if not caller_owns_transaction:
+        conn.commit()
+        _job_access_schema_initialized.add(db_url)
 
 
 def _ensure_extra_columns(conn: Connection, db_url: str) -> None:

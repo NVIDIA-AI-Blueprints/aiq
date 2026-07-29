@@ -472,6 +472,7 @@ functions:
       max_input_chars: 32768
       max_execution_seconds: 3600
       max_plan_bytes: 1048576
+      max_source_routing_bytes: 1048576
       max_final_report_bytes: 2097152
       max_state_file_count: 64
       max_total_state_bytes: 25165824
@@ -513,6 +514,7 @@ functions:
 | `max_input_chars` | `32768` | Combined final user query and clarifier context, before state preparation or graph construction. |
 | `max_execution_seconds` | `3600` | Top-level deep-research graph execution timeout. |
 | `max_plan_bytes` | `1048576` | UTF-8 serialized `ResearchPlan`, before `/shared/plan.json` persistence. |
+| `max_source_routing_bytes` | `1048576` | UTF-8 serialized `SourceRoutingPlan`, before `/shared/source_routing.json` persistence. |
 | `max_final_report_bytes` | `2097152` | UTF-8 serialized writer output, before `/shared/output.md` persistence. |
 | `max_state_file_count` | `64` | Files held in the job's StateBackend filesystem, including resumed state. Sandbox workspace files are outside this state budget. |
 | `max_total_state_bytes` | `25165824` | Aggregate payload bytes held in the job's StateBackend filesystem, including resumed state. |

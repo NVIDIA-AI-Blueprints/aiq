@@ -18,6 +18,7 @@ from pydantic import Field
 DEFAULT_MAX_RESEARCH_INPUT_CHARS = 32_768
 DEFAULT_MAX_RESEARCH_EXECUTION_SECONDS = 3600.0
 DEFAULT_MAX_RESEARCH_PLAN_BYTES = 1 * 1024 * 1024
+DEFAULT_MAX_SOURCE_ROUTING_BYTES = 1 * 1024 * 1024
 DEFAULT_MAX_FINAL_REPORT_BYTES = 2 * 1024 * 1024
 DEFAULT_MAX_STATE_FILE_COUNT = 64
 DEFAULT_MAX_TOTAL_STATE_BYTES = 24 * 1024 * 1024
@@ -130,6 +131,7 @@ class StateBudgetLedger:
         sandbox_enabled: bool,
     ) -> None:
         self._limits = limits
+        self._sandbox_enabled = sandbox_enabled
         self._sizes = state_backend_file_sizes(files, sandbox_enabled=sandbox_enabled)
         self._generations = {path: 0 for path in self._sizes}
         self._next_generation = 1
@@ -159,7 +161,7 @@ class StateBudgetLedger:
 
         proposed: dict[str, int] = {}
         for path, content in files:
-            canonical = _canonical_state_backend_path(path, sandbox_enabled=True)
+            canonical = _canonical_state_backend_path(path, sandbox_enabled=self._sandbox_enabled)
             if canonical is None:
                 raise ValueError("Deep-research state mutation must target /shared/")
             if canonical in proposed:
@@ -216,6 +218,12 @@ class DeepResearchResourceLimits(BaseModel):
         ge=1,
         le=DEFAULT_MAX_RESEARCH_PLAN_BYTES,
         description="Maximum serialized size of the structured research plan.",
+    )
+    max_source_routing_bytes: int = Field(
+        default=DEFAULT_MAX_SOURCE_ROUTING_BYTES,
+        ge=1,
+        le=DEFAULT_MAX_SOURCE_ROUTING_BYTES,
+        description="Maximum serialized size of the structured source-routing response.",
     )
     max_final_report_bytes: int = Field(
         default=DEFAULT_MAX_FINAL_REPORT_BYTES,

@@ -267,9 +267,15 @@ def build_research_batch_tool(
             persisted_note_count += len(note_files)
             persisted_note_bytes += batch_note_bytes
 
+        try:
+            _persist_research_notes(backend=backend, note_files=note_files, state_budget=state_budget)
+        except Exception:
+            async with ledger_lock:
+                persisted_note_count -= len(note_files)
+                persisted_note_bytes -= batch_note_bytes
+            raise
         if source_registry_middleware is not None:
             source_registry_middleware.register_research_note_sources(notes)
-        _persist_research_notes(backend=backend, note_files=note_files, state_budget=state_budget)
 
         if errors:
             retained_detail = ""
