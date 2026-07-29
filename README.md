@@ -152,7 +152,7 @@ When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), infere
 | Component | Default Model | Self-Hosted Hardware Reference |
 |-----------|---------------|-------------------------------|
 | LLM (intent, shallow research, deep-research writer) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super model card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
-| LLM (deep-research source router, orchestrator, planner, researcher) | `nvidia/nemotron-3-ultra-550b-a55b` in default profiles; GPT-OSS-120B or GPT-5.2 for selected roles in focused profiles | [Configuration Files](#configuration-files) |
+| LLM (deep-research source router, orchestrator, planner, researcher) | `nvidia/nemotron-3-ultra-550b-a55b` in default profiles; GPT-OSS-120B or GPT-5.2 for selected roles in focused profiles | [Nemotron 3 Ultra model card](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b/modelcard) |
 | Document summary (optional) | `nvidia/nemotron-mini-4b-instruct` | [Nemotron Mini 4B](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/) |
 | Text embedding | `nvidia/llama-nemotron-embed-vl-1b-v2` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
 | VLM (image/chart extraction, optional) | `nvidia/nemotron-nano-12b-v2-vl` | [Vision language model support matrix](https://docs.nvidia.com/nim/vision-language-models/latest/support-matrix.html#nemotron-nano-12b-v2-vl) |
