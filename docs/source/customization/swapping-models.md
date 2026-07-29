@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 LLMs are defined in the `llms` section and referenced by agents and tools. You can swap NIM models, change parameters, or add alternative providers.
 
-**Example: Nemotron Super NIM (used for intent classification, shallow research, and deep-research writing)**
+**Example: NIM model (default)**
 
 ```yaml
 llms:
@@ -20,7 +20,7 @@ llms:
     num_retries: 5
 ```
 
-**Example: Nemotron Ultra NIM with thinking (used for deep-research routing, orchestration, planning, and research)**
+**Example: NIM with thinking (for example, for deep research)**
 
 ```yaml
 llms:
