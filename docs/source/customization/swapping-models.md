@@ -6,7 +6,7 @@ SPDX-License-Identifier: Apache-2.0
 
 LLMs are defined in the `llms` section and referenced by agents and tools. You can swap NIM models, change parameters, or add alternative providers.
 
-**Example: Nemotron 3 Super NIM (used for intent classification, shallow research, and deep-research writing)**
+**Example: Nemotron Super NIM (used for intent classification, shallow research, and deep-research writing)**
 
 ```yaml
 llms:
@@ -20,7 +20,7 @@ llms:
     num_retries: 5
 ```
 
-**Example: Nemotron 3 Ultra NIM with thinking (used for deep-research routing, orchestration, planning, and research)**
+**Example: Nemotron Ultra NIM with thinking (used for deep-research routing, orchestration, planning, and research)**
 
 ```yaml
 llms:
@@ -71,7 +71,7 @@ llms:
 ```
 
 ```{note}
-**Nemotron 3 Super — Build Endpoint Availability:** Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429 or 503 responses). The default configs use Nemotron 3 Super for intent classification, shallow research, and deep-research writing. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended.
+**Nemotron Super — Build Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429 or 503 responses). The default configs use Nemotron Super for intent classification, shallow research, and deep-research writing, and Nemotron Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) for the other deep-research roles. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended.
 ```
 
 You can mix hosted and local NIMs in the same config -- for example, use a local NIM for the high-volume shallow researcher and a hosted NIM for the orchestrator:
