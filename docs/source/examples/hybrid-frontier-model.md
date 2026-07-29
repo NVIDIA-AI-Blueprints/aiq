@@ -33,14 +33,6 @@ llms:
     temperature: 0.1
     max_tokens: 16384
 
-  nemotron_ultra_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
-    top_p: 0.7
-    max_tokens: 65536
-
   # Frontier model for deep research (higher quality)
   frontier_llm:
     _type: openai
@@ -94,10 +86,6 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     orchestrator_llm: frontier_llm    # Frontier model here
-    source_router_llm: nemotron_ultra_llm
-    researcher_llm: nemotron_ultra_llm
-    planner_llm: frontier_llm
-    writer_llm: frontier_llm
     tools:
       - advanced_web_search_tool
       - knowledge_search

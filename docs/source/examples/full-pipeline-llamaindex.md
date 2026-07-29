@@ -65,17 +65,6 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_ultra_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
-    top_p: 0.7
-    max_tokens: 65536
-    num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: true
-
   # LLM for document summaries (shown in the UI after upload)
   summary_llm:
     _type: nim
@@ -152,11 +141,7 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_ultra_llm
-    source_router_llm: nemotron_ultra_llm
-    researcher_llm: nemotron_ultra_llm
-    planner_llm: nemotron_ultra_llm
-    writer_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_super_llm
     verbose: true
     tools:
       # - paper_search_tool  # Uncomment if SERPER_API_KEY is set

@@ -451,10 +451,10 @@ batches those queries for researcher workers and delegates final synthesis to th
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_ultra_llm
-    source_router_llm: nemotron_ultra_llm
-    researcher_llm: nemotron_ultra_llm
-    planner_llm: nemotron_ultra_llm
+    orchestrator_llm: nemotron_super_llm
+    source_router_llm: nemotron_super_llm
+    researcher_llm: nemotron_super_llm
+    planner_llm: nemotron_super_llm
     writer_llm: nemotron_super_llm
     # tools omitted -> inherit every tool in data_source_registry
     exclude_tools:

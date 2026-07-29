@@ -235,10 +235,10 @@ for configuration details.
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_ultra_llm
-    source_router_llm: nemotron_ultra_llm
-    planner_llm: nemotron_ultra_llm
-    researcher_llm: nemotron_ultra_llm
+    orchestrator_llm: nemotron_llm
+    source_router_llm: nemotron_super_llm
+    planner_llm: nemotron_llm
+    researcher_llm: nemotron_llm
     writer_llm: nemotron_super_llm
     enable_source_router: true
     enable_citation_verification: true

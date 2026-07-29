@@ -24,9 +24,9 @@ llms:
 
 ```yaml
 llms:
-  nemotron_ultra_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 1.0
     top_p: 1.0
@@ -35,7 +35,7 @@ llms:
       enable_thinking: true
 ```
 
-**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_ultra_llm`, `writer_llm: nemotron_super_llm`). Use different keys in `llms` and point agents at them to swap models per role.
+**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_super_llm`, `llm: nemotron_super_llm`). Use different keys in `llms` and point agents at them to swap models per role.
 
 ## Using Downloadable NIMs (Self-Hosted)
 
