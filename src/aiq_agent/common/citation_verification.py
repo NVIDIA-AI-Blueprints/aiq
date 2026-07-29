@@ -40,6 +40,7 @@ from collections.abc import Callable
 from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
+from enum import StrEnum
 from html import unescape
 from urllib.parse import parse_qs
 from urllib.parse import unquote
@@ -105,6 +106,42 @@ class CitationVerificationResult:
     valid_citations: list[dict] = field(default_factory=list)
 
 
+class EmptySourceRegistryReason(StrEnum):
+    """Stable classifications for research completing without sources."""
+
+    NO_SOURCES_SELECTED = "no_sources_selected"
+    NO_SOURCE_RESULTS = "no_source_results"
+    SOURCE_TOOLS_UNAVAILABLE = "source_tools_unavailable"
+
+    @property
+    def public_message(self) -> str:
+        """Return safe remediation suitable for direct display to users."""
+        if self is EmptySourceRegistryReason.NO_SOURCES_SELECTED:
+            return "No data sources are selected. Select at least one data source and run the research again."
+        if self is EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE:
+            return (
+                "The selected data source tools are currently unavailable. "
+                "Check their configuration or select different data sources and run the research again."
+            )
+        return (
+            "The selected data sources returned no results. "
+            "Try rephrasing the question or selecting different data sources."
+        )
+
+
+def classify_empty_source_registry_reason(
+    data_sources: list[str] | None,
+    available_count: int,
+    unavailable_tools: list[str],
+) -> EmptySourceRegistryReason:
+    """Classify an empty source registry without conflating selection and availability."""
+    if data_sources == []:
+        return EmptySourceRegistryReason.NO_SOURCES_SELECTED
+    if available_count == 0 and unavailable_tools:
+        return EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE
+    return EmptySourceRegistryReason.NO_SOURCE_RESULTS
+
+
 class EmptySourceRegistryError(Exception):
     """Raised when no sources were captured during research."""
 
@@ -113,16 +150,27 @@ class EmptySourceRegistryError(Exception):
         agent_type: str = "research",
         unavailable_tools: list[str] | None = None,
         available_count: int = 0,
+        reason: EmptySourceRegistryReason = EmptySourceRegistryReason.NO_SOURCE_RESULTS,
+        generated_answer: str | None = None,
     ) -> None:
         """Build the empty-registry error with agent type and tool-availability context."""
         self.agent_type = agent_type
         self.unavailable_tools = unavailable_tools or []
         self.available_count = available_count
+        self.reason = reason
+        self.public_message = reason.public_message
+        self.generated_answer = generated_answer
         super().__init__(
             f"Research failed: no sources were captured during {agent_type}. "
-            "All tool calls may have failed or returned no results. "
-            "Please try again."
+            "All tool calls may have failed or returned no results."
         )
+
+    @property
+    def public_response(self) -> str:
+        """Return the generated answer, when present, with remediation."""
+        if self.generated_answer and self.generated_answer.strip():
+            return f"{self.generated_answer.rstrip()}\n\n{self.public_message}"
+        return self.public_message
 
 
 _TRACKING_PARAMS = frozenset(

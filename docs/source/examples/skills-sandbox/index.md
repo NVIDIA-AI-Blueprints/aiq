@@ -107,9 +107,8 @@ functions:
 AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run in the configured provider. Modal creates a fresh sandbox named for the job.
 
 In the reference async API flow, artifact capture uses the job database configured by
-`general.front_end.db_url` (`NAT_JOB_STORE_DB_URL`) for metadata. Without that job-scoped database URL, as in a direct
-`nat run`, Modal execution still works but durable capture remains inactive. Artifact bytes use SQL BLOB storage in the
-job database by default. For production, use S3-compatible object storage by setting `AIQ_ARTIFACT_BLOB_PROVIDER=s3`,
+`general.front_end.db_url` (`NAT_JOB_STORE_DB_URL`) for metadata. Artifact bytes use SQL BLOB storage in the job database
+by default. For production, use S3-compatible object storage by setting `AIQ_ARTIFACT_BLOB_PROVIDER=s3`,
 `AIQ_ARTIFACT_S3_BUCKET`, and the standard AWS credentials; set `AIQ_ARTIFACT_S3_ENDPOINT_URL` for MinIO or another
 compatible service. See [Production Artifact Storage](../../deployment/production.md#artifact-storage) for all options.
 
@@ -120,7 +119,14 @@ deletes the sandbox at terminal cleanup. Attaching to an existing shared
 sandbox is available only through explicit debug settings and is not
 job-isolated.
 
-## Run AI-Q
+## Run Synchronously with `nat run` (Non-Persistent)
+
+```{warning}
+`nat run` is a synchronous, single-run command. It does not create an async job record or connect the workflow to the
+job-scoped artifact store. The final report is returned normally, and `/shared/` files can contribute to that report
+during the run, but run state, `/shared/` content, and sandbox-generated files cannot be retrieved through the job or
+artifact APIs after the command finishes.
+```
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat run \
@@ -128,7 +134,17 @@ dotenv -f deploy/.env run .venv/bin/nat run \
   --input "Compare the top 10 publicly traded semiconductor companies by 2024 revenue. Build a markdown table with revenue, YoY growth, market cap, and gross margin. Then rank them and compute summary statistics. Use the data analysis tool for all calculations."
 ```
 
-For API or UI testing:
+Use this mode to try the workflow when you only need its returned report. Do not use it when you need durable job state
+or separately retrievable charts, CSVs, notebooks, or other generated files.
+
+## Run with `nat serve` for Persistent Jobs and Artifacts
+
+To retain job information and retrieve supported generated files after a run, start the async API with `nat serve`.
+The configured `NAT_JOB_STORE_DB_URL` supplies the required job-scoped store. The reference config defaults to a local
+SQLite database; production deployments should configure PostgreSQL and appropriate artifact blob storage.
+For trusted local development, set `REQUIRE_AUTH=false` in `deploy/.env`; the commands below omit credentials on that
+basis. When `REQUIRE_AUTH=true`, these job routes require authentication, so configure authentication and add the same
+`Authorization: Bearer $AIQ_TOKEN` header to every `curl` command below.
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat serve \
@@ -137,7 +153,37 @@ dotenv -f deploy/.env run .venv/bin/nat serve \
   --port 8000
 ```
 
-Then submit a deep research request through the AI-Q API or UI.
+In another terminal, submit a deep research request with a known job ID. Custom job IDs must be unique, so change this
+value before repeating the example against the same job store:
+
+```bash
+curl -X POST http://localhost:8000/v1/jobs/async/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_id": "skills-sandbox-example",
+    "agent_type": "deep_researcher",
+    "input": "Compare the top 10 publicly traded semiconductor companies by 2024 revenue. Build a markdown table and a CSV with revenue, YoY growth, market cap, and gross margin. Then rank them and compute summary statistics. Use the data analysis tool for all calculations."
+  }'
+```
+
+Check the job until its status is either `success` or `failure`. If it reaches `failure`, inspect the response's `error`
+field for the actionable failure message:
+
+```bash
+curl http://localhost:8000/v1/jobs/async/job/skills-sandbox-example
+```
+
+List its captured artifacts, then use an `artifact_id` from the response to download one:
+
+```bash
+curl http://localhost:8000/v1/jobs/async/job/skills-sandbox-example/artifacts
+curl -OJ http://localhost:8000/v1/jobs/async/job/skills-sandbox-example/artifacts/{artifact_id}/content
+```
+
+Artifact capture is best-effort and limited to the configured file types and size. Stored artifacts are retrievable
+rather than permanent: server-wide retention cleanup can remove an artifact independently of the job's expiry. For the
+complete API contract, authentication guidance, and retention behavior, see
+[Durable Sandbox Artifacts](../../integration/rest-api.md#durable-sandbox-artifacts).
 
 ## Example Queries
 
@@ -230,8 +276,7 @@ No config change is required for additional built-in skills inside an enabled co
 - Text artifacts that need to survive for the report should be written through DeepAgents filesystem tools to `/shared/...`.
 - `/shared/` is a virtual DeepAgents filesystem path. Use `ls`, `read_file`, `write_file`, and `edit_file` for `/shared/`; do not inspect `/shared/` with shell commands through `execute`.
 - The sandbox is configured with `network: blocked`, so research should happen through AI-Q search tools, not from sandbox code.
-- The reference profile enables durable sandbox artifact capture, which requires the async API's job-scoped artifact
-  store. Successful `execute` calls checkpoint manifest-declared files, and success/failure terminal paths perform one
-  final best-effort scan. A busy cancellation skips that scan and preserves earlier checkpoints. Direct `nat run` does
-  not provide that store, and adding a sandbox alone does not guarantee that every generated file is persisted or
-  embedded in the report.
+- The reference profile enables durable sandbox artifact capture for async API jobs. Successful `execute` calls
+  checkpoint manifest-declared files, and success/failure terminal paths perform one final best-effort scan. A busy
+  cancellation skips that scan and preserves earlier checkpoints. Adding a sandbox alone does not guarantee that every
+  generated file is persisted or embedded in the report.

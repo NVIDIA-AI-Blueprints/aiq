@@ -42,6 +42,8 @@ from aiq_agent.agents.deep_researcher.tools.research import build_research_batch
 from aiq_agent.agents.deep_researcher.tools.research import researcher_invoke_state
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_api.jobs.callbacks import AgentEventCallback
 
@@ -350,6 +352,84 @@ class TestDeepResearcherAgent:
             request_agent.finalize.assert_called_once_with(interrupted=True)
         else:
             request_agent.finalize.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("data_sources", "tool_description", "expected_reason"),
+        [
+            ([], "Search the web for information.", EmptySourceRegistryReason.NO_SOURCES_SELECTED),
+            (None, "Web search (unavailable - missing API key)", EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_registered_run_raises_typed_source_configuration_failure(
+        self, data_sources, tool_description, expected_reason
+    ):
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.agents.deep_researcher.register import deep_research_agent
+
+        builder = MagicMock()
+        builder.get_tools = AsyncMock(return_value=[web_search_tool])
+        builder.get_llm = AsyncMock(return_value=MagicMock())
+        config = DeepResearchAgentConfig(orchestrator_llm="llm", tools=["web_search_tool"], verbose=False)
+        state = DeepResearchAgentState(messages=[HumanMessage(content="research this")], data_sources=data_sources)
+        original_description = web_search_tool.description
+        web_search_tool.description = tool_description
+
+        try:
+            registration = deep_research_agent.__wrapped__(config, builder)
+            function_info = await anext(registration)
+            try:
+                with pytest.raises(EmptySourceRegistryError) as exc_info:
+                    await function_info.single_fn(state)
+            finally:
+                await registration.aclose()
+        finally:
+            web_search_tool.description = original_description
+
+        assert exc_info.value.reason is expected_reason
+
+    @pytest.mark.asyncio
+    async def test_explicit_empty_selection_skips_request_agent_setup(self):
+        from aiq_agent.agents.deep_researcher import register as deep_register
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.agents.deep_researcher.register import deep_research_agent
+
+        builder = MagicMock()
+        builder.get_tools = AsyncMock(return_value=[web_search_tool])
+        builder.get_llm = AsyncMock(return_value=MagicMock())
+        config = DeepResearchAgentConfig(orchestrator_llm="llm", tools=["web_search_tool"], verbose=False)
+        state = DeepResearchAgentState(messages=[HumanMessage(content="research this")], data_sources=[])
+
+        with patch.object(deep_register, "filter_tools_by_sources") as filter_tools:
+            registration = deep_research_agent.__wrapped__(config, builder)
+            function_info = await anext(registration)
+            try:
+                with pytest.raises(EmptySourceRegistryError):
+                    await function_info.single_fn(state)
+            finally:
+                await registration.aclose()
+
+        filter_tools.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_deep_evaluation_wrapper_returns_public_response_for_empty_sources(self):
+        from aiq_agent.agents.deep_researcher.register import DeepResearchWorkflowConfig
+        from aiq_agent.agents.deep_researcher.register import deep_research_workflow
+
+        error = EmptySourceRegistryError(generated_answer="A source-free draft")
+        agent_fn = MagicMock()
+        agent_fn.ainvoke = AsyncMock(side_effect=error)
+        builder = MagicMock()
+        builder.get_function = AsyncMock(return_value=agent_fn)
+
+        registration = deep_research_workflow.__wrapped__(DeepResearchWorkflowConfig(), builder)
+        function_info = await anext(registration)
+        try:
+            response = await function_info.single_fn("research this")
+        finally:
+            await registration.aclose()
+
+        assert response.choices[0].message.content == error.public_response
 
     def test_modal_sandbox_name_is_job_id(self):
         """Modal sandbox names use the resolved job ID directly."""
@@ -1247,6 +1327,111 @@ class TestDeepResearcherAgent:
             with pytest.raises(Exception, match="Agent error"):
                 await agent.run(state)
             assert mock_agent.ainvoke.await_count == 1
+
+    @pytest.mark.parametrize(
+        ("data_sources", "enable_citation_verification", "expected_reason"),
+        [
+            (None, True, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+            (["web"], True, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+            (None, False, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_committed_output_empty_registry_classification_preserves_sanitized_answer(
+        self,
+        mock_llm_provider,
+        real_tool,
+        data_sources,
+        enable_citation_verification,
+        expected_reason,
+    ):
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        draft = "Draft answer with https://private.example/path"
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(
+            return_value={"messages": [AIMessage(content="Writer complete")], "files": output_markdown_file(draft)}
+        )
+
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(draft),
+            ),
+        ):
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                enable_citation_verification=enable_citation_verification,
+            )
+            state = DeepResearchAgentState(
+                messages=[HumanMessage(content="Test")],
+                data_sources=data_sources,
+            )
+
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await agent.run(state)
+
+        assert exc_info.value.reason is expected_reason
+        assert exc_info.value.generated_answer == "Draft answer with "
+
+    @pytest.mark.asyncio
+    async def test_empty_registry_is_classified_without_committed_writer_output(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value={"messages": [AIMessage(content="No report")], "files": {}})
+
+        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                enable_citation_verification=True,
+            )
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Test")], data_sources=None)
+
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await agent.run(state)
+
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCE_RESULTS
+        assert exc_info.value.generated_answer is None
+
+    @pytest.mark.asyncio
+    async def test_disabled_citation_verification_rejects_empty_selection_before_orchestrator(
+        self,
+        mock_llm_provider,
+        real_tool,
+    ):
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value={"messages": [AIMessage(content="No report")], "files": {}})
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_agent,
+        ) as create_deep_agent:
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                enable_citation_verification=False,
+            )
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Test")], data_sources=[])
+
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await agent.run(state)
+
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCES_SELECTED
+        create_deep_agent.assert_not_called()
+        mock_agent.ainvoke.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_run_empty_result_messages(self, mock_llm_provider, real_tool):

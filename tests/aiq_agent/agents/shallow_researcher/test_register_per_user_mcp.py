@@ -21,6 +21,8 @@ from langchain_core.tools import tool
 
 from aiq_agent.agents.shallow_researcher import register as shallow_register
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 
 
 @tool
@@ -98,3 +100,58 @@ async def test_shallow_run_surfaces_reconnect_when_source_unavailable():
         assert "Reconnect them in the data sources panel" in content
     finally:
         await agen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_registered_shallow_run_raises_typed_no_sources_for_explicit_empty_selection():
+    """Explicit empty selection fails before filtering or per-user setup."""
+    run, agen = await _build_run()
+    try:
+        state = ShallowResearchAgentState(
+            messages=[HumanMessage(content="research this")],
+            data_sources=[],
+        )
+        with patch.object(shallow_register, "filter_tools_by_sources") as filter_tools:
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await run(state)
+
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCES_SELECTED
+        filter_tools.assert_not_called()
+    finally:
+        await agen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_registered_shallow_run_classifies_selected_unavailable_tool():
+    run, agen = await _build_run()
+    try:
+        _dummy_search.description = "Web search (unavailable - missing API key)"
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="research this")])
+        with patch.dict(sys.modules, {m: None for m in _AIQ_API_MODULES}):
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await run(state)
+
+        assert exc_info.value.reason is EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE
+    finally:
+        _dummy_search.description = "Dummy search tool used to build the agent."
+        await agen.aclose()
+
+
+@pytest.mark.asyncio
+async def test_shallow_evaluation_wrapper_returns_public_response_for_empty_sources():
+    generated_answer = "A source-free draft"
+    error = EmptySourceRegistryError(generated_answer=generated_answer)
+    agent_fn = MagicMock()
+    agent_fn.ainvoke = AsyncMock(side_effect=error)
+    builder = MagicMock()
+    builder.get_function = AsyncMock(return_value=agent_fn)
+    config = shallow_register.ShallowResearchWorkflowConfig()
+
+    registration = shallow_register.shallow_research_workflow.__wrapped__(config, builder)
+    function_info = await anext(registration)
+    try:
+        response = await function_info.single_fn("research this")
+    finally:
+        await registration.aclose()
+
+    assert response.choices[0].message.content == error.public_response
