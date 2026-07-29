@@ -94,8 +94,9 @@ middleware:
           regex_detection:
             input:
               patterns:
-                - '(?i)ignore\s+(all\s+)?previous\s+instructions'
+                - '(?i)\b(?:ignore|disregard|discard|override)\s+(?:(?:all|any|the)\s+)?(?:previous|prior|earlier)\s+instructions?\b'
                 - '(?i)reveal\s+(the\s+)?system\s+prompt'
+                - '(?i)\b(?:api[\s_-]*key|password)\s*(?::|=|\bis\b|\bequals?\b)\s*\S+'
             output:
               patterns:
                 - '(?i)system\s+prompt\s*[:=]'
