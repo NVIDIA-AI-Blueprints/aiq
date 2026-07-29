@@ -16,7 +16,6 @@
 """Document management endpoints."""
 
 import logging
-import os
 from typing import Any
 
 from fastapi import APIRouter
@@ -25,10 +24,11 @@ from fastapi import File
 from fastapi import HTTPException
 from fastapi import UploadFile
 
+from aiq_agent.fastapi_extensions.upload_security import UPLOAD_ENDPOINT_DESCRIPTION
 from aiq_agent.fastapi_extensions.upload_security import UploadValidationError
 from aiq_agent.fastapi_extensions.upload_security import get_upload_limits
-from aiq_agent.fastapi_extensions.upload_security import save_validated_upload
 from aiq_agent.fastapi_extensions.upload_security import validate_upload_count
+from aiq_agent.fastapi_extensions.upload_security import validated_upload_batch
 from aiq_agent.knowledge.base import BaseIngestor
 from aiq_agent.knowledge.schema import FileInfo
 from aiq_agent.knowledge.schema import IngestionJobStatus
@@ -49,9 +49,7 @@ def add_document_routes(router: APIRouter):
         status_code=202,
         tags=["documents"],
         summary="Upload documents to a collection",
-        description=(
-            "Upload files for ingestion into a collection. Accepted formats and limits are deployment-configurable."
-        ),
+        description=UPLOAD_ENDPOINT_DESCRIPTION,
         responses={
             400: {"description": "No files provided"},
             404: {"description": "Collection not found"},
@@ -83,68 +81,37 @@ def add_document_routes(router: APIRouter):
         if collection is None:
             raise HTTPException(status_code=404, detail=f"Collection '{collection_name}' not found")
 
-        temp_paths = []
-        original_filenames = []
-        total_bytes = 0
-        request_owns_temp_paths = True
         try:
-            # Save uploaded files to temp location
-            # NOTE: Files are NOT deleted here - the ingestion job cleans them up
-            # after processing to allow background thread to access them
-            for file in files:
-                saved = await save_validated_upload(
-                    file,
-                    limits=limits,
-                    remaining_total_bytes=limits.max_total_bytes - total_bytes,
-                    on_temp_path_created=temp_paths.append,
+            async with validated_upload_batch(files, limits=limits) as batch:
+                job_id = ingestor.submit_job(
+                    batch.temp_paths,
+                    collection_name,
+                    config={
+                        "cleanup_files": True,
+                        "original_filenames": batch.original_filenames,
+                    },
                 )
-                total_bytes += saved.size_bytes
-                original_filenames.append(saved.original_filename)
-                logger.debug("Saved validated upload to %s", saved.path)
+                batch.transfer_ownership()
 
-            # Submit ingestion job (job will clean up temp files after processing)
-            # Pass original filenames so file_details uses correct names
-            job_id = ingestor.submit_job(
-                temp_paths,
-                collection_name,
-                config={
-                    "cleanup_files": True,
-                    "original_filenames": original_filenames,
-                },
-            )
-            # The ingestion job now owns cleanup. From this point forward, route
-            # cancellation or response construction must not remove its inputs.
-            request_owns_temp_paths = False
-
-            # Get the job to extract file_ids for the response
-            job_status = ingestor.get_job_status(job_id)
-            file_ids = [fd.file_id for fd in job_status.file_details]
-
-            logger.info(f"Submitted ingestion job {job_id} for {len(files)} file(s)")
-
-            return UploadResponse(
-                job_id=job_id,
-                file_ids=file_ids,
-                message=f"Ingestion job submitted for {len(files)} file(s)",
-            )
+                job_status = ingestor.get_job_status(job_id)
+                file_ids = [fd.file_id for fd in job_status.file_details]
+                logger.info("Submitted ingestion job %s for %d file(s)", job_id, len(files))
+                return UploadResponse(
+                    job_id=job_id,
+                    file_ids=file_ids,
+                    message=f"Ingestion job submitted for {len(files)} file(s)",
+                )
 
         except UploadValidationError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         except HTTPException:
             raise
         except Exception as exc:
-            logger.exception("Failed to submit document ingestion job")
+            logger.error(
+                "Failed to submit document ingestion job (error_type=%s)",
+                type(exc).__name__,
+            )
             raise HTTPException(status_code=500, detail="Failed to submit ingestion job") from exc
-        finally:
-            # asyncio.CancelledError and other BaseException subclasses bypass the
-            # handlers above. Until submit_job succeeds, every saved path is owned
-            # by this request and must be removed on every exit path.
-            if request_owns_temp_paths:
-                for path in temp_paths:
-                    try:
-                        os.unlink(path)
-                    except OSError:
-                        pass
 
     @router.get(
         "/v1/collections/{collection_name}/documents",

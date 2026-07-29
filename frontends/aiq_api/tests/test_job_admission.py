@@ -130,6 +130,51 @@ async def test_global_active_limit_is_enforced_across_principals(db_url):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("agent_type", "blocks_deep_research"),
+    [
+        pytest.param("deep_researcher", True, id="deep-research-counts"),
+        pytest.param("shallow_researcher", False, id="unrelated-agent-does-not-count"),
+    ],
+)
+async def test_global_active_limit_counts_only_deep_research_jobs(db_url, agent_type, blocks_deep_research):
+    """Existing job metadata consumes deep-research capacity only for deep-research jobs."""
+    _set_job_status(db_url, "existing-job", "running")
+    job_access.create_job_access(
+        "existing-job",
+        Principal(type="jwt", sub="existing-owner"),
+        db_url,
+        agent_type=agent_type,
+    )
+    reserve = reserve_deep_research_job(
+        db_url=db_url,
+        job_id="new-deep-job",
+        principal=Principal(type="jwt", sub="new-owner"),
+        limits=_limits(max_active_per_principal=10, max_active_global=1),
+    )
+
+    if blocks_deep_research:
+        with pytest.raises(JobGlobalCapacityExceededError):
+            await reserve
+    else:
+        await reserve
+
+
+@pytest.mark.asyncio
+async def test_global_active_limit_counts_missing_access_metadata_conservatively(db_url):
+    """Unclassifiable active jobs fail closed instead of bypassing the deployment ceiling."""
+    _set_job_status(db_url, "legacy-active-job", "running")
+
+    with pytest.raises(JobGlobalCapacityExceededError):
+        await reserve_deep_research_job(
+            db_url=db_url,
+            job_id="new-deep-job",
+            principal=Principal(type="jwt", sub="new-owner"),
+            limits=_limits(max_active_per_principal=10, max_active_global=1),
+        )
+
+
+@pytest.mark.asyncio
 async def test_per_principal_limit_keeps_principals_independent(db_url):
     limits = _limits(max_active_per_principal=1, max_active_global=10)
 
@@ -208,7 +253,7 @@ async def test_stale_submitter_cannot_release_reused_job_id_reservation(db_url, 
         )
         conn.commit()
 
-    monkeypatch.setattr(admission.time, "time", lambda: 100.0)
+    monkeypatch.setattr(admission, "time", SimpleNamespace(time=lambda: 100.0))
     new_token = await reserve_deep_research_job(
         db_url=db_url,
         job_id="reused-job",
@@ -507,6 +552,85 @@ async def test_submit_agent_job_failure_retains_reservations_when_enqueue_may_ha
             skip_encryption_readiness_check=True,
         )
 
+    submit.release_job_access_reservation.assert_not_called()
+    submit.release_deep_research_job_reservation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submission_lease_loss_cancels_only_inner_submit_task(patched_submission, monkeypatch):
+    """Lease failure aborts enqueue without injecting cancellation into the caller."""
+    submit, job_store_module = patched_submission
+    started = asyncio.Event()
+    inner_cancelled = asyncio.Event()
+
+    async def stalled_enqueue(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            inner_cancelled.set()
+
+    monkeypatch.setattr(job_store_module, "JobStore", _fake_job_store_factory(stalled_enqueue))
+    monkeypatch.setattr(
+        submit,
+        "validate_deep_research_input",
+        lambda _input: _limits(reservation_ttl_seconds=0.03),
+    )
+    submit.renew_job_access_reservation.return_value = False
+
+    with pytest.raises(JobAdmissionUnavailableError, match="lease was lost"):
+        await asyncio.wait_for(
+            submit.submit_agent_job(
+                agent_type="deep_researcher",
+                input_text="query",
+                owner="untrusted-owner",
+                principal=Principal(type="anonymous", sub="untrusted-owner"),
+                job_id="job-1",
+                skip_encryption_readiness_check=True,
+            ),
+            timeout=1,
+        )
+
+    assert started.is_set()
+    assert inner_cancelled.is_set()
+    assert asyncio.current_task().cancelling() == 0
+    submit.release_job_access_reservation.assert_not_called()
+    submit.release_deep_research_job_reservation.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_external_submission_cancellation_is_preserved(patched_submission, monkeypatch):
+    """External cancellation cancels the inner enqueue and remains CancelledError."""
+    submit, job_store_module = patched_submission
+    started = asyncio.Event()
+    inner_cancelled = asyncio.Event()
+
+    async def stalled_enqueue(*_args, **_kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        finally:
+            inner_cancelled.set()
+
+    monkeypatch.setattr(job_store_module, "JobStore", _fake_job_store_factory(stalled_enqueue))
+
+    caller_task = asyncio.create_task(
+        submit.submit_agent_job(
+            agent_type="deep_researcher",
+            input_text="query",
+            owner="untrusted-owner",
+            principal=Principal(type="anonymous", sub="untrusted-owner"),
+            job_id="job-1",
+            skip_encryption_readiness_check=True,
+        )
+    )
+    await asyncio.wait_for(started.wait(), timeout=1)
+    caller_task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await caller_task
+
+    assert inner_cancelled.is_set()
     submit.release_job_access_reservation.assert_not_called()
     submit.release_deep_research_job_reservation.assert_not_awaited()
 

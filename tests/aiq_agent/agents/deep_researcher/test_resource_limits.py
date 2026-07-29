@@ -155,5 +155,14 @@ def test_state_budget_reservation_is_replacement_aware_and_rollback_safe():
         ledger.reserve([("/shared/output.md", b"34567")])
 
     ledger.rollback(second)
-    ledger.reserve([("/shared/output.md", b"3456")])
-    ledger.rollback(replacement)  # Superseded reservation must not corrupt later accounting.
+    latest = ledger.reserve([("/shared/output.md", b"3456")])
+    ledger.rollback(second)  # Superseded reservation must not corrupt later accounting.
+    with pytest.raises(ValueError, match="aggregate limit"):
+        ledger.reserve([("/shared/plan.json", b"123")])
+
+    ledger.rollback(latest)
+    ledger.rollback(replacement)
+    restored = ledger.reserve([("/shared/output.md", b"34")])
+    with pytest.raises(ValueError, match="aggregate limit"):
+        ledger.reserve([("/shared/output.md", b"345")])
+    ledger.rollback(restored)

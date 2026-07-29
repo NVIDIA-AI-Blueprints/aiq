@@ -416,6 +416,45 @@ def test_graph_wires_filesystem_tool_call_guard_cross_cutting():
         assert not any(isinstance(middleware, RequiredOutputFileMiddleware) for middleware in middleware_stack)
 
 
+def test_graph_default_limits_are_shared_with_state_budget_ledger():
+    """The graph and its ledger must enforce the exact same immutable limits instance."""
+    registry, tool_set, middleware_set = _tool_set_and_middleware()
+    runtime = DeepAgentsRuntime()
+    fake_graph = MagicMock()
+    fake_graph.with_config.return_value = fake_graph
+    fake_batch_tool = MagicMock()
+    fake_batch_tool.name = "run_research_batch"
+    fake_batch_tool.description = "Run research."
+
+    with (
+        patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=fake_graph),
+        patch("aiq_agent.agents.deep_researcher.factory.create_agent", return_value=MagicMock()),
+        patch("aiq_agent.agents.deep_researcher.factory.create_summarization_middleware", return_value=MagicMock()),
+        patch(
+            "aiq_agent.agents.deep_researcher.factory.build_research_batch_tool",
+            return_value=fake_batch_tool,
+        ) as build_batch_tool,
+    ):
+        build_deep_research_graph(
+            llm_provider=_llm_provider(),
+            state=DeepResearchAgentState(messages=[]),
+            prompts=_prompts(),
+            tools=[web_search_tool],
+            runtime=runtime,
+            tool_set=tool_set,
+            middleware_set=middleware_set,
+            source_registry_middleware=registry,
+            callbacks=[],
+            domain_catalog_path=None,
+            max_research_concurrency=6,
+            final_report_tracker=FinalReportCommitTracker(),
+        )
+
+    limits = build_batch_tool.call_args.kwargs["resource_limits"]
+    state_budget = build_batch_tool.call_args.kwargs["state_budget"]
+    assert state_budget._limits is limits
+
+
 def test_subagents_can_disable_source_router():
     """The source-router subagent can be omitted without changing the rest of the workflow."""
     provider = _llm_provider()

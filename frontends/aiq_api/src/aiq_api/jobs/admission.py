@@ -129,7 +129,9 @@ _COUNT_ACTIVE_GLOBAL_SQL = text(
     "  UNION "
     "  SELECT ji.job_id "
     "  FROM job_info ji "
-    "  WHERE ji.is_expired IS NOT TRUE "
+    "  LEFT JOIN job_access ja ON ja.job_id = ji.job_id "
+    "  WHERE (ja.job_id IS NULL OR ja.agent_type IS NULL OR ja.agent_type = 'deep_researcher') "
+    "    AND ji.is_expired IS NOT TRUE "
     "    AND lower(ji.status) NOT IN " + _TERMINAL_STATUS_SQL + ""
     ") active_jobs"
 )

@@ -72,6 +72,8 @@ ALTER TABLE job_access ADD COLUMN IF NOT EXISTS submission_token VARCHAR;
 ALTER TABLE job_access ADD COLUMN IF NOT EXISTS submission_expires_at DOUBLE PRECISION;
 
 CREATE INDEX IF NOT EXISTS idx_job_access_owner ON job_access(owner_auth_type, owner_subject);
+-- Supports the report-follow-up default: "latest completed report job in this conversation".
+CREATE INDEX IF NOT EXISTS idx_job_access_conversation ON job_access(conversation_id);
 
 -- Deep-research admission reservations. Successful rows remain for the rolling
 -- submission-rate window; terminal/orphaned rows are cleaned on later admits.

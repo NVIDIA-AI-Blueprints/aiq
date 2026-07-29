@@ -567,6 +567,7 @@ def build_deep_research_graph(
             ExecuteTimeoutClampMiddleware(max_timeout_seconds=execute_ceiling),
             *cross_cutting_middleware,
         ]
+    limits = resource_limits or DeepResearchResourceLimits()
     context = DeepResearchGraphContext(
         llm_provider=llm_provider,
         state=state,
@@ -578,14 +579,14 @@ def build_deep_research_graph(
         domain_catalog_path=domain_catalog_path,
         current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         max_research_concurrency=max_research_concurrency,
-        resource_limits=resource_limits or DeepResearchResourceLimits(),
+        resource_limits=limits,
         enable_source_router=enable_source_router,
         backend=runtime.backend,
         visibility_middleware=cross_cutting_middleware,
         final_report_tracker=final_report_tracker,
         state_budget=state_budget
         or StateBudgetLedger(
-            limits=resource_limits or DeepResearchResourceLimits(),
+            limits=limits,
             files=state.files,
             sandbox_enabled=runtime.execution_enabled,
         ),

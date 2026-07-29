@@ -738,14 +738,33 @@ class TodoQuotaMiddleware(AgentMiddleware):
                 f"write_todos exceeds the {self.resource_limits.max_total_todo_chars}-character aggregate content limit"
             )
 
+    @staticmethod
+    def _tool_error(request: object, error: ValueError) -> ToolMessage:
+        """Return a recoverable tool error for a rejected todo replacement."""
+        tool_call = getattr(request, "tool_call", {})
+        if not isinstance(tool_call, dict):
+            tool_call = {}
+        return ToolMessage(
+            content=f"write_todos_quota_rejected: {error}",
+            tool_call_id=tool_call.get("id", "todo-quota"),
+            name=tool_call.get("name", TodoQuotaMiddleware._TODO_TOOL),
+            status="error",
+        )
+
     def wrap_tool_call(self, request, handler):
         """Validate a synchronous todo update before graph-state mutation."""
-        self._validate(request)
+        try:
+            self._validate(request)
+        except ValueError as exc:
+            return self._tool_error(request, exc)
         return handler(request)
 
     async def awrap_tool_call(self, request, handler):
         """Validate an asynchronous todo update before graph-state mutation."""
-        self._validate(request)
+        try:
+            self._validate(request)
+        except ValueError as exc:
+            return self._tool_error(request, exc)
         return await handler(request)
 
 

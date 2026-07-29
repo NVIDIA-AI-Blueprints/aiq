@@ -48,7 +48,7 @@ def patched(monkeypatch):
     _FakeJobStore.last_job_args = None
 
 
-def test_submit_forwards_owner_user_id_as_last_arg(patched):
+def test_submit_forwards_owner_user_id_before_admission_token(patched):
     principal = Principal(type="jwt", sub="user-1", email="u@example.com")
     asyncio.run(
         submit_mod.submit_agent_job(

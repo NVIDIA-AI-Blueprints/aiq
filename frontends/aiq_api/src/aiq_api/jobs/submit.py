@@ -389,12 +389,10 @@ async def submit_agent_job(
         await _release_submission_reservations()
         raise
 
-    owner_task = asyncio.current_task()
     lease_lost = asyncio.Event()
 
     async def _maintain_submission_lease() -> None:
         """Keep pre-enqueue rows live until NAT has made job_info durable."""
-        assert owner_task is not None
         renewal_interval = max(0.05, reservation_ttl_seconds / 3)
         try:
             while True:
@@ -418,7 +416,6 @@ async def submit_agent_job(
                     )
                 if not access_ok or not admission_ok:
                     lease_lost.set()
-                    owner_task.cancel()
                     return
         except asyncio.CancelledError:
             raise
@@ -429,20 +426,25 @@ async def submit_agent_job(
                 type(exc).__name__,
             )
             lease_lost.set()
-            owner_task.cancel()
 
     lease_task = asyncio.create_task(
         _maintain_submission_lease(),
         name=f"submission-lease-{resolved_job_id}",
     )
+    lease_lost_waiter = asyncio.create_task(
+        lease_lost.wait(),
+        name=f"submission-lease-loss-{resolved_job_id}",
+    )
 
     async def _stop_submission_lease() -> None:
-        lease_task.cancel()
-        with suppress(asyncio.CancelledError):
-            await lease_task
+        for task in (lease_task, lease_lost_waiter):
+            task.cancel()
+        for task in (lease_task, lease_lost_waiter):
+            with suppress(asyncio.CancelledError):
+                await task
 
-    try:
-        await job_store.submit_job(
+    submit_task = asyncio.create_task(
+        job_store.submit_job(
             job_id=resolved_job_id,
             expiry_seconds=expiry_seconds,
             job_fn=run_agent_job,
@@ -466,7 +468,20 @@ async def submit_agent_job(
                 principal_user_id(principal),
                 admission_token,
             ],
+        ),
+        name=f"submit-job-{resolved_job_id}",
+    )
+
+    try:
+        completed, _ = await asyncio.wait(
+            {submit_task, lease_lost_waiter},
+            return_when=asyncio.FIRST_COMPLETED,
         )
+        if lease_lost_waiter in completed:
+            submit_task.cancel()
+            await asyncio.gather(submit_task, return_exceptions=True)
+            raise JobAdmissionUnavailableError("Submission lease was lost before the job became durable")
+        await submit_task
     except IntegrityError as e:
         # A caller-supplied job_id collided with an existing job. NAT's _create_job
         # inserts job_info first, so the collision fails before any state of OURS is
@@ -478,11 +493,9 @@ async def submit_agent_job(
         logger.info("Rejected colliding job_id %s on async submit", resolved_job_id)
         raise JobIdConflictError(f"Job already exists: {resolved_job_id}") from e
     except asyncio.CancelledError:
+        submit_task.cancel()
+        await asyncio.shield(asyncio.gather(submit_task, return_exceptions=True))
         await asyncio.shield(_stop_submission_lease())
-        if lease_lost.is_set():
-            # Do not delete possibly-replaced rows or release capacity after a
-            # lease is lost. Conditional expiry cleanup owns recovery.
-            raise JobAdmissionUnavailableError("Submission lease was lost before the job became durable")
         logger.warning(
             "Submission of %s was cancelled; retaining its expiring ownership reservation because Dask enqueue "
             "may already have occurred",

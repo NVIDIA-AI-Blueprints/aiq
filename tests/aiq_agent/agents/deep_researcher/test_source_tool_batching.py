@@ -17,12 +17,14 @@
 
 import asyncio
 from contextlib import suppress
+from typing import Annotated
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
+from langchain_core.tools import InjectedToolArg
 from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
@@ -249,6 +251,66 @@ async def test_inferred_schema_source_tool_is_budgeted_and_throttled():
         assert sorted(calls) == ["a", "b"]
     finally:
         reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+async def test_source_adapters_use_model_facing_schema_without_injected_arguments():
+    """Injected arguments stay runtime-forwardable but never enter the model schema."""
+    calls: list[str] = []
+
+    @tool
+    async def batchable(
+        query: str,
+    ) -> str:
+        """Search a source that is safe to expose as a batch wrapper."""
+        calls.append(f"batch:{query}")
+        return query
+
+    @tool
+    async def injected_single(
+        query: str,
+        credential: Annotated[str, InjectedToolArg],
+    ) -> str:
+        """Search a source with one model argument and one required injected argument."""
+        calls.append(f"injected:{query}:{credential}")
+        return query
+
+    @tool
+    async def throttled(
+        query: str,
+        limit: int,
+        credential: Annotated[str, InjectedToolArg],
+    ) -> str:
+        """Search a source with multiple model arguments and an injected credential."""
+        calls.append(f"plain:{query}:{limit}:{credential}")
+        return query
+
+    wrapped = {
+        item.name: item
+        for item in adapt_source_tools_for_research(
+            [batchable, injected_single, throttled],
+            source_tool_names={"batchable", "injected_single", "throttled"},
+            max_concurrent_source_tool_calls=1,
+            max_batch_size=2,
+        )
+    }
+
+    assert set(wrapped["batchable"].tool_call_schema.model_fields) == {"queries"}
+    assert set(wrapped["injected_single"].tool_call_schema.model_fields) == {"query"}
+    assert set(wrapped["throttled"].tool_call_schema.model_fields) == {"query", "limit"}
+    assert set(wrapped["injected_single"].get_input_schema().model_fields) == {"query", "credential"}
+    assert set(wrapped["throttled"].get_input_schema().model_fields) == {"query", "limit", "credential"}
+    assert "credential" not in wrapped["injected_single"].tool_call_schema.model_fields
+    assert "credential" not in wrapped["throttled"].tool_call_schema.model_fields
+
+    await wrapped["batchable"].ainvoke({"queries": "alpha"})
+    await wrapped["injected_single"].ainvoke({"query": "beta", "credential": "runtime-secret"})
+    await wrapped["throttled"].ainvoke({"query": "gamma", "limit": 2, "credential": "runtime-secret"})
+    assert calls == [
+        "batch:alpha",
+        "injected:beta:runtime-secret",
+        "plain:gamma:2:runtime-secret",
+    ]
 
 
 @pytest.mark.asyncio

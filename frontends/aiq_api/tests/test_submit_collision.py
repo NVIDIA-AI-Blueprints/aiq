@@ -107,8 +107,7 @@ async def test_access_persistence_failure_happens_before_enqueue(patched_submit,
 
 @pytest.mark.asyncio
 async def test_post_create_submit_failure_retains_durable_accounting(patched_submit, monkeypatch):
-    """A non-collision submit_job failure (e.g. scheduler/Dask error) after the job_info
-    row is committed must still roll back, or it leaves an orphaned ownerless job."""
+    """A post-create submit failure retains durable accounting because enqueue may have occurred."""
     submit_mod, job_store_mod, _create_access = patched_submit
 
     async def _submit_job_dask_failure(*args, **kwargs):

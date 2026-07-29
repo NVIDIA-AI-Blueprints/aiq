@@ -523,6 +523,7 @@ warning is logged; use `opensearch_ingestion_mode: local` if you require summari
 > | **Helm** | `deploy/helm/deployment-k8s/values.yaml` under both the backend and frontend apps' `env` sections |
 >
 > Example for Foundational RAG:
+>
 > ```bash
 > FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md
 > FILE_UPLOAD_MAX_SIZE_MB=100

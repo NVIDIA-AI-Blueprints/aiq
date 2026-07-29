@@ -131,6 +131,7 @@ def test_backend_wires_default_on_deep_research_admission_limits():
 def test_database_initializers_precreate_deep_research_admission_schema():
     for init_db_path in (COMPOSE_INIT_DB_PATH, HELM_INIT_DB_PATH):
         init_sql = init_db_path.read_text(encoding="utf-8")
+        assert "CREATE INDEX IF NOT EXISTS idx_job_access_conversation" in init_sql
         assert "CREATE TABLE IF NOT EXISTS deep_research_admission" in init_sql
         assert "CREATE INDEX IF NOT EXISTS idx_deep_research_admission_owner" in init_sql
 

@@ -985,8 +985,8 @@ class TestTodoQuotaMiddleware:
             ),
         ],
     )
-    def test_oversized_todos_fail_before_state_mutation(self, todos, message):
-        """Count, per-item, and aggregate overages never reach the framework handler."""
+    def test_oversized_todos_return_tool_error_before_state_mutation(self, todos, message):
+        """Count, per-item, and aggregate overages remain recoverable by the model."""
         middleware = TodoQuotaMiddleware(
             resource_limits=DeepResearchResourceLimits(
                 max_todo_items=2,
@@ -996,10 +996,35 @@ class TestTodoQuotaMiddleware:
         )
         handler = MagicMock()
 
-        with pytest.raises(ValueError, match=message):
-            middleware.wrap_tool_call(self._request(todos), handler)
+        result = middleware.wrap_tool_call(self._request(todos), handler)
 
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        assert result.tool_call_id == "todo-call"
+        assert message in str(result.content)
         handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_oversized_todos_return_tool_error_before_state_mutation(self):
+        """The asynchronous guard has the same recoverable rejection contract."""
+        middleware = TodoQuotaMiddleware(
+            resource_limits=DeepResearchResourceLimits(
+                max_todo_items=1,
+                max_todo_item_chars=3,
+                max_total_todo_chars=3,
+            )
+        )
+        handler = AsyncMock()
+
+        result = await middleware.awrap_tool_call(
+            self._request([{"content": "one"}, {"content": "two"}]),
+            handler,
+        )
+
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        assert "1-item limit" in str(result.content)
+        handler.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_non_todo_tool_is_unchanged(self):

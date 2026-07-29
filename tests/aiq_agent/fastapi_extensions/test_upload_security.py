@@ -6,8 +6,8 @@
 from __future__ import annotations
 
 import asyncio
-import importlib
 import os
+import struct
 import zipfile
 from collections.abc import Callable
 from io import BytesIO
@@ -21,7 +21,9 @@ from fastapi import UploadFile
 from fastapi.routing import APIRoute
 from starlette.datastructures import Headers
 
+from aiq_agent.fastapi_extensions import upload_security as upload_security_module
 from aiq_agent.fastapi_extensions.routes.documents import add_document_routes as add_legacy_document_routes
+from aiq_agent.fastapi_extensions.upload_security import UPLOAD_ENDPOINT_DESCRIPTION
 from aiq_agent.fastapi_extensions.upload_security import UploadLimits
 from aiq_agent.fastapi_extensions.upload_security import UploadValidationError
 from aiq_agent.fastapi_extensions.upload_security import get_upload_limits
@@ -31,6 +33,22 @@ from aiq_api.routes.documents import add_document_routes as add_unified_document
 
 _DOCX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 _PPTX_CONTENT_TYPE = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+
+
+class _NonSeekableZipSink:
+    """Write-only sink that makes zipfile emit data descriptors."""
+
+    def __init__(self) -> None:
+        self._buffer = BytesIO()
+
+    def write(self, content: bytes) -> int:
+        return self._buffer.write(content)
+
+    def flush(self) -> None:
+        pass
+
+    def getvalue(self) -> bytes:
+        return self._buffer.getvalue()
 
 
 def _upload(filename: str, content: bytes, content_type: str) -> UploadFile:
@@ -70,6 +88,26 @@ def _office_document(
     return output.getvalue()
 
 
+def _streaming_office_document() -> bytes:
+    output = _NonSeekableZipSink()
+    with zipfile.ZipFile(output, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", b"<Types/>")
+        archive.writestr("word/document.xml", b"<document/>")
+    content = output.getvalue()
+    flag_bits = struct.unpack_from("<H", content, 6)[0]
+    assert flag_bits & 0x8
+    assert b"PK\x07\x08" in content
+    return content
+
+
+def _forge_first_data_descriptor_crc(content: bytes, *, crc: int) -> bytes:
+    forged = bytearray(content)
+    descriptor_offset = forged.find(b"PK\x07\x08")
+    assert descriptor_offset >= 0
+    struct.pack_into("<I", forged, descriptor_offset + 4, crc)
+    return bytes(forged)
+
+
 def _mark_first_zip_entry_encrypted(content: bytes) -> bytes:
     encrypted = bytearray(content)
     for signature, flag_offset in ((b"PK\x03\x04", 6), (b"PK\x01\x02", 8)):
@@ -79,6 +117,67 @@ def _mark_first_zip_entry_encrypted(content: bytes) -> bytes:
         flags = int.from_bytes(encrypted[field_offset : field_offset + 2], "little") | 0x1
         encrypted[field_offset : field_offset + 2] = flags.to_bytes(2, "little")
     return bytes(encrypted)
+
+
+def _forge_central_entry_size(content: bytes, entry_name: str, *, uncompressed_size: int) -> bytes:
+    forged = bytearray(content)
+    offset = 0
+    while (header_offset := forged.find(b"PK\x01\x02", offset)) >= 0:
+        filename_length, extra_length, comment_length = struct.unpack_from("<HHH", forged, header_offset + 28)
+        filename_start = header_offset + 46
+        filename = bytes(forged[filename_start : filename_start + filename_length]).decode("utf-8")
+        if filename == entry_name:
+            struct.pack_into("<I", forged, header_offset + 24, uncompressed_size)
+            return bytes(forged)
+        offset = filename_start + filename_length + extra_length + comment_length
+    raise AssertionError(f"central-directory entry not found: {entry_name}")
+
+
+def _forge_entry_crc(content: bytes, entry_name: str, *, crc: int) -> bytes:
+    forged = bytearray(content)
+    local_offset = 0
+    while (header_offset := forged.find(b"PK\x03\x04", local_offset)) >= 0:
+        filename_length, extra_length = struct.unpack_from("<HH", forged, header_offset + 26)
+        filename_start = header_offset + 30
+        filename = bytes(forged[filename_start : filename_start + filename_length]).decode("utf-8")
+        if filename == entry_name:
+            struct.pack_into("<I", forged, header_offset + 14, crc)
+            break
+        local_offset = filename_start + filename_length + extra_length
+    else:
+        raise AssertionError(f"local entry not found: {entry_name}")
+
+    central_offset = 0
+    while (header_offset := forged.find(b"PK\x01\x02", central_offset)) >= 0:
+        filename_length, extra_length, comment_length = struct.unpack_from("<HHH", forged, header_offset + 28)
+        filename_start = header_offset + 46
+        filename = bytes(forged[filename_start : filename_start + filename_length]).decode("utf-8")
+        if filename == entry_name:
+            struct.pack_into("<I", forged, header_offset + 16, crc)
+            return bytes(forged)
+        central_offset = filename_start + filename_length + extra_length + comment_length
+    raise AssertionError(f"central-directory entry not found: {entry_name}")
+
+
+def _reverse_central_directory_entries(content: bytes) -> bytes:
+    """Reorder central records without changing their stable local-header offsets."""
+    eocd_offset = content.rfind(b"PK\x05\x06")
+    assert eocd_offset >= 0
+    central_size, central_offset = struct.unpack_from("<II", content, eocd_offset + 12)
+    central_end = central_offset + central_size
+    records: list[bytes] = []
+    offset = central_offset
+    while offset < central_end:
+        assert content[offset : offset + 4] == b"PK\x01\x02"
+        filename_length, extra_length, comment_length = struct.unpack_from("<HHH", content, offset + 28)
+        record_end = offset + 46 + filename_length + extra_length + comment_length
+        records.append(content[offset:record_end])
+        offset = record_end
+    assert offset == central_end
+
+    reordered = bytearray(content)
+    reordered[central_offset:central_end] = b"".join(reversed(records))
+    return bytes(reordered)
 
 
 def _upload_route(register_routes: Callable[[APIRouter], None]) -> APIRoute:
@@ -235,6 +334,32 @@ async def test_accepts_docx_with_exact_required_members() -> None:
 
 
 @pytest.mark.asyncio
+async def test_accepts_docx_with_reordered_central_directory_entries() -> None:
+    saved = await save_validated_upload(
+        _upload("report.docx", _reverse_central_directory_entries(_office_document()), _DOCX_CONTENT_TYPE),
+        limits=_limits(accepted_extensions=frozenset({".docx"})),
+        remaining_total_bytes=2048,
+    )
+    try:
+        assert saved.original_filename == "report.docx"
+    finally:
+        os.unlink(saved.path)
+
+
+@pytest.mark.asyncio
+async def test_accepts_streaming_docx_with_data_descriptors() -> None:
+    saved = await save_validated_upload(
+        _upload("report.docx", _streaming_office_document(), _DOCX_CONTENT_TYPE),
+        limits=_limits(accepted_extensions=frozenset({".docx"})),
+        remaining_total_bytes=2048,
+    )
+    try:
+        assert saved.original_filename == "report.docx"
+    finally:
+        os.unlink(saved.path)
+
+
+@pytest.mark.asyncio
 async def test_accepts_pptx_with_exact_required_members() -> None:
     saved = await save_validated_upload(
         _upload("slides.pptx", _office_document(required_member="ppt/presentation.xml"), _PPTX_CONTENT_TYPE),
@@ -305,6 +430,65 @@ async def test_rejects_office_archive_with_zip_bomb_ratio() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rejects_office_archive_when_central_directory_forges_small_expansion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Actual decompressed bytes, not a forged central-directory size, enforce the ceiling."""
+    large_entry = bytes(range(256)) * 16
+    content = _forge_central_entry_size(
+        _office_document(extra_entries={"word/large.xml": large_entry}),
+        "word/large.xml",
+        uncompressed_size=1,
+    )
+    monkeypatch.setattr(upload_security_module, "MAX_OFFICE_ENTRY_UNCOMPRESSED_BYTES", 1024)
+
+    with pytest.raises(UploadValidationError) as exc:
+        await save_validated_upload(
+            _upload("report.docx", content, _DOCX_CONTENT_TYPE),
+            limits=_limits(
+                max_file_bytes=16 * 1024,
+                max_total_bytes=16 * 1024,
+                accepted_extensions=frozenset({".docx"}),
+            ),
+            remaining_total_bytes=16 * 1024,
+        )
+
+    assert exc.value.status_code == 415
+    assert "expands beyond" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_rejects_office_archive_with_forged_crc() -> None:
+    """CRC verification is computed from decompressed bytes, not trusted metadata."""
+    content = _forge_entry_crc(_office_document(), "word/document.xml", crc=0)
+
+    with pytest.raises(UploadValidationError) as exc:
+        await save_validated_upload(
+            _upload("report.docx", content, _DOCX_CONTENT_TYPE),
+            limits=_limits(accepted_extensions=frozenset({".docx"})),
+            remaining_total_bytes=2048,
+        )
+
+    assert exc.value.status_code == 415
+    assert "metadata" in exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_rejects_office_archive_with_forged_data_descriptor_crc() -> None:
+    content = _forge_first_data_descriptor_crc(_streaming_office_document(), crc=0)
+
+    with pytest.raises(UploadValidationError) as exc:
+        await save_validated_upload(
+            _upload("report.docx", content, _DOCX_CONTENT_TYPE),
+            limits=_limits(accepted_extensions=frozenset({".docx"})),
+            remaining_total_bytes=2048,
+        )
+
+    assert exc.value.status_code == 415
+    assert "metadata" in exc.value.detail
+
+
+@pytest.mark.asyncio
 async def test_rejects_declared_mime_mismatch() -> None:
     with pytest.raises(UploadValidationError) as exc:
         await save_validated_upload(
@@ -332,8 +516,10 @@ async def test_rejects_content_that_does_not_match_extension() -> None:
 def test_upload_route_documents_security_error_responses(
     register_routes: Callable[[APIRouter], None],
 ) -> None:
-    responses = _upload_route(register_routes).responses
+    route = _upload_route(register_routes)
+    responses = route.responses
 
+    assert route.description == UPLOAD_ENDPOINT_DESCRIPTION
     assert responses[413]["description"] == "Upload size or file-count limit exceeded"
     assert responses[415]["description"] == "Unsupported, malformed, or mismatched file content"
 
@@ -342,6 +528,7 @@ def test_upload_route_documents_security_error_responses(
 @pytest.mark.asyncio
 async def test_upload_route_does_not_expose_internal_ingestion_errors(
     register_routes: Callable[[APIRouter], None],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     endpoint = _upload_endpoint(register_routes)
 
@@ -354,6 +541,8 @@ async def test_upload_route_does_not_expose_internal_ingestion_errors(
 
     assert exc.value.status_code == 500
     assert exc.value.detail == "Failed to submit ingestion job"
+    assert "RuntimeError" in caplog.text
+    assert "secret database connection details" not in caplog.text
 
 
 @pytest.mark.parametrize("register_routes", [add_legacy_document_routes, add_unified_document_routes])
@@ -365,7 +554,6 @@ async def test_upload_route_cancellation_removes_all_request_owned_temp_files(
 ) -> None:
     """Cancellation after one saved file removes every path still owned by the request."""
     endpoint = _upload_endpoint(register_routes)
-    route_module = importlib.import_module(register_routes.__module__)
     first_path = tmp_path / "first.txt"
     first_path.write_bytes(b"research")
     save_count = 0
@@ -380,7 +568,7 @@ async def test_upload_route_cancellation_removes_all_request_owned_temp_files(
             return SimpleNamespace(path=str(path), original_filename="first.txt", size_bytes=8)
         raise asyncio.CancelledError
 
-    monkeypatch.setattr(route_module, "save_validated_upload", save_then_cancel)
+    monkeypatch.setattr(upload_security_module, "save_validated_upload", save_then_cancel)
 
     with pytest.raises(asyncio.CancelledError):
         await endpoint(
@@ -405,7 +593,6 @@ async def test_upload_route_success_transfers_temp_file_ownership_to_ingestion(
 ) -> None:
     """A submitted job retains its input even if the request then finishes."""
     endpoint = _upload_endpoint(register_routes)
-    route_module = importlib.import_module(register_routes.__module__)
     submitted_path = tmp_path / "submitted.txt"
     submitted_path.write_bytes(b"research")
 
@@ -413,7 +600,7 @@ async def test_upload_route_success_transfers_temp_file_ownership_to_ingestion(
         on_temp_path_created(str(submitted_path))
         return SimpleNamespace(path=str(submitted_path), original_filename="submitted.txt", size_bytes=8)
 
-    monkeypatch.setattr(route_module, "save_validated_upload", save_upload)
+    monkeypatch.setattr(upload_security_module, "save_validated_upload", save_upload)
     ingestor = _SuccessfulIngestor()
 
     response = await endpoint(

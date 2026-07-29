@@ -143,13 +143,13 @@ class BatchSourceToolInput(BaseModel):
 
 
 def _single_string_input_field(tool: BaseTool) -> str | None:
-    """Return the sole string input field for a compatible tool, otherwise None."""
-    schema = getattr(tool, "args_schema", None) or tool.get_input_schema()
-    fields = getattr(schema, "model_fields", None)
-    if not fields or len(fields) != 1:
+    """Return the sole string model field when no injected fields would be dropped."""
+    model_fields = getattr(tool.tool_call_schema, "model_fields", None)
+    full_fields = getattr(tool.get_input_schema(), "model_fields", None)
+    if not model_fields or len(model_fields) != 1 or not full_fields or set(full_fields) != set(model_fields):
         return None
 
-    name, field = next(iter(fields.items()))
+    name, field = next(iter(model_fields.items()))
     if field.annotation is str:
         return name
     return None
@@ -221,6 +221,9 @@ def _make_throttled_source_tool(
             result = await original_tool.ainvoke(kwargs)
         return result
 
+    # Retain injected fields for runtime validation/forwarding. BaseTool derives
+    # tool_call_schema from this full schema and hides InjectedToolArg fields from
+    # the model-facing contract.
     args_schema = getattr(original_tool, "args_schema", None) or original_tool.get_input_schema()
 
     return StructuredTool.from_function(
