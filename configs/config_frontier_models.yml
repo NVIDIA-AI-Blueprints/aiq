@@ -70,6 +70,17 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
+  nemotron_ultra_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    temperature: 0.7
+    top_p: 0.7
+    max_tokens: 65536
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+
   # Frontier model for orchestrating and planning in deep research agent
   # You need to set the OPENAI_API_KEY environment variable
   openai_gpt_5_2:
@@ -148,8 +159,8 @@ functions:
     _type: deep_research_agent
     enable_citation_verification: true
     orchestrator_llm: openai_gpt_5_2
-    source_router_llm: nemotron_super_llm
-    researcher_llm: nemotron_super_llm
+    source_router_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
     planner_llm: openai_gpt_5_2
     writer_llm: openai_gpt_5_2
     verbose: true
