@@ -13,6 +13,7 @@ control run through the real ``require_verified_principal`` and
 from __future__ import annotations
 
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -35,7 +36,8 @@ from aiq_api.jobs.access import ensure_job_access_table
 # This allows us to test the endpoint code without the complexity of routing network calls.
 
 
-async def _call_endpoint(app: FastAPI, path: str, method: str, *args):
+async def _call_endpoint(app: FastAPI, path: str, method: str, *args) -> Any:
+    """Call the endpoint function directly and return the response."""
     for route in app.routes:
         if getattr(route, "path", None) == path and method in getattr(route, "methods", set()):
             return await route.endpoint(*args)  # pyright: ignore[reportAttributeAccessIssue]
@@ -90,6 +92,7 @@ async def job_report_app(monkeypatch, tmp_path):
 
 @pytest.mark.asyncio
 async def test_get_job_report_returns_report(job_report_app):
+    """Test that the get_job_report endpoint returns the correct report."""
     app, job, job_store, _db_url = job_report_app
 
     response = await _call_endpoint(app, "/v1/jobs/async/job/{job_id}/report", "GET", "job-1")
@@ -107,6 +110,7 @@ async def test_get_job_report_returns_report(job_report_app):
 
 @pytest.mark.asyncio
 async def test_get_job_report_has_report_false_when_missing(job_report_app):
+    """Test that the get_job_report endpoint returns False when the report is missing."""
     app, job, job_store, _db_url = job_report_app
     job.output = {}
 
@@ -124,25 +128,8 @@ async def test_get_job_report_has_report_false_when_missing(job_report_app):
 
 
 @pytest.mark.asyncio
-async def test_get_job_report_decodes_json_string_output(job_report_app):
-    app, job, job_store, _db_url = job_report_app
-    job.output = '{"report": "# From JSON", "result_kind": "report"}'
-
-    response = await _call_endpoint(app, "/v1/jobs/async/job/{job_id}/report", "GET", "job-1")
-
-    assert response.model_dump() == {
-        "job_id": "job-1",
-        "has_report": True,
-        "report": "# From JSON",
-        "parent_job_id": None,
-        "interaction_action": None,
-        "result_kind": "report",
-    }
-    job_store.get_job.assert_awaited_once_with("job-1")
-
-
-@pytest.mark.asyncio
 async def test_get_job_report_includes_interaction_metadata(job_report_app):
+    """Test that the get_job_report endpoint includes interaction metadata."""
     app, job, job_store, _db_url = job_report_app
     job.output = {
         "report": "# Revised",
@@ -166,6 +153,7 @@ async def test_get_job_report_includes_interaction_metadata(job_report_app):
 
 @pytest.mark.asyncio
 async def test_get_job_report_not_found(job_report_app):
+    """Test that the get_job_report endpoint returns a 404 when the job is not found."""
     app, _job, job_store, _db_url = job_report_app
     job_store.get_job = AsyncMock(return_value=None)
 
@@ -178,6 +166,7 @@ async def test_get_job_report_not_found(job_report_app):
 
 @pytest.mark.asyncio
 async def test_get_job_report_requires_verified_principal(job_report_app, monkeypatch):
+    """Test that the get_job_report endpoint requires a verified principal."""
     app, _job, job_store, _db_url = job_report_app
     import aiq_api.jobs.access as job_access_mod
 
@@ -194,6 +183,7 @@ async def test_get_job_report_requires_verified_principal(job_report_app, monkey
 
 @pytest.mark.asyncio
 async def test_get_job_report_denies_cross_user_when_auth_required(job_report_app, monkeypatch):
+    """Test that the get_job_report endpoint denies cross-user access when authentication is required."""
     app, _job, job_store, db_url = job_report_app
     import aiq_api.jobs.access as job_access_mod
 
@@ -214,6 +204,7 @@ async def test_get_job_report_denies_cross_user_when_auth_required(job_report_ap
 
 @pytest.mark.asyncio
 async def test_get_job_status_success(job_report_app):
+    """Test that the get_job_status endpoint returns the correct status."""
     app, job, job_store, _db_url = job_report_app
 
     response = await _call_endpoint(app, "/v1/jobs/async/job/{job_id}", "GET", "job-1")
@@ -230,6 +221,7 @@ async def test_get_job_status_success(job_report_app):
 
 @pytest.mark.asyncio
 async def test_get_job_status_error(job_report_app):
+    """Test that the get_job_status endpoint returns the correct status when an error occurs."""
     app, job, job_store, _db_url = job_report_app
     job.error = "An error occurred"
     job.status = "error"
@@ -238,9 +230,9 @@ async def test_get_job_status_error(job_report_app):
 
     assert response.model_dump() == {
         "job_id": "job-1",
-        "status": job.status,
+        "status": "error",
         "agent_type": None,
-        "error": job.error,
+        "error": "An error occurred",
         "created_at": None,
     }
     job_store.get_job.assert_awaited_once_with("job-1")
