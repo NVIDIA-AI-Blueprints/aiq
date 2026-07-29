@@ -175,7 +175,7 @@ def test_state_budget_reservation_is_replacement_aware_and_rollback_safe():
 def test_state_budget_reserve_uses_non_sandbox_path_canonicalization():
     """Route-local mutations replace route-local seeds when StateBackend owns every path."""
     ledger = StateBudgetLedger(
-        limits=DeepResearchResourceLimits(max_state_file_count=2, max_total_state_bytes=3),
+        limits=DeepResearchResourceLimits(max_state_file_count=3, max_total_state_bytes=3),
         files={"/output.md": "12"},
         sandbox_enabled=False,
     )
@@ -188,3 +188,5 @@ def test_state_budget_reserve_uses_non_sandbox_path_canonicalization():
     # /output.md must be restored to 2 bytes; only then does one more byte fit
     # the 3-byte aggregate cap.
     ledger.reserve([("/notes.md", b"1")])
+    with pytest.raises(ValueError, match="aggregate limit"):
+        ledger.reserve([("/extra.md", b"1")])
