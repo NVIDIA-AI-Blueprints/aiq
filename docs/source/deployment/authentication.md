@@ -11,11 +11,11 @@ multi-user or externally reachable deployment must enable AIQ authentication or 
 AIQ behind a customer-managed authenticated gateway, and must own the corresponding
 authorization policy, network isolation, and edge rate limits.
 
-When AIQ authentication is enabled, the web UI signs users in with an OAuth/OIDC
-provider. The backend validates the resulting JWT before serving protected API
-routes only when `REQUIRE_AUTH=true` and the request hostname is classified as
-external through `AIQ_EXTERNAL_HOSTNAMES`. Requests outside that external boundary
-remain on the trusted/internal path.
+When AIQ authentication is configured, the web UI signs users in with an OAuth/OIDC
+provider, and the backend validates any presented bearer token or `idToken` cookie.
+External requests require a valid token when `REQUIRE_AUTH=true` and the request
+hostname is classified through `AIQ_EXTERNAL_HOSTNAMES`; requests outside that
+boundary remain on the trusted/internal path.
 
 Use this guide when you need to:
 
