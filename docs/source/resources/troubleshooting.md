@@ -35,28 +35,31 @@ Common issues and solutions for the AI-Q blueprint.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
-| HTTP 429 or 503 on deep research | Nemotron Super Build API has limited availability due to high demand | Retry after a short delay, reduce concurrency, or self-host via [Brev Launchable](#nemotron-super--build-endpoint-availability) for consistent throughput |
+| HTTP 429 or 503 on deep research | Nemotron Super or Nemotron Ultra hosted endpoint availability | Retry after a short delay, reduce concurrency, or follow the [model-specific self-hosting guidance](#nemotron-super-and-ultra--hosted-endpoint-availability) for consistent throughput |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
 | Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns`, or set `enable_clarifier: false` in the workflow to disable clarification |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
 | Job status stuck on RUNNING | Dask worker crashed | Check Dask logs; the ghost job reaper will eventually mark it FAILURE |
 | OpenShell setup, attestation, readiness, or deletion fails | Gateway, version, policy/config, image, or service-owner mismatch | Follow the canonical [OpenShell inspection and troubleshooting guide](../deployment/openshell.md#inspection-and-troubleshooting) |
 
-## Nemotron Super — Build Endpoint Availability
+## Nemotron Super and Ultra — Hosted Endpoint Availability
 
-Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but the NVIDIA Build API endpoints have limited availability due to high demand. During peak periods you may observe:
+Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) and Nemotron Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their NVIDIA-hosted endpoints can have limited availability during high demand. During peak periods you may observe:
 
 - Elevated latency or timeouts on LLM inference calls
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
 - Degraded agent workflow performance due to upstream model availability
 
-**Default Configuration:** The default configs use Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`). If hosted endpoints are saturated, retry after a short delay, reduce concurrency, or self-host for consistent throughput.
+**Default Configuration:** The default configs use Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) for intent classification, shallow research, and deep-research writing, and Nemotron Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) for the other deep-research roles. If hosted endpoints are saturated, retry after a short delay, reduce concurrency, or self-host for consistent throughput.
 
-### Recommended Mitigation: Self-Host via Brev Launchable
+### Recommended Mitigation: Self-Host the Affected Model
 
-For production and staging deployments that require consistent throughput and low-latency inference, the recommended approach is to self-host the Nemotron Super model using a [Brev Launchable](https://brev.nvidia.com/placeholder_url) rather than relying on shared Build API endpoints.
+For production and staging deployments that require consistent throughput and low-latency inference, self-host the affected model with NVIDIA NIM rather than relying on shared endpoints:
 
-Once your self-hosted endpoint is running, uncomment and update `base_url` in your config to point at it:
+- [Self-host Nemotron Super](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b?nim=self-hosted)
+- [Self-host Nemotron Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b?nim=self-hosted)
+
+Once your self-hosted endpoint is running, update the corresponding `base_url` in your config to point at it:
 
 ```yaml
 llms:
@@ -65,9 +68,21 @@ llms:
     model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://<your-brev-endpoint>/v1"
     api_key: ""
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
+    temperature: 0.7
+    top_p: 0.7
+    max_tokens: 65536
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: true
+
+  nemotron_ultra_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://<your-ultra-endpoint>/v1"
+    api_key: ""
+    temperature: 0.7
+    top_p: 0.7
+    max_tokens: 65536
     num_retries: 5
     chat_template_kwargs:
       enable_thinking: true

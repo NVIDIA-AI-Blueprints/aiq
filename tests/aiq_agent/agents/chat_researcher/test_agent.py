@@ -28,6 +28,8 @@ from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
 from aiq_agent.agents.chat_researcher.models import WorkflowFailure
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.logging_utils import log_identifier_ref
 
 
@@ -239,6 +241,78 @@ class TestChatResearcherAgent:
         assert "try again" in result["messages"][-1].content.lower()
         assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
         assert "provider detail" not in result["workflow_outcome"].error
+
+    @pytest.mark.parametrize("depth", ["shallow", "deep"])
+    @pytest.mark.parametrize("generated_answer", [None, "Sanitized generated answer."])
+    @pytest.mark.asyncio
+    async def test_empty_source_failure_returns_generated_answer_and_typed_remediation(
+        self,
+        mock_clarifier,
+        depth,
+        generated_answer,
+    ):
+        async def orchestration(_state):
+            return {
+                "user_intent": IntentResult(intent="research", target="new_research", raw=None),
+                "depth_decision": DepthDecision(decision=depth, raw_reasoning="test"),
+            }
+
+        async def empty_sources(_state):
+            raise EmptySourceRegistryError(
+                reason=EmptySourceRegistryReason.NO_SOURCES_SELECTED,
+                generated_answer=generated_answer,
+            )
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=orchestration,
+            shallow_research_fn=empty_sources,
+            deep_research_fn=empty_sources,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            enable_escalation=False,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+            thread_id=f"test-empty-sources-{depth}-{generated_answer is not None}",
+        )
+
+        content = result["messages"][-1].content
+        if generated_answer:
+            assert content.startswith(f"{generated_answer}\n\n")
+        assert "No data sources are selected" in content
+        assert "Please try again" not in content
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    @pytest.mark.parametrize("depth", ["shallow", "deep"])
+    @pytest.mark.asyncio
+    async def test_unavailable_source_tools_preserve_actionable_remediation(self, mock_clarifier, depth):
+        async def orchestration(_state):
+            return {
+                "user_intent": IntentResult(intent="research", target="new_research", raw=None),
+                "depth_decision": DepthDecision(decision=depth, raw_reasoning="test"),
+            }
+
+        async def unavailable_sources(_state):
+            raise EmptySourceRegistryError(reason=EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE)
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=orchestration,
+            shallow_research_fn=unavailable_sources,
+            deep_research_fn=unavailable_sources,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            enable_escalation=False,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+            thread_id=f"test-unavailable-sources-{depth}",
+        )
+
+        assert "data source tools are currently unavailable" in result["messages"][-1].content
+        assert "returned no results" not in result["messages"][-1].content
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
     @pytest.mark.asyncio
     async def test_run_deep_research_flow(

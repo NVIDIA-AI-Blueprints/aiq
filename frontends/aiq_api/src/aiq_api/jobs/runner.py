@@ -35,7 +35,10 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 from typing import Any
 
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+
 from .callbacks import AgentEventCallback
+from .callbacks import build_final_report_event
 from .event_store import BatchingEventStore
 from .event_store import EventStore
 
@@ -236,6 +239,109 @@ def _write_job_success_if_running_sync(db_url: str, job_id: str, stored_output: 
     with engine.begin() as conn:
         result = conn.execute(stmt, {"output": stored_output, "job_id": job_id})
         return (result.rowcount or 0) == 1
+
+
+def _write_job_source_failure_if_running_sync(
+    db_url: str,
+    job_id: str,
+    public_error: str,
+    stored_output: str,
+    final_report_event: dict[str, Any] | None = None,
+    job_output_cipher: Any | None = None,
+) -> bool:
+    """Persist a source failure, then store its optional final-report event best-effort."""
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'failure', error = :error, output = :output, "
+        f"updated_at = {_db_now_expr(db_url)} WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(
+            stmt,
+            {"error": public_error, "output": stored_output, "job_id": job_id},
+        )
+        if (result.rowcount or 0) != 1:
+            return False
+
+    if final_report_event is not None:
+        try:
+            EventStore(db_url, job_id, content_cipher=job_output_cipher).store(final_report_event)
+        except Exception as exc:
+            logger.warning(
+                "Job %s source-failure final-report event write failed exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
+    return True
+
+
+def _write_job_failure_if_running_sync(db_url: str, job_id: str, public_error: str) -> bool:
+    """Compare-and-set a generic failure without changing an existing terminal job."""
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'failure', error = :error, updated_at = {_db_now_expr(db_url)} "
+        "WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(stmt, {"error": public_error, "job_id": job_id})
+        return (result.rowcount or 0) == 1
+
+
+async def _persist_empty_source_failure(
+    *,
+    error: EmptySourceRegistryError,
+    job_output_cipher: Any,
+    db_url: str,
+    job_id: str,
+    event_store: Any | None = None,
+) -> bool:
+    """Persist a typed source failure, falling back safely if output storage fails."""
+    from .crypto import serialize_job_output_for_storage
+
+    output = {
+        "report": error.generated_answer,
+        "outcome_reason": error.reason.value,
+    }
+    try:
+        stored_output = serialize_job_output_for_storage(output, job_output_cipher)
+        if event_store is not None and hasattr(event_store, "flush"):
+            await asyncio.to_thread(event_store.flush)
+        final_report_event = (
+            build_final_report_event(error.generated_answer).to_sse_dict() if error.generated_answer else None
+        )
+        return await asyncio.get_running_loop().run_in_executor(
+            None,
+            _write_job_source_failure_if_running_sync,
+            db_url,
+            job_id,
+            error.public_message,
+            stored_output,
+            final_report_event,
+            job_output_cipher,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Job %s source-failure output write failed exception=%s",
+            job_id,
+            exc.__class__.__name__,
+        )
+        sanitized_error = f"job failed ({type(exc).__name__}); check server logs for details"
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            _write_job_failure_if_running_sync,
+            db_url,
+            job_id,
+            sanitized_error,
+        )
+        return False
 
 
 def _run_lease_refresher(db_url: str, job_id: str, stop_event: threading.Event) -> None:
@@ -957,6 +1063,24 @@ async def run_agent_job(
                     await job_store.update_status(job_id, JobStatus.INTERRUPTED, error="cancelled by user")
             except (ConnectionError, TimeoutError, RuntimeError):
                 pass
+
+    except EmptySourceRegistryError as e:
+        logger.info("Job %s failed because no research sources were available (%s)", job_id, e.reason.value)
+        if event_store is None:
+            event_store = BatchingEventStore(EventStore(db_url, job_id, content_cipher=job_output_cipher))
+
+        await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
+        wrote = await _persist_empty_source_failure(
+            error=e,
+            job_output_cipher=job_output_cipher,
+            db_url=db_url,
+            job_id=job_id,
+            event_store=event_store,
+        )
+        if wrote:
+            logger.info("Job %s persisted source-failure outcome", job_id)
+        else:
+            logger.warning("Job %s already terminal or source-failure output persistence failed", job_id)
 
     except Exception as e:
         logger.exception("Job %s failed: %s", job_id, type(e).__name__)

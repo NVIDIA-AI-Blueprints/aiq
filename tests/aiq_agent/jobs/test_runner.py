@@ -90,6 +90,16 @@ def fixture_event_store_cache_guard():
     EventStore.dispose_all_engines()
 
 
+@pytest.fixture(name="content_encryption_manager_guard")
+def fixture_content_encryption_manager_guard():
+    """Reset content-encryption globals even when a test assertion fails."""
+    from aiq_api.jobs import crypto
+
+    crypto.reset_content_encryption_manager_for_tests()
+    yield
+    crypto.reset_content_encryption_manager_for_tests()
+
+
 class TestIntermediateStepEvent:
     """Tests for the IntermediateStepEvent model."""
 
@@ -910,6 +920,318 @@ class TestRunAgentJobEncryption:
             error="job failed (RuntimeError); check server logs for details",
         )
         update_job_output.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("reason", "generated_answer", "initial_status"),
+        [
+            ("no_sources_selected", None, "running"),
+            ("no_source_results", "# Preserved report", "running"),
+            ("no_source_results", "# Race-losing report", "success"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_empty_source_failure_persists_actionable_error_and_encrypted_outcome(
+        self, monkeypatch, tmp_path, reason, generated_answer, initial_status, content_encryption_manager_guard
+    ):
+        import base64
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+
+        from sqlalchemy import text
+
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+        from aiq_api.jobs import crypto
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):  # noqa: ARG002 - mirrors NAT API
+                return AsyncContext()
+
+        typed_reason = EmptySourceRegistryReason(reason)
+        source_error = EmptySourceRegistryError(reason=typed_reason, generated_answer=generated_answer)
+        mock_job_store = MagicMock(update_status=AsyncMock())
+        config = SimpleNamespace(workflow=None, functions={}, middleware={})
+        monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "key")
+        monkeypatch.setenv(
+            "AIQ_CONTENT_ENCRYPTION_KEY",
+            base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
+        )
+        monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY_ID", "test-key")
+        encryption_policy = crypto.get_content_encryption_policy_identity()
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) VALUES ('job-1', :status, 'original', 'kept')"
+                ),
+                {"status": initial_status},
+            )
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store)
+            )
+            stack.enter_context(patch("nat.runtime.loader.load_config", return_value=config))
+            stack.enter_context(
+                patch(
+                    "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                    return_value=FakeWorkflowBuilder(),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                    return_value=FakeExporterManager(),
+                )
+            )
+            stack.enter_context(patch("aiq_api.jobs.runner._load_agent_class", return_value=object))
+            stack.enter_context(
+                patch("aiq_api.jobs.runner._create_llm_provider", AsyncMock(return_value=(object(), object())))
+            )
+            stack.enter_context(patch("aiq_api.jobs.runner._create_agent_instance", return_value=object()))
+            stack.enter_context(patch("aiq_api.jobs.runner._run_agent", AsyncMock(side_effect=source_error)))
+            await run_agent_job(
+                False,
+                20,
+                "tcp://localhost:8786",
+                db_url,
+                "config.yml",
+                "job-1",
+                "input",
+                "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                "deep_research_agent",
+                content_encryption_policy=encryption_policy,
+            )
+
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT status, error, output FROM job_info WHERE job_id = 'job-1'")).one()
+
+        if initial_status == "running":
+            assert row.status == "failure"
+            assert row.error == typed_reason.public_message
+            assert row.output.startswith(crypto.ENVELOPE_PREFIX)
+            if generated_answer:
+                assert generated_answer not in row.output
+            assert crypto.read_job_output("job-1", row.output) == {
+                "report": generated_answer,
+                "outcome_reason": reason,
+            }
+        else:
+            assert tuple(row) == ("success", "original", "kept")
+        assert [call.args[1] for call in mock_job_store.update_status.await_args_list] == [JobStatus.RUNNING]
+        events = EventStore.get_events(db_url, "job-1")
+        assert not any(event["type"] == "job.error" for event in events)
+        final_reports = [
+            event
+            for event in events
+            if event["type"] == "artifact.update" and event.get("data", {}).get("output_category") == "final_report"
+        ]
+        if generated_answer and initial_status == "running":
+            assert [event["data"]["content"] for event in final_reports] == [generated_answer]
+        else:
+            assert final_reports == []
+
+    @pytest.mark.asyncio
+    async def test_source_failure_event_write_failure_preserves_typed_outcome(self, tmp_path):
+        from sqlalchemy import text
+
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _persist_empty_source_failure
+
+        db_url = f"sqlite:///{tmp_path / 'event-failure.db'}"
+        EventStore._ensure_table_exists(db_url)
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) "
+                    "VALUES ('job-1', 'running', 'original', 'kept')"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE TRIGGER reject_job_event BEFORE INSERT ON job_events "
+                    "BEGIN SELECT RAISE(FAIL, 'event insert failed'); END"
+                )
+            )
+
+        source_error = EmptySourceRegistryError(generated_answer="# Preserved report")
+        with patch("aiq_api.jobs.crypto.serialize_job_output_for_storage", return_value="stored-output"):
+            wrote = await _persist_empty_source_failure(
+                error=source_error,
+                job_output_cipher=None,
+                db_url=db_url,
+                job_id="job-1",
+            )
+
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT status, error, output FROM job_info WHERE job_id = 'job-1'")).one()
+
+        assert wrote is True
+        assert tuple(row) == ("failure", source_error.public_message, "stored-output")
+        assert EventStore.get_events(db_url, "job-1") == []
+
+    @pytest.mark.asyncio
+    async def test_empty_source_output_encryption_failure_uses_generic_sanitized_failure(self, tmp_path):
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+        from aiq_api.jobs.crypto import ContentEncryptionUnavailable
+
+        source_error = EmptySourceRegistryError(
+            reason=EmptySourceRegistryReason.NO_SOURCE_RESULTS,
+            generated_answer="plaintext report must not be persisted",
+        )
+        serialize_output = MagicMock(side_effect=ContentEncryptionUnavailable("secret backend details"))
+        write_failure = MagicMock()
+        write_fallback = MagicMock(return_value=False)
+        event_store = MagicMock()
+
+        with (
+            patch("aiq_api.jobs.crypto.serialize_job_output_for_storage", serialize_output),
+            patch(
+                "aiq_api.jobs.runner._write_job_source_failure_if_running_sync",
+                write_failure,
+            ),
+            patch("aiq_api.jobs.runner._write_job_failure_if_running_sync", write_fallback),
+        ):
+            # Exercise the same terminal helper path directly; full worker setup is
+            # covered by the parameterized test above.
+            from aiq_api.jobs.runner import _persist_empty_source_failure
+
+            wrote = await _persist_empty_source_failure(
+                error=source_error,
+                job_output_cipher=object(),
+                db_url=f"sqlite:///{tmp_path / 'test.db'}",
+                job_id="job-1",
+                event_store=event_store,
+            )
+
+        write_failure.assert_not_called()
+        assert wrote is False
+        write_failure.assert_not_called()
+        write_fallback.assert_called_once_with(
+            f"sqlite:///{tmp_path / 'test.db'}",
+            "job-1",
+            "job failed (ContentEncryptionUnavailable); check server logs for details",
+        )
+        event_store.flush.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal_status", ["success", "failure", "interrupted"])
+    async def test_source_failure_fallback_does_not_overwrite_terminal_race(self, tmp_path, terminal_status):
+        from sqlalchemy import text
+
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _persist_empty_source_failure
+
+        db_url = f"sqlite:///{tmp_path / 'fallback-race.db'}"
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) VALUES ('job-1', :status, 'original', 'kept')"
+                ),
+                {"status": terminal_status},
+            )
+
+        with patch(
+            "aiq_api.jobs.crypto.serialize_job_output_for_storage",
+            side_effect=RuntimeError("persistence failed"),
+        ):
+            wrote = await _persist_empty_source_failure(
+                error=EmptySourceRegistryError(generated_answer="plaintext"),
+                job_output_cipher=object(),
+                db_url=db_url,
+                job_id="job-1",
+            )
+
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT status, error, output FROM job_info WHERE job_id = 'job-1'")).one()
+
+        assert wrote is False
+        assert tuple(row) == (terminal_status, "original", "kept")
+
+    def test_source_failure_write_only_changes_running_job(self, tmp_path):
+        from sqlalchemy import text
+
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _write_job_source_failure_if_running_sync
+
+        db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) VALUES "
+                    "('running-job', 'running', NULL, NULL), "
+                    "('terminal-job', 'success', NULL, 'original')"
+                )
+            )
+
+        assert _write_job_source_failure_if_running_sync(db_url, "running-job", "Select a source.", "encrypted-output")
+        assert not _write_job_source_failure_if_running_sync(db_url, "terminal-job", "Select a source.", "replacement")
+
+        with engine.connect() as conn:
+            running = conn.execute(
+                text("SELECT status, error, output FROM job_info WHERE job_id = 'running-job'")
+            ).one()
+            terminal = conn.execute(
+                text("SELECT status, error, output FROM job_info WHERE job_id = 'terminal-job'")
+            ).one()
+        assert tuple(running) == ("failure", "Select a source.", "encrypted-output")
+        assert tuple(terminal) == ("success", None, "original")
 
 
 class TestEventStore:
@@ -2169,6 +2491,56 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_research_concurrency == 2
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
+
+    @pytest.mark.asyncio
+    async def test_async_deep_researcher_rejects_empty_sources_when_citation_verification_disabled(self):
+        """The worker path enforces source selection even when citation verification is disabled."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMProvider
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+        from aiq_api.jobs.runner import _create_agent_instance
+        from aiq_api.jobs.runner import _run_agent
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        mock_llm = MagicMock()
+        provider = LLMProvider()
+        provider.set_default(mock_llm)
+        agent = _create_agent_instance(
+            agent_cls=DeepResearcherAgent,
+            llm_provider=provider,
+            llm=mock_llm,
+            tools=[],
+            fn_config=DeepResearchAgentConfig(
+                orchestrator_llm="llm",
+                enable_citation_verification=False,
+            ),
+            verbose=False,
+            callbacks=[],
+            job_id="async-job-123",
+        )
+
+        with patch.object(agent, "_build_orchestrator_agent") as build_orchestrator:
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await _run_agent(
+                    agent=agent,
+                    input_text="Research this",
+                    monitor=FakeMonitor(),
+                    data_sources=[],
+                )
+
+        assert agent.enable_citation_verification is False
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCES_SELECTED
+        build_orchestrator.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_run_agent_seeds_initial_files_when_state_supports_files(self):

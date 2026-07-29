@@ -30,6 +30,7 @@ from langchain_core.tools import BaseTool
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
+from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
@@ -249,6 +250,10 @@ class DeepResearcherAgent:
         """
         Execute deep research with multi-phase workflow.
         """
+        # Both the NAT registrar and async job runner call this interface, so source
+        # selection and availability must be enforced here rather than by either adapter.
+        validate_research_source_configuration(state.data_sources, "deep research", self.tools)
+
         prepared_files = self.deepagents_runtime.prepare_state_files(dict(state.files))
         if prepared_files != state.files:
             state = state.model_copy(update={"files": prepared_files})
@@ -273,6 +278,27 @@ class DeepResearcherAgent:
                 state.files,
                 final_report_tracker=final_report_tracker,
             )
+            # Capturing no sources is a research outcome failure even when citation
+            # rewriting is disabled; enable_citation_verification only controls the latter.
+            if not self.source_registry_middleware.has_sources():
+                from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
+                from aiq_agent.common.tool_validation import validate_tool_availability
+
+                _, available_count, unavailable = validate_tool_availability(
+                    self.tools,
+                    research_type="deep research",
+                    enable_logging=False,
+                )
+                generated_answer = None
+                if final_message is not None:
+                    generated_answer = sanitize_report(final_message).sanitized_report
+                raise EmptySourceRegistryError(
+                    "deep research",
+                    unavailable_tools=unavailable,
+                    available_count=available_count,
+                    reason=classify_empty_source_registry_reason(state.data_sources, available_count, unavailable),
+                    generated_answer=generated_answer,
+                )
             if final_message is None:
                 raise RuntimeError("writer_output_not_committed")
 
@@ -302,20 +328,6 @@ class DeepResearcherAgent:
                         "returning the generated report without failing the job. "
                         "This may indicate unsupported citation formatting or over-aggressive verification."
                     )
-            elif self.enable_citation_verification:
-                from aiq_agent.common.tool_validation import validate_tool_availability
-
-                _, available_count, unavailable = validate_tool_availability(
-                    self.tools,
-                    research_type="deep research",
-                    enable_logging=False,
-                )
-                raise EmptySourceRegistryError(
-                    "deep research",
-                    unavailable_tools=unavailable,
-                    available_count=available_count,
-                )
-
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report

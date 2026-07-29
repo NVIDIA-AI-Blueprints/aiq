@@ -126,6 +126,15 @@ class IntermediateStepEvent(BaseModel):
         return {k: v for k, v in result.items() if v is not None}
 
 
+def build_final_report_event(content: str) -> IntermediateStepEvent:
+    """Build the canonical final-report artifact event."""
+    return IntermediateStepEvent(
+        category=EventCategory.ARTIFACT,
+        state=EventState.UPDATE,
+        data=EventData(type=ArtifactType.OUTPUT.value, content=content, output_category="final_report"),
+    )
+
+
 class ToolArtifactMapping:
     """
     Maps tool names to artifact types for automatic artifact emission.
@@ -381,11 +390,7 @@ class AgentEventCallback(BaseCallbackHandler):
         frontend receives the verified content (overwrites the earlier
         auto-emitted version).
         """
-        self._emit_artifact(
-            ArtifactType.OUTPUT,
-            content,
-            output_category="final_report",
-        )
+        self._emit(build_final_report_event(content))
 
     def _is_search_tool(self, tool_name: str) -> bool:
         """Check if tool is a search-related tool that returns URLs."""
