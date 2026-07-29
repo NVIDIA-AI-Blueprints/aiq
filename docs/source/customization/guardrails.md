@@ -7,19 +7,18 @@ SPDX-License-Identifier: Apache-2.0
 
 AI-Q can use NeMo Guardrails through NeMo Agent Toolkit middleware to evaluate selected workflow and agent-boundary inputs and outputs. Guardrails can pass content through unchanged, block content with a configured refusal, or modify selected fields before execution continues.
 
-AI-Q provides middleware types for workflow, shallow-research, and deep-research boundaries. That capability does not
-mean every boundary is active whenever its middleware is defined. In
-`configs/config_web_default_guardrails.yml`, the workflow middleware is explicitly attached to the workflow. The async
-deep-research runner selects `deep_agent_guardrails` because its `workflow_functions` targets `deep_research_agent`.
-The checked-in profile does **not** attach `shallow_agent_guardrails` to `shallow_research_agent`, so shallow guardrails
-are not active until that middleware reference is added to the function.
+AI-Q provides middleware types for workflow, shallow-research, and deep-research boundaries. In
+`configs/config_web_default_guardrails.yml`, the workflow middleware is explicitly attached under `workflow.middleware`.
+The shallow middleware is dynamically attached by targeting `shallow_research_agent` under `workflow_functions`.
+Because the async deep-research runner calls its agent directly, it reconstructs the middleware selection from the
+`deep_research_agent` target and applies it around that call.
 
 ## Guarded Boundaries
 
 | Boundary | Middleware | Applies To |
 | --- | --- | --- |
 | Workflow | `workflow_guardrails` | Workflow input and final assistant response; active when attached under `workflow.middleware`. |
-| Shallow researcher | `shallow_agent_guardrails` | Shallow input or output message content; active when attached under `functions.shallow_research_agent.middleware`. |
+| Shallow researcher | `shallow_agent_guardrails` | Shallow input or output message content; dynamically attached when `workflow_functions` targets `shallow_research_agent`. |
 | Deep researcher | `deep_agent_guardrails` | Deep input or output message content; the async runner selects it when `workflow_functions` targets `deep_research_agent`. |
 
 These middleware types use NAT/NeMo Guardrails for policy evaluation at AI-Q workflow and agent boundaries.
@@ -52,11 +51,11 @@ Presidio analyzer and anonymizer import, `en_core_web_lg` is installed, and emai
 ## Configuration Shape
 
 The guardrails configuration is placed in the top-level `middleware` section. Defining an entry makes that middleware
-available; attach it to the workflow or function that should be guarded, and use its `workflow_functions` block to
-select which fields it evaluates. Attaching a middleware without a matching `workflow_functions` selection resolves to
-zero guarded fields, so the boundary appears configured but is not enforced. The `guardrails` block uses NAT/NeMo
-Guardrails configuration. Refer to `configs/config_web_default_guardrails.yml` for the full field-selection paths used by
-each boundary.
+available. For named functions, `workflow_functions` dynamically attaches the middleware and selects the fields it
+evaluates. For the workflow boundary, list the middleware under `workflow.middleware` and use its `workflow_functions`
+block to select fields. A middleware without a matching `workflow_functions` field selection resolves to zero guarded
+fields, so that boundary is not enforced. The `guardrails` block uses NAT/NeMo Guardrails configuration. Refer to
+`configs/config_web_default_guardrails.yml` for the complete attachment and field-selection example.
 
 ```yaml
 middleware:
@@ -84,30 +83,26 @@ middleware:
     guardrails:
       # NeMo Guardrails configuration.
 
-functions:
-  shallow_research_agent:
-    _type: shallow_research_agent
-    middleware:
-      - shallow_agent_guardrails
-
 workflow:
   _type: chat_deepresearcher_agent
   middleware:
     - workflow_guardrails
 ```
 
-Add the shallow attachment shown above to activate shallow enforcement in the reference profile. For async deep
-research, the worker does not invoke the registered NAT function directly, so the AI-Q runner reconstructs the function
-middleware chain and selects middleware whose `workflow_functions` includes `deep_research_agent`. You can also list
-middleware directly on a function, but do not configure the same middleware through both mechanisms for the same async
-worker function.
+The `shallow_agent_guardrails` target above activates shallow enforcement without a separate function-level middleware
+list. For async deep research, the worker does not invoke the registered NAT function directly, so the AI-Q runner
+reconstructs the function middleware chain and selects middleware whose `workflow_functions` includes
+`deep_research_agent`.
+
+Do not also list the same middleware under `functions.<agent>.middleware`. Configuring both attachment mechanisms for
+the same agent can evaluate the middleware twice on normal function calls, and the async deep-research runner rejects
+duplicate middleware names.
 
 ## Field Selection
 
-The `workflow_functions` entry names the function schema used for field selection and defines which string fields
+The `workflow_functions` entry names the function that dynamic middleware wraps and defines which string fields
 guardrails evaluate and can modify. The async deep-research runner also uses that target to select middleware around its
-direct worker call. For the normal shallow function path, `workflow_functions` alone is not an attachment; add the
-middleware name to `functions.shallow_research_agent.middleware`.
+direct worker call.
 
 For nested response objects, selected fields can be dotted paths:
 
@@ -158,7 +153,6 @@ Guardrails middleware is available at these AI-Q boundaries:
 - Shallow researcher input and output messages
 - Deep researcher input and output messages
 
-The reference profile actively guards the workflow and async deep researcher as described above. It does not enforce all
-three boundaries by default.
+The reference profile actively guards all three boundaries described above.
 
 For the complete YAML schema and general configuration conventions, refer to [Configuration Reference](./configuration-reference.md).
