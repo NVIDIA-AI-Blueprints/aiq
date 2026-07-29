@@ -278,8 +278,6 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
                 logger.warning("Deep research received data_sources with no matching tools")
 
-            validate_research_source_configuration(data_sources, "deep research", selected_tools)
-
             result = await active_agent.run(state)
             return result
         except asyncio.CancelledError:

@@ -30,6 +30,7 @@ from langchain_core.tools import BaseTool
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
+from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
@@ -249,6 +250,10 @@ class DeepResearcherAgent:
         """
         Execute deep research with multi-phase workflow.
         """
+        # Both the NAT registrar and async job runner call this interface, so source
+        # selection and availability must be enforced here rather than by either adapter.
+        validate_research_source_configuration(state.data_sources, "deep research", self.tools)
+
         prepared_files = self.deepagents_runtime.prepare_state_files(dict(state.files))
         if prepared_files != state.files:
             state = state.model_copy(update={"files": prepared_files})
@@ -273,7 +278,9 @@ class DeepResearcherAgent:
                 state.files,
                 final_report_tracker=final_report_tracker,
             )
-            if self.enable_citation_verification and not self.source_registry_middleware.has_sources():
+            # Capturing no sources is a research outcome failure even when citation
+            # rewriting is disabled; enable_citation_verification only controls the latter.
+            if not self.source_registry_middleware.has_sources():
                 from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
                 from aiq_agent.common.tool_validation import validate_tool_availability
 

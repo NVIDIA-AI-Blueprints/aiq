@@ -2493,6 +2493,56 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_source_tool_batch_size == 4
 
     @pytest.mark.asyncio
+    async def test_async_deep_researcher_rejects_empty_sources_when_citation_verification_disabled(self):
+        """The worker path enforces source selection even when citation verification is disabled."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMProvider
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+        from aiq_api.jobs.runner import _create_agent_instance
+        from aiq_api.jobs.runner import _run_agent
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        mock_llm = MagicMock()
+        provider = LLMProvider()
+        provider.set_default(mock_llm)
+        agent = _create_agent_instance(
+            agent_cls=DeepResearcherAgent,
+            llm_provider=provider,
+            llm=mock_llm,
+            tools=[],
+            fn_config=DeepResearchAgentConfig(
+                orchestrator_llm="llm",
+                enable_citation_verification=False,
+            ),
+            verbose=False,
+            callbacks=[],
+            job_id="async-job-123",
+        )
+
+        with patch.object(agent, "_build_orchestrator_agent") as build_orchestrator:
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await _run_agent(
+                    agent=agent,
+                    input_text="Research this",
+                    monitor=FakeMonitor(),
+                    data_sources=[],
+                )
+
+        assert agent.enable_citation_verification is False
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCES_SELECTED
+        build_orchestrator.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_run_agent_seeds_initial_files_when_state_supports_files(self):
         """Async runner seeds DeepAgents virtual filesystem files into stateful agents."""
         from typing import Annotated

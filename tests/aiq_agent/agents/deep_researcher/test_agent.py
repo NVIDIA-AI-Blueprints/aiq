@@ -1329,11 +1329,11 @@ class TestDeepResearcherAgent:
             assert mock_agent.ainvoke.await_count == 1
 
     @pytest.mark.parametrize(
-        ("data_sources", "expected_reason"),
+        ("data_sources", "enable_citation_verification", "expected_reason"),
         [
-            ([], EmptySourceRegistryReason.NO_SOURCES_SELECTED),
-            (None, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
-            (["web"], EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+            (None, True, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+            (["web"], True, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+            (None, False, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
         ],
     )
     @pytest.mark.asyncio
@@ -1342,6 +1342,7 @@ class TestDeepResearcherAgent:
         mock_llm_provider,
         real_tool,
         data_sources,
+        enable_citation_verification,
         expected_reason,
     ):
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
@@ -1360,7 +1361,11 @@ class TestDeepResearcherAgent:
                 return_value=committed_tracker(draft),
             ),
         ):
-            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            agent = DeepResearcherAgent(
+                llm_provider=mock_llm_provider,
+                tools=[real_tool],
+                enable_citation_verification=enable_citation_verification,
+            )
             state = DeepResearchAgentState(
                 messages=[HumanMessage(content="Test")],
                 data_sources=data_sources,
@@ -1372,20 +1377,11 @@ class TestDeepResearcherAgent:
         assert exc_info.value.reason is expected_reason
         assert exc_info.value.generated_answer == "Draft answer with "
 
-    @pytest.mark.parametrize(
-        ("data_sources", "expected_reason"),
-        [
-            ([], EmptySourceRegistryReason.NO_SOURCES_SELECTED),
-            (None, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
-        ],
-    )
     @pytest.mark.asyncio
     async def test_empty_registry_is_classified_without_committed_writer_output(
         self,
         mock_llm_provider,
         real_tool,
-        data_sources,
-        expected_reason,
     ):
         mock_agent = MagicMock()
         mock_agent.with_config = MagicMock(return_value=mock_agent)
@@ -1399,16 +1395,16 @@ class TestDeepResearcherAgent:
                 tools=[real_tool],
                 enable_citation_verification=True,
             )
-            state = DeepResearchAgentState(messages=[HumanMessage(content="Test")], data_sources=data_sources)
+            state = DeepResearchAgentState(messages=[HumanMessage(content="Test")], data_sources=None)
 
             with pytest.raises(EmptySourceRegistryError) as exc_info:
                 await agent.run(state)
 
-        assert exc_info.value.reason is expected_reason
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCE_RESULTS
         assert exc_info.value.generated_answer is None
 
     @pytest.mark.asyncio
-    async def test_disabled_citation_verification_still_requires_committed_writer_output(
+    async def test_disabled_citation_verification_rejects_empty_selection_before_orchestrator(
         self,
         mock_llm_provider,
         real_tool,
@@ -1417,7 +1413,10 @@ class TestDeepResearcherAgent:
         mock_agent.with_config = MagicMock(return_value=mock_agent)
         mock_agent.ainvoke = AsyncMock(return_value={"messages": [AIMessage(content="No report")], "files": {}})
 
-        with patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent):
+        with patch(
+            "aiq_agent.agents.deep_researcher.factory.create_deep_agent",
+            return_value=mock_agent,
+        ) as create_deep_agent:
             from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
             agent = DeepResearcherAgent(
@@ -1427,8 +1426,12 @@ class TestDeepResearcherAgent:
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Test")], data_sources=[])
 
-            with pytest.raises(RuntimeError, match="^writer_output_not_committed$"):
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
                 await agent.run(state)
+
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCES_SELECTED
+        create_deep_agent.assert_not_called()
+        mock_agent.ainvoke.assert_not_awaited()
 
     @pytest.mark.asyncio
     async def test_run_empty_result_messages(self, mock_llm_provider, real_tool):
