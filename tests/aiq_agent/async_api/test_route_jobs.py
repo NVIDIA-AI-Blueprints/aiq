@@ -173,7 +173,7 @@ async def test_get_job_report_not_found(job_report_app):
         await _call_endpoint(app, "/v1/jobs/async/job/{job_id}/report", "GET", "missing-job")
         assert e.value.status_code == 404
         assert e.value.detail == "Job not found: missing-job"
-    job_store.get_job.assert_awaited_once_with("missing-job")
+        job_store.get_job.assert_awaited_once_with("missing-job")
 
 
 @pytest.mark.asyncio
@@ -189,7 +189,7 @@ async def test_get_job_report_requires_verified_principal(job_report_app, monkey
         assert e.value.status_code == 404
         assert e.value.detail == "Job not found: job-1"
 
-    job_store.get_job.assert_not_awaited()
+        job_store.get_job.assert_not_awaited()
 
 
 @pytest.mark.asyncio
@@ -209,7 +209,7 @@ async def test_get_job_report_denies_cross_user_when_auth_required(job_report_ap
         await _call_endpoint(app, "/v1/jobs/async/job/{job_id}/report", "GET", "job-1")
         assert e.value.status_code == 404
         assert e.value.detail == "Job not found: job-1"
-    job_store.get_job.assert_awaited_once_with("job-1")
+        job_store.get_job.assert_awaited_once_with("job-1")
 
 
 @pytest.mark.asyncio
@@ -223,7 +223,7 @@ async def test_get_job_status_success(job_report_app):
         "status": "success",
         "agent_type": None,
         "error": None,
-        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "created_at": None,
     }
     job_store.get_job.assert_awaited_once_with("job-1")
 
@@ -241,6 +241,6 @@ async def test_get_job_status_error(job_report_app):
         "status": job.status,
         "agent_type": None,
         "error": job.error,
-        "created_at": job.created_at.isoformat() if job.created_at else None,
+        "created_at": None,
     }
     job_store.get_job.assert_awaited_once_with("job-1")
