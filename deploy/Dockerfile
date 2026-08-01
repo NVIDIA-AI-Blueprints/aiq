@@ -76,22 +76,27 @@ COPY deploy/entrypoint.py deploy/start_web.py ./deploy/
 # import-fail at runtime. Syncing with the dev group installs those deps from the
 # frozen lock (still pinned, no re-resolve). TODO(deploy): move the source
 # packages to a dedicated non-dev group to keep test-only tooling out of the image.
-RUN uv sync --frozen --extra s3
+RUN uv sync --frozen --extra pii --extra s3
 
-# Install workspace packages (without CLI for base)
-RUN uv pip install --no-deps -e . \
+# Install workspace packages (without CLI for base). The root install does not
+# need workspace source overrides because dependencies were synced above; avoid
+# parsing opt-in workspace groups whose source trees are intentionally absent.
+RUN uv pip install --no-sources --no-deps -e . \
     && uv pip install --no-deps -e ./sources/google_scholar_paper_search \
     && uv pip install --no-deps -e ./sources/tavily_web_search \
     && uv pip install --no-deps -e ./sources/exa_web_search \
+    && uv pip install --no-deps -e ./sources/nimble_web_search \
     && uv pip install --no-deps -e "./sources/knowledge_layer[all]" \
     && uv pip install --no-deps -e ./frontends/aiq_api \
     && uv pip install "psycopg[binary]>=3.0.0"
 
-RUN /app/.venv/bin/python -c "import aiq_api; import knowledge_layer; print('✓ Base packages installed')"
+RUN /app/.venv/bin/python -c \
+    "import asyncio; import aiq_api; import knowledge_layer; import presidio_analyzer; import presidio_anonymizer; import spacy; from nemoguardrails.library.sensitive_data_detection.actions import mask_sensitive_data; from nemoguardrails.rails.llm.config import RailsConfig; config = RailsConfig.from_content(yaml_content='rails:\n  config:\n    sensitive_data_detection:\n      output:\n        entities:\n          - EMAIL_ADDRESS\n'); assert spacy.util.is_package('en_core_web_lg'); assert asyncio.run(mask_sensitive_data(source='output', text='Contact customer@example.com', config=config)) == 'Contact <EMAIL_ADDRESS>'; print('✓ Base packages and PII runtime installed')"
 
+# Keep immutable application assets root-owned; only runtime data is writable by the service user.
 RUN chmod +x /app/deploy/start_web.py \
     && mkdir -p /app/data \
-    && chown -R 1000:1000 /app
+    && chown 1000:1000 /app/data
 
 # =============================================================================
 # Stage 2: Development (includes CLI)

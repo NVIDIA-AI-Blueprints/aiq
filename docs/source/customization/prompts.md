@@ -9,14 +9,17 @@ Each agent in the AI-Q blueprint uses [Jinja2](https://jinja.palletsprojects.com
 
 ## Prompt Template Inventory
 
-| Template | Agent | Purpose |
-|----------|-------|---------|
+| Template | Consumer | Purpose |
+|----------|----------|---------|
 | `src/aiq_agent/agents/chat_researcher/prompts/intent_classification.j2` | Intent Classifier | Classifies queries as meta or research, determines depth (shallow/deep), generates meta responses |
 | `src/aiq_agent/agents/shallow_researcher/prompts/researcher.j2` | Shallow Researcher | Defines the research persona, tool usage strategy, source hierarchy, and citation rules |
-| `src/aiq_agent/agents/deep_researcher/prompts/orchestrator.j2` | Deep Research Orchestrator | Coordinates the multi-phase research workflow, delegates to sub-agents, writes the final report |
-| `src/aiq_agent/agents/deep_researcher/prompts/planner.j2` | Deep Research Planner | Generates evidence-grounded research plans with TOC structure and search queries |
-| `src/aiq_agent/agents/deep_researcher/prompts/researcher.j2` | Deep Research Researcher | Gathers and synthesizes information from search tools with inline citations |
-| `src/aiq_agent/agents/clarifier/prompts/research_clarification.j2` | Clarifier | Determines whether a research request needs clarification, asks focused follow-up questions |
+| `src/aiq_agent/agents/deep_researcher/prompts/orchestrator.j2` | Deep Research Orchestrator | Coordinates ordered routing, planning, batched research, and writer delegation; it does not call source tools directly |
+| `src/aiq_agent/agents/deep_researcher/prompts/source_router.j2` | Source Router | Selects an advisory route from the request-allowed source catalog before planning |
+| `src/aiq_agent/agents/deep_researcher/prompts/planner.j2` | Deep Research Planner | Grounds and returns a structured `ResearchPlan` with independent `ResearchQuery` objects |
+| `src/aiq_agent/agents/deep_researcher/prompts/researcher.j2` | Researcher Worker | Executes one `ResearchQuery` and returns structured `ResearchNotes` using preferred and fallback tools as prompt guidance |
+| `src/aiq_agent/agents/deep_researcher/prompts/writer.j2` | Report Writer | Synthesizes the plan, research notes, and captured sources into `/shared/output.md` |
+| `src/aiq_agent/agents/deep_researcher/prompts/source_registry.j2` | Source Registry Middleware | Renders the captured source list exposed to the writer |
+| `src/aiq_agent/agents/clarifier/prompts/research_clarification.j2` | Clarifier | Determines whether a request needs clarification and asks focused follow-up questions; it does not create or approve a plan |
 
 ## Template Directory Structure
 
@@ -30,8 +33,11 @@ src/aiq_agent/agents/
     deep_researcher/
         prompts/
             orchestrator.j2            # Orchestrator prompt
+            source_router.j2            # Advisory source-routing prompt
             planner.j2                 # Research planner prompt
-            researcher.j2              # Sub-researcher prompt
+            researcher.j2              # Researcher-worker prompt
+            writer.j2                  # Final synthesis prompt
+            source_registry.j2         # Captured-source list fragment
     clarifier/
         prompts/
             research_clarification.j2  # Clarification prompt
@@ -40,7 +46,7 @@ src/aiq_agent/agents/
             intent_classification.j2   # Routing prompt
 ```
 
-The naming convention follows the template's role: `researcher.j2`, `orchestrator.j2`, `planner.j2`.
+The naming convention follows each runtime role. `source_registry.j2` is a middleware-rendered fragment rather than an agent system prompt.
 
 ## How Templates Are Loaded
 
@@ -97,6 +103,7 @@ Each template receives different variables depending on the agent context.
 | `user_info` | `dict` or `None` | User context with `name` and `email` keys |
 | `tools` | `list[dict]` | Available tools (each has `name` and `description` keys) |
 | `query` | `str` | The user's query text |
+| `active_report_available` | `bool` | Whether the conversation has a report that can be edited or extended |
 
 ### Shallow Researcher
 
@@ -114,22 +121,54 @@ Each template receives different variables depending on the agent context.
 | `current_datetime` | `str` | Current date and time string |
 | `clarifier_result` | `str` or `None` | Clarification context from the clarifier agent |
 | `available_documents` | `list[dict]` or `None` | Uploaded documents with `file_name` and `summary` keys |
-| `tools` | `list[dict]` | Available tools (each has `name` and `description` keys) |
+| `user_info` | `dict` or `None` | Authenticated user context |
+| `tools` | `list[dict]` | Orchestrator-callable helper tools and `run_research_batch`; source tools are intentionally excluded |
+| `enable_source_router` | `bool` | Whether to run the advisory source-router stage |
+| `max_research_concurrency` | `int` | Maximum `ResearchQuery` objects accepted in one research batch |
+| `parent_report_context_available` | `bool` | Whether mounted parent-report files are available, enabling delta planning and revision instructions |
+| `execution_enabled` | `bool` | Whether a sandbox exposes execution tools |
+| `sandbox_workdir`, `sandbox_artifact_dir` | `str` | Per-job sandbox paths used when execution is enabled |
+
+### Deep Research Source Router
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `current_datetime` | `str` | Current date and time string |
+| `user_info` | `dict` or `None` | Authenticated user context |
+| `clarifier_result` | `str` or `None` | Clarification context used to choose an advisory route |
+| `available_documents` | `list[dict]` or `None` | Uploaded documents available as routing context |
 
 ### Deep Research Planner
 
 | Variable | Type | Description |
 |----------|------|-------------|
-| `tools` | `list[dict]` | Available search tools (each has `name` and `description` keys) |
+| `current_datetime` | `str` | Current date and time string |
+| `user_info` | `dict` or `None` | Authenticated user context |
+| `tools` | `list[dict]` | Request-filtered source tools available for plan grounding |
 | `available_documents` | `list[dict]` or `None` | Uploaded documents with `file_name` and `summary` keys |
+| `enable_source_router` | `bool` | Whether `/shared/source_routing.json` may provide advisory guidance |
+| `max_research_concurrency` | `int` | Preferred upper bound for independent queries in one batch |
 
 ### Deep Research Researcher
 
 | Variable | Type | Description |
 |----------|------|-------------|
 | `current_datetime` | `str` | Current date and time string |
-| `tools` | `list[dict]` | Available search tools (each has `name` and `description` keys) |
+| `user_info` | `dict` or `None` | Authenticated user context |
+| `tools` | `list[dict]` | Full request-filtered source-tool set available to each worker; plan preferences do not narrow this set |
 | `available_documents` | `list[dict]` or `None` | Uploaded documents with `file_name` and `summary` keys |
+| `sandbox_workdir`, `sandbox_artifact_dir` | `str` | Per-job sandbox paths available to skills when configured |
+
+### Deep Research Writer
+
+| Variable | Type | Description |
+|----------|------|-------------|
+| `current_datetime` | `str` | Current date and time string |
+| `user_info` | `dict` or `None` | Authenticated user context |
+| `parent_report_context_available` | `bool` | Whether mounted parent-report files are available for standalone revision synthesis with delta evidence |
+| `sandbox_workdir`, `sandbox_artifact_dir` | `str` | Per-job sandbox paths for generated report artifacts |
+
+The writer reads the persisted plan and research notes from `/shared/` and retrieves captured sources through `get_verified_sources`; those inputs are runtime files and tools rather than Jinja variables. The separate `source_registry.j2` fragment receives a `sources` list from `SourceRegistryMiddleware`.
 
 ### Research Clarification
 
@@ -137,15 +176,9 @@ Each template receives different variables depending on the agent context.
 |----------|------|-------------|
 | `clarifier_result` | `str` or `None` | Previous clarification context (for multi-turn clarification) |
 | `available_documents` | `list[dict]` or `None` | Uploaded documents with `file_name` and `summary` keys |
+| `connected_sources` | `list[dict]` | Connected data sources that the later research phase can access |
 | `tools` | `list[dict]` | Available tools (each has `name` and `description` keys) |
 | `tool_names` | `list[str]` | List of tool name strings extracted from `tools` |
-
-### Plan Generation
-
-| Variable | Type | Description |
-|----------|------|-------------|
-| `clarifier_context` | `str` or `None` | Context from the clarification dialog |
-| `feedback_history` | `list[str]` or `None` | Previous plan feedback from the user (for iterative plan refinement) |
 
 ## Modifying Prompts
 
@@ -171,9 +204,12 @@ Each template has well-defined sections you can target:
 
 - **Intent Classifier** (`intent_classification.j2`) — Classification rules, depth determination, meta response style, output JSON schema
 - **Shallow Researcher** (`researcher.j2`) — Source hierarchy, research rules, citation format, response formatting
-- **Deep Research Orchestrator** (`orchestrator.j2`) — Workflow steps, report length targets, citation guidelines, synthesis guidelines
-- **Deep Research Planner** (`planner.j2`) — TOC structure, query generation guidelines, research cycle instructions, output JSON schema
-- **Deep Research Researcher** (`researcher.j2`) — Research protocol, source prioritization, tool call budget, citation format
+- **Deep Research Orchestrator** (`orchestrator.j2`) — Ordered stage handoffs, bounded batch dispatch, retry rules, and writer delegation
+- **Source Router** (`source_router.j2`) — Advisory source-domain selection and planner guidance
+- **Deep Research Planner** (`planner.j2`) — Answer-shape analysis, plan grounding, and structured query generation
+- **Researcher Worker** (`researcher.j2`) — Single-query research protocol, source preferences, tool-call batching, and structured notes
+- **Report Writer** (`writer.j2`) — Final synthesis, source use, citation format, and `/shared/output.md` contract
+- **Source Registry** (`source_registry.j2`) — Formatting for the captured-source list injected by middleware
 - **Clarifier** (`research_clarification.j2`) — What counts as "sufficiently specified", question style, multi-turn policy
 
 ### Creating a New Template
@@ -235,15 +271,14 @@ class MyAgent:
 
 ### Multi-Prompt Agents
 
-Some agents use multiple prompts for different roles. The deep researcher loads three separate templates:
+Some agents use multiple prompts for different roles. The deep researcher loads five agent templates:
 
 ```python
-self.orchestrator_prompt = load_prompt(AGENT_DIR / "prompts", "orchestrator")
-self.planner_prompt = load_prompt(AGENT_DIR / "prompts", "planner")
-self.researcher_prompt = load_prompt(AGENT_DIR / "prompts", "researcher")
+prompt_names = ["planner", "researcher", "orchestrator", "writer", "source_router"]
+prompts = {name: load_prompt(AGENT_DIR / "prompts", name) for name in prompt_names}
 ```
 
-Each prompt is rendered with different context variables. This enables role specialization, independent tuning (through the GA optimizer), and token efficiency.
+`source_registry.j2` is loaded separately by source-registry middleware. Each prompt is rendered with role-specific context, enabling independent model configuration and bounded tool access.
 
 ## Jinja2 Patterns
 

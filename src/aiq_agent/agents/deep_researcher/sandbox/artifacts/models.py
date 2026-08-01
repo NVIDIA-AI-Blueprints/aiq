@@ -84,24 +84,30 @@ class Artifact(BaseModel):
     status: ArtifactStatus = Field(default=ArtifactStatus.PENDING)
 
     def to_sse_payload(self, content_url: str) -> dict[str, object]:
-        """Build the richer ``artifact`` SSE payload for live UI updates.
+        """Build the canonical ``artifact.update`` SSE payload for live UI updates.
 
         Args:
             content_url: Authenticated URL where the bytes can be fetched.
 
         Returns:
-            A JSON-serializable payload (no bytes) matching the design's artifact event.
+            A JSON-serializable payload (no bytes) matching the API/UI event contract.
         """
         return {
-            "type": "artifact",
-            "artifact_id": self.artifact_id,
-            "kind": self.kind.value,
-            "filename": self.filename,
-            "mime_type": self.mime_type,
-            "size_bytes": self.size_bytes,
-            "sha256": self.sha256,
-            "title": self.title,
-            "caption": self.caption,
-            "inline": self.inline,
-            "content_url": content_url,
+            "type": "artifact.update",
+            "name": self.filename,
+            "data": {
+                "type": "file",
+                "url": content_url,
+                "content_url": content_url,
+                "file_path": self.filename,
+                "artifact_id": self.artifact_id,
+                "job_id": self.job_id,
+                "kind": self.kind.value,
+                "mime_type": self.mime_type,
+                "size_bytes": self.size_bytes,
+                "sha256": self.sha256,
+                "title": self.title,
+                "caption": self.caption,
+                "inline": self.inline,
+            },
         }

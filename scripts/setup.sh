@@ -3,6 +3,39 @@
 
 set -euo pipefail
 
+UV_MIN_VERSION="0.11.25"
+
+version_at_least() {
+    local current="$1"
+    local minimum="$2"
+    local current_major current_minor current_patch
+    local minimum_major minimum_minor minimum_patch
+
+    if [[ ! "${current}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+        return 1
+    fi
+    current_major="${BASH_REMATCH[1]}"
+    current_minor="${BASH_REMATCH[2]}"
+    current_patch="${BASH_REMATCH[3]}"
+
+    if [[ ! "${minimum}" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+        return 1
+    fi
+    minimum_major="${BASH_REMATCH[1]}"
+    minimum_minor="${BASH_REMATCH[2]}"
+    minimum_patch="${BASH_REMATCH[3]}"
+
+    if (( current_major != minimum_major )); then
+        (( current_major > minimum_major ))
+        return
+    fi
+    if (( current_minor != minimum_minor )); then
+        (( current_minor > minimum_minor ))
+        return
+    fi
+    (( current_patch >= minimum_patch ))
+}
+
 echo "=== AI-Q Blueprint Development Setup ==="
 echo ""
 
@@ -29,6 +62,16 @@ if [ -z "${UV_BIN}" ]; then
     exit 1
 fi
 
+UV_CURRENT_VERSION="$("${UV_BIN}" --version)"
+UV_CURRENT_VERSION="${UV_CURRENT_VERSION#uv }"
+UV_CURRENT_VERSION="${UV_CURRENT_VERSION%% *}"
+if ! version_at_least "${UV_CURRENT_VERSION}" "${UV_MIN_VERSION}"; then
+    echo "Error: uv ${UV_MIN_VERSION} or newer is required; found ${UV_CURRENT_VERSION} at ${UV_BIN}."
+    echo "The MCP project uses scoped dependency overrides introduced in uv ${UV_MIN_VERSION}."
+    echo "Upgrade uv and re-run setup (CI and the MCP image use uv 0.11.26)."
+    exit 1
+fi
+
 # Create virtual environment
 echo ""
 echo "Creating virtual environment..."
@@ -43,8 +86,15 @@ source .venv/bin/activate
 # Install core framework with dev dependencies (uses uv.lock to pin versions)
 echo ""
 echo "Installing core framework with dev dependencies..."
-"${UV_BIN}" sync --dev
+"${UV_BIN}" sync --group dev
 echo "Core framework installed"
+
+# Install the MCP server in its isolated project environment. The MCP lockfile
+# intentionally carries a different cryptography policy from the root project.
+echo ""
+echo "Installing MCP server with dev dependencies..."
+"${UV_BIN}" sync --project mcp --extra dev
+echo "MCP server installed in mcp/.venv"
 
 # Install frontends (--no-deps: dependencies already resolved by uv sync)
 echo ""
@@ -66,6 +116,8 @@ echo ""
 echo "Installing data sources..."
 "${UV_BIN}" pip install -e ./sources/tavily_web_search
 "${UV_BIN}" pip install -e ./sources/exa_web_search
+"${UV_BIN}" pip install -e ./sources/nimble_web_search
+"${UV_BIN}" pip install -e ./sources/you_com
 "${UV_BIN}" pip install -e ./sources/google_scholar_paper_search
 "${UV_BIN}" pip install -e "./sources/knowledge_layer[llamaindex,foundational_rag]"
 echo "Data Sources installed"
@@ -116,4 +168,6 @@ echo "   - CLI mode:        ./scripts/start_cli.sh"
 echo "   - Skill backend:   ./scripts/start_as_skill.sh"
 echo "   - Server mode:     ./scripts/start_server_in_debug_mode.sh"
 echo "   - End-to-End (UI): ./scripts/start_e2e.sh"
+echo "4. Run the MCP server from its isolated environment:"
+echo "   uv run --project mcp aiq-mcp-server"
 echo ""

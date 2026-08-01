@@ -11,7 +11,7 @@ AI-Q includes portable Agent Skills for coding harnesses that support skill-styl
 
 AI-Q ships two distinct skill sets, separated by audience. This page documents
 the **API-consumer** skills. The maintainer skills are documented in their own
-[README](../../../.agents/skills/README.md).
+[README](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/.agents/skills/README.md).
 
 | | API-consumer skills | Maintainer skills |
 | :-- | :-- | :-- |
@@ -65,6 +65,24 @@ For local non-container use, the deploy skill should prefer the backend-only Age
 ```
 
 This starts the AI-Q API backend required by `aiq-research` without starting the browser UI.
+
+## Report Follow-Up and Portable Outputs
+
+The `aiq-research` helper exposes the completed-report and durable-artifact operations as
+public commands:
+
+```bash
+python3 $SKILL_DIR/scripts/aiq.py report_edit <JOB_ID> "<EDIT_INSTRUCTIONS>"
+python3 $SKILL_DIR/scripts/aiq.py report <JOB_ID> --out-dir ./my-report
+python3 $SKILL_DIR/scripts/aiq.py artifacts <JOB_ID> --download-dir ./aiq-artifacts
+```
+
+`report_edit` submits a child job for a cosmetic rewrite and polls it to completion; the
+parent report remains unchanged. `report --out-dir` writes `report.md` plus an `artifacts/`
+directory, downloads the job's durable artifacts, and rewrites embedded `artifact://`
+image references to local files. `artifacts --download-dir` downloads the artifacts into
+the requested directory and prints their local paths; omit `--download-dir` to list the
+artifact metadata without downloading bytes.
 
 ## Example Invocations
 
@@ -124,7 +142,7 @@ ln -s ../../skills/aiq-research .claude/skills/aiq-research
 ```
 
 The maintainer-skill symlinks are managed alongside the maintainer skill set;
-see the [maintainer skills README](../../../.agents/skills/README.md) for how
+refer to the [maintainer skills README](https://github.com/NVIDIA-AI-Blueprints/aiq/blob/develop/.agents/skills/README.md) for how
 those are added.
 
 For a user-level install:

@@ -12,6 +12,7 @@
  */
 
 import { apiConfig } from './config'
+import { artifactContentPath } from '@/shared/utils/artifact-url'
 
 // ============================================================
 // Types
@@ -149,6 +150,21 @@ export interface TodoItem {
   status: 'pending' | 'in_progress' | 'completed' | 'cancelled'
 }
 
+/** File update emitted by artifact.update. Durable generated files carry metadata, not bytes. */
+export interface FileArtifactUpdate {
+  filename: string
+  content?: string
+  artifactId?: string
+  contentUrl?: string
+  kind?: string
+  mimeType?: string
+  sizeBytes?: number
+  sha256?: string
+  title?: string
+  caption?: string
+  inline?: boolean
+}
+
 /** artifact.update event */
 export interface ArtifactUpdateEvent extends DeepResearchSSEEvent {
   event: 'artifact.update'
@@ -157,8 +173,19 @@ export interface ArtifactUpdateEvent extends DeepResearchSSEEvent {
     timestamp: string
     data: {
       type: ArtifactType
-      content: string | TodoItem[]
+      content?: string | TodoItem[]
       url?: string // For citation_source and citation_use types
+      content_url?: string
+      file_path?: string
+      artifact_id?: string
+      job_id?: string
+      kind?: string
+      mime_type?: string
+      size_bytes?: number
+      sha256?: string
+      title?: string
+      caption?: string
+      inline?: boolean
     }
     metadata?: {
       workflow?: string
@@ -208,7 +235,7 @@ export interface DeepResearchCallbacks {
   /** Called on artifact updates */
   onTodoUpdate?: (todos: TodoItem[], workflow?: string) => void
   onCitationUpdate?: (url: string, content: string, isCited?: boolean) => void
-  onFileUpdate?: (filename: string, content: string) => void
+  onFileUpdate?: (file: FileArtifactUpdate) => void
   onOutputUpdate?: (content: string, outputCategory?: string, workflow?: string) => void
   /** Called on job heartbeat (confirms job is alive during long operations) */
   onHeartbeat?: (uptimeSeconds: number) => void
@@ -484,16 +511,13 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
 
       case 'artifact.update': {
         // artifact.update has nested structure: { id, timestamp, data: { type, content, url?, output_category? }, metadata?: { workflow } }
-        const artifactWrapper = rawData as {
-          data?: { type: ArtifactType; content: string | TodoItem[]; url?: string; output_category?: string }
-          type?: ArtifactType
-          content?: string | TodoItem[]
-          url?: string
-          output_category?: string
-          metadata?: { workflow?: string }
-        }
+        // Reuse the exported ArtifactUpdateEvent data contract (durable metadata fields
+        // included) instead of re-declaring a narrower shape; `path`/`output_category` are
+        // the two extra keys this parser also reads.
+        type ArtifactData = ArtifactUpdateEvent['data']['data'] & { path?: string; output_category?: string }
+        const artifactWrapper = rawData as { data?: ArtifactData; metadata?: { workflow?: string } } & Partial<ArtifactData>
         // Handle both nested (data.type) and flat (type) structures
-        const artifactData = artifactWrapper.data || artifactWrapper
+        const artifactData = (artifactWrapper.data || artifactWrapper) as ArtifactData
         const artifactWorkflow = artifactWrapper.metadata?.workflow
 
         switch (artifactData.type) {
@@ -509,11 +533,26 @@ export const createDeepResearchClient = (options: DeepResearchStreamOptions): De
             callbacks.onCitationUpdate?.(artifactData.url || '', artifactData.content as string, true)
             break
           case 'file': {
-            // file artifacts are written during research — extract filename from path
-            const raw = artifactData as Record<string, unknown>
-            const filePath = (raw.file_path || raw.path || artifactData.url || 'unknown') as string
-            const fileName = filePath.split('/').pop() || filePath
-            callbacks.onFileUpdate?.(fileName, artifactData.content as string)
+            // Generated artifacts carry durable metadata; legacy text-file events carry content.
+            const artifactId = artifactData.artifact_id
+            // Fall back to artifactId (not a shared 'unknown') when no path/url is present, so two
+            // distinct pathless artifacts don't collapse onto one filename key downstream.
+            const filePath = artifactData.file_path || artifactData.path || artifactData.url
+            const fileName = filePath ? filePath.split('/').pop() || filePath : artifactId || 'unknown'
+            callbacks.onFileUpdate?.({
+              filename: fileName,
+              // content is typed as string | TodoItem[]; only a string is a real file body.
+              content: typeof artifactData.content === 'string' ? artifactData.content : undefined,
+              artifactId,
+              contentUrl: artifactId ? artifactContentPath(jobId, artifactId) : artifactData.content_url || artifactData.url,
+              kind: artifactData.kind,
+              mimeType: artifactData.mime_type,
+              sizeBytes: artifactData.size_bytes,
+              sha256: artifactData.sha256,
+              title: artifactData.title,
+              caption: artifactData.caption,
+              inline: artifactData.inline,
+            })
             break
           }
           case 'output':

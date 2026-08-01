@@ -22,6 +22,7 @@ lazy creation, idempotency-gated retry, cleanup) is under test.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 from unittest.mock import MagicMock
 
@@ -250,24 +251,41 @@ class TestEntryPointDiscovery:
         finally:
             registry._SANDBOX_PROVIDERS.pop("ep-fake", None)
 
-    def test_broken_entry_point_is_skipped(self, monkeypatch: Any) -> None:
+    def test_broken_entry_point_is_skipped(self, monkeypatch: Any, caplog: pytest.LogCaptureFixture) -> None:
         from aiq_agent.agents.deep_researcher.sandbox import registry
 
         class _BrokenEntryPoint:
             name = "broken"
 
             def load(self) -> type[SandboxProvider]:
-                raise RuntimeError("boom")
+                raise RuntimeError("credential=do-not-log")
 
         monkeypatch.setattr(registry, "_entry_points_loaded", False)
         monkeypatch.setattr("importlib.metadata.entry_points", lambda *, group: [_BrokenEntryPoint()])
         # Must not raise; built-in resolution stays intact.
-        registry._load_entry_point_providers()
+        with caplog.at_level(logging.WARNING):
+            registry._load_entry_point_providers()
         assert "broken" not in registry._SANDBOX_PROVIDERS
         assert "modal" in registered_providers()
+        assert "RuntimeError" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
 
 
 class TestProviderLifecycle:
+    def test_event_emitter_failure_is_sanitized(self, caplog: pytest.LogCaptureFixture) -> None:
+        provider = _RegisteredFake(_fake_config(), "job-1")
+
+        def fail(_event: dict[str, object]) -> None:
+            raise RuntimeError("credential=do-not-log")
+
+        provider.set_event_emitter(fail)
+        with caplog.at_level(logging.WARNING):
+            provider._emit_event({"type": "test"})
+
+        assert "event_emit_failed" in caplog.text
+        assert "RuntimeError" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+
     def test_session_created_lazily(self) -> None:
         session = MagicMock()
         provider = _ScriptedProvider(_fake_config(), "job-1", sessions=[session])
@@ -325,6 +343,19 @@ class TestProviderLifecycle:
         provider.close()
         session.close.assert_called_once()
         assert provider._session is None
+
+    def test_session_close_failure_is_sanitized(self, caplog: pytest.LogCaptureFixture) -> None:
+        session = MagicMock()
+        session.close.side_effect = RuntimeError("credential=do-not-log")
+        provider = _ScriptedProvider(_fake_config(), "job-1", sessions=[session])
+        provider._session = session
+
+        with caplog.at_level(logging.WARNING):
+            provider.close()
+
+        assert provider.cleanup_failure_reason_codes == ("session_close_failed",)
+        assert "RuntimeError" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
 
     def test_terminate_releases_session_and_blocks_further_ops(self) -> None:
         session = MagicMock()
@@ -421,11 +452,15 @@ class TestWorkspacePreparation:
         assert "/sandbox/job-xyz" in mkdir_cmd
         assert "/sandbox/job-xyz/aiq-artifacts" in mkdir_cmd
 
-    def test_workspace_prep_failure_does_not_abort_the_call(self) -> None:
+    def test_workspace_prep_failure_does_not_abort_the_call(self, caplog: pytest.LogCaptureFixture) -> None:
         # Best-effort: a mkdir failure is swallowed so it cannot break session creation;
         # a real filesystem problem resurfaces on the first actual write.
         session = MagicMock()
-        session.execute.side_effect = [RuntimeError("mkdir boom"), "ok"]
+        session.execute.side_effect = [RuntimeError("credential=do-not-log"), "ok"]
         provider = _WorkspaceProvider(_fake_config(workdir="/sandbox"), "job-1", session)
 
-        assert provider.execute("echo hi") == "ok"
+        with caplog.at_level(logging.WARNING):
+            assert provider.execute("echo hi") == "ok"
+
+        assert "workspace_prepare_failed" in caplog.text
+        assert "credential=do-not-log" not in caplog.text

@@ -16,13 +16,20 @@
 """Custom middleware for the deep research agent."""
 
 import asyncio
+import hashlib
 import json
 import logging
+import posixpath
+import re
+import threading
 from pathlib import Path
+from pathlib import PurePosixPath
 
 from langchain.agents.middleware import AgentMiddleware
+from langchain.agents.middleware import hook_config
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.messages import AIMessage
+from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 
@@ -32,6 +39,9 @@ from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
+
+from .resource_limits import DeepResearchResourceLimits
+from .resource_limits import StateBudgetLedger
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +53,90 @@ _SOURCE_ROUTING_PATH = "/shared/source_routing.json"
 # route-local key. The guard reads raw state, so it must accept both forms or it
 # blocks the orchestrator forever on sandboxed runs.
 _SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
+FINAL_REPORT_PATH = "/shared/output.md"
+FINAL_REPORT_STATE_PATHS = (FINAL_REPORT_PATH, "/output.md")
+_UNRESOLVED_SANDBOX_PATH_PATTERN = re.compile(
+    r"<\s*sandbox_(?:artifact_dir|workdir)\s*>|\{\{\s*sandbox_(?:artifact_dir|workdir)\s*\}\}"
+)
+
+
+def _normalized_virtual_path(path: object) -> str | None:
+    """Return a canonical virtual path without weakening backend validation."""
+    if not isinstance(path, str) or not path:
+        return None
+    normalized = posixpath.normpath(path.replace("\\", "/"))
+    return normalized if normalized.startswith("/") else f"/{normalized}"
+
+
+def _tool_file_path(tool_call: object) -> str | None:
+    """Read and normalize a filesystem tool's target path."""
+    if not isinstance(tool_call, dict):
+        return None
+    args = tool_call.get("args")
+    if not isinstance(args, dict):
+        return None
+    return _normalized_virtual_path(args.get("file_path", args.get("path")))
+
+
+def _entry_text(entry: object) -> str | None:
+    """Read exact text from a DeepAgents state-file entry."""
+    if isinstance(entry, dict):
+        entry = entry.get("content")
+    if isinstance(entry, bytes):
+        try:
+            return entry.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(entry, str):
+        return entry
+    return None
+
+
+def _tool_result_failed(result: object) -> bool:
+    """Return whether a filesystem tool result reports an error."""
+    status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+    return status == "error"
+
+
+class FinalReportCommitTracker:
+    """Run-local proof of the writer's most recent successful report mutation."""
+
+    def __init__(self) -> None:
+        self._digest: str | None = None
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _digest_text(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def record(self, content: str) -> str:
+        """Record the exact UTF-8 digest after a successful writer mutation."""
+        digest = self._digest_text(content)
+        with self._lock:
+            self._digest = digest
+        return digest
+
+    @property
+    def digest(self) -> str | None:
+        """Return the most recently committed digest for this run."""
+        with self._lock:
+            return self._digest
+
+    def committed_text(
+        self,
+        files: object,
+        *,
+        paths: tuple[str, ...] = FINAL_REPORT_STATE_PATHS,
+    ) -> str | None:
+        """Return the non-empty state file matching the writer's exact digest."""
+        digest = self.digest
+        if digest is None or not isinstance(files, dict):
+            return None
+        for path in paths:
+            content = _entry_text(files.get(path))
+            if content is not None and content.strip() and self._digest_text(content) == digest:
+                return content
+        return None
 
 
 class SourceRoutingGuardMiddleware(AgentMiddleware):
@@ -114,6 +208,345 @@ class EmptyContentFixMiddleware(AgentMiddleware):
                 fixed_messages.append(msg)
 
         return await handler(request.override(messages=fixed_messages))
+
+
+class ExecuteTimeoutClampMiddleware(AgentMiddleware):
+    """Clamp the sandbox ``execute`` tool's per-call timeout to a configured ceiling.
+
+    The deepagents ``execute`` tool forwards a model-supplied ``timeout`` straight to the
+    sandbox backend, and providers cap it (OpenShell rejects an ``exec`` timeout above the
+    gateway maximum). LLMs routinely pass an oversized value -- e.g. milliseconds, where the
+    backend expects seconds, or an arbitrarily large round number -- so an unclamped timeout
+    makes every ``execute`` fail with a "timeout exceeds maximum" error and no sandbox code
+    ever runs. Bound the argument to the configured sandbox lifetime (seconds).
+
+    This guards a different boundary than ``SandboxProvider._clamp_timeout`` in
+    ``sandbox/base.py``: that clamp covers AI-Q's own provider-mediated calls (e.g. workspace
+    prep), whereas the deepagents ``execute`` tool reaches the backend without passing through
+    it, so the untrusted agent argument must be sanitized here at the tool-call boundary.
+    """
+
+    def __init__(self, *, max_timeout_seconds: int) -> None:
+        """Store the ceiling (in seconds) that a single ``execute`` call may request."""
+        self.max_timeout_seconds = max(1, int(max_timeout_seconds))
+
+    async def awrap_tool_call(self, request, handler):
+        """Clamp an oversized ``timeout`` argument on ``execute`` tool calls."""
+        tool_call = request.tool_call
+        if tool_call.get("name") != "execute":
+            return await handler(request)
+        args = tool_call.get("args")
+        if not isinstance(args, dict) or not isinstance(args.get("timeout"), (int, float)):
+            return await handler(request)
+        requested = int(args["timeout"])
+        # A non-positive value means "no timeout" to the backend; leave it alone.
+        if requested <= 0 or requested <= self.max_timeout_seconds:
+            return await handler(request)
+        logger.warning(
+            "Clamping execute timeout %ss -> %ss (agent-supplied value exceeds the sandbox ceiling)",
+            requested,
+            self.max_timeout_seconds,
+        )
+        modified = {**tool_call, "args": {**args, "timeout": self.max_timeout_seconds}}
+        return await handler(request.override(tool_call=modified))
+
+
+class FilesystemToolCallGuardMiddleware(AgentMiddleware):
+    """Normalize safe filesystem aliases and reject unresolved sandbox path templates."""
+
+    async def awrap_tool_call(self, request, handler):
+        """Repair ``read_file(path=...)`` and fail before executing placeholder paths."""
+        tool_call = request.tool_call
+        if not isinstance(tool_call, dict):
+            return await handler(request)
+        args = tool_call.get("args")
+        if not isinstance(args, dict):
+            return await handler(request)
+
+        if tool_call.get("name") == "read_file" and isinstance(args.get("path"), str):
+            normalized_args = {key: value for key, value in args.items() if key != "path"}
+            normalized_args.setdefault("file_path", args["path"])
+            modified = {**tool_call, "args": normalized_args}
+            return await handler(request.override(tool_call=modified))
+
+        if tool_call.get("name") == "execute" and isinstance(args.get("command"), str):
+            command = args["command"]
+            unresolved = _UNRESOLVED_SANDBOX_PATH_PATTERN.search(command)
+            if unresolved is not None:
+                return ToolMessage(
+                    content=(
+                        f"Command not executed: unresolved sandbox path placeholder {unresolved.group(0)}. "
+                        "Use the exact sandbox_workdir or sandbox_artifact_dir path from your instructions."
+                    ),
+                    tool_call_id=tool_call.get("id", "filesystem-tool-call-guard"),
+                    name="execute",
+                    status="error",
+                )
+
+        return await handler(request)
+
+
+class FinalReportOwnershipGuardMiddleware(AgentMiddleware):
+    """Reserve final-report mutation for the writer role."""
+
+    async def awrap_tool_call(self, request, handler):
+        """Reject non-writer mutations of either final-report state path."""
+        tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
+        if tool_call.get("name") not in {"write_file", "edit_file"}:
+            return await handler(request)
+        if _tool_file_path(tool_call) not in FINAL_REPORT_STATE_PATHS:
+            return await handler(request)
+        return ToolMessage(
+            content=(
+                "final_report_writer_only: only writer-agent may write or edit "
+                f"{FINAL_REPORT_PATH}; hand off evidence through the normal research workflow."
+            ),
+            tool_call_id=tool_call.get("id", "final-report-ownership"),
+            name=tool_call.get("name"),
+            status="error",
+        )
+
+
+class StateMutationGuardMiddleware(AgentMiddleware):
+    """Restrict model-issued mutations of the StateBackend filesystem by role."""
+
+    def __init__(self, *, writer: bool, sandbox_enabled: bool) -> None:
+        self.writer = writer
+        self.sandbox_enabled = sandbox_enabled
+
+    def _is_state_backed(self, path: str | None) -> bool:
+        if path is None:
+            return False
+        return not self.sandbox_enabled or path == "/shared" or path.startswith("/shared/")
+
+    @staticmethod
+    def _tool_error(tool_call: dict[str, object], reason: str, guidance: str) -> ToolMessage:
+        return ToolMessage(
+            content=f"{reason}: {guidance}",
+            tool_call_id=tool_call.get("id", "state-mutation-guard"),
+            name=tool_call.get("name"),
+            status="error",
+        )
+
+    def _rejection(self, request: object) -> ToolMessage | None:
+        """Return a denial for a guarded mutation, otherwise allow delegation."""
+        tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
+        tool_name = tool_call.get("name")
+        if tool_name not in {"write_file", "edit_file"}:
+            return None
+
+        target = _tool_file_path(tool_call)
+        if not self._is_state_backed(target):
+            return None
+        if not self.writer:
+            return self._tool_error(
+                tool_call,
+                "state_mutation_role_denied",
+                "this agent has read-only access to shared research state; return structured output instead",
+            )
+        if target != FINAL_REPORT_PATH:
+            return self._tool_error(
+                tool_call,
+                "writer_state_path_denied",
+                f"writer-agent may mutate only {FINAL_REPORT_PATH}",
+            )
+        if tool_name == "edit_file":
+            return self._tool_error(
+                tool_call,
+                "writer_output_edit_not_supported",
+                f"use write_file with file_path={FINAL_REPORT_PATH} and the complete bounded report",
+            )
+        return None
+
+    def wrap_tool_call(self, request, handler):
+        """Reject unauthorized state writes before a synchronous backend call."""
+        rejection = self._rejection(request)
+        if rejection is not None:
+            return rejection
+        return handler(request)
+
+    async def awrap_tool_call(self, request, handler):
+        """Reject unauthorized state writes before an asynchronous backend call."""
+        rejection = self._rejection(request)
+        if rejection is not None:
+            return rejection
+        return await handler(request)
+
+
+class FinalReportCommitMiddleware(AgentMiddleware):
+    """Commit writer-owned output with overwrite and exact-digest verification."""
+
+    def __init__(
+        self,
+        *,
+        backend: object,
+        tracker: FinalReportCommitTracker,
+        state_budget: StateBudgetLedger | None = None,
+        resource_limits: DeepResearchResourceLimits | None = None,
+    ) -> None:
+        self.backend = backend
+        self.tracker = tracker
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
+        self.state_budget = state_budget or StateBudgetLedger(
+            limits=self.resource_limits,
+            files={},
+            sandbox_enabled=True,
+        )
+        self._mutation_lock = asyncio.Lock()
+
+    @staticmethod
+    def _tool_error(tool_call: dict[str, object], reason: str, guidance: str) -> ToolMessage:
+        return ToolMessage(
+            content=f"{reason}: {guidance}",
+            tool_call_id=tool_call.get("id", "final-report-commit"),
+            name=tool_call.get("name"),
+            status="error",
+        )
+
+    @staticmethod
+    def _response_error(response: object) -> object:
+        return response.get("error") if isinstance(response, dict) else getattr(response, "error", None)
+
+    async def _commit_write(self, tool_call: dict[str, object]) -> ToolMessage:
+        args = tool_call.get("args")
+        content = args.get("content") if isinstance(args, dict) else None
+        if not isinstance(content, str):
+            return self._tool_error(tool_call, "writer_output_commit_failed", "report content must be text")
+        encoded = content.encode("utf-8")
+        if len(encoded) > self.resource_limits.max_final_report_bytes:
+            return self._tool_error(
+                tool_call,
+                "writer_output_limit_exceeded",
+                f"report exceeds the {self.resource_limits.max_final_report_bytes}-byte UTF-8 limit",
+            )
+        try:
+            reservation = self.state_budget.reserve([(FINAL_REPORT_PATH, encoded)])
+        except ValueError:
+            return self._tool_error(
+                tool_call,
+                "writer_output_limit_exceeded",
+                "report would exceed the shared-state resource limit",
+            )
+        try:
+            responses = await self.backend.aupload_files([(FINAL_REPORT_PATH, encoded)])
+        except Exception as exc:  # noqa: BLE001 - return a stable, sanitized tool error
+            self.state_budget.rollback(reservation)
+            logger.warning("Writer final-report commit failed (%s)", type(exc).__name__)
+            return self._tool_error(tool_call, "writer_output_commit_failed", "the backend rejected the write")
+        if not isinstance(responses, list) or len(responses) != 1 or self._response_error(responses[0]):
+            self.state_budget.rollback(reservation)
+            logger.warning("Writer final-report commit returned an unsuccessful upload response")
+            return self._tool_error(tool_call, "writer_output_commit_failed", "the backend rejected the write")
+        self.tracker.record(content)
+        return ToolMessage(
+            content=f"Updated file {FINAL_REPORT_PATH}",
+            tool_call_id=tool_call.get("id", "final-report-commit"),
+            name="write_file",
+            status="success",
+        )
+
+    async def awrap_tool_call(self, request, handler):
+        """Upsert bounded writer output; edits are rejected before mutation."""
+        tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
+        tool_name = tool_call.get("name")
+        if tool_name not in {"write_file", "edit_file"}:
+            return await handler(request)
+        target = _tool_file_path(tool_call)
+        if target not in FINAL_REPORT_STATE_PATHS:
+            return await handler(request)
+        if target != FINAL_REPORT_PATH:
+            return self._tool_error(
+                tool_call,
+                "writer_output_path_invalid",
+                f"write the final report to {FINAL_REPORT_PATH}",
+            )
+
+        async with self._mutation_lock:
+            if tool_name == "write_file":
+                return await self._commit_write(tool_call)
+            return self._tool_error(
+                tool_call,
+                "writer_output_edit_not_supported",
+                f"use write_file with file_path={FINAL_REPORT_PATH} and the complete bounded report",
+            )
+
+
+class RequiredOutputFileMiddleware(AgentMiddleware):
+    """Verify a model's file-backed completion marker before ending its run.
+
+    A model can claim that it wrote a file without making the filesystem tool call.
+    Keep recovery local to that agent: request one corrective model turn, then fail
+    with a stable reason code instead of restarting the surrounding workflow.
+    """
+
+    def __init__(
+        self,
+        *,
+        tracker: FinalReportCommitTracker,
+        paths: tuple[str, ...] = FINAL_REPORT_STATE_PATHS,
+        completion_marker: str = "Wrote /shared/output.md",
+        max_retries: int = 1,
+        reason_code: str = "writer_output_not_committed",
+    ) -> None:
+        """Configure the accepted state paths and bounded corrective turns."""
+        if not paths:
+            raise ValueError("paths must not be empty")
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        self.tracker = tracker
+        self.paths = paths
+        self.completion_marker = completion_marker
+        self.max_retries = max_retries
+        self.reason_code = reason_code
+        self._retry_message = (
+            "The final report is missing, empty, or was not committed by this writer run. "
+            "Do not repeat research or regenerate artifacts. "
+            f"Call write_file with file_path={paths[0]} and the complete final Markdown, confirm the tool "
+            f"succeeds, and only then return `{completion_marker}`."
+        )
+
+    @staticmethod
+    def _files_from_state(state: object) -> object:
+        return state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+
+    def _required_output_is_committed(self, state: object) -> bool:
+        files = self._files_from_state(state)
+        return self.tracker.committed_text(files, paths=self.paths) is not None
+
+    def _retry_count(self, messages: list[object]) -> int:
+        return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
+
+    def _check_after_model(self, state: object) -> dict[str, object] | None:
+        messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+        if not isinstance(messages, list) or not messages:
+            return None
+        last_message = messages[-1]
+        if not isinstance(last_message, AIMessage) or last_message.tool_calls:
+            return None
+        if last_message.text.strip() != self.completion_marker:
+            return None
+        if self._required_output_is_committed(state):
+            return None
+
+        retry_count = self._retry_count(messages)
+        if retry_count >= self.max_retries:
+            raise RuntimeError(self.reason_code)
+
+        logger.warning("Agent reported completion before committing the required output; requesting corrective turn")
+        return {
+            "messages": [HumanMessage(content=self._retry_message)],
+            "jump_to": "model",
+        }
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state, runtime):
+        """Verify synchronous writer completion and request one local repair when needed."""
+        return self._check_after_model(state)
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        """Verify asynchronous writer completion and request one local repair when needed."""
+        return self._check_after_model(state)
 
 
 # Common hallucinated tool name mappings
@@ -281,6 +714,72 @@ class TodoSuppressionMiddleware(AgentMiddleware):
     async def awrap_model_call(self, request, handler):
         """Strip write_todos and its prompt before an asynchronous model call."""
         return await handler(self._clean_request(request))
+
+
+class TodoQuotaMiddleware(AgentMiddleware):
+    """Reject oversized top-level todo replacements before they mutate graph state."""
+
+    _TODO_TOOL = "write_todos"
+
+    def __init__(self, *, resource_limits: DeepResearchResourceLimits | None = None) -> None:
+        """Configure the hard job-local todo count and content ceilings."""
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
+
+    def _validate(self, request: object) -> None:
+        """Validate raw write_todos arguments before delegating to the framework tool."""
+        tool_call = getattr(request, "tool_call", {})
+        if not isinstance(tool_call, dict) or tool_call.get("name") != self._TODO_TOOL:
+            return
+        args = tool_call.get("args", {})
+        todos = args.get("todos") if isinstance(args, dict) else None
+        if not isinstance(todos, list):
+            raise ValueError("write_todos requires a todos list")
+        if len(todos) > self.resource_limits.max_todo_items:
+            raise ValueError(f"write_todos exceeds the {self.resource_limits.max_todo_items}-item limit")
+
+        total_chars = 0
+        for todo in todos:
+            content = todo.get("content") if isinstance(todo, dict) else None
+            if not isinstance(content, str):
+                raise ValueError("write_todos item content must be a string")
+            if len(content) > self.resource_limits.max_todo_item_chars:
+                raise ValueError(
+                    f"write_todos item exceeds the {self.resource_limits.max_todo_item_chars}-character limit"
+                )
+            total_chars += len(content)
+        if total_chars > self.resource_limits.max_total_todo_chars:
+            raise ValueError(
+                f"write_todos exceeds the {self.resource_limits.max_total_todo_chars}-character aggregate content limit"
+            )
+
+    @staticmethod
+    def _tool_error(request: object, error: ValueError) -> ToolMessage:
+        """Return a recoverable tool error for a rejected todo replacement."""
+        tool_call = getattr(request, "tool_call", {})
+        if not isinstance(tool_call, dict):
+            tool_call = {}
+        return ToolMessage(
+            content=f"write_todos_quota_rejected: {error}",
+            tool_call_id=tool_call.get("id", "todo-quota"),
+            name=tool_call.get("name", TodoQuotaMiddleware._TODO_TOOL),
+            status="error",
+        )
+
+    def wrap_tool_call(self, request, handler):
+        """Validate a synchronous todo update before graph-state mutation."""
+        try:
+            self._validate(request)
+        except ValueError as exc:
+            return self._tool_error(request, exc)
+        return handler(request)
+
+    async def awrap_tool_call(self, request, handler):
+        """Validate an asynchronous todo update before graph-state mutation."""
+        try:
+            self._validate(request)
+        except ValueError as exc:
+            return self._tool_error(request, exc)
+        return await handler(request)
 
 
 class ToolRetryMiddleware(AgentMiddleware):
@@ -506,6 +1005,114 @@ class SourceRegistryMiddleware(AgentMiddleware):
         return self._render_source_list_text(self.get_source_entries(mode=mode))
 
 
+class ArtifactHarvestMiddleware(AgentMiddleware):
+    """Checkpoint durable artifacts after successful sandbox execute calls."""
+
+    def __init__(self, artifact_manager: object) -> None:
+        """Store the artifact manager used for best-effort checkpoints."""
+        self.artifact_manager = artifact_manager
+
+    async def awrap_tool_call(self, request, handler):
+        """Run the tool, then checkpoint manifest-declared artifacts after execute."""
+        result = await handler(request)
+        tool_name = ""
+        if hasattr(request, "tool_call") and isinstance(request.tool_call, dict):
+            tool_name = request.tool_call.get("name", "")
+        result_status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+        if tool_name == "execute" and result_status != "error":
+            try:
+                captured = await asyncio.to_thread(self.artifact_manager.harvest_after_execute)
+            except Exception as exc:  # noqa: BLE001 - artifact capture must not fail the agent
+                logger.warning("Artifact checkpoint harvest failed (%s)", type(exc).__name__)
+            else:
+                result = self._append_checkpoint_result(result, captured)
+        return result
+
+    @staticmethod
+    def _append_checkpoint_result(result: object, captured: object) -> object:
+        """Tell the model the exact safe filenames captured from a valid manifest."""
+        if not isinstance(result, ToolMessage) or not isinstance(result.content, str):
+            return result
+        if not isinstance(captured, (list, tuple)) or not captured:
+            return result
+
+        lines = ["Artifact checkpoint captured these exact filenames:"]
+        for artifact in captured[:10]:
+            filename = PurePosixPath(str(getattr(artifact, "filename", ""))).name
+            if not filename:
+                continue
+            if bool(getattr(artifact, "inline", False)):
+                lines.append(f"- {filename} (inline): embed as ![caption](artifact://{filename})")
+            else:
+                lines.append(f"- {filename} (downloadable; not marked inline)")
+        if len(lines) == 1:
+            return result
+        content = result.content.rstrip() + "\n\n" + "\n".join(lines)
+        return result.model_copy(update={"content": content})
+
+
+class SourceRoutingPersistenceMiddleware(AgentMiddleware):
+    """Persist the source router's schema-validated response to shared state."""
+
+    def __init__(
+        self,
+        backend: object,
+        *,
+        state_budget: StateBudgetLedger | None = None,
+        resource_limits: DeepResearchResourceLimits | None = None,
+        path: str = _SOURCE_ROUTING_PATH,
+    ) -> None:
+        self.backend = backend
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
+        self.state_budget = state_budget or StateBudgetLedger(
+            limits=self.resource_limits,
+            files={},
+            sandbox_enabled=True,
+        )
+        self.path = path
+
+    @staticmethod
+    def _routing_from_state(state: object) -> object:
+        if isinstance(state, dict):
+            return state.get("structured_response")
+        return getattr(state, "structured_response", None)
+
+    def _persist_routing(self, routing: object) -> None:
+        if routing is None:
+            return
+        if hasattr(routing, "model_dump"):
+            payload = routing.model_dump(mode="json", exclude_none=True)
+        elif isinstance(routing, dict):
+            payload = routing
+        else:
+            return
+
+        content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        if len(content) > self.resource_limits.max_source_routing_bytes:
+            raise ValueError(
+                f"Source routing exceeds the {self.resource_limits.max_source_routing_bytes}-byte serialized size limit"
+            )
+        reservation = self.state_budget.reserve([(self.path, content)])
+        try:
+            responses = self.backend.upload_files([(self.path, content)])
+        except Exception:
+            self.state_budget.rollback(reservation)
+            raise
+        errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
+        if errors:
+            self.state_budget.rollback(reservation)
+            logger.error("Failed to persist source routing to %s: %s", self.path, "; ".join(errors))
+            raise RuntimeError(f"Failed to persist source routing to {self.path}")
+
+    def after_agent(self, state, runtime):
+        """Persist source routing after a synchronous source-router run."""
+        self._persist_routing(self._routing_from_state(state))
+
+    async def aafter_agent(self, state, runtime):
+        """Persist source routing after an asynchronous source-router run."""
+        await asyncio.to_thread(self._persist_routing, self._routing_from_state(state))
+
+
 class PlanPersistenceMiddleware(AgentMiddleware):
     """Persists the planner's structured ResearchPlan to the shared filesystem.
 
@@ -522,14 +1129,28 @@ class PlanPersistenceMiddleware(AgentMiddleware):
     orchestrator reads a missing or stale ``/shared/plan.json``.
     """
 
-    def __init__(self, backend: object, *, path: str = "/shared/plan.json") -> None:
+    def __init__(
+        self,
+        backend: object,
+        *,
+        state_budget: StateBudgetLedger | None = None,
+        resource_limits: DeepResearchResourceLimits | None = None,
+        path: str = "/shared/plan.json",
+    ) -> None:
         """Initialize the middleware.
 
         Args:
             backend: Shared filesystem backend exposing ``upload_files``.
+            resource_limits: Hard plan/query limits enforced before state mutation.
             path: Shared path the serialized plan is written to.
         """
         self.backend = backend
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
+        self.state_budget = state_budget or StateBudgetLedger(
+            limits=self.resource_limits,
+            files={},
+            sandbox_enabled=True,
+        )
         self.path = path
 
     @staticmethod
@@ -549,10 +1170,46 @@ class PlanPersistenceMiddleware(AgentMiddleware):
             payload = plan
         else:
             return
+
+        queries = payload.get("queries", [])
+        if not isinstance(queries, list):
+            raise ValueError("Research plan queries must be a list")
+        if len(queries) > self.resource_limits.max_research_queries:
+            raise ValueError(f"Research plan exceeds the {self.resource_limits.max_research_queries}-query job limit")
+        query_chars = 0
+        for query in queries:
+            if not isinstance(query, dict):
+                raise ValueError("Research plan contains an invalid query")
+            query_text = query.get("query")
+            if not isinstance(query_text, str) or not query_text:
+                raise ValueError("Research plan contains an invalid query")
+            query_chars += len(query_text)
+            subqueries = query.get("subqueries", [])
+            if not isinstance(subqueries, list) or any(
+                not isinstance(subquery, str) or not subquery for subquery in subqueries
+            ):
+                raise ValueError("Research plan contains invalid subqueries")
+            query_chars += sum(len(subquery) for subquery in subqueries)
+        if query_chars > self.resource_limits.max_total_query_chars:
+            raise ValueError(
+                "Research plan exceeds the "
+                f"{self.resource_limits.max_total_query_chars}-character aggregate query limit"
+            )
+
         content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
-        responses = self.backend.upload_files([(self.path, content)])
+        if len(content) > self.resource_limits.max_plan_bytes:
+            raise ValueError(
+                f"Research plan exceeds the {self.resource_limits.max_plan_bytes}-byte serialized size limit"
+            )
+        reservation = self.state_budget.reserve([(self.path, content)])
+        try:
+            responses = self.backend.upload_files([(self.path, content)])
+        except Exception:
+            self.state_budget.rollback(reservation)
+            raise
         errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
         if errors:
+            self.state_budget.rollback(reservation)
             # Raw backend detail stays in logs; the raised error reaches the job status /
             # caller, so it must not echo backend-internal strings (hostnames, paths, etc.).
             logger.error("Failed to persist plan to %s: %s", self.path, "; ".join(errors))

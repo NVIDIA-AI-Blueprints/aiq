@@ -30,6 +30,7 @@ from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.data_source_registry import populate_from_config
@@ -40,6 +41,12 @@ from aiq_agent.common.data_source_registry import reset_registry
 def web_search_tool(query: str) -> str:
     """Search the web for information."""
     return f"Results for: {query}"
+
+
+@tool
+def empty_web_search_tool(query: str) -> str:
+    """Search the web but return no usable evidence."""
+    return "Search returned no results"
 
 
 class TestShallowResearcherAgent:
@@ -810,6 +817,91 @@ class TestShallowResearcherSessionRegistry:
 
         with pytest.raises(EmptySourceRegistryError):
             await agent.run(state)
+
+    @pytest.mark.parametrize(
+        ("data_sources", "expected_reason"),
+        [
+            ([], EmptySourceRegistryReason.NO_SOURCES_SELECTED),
+            (None, EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+            (["web"], EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_empty_registry_classification_preserves_sanitized_answer(
+        self,
+        mock_llm_provider,
+        mock_llm,
+        data_sources,
+        expected_reason,
+    ):
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Draft answer with https://private.example/path"))
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[web_search_tool])
+        state = ShallowResearchAgentState(
+            messages=[HumanMessage(content="Test")],
+            data_sources=data_sources,
+        )
+
+        with pytest.raises(EmptySourceRegistryError) as exc_info:
+            await agent.run(state)
+
+        assert exc_info.value.reason is expected_reason
+        assert exc_info.value.generated_answer == "Draft answer with "
+
+    @pytest.mark.asyncio
+    async def test_enabled_source_empty_result_preserves_generated_answer(self, mock_llm_provider, mock_llm):
+        populate_from_config(
+            [
+                {
+                    "id": "web",
+                    "name": "Web Search",
+                    "description": "Search the web.",
+                    "tools": ["empty_web_search_tool"],
+                }
+            ]
+        )
+        tool_call = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "empty_web_search_tool",
+                    "args": {"query": "quantum computing"},
+                    "id": "empty-search-1",
+                }
+            ],
+        )
+        generated_answer = "No supporting sources were found, so I cannot provide a sourced answer."
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call, AIMessage(content=generated_answer)])
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[empty_web_search_tool])
+        state = ShallowResearchAgentState(
+            messages=[HumanMessage(content="Summarize quantum computing.")],
+            data_sources=["web"],
+        )
+
+        try:
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await agent.run(state)
+        finally:
+            reset_registry()
+
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCE_RESULTS
+        assert exc_info.value.generated_answer == generated_answer
+        assert "Try rephrasing the question" in exc_info.value.public_response
+        assert mock_llm.ainvoke.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_registry_without_final_message_raises_typed_failure(self, mock_llm_provider):
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[web_search_tool])
+        agent._graph = MagicMock()
+        agent._graph.ainvoke = AsyncMock(return_value={"messages": []})
+
+        with (
+            patch.object(SourceRegistry, "all_sources", return_value=[]),
+            pytest.raises(EmptySourceRegistryError) as exc_info,
+        ):
+            await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="Test")]))
+
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCE_RESULTS
+        assert exc_info.value.generated_answer is None
 
     @pytest.mark.asyncio
     async def test_session_registry_does_not_mutate_shared_instance(self, mock_llm_provider, mock_llm):

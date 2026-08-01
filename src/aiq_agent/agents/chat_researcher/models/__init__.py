@@ -17,12 +17,22 @@
 
 from .depth import DepthDecision
 from .intent import IntentResult
+from .result import RESEARCH_WORKFLOW_FAILURE_ERROR
+from .result import ChatResearcherResponse
 from .result import ShallowResult
+from .result import WorkflowFailure
+from .result import WorkflowOutcome
+from .result import WorkflowSuccess
 from .state import ChatResearcherState
 
 __all__ = [
+    "ChatResearcherResponse",
     "ChatResearcherState",
     "DepthDecision",
     "IntentResult",
+    "RESEARCH_WORKFLOW_FAILURE_ERROR",
     "ShallowResult",
+    "WorkflowFailure",
+    "WorkflowOutcome",
+    "WorkflowSuccess",
 ]

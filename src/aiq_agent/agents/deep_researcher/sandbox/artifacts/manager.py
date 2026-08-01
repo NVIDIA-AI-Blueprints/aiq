@@ -36,6 +36,7 @@ from typing import TYPE_CHECKING
 from typing import Any
 
 from ..config import ArtifactCaptureConfig
+from ..logging_utils import log_sandbox_failure
 from .manifest import ManifestEntry
 from .manifest import parse_manifest
 from .models import Artifact
@@ -178,15 +179,30 @@ class ArtifactManager:
         self._emit = emit
         self._content_url_template = content_url_template
         self._lock = threading.Lock()
+        self._final_harvest_lock = threading.Lock()
+        self._final_harvest_done = False
+        self._final_harvest_result: list[Artifact] = []
         self._seen: set[tuple[str, str]] = set()
         self._total_bytes = 0
         self._count = 0
 
     def final_harvest(self) -> list[Artifact]:
-        """Harvest at the end of a successful agent run, with a directory scan fallback."""
+        """Harvest at a terminal boundary, with a directory scan fallback."""
         if not self.config.enabled:
             return []
-        return self._harvest(scan=True)
+        with self._final_harvest_lock:
+            if self._final_harvest_done:
+                return list(self._final_harvest_result)
+            captured = self._harvest(scan=True)
+            self._final_harvest_result = list(captured)
+            self._final_harvest_done = True
+            return captured
+
+    def harvest_after_execute(self) -> list[Artifact]:
+        """Checkpoint manifest-declared artifacts after a sandbox execute call."""
+        if not self.config.enabled:
+            return []
+        return self._harvest(scan=False)
 
     def resolve_report_references(self, markdown: str, artifacts: list[Artifact] | None = None) -> str:
         """Validate ``artifact://`` image references against this job's artifacts.
@@ -203,8 +219,14 @@ class ArtifactManager:
         if artifacts is None:
             try:
                 artifacts = self.store.list(self.job_id)
-            except Exception:  # noqa: BLE001 - report resolution must not fail the job
-                logger.warning("Could not load artifacts to resolve report references", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - report resolution must not fail the job
+                log_sandbox_failure(
+                    logger,
+                    operation="artifact_reference_load",
+                    reason_code="artifact_store_read_failed",
+                    exc=exc,
+                    sandbox=self.job_id,
+                )
                 return markdown
 
         by_id = {a.artifact_id: a for a in artifacts}
@@ -236,8 +258,14 @@ class ArtifactManager:
         if artifacts is None:
             try:
                 artifacts = self.store.list(self.job_id)
-            except Exception:  # noqa: BLE001 - embedding must not fail the job
-                logger.warning("Could not load artifacts to embed inline figures", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - embedding must not fail the job
+                log_sandbox_failure(
+                    logger,
+                    operation="artifact_inline_load",
+                    reason_code="artifact_store_read_failed",
+                    exc=exc,
+                    sandbox=self.job_id,
+                )
                 return markdown
 
         orphans = [
@@ -275,8 +303,14 @@ class ArtifactManager:
         if artifacts is None:
             try:
                 artifacts = self.store.list(self.job_id)
-            except Exception:  # noqa: BLE001 - indexing must not fail the job
-                logger.warning("Could not load artifacts to index generated outputs", exc_info=True)
+            except Exception as exc:  # noqa: BLE001 - indexing must not fail the job
+                log_sandbox_failure(
+                    logger,
+                    operation="artifact_index_load",
+                    reason_code="artifact_store_read_failed",
+                    exc=exc,
+                    sandbox=self.job_id,
+                )
                 return markdown
 
         if not artifacts:
@@ -347,8 +381,14 @@ class ArtifactManager:
         """Enumerate allowed files in the artifact dir (bounded, best-effort fallback)."""
         try:
             response = self.backend.execute(f"find {shlex.quote(self.artifact_dir)} -type f")
-        except Exception:  # noqa: BLE001 - scan is best-effort
-            logger.warning("Artifact scan failed for job %s", self.job_id, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - scan is best-effort
+            log_sandbox_failure(
+                logger,
+                operation="artifact_scan",
+                reason_code="artifact_scan_failed",
+                exc=exc,
+                sandbox=self.job_id,
+            )
             return []
         output = getattr(response, "output", "") or ""
         entries: list[ManifestEntry] = []

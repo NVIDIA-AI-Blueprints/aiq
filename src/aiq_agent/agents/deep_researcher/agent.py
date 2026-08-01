@@ -30,11 +30,14 @@ from langchain_core.tools import BaseTool
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
+from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
 
+from .custom_middleware import FinalReportCommitTracker
 from .custom_middleware import SourceRegistryMiddleware
 from .deepagents_runtime import DeepAgentsRuntime
 from .deepagents_runtime import DeepResearchSandboxConfig
@@ -43,8 +46,13 @@ from .factory import build_deep_research_graph
 from .factory import build_deep_research_middleware_set
 from .factory import build_deep_research_tool_set
 from .models import DeepResearchAgentState
+from .resource_limits import DeepResearchExecutionTimeout
+from .resource_limits import DeepResearchResourceLimits
+from .resource_limits import StateBudgetLedger
 from .tools.source_tool_batching import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
 from .tools.source_tool_batching import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
+from .tools.source_tool_batching import activate_source_tool_budget
+from .tools.source_tool_batching import reset_source_tool_budget
 
 logger = logging.getLogger(__name__)
 
@@ -53,14 +61,6 @@ PARENT_REPORT_CONTEXT_PATH = "/shared/parent_report_context.json"
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
-
-# Salvage gate: when the orchestrator synthesizes the report inline instead of delegating to
-# writer-agent, no /shared/output.md is written. We accept the final message as the report only
-# when it is clearly a substantive report (long + has a markdown heading), so workflow chatter is
-# still rejected and the strict file-first contract is preserved.
-_WRITER_COMPLETION_MARKER = "Wrote /shared/output.md"
-_MIN_INLINE_REPORT_CHARS = 400
-_MD_HEADING_RE = re.compile(r"(?m)^#{1,6}\s")
 
 
 class DeepResearcherAgent:
@@ -86,6 +86,7 @@ class DeepResearcherAgent:
         max_research_concurrency: int = DEFAULT_MAX_RESEARCH_CONCURRENCY,
         max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
         max_source_tool_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
+        resource_limits: DeepResearchResourceLimits | None = None,
     ) -> None:
         """
         Initialize the deep researcher agent.
@@ -105,6 +106,7 @@ class DeepResearcherAgent:
                 run_research_batch call.
             max_concurrent_source_tool_calls: Shared source-tool concurrency limit across researcher workers.
             max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
+            resource_limits: Hard per-job request, state, source-call, and wall-clock limits.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -113,6 +115,7 @@ class DeepResearcherAgent:
         self.max_research_concurrency = max_research_concurrency
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
         self.domain_catalog_path = domain_catalog_path
         self.enable_source_router = enable_source_router
         self.enable_citation_verification = enable_citation_verification
@@ -126,32 +129,50 @@ class DeepResearcherAgent:
             artifact_emit=artifact_emit,
         )
 
-        self._prompts = self._load_prompts()
-        source_tool_names = {tool.name for tool in self.tools}
-        self.source_registry_middleware = SourceRegistryMiddleware(source_tool_names=source_tool_names)
-        self.tool_set = build_deep_research_tool_set(
-            self.tools,
-            source_registry_middleware=self.source_registry_middleware,
-            max_concurrent_source_tool_calls=self.max_concurrent_source_tool_calls,
-            max_source_tool_batch_size=self.max_source_tool_batch_size,
-        )
-        self.middleware_set = build_deep_research_middleware_set(
-            tool_set=self.tool_set,
-            source_registry_middleware=self.source_registry_middleware,
-            enable_source_router=self.enable_source_router,
-        )
+        try:
+            self._prompts = self._load_prompts()
+            source_tool_names = {tool.name for tool in self.tools}
+            self.source_registry_middleware = SourceRegistryMiddleware(source_tool_names=source_tool_names)
+            self.tool_set = build_deep_research_tool_set(
+                self.tools,
+                source_registry_middleware=self.source_registry_middleware,
+                max_concurrent_source_tool_calls=self.max_concurrent_source_tool_calls,
+                max_source_tool_batch_size=self.max_source_tool_batch_size,
+            )
+            self.middleware_set = build_deep_research_middleware_set(
+                tool_set=self.tool_set,
+                source_registry_middleware=self.source_registry_middleware,
+                enable_source_router=self.enable_source_router,
+                artifact_manager=self.deepagents_runtime.artifact_manager,
+            )
 
-        self.source_tool_names = self.tool_set.source_tool_names
-        self.tools_info = self.tool_set.tools_info
-        self.non_search_tools = self.tool_set.helper_tools
-        self.all_tools = self.tool_set.all_tools
-        self.research_source_tools = self.tool_set.research_source_tools
-        self.researcher_tools = self.tool_set.researcher_tools
-        self.writer_tools = self.tool_set.writer_tools
-        self.researcher_middleware = self.middleware_set.researcher
-        self.writer_middleware = self.middleware_set.writer
-        self.orchestrator_middleware = self.middleware_set.orchestrator
-        self.middleware = self.researcher_middleware
+            self.source_tool_names = self.tool_set.source_tool_names
+            self.tools_info = self.tool_set.tools_info
+            self.non_search_tools = self.tool_set.helper_tools
+            self.all_tools = self.tool_set.all_tools
+            self.research_source_tools = self.tool_set.research_source_tools
+            self.researcher_tools = self.tool_set.researcher_tools
+            self.writer_tools = self.tool_set.writer_tools
+            self.researcher_middleware = self.middleware_set.researcher
+            self.writer_middleware = self.middleware_set.writer
+            self.orchestrator_middleware = self.middleware_set.orchestrator
+            self.middleware = self.researcher_middleware
+        except Exception:
+            try:
+                cleanup_succeeded = self.deepagents_runtime.finalize(interrupted=False)
+            except Exception as cleanup_error:  # noqa: BLE001 - preserve the original construction failure
+                logger.warning(
+                    "Deep research runtime cleanup failed during agent construction (%s)",
+                    type(cleanup_error).__name__,
+                )
+            else:
+                if not cleanup_succeeded:
+                    logger.warning("Deep research runtime cleanup reported failure during agent construction")
+            raise
+
+    def finalize(self, *, interrupted: bool) -> bool:
+        """Release this request's sandbox runtime exactly once."""
+        return self.deepagents_runtime.finalize(interrupted=interrupted)
 
     def _load_prompts(self) -> dict[str, str]:
         """Load all prompts for subagents."""
@@ -163,7 +184,13 @@ class DeepResearcherAgent:
 
         return prompts
 
-    def _build_orchestrator_agent(self, state: DeepResearchAgentState) -> Any:
+    def _build_orchestrator_agent(
+        self,
+        state: DeepResearchAgentState,
+        *,
+        final_report_tracker: FinalReportCommitTracker,
+        state_budget: StateBudgetLedger | None = None,
+    ) -> Any:
         """Build the orchestrator graph for the current state."""
         return build_deep_research_graph(
             llm_provider=self.llm_provider,
@@ -178,46 +205,27 @@ class DeepResearcherAgent:
             domain_catalog_path=self.domain_catalog_path,
             enable_source_router=self.enable_source_router,
             max_research_concurrency=self.max_research_concurrency,
+            resource_limits=self.resource_limits,
+            final_report_tracker=final_report_tracker,
+            state_budget=state_budget,
         )
 
-    def _extract_final_markdown(self, result: dict | Any, files: dict[str, Any] | None = None) -> str | None:
-        """Extract final Markdown from output files."""
-        output_paths = ("/shared/output.md", "/output.md")
-        files = result.get("files", None) if isinstance(result, dict) else getattr(result, "files", None) or files or {}
-        if isinstance(files, dict):
-            for output_path in output_paths:
-                output_entry = files.get(output_path)
-                if isinstance(output_entry, dict):
-                    output_entry = output_entry.get("content")
-                if isinstance(output_entry, bytes):
-                    output_entry = output_entry.decode("utf-8")
-                if isinstance(output_entry, str) and output_entry.strip():
-                    return output_entry.strip()
-        return self._salvage_inline_report(result)
-
-    @staticmethod
-    def _salvage_inline_report(result: dict | Any) -> str | None:
-        """Salvage a report the orchestrator wrote inline instead of via writer-agent.
-
-        When the orchestrator skips the writer-agent delegation and emits the full report in its
-        final message, no output file exists. Accept that message only when it is clearly a
-        substantive report so plain workflow chatter is still rejected.
-        """
-        messages = result.get("messages") if isinstance(result, dict) else getattr(result, "messages", None)
-        if not messages:
-            return None
-        content = getattr(messages[-1], "content", None)
-        if not isinstance(content, str):
-            return None
-        stripped = content.strip()
-        if (
-            not stripped
-            or stripped == _WRITER_COMPLETION_MARKER
-            or len(stripped) < _MIN_INLINE_REPORT_CHARS
-            or not _MD_HEADING_RE.search(stripped)
-        ):
-            return None
-        return stripped
+    def _extract_final_markdown(
+        self,
+        result: dict | Any,
+        files: dict[str, Any] | None = None,
+        *,
+        final_report_tracker: FinalReportCommitTracker,
+    ) -> str | None:
+        """Extract only Markdown committed by the writer during this run."""
+        # Resolve result files first, then fall back to the passed-in files (state.files) and
+        # finally an empty dict. Without the explicit grouping, `or files or {}` bound only to
+        # the else branch, so a dict result lacking a usable "files" key silently discarded
+        # the fallback even when output files existed.
+        result_files = result.get("files", None) if isinstance(result, dict) else getattr(result, "files", None)
+        files = result_files or files or {}
+        committed = final_report_tracker.committed_text(files)
+        return committed.strip() if committed is not None else None
 
     @staticmethod
     def _read_seed_file_text(files: dict[str, Any], path: str) -> str | None:
@@ -254,27 +262,94 @@ class DeepResearcherAgent:
         """
         Execute deep research with multi-phase workflow.
         """
-        prepared_files = self.deepagents_runtime.prepare_state_files(dict(state.files))
-        if prepared_files != state.files:
-            state = state.model_copy(update={"files": prepared_files})
-        self._seed_parent_sources(state.files)
-        agent = self._build_orchestrator_agent(state)
+        # Both the NAT registrar and async job runner call this interface, so source
+        # selection and availability must be enforced here rather than by either adapter.
+        validate_research_source_configuration(state.data_sources, "deep research", self.tools)
 
         messages = state.messages
+        query = ""
         if messages:
             query_content = messages[-1].content
             query = query_content if isinstance(query_content, str) else str(query_content)
+        clarifier_result = state.clarifier_result or ""
+        request_context_chars = len(query) + len(clarifier_result)
+        if request_context_chars > self.resource_limits.max_input_chars:
+            raise ValueError(
+                "Deep-research query and clarification context exceeds the "
+                f"{self.resource_limits.max_input_chars}-character limit"
+            )
+
+        prepared_files = self.deepagents_runtime.prepare_state_files(dict(state.files))
+        if prepared_files != state.files:
+            state = state.model_copy(update={"files": prepared_files})
+        state_budget = StateBudgetLedger(
+            limits=self.resource_limits,
+            files=dict(state.files),
+            sandbox_enabled=self.deepagents_runtime.execution_enabled,
+        )
+        self._seed_parent_sources(state.files)
+        final_report_tracker = FinalReportCommitTracker()
+        agent = self._build_orchestrator_agent(
+            state,
+            final_report_tracker=final_report_tracker,
+            state_budget=state_budget,
+        )
+
+        if messages:
             logger.info("=" * 80)
             logger.info("Deep Research Subagent: Starting workflow")
             logger.info("Query: %s...", query[:100])
             logger.info("=" * 80)
 
+        budget_token = activate_source_tool_budget(self.resource_limits.max_source_tool_calls)
         try:
-            result = await agent.ainvoke(state, config={"callbacks": self.callbacks} if self.callbacks else None)
+            execution_timeout = asyncio.timeout(self.resource_limits.max_execution_seconds)
+            try:
+                async with execution_timeout:
+                    result = await agent.ainvoke(
+                        state,
+                        config={"callbacks": self.callbacks} if self.callbacks else None,
+                    )
+            except TimeoutError as exc:
+                # An inner provider/tool may raise TimeoutError for its own operation.
+                # Only the asyncio.timeout context's deadline is a job-level resource
+                # timeout that requires forcible sandbox teardown.
+                if execution_timeout.expired():
+                    raise DeepResearchExecutionTimeout("Deep-research execution time limit exceeded") from exc
+                raise
+            if execution_timeout.expired():
+                # A coroutine can suppress its cancellation. The job still crossed
+                # the hard wall-clock boundary and must not be treated as successful.
+                raise DeepResearchExecutionTimeout("Deep-research execution time limit exceeded")
 
-            final_message = self._extract_final_markdown(result, state.files)
+            final_message = self._extract_final_markdown(
+                result,
+                state.files,
+                final_report_tracker=final_report_tracker,
+            )
+            # Capturing no sources is a research outcome failure even when citation
+            # rewriting is disabled; enable_citation_verification only controls the latter.
+            if not self.source_registry_middleware.has_sources():
+                from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
+                from aiq_agent.common.tool_validation import validate_tool_availability
+
+                _, available_count, unavailable = validate_tool_availability(
+                    self.tools,
+                    research_type="deep research",
+                    enable_logging=False,
+                )
+                generated_answer = None
+                if final_message is not None:
+                    generated_answer = sanitize_report(final_message).sanitized_report
+                raise EmptySourceRegistryError(
+                    "deep research",
+                    unavailable_tools=unavailable,
+                    available_count=available_count,
+                    reason=classify_empty_source_registry_reason(state.data_sources, available_count, unavailable),
+                    generated_answer=generated_answer,
+                )
             if final_message is None:
-                raise ValueError("writer-agent did not produce a final Markdown answer")
+                raise RuntimeError("writer_output_not_committed")
 
             # Post-process: verify citations against source registry
             if self.enable_citation_verification and self.source_registry_middleware.has_sources():
@@ -302,20 +377,6 @@ class DeepResearcherAgent:
                         "returning the generated report without failing the job. "
                         "This may indicate unsupported citation formatting or over-aggressive verification."
                     )
-            elif self.enable_citation_verification:
-                from aiq_agent.common.tool_validation import validate_tool_availability
-
-                _, available_count, unavailable = validate_tool_availability(
-                    self.tools,
-                    research_type="deep research",
-                    enable_logging=False,
-                )
-                raise EmptySourceRegistryError(
-                    "deep research",
-                    unavailable_tools=unavailable,
-                    available_count=available_count,
-                )
-
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report
@@ -356,6 +417,12 @@ class DeepResearcherAgent:
             logger.info("=" * 80)
             return DeepResearchAgentState.model_validate(result)
 
+        except EmptySourceRegistryError as ex:
+            if ex.reason is not EmptySourceRegistryReason.NO_SOURCE_RESULTS:
+                logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
+            raise
         except Exception as ex:
             logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
             raise
+        finally:
+            reset_source_tool_budget(budget_token)

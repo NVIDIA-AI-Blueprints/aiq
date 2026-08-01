@@ -20,12 +20,14 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from collections.abc import Mapping
 from typing import Any
 
 from fastapi import HTTPException
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 from aiq_agent.auth import Principal
 from aiq_agent.auth import get_current_principal
@@ -70,11 +72,24 @@ _LATEST_REPORT_JOB_SQL_OWNED = text(
     + "ORDER BY ji.created_at DESC LIMIT 1"
 )
 _JOB_ACCESS_DELETE_SQL = text("DELETE FROM job_access WHERE job_id = :job_id")
+_JOB_ACCESS_RESERVATION_DELETE_SQL = text(
+    "DELETE FROM job_access WHERE job_id = :job_id AND submission_token = :submission_token"
+)
+_JOB_ACCESS_RESERVATION_RENEW_SQL = text(
+    "UPDATE job_access SET submission_expires_at = :submission_expires_at "
+    "WHERE job_id = :job_id AND submission_token = :submission_token"
+)
 _JOB_ACCESS_CLEANUP_SQL = text(
-    "DELETE FROM job_access WHERE job_id NOT IN (SELECT job_id FROM job_info WHERE is_expired IS NOT TRUE)"
+    "DELETE FROM job_access "
+    "WHERE job_id NOT IN (SELECT job_id FROM job_info WHERE is_expired IS NOT TRUE) "
+    "AND (submission_token IS NULL OR submission_expires_at <= :now)"
 )
 _JOB_INFO_DELETE_SQL = text("DELETE FROM job_info WHERE job_id = :job_id")
 _JOB_EVENTS_DELETE_SQL = text("DELETE FROM job_events WHERE job_id = :job_id")
+
+
+class JobAccessConflictError(RuntimeError):
+    """A submission cannot reserve ownership for an already-used job ID."""
 
 
 def _is_postgres(db_url: str) -> bool:
@@ -95,12 +110,89 @@ def create_job_access(
     db_url: str,
     conversation_id: str | None = None,
     agent_type: str | None = None,
+    *,
+    submission_token: str | None = None,
+    submission_expires_at: float | None = None,
 ) -> None:
-    """Persist the verified owner (and originating conversation + agent type) for a new job."""
+    """Persist owner metadata, optionally as an insert-only pre-enqueue reservation.
+
+    Normal callers retain the historical upsert behavior. Submission code passes
+    an opaque token and expiry, which makes ownership durable *before* handing a
+    task to Dask without allowing a colliding caller to overwrite an existing
+    job's owner.
+    """
     with _job_access_connection(db_url) as conn:
         _ensure_job_access_schema(conn, db_url)
-        conn.execute(_job_access_upsert_sql(db_url), _principal_params(job_id, principal, conversation_id, agent_type))
+        params = _principal_params(
+            job_id,
+            principal,
+            conversation_id,
+            agent_type,
+            submission_token=submission_token,
+            submission_expires_at=submission_expires_at,
+        )
+        try:
+            if submission_token is None:
+                conn.execute(_job_access_upsert_sql(db_url), params)
+            else:
+                if submission_expires_at is None:
+                    raise ValueError("submission_expires_at is required with submission_token")
+                # An expired, never-enqueued reservation is safe to reclaim. A
+                # live/expired job_info row is never touched by this path.
+                conn.execute(
+                    text(
+                        "DELETE FROM job_access "
+                        "WHERE job_id = :job_id "
+                        "AND submission_token IS NOT NULL "
+                        "AND submission_expires_at <= :now "
+                        "AND job_id NOT IN (SELECT job_id FROM job_info)"
+                    ),
+                    {"job_id": job_id, "now": time.time()},
+                )
+                if conn.execute(
+                    text("SELECT 1 FROM job_info WHERE job_id = :job_id"),
+                    {"job_id": job_id},
+                ).first():
+                    conn.rollback()
+                    raise JobAccessConflictError(f"Job already exists: {job_id}")
+                conn.execute(_job_access_reservation_insert_sql(), params)
+            conn.commit()
+        except IntegrityError as exc:
+            conn.rollback()
+            raise JobAccessConflictError(f"Job access already exists: {job_id}") from exc
+
+
+def renew_job_access_reservation(
+    job_id: str,
+    submission_token: str,
+    db_url: str,
+    submission_expires_at: float,
+) -> bool:
+    """Extend an in-flight ownership reservation iff its opaque token matches."""
+    with _job_access_connection(db_url) as conn:
+        _ensure_job_access_schema(conn, db_url)
+        result = conn.execute(
+            _JOB_ACCESS_RESERVATION_RENEW_SQL,
+            {
+                "job_id": job_id,
+                "submission_token": submission_token,
+                "submission_expires_at": submission_expires_at,
+            },
+        )
         conn.commit()
+        return (result.rowcount or 0) == 1
+
+
+def release_job_access_reservation(job_id: str, submission_token: str, db_url: str) -> bool:
+    """Delete a failed pre-enqueue reservation iff its opaque token matches."""
+    with _job_access_connection(db_url) as conn:
+        _ensure_job_access_schema(conn, db_url)
+        result = conn.execute(
+            _JOB_ACCESS_RESERVATION_DELETE_SQL,
+            {"job_id": job_id, "submission_token": submission_token},
+        )
+        conn.commit()
+        return (result.rowcount or 0) == 1
 
 
 def get_latest_report_job_for_conversation(
@@ -152,15 +244,16 @@ def delete_job_access(job_id: str, db_url: str) -> int:
 
 
 def cleanup_job_access(db_url: str, conn: Connection | None = None) -> int:
-    """Delete access rows for expired or missing jobs."""
+    """Delete expired-job rows and expired pre-enqueue reservations."""
+    params = {"now": time.time()}
     if conn is not None:
         _ensure_job_access_schema(conn, db_url)
-        result = conn.execute(_JOB_ACCESS_CLEANUP_SQL)
+        result = conn.execute(_JOB_ACCESS_CLEANUP_SQL, params)
         return result.rowcount or 0
 
     with _job_access_connection(db_url) as owned_conn:
         _ensure_job_access_schema(owned_conn, db_url)
-        result = owned_conn.execute(_JOB_ACCESS_CLEANUP_SQL)
+        result = owned_conn.execute(_JOB_ACCESS_CLEANUP_SQL, params)
         owned_conn.commit()
         return result.rowcount or 0
 
@@ -302,34 +395,50 @@ def _job_access_connection(db_url: str):
 
 
 def _ensure_job_access_schema(conn: Connection, db_url: str) -> None:
-    """Create the ``job_access`` table and index once per database URL."""
+    """Create the ``job_access`` schema, caching only committed initialization.
+
+    Most callers pass a fresh connection, so this helper owns and commits the
+    DDL transaction before any job-level work begins. A caller may also pass a
+    connection with an active transaction (for example, coordinated cleanup).
+    In that case the caller retains transaction ownership and the URL is not
+    cached: a later rollback may undo transactional DDL on PostgreSQL.
+    """
     if db_url in _job_access_schema_initialized:
         return
+    caller_owns_transaction = conn.in_transaction()
     conn.execute(text(_job_access_table_sql(db_url)))
     _ensure_extra_columns(conn, db_url)
     conn.execute(text(_JOB_ACCESS_INDEX_SQL))
     conn.execute(text(_JOB_ACCESS_CONVERSATION_INDEX_SQL))
-    _job_access_schema_initialized.add(db_url)
+    if not caller_owns_transaction:
+        conn.commit()
+        _job_access_schema_initialized.add(db_url)
 
 
 def _ensure_extra_columns(conn: Connection, db_url: str) -> None:
-    """Add conversation_id / agent_type to a pre-existing job_access table.
+    """Add optional metadata columns to a pre-existing job_access table.
 
     CREATE TABLE IF NOT EXISTS won't add columns to an existing table. Idempotent across upgrades:
     Postgres supports ADD COLUMN IF NOT EXISTS; SQLite does not, so check PRAGMA table_info first.
-    Best-effort — a concurrent add or older engine degrades cleanly.
+    Migration failure is fatal because the submission-token columns are part of
+    the admission and ownership invariant; the API must not report ready with a
+    partially upgraded table.
     """
-    try:
-        if _is_postgres(db_url):
-            for col in ("conversation_id", "agent_type"):
-                conn.execute(text(f"ALTER TABLE job_access ADD COLUMN IF NOT EXISTS {col} VARCHAR"))
-        else:
-            cols = {row[1] for row in conn.execute(text("PRAGMA table_info(job_access)")).fetchall()}
-            for col in ("conversation_id", "agent_type"):
-                if col not in cols:
-                    conn.execute(text(f"ALTER TABLE job_access ADD COLUMN {col} VARCHAR"))
-    except Exception as e:
-        logger.debug("Could not ensure job_access extra columns: %s", type(e).__name__)
+    columns = (
+        ("conversation_id", "VARCHAR"),
+        ("agent_type", "VARCHAR"),
+        ("submission_token", "VARCHAR"),
+        ("submission_expires_at", "DOUBLE PRECISION"),
+    )
+    if _is_postgres(db_url):
+        for col, column_type in columns:
+            conn.execute(text(f"ALTER TABLE job_access ADD COLUMN IF NOT EXISTS {col} {column_type}"))
+        return
+
+    existing = {row[1] for row in conn.execute(text("PRAGMA table_info(job_access)")).fetchall()}
+    for col, column_type in columns:
+        if col not in existing:
+            conn.execute(text(f"ALTER TABLE job_access ADD COLUMN {col} {column_type}"))
 
 
 def _job_access_table_sql(db_url: str) -> str:
@@ -345,6 +454,8 @@ def _job_access_table_sql(db_url: str) -> str:
         "  owner_email VARCHAR,"
         "  conversation_id VARCHAR,"
         "  agent_type VARCHAR,"
+        "  submission_token VARCHAR,"
+        "  submission_expires_at DOUBLE PRECISION,"
         f"  created_at {created_at_type}"
         ")"
     )
@@ -352,8 +463,14 @@ def _job_access_table_sql(db_url: str) -> str:
 
 def _job_access_upsert_sql(db_url: str):
     """Return the dialect-appropriate upsert statement for ``job_access``."""
-    cols = "job_id, owner_auth_type, owner_subject, owner_email, conversation_id, agent_type"
-    vals = ":job_id, :owner_auth_type, :owner_subject, :owner_email, :conversation_id, :agent_type"
+    cols = (
+        "job_id, owner_auth_type, owner_subject, owner_email, conversation_id, agent_type, "
+        "submission_token, submission_expires_at"
+    )
+    vals = (
+        ":job_id, :owner_auth_type, :owner_subject, :owner_email, :conversation_id, :agent_type, "
+        ":submission_token, :submission_expires_at"
+    )
     postgres_upsert = (
         f"INSERT INTO job_access ({cols}) VALUES ({vals}) "
         "ON CONFLICT(job_id) DO UPDATE SET "
@@ -361,15 +478,36 @@ def _job_access_upsert_sql(db_url: str):
         "owner_subject = excluded.owner_subject, "
         "owner_email = excluded.owner_email, "
         "conversation_id = excluded.conversation_id, "
-        "agent_type = excluded.agent_type"
+        "agent_type = excluded.agent_type, "
+        "submission_token = NULL, "
+        "submission_expires_at = NULL"
     )
     sqlite_upsert = f"INSERT OR REPLACE INTO job_access ({cols}) VALUES ({vals})"
     return text(postgres_upsert if _is_postgres(db_url) else sqlite_upsert)
 
 
+def _job_access_reservation_insert_sql():
+    """Return the insert-only statement used before a task is enqueued."""
+    return text(
+        "INSERT INTO job_access ("
+        "job_id, owner_auth_type, owner_subject, owner_email, conversation_id, agent_type, "
+        "submission_token, submission_expires_at"
+        ") VALUES ("
+        ":job_id, :owner_auth_type, :owner_subject, :owner_email, :conversation_id, :agent_type, "
+        ":submission_token, :submission_expires_at"
+        ")"
+    )
+
+
 def _principal_params(
-    job_id: str, principal: Principal, conversation_id: str | None = None, agent_type: str | None = None
-) -> dict[str, str | None]:
+    job_id: str,
+    principal: Principal,
+    conversation_id: str | None = None,
+    agent_type: str | None = None,
+    *,
+    submission_token: str | None = None,
+    submission_expires_at: float | None = None,
+) -> dict[str, str | float | None]:
     """Return SQL bind params for a job's owner identity, conversation, and agent type."""
     return {
         "job_id": job_id,
@@ -378,4 +516,6 @@ def _principal_params(
         "owner_email": principal.email,
         "conversation_id": conversation_id,
         "agent_type": agent_type,
+        "submission_token": submission_token,
+        "submission_expires_at": submission_expires_at,
     }

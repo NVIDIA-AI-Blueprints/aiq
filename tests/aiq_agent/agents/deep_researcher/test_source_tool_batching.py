@@ -17,16 +17,22 @@
 
 import asyncio
 from contextlib import suppress
+from typing import Annotated
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import ToolMessage
+from langchain_core.tools import BaseTool
+from langchain_core.tools import InjectedToolArg
 from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
+from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolBudgetExceeded
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolConcurrencyLimiter
+from aiq_agent.agents.deep_researcher.tools.source_tool_batching import activate_source_tool_budget
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import adapt_source_tools_for_research
+from aiq_agent.agents.deep_researcher.tools.source_tool_batching import reset_source_tool_budget
 
 
 @pytest.mark.asyncio
@@ -130,6 +136,250 @@ async def test_batch_wrapper_rejects_oversized_tool_batches_without_calling_orig
 
     assert calls == []
     assert "ERROR: search_tool accepts at most 1 queries per batch" in output
+
+
+@pytest.mark.asyncio
+async def test_source_call_budget_accepts_exact_batch_items_and_rejects_one_more():
+    """Every batch item counts as one provider call and overage is atomic."""
+    calls: list[str] = []
+
+    @tool
+    async def search_tool(query: str) -> str:
+        """Search a source."""
+        calls.append(query)
+        return query
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=3,
+        max_batch_size=3,
+    )[0]
+    token = activate_source_tool_budget(3)
+    try:
+        await wrapped.ainvoke({"queries": ["a", "b", "c"]})
+
+        assert sorted(calls) == ["a", "b", "c"]
+        with pytest.raises(SourceToolBudgetExceeded, match=r"3/3 calls used"):
+            await wrapped.ainvoke({"queries": "d"})
+        assert sorted(calls) == ["a", "b", "c"]
+    finally:
+        reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+async def test_source_call_budget_is_shared_by_batchable_and_non_batchable_tools():
+    """All source adapter shapes consume the same job-local ledger."""
+    calls: list[str] = []
+
+    @tool
+    async def batchable(query: str) -> str:
+        """Search a source."""
+        calls.append(f"batch:{query}")
+        return query
+
+    @tool
+    async def non_batchable(query: str, limit: int) -> str:
+        """Search a source with a result limit."""
+        calls.append(f"plain:{query}:{limit}")
+        return query
+
+    wrapped = {
+        item.name: item
+        for item in adapt_source_tools_for_research(
+            [batchable, non_batchable],
+            source_tool_names={"batchable", "non_batchable"},
+            max_concurrent_source_tool_calls=2,
+            max_batch_size=2,
+        )
+    }
+    token = activate_source_tool_budget(2)
+    try:
+        await wrapped["batchable"].ainvoke({"queries": "a"})
+        await wrapped["non_batchable"].ainvoke({"query": "b", "limit": 1})
+
+        with pytest.raises(SourceToolBudgetExceeded):
+            await wrapped["non_batchable"].ainvoke({"query": "c", "limit": 1})
+        assert calls == ["batch:a", "plain:b:1"]
+    finally:
+        reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+async def test_inferred_schema_source_tool_is_budgeted_and_throttled():
+    """BaseTool schemas inferred from _run signatures cannot bypass either guard."""
+    calls: list[str] = []
+    active = 0
+    max_seen = 0
+
+    class InferredSchemaSourceTool(BaseTool):
+        name: str = "inferred_source"
+        description: str = "Source tool whose args_schema is inferred by BaseTool."
+
+        def _run(self, query: str, limit: int = 1) -> str:
+            raise NotImplementedError
+
+        async def _arun(self, query: str, limit: int = 1) -> str:
+            nonlocal active, max_seen
+            calls.append(query)
+            active += 1
+            max_seen = max(max_seen, active)
+            await asyncio.sleep(0.01)
+            active -= 1
+            return f"{query}:{limit}"
+
+    original = InferredSchemaSourceTool()
+    assert original.args_schema is None
+    wrapped = adapt_source_tools_for_research(
+        [original],
+        source_tool_names={original.name},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=2,
+    )[0]
+
+    token = activate_source_tool_budget(2)
+    try:
+        results = await asyncio.gather(
+            wrapped.ainvoke({"query": "a", "limit": 1}),
+            wrapped.ainvoke({"query": "b", "limit": 2}),
+        )
+        assert results == ["a:1", "b:2"]
+        assert max_seen == 1
+
+        with pytest.raises(SourceToolBudgetExceeded, match=r"2/2 calls used"):
+            await wrapped.ainvoke({"query": "c", "limit": 3})
+        assert sorted(calls) == ["a", "b"]
+    finally:
+        reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+async def test_source_adapters_use_model_facing_schema_without_injected_arguments():
+    """Injected arguments stay runtime-forwardable but never enter the model schema."""
+    calls: list[str] = []
+
+    @tool
+    async def batchable(
+        query: str,
+    ) -> str:
+        """Search a source that is safe to expose as a batch wrapper."""
+        calls.append(f"batch:{query}")
+        return query
+
+    @tool
+    async def injected_single(
+        query: str,
+        credential: Annotated[str, InjectedToolArg],
+    ) -> str:
+        """Search a source with one model argument and one required injected argument."""
+        calls.append(f"injected:{query}:{credential}")
+        return query
+
+    @tool
+    async def throttled(
+        query: str,
+        limit: int,
+        credential: Annotated[str, InjectedToolArg],
+    ) -> str:
+        """Search a source with multiple model arguments and an injected credential."""
+        calls.append(f"plain:{query}:{limit}:{credential}")
+        return query
+
+    wrapped = {
+        item.name: item
+        for item in adapt_source_tools_for_research(
+            [batchable, injected_single, throttled],
+            source_tool_names={"batchable", "injected_single", "throttled"},
+            max_concurrent_source_tool_calls=1,
+            max_batch_size=2,
+        )
+    }
+
+    assert set(wrapped["batchable"].tool_call_schema.model_fields) == {"queries"}
+    assert set(wrapped["injected_single"].tool_call_schema.model_fields) == {"query"}
+    assert set(wrapped["throttled"].tool_call_schema.model_fields) == {"query", "limit"}
+    assert set(wrapped["injected_single"].get_input_schema().model_fields) == {"query", "credential"}
+    assert set(wrapped["throttled"].get_input_schema().model_fields) == {"query", "limit", "credential"}
+    assert "credential" not in wrapped["injected_single"].tool_call_schema.model_fields
+    assert "credential" not in wrapped["throttled"].tool_call_schema.model_fields
+
+    await wrapped["batchable"].ainvoke({"queries": "alpha"})
+    await wrapped["injected_single"].ainvoke({"query": "beta", "credential": "runtime-secret"})
+    await wrapped["throttled"].ainvoke({"query": "gamma", "limit": 2, "credential": "runtime-secret"})
+    assert calls == [
+        "batch:alpha",
+        "injected:beta:runtime-secret",
+        "plain:gamma:2:runtime-secret",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_source_call_budget_reservation_is_concurrency_safe():
+    """Concurrent wrappers cannot race past the remaining provider-call budget."""
+    calls: list[str] = []
+    release = asyncio.Event()
+
+    @tool
+    async def search_tool(query: str) -> str:
+        """Search a source."""
+        calls.append(query)
+        await release.wait()
+        return query
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=2,
+        max_batch_size=1,
+    )[0]
+    token = activate_source_tool_budget(1)
+    try:
+        first = asyncio.create_task(wrapped.ainvoke({"queries": "a"}))
+        await asyncio.sleep(0)
+        second = asyncio.create_task(wrapped.ainvoke({"queries": "b"}))
+        await asyncio.sleep(0)
+        release.set()
+        results = await asyncio.gather(first, second, return_exceptions=True)
+
+        assert len(calls) == 1
+        assert sum(isinstance(result, SourceToolBudgetExceeded) for result in results) == 1
+    finally:
+        reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+async def test_source_call_budget_is_fresh_per_activation_and_reset_restores_parent():
+    """Nested jobs receive isolated ledgers and reset restores the caller context exactly."""
+    calls: list[str] = []
+
+    @tool
+    async def search_tool(query: str) -> str:
+        """Search a source."""
+        calls.append(query)
+        return query
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=1,
+    )[0]
+    outer = activate_source_tool_budget(1)
+    try:
+        await wrapped.ainvoke({"queries": "outer"})
+        inner = activate_source_tool_budget(1)
+        try:
+            await wrapped.ainvoke({"queries": "inner"})
+        finally:
+            reset_source_tool_budget(inner)
+
+        with pytest.raises(SourceToolBudgetExceeded):
+            await wrapped.ainvoke({"queries": "outer-overage"})
+    finally:
+        reset_source_tool_budget(outer)
+
+    await wrapped.ainvoke({"queries": "unbudgeted-caller"})
+    assert calls == ["outer", "inner", "unbudgeted-caller"]
 
 
 @pytest.mark.asyncio

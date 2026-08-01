@@ -19,6 +19,7 @@ import {
   cancelJob,
   type DeepResearchClient,
   type DeepResearchJobStatus,
+  type FileArtifactUpdate,
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
@@ -212,7 +213,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         toolCalls: new Map<string, { name: string; input?: Record<string, unknown>; output?: string; workflow?: string; agentId?: string; isSandbox?: boolean }>(),
         todos: null as TodoItem[] | null,
         citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-        files: new Map<string, string>(),
+        files: new Map<string, FileArtifactUpdate>(),
         reportContent: null as string | null,
       }
 
@@ -238,7 +239,7 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
         const llmSteps = Array.from(buf.llmSteps.entries()).map(([id, s]) => ({ id, name: s.name, workflow: s.workflow, content: s.content, thinking: s.thinking, usage: s.usage, isComplete: true, timestamp: now }))
         const toolCalls = Array.from(buf.toolCalls.entries()).map(([id, t]) => ({ id, name: t.name, input: t.input, output: t.output, workflow: t.workflow, agentId: t.agentId, isSandbox: t.isSandbox, status: 'complete' as const, timestamp: now }))
         const citations = buf.citations.map((c, i) => ({ id: `citation-${i}`, url: c.url, content: c.content, isCited: c.isCited, timestamp: now }))
-        const files = Array.from(buf.files.entries()).map(([filename, content], i) => ({ id: `file-${i}`, filename, content, timestamp: now }))
+        const files = Array.from(buf.files.values()).map((file, i) => ({ id: `file-${i}`, ...file, timestamp: now }))
         const todos = buf.todos ? normalizeDeepResearchTodos(buf.todos) : undefined
 
         useChatStore.setState((state) => ({
@@ -486,13 +487,19 @@ export const useDeepResearch = (): UseDeepResearchReturn => {
             resetTimeout(); addDeepResearchCitation(url, content, isCited)
           },
 
-          onFileUpdate: (filename, content) => {
-            if (buf.active) { buf.files.set(filename, content); return }
+          onFileUpdate: (file) => {
+            if (buf.active) {
+              // Merge like the live store (addDeepResearchFile): a later metadata-only
+              // event must not drop content from an earlier event for the same filename.
+              const prev = buf.files.get(file.filename)
+              buf.files.set(file.filename, prev ? { ...prev, ...file } : file)
+              return
+            }
             if (!isActiveJob()) return
-            resetTimeout(); addDeepResearchFile({ filename, content })
+            resetTimeout(); addDeepResearchFile(file)
             // report.md artifact arrives 1-2 min before the final_report output event —
             // use it as an early signal to switch the UI to "writing" status.
-            if (filename.endsWith('report.md')) {
+            if (file.filename.endsWith('report.md')) {
               setCurrentStatus('writing')
             }
           },

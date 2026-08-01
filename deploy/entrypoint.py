@@ -23,6 +23,8 @@ import subprocess
 import sys
 import time
 
+_DASK_LOOPBACK_HOST = "127.0.0.1"
+
 
 def _terminate_process(proc: subprocess.Popen[str] | None) -> None:
     if proc is None or proc.poll() is not None:
@@ -56,13 +58,68 @@ def _wait_for_scheduler(port: int) -> None:
     print("Waiting for scheduler to start...", flush=True)
     for attempt in range(1, 31):
         try:
-            Client(f"tcp://localhost:{port}", timeout="2s").close()
+            Client(f"tcp://{_DASK_LOOPBACK_HOST}:{port}", timeout="2s").close()
             print("Scheduler ready.", flush=True)
             return
         except Exception as exc:
             if attempt == 30:
                 raise RuntimeError("Scheduler failed to start") from exc
             time.sleep(1)
+
+
+def _scheduler_args(port: int) -> list[str]:
+    """Return the command for the network-namespace-local embedded scheduler.
+
+    The embedded scheduler has no authentication boundary. Keep both its task
+    submission port and dashboard on loopback; operators that need a shared
+    scheduler must deploy and secure it separately.
+    """
+    return [
+        "dask-scheduler",
+        "--host",
+        _DASK_LOOPBACK_HOST,
+        "--port",
+        str(port),
+        "--dashboard-address",
+        f"{_DASK_LOOPBACK_HOST}:8787",
+    ]
+
+
+def _worker_args(
+    scheduler_port: int,
+    nworkers: str,
+    nthreads: str,
+    *,
+    memory_limit: str | None = None,
+    lifetime: str | None = None,
+    lifetime_restart: bool = True,
+) -> list[str]:
+    """Return the command for workers in the embedded cluster.
+
+    A Dask worker exposes unauthenticated RPC and diagnostics listeners in
+    addition to its scheduler connection. Bind every listener to loopback so
+    the embedded cluster remains local to the container network namespace.
+    """
+    args = [
+        "dask-worker",
+        f"tcp://{_DASK_LOOPBACK_HOST}:{scheduler_port}",
+        "--host",
+        _DASK_LOOPBACK_HOST,
+        "--dashboard-address",
+        f"{_DASK_LOOPBACK_HOST}:0",
+        "--nworkers",
+        str(nworkers),
+        "--nthreads",
+        str(nthreads),
+        "--no-dashboard",
+    ]
+    if memory_limit:
+        args += ["--memory-limit", memory_limit]
+    if lifetime:
+        args += ["--lifetime", lifetime]
+        if lifetime_restart:
+            args += ["--lifetime-restart"]
+    return args
 
 
 def main() -> int:
@@ -87,18 +144,10 @@ def main() -> int:
     print("", flush=True)
     print(f"Config: {config_file}", flush=True)
     print(f"API:    http://{host}:{port}", flush=True)
-    print(f"Dask:   tcp://localhost:{scheduler_port}", flush=True)
+    print(f"Dask:   tcp://{_DASK_LOOPBACK_HOST}:{scheduler_port}", flush=True)
     print("", flush=True)
 
-    scheduler_proc = subprocess.Popen(
-        [
-            "dask-scheduler",
-            "--port",
-            str(scheduler_port),
-            "--dashboard-address",
-            ":8787",
-        ],
-    )
+    scheduler_proc = subprocess.Popen(_scheduler_args(scheduler_port))
 
     try:
         _wait_for_scheduler(scheduler_port)
@@ -106,29 +155,22 @@ def main() -> int:
         _terminate_process(scheduler_proc)
         raise SystemExit(str(exc)) from exc
 
-    worker_args = [
-        "dask-worker",
-        f"tcp://localhost:{scheduler_port}",
-        "--nworkers",
-        str(nworkers),
-        "--nthreads",
-        str(nthreads),
-        "--no-dashboard",
-    ]
-    if memory_limit:
-        worker_args += ["--memory-limit", memory_limit]
-    if lifetime:
-        lifetime_restart = os.getenv("DASK_LIFETIME_RESTART", "true").lower() != "false"
-        worker_args += ["--lifetime", lifetime]
-        if lifetime_restart:
-            worker_args += ["--lifetime-restart"]
-
-    worker_proc = subprocess.Popen(worker_args)
+    lifetime_restart = os.getenv("DASK_LIFETIME_RESTART", "true").lower() != "false"
+    worker_proc = subprocess.Popen(
+        _worker_args(
+            scheduler_port,
+            nworkers,
+            nthreads,
+            memory_limit=memory_limit,
+            lifetime=lifetime,
+            lifetime_restart=lifetime_restart,
+        ),
+    )
 
     print("Waiting for worker to connect...", flush=True)
     time.sleep(3)
 
-    os.environ["NAT_DASK_SCHEDULER_ADDRESS"] = f"tcp://localhost:{scheduler_port}"
+    os.environ["NAT_DASK_SCHEDULER_ADDRESS"] = f"tcp://{_DASK_LOOPBACK_HOST}:{scheduler_port}"
 
     print("", flush=True)
     print("--------------------------------------------", flush=True)

@@ -13,7 +13,7 @@ compatibility: |
   access to a running local AI-Q Blueprint server at `http://localhost:8000` by default. Non-local backends must be
   explicitly trusted by the user and granted by the host tool outside this public skill.
 metadata:
-  version: "2.1.0"
+  version: "2.2.0"
   author: "NVIDIA AI-Q Blueprint Team <aiq-blueprint@nvidia.com>"
   github-url: "https://github.com/NVIDIA-AI-Blueprints/aiq"
   tags:
@@ -32,7 +32,7 @@ allowed-tools: Read Bash
 
 # AIQ Research Skill
 
-## Purpose
+## When to Use This Skill
 
 Use this skill to call a locally running NVIDIA AI-Q Blueprint server through the helper script at
 `scripts/aiq.py`.
@@ -64,7 +64,7 @@ Users need:
 
 The helper script has no third-party Python package dependencies; it uses Python standard-library HTTP modules.
 
-## Instructions
+## Workflow
 
 1. Resolve the target backend URL.
 2. Run `health` before sending research requests.
@@ -211,7 +211,7 @@ citations and source URLs intact in every follow-up answer.
 
 ## Version Compatibility
 
-**IMPORTANT:** This skill is designed for NVIDIA AI-Q Blueprint version 2.1.0.
+**IMPORTANT:** This skill is designed for NVIDIA AI-Q Blueprint version 2.2.0.
 
 Semantic Versioning Compatibility Rules:
 
@@ -227,11 +227,11 @@ Compatible IF:
 
 Examples:
 
-- Skill version 2.1.0 is compatible with Blueprint version 2.1.0.
-- Skill version 2.1.0 is compatible with Blueprint version 2.2.0.
-- Skill version 2.1.0 is compatible with Blueprint version 2.1.5.
-- Skill version 2.1.0 is not compatible with Blueprint version 3.0.0.
-- Skill version 2.1.0 is not compatible with Blueprint version 2.0.0.
+- Skill version 2.2.0 is compatible with Blueprint version 2.2.0.
+- Skill version 2.2.0 is compatible with Blueprint version 2.3.0.
+- Skill version 2.2.0 is compatible with Blueprint version 2.2.5.
+- Skill version 2.2.0 is not compatible with Blueprint version 3.0.0.
+- Skill version 2.2.0 is not compatible with Blueprint version 2.1.0.
 
 If your Blueprint version is not compatible:
 
@@ -395,7 +395,7 @@ source URLs intact.
    python3 $SKILL_DIR/scripts/aiq.py agents
    ```
 2. If agents are unavailable, report the compatibility failure and offer to run `aiq-deploy` validation.
-3. Confirm the deployed Blueprint version is compatible with skill version 2.1.0.
+3. Confirm the deployed Blueprint version is compatible with skill version 2.2.0.
 
 ### Issue: Job is interrupted or appears stuck
 

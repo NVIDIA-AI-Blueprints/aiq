@@ -28,13 +28,18 @@ from __future__ import annotations
 import asyncio
 import importlib
 import logging
+import threading
 import uuid
 from collections.abc import Awaitable
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from typing import Any
 
+from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchExecutionTimeout
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+
 from .callbacks import AgentEventCallback
+from .callbacks import build_final_report_event
 from .event_store import BatchingEventStore
 from .event_store import EventStore
 
@@ -57,6 +62,7 @@ _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
         "max_research_concurrency",
         "max_concurrent_source_tool_calls",
         "max_source_tool_batch_size",
+        "resource_limits",
     }
 )
 _CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
@@ -178,6 +184,182 @@ class CancellationMonitor:
 # Interval for emitting heartbeat events
 HEARTBEAT_INTERVAL_SECONDS = 30
 
+# The ghost-job reaper treats a RUNNING job with no recent activity as a dead
+# worker. But a worker can spend minutes in pre-event initialization (config,
+# providers, tools, MCP, sandbox) before it stores its first event, so from the
+# moment the job enters RUNNING we refresh a lightweight lease — job_info's
+# updated_at, the same column the reaper falls back to for a zero-event job — on
+# this interval. A slow-but-live worker keeps its lease fresh and is not reaped;
+# a genuinely dead worker stops refreshing and its lease goes stale. Keep this
+# well under GHOST_JOB_TIMEOUT_SECONDS so a live worker refreshes several times
+# before the reaper's timeout.
+LEASE_REFRESH_INTERVAL_SECONDS = 60
+
+
+def _db_now_expr(db_url: str) -> str:
+    """Return the DB current-time SQL expression for this backend.
+
+    Accepts both ``postgresql://`` and the legacy ``postgres://`` scheme.
+    """
+    return "NOW()" if db_url.startswith(("postgresql", "postgres")) else "CURRENT_TIMESTAMP"
+
+
+def _touch_job_lease_sync(db_url: str, job_id: str) -> None:
+    """Refresh the running-job lease by bumping job_info.updated_at.
+
+    Scoped to ``status = 'running'`` so it can never resurrect the timestamp of
+    a job that has already reached a terminal state.
+    """
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET updated_at = {_db_now_expr(db_url)} WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt, {"job_id": job_id})
+
+
+def _write_job_success_if_running_sync(db_url: str, job_id: str, stored_output: str) -> bool:
+    """Compare-and-set the job to SUCCESS with its output, only if still RUNNING.
+
+    A single guarded ``UPDATE ... WHERE status = 'running'`` so a job the reaper
+    already moved to a terminal state (e.g. it was reaped while slow to finish)
+    is never resurrected. Returns True iff this call performed the write.
+    """
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'success', output = :output, updated_at = {_db_now_expr(db_url)} "
+        "WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(stmt, {"output": stored_output, "job_id": job_id})
+        return (result.rowcount or 0) == 1
+
+
+def _write_job_source_failure_if_running_sync(
+    db_url: str,
+    job_id: str,
+    public_error: str,
+    stored_output: str,
+    final_report_event: dict[str, Any] | None = None,
+    job_output_cipher: Any | None = None,
+) -> bool:
+    """Persist a source failure, then store its optional final-report event best-effort."""
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'failure', error = :error, output = :output, "
+        f"updated_at = {_db_now_expr(db_url)} WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(
+            stmt,
+            {"error": public_error, "output": stored_output, "job_id": job_id},
+        )
+        if (result.rowcount or 0) != 1:
+            return False
+
+    if final_report_event is not None:
+        try:
+            EventStore(db_url, job_id, content_cipher=job_output_cipher).store(final_report_event)
+        except Exception as exc:
+            logger.warning(
+                "Job %s source-failure final-report event write failed exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
+    return True
+
+
+def _write_job_failure_if_running_sync(db_url: str, job_id: str, public_error: str) -> bool:
+    """Compare-and-set a generic failure without changing an existing terminal job."""
+    from sqlalchemy import text
+
+    from .event_store import EventStore
+
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    stmt = text(
+        f"UPDATE job_info SET status = 'failure', error = :error, updated_at = {_db_now_expr(db_url)} "
+        "WHERE job_id = :job_id AND status = 'running'"
+    )
+    with engine.begin() as conn:
+        result = conn.execute(stmt, {"error": public_error, "job_id": job_id})
+        return (result.rowcount or 0) == 1
+
+
+async def _persist_empty_source_failure(
+    *,
+    error: EmptySourceRegistryError,
+    job_output_cipher: Any,
+    db_url: str,
+    job_id: str,
+    event_store: Any | None = None,
+) -> bool:
+    """Persist a typed source failure, falling back safely if output storage fails."""
+    from .crypto import serialize_job_output_for_storage
+
+    output = {
+        "report": error.generated_answer,
+        "outcome_reason": error.reason.value,
+    }
+    try:
+        stored_output = serialize_job_output_for_storage(output, job_output_cipher)
+        if event_store is not None and hasattr(event_store, "flush"):
+            await asyncio.to_thread(event_store.flush)
+        final_report_event = (
+            build_final_report_event(error.generated_answer).to_sse_dict() if error.generated_answer else None
+        )
+        return await asyncio.get_running_loop().run_in_executor(
+            None,
+            _write_job_source_failure_if_running_sync,
+            db_url,
+            job_id,
+            error.public_message,
+            stored_output,
+            final_report_event,
+            job_output_cipher,
+        )
+    except Exception as exc:
+        logger.warning(
+            "Job %s source-failure output write failed exception=%s",
+            job_id,
+            exc.__class__.__name__,
+        )
+        sanitized_error = f"job failed ({type(exc).__name__}); check server logs for details"
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            _write_job_failure_if_running_sync,
+            db_url,
+            job_id,
+            sanitized_error,
+        )
+        return False
+
+
+def _run_lease_refresher(db_url: str, job_id: str, stop_event: threading.Event) -> None:
+    """Refresh the running-job lease on a dedicated thread until signalled.
+
+    Runs in its own OS thread — not the worker event loop — so it cannot be
+    starved by synchronous cold-start work (config load, agent import) that
+    holds the loop. ``stop_event.wait`` returns True when the job ends (exit) or
+    False on timeout (refresh, then loop).
+    """
+    while not stop_event.wait(LEASE_REFRESH_INTERVAL_SECONDS):
+        try:
+            _touch_job_lease_sync(db_url, job_id)
+        except Exception as exc:  # noqa: BLE001 - a failed lease refresh must never kill the job
+            logger.debug("Lease refresh for job %s failed: %s", job_id, exc)
+
 
 async def run_with_cancellation(
     coro,
@@ -254,7 +436,7 @@ def _get_worker_function_type(config: Any) -> str | None:
     if config.workflow is None:
         return None
 
-    if config.workflow.use_async_deep_research:
+    if getattr(config.workflow, "use_async_deep_research", False):
         return _DEEP_RESEARCH_FUNCTION_TYPE
     return None
 
@@ -455,6 +637,7 @@ async def run_agent_job(
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
     owner_user_id: str | None = None,
+    admission_token: str | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -493,6 +676,7 @@ async def run_agent_job(
         owner_user_id: Canonical per-user key (``principal_user_id``), set on the NAT
             Context so per_user_mcp_client retrieves the token the owner connected
             via /v1/auth/mcp/{id}/connect.
+        admission_token: Opaque deep-research fencing token captured at submit time.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -530,6 +714,8 @@ async def run_agent_job(
     job_store: JobStore | None = None
     job_output_cipher = None
     cancellation_monitor: CancellationMonitor | None = None
+    lease_stop: threading.Event | None = None
+    lease_thread: threading.Thread | None = None
     event_store: EventStore | BatchingEventStore | None = None
     # Sandbox runtime is released on the terminal path; interrupted forces terminate() over close().
     sandbox_runtime: Any | None = None
@@ -543,6 +729,27 @@ async def run_agent_job(
 
     try:
         job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+        if admission_token is not None:
+            from .admission import is_deep_research_reservation_current
+
+            try:
+                reservation_is_current = await asyncio.to_thread(
+                    is_deep_research_reservation_current,
+                    db_url,
+                    job_id,
+                    admission_token,
+                )
+            except Exception as exc:  # noqa: BLE001 - worker admission fails closed
+                logger.warning(
+                    "Could not verify admission fencing token for job %s (error_type=%s)",
+                    job_id,
+                    type(exc).__name__,
+                )
+                reservation_is_current = False
+            if not reservation_is_current:
+                logger.warning("Rejected job %s because its admission fencing token is no longer current", job_id)
+                await job_store.update_status(job_id, JobStatus.FAILURE, error="submission admission lease lost")
+                return
         try:
             from .crypto import ContentEncryptionError
             from .crypto import ContentEncryptionPolicyMismatch
@@ -566,6 +773,19 @@ async def run_agent_job(
             return
 
         await job_store.update_status(job_id, JobStatus.RUNNING)
+
+        # Start refreshing the reaper lease immediately, before the slow
+        # initialization below stores any event, so a live worker in a long
+        # cold start is not mistaken for a dead one. It runs on a dedicated
+        # thread so synchronous init work can't starve it.
+        lease_stop = threading.Event()
+        lease_thread = threading.Thread(
+            target=_run_lease_refresher,
+            args=(db_url, job_id, lease_stop),
+            name=f"job-lease-{job_id}",
+            daemon=True,
+        )
+        lease_thread.start()
 
         cancellation_monitor = CancellationMonitor(
             scheduler_address=scheduler_address,
@@ -629,8 +849,10 @@ async def run_agent_job(
             from nat.data_models.intermediate_step import TraceMetadata
             from nat.data_models.invocation_node import InvocationNode
             from nat.observability.exporter_manager import ExporterManager
-            from nat.plugins.langchain.callback_handler import LangchainProfilerHandler
             from nat.utils.reactive.subject import Subject
+
+            from .telemetry import AgentLifecycleTelemetryCallback
+            from .telemetry import aiq_langchain_profiler_context
 
             telemetry_exporters = {
                 name: configured.instance for name, configured in builder._telemetry_exporters.items()
@@ -654,7 +876,7 @@ async def run_agent_job(
             _ = context_state.active_span_id_stack
 
             # Set up span hierarchy metadata
-            workflow_span_name = f"async_job:{agent_config_name}"
+            workflow_span_name = agent_config_name
             context_state.active_function.set(
                 InvocationNode(
                     function_name=workflow_span_name,
@@ -711,16 +933,15 @@ async def run_agent_job(
                         )
                     )
 
-                    # Create profiler callback AFTER workflow starts (ensures correct parent)
-                    nat_profiler_callback = LangchainProfilerHandler()
+                    agent_telemetry_callback = AgentLifecycleTelemetryCallback(context.intermediate_step_manager)
 
                     verbose = is_verbose(getattr(fn_config, "verbose", False))
                     callbacks = [VerboseTraceCallback()] if verbose else []
 
                     raw_event_store = EventStore(db_url, job_id, content_cipher=job_output_cipher)
                     event_store = BatchingEventStore(raw_event_store)
+                    callbacks.append(agent_telemetry_callback)
                     callbacks.append(AgentEventCallback(event_store))
-                    callbacks.append(nat_profiler_callback)
 
                     # Resolve per-user MCP source tools for the job owner (Context.user_id
                     # set above); connections stay open via mcp_stack for the agent run.
@@ -759,20 +980,22 @@ async def run_agent_job(
                         # agents without a sandbox runtime; close()/terminate() are then no-ops.
                         sandbox_runtime = getattr(agent, "deepagents_runtime", None)
 
-                        # Run agent - LLM/tool events will be nested under workflow span
-                        result = await _run_agent(
-                            agent=agent,
-                            input_text=input_text,
-                            builder=builder,
-                            config=config,
-                            function_name=agent_config_name,
-                            function_config=fn_config,
-                            monitor=cancellation_monitor,
-                            available_documents=available_documents,
-                            data_sources=data_sources,
-                            event_store=event_store,
-                            initial_files=initial_files,
-                        )
+                        # Replace NAT's inherited profiler for this invocation rather than adding a
+                        # second callback with duplicate LangChain run IDs.
+                        with aiq_langchain_profiler_context():
+                            result = await _run_agent(
+                                agent=agent,
+                                input_text=input_text,
+                                builder=builder,
+                                config=config,
+                                function_name=agent_config_name,
+                                function_config=fn_config,
+                                monitor=cancellation_monitor,
+                                available_documents=available_documents,
+                                data_sources=data_sources,
+                                event_store=event_store,
+                                initial_files=initial_files,
+                            )
 
                     # Emit WORKFLOW_END event for Phoenix
                     context.intermediate_step_manager.push_intermediate_step(
@@ -798,27 +1021,38 @@ async def run_agent_job(
                     # Signal event stream completion
                     event_stream.on_complete()
 
-                    # Flush any buffered events before updating status
+                    # Harvest artifacts (durable, idempotent) before SUCCESS so clients cannot
+                    # stop streaming before the terminal metadata is persisted. Resource release
+                    # is deferred to the finally block: the provider's close() is unbounded, so
+                    # awaiting it here could strand a finished job in RUNNING if SDK cleanup hangs.
+                    await asyncio.to_thread(
+                        _harvest_sandbox_artifacts,
+                        sandbox_runtime,
+                        job_id=job_id,
+                        interrupted=False,
+                    )
                     if hasattr(event_store, "flush"):
                         event_store.flush()
 
                     # Extract report and update status inside the context manager
                     # so the UI sees completion before exporter flush and cleanup
                     report = _extract_result(result)
-                    from .crypto import update_job_output
+                    from .crypto import serialize_job_output_for_storage
 
                     if job_output_cipher is None:
                         raise RuntimeError("job output cipher was not initialized")
                     # Apply caller metadata first, then set the canonical report last so a
                     # stray "report" key in output_metadata can never overwrite the real report.
                     output = {**(output_metadata or {}), "report": report}
+                    # Terminal state is immutable: write SUCCESS with a single
+                    # compare-and-set (WHERE status='running'), so if the ghost
+                    # reaper already marked this job FAILURE it is never
+                    # resurrected. Serialize/encrypt exactly as update_job_output
+                    # would, then do the guarded write.
                     try:
-                        await update_job_output(
-                            job_store,
-                            job_id,
-                            JobStatus.SUCCESS,
-                            output=output,
-                            cipher=job_output_cipher,
+                        stored_output = serialize_job_output_for_storage(output, job_output_cipher)
+                        wrote = await asyncio.get_running_loop().run_in_executor(
+                            None, _write_job_success_if_running_sync, db_url, job_id, stored_output
                         )
                     except Exception as exc:
                         logger.warning(
@@ -827,22 +1061,18 @@ async def run_agent_job(
                             exc.__class__.__name__,
                         )
                         raise
-                    logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    if wrote:
+                        logger.info("Job %s completed (report: %d chars)", job_id, len(report))
+                    else:
+                        logger.warning("Job %s already terminal; skipping success write", job_id)
 
     except asyncio.CancelledError:
         logger.info("Job %s cancelled", job_id)
         interrupted = True
-        if job_store:
-            try:
-                job = await job_store.get_job(job_id)
-                if job and job.status != JobStatus.INTERRUPTED.value:
-                    await job_store.update_status(job_id, JobStatus.INTERRUPTED, error="cancelled by user")
-            except (ConnectionError, TimeoutError, RuntimeError):
-                pass
-
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
+        await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=True)
         _store_terminal_event_best_effort(
             event_store,
             {
@@ -851,42 +1081,75 @@ async def run_agent_job(
             },
         )
 
-    except Exception as e:
-        logger.exception("Job %s failed: %s", job_id, type(e).__name__)
         if job_store:
-            await job_store.update_status(job_id, JobStatus.FAILURE, error=str(e))
+            try:
+                job = await job_store.get_job(job_id)
+                if job and job.status != JobStatus.INTERRUPTED.value:
+                    await job_store.update_status(job_id, JobStatus.INTERRUPTED, error="cancelled by user")
+            except (ConnectionError, TimeoutError, RuntimeError):
+                pass
 
+    except EmptySourceRegistryError as e:
+        logger.info("Job %s failed because no research sources were available (%s)", job_id, e.reason.value)
+        if event_store is None:
+            event_store = BatchingEventStore(EventStore(db_url, job_id, content_cipher=job_output_cipher))
+
+        await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
+        wrote = await _persist_empty_source_failure(
+            error=e,
+            job_output_cipher=job_output_cipher,
+            db_url=db_url,
+            job_id=job_id,
+            event_store=event_store,
+        )
+        if wrote:
+            logger.info("Job %s persisted source-failure outcome", job_id)
+        else:
+            logger.warning("Job %s already terminal or source-failure output persistence failed", job_id)
+
+    except Exception as e:
+        resource_timeout = isinstance(e, DeepResearchExecutionTimeout)
+        if resource_timeout:
+            # A timed-out graph may still have a blocking provider call running
+            # outside the event loop. Terminate its sandbox before persisting the
+            # failure so external execution cannot outlive the job deadline.
+            interrupted = True
+            await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=True)
+        logger.exception("Job %s failed: %s", job_id, type(e).__name__)
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
+        # Persist only the exception class name: raw messages can embed
+        # credentials or internal hostnames, and both the event stream and the
+        # stored status are surfaced to the job's caller.
+        sanitized_error = f"job failed ({type(e).__name__}); check server logs for details"
+        if not resource_timeout:
+            await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
         _store_terminal_event_best_effort(
             event_store,
             {
                 "type": "job.error",
                 "data": {
-                    "error": str(e),
+                    "error": sanitized_error,
                     "error_type": type(e).__name__,
                 },
             },
         )
+        if job_store:
+            await job_store.update_status(job_id, JobStatus.FAILURE, error=sanitized_error)
 
     finally:
         # Ensure terminal-path events are not left in the batch buffer.
-        if event_store is not None and hasattr(event_store, "flush"):
-            try:
-                event_store.flush()
-            except Exception as exc:
-                logger.warning(
-                    "Final event flush failed for job %s exception=%s",
-                    job_id,
-                    exc.__class__.__name__,
-                )
+        await _flush_event_store(event_store, job_id=job_id)
+        if lease_stop is not None:
+            lease_stop.set()
+        if lease_thread is not None:
+            await asyncio.to_thread(lease_thread.join, 5)
         if cancellation_monitor:
             cancellation_monitor.stop()
-        # Release the sandbox off the event loop so the SDK session close never blocks the Dask
-        # worker. The single artifact harvest already ran in agent.run() before this point, so
-        # teardown only closes/terminates; interrupted jobs terminate() to preempt a live execute.
+        # Idempotent fallback for failures before a terminal branch finalized the runtime.
         await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=interrupted)
+        await _flush_event_store(event_store, job_id=job_id)
         # Clean up job-scoped auth token
         if _auth_token_reset is not None:
             from ._auth_context import job_auth_token
@@ -909,14 +1172,50 @@ def _store_terminal_event_best_effort(event_store, event: dict) -> None:
         )
 
 
-def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
-    """Release sandbox resources on a terminal path (best-effort, never raises).
+def _harvest_sandbox_artifacts(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
+    """Persist captured artifacts on a terminal path without releasing the sandbox."""
+    if sandbox_runtime is None:
+        return
+    finalize_artifacts = getattr(sandbox_runtime, "finalize_artifacts", None)
+    if callable(finalize_artifacts):
+        try:
+            finalize_artifacts(interrupted=interrupted)
+        except Exception as exc:  # noqa: BLE001 - artifact capture cannot replace the job result
+            logger.warning(
+                "Terminal artifact harvest failed for job %s exception=%s",
+                job_id,
+                exc.__class__.__name__,
+            )
 
-    Interrupted jobs (cancel/timeout) call ``terminate()`` so a still-running ``execute`` is
-    forcibly preempted; normal paths call ``close()`` gracefully. Both are idempotent. This runs
-    off the event loop (``asyncio.to_thread``) so the SDK session close cannot block the worker.
+
+async def _flush_event_store(event_store: Any | None, *, job_id: str) -> None:
+    """Flush terminal events off-loop without replacing the job result."""
+    if event_store is None or not hasattr(event_store, "flush"):
+        return
+    try:
+        await asyncio.to_thread(event_store.flush)
+    except Exception as exc:  # noqa: BLE001 - terminal observability must not replace the job result
+        logger.warning("Event store flush failed for job %s (%s)", job_id, type(exc).__name__)
+
+
+def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: bool) -> None:
+    """Harvest artifacts and release sandbox resources on a terminal path.
+
+    Prefers ``finalize(interrupted=...)`` when available. On the legacy fallback,
+    interrupted/cancelled jobs call ``terminate()`` so a still-running ``execute`` is forcibly
+    preempted; normal failure and success paths call ``close()`` gracefully. Both are idempotent.
+    This runs off the event loop (``asyncio.to_thread``) so SDK cleanup cannot block the worker.
     """
     if sandbox_runtime is None:
+        return
+    _harvest_sandbox_artifacts(sandbox_runtime, job_id=job_id, interrupted=interrupted)
+    finalize = getattr(sandbox_runtime, "finalize", None)
+    if callable(finalize):
+        try:
+            if not finalize(interrupted=interrupted):
+                logger.warning("Sandbox cleanup reported failure for job %s", job_id)
+        except Exception as exc:  # noqa: BLE001 - cleanup must never replace the job result
+            logger.warning("Sandbox cleanup failed for job %s (%s)", job_id, type(exc).__name__)
         return
     teardown = getattr(sandbox_runtime, "terminate", None) if interrupted else None
     if teardown is None:
@@ -925,8 +1224,11 @@ def _teardown_sandbox(sandbox_runtime: Any | None, *, job_id: str, interrupted: 
         return
     try:
         teardown()
-    except Exception:  # noqa: BLE001 - cleanup must never raise on the terminal path
-        logger.warning("Sandbox cleanup failed for job %s", job_id, exc_info=True)
+    except Exception as exc:  # noqa: BLE001 - cleanup must never raise on the terminal path
+        # Secret-safe: log only the exception type. A provider cleanup error can carry a
+        # credential or internal hostname, which must never reach the logs (matches the
+        # finalize_artifacts handler above).
+        logger.warning("Sandbox cleanup failed for job %s (%s)", job_id, type(exc).__name__)
 
 
 def _create_agent_instance(
@@ -972,6 +1274,7 @@ def _create_agent_instance(
             max_research_concurrency=fn_config.max_research_concurrency,
             max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
             max_source_tool_batch_size=fn_config.max_source_tool_batch_size,
+            resource_limits=fn_config.resource_limits,
         )
 
     if _constructor_accepts_explicit_kwargs(agent_cls, _CONFIGURABLE_AGENT_KWARGS):

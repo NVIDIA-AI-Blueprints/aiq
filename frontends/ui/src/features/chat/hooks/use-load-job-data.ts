@@ -28,6 +28,7 @@ import {
   createDeepResearchClient,
   type DeepResearchClient,
   type DeepResearchJobStatus,
+  type FileArtifactUpdate,
   type TodoItem,
 } from '@/adapters/api'
 import { useChatStore } from '../store'
@@ -371,7 +372,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           >(),
           todos: null as TodoItem[] | null,
           citations: [] as Array<{ url: string; content: string; isCited: boolean }>,
-          files: new Map<string, string>(), // filename -> latest content (deduped)
+          files: new Map<string, FileArtifactUpdate>(), // filename -> latest event (deduped)
           reportContent: null as string | null,
         }
 
@@ -427,10 +428,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             timestamp: now,
           }))
 
-          const files = Array.from(buffer.files.entries()).map(([filename, content], idx) => ({
+          const files = Array.from(buffer.files.values()).map((file, idx) => ({
             id: `file-${idx}`,
-            filename,
-            content,
+            ...file,
             timestamp: now,
           }))
 
@@ -574,8 +574,11 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
               buffer.citations.push({ url, content, isCited: isCited ?? false })
             },
 
-            onFileUpdate: (filename, content) => {
-              buffer.files.set(filename, content)
+            onFileUpdate: (file) => {
+              // Merge like the live store: a later metadata-only event must not drop
+              // content from an earlier event for the same filename during replay.
+              const prev = buffer.files.get(file.filename)
+              buffer.files.set(file.filename, prev ? { ...prev, ...file } : file)
             },
 
             onOutputUpdate: (content, outputCategory) => {

@@ -22,11 +22,14 @@ Tests cover:
 - URL normalization for database connections
 """
 
+import logging
 import tempfile
+import uuid
 from pathlib import Path
 
 import pytest
 
+from aiq_agent.common.logging_utils import log_identifier_ref
 from aiq_agent.knowledge.schema import AvailableDocument
 from aiq_agent.knowledge.summary_store import SummaryStore
 from aiq_agent.knowledge.summary_store import _normalize_db_url
@@ -211,6 +214,21 @@ class TestSummaryStore:
         """Test getting documents from empty collection returns empty list."""
         docs = store.get_all("nonexistent_collection")
         assert docs == []
+
+    def test_database_errors_do_not_log_collection_capability(self, temp_db, caplog):
+        """Bound SQL parameters stay hidden when an operation fails."""
+        store = SummaryStore(temp_db)
+        capability_id = str(uuid.uuid4())
+        assert store._sync_engine.hide_parameters is True
+        assert store._get_or_create_async_engine(temp_db).sync_engine.hide_parameters is True
+        with store._sync_engine.begin() as conn:
+            conn.exec_driver_sql("DROP TABLE summaries")
+
+        caplog.set_level(logging.WARNING, logger="aiq_agent.knowledge.summary_store")
+
+        assert store.get_all(capability_id) == []
+        assert capability_id not in caplog.text
+        assert log_identifier_ref(capability_id) in caplog.text
 
     def test_get_all_different_collections(self, store):
         """Test documents are isolated by collection."""

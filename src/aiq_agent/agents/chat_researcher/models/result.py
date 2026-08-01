@@ -15,9 +15,38 @@
 
 """Result models for chat research agent."""
 
+from typing import Annotated
 from typing import Literal
 
 from pydantic import BaseModel
+from pydantic import Field
+
+from nat.data_models.api_server import ChatResponse
+
+RESEARCH_WORKFLOW_FAILURE_ERROR = "Research could not be completed. Please try again."
+
+
+class WorkflowSuccess(BaseModel):
+    """Successful terminal workflow outcome."""
+
+    status: Literal["success"] = "success"
+    result: str
+
+
+class WorkflowFailure(BaseModel):
+    """Failed terminal workflow outcome with a sanitized public error."""
+
+    status: Literal["failed"] = "failed"
+    error: str
+
+
+WorkflowOutcome = Annotated[WorkflowSuccess | WorkflowFailure, Field(discriminator="status")]
+
+
+class ChatResearcherResponse(ChatResponse):
+    """Chat response carrying the workflow's explicit terminal outcome."""
+
+    workflow_outcome: WorkflowOutcome
 
 
 class ShallowResult(BaseModel):

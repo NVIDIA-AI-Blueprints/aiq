@@ -180,9 +180,10 @@ dotenv -f deploy/.env run .venv/bin/nat run \
 The CLI script starts an interactive session. Type your research query and the system will:
 
 1. Classify the intent (shallow vs deep)
-2. For deep queries: present a research plan for your approval
-3. Execute the research with tool calls shown in real time
-4. Output a structured report
+2. Ask a focused clarification only when the request is genuinely ambiguous; the clarifier does not ask you to approve a plan
+3. For deep queries, build an internal structured plan and run independent research queries concurrently
+4. Show research tool activity in real time
+5. Have the writer synthesize the captured evidence into the requested output shape
 
 ### Example Session
 
@@ -201,7 +202,8 @@ The CLI script starts an interactive session. Type your research query and the s
 
 ## Tips for Local NIMs
 
-- **GPU memory**: Monitor with `nvidia-smi`. The 30B model needs ~40 GB VRAM.
+- **GPU memory**: Monitor with `nvidia-smi`. Size GPUs for the
+  `nvidia/nemotron-3-super-120b-a12b` NIM using the model card and support matrix.
 - **Startup time**: NIM containers take 2--5 minutes to load the model on first start. Wait until `/v1/models` returns a response.
 - **Multiple GPUs**: Use `--gpus '"device=0,1"'` to spread across GPUs, or run separate containers per GPU for different model roles.
 - **Networking**: If running inside Docker Compose, use container names instead of `localhost` for `base_url`.

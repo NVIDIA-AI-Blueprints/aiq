@@ -39,6 +39,8 @@ All containerized deployments run the same three services:
 
 - **[Production Considerations](./production.md)** -- Guidance on managed databases, horizontal scaling, security hardening, monitoring, and resource requirements.
 
+- **[OpenShell](./openshell.md)** -- Optional policy-bound execution for generated deep-research code, including supported platforms, authenticated gateway ownership, policy/config pairing, deterministic live acceptance, and safe cleanup.
+
 ## Quick Start
 
 For the fastest path to a running stack:

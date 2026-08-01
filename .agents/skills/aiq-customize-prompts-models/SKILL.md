@@ -112,6 +112,7 @@ smoke run is the real check; a config/prompt-only change needs no Python lint.
 
 ## Related Skills
 
+- `aiq-configure-workflow`
 - `aiq-add-tool`
 - `aiq-add-data-source`
 - `aiq-release-qa`

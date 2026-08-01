@@ -10,9 +10,9 @@ AI-Q uses a multi-agent architecture where an intent classifier routes queries t
 | Agent | Purpose | Speed | Depth |
 |-------|---------|-------|-------|
 | [Intent Classifier](./intent-classifier.md) | Route queries and determine research depth | Instant | — |
-| [Clarifier](./clarifier.md) | HITL: clarify ambiguous queries and the requested output type | Interactive | — |
+| [Clarifier](./clarifier.md) | Optionally gather missing context and the requested output type before deep research | Interactive | — |
 | [Shallow Researcher](./shallow-researcher.md) | Fast, bounded research for simple questions | Fast (30-60s) | Surface |
-| [Deep Researcher](./deep-researcher.md) | Multi-phase deep research with planning and iteration | Thorough (2-10min) | Deep |
+| [Deep Researcher](./deep-researcher.md) | Advisory source routing, structured planning, concurrent evidence gathering, and writer synthesis | Thorough (2-10min) | Deep |
 
 ```{toctree}
 :titlesonly:

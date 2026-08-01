@@ -2913,9 +2913,9 @@ export const useChatStore = create<ChatStore>()(
           const existingIndex = deepResearchFiles.findIndex((f) => f.filename === file.filename)
 
           if (existingIndex >= 0) {
-            // Update existing file with latest content
+            // Update existing text or durable generated-artifact metadata.
             const updatedFiles = deepResearchFiles.map((f, i) =>
-              i === existingIndex ? { ...f, content: file.content, timestamp: new Date() } : f
+              i === existingIndex ? { ...f, ...file, timestamp: new Date() } : f
             )
             set({ deepResearchFiles: updatedFiles }, false, 'addDeepResearchFile:update')
             return deepResearchFiles[existingIndex].id

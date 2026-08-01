@@ -10,6 +10,7 @@ existing job id could destroy that job's durable state.
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import pytest
@@ -40,16 +41,19 @@ def patched_submit(monkeypatch):
     monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", "tcp://localhost:8786")
     monkeypatch.setenv("REQUIRE_AUTH", "false")
 
-    rollback = MagicMock()
     create_access = MagicMock()
-    monkeypatch.setattr(submit_mod, "rollback_job_submission", rollback)
     monkeypatch.setattr(submit_mod, "create_job_access", create_access)
-    return submit_mod, job_store_mod, rollback, create_access
+    monkeypatch.setattr(submit_mod, "release_job_access_reservation", MagicMock())
+    monkeypatch.setattr(submit_mod, "renew_job_access_reservation", MagicMock(return_value=True))
+    monkeypatch.setattr(submit_mod, "reserve_deep_research_job", AsyncMock(return_value="admission-token"))
+    monkeypatch.setattr(submit_mod, "renew_deep_research_job_reservation", AsyncMock(return_value=True))
+    monkeypatch.setattr(submit_mod, "release_deep_research_job_reservation", AsyncMock())
+    return submit_mod, job_store_mod, create_access
 
 
 @pytest.mark.asyncio
 async def test_colliding_job_id_raises_conflict_without_rollback(patched_submit, monkeypatch):
-    submit_mod, job_store_mod, rollback, _create_access = patched_submit
+    submit_mod, job_store_mod, _create_access = patched_submit
 
     async def _submit_job_collision(*args, **kwargs):
         raise IntegrityError("INSERT INTO job_info", {}, Exception("UNIQUE constraint failed: job_info.job_id"))
@@ -65,19 +69,23 @@ async def test_colliding_job_id_raises_conflict_without_rollback(patched_submit,
             job_id="victim-job-id",
         )
 
-    # The colliding job already existed and is NOT ours — we must never delete it.
-    rollback.assert_not_called()
+    # The colliding job already existed and is NOT ours. Cleanup is guarded by
+    # this submitter's opaque reservation token.
+    submit_mod.release_job_access_reservation.assert_called_once_with(
+        "victim-job-id",
+        "admission-token",
+        "sqlite:///./data/jobs.db",
+    )
 
 
 @pytest.mark.asyncio
-async def test_access_persistence_failure_still_rolls_back(patched_submit, monkeypatch):
-    submit_mod, job_store_mod, rollback, create_access = patched_submit
+async def test_access_persistence_failure_happens_before_enqueue(patched_submit, monkeypatch):
+    submit_mod, job_store_mod, create_access = patched_submit
 
-    async def _submit_job_ok(*args, **kwargs):
-        return "ok"
+    enqueue = AsyncMock()
 
-    monkeypatch.setattr(job_store_mod, "JobStore", _fake_job_store_factory(_submit_job_ok))
-    # create_job_access runs in an executor; make it raise to simulate access persistence failure.
+    monkeypatch.setattr(job_store_mod, "JobStore", _fake_job_store_factory(enqueue))
+    # Ownership is persisted before JobStore can hand work to Dask.
     create_access.side_effect = RuntimeError("db down")
 
     with pytest.raises(RuntimeError):
@@ -89,15 +97,18 @@ async def test_access_persistence_failure_still_rolls_back(patched_submit, monke
             job_id="our-own-new-job",
         )
 
-    # We created this job, then access persistence failed -> roll back our partial state.
-    rollback.assert_called_once()
+    enqueue.assert_not_awaited()
+    submit_mod.release_deep_research_job_reservation.assert_awaited_once_with(
+        db_url="sqlite:///./data/jobs.db",
+        job_id="our-own-new-job",
+        reservation_token="admission-token",
+    )
 
 
 @pytest.mark.asyncio
-async def test_post_create_submit_failure_rolls_back(patched_submit, monkeypatch):
-    """A non-collision submit_job failure (e.g. scheduler/Dask error) after the job_info
-    row is committed must still roll back, or it leaves an orphaned ownerless job."""
-    submit_mod, job_store_mod, rollback, _create_access = patched_submit
+async def test_post_create_submit_failure_retains_durable_accounting(patched_submit, monkeypatch):
+    """A post-create submit failure retains durable accounting because enqueue may have occurred."""
+    submit_mod, job_store_mod, _create_access = patched_submit
 
     async def _submit_job_dask_failure(*args, **kwargs):
         # NAT's submit_job commits job_info before submitting to Dask, so this
@@ -116,13 +127,16 @@ async def test_post_create_submit_failure_rolls_back(patched_submit, monkeypatch
             job_id="our-own-new-job",
         )
 
-    rollback.assert_called_once()
+    # The error may occur after dask_client.submit. Keep durable ownership and
+    # admission accounting instead of releasing capacity under a running task.
+    submit_mod.release_job_access_reservation.assert_not_called()
+    submit_mod.release_deep_research_job_reservation.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_submit_records_conversation_id_on_job_access(patched_submit, monkeypatch):
     """The originating conversation id is persisted with the job for report-follow-up lookups."""
-    submit_mod, job_store_mod, _rollback, create_access = patched_submit
+    submit_mod, job_store_mod, create_access = patched_submit
 
     async def _submit_job_ok(*args, **kwargs):
         return "ok"

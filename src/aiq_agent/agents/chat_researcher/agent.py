@@ -46,17 +46,35 @@ from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_identifier_ref
 
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
 except ImportError:
     _AuthError = None  # type: ignore[assignment,misc]
 
+try:
+    from aiq_api.jobs.admission import JobAdmissionError as _JobAdmissionError
+except ImportError:
+    _JobAdmissionError = None  # type: ignore[assignment,misc]
+
+from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from .models import ChatResearcherState
 from .models import ShallowResult
+from .models import WorkflowFailure
 from .utils import trim_message_history
 
 logger = logging.getLogger(__name__)
+
+
+def _report_ref(job_id: str | None) -> str:
+    """Redacted correlation ref for a report job UUID (an opaque bearer capability).
+
+    The raw UUID must never enter logs; ``log_identifier_ref`` yields a stable
+    ``sha256:<12hex>`` reference instead. ``active_report_job_id`` is optional, so
+    fall back to ``"none"`` rather than hashing ``None``.
+    """
+    return log_identifier_ref(job_id) if job_id else "none"
 
 
 # Async-job escalation signal. The chat WebSocket frame carries only a string ``content`` field,
@@ -65,6 +83,10 @@ logger = logging.getLogger(__name__)
 # changes. Mirrored by the UI parser in frontends/ui/src/features/chat/hooks/use-websocket-chat.ts.
 _ESCALATION_KIND_DEEP_RESEARCH = "deep_research"
 _ESCALATION_KIND_REPORT_EDIT = "report_edit"
+
+
+def _research_workflow_failure() -> WorkflowFailure:
+    return WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
 
 
 def _job_escalation_message(kind: str, job_id: str) -> str:
@@ -163,6 +185,7 @@ class ChatResearcherAgent:
                         update={
                             "messages": [AIMessage(content=error_msg)],
                             "original_query": original_query,
+                            "workflow_outcome": _research_workflow_failure(),
                         },
                     )
 
@@ -207,26 +230,14 @@ class ChatResearcherAgent:
                 result = await self.shallow_research_fn(shallow_state)
             except EmptySourceRegistryError as exc:
                 logger.warning("Shallow research produced no verifiable sources")
-                if exc.unavailable_tools:
-                    from aiq_agent.common.tool_validation import format_user_facing_tool_error
-
-                    err_msg = format_user_facing_tool_error(
-                        "shallow research",
-                        exc.unavailable_tools,
-                        exc.available_count,
-                    )
-                else:
-                    err_msg = (
-                        "The search tools did not return any results for this question. "
-                        "This may be due to a temporary issue or the question may need to be rephrased. "
-                        "Please try again."
-                    )
+                err_msg = exc.public_response
                 # confidence="high" reflects certainty that an error occurred and that the error
                 # message is the correct response — not uncertainty about the answer quality.
                 # escalate_to_deep=False because retrying deep research will not resolve a
                 # source registry or transient failure; the user should rephrase and retry.
                 return {
                     "messages": [AIMessage(content=err_msg)],
+                    "workflow_outcome": _research_workflow_failure(),
                     "shallow_result": ShallowResult(
                         answer=err_msg,
                         confidence="high",
@@ -239,6 +250,7 @@ class ChatResearcherAgent:
                     err_msg = str(e)
                     return {
                         "messages": [AIMessage(content=err_msg)],
+                        "workflow_outcome": _research_workflow_failure(),
                         "shallow_result": ShallowResult(
                             answer=err_msg,
                             confidence="high",
@@ -251,6 +263,7 @@ class ChatResearcherAgent:
                 # occurred; escalating to deep research will not resolve an unexpected exception.
                 return {
                     "messages": [AIMessage(content=err_msg)],
+                    "workflow_outcome": _research_workflow_failure(),
                     "shallow_result": ShallowResult(
                         answer=err_msg,
                         confidence="high",
@@ -284,12 +297,24 @@ class ChatResearcherAgent:
                 try:
                     job_id = await self.deep_research_job_submitter(state)
                 except Exception as e:
+                    if _JobAdmissionError and isinstance(e, _JobAdmissionError):
+                        logger.warning(
+                            "Deep research submission rejected (error_type=%s)",
+                            type(e).__name__,
+                        )
+                        return {
+                            "messages": [AIMessage(content=e.public_message)],
+                            "workflow_outcome": _research_workflow_failure(),
+                        }
                     # Surface auth failures to the user verbatim instead of failing the
                     # turn — submit_agent_job raises McpAuthRequiredError (an AuthError)
                     # before enqueue when a selected source isn't connected.
                     if _AuthError and isinstance(e, _AuthError):
                         logger.warning("Auth required before deep research submit: %s", e)
-                        return {"messages": [AIMessage(content=str(e))]}
+                        return {
+                            "messages": [AIMessage(content=str(e))],
+                            "workflow_outcome": _research_workflow_failure(),
+                        }
                     raise
                 escalation = _job_escalation_message(_ESCALATION_KIND_DEEP_RESEARCH, job_id)
                 return {"messages": [AIMessage(content=escalation)]}
@@ -334,38 +359,35 @@ class ChatResearcherAgent:
                 result = await self.deep_research_fn(deep_state)
             except EmptySourceRegistryError as exc:
                 logger.warning("Deep research produced no verifiable sources")
-                if exc.unavailable_tools:
-                    from aiq_agent.common.tool_validation import format_user_facing_tool_error
-
-                    err_msg = format_user_facing_tool_error(
-                        "deep research",
-                        exc.unavailable_tools,
-                        exc.available_count,
-                    )
-                else:
-                    err_msg = (
-                        "The search tools did not return any results for this question. "
-                        "This may be due to a temporary issue or the question may need to be rephrased. "
-                        "Please try again."
-                    )
-                return {"messages": [AIMessage(content=err_msg)]}
+                err_msg = exc.public_response
+                return {
+                    "messages": [AIMessage(content=err_msg)],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
             except Exception as e:
                 if _AuthError and isinstance(e, _AuthError):
                     logger.warning("Auth error in deep research: %s", e)
-                    return {"messages": [AIMessage(content=str(e))]}
+                    return {
+                        "messages": [AIMessage(content=str(e))],
+                        "workflow_outcome": _research_workflow_failure(),
+                    }
                 # Inline (synchronous CLI) path: a raised exception would crash the whole CLI turn.
                 # Degrade to a chat message instead (the error is logged for debugging).
                 logger.error("Inline deep research failed (error_type=%s)", type(e).__name__, exc_info=True)
                 return {
                     "messages": [
                         AIMessage(content="I ran into an error while producing that report. Please try again.")
-                    ]
+                    ],
+                    "workflow_outcome": _research_workflow_failure(),
                 }
             if not result.messages:
                 error_message = "An error occurred during deep research."
                 logger.error(error_message)
                 final_message = AIMessage(content=error_message)
-                return {"messages": [final_message]}
+                return {
+                    "messages": [final_message],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
             else:
                 report_message = result.messages[-1]
                 report_md = report_message.content
@@ -378,21 +400,31 @@ class ChatResearcherAgent:
 
         async def report_ask_node(state: ChatResearcherState) -> dict[str, Any]:
             if self.report_ask_fn is None:
-                return {"messages": [AIMessage(content="Report follow-up is not available in this workflow.")]}
+                return {
+                    "messages": [AIMessage(content="Report follow-up is not available in this workflow.")],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
             try:
                 answer = await self.report_ask_fn(state)
+            except TimeoutError:
+                logger.warning("Report ask timed out (report_ref=%s)", _report_ref(state.active_report_job_id))
+                return {
+                    "messages": [AIMessage(content="The report service took too long to respond. Please try again.")],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
             except Exception as e:
                 # The node has no HTTP scope, so a raised exception would surface as an
                 # opaque workflow error / empty completion. Degrade to a chat message.
                 logger.warning(
-                    "Report ask failed for report %s (error_type=%s)",
-                    state.active_report_job_id,
+                    "Report ask failed (report_ref=%s, error_type=%s)",
+                    _report_ref(state.active_report_job_id),
                     type(e).__name__,
                 )
                 return {
                     "messages": [
                         AIMessage(content="I couldn't access that report to answer your question. Please try again.")
-                    ]
+                    ],
+                    "workflow_outcome": _research_workflow_failure(),
                 }
             return {"messages": [AIMessage(content=answer)]}
 
@@ -403,11 +435,14 @@ class ChatResearcherAgent:
                     job_id = await self.report_edit_job_submitter(state)
                 except Exception as e:
                     logger.warning(
-                        "Report edit submission failed for report %s (error_type=%s)",
-                        state.active_report_job_id,
+                        "Report edit submission failed (report_ref=%s, error_type=%s)",
+                        _report_ref(state.active_report_job_id),
                         type(e).__name__,
                     )
-                    return {"messages": [AIMessage(content="I couldn't start the report edit. Please try again.")]}
+                    return {
+                        "messages": [AIMessage(content="I couldn't start the report edit. Please try again.")],
+                        "workflow_outcome": _research_workflow_failure(),
+                    }
                 escalation = _job_escalation_message(_ESCALATION_KIND_REPORT_EDIT, job_id)
                 return {"messages": [AIMessage(content=escalation)]}
             # Inline path (synchronous CLI): rewrite the in-session report directly -- no job or
@@ -418,9 +453,15 @@ class ChatResearcherAgent:
                     revised = await self.report_edit_fn(state)
                 except Exception as e:
                     logger.warning("Inline report edit failed (error_type=%s)", type(e).__name__)
-                    return {"messages": [AIMessage(content="I couldn't edit the report. Please try again.")]}
+                    return {
+                        "messages": [AIMessage(content="I couldn't edit the report. Please try again.")],
+                        "workflow_outcome": _research_workflow_failure(),
+                    }
                 return {"messages": [AIMessage(content=revised)], "last_report_markdown": revised}
-            return {"messages": [AIMessage(content="Report edit is not available in this workflow.")]}
+            return {
+                "messages": [AIMessage(content="Report edit is not available in this workflow.")],
+                "workflow_outcome": _research_workflow_failure(),
+            }
 
         def route_after_orchestration(state: ChatResearcherState) -> str:
             """From combined orchestration: meta -> END (response already in messages), else by depth."""
@@ -535,6 +576,7 @@ class ChatResearcherAgent:
                 "data_sources": state.data_sources,
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
+                "workflow_outcome": None,
                 "skip_clarifier": state.skip_clarifier,
                 "active_report_job_id": state.active_report_job_id,
                 # Pass through; the keep-if-set reducer preserves a prior in-session report when

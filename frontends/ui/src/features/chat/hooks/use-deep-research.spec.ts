@@ -919,6 +919,33 @@ describe('useDeepResearch', () => {
       expect(updates).not.toHaveProperty('deepResearchTodos')
     })
 
+    test('replay buffer merges file content with a later metadata-only update', async () => {
+      await setupBufferedHook()
+
+      act(() => {
+        // Legacy content event, then a durable metadata-only event for the same file.
+        // Replay must merge (not overwrite) so the earlier content survives.
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'chart.png', content: 'BASE64DATA' })
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'chart.png', artifactId: 'art-1', mimeType: 'image/png' })
+        mockClient?.callbacks.onStreamMode?.('live')
+      })
+
+      const replayCommit = vi.mocked(useChatStore.setState).mock.calls[0]?.[0]
+      expect(replayCommit).toEqual(expect.any(Function))
+
+      const updates = (replayCommit as unknown as (state: { currentStatus: string }) => Record<string, unknown>)({
+        currentStatus: 'researching',
+      })
+      const files = updates.deepResearchFiles as Array<Record<string, unknown>>
+      expect(files).toHaveLength(1)
+      expect(files[0]).toMatchObject({
+        filename: 'chart.png',
+        content: 'BASE64DATA',
+        artifactId: 'art-1',
+        mimeType: 'image/png',
+      })
+    })
+
     test('onCitationUpdate adds citation to store', async () => {
       await setupConnectedHook()
 
@@ -937,7 +964,7 @@ describe('useDeepResearch', () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onFileUpdate?.('report.md', '# Report content')
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'report.md', content: '# Report content' })
       })
 
       expect(mockAddDeepResearchFile).toHaveBeenCalledWith({
@@ -950,7 +977,7 @@ describe('useDeepResearch', () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onFileUpdate?.('report.md', '# Final report')
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'report.md', content: '# Final report' })
       })
 
       expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
@@ -960,7 +987,7 @@ describe('useDeepResearch', () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onFileUpdate?.('artifacts/report.md', '# Final report')
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'artifacts/report.md', content: '# Final report' })
       })
 
       expect(mockSetCurrentStatus).toHaveBeenCalledWith('writing')
@@ -970,7 +997,7 @@ describe('useDeepResearch', () => {
       await setupConnectedHook()
 
       act(() => {
-        mockClient?.callbacks.onFileUpdate?.('notes.md', '# Some notes')
+        mockClient?.callbacks.onFileUpdate?.({ filename: 'notes.md', content: '# Some notes' })
       })
 
       expect(mockAddDeepResearchFile).toHaveBeenCalledWith({

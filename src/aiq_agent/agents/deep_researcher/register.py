@@ -15,6 +15,7 @@
 
 """NAT register function for deep research agent."""
 
+import asyncio
 import logging
 from typing import TypeVar
 
@@ -22,6 +23,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
@@ -30,6 +32,8 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
+from aiq_agent.common import validate_research_source_configuration
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -47,6 +51,8 @@ from .agent import DeepResearcherAgent
 from .deepagents_runtime import DeepResearchSandboxConfig
 from .deepagents_runtime import DeepResearchSkillsConfig
 from .models import DeepResearchAgentState
+from .resource_limits import DeepResearchExecutionTimeout
+from .resource_limits import DeepResearchResourceLimits
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +113,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         ge=1,
         description="Maximum concrete inputs accepted by batch-capable source tool wrappers.",
     )
+    resource_limits: DeepResearchResourceLimits = Field(
+        default_factory=DeepResearchResourceLimits,
+        description="Hard per-job limits for request, plan, notes, source calls, and execution time.",
+    )
 
     @field_validator("skills", mode="before")
     @classmethod
@@ -121,6 +131,12 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         if isinstance(value, dict):
             return DeepResearchSandboxConfig.model_validate(value)
         return value
+
+    @model_validator(mode="after")
+    def _research_concurrency_fits_job_budget(self):
+        if self.max_research_concurrency > self.resource_limits.max_research_queries:
+            raise ValueError("max_research_concurrency cannot exceed resource_limits.max_research_queries")
+        return self
 
 
 @register_function(config_type=DeepResearchSkillsConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -232,14 +248,19 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         max_research_concurrency=config.max_research_concurrency,
         max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
         max_source_tool_batch_size=config.max_source_tool_batch_size,
+        resource_limits=config.resource_limits,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
         """Run deep research with a list of messages or payload."""
+        active_agent = agent
+        owns_active_agent = False
+        interrupted = False
         try:
             data_sources = state.data_sources
+            validate_research_source_configuration(data_sources, "deep research")
+
             selected_tools = filter_tools_by_sources(tools, data_sources)
-            active_agent = agent
             if sandbox_config is not None or (data_sources is not None and selected_tools != tools):
                 # Scope the Modal sandbox to the async job_id when one is in
                 # NAT context (set by aiq_api/jobs/runner.py). Falls back to a
@@ -265,35 +286,24 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     max_research_concurrency=config.max_research_concurrency,
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
+                    resource_limits=config.resource_limits,
                 )
+                owns_active_agent = True
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
                 logger.warning("Deep research received data_sources with no matching tools")
 
-            # Validate tool availability before starting deep research
-            # At least one tool must be available
-            # This prevents the agent from trying to reason about unavailable tools
-            # Check selected_tools directly - they already reflect data_sources filtering
-            from aiq_agent.common import format_user_facing_tool_error
-            from aiq_agent.common import validate_tool_availability
-
-            is_valid, _, unavailable_tools = validate_tool_availability(selected_tools, research_type="deep research")
-
-            # Fail if no tools are available
-            if not is_valid:
-                error_msg = format_user_facing_tool_error("deep research", unavailable_tools)
-
-                # Return error state with error message - this prevents the agent from running
-                from langchain_core.messages import AIMessage
-
-                error_state = DeepResearchAgentState(messages=state.messages + [AIMessage(content=error_msg)])
-                return error_state
-
             result = await active_agent.run(state)
             return result
+        except (asyncio.CancelledError, DeepResearchExecutionTimeout):
+            interrupted = True
+            raise
         except Exception:
             logger.exception("Error in deep research execution")
             raise
+        finally:
+            if owns_active_agent:
+                await asyncio.to_thread(active_agent.finalize, interrupted=interrupted)
 
     yield FunctionInfo.from_fn(_run, description="Deep research agent for comprehensive multi-phase research.")
 
@@ -308,7 +318,10 @@ class DeepResearchWorkflowConfig(FunctionBaseConfig, name="deep_research_workflo
     for the deep_research_agent. Use this as the workflow for evaluation.
     """
 
-    pass
+    use_async_deep_research: bool = Field(
+        default=False,
+        description="Submit deep research as an async job instead of running inline",
+    )
 
 
 @register_function(config_type=DeepResearchWorkflowConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -320,8 +333,11 @@ async def deep_research_workflow(config: DeepResearchWorkflowConfig, builder: Bu
     async def _run(query: str) -> ChatResponse:
         """Run deep research on a query string."""
         state = DeepResearchAgentState(messages=[HumanMessage(content=query)])
-        result = await deep_research_agent_fn.ainvoke(state)
-        response_content = result.messages[-1].content
+        try:
+            result = await deep_research_agent_fn.ainvoke(state)
+            response_content = result.messages[-1].content
+        except EmptySourceRegistryError as exc:
+            response_content = exc.public_response
         return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
 
     yield FunctionInfo.from_fn(_run, description="Deep research workflow for evaluation (accepts string query).")

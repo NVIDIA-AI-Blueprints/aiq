@@ -7,7 +7,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # Optional OpenShell sandbox log verbosity. Defaults to `warn` (OpenShell's stock
 # sandbox level, so default behavior is unchanged). Rebuild with
-# `--build-arg OPENSHELL_SANDBOX_LOG_LEVEL=debug` (or `setup_openshell.sh
+# `--build-arg OPENSHELL_SANDBOX_LOG_LEVEL=debug` (or `scripts/openshell/setup_openshell.sh
 # --sandbox-log-level debug`) to surface process/relay detail (`OCSF PROC:` etc.)
 # in the container logs (`/var/log/openshell.*.log`, `openshell logs <name>`).
 ARG OPENSHELL_SANDBOX_LOG_LEVEL=warn

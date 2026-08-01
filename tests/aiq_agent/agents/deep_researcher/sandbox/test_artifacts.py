@@ -19,6 +19,7 @@ validation pipeline (traversal/extension/size/quota/dedup/scan), and SQL or S3-c
 from __future__ import annotations
 
 import json
+import logging
 from hashlib import sha256
 from io import BytesIO
 from types import SimpleNamespace
@@ -48,14 +49,18 @@ class _FakeBackend:
 
     def __init__(self, files: dict[str, bytes]) -> None:
         self.files = files
+        self.execute_calls: list[str] = []
+        self.download_calls: list[list[str]] = []
 
     def download_files(self, paths: list[str]) -> list[Any]:
+        self.download_calls.append(list(paths))
         return [
             SimpleNamespace(path=p, content=self.files.get(p), error=None if p in self.files else "not found")
             for p in paths
         ]
 
     def execute(self, command: str, *, timeout: int | None = None) -> Any:
+        self.execute_calls.append(command)
         return SimpleNamespace(output="\n".join(self.files), exit_code=0)
 
 
@@ -114,6 +119,21 @@ class TestNormalizePosix:
 
 
 class TestHarvest:
+    def test_store_and_scan_failures_do_not_log_exception_text(self, caplog: pytest.LogCaptureFixture) -> None:
+        store = SimpleNamespace(list=lambda _job_id: (_ for _ in ()).throw(RuntimeError("credential=do-not-log")))
+        manager, _ = _make_manager(store, {})
+
+        with caplog.at_level(logging.WARNING):
+            assert manager.resolve_report_references("report") == "report"
+            manager.backend.execute = lambda *_args, **_kwargs: (_ for _ in ()).throw(  # type: ignore[method-assign]
+                RuntimeError("token=do-not-log")
+            )
+            assert manager._scan_dir() == []
+
+        assert "RuntimeError" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+        assert "token=do-not-log" not in caplog.text
+
     def test_captures_manifest_artifact(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
         png_path = f"{_ARTIFACT_DIR}/chart.png"
@@ -126,8 +146,12 @@ class TestHarvest:
         assert captured[0].mime_type == "image/png"
         assert captured[0].kind == ArtifactKind.IMAGE
         assert store.list("job-1")[0].filename == "chart.png"
-        assert emitted and emitted[0]["type"] == "artifact"
-        assert "content" not in emitted[0]  # bytes never in the event payload
+        assert emitted and emitted[0]["type"] == "artifact.update"
+        assert emitted[0]["name"] == "chart.png"
+        assert emitted[0]["data"]["type"] == "file"
+        assert emitted[0]["data"]["artifact_id"] == captured[0].artifact_id
+        assert emitted[0]["data"]["content_url"].endswith(f"/{captured[0].artifact_id}/content")
+        assert "content" not in emitted[0]["data"]  # bytes and URL-as-text never enter the payload
 
     def test_rejects_path_traversal(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
@@ -168,8 +192,40 @@ class TestHarvest:
         files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(png_path), png_path: _PNG}
         manager, _ = _make_manager(store, files)
         manager.final_harvest()
+        first_downloads = list(manager.backend.download_calls)
         manager.final_harvest()  # same bytes again
         assert len(store.list("job-1")) == 1
+        assert manager.backend.download_calls == first_downloads
+
+    def test_checkpoint_harvest_uses_manifest_without_directory_scan(self, tmp_path: Any) -> None:
+        store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
+        png_path = f"{_ARTIFACT_DIR}/chart.png"
+        files = {f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(png_path), png_path: _PNG}
+        manager, _ = _make_manager(store, files)
+
+        captured = manager.harvest_after_execute()
+
+        assert [artifact.filename for artifact in captured] == ["chart.png"]
+        assert manager.backend.execute_calls == []
+
+    def test_final_harvest_after_checkpoint_does_not_reemit(self, tmp_path: Any) -> None:
+        store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
+        png_path = f"{_ARTIFACT_DIR}/chart.png"
+        csv_path = f"{_ARTIFACT_DIR}/chart.csv"
+        files = {
+            f"{_ARTIFACT_DIR}/manifest.json": _manifest_bytes(png_path),
+            png_path: _PNG,
+            csv_path: b"state,pop\nCA,39431263\n",
+        }
+        manager, emitted = _make_manager(store, files)
+
+        checkpointed = manager.harvest_after_execute()
+        assert [artifact.filename for artifact in checkpointed] == ["chart.png"]
+
+        finalized = manager.final_harvest()
+        # chart.png was already captured at checkpoint; only the scan-discovered CSV is new.
+        assert [artifact.filename for artifact in finalized] == ["chart.csv"]
+        assert len(emitted) == 2
 
     def test_scan_fallback_without_manifest(self, tmp_path: Any) -> None:
         store = SqlArtifactStore(f"sqlite:///{tmp_path}/jobs.db")
@@ -367,17 +423,20 @@ class TestS3Store:
             ).scalar_one()
         assert content is None
 
-    def test_failed_upload_removes_metadata(self, tmp_path: Any) -> None:
+    def test_failed_upload_removes_metadata(self, tmp_path: Any, caplog: pytest.LogCaptureFixture) -> None:
         client = _FakeS3Client()
         client.fail_put = True
         store = self._store(tmp_path, client)
         artifact = self._artifact()
 
-        with pytest.raises(RuntimeError, match="upload failed"):
-            store.put(artifact, _PNG)
+        with caplog.at_level(logging.WARNING):
+            with pytest.raises(RuntimeError, match="upload failed"):
+                store.put(artifact, _PNG)
 
         assert store.get(artifact.job_id, artifact.artifact_id) is None
         assert b"".join(store.open_bytes(artifact.job_id, artifact.artifact_id)) == b""
+        assert "RuntimeError" in caplog.text
+        assert "upload failed" not in caplog.text
 
     def test_failed_delete_retains_metadata_for_retry(self, tmp_path: Any) -> None:
         client = _FakeS3Client()

@@ -27,6 +27,8 @@ from fastapi import FastAPI
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+from aiq_agent.agents.shallow_researcher.register import ShallowResearchAgentConfig
 from aiq_agent.auth import Principal
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
@@ -43,7 +45,7 @@ def data_source_registry():
                 "id": "web_search",
                 "name": "Web Search",
                 "description": "Search the web.",
-                "tools": ["web_search_tool"],
+                "tools": ["web_search_tool", "advanced_web_search_tool"],
             },
             {
                 "id": "knowledge_layer",
@@ -81,10 +83,12 @@ async def submit_app(monkeypatch):
     monkeypatch.setattr(aiq_agent.auth, "get_auth_token", lambda: "token-1")
 
     from aiq_api.jobs import access
+    from aiq_api.jobs import admission
     from aiq_api.jobs import event_store
     from aiq_api.jobs import submit
 
     monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())
+    monkeypatch.setattr(admission, "ensure_deep_research_admission_table", MagicMock())
     monkeypatch.setattr(
         jobs_routes,
         "require_verified_principal",
@@ -105,12 +109,14 @@ async def submit_app(monkeypatch):
     )
 
     web_tool = SimpleNamespace(name="web_search_tool")
+    advanced_web_tool = SimpleNamespace(name="advanced_web_search_tool")
     knowledge_tool = SimpleNamespace(name="knowledge_search_tool")
     # Map tool names to their LangChain-wrapper stand-ins. The mock get_tools
-    # below filters by tool_names so the validator's "tools=None means inherit
-    # all registry refs" branch is actually exercised by the test suite.
+    # below filters by tool_names so passing [] reproduces the typed-config bug
+    # while inherited registry refs resolve to their real wrapper names.
     tools_by_name: dict[str, SimpleNamespace] = {
         "web_search_tool": web_tool,
+        "advanced_web_search_tool": advanced_web_tool,
         "knowledge_search_tool": knowledge_tool,
     }
 
@@ -118,9 +124,10 @@ async def submit_app(monkeypatch):
         return [tools_by_name[name] for name in tool_names if name in tools_by_name]
 
     builder = MagicMock()
-    # Realistic default for researcher agents: tools=None means "inherit all
-    # registry refs," which the validator resolves via get_all_tool_refs().
-    builder.get_function_config.return_value = SimpleNamespace(tools=None, exclude_tools=[])
+    builder.get_function_config.return_value = DeepResearchAgentConfig(
+        orchestrator_llm="llm",
+        exclude_tools=["web_search_tool"],
+    )
     builder.get_tools = AsyncMock(side_effect=_filtered_get_tools)
 
     app = FastAPI()
@@ -137,6 +144,15 @@ async def test_route_registration_validates_artifact_store(submit_app):
     jobs_routes._validate_artifact_store.assert_called_once_with("sqlite:///./test.db")
 
 
+@pytest.mark.asyncio
+async def test_route_registration_initializes_admission_schema(submit_app):
+    from aiq_api.jobs import admission
+
+    _app, _submitted_job, _builder = submit_app
+
+    admission.ensure_deep_research_admission_table.assert_called_once_with("sqlite:///./test.db")
+
+
 def test_artifact_store_validation_propagates_failure(monkeypatch):
     import aiq_api.routes.jobs as jobs_routes
     from aiq_agent.agents.deep_researcher.sandbox import artifacts
@@ -150,7 +166,7 @@ def test_artifact_store_validation_propagates_failure(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_submit_job_forwards_selected_data_sources(submit_app):
+async def test_submit_job_accepts_source_when_empty_tools_inherit_and_partial_exclusion_leaves_tool(submit_app):
     app, submitted_job, builder = submit_app
 
     with TestClient(app) as client:
@@ -163,6 +179,147 @@ async def test_submit_job_forwards_selected_data_sources(submit_app):
     assert response.json()["job_id"] == "job-1"
     submitted_job.assert_awaited_once()
     assert submitted_job.await_args.kwargs["data_sources"] == ["web_search"]
+    builder.get_tools.assert_awaited_once()
+    _, kwargs = builder.get_tools.await_args
+    assert sorted(kwargs["tool_names"]) == [
+        "advanced_web_search_tool",
+        "knowledge_search_tool",
+        "web_search_tool",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_status", "expected_detail", "expected_retry_after"),
+    [
+        pytest.param(
+            "rate",
+            429,
+            "Deep research submission rate limit reached. Please try again shortly.",
+            "60",
+            id="rate-limit",
+        ),
+        pytest.param(
+            "principal",
+            429,
+            "Active deep research job limit reached. Wait for a running job to finish.",
+            "30",
+            id="principal-capacity",
+        ),
+        pytest.param(
+            "global",
+            503,
+            "The server is at deep research capacity. Please try again shortly.",
+            "30",
+            id="global-capacity",
+        ),
+        pytest.param(
+            "input",
+            413,
+            "Deep research input exceeds the 123-character limit.",
+            None,
+            id="input-limit",
+        ),
+    ],
+)
+def test_submit_job_maps_admission_failures(
+    submit_app,
+    error,
+    expected_status,
+    expected_detail,
+    expected_retry_after,
+):
+    from aiq_api.jobs.admission import JobGlobalCapacityExceededError
+    from aiq_api.jobs.admission import JobInputTooLargeError
+    from aiq_api.jobs.admission import JobPrincipalCapacityExceededError
+    from aiq_api.jobs.admission import JobSubmissionRateExceededError
+
+    errors = {
+        "rate": JobSubmissionRateExceededError(),
+        "principal": JobPrincipalCapacityExceededError(),
+        "global": JobGlobalCapacityExceededError(),
+        "input": JobInputTooLargeError(123),
+    }
+    app, submitted_job, _builder = submit_app
+    submitted_job.side_effect = errors[error]
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "deep_researcher", "input": "query"},
+        )
+
+    assert response.status_code == expected_status
+    assert response.json() == {"detail": expected_detail}
+    assert response.headers.get("retry-after") == expected_retry_after
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("credential_source", "expected_token"),
+    [
+        pytest.param(
+            "bearer-header",
+            "bearer-token",
+            id="bearer-header",
+        ),
+        pytest.param(
+            "id-token-cookie",
+            "cookie-token",
+            id="id-token-cookie",
+        ),
+    ],
+)
+async def test_submit_job_forwards_authenticated_request_token(
+    submit_app,
+    monkeypatch,
+    credential_source,
+    expected_token,
+):
+    """REST submit captures the validated request token without requiring NAT Context."""
+    import aiq_agent.auth
+    from aiq_agent.auth.utils import get_auth_token as real_get_auth_token
+    from aiq_api.auth.middleware import AuthMiddleware
+
+    class AcceptTokenValidator:
+        def can_handle(self, token: str) -> bool:  # noqa: ARG002 - accepts both test credentials
+            return True
+
+        async def validate(self, token: str):
+            return (
+                {
+                    "type": "jwt",
+                    "sub": "user-1",
+                    "email": "user@example.com",
+                    "name": "Test User",
+                    "token": token,
+                    "skip_clarifier": False,
+                },
+                None,
+            )
+
+    app, submitted_job, _builder = submit_app
+    monkeypatch.setattr(aiq_agent.auth, "get_auth_token", real_get_auth_token)
+    app.add_middleware(
+        AuthMiddleware,
+        validators=[AcceptTokenValidator()],
+        require_auth=True,
+        external_hostnames={"testserver"},
+    )
+
+    with TestClient(app) as client:
+        headers = None
+        if credential_source == "bearer-header":
+            headers = {"Authorization": f"Bearer {expected_token}"}
+        else:
+            client.cookies.set("idToken", expected_token)
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "deep_researcher", "input": "query"},
+            headers=headers,
+        )
+
+    assert response.status_code == 200
+    assert submitted_job.await_args.kwargs["auth_token"] == expected_token
 
 
 @pytest.mark.asyncio
@@ -189,6 +346,65 @@ async def test_submit_job_rejects_internal_agent(submit_app, monkeypatch):
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Agent type is internal-only and cannot be submitted directly: report_rewriter"
+    submitted_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "source_payload",
+    [
+        pytest.param({}, id="omitted"),
+        pytest.param({"data_sources": None}, id="null"),
+        pytest.param({"data_sources": []}, id="empty"),
+        pytest.param({"data_sources": ["web_search"]}, id="selected"),
+    ],
+)
+async def test_submit_job_rejects_registered_but_unconfigured_agent(submit_app, monkeypatch, source_payload):
+    app, submitted_job, builder = submit_app
+    import aiq_api.routes.jobs as jobs_routes
+
+    shallow_config = AgentConfig(
+        class_path="aiq_agent.agents.shallow_researcher.agent.ShallowResearcherAgent",
+        config_name="shallow_research_agent",
+        description="Test shallow researcher",
+    )
+    monkeypatch.setattr(jobs_routes, "get_agent_config", lambda _agent_type: shallow_config)
+    require_principal = MagicMock(return_value=Principal(type="jwt", sub="user-1", email="user@example.com"))
+    monkeypatch.setattr(jobs_routes, "require_verified_principal", require_principal)
+    builder.get_function_config.side_effect = ValueError("Function `shallow_research_agent` not found")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "shallow_researcher", "input": "query", **source_payload},
+        )
+
+    assert response.status_code == 400
+    assert response.json()["detail"] == {
+        "code": "agent_not_configured",
+        "message": "Agent 'shallow_researcher' is not configured in the active workflow",
+        "agent_type": "shallow_researcher",
+        "config_name": "shallow_research_agent",
+    }
+    builder.get_function_config.assert_called_with("shallow_research_agent")
+    builder.get_tools.assert_not_awaited()
+    require_principal.assert_not_called()
+    submitted_job.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_submit_job_does_not_classify_unexpected_function_config_value_error(submit_app):
+    app, submitted_job, builder = submit_app
+    builder.get_function_config.side_effect = ValueError("invalid function configuration")
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "deep_researcher", "input": "query"},
+        )
+
+    assert response.status_code == 500
+    builder.get_tools.assert_not_awaited()
     submitted_job.assert_not_awaited()
 
 
@@ -262,9 +478,9 @@ async def test_submit_job_rejects_unknown_data_sources(submit_app):
 @pytest.mark.asyncio
 async def test_submit_job_rejects_source_unavailable_for_agent(submit_app):
     app, submitted_job, builder = submit_app
-    builder.get_function_config.return_value = SimpleNamespace(
-        tools=None,
-        exclude_tools=["web_search_tool"],
+    builder.get_function_config.return_value = DeepResearchAgentConfig(
+        orchestrator_llm="llm",
+        exclude_tools=["web_search_tool", "advanced_web_search_tool"],
     )
 
     with TestClient(app) as client:
@@ -286,7 +502,10 @@ async def test_submit_job_rejects_source_unavailable_for_agent(submit_app):
 @pytest.mark.asyncio
 async def test_submit_job_rejects_mixed_available_and_agent_unavailable_sources(submit_app):
     app, submitted_job, builder = submit_app
-    builder.get_function_config.return_value = SimpleNamespace(tools=None, exclude_tools=["web_search_tool"])
+    builder.get_function_config.return_value = DeepResearchAgentConfig(
+        orchestrator_llm="llm",
+        exclude_tools=["web_search_tool", "advanced_web_search_tool"],
+    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -311,7 +530,10 @@ async def test_submit_job_rejects_mixed_available_and_agent_unavailable_sources(
 @pytest.mark.asyncio
 async def test_submit_job_rejects_combined_unknown_and_agent_unavailable_sources(submit_app):
     app, submitted_job, builder = submit_app
-    builder.get_function_config.return_value = SimpleNamespace(tools=None, exclude_tools=["web_search_tool"])
+    builder.get_function_config.return_value = DeepResearchAgentConfig(
+        orchestrator_llm="llm",
+        exclude_tools=["web_search_tool", "advanced_web_search_tool"],
+    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -339,7 +561,10 @@ async def test_submit_job_rejects_combined_unknown_and_agent_unavailable_sources
 @pytest.mark.asyncio
 async def test_submit_job_dedupes_problematic_ids_preserving_first_seen_order_and_casing(submit_app):
     app, submitted_job, builder = submit_app
-    builder.get_function_config.return_value = SimpleNamespace(tools=None, exclude_tools=["web_search_tool"])
+    builder.get_function_config.return_value = DeepResearchAgentConfig(
+        orchestrator_llm="llm",
+        exclude_tools=["web_search_tool", "advanced_web_search_tool"],
+    )
 
     with TestClient(app) as client:
         response = client.post(
@@ -366,9 +591,9 @@ async def test_submit_job_dedupes_problematic_ids_preserving_first_seen_order_an
 @pytest.mark.asyncio
 async def test_submit_job_rejects_known_source_when_agent_has_no_available_sources(submit_app):
     app, submitted_job, builder = submit_app
-    builder.get_function_config.return_value = SimpleNamespace(
-        tools=None,
-        exclude_tools=["web_search_tool", "knowledge_search_tool"],
+    builder.get_function_config.return_value = DeepResearchAgentConfig(
+        orchestrator_llm="llm",
+        exclude_tools=["web_search_tool", "advanced_web_search_tool", "knowledge_search_tool"],
     )
 
     with TestClient(app) as client:
@@ -398,7 +623,7 @@ async def test_submit_job_forwards_omitted_data_sources_without_resolving_tools(
         )
 
     assert response.status_code == 200
-    builder.get_function_config.assert_not_called()
+    builder.get_function_config.assert_called_once_with("deep_research_agent")
     builder.get_tools.assert_not_awaited()
     submitted_job.assert_awaited_once()
     _, kwargs = submitted_job.await_args
@@ -416,7 +641,7 @@ async def test_submit_job_forwards_null_data_sources_without_resolving_tools(sub
         )
 
     assert response.status_code == 200
-    builder.get_function_config.assert_not_called()
+    builder.get_function_config.assert_called_once_with("deep_research_agent")
     builder.get_tools.assert_not_awaited()
     submitted_job.assert_awaited_once()
     _, kwargs = submitted_job.await_args
@@ -444,7 +669,7 @@ async def test_submit_job_forwards_valid_data_sources_exactly_as_provided(submit
 
 
 @pytest.mark.asyncio
-async def test_submit_job_validates_sources_for_shallow_researcher(submit_app, monkeypatch):
+async def test_submit_job_accepts_inherited_source_for_configured_shallow_researcher(submit_app, monkeypatch):
     app, submitted_job, builder = submit_app
     import aiq_api.routes.jobs as jobs_routes
 
@@ -454,9 +679,9 @@ async def test_submit_job_validates_sources_for_shallow_researcher(submit_app, m
         description="Test shallow researcher",
     )
     monkeypatch.setattr(jobs_routes, "get_agent_config", lambda _agent_type: shallow_config)
-    builder.get_function_config.return_value = SimpleNamespace(
-        tools=None,
-        exclude_tools=["web_search_tool"],
+    builder.get_function_config.return_value = ShallowResearchAgentConfig(
+        llm="llm",
+        exclude_tools=["advanced_web_search_tool"],
     )
 
     with TestClient(app) as client:
@@ -465,14 +690,8 @@ async def test_submit_job_validates_sources_for_shallow_researcher(submit_app, m
             json={"agent_type": "shallow_researcher", "input": "query", "data_sources": ["web_search"]},
         )
 
-    assert response.status_code == 422
-    assert response.json()["detail"] == {
-        "message": "Data source(s) are not available for agent 'shallow_researcher': web_search",
-        "invalid_ids": [],
-        "unavailable_for_agent": ["web_search"],
-        "known_ids": ["knowledge_layer", "web_search"],
-    }
-    submitted_job.assert_not_awaited()
+    assert response.status_code == 200
+    assert submitted_job.await_args.kwargs["data_sources"] == ["web_search"]
     builder.get_function_config.assert_called_with("shallow_research_agent")
 
 
@@ -601,16 +820,16 @@ async def test_submit_job_returns_500_when_validation_tool_resolution_fails_for_
 
 
 @pytest.mark.asyncio
-async def test_validation_calls_get_all_tool_refs_when_fn_config_tools_is_none(submit_app, monkeypatch):
-    """Regression test: ``tools is None`` must inherit refs via ``get_all_tool_refs``.
+async def test_validation_calls_get_all_tool_refs_when_fn_config_tools_is_empty(submit_app, monkeypatch):
+    """Regression test: ``tools=[]`` must inherit refs via ``get_all_tool_refs``.
 
-    The fixture's default ``tools=None`` exercises this branch, but no other
+    The fixture's typed default ``tools=[]`` exercises this branch, but no other
     test asserts the exact call. This pins the contract so future refactors
     that swap the inheritance mechanism (e.g. caching, alternate registries)
     surface here instead of silently changing agent capability resolution.
     """
     app, submitted_job, builder = submit_app
-    # Default fixture is tools=None, exclude_tools=[]. Spy on the name as bound
+    # Spy on the name as bound
     # in the routes module (Python testing idiom: patch where used, not where
     # defined).
     import aiq_api.routes.jobs as jobs_routes
@@ -630,7 +849,11 @@ async def test_validation_calls_get_all_tool_refs_when_fn_config_tools_is_none(s
     # builder was asked to resolve those exact refs via LangChain wrappers.
     builder.get_tools.assert_awaited_once()
     _, kwargs = builder.get_tools.await_args
-    assert sorted(kwargs["tool_names"]) == ["knowledge_search_tool", "web_search_tool"]
+    assert sorted(kwargs["tool_names"]) == [
+        "advanced_web_search_tool",
+        "knowledge_search_tool",
+        "web_search_tool",
+    ]
     submitted_job.assert_awaited_once()
 
 
@@ -643,9 +866,9 @@ async def test_validation_does_not_call_get_all_tool_refs_when_fn_config_tools_i
     inheritance call entirely.
     """
     app, submitted_job, builder = submit_app
-    builder.get_function_config.return_value = SimpleNamespace(
+    builder.get_function_config.return_value = DeepResearchAgentConfig(
+        orchestrator_llm="llm",
         tools=["knowledge_search_tool"],
-        exclude_tools=[],
     )
 
     import aiq_api.routes.jobs as jobs_routes

@@ -70,6 +70,7 @@ from unittest.mock import patch
 
 import pytest
 
+from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommitTracker
 from aiq_agent.auth import Principal
 from aiq_api.jobs.callbacks import ArtifactType
 from aiq_api.jobs.callbacks import DeepResearchEventCallback
@@ -87,6 +88,16 @@ def fixture_event_store_cache_guard():
     EventStore.dispose_all_engines()
     yield
     EventStore.dispose_all_engines()
+
+
+@pytest.fixture(name="content_encryption_manager_guard")
+def fixture_content_encryption_manager_guard():
+    """Reset content-encryption globals even when a test assertion fails."""
+    from aiq_api.jobs import crypto
+
+    crypto.reset_content_encryption_manager_for_tests()
+    yield
+    crypto.reset_content_encryption_manager_for_tests()
 
 
 class TestIntermediateStepEvent:
@@ -367,6 +378,15 @@ class TestSubmitDeepResearchJob:
 
     principal = Principal(type="test", sub="user-1", email="test@example.com", name="Test User")
 
+    @pytest.fixture(autouse=True)
+    def _isolate_admission_store(self):
+        """Keep legacy submit tests scoped to submission wiring, not admission-store integration."""
+        with (
+            patch("aiq_api.jobs.submit.reserve_deep_research_job", new_callable=AsyncMock),
+            patch("aiq_api.jobs.submit.release_deep_research_job_reservation", new_callable=AsyncMock),
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_submit_without_scheduler_raises(self):
         """Test submit_deep_research_job raises without NAT_DASK_SCHEDULER_ADDRESS."""
@@ -438,9 +458,10 @@ class TestSubmitDeepResearchJob:
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
         # Trailing worker args: available_documents, data_sources, auth_token,
-        # encryption policy, initial_files, output_metadata, principal_user_id.
-        assert job_args[-6] == ["web_search"]
-        assert job_args[-4].mode == "off"
+        # encryption policy, initial_files, output_metadata, principal_user_id,
+        # admission fencing token.
+        assert job_args[-7] == ["web_search"]
+        assert job_args[-5].mode == "off"
 
     @pytest.mark.asyncio
     async def test_submit_agent_job_passes_initial_files_and_output_metadata(self):
@@ -475,9 +496,9 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
         # Encryption policy precedes the upstream report-context arguments.
-        assert job_args[-4].mode == "off"
-        assert job_args[-3] == initial_files
-        assert job_args[-2] == output_metadata
+        assert job_args[-5].mode == "off"
+        assert job_args[-4] == initial_files
+        assert job_args[-3] == output_metadata
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):
@@ -567,8 +588,8 @@ class TestSubmitDeepResearchJob:
         assert principal.email == "test@example.com"
 
     @pytest.mark.asyncio
-    async def test_submit_rolls_back_when_job_access_persistence_fails(self):
-        """Test submit_agent_job rolls back partial submission on access persistence failure."""
+    async def test_submit_stops_before_enqueue_when_job_access_persistence_fails(self):
+        """Ownership persistence must fail before any work is handed to Dask."""
         from aiq_api.jobs.submit import submit_agent_job
 
         mock_job_store = MagicMock()
@@ -588,20 +609,50 @@ class TestSubmitDeepResearchJob:
                         "aiq_api.jobs.submit.create_job_access",
                         side_effect=RuntimeError("db write failed"),
                     ):
-                        with patch("aiq_api.jobs.submit.rollback_job_submission") as rollback_job_submission:
-                            with pytest.raises(RuntimeError, match="db write failed"):
-                                await submit_agent_job(
-                                    agent_type="deep_researcher",
-                                    input_text="test query",
-                                    owner="test@example.com",
-                                )
+                        with pytest.raises(RuntimeError, match="db write failed"):
+                            await submit_agent_job(
+                                agent_type="deep_researcher",
+                                input_text="test query",
+                                owner="test@example.com",
+                            )
 
-        mock_job_store.submit_job.assert_called_once()
-        rollback_job_submission.assert_called_once_with("test-job-id", "sqlite:///./test.db")
+        mock_job_store.submit_job.assert_not_called()
 
 
 class TestRunAgentJobEncryption:
     """Tests for async worker encryption preflight behavior."""
+
+    @pytest.mark.asyncio
+    async def test_stale_admission_fencing_token_never_runs_worker(self):
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+
+        with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+            with patch(
+                "aiq_api.jobs.admission.is_deep_research_reservation_current",
+                return_value=False,
+            ):
+                await run_agent_job(
+                    False,
+                    20,
+                    "tcp://localhost:8786",
+                    "sqlite:///./test.db",
+                    "config.yml",
+                    "job-1",
+                    "input",
+                    "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                    "deep_research_agent",
+                    admission_token="stale-token",
+                )
+
+        mock_job_store.update_status.assert_awaited_once_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="submission admission lease lost",
+        )
 
     @pytest.mark.asyncio
     async def test_encryption_preflight_failure_marks_failure_before_running(self):
@@ -725,7 +776,10 @@ class TestRunAgentJobEncryption:
 
         mock_job_store = MagicMock()
         mock_job_store.update_status = AsyncMock()
-        update_job_output = AsyncMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        # The success output is serialized/encrypted via serialize_job_output_for_storage
+        # before the conditional write; simulate encryption failing there.
+        serialize_output = MagicMock(side_effect=ContentEncryptionUnavailable("encrypt failed"))
+        write_success = MagicMock()  # the raw-SQL success writer; must never run on failure
         db_url = f"sqlite:///{tmp_path / 'test.db'}"
 
         config = SimpleNamespace(workflow=None, functions={}, middleware={})
@@ -749,7 +803,16 @@ class TestRunAgentJobEncryption:
                                         "aiq_api.jobs.runner._run_agent",
                                         AsyncMock(return_value="secret report"),
                                     ):
-                                        with patch("aiq_api.jobs.crypto.update_job_output", update_job_output):
+                                        with (
+                                            patch(
+                                                "aiq_api.jobs.crypto.serialize_job_output_for_storage",
+                                                serialize_output,
+                                            ),
+                                            patch(
+                                                "aiq_api.jobs.runner._write_job_success_if_running_sync",
+                                                write_success,
+                                            ),
+                                        ):
                                             await run_agent_job(
                                                 False,
                                                 20,
@@ -773,8 +836,12 @@ class TestRunAgentJobEncryption:
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
         assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
         assert all("output" not in call.kwargs for call in mock_job_store.update_status.await_args_list)
-        update_job_output.assert_awaited_once()
-        assert update_job_output.await_args.kwargs["output"] == {
+        # The output was assembled with the real report (never the output_metadata
+        # "report" decoy) and handed to serialization; when that failed the job was
+        # marked FAILURE and the success writer never ran, so nothing was persisted.
+        write_success.assert_not_called()
+        serialize_output.assert_called_once()
+        assert serialize_output.call_args.args[0] == {
             "parent_job_id": "parent-job",
             "interaction_action": "edit",
             "report": "secret report",
@@ -885,12 +952,458 @@ class TestRunAgentJobEncryption:
 
         statuses = [call.args[1] for call in mock_job_store.update_status.await_args_list]
         assert statuses == [JobStatus.RUNNING, JobStatus.FAILURE]
+        # The persisted error is sanitized to the exception class name so raw
+        # messages cannot leak credentials or internal hostnames to callers.
         mock_job_store.update_status.assert_awaited_with(
             "job-1",
             JobStatus.FAILURE,
-            error="transient database failure",
+            error="job failed (RuntimeError); check server logs for details",
         )
         update_job_output.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("reason", "generated_answer", "initial_status"),
+        [
+            ("no_sources_selected", None, "running"),
+            ("no_source_results", "# Preserved report", "running"),
+            ("no_source_results", "# Race-losing report", "success"),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_empty_source_failure_persists_actionable_error_and_encrypted_outcome(
+        self, monkeypatch, tmp_path, reason, generated_answer, initial_status, content_encryption_manager_guard
+    ):
+        import base64
+        from contextlib import ExitStack
+        from types import SimpleNamespace
+
+        from sqlalchemy import text
+
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+        from aiq_api.jobs import crypto
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):  # noqa: ARG002 - mirrors NAT API
+                return AsyncContext()
+
+        typed_reason = EmptySourceRegistryReason(reason)
+        source_error = EmptySourceRegistryError(reason=typed_reason, generated_answer=generated_answer)
+        mock_job_store = MagicMock(update_status=AsyncMock())
+        config = SimpleNamespace(workflow=None, functions={}, middleware={})
+        monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION", "key")
+        monkeypatch.setenv(
+            "AIQ_CONTENT_ENCRYPTION_KEY",
+            base64.urlsafe_b64encode(b"a" * crypto.DEK_BYTES).decode(),
+        )
+        monkeypatch.setenv("AIQ_CONTENT_ENCRYPTION_KEY_ID", "test-key")
+        encryption_policy = crypto.get_content_encryption_policy_identity()
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) VALUES ('job-1', :status, 'original', 'kept')"
+                ),
+                {"status": initial_status},
+            )
+
+        with ExitStack() as stack:
+            stack.enter_context(
+                patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store)
+            )
+            stack.enter_context(patch("nat.runtime.loader.load_config", return_value=config))
+            stack.enter_context(
+                patch(
+                    "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                    return_value=FakeWorkflowBuilder(),
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                    return_value=FakeExporterManager(),
+                )
+            )
+            stack.enter_context(patch("aiq_api.jobs.runner._load_agent_class", return_value=object))
+            stack.enter_context(
+                patch("aiq_api.jobs.runner._create_llm_provider", AsyncMock(return_value=(object(), object())))
+            )
+            stack.enter_context(patch("aiq_api.jobs.runner._create_agent_instance", return_value=object()))
+            stack.enter_context(patch("aiq_api.jobs.runner._run_agent", AsyncMock(side_effect=source_error)))
+            await run_agent_job(
+                False,
+                20,
+                "tcp://localhost:8786",
+                db_url,
+                "config.yml",
+                "job-1",
+                "input",
+                "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                "deep_research_agent",
+                content_encryption_policy=encryption_policy,
+            )
+
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT status, error, output FROM job_info WHERE job_id = 'job-1'")).one()
+
+        if initial_status == "running":
+            assert row.status == "failure"
+            assert row.error == typed_reason.public_message
+            assert row.output.startswith(crypto.ENVELOPE_PREFIX)
+            if generated_answer:
+                assert generated_answer not in row.output
+            assert crypto.read_job_output("job-1", row.output) == {
+                "report": generated_answer,
+                "outcome_reason": reason,
+            }
+        else:
+            assert tuple(row) == ("success", "original", "kept")
+        assert [call.args[1] for call in mock_job_store.update_status.await_args_list] == [JobStatus.RUNNING]
+        events = EventStore.get_events(db_url, "job-1")
+        assert not any(event["type"] == "job.error" for event in events)
+        final_reports = [
+            event
+            for event in events
+            if event["type"] == "artifact.update" and event.get("data", {}).get("output_category") == "final_report"
+        ]
+        if generated_answer and initial_status == "running":
+            assert [event["data"]["content"] for event in final_reports] == [generated_answer]
+        else:
+            assert final_reports == []
+
+    @pytest.mark.asyncio
+    async def test_source_failure_event_write_failure_preserves_typed_outcome(self, tmp_path):
+        from sqlalchemy import text
+
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _persist_empty_source_failure
+
+        db_url = f"sqlite:///{tmp_path / 'event-failure.db'}"
+        EventStore._ensure_table_exists(db_url)
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) "
+                    "VALUES ('job-1', 'running', 'original', 'kept')"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE TRIGGER reject_job_event BEFORE INSERT ON job_events "
+                    "BEGIN SELECT RAISE(FAIL, 'event insert failed'); END"
+                )
+            )
+
+        source_error = EmptySourceRegistryError(generated_answer="# Preserved report")
+        with patch("aiq_api.jobs.crypto.serialize_job_output_for_storage", return_value="stored-output"):
+            wrote = await _persist_empty_source_failure(
+                error=source_error,
+                job_output_cipher=None,
+                db_url=db_url,
+                job_id="job-1",
+            )
+
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT status, error, output FROM job_info WHERE job_id = 'job-1'")).one()
+
+        assert wrote is True
+        assert tuple(row) == ("failure", source_error.public_message, "stored-output")
+        assert EventStore.get_events(db_url, "job-1") == []
+
+    @pytest.mark.asyncio
+    async def test_empty_source_output_encryption_failure_uses_generic_sanitized_failure(self, tmp_path):
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+        from aiq_api.jobs.crypto import ContentEncryptionUnavailable
+
+        source_error = EmptySourceRegistryError(
+            reason=EmptySourceRegistryReason.NO_SOURCE_RESULTS,
+            generated_answer="plaintext report must not be persisted",
+        )
+        serialize_output = MagicMock(side_effect=ContentEncryptionUnavailable("secret backend details"))
+        write_failure = MagicMock()
+        write_fallback = MagicMock(return_value=False)
+        event_store = MagicMock()
+
+        with (
+            patch("aiq_api.jobs.crypto.serialize_job_output_for_storage", serialize_output),
+            patch(
+                "aiq_api.jobs.runner._write_job_source_failure_if_running_sync",
+                write_failure,
+            ),
+            patch("aiq_api.jobs.runner._write_job_failure_if_running_sync", write_fallback),
+        ):
+            # Exercise the same terminal helper path directly; full worker setup is
+            # covered by the parameterized test above.
+            from aiq_api.jobs.runner import _persist_empty_source_failure
+
+            wrote = await _persist_empty_source_failure(
+                error=source_error,
+                job_output_cipher=object(),
+                db_url=f"sqlite:///{tmp_path / 'test.db'}",
+                job_id="job-1",
+                event_store=event_store,
+            )
+
+        write_failure.assert_not_called()
+        assert wrote is False
+        write_failure.assert_not_called()
+        write_fallback.assert_called_once_with(
+            f"sqlite:///{tmp_path / 'test.db'}",
+            "job-1",
+            "job failed (ContentEncryptionUnavailable); check server logs for details",
+        )
+        event_store.flush.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("terminal_status", ["success", "failure", "interrupted"])
+    async def test_source_failure_fallback_does_not_overwrite_terminal_race(self, tmp_path, terminal_status):
+        from sqlalchemy import text
+
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _persist_empty_source_failure
+
+        db_url = f"sqlite:///{tmp_path / 'fallback-race.db'}"
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) VALUES ('job-1', :status, 'original', 'kept')"
+                ),
+                {"status": terminal_status},
+            )
+
+        with patch(
+            "aiq_api.jobs.crypto.serialize_job_output_for_storage",
+            side_effect=RuntimeError("persistence failed"),
+        ):
+            wrote = await _persist_empty_source_failure(
+                error=EmptySourceRegistryError(generated_answer="plaintext"),
+                job_output_cipher=object(),
+                db_url=db_url,
+                job_id="job-1",
+            )
+
+        with engine.connect() as conn:
+            row = conn.execute(text("SELECT status, error, output FROM job_info WHERE job_id = 'job-1'")).one()
+
+        assert wrote is False
+        assert tuple(row) == (terminal_status, "original", "kept")
+
+    def test_source_failure_write_only_changes_running_job(self, tmp_path):
+        from sqlalchemy import text
+
+        from aiq_api.jobs.event_store import EventStore
+        from aiq_api.jobs.runner import _write_job_source_failure_if_running_sync
+
+        db_url = f"sqlite:///{tmp_path / 'jobs.db'}"
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "CREATE TABLE job_info (job_id TEXT PRIMARY KEY, status TEXT, error TEXT, "
+                    "output TEXT, updated_at TIMESTAMP)"
+                )
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO job_info (job_id, status, error, output) VALUES "
+                    "('running-job', 'running', NULL, NULL), "
+                    "('terminal-job', 'success', NULL, 'original')"
+                )
+            )
+
+        assert _write_job_source_failure_if_running_sync(db_url, "running-job", "Select a source.", "encrypted-output")
+        assert not _write_job_source_failure_if_running_sync(db_url, "terminal-job", "Select a source.", "replacement")
+
+        with engine.connect() as conn:
+            running = conn.execute(
+                text("SELECT status, error, output FROM job_info WHERE job_id = 'running-job'")
+            ).one()
+            terminal = conn.execute(
+                text("SELECT status, error, output FROM job_info WHERE job_id = 'terminal-job'")
+            ).one()
+        assert tuple(running) == ("failure", "Select a source.", "encrypted-output")
+        assert tuple(terminal) == ("success", None, "original")
+
+
+class TestDeepResearchTimeoutLifecycle:
+    """Job wall-clock expiry forcibly tears down external execution before failure."""
+
+    @pytest.mark.parametrize(
+        ("error", "expected_interrupted"),
+        [
+            pytest.param(
+                None,
+                True,
+                id="job-resource-timeout",
+            ),
+            pytest.param(
+                TimeoutError("provider request timed out"),
+                False,
+                id="inner-provider-timeout",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_only_job_resource_timeout_terminates_before_failure(
+        self,
+        error,
+        expected_interrupted,
+        tmp_path,
+        content_encryption_manager_guard,
+    ):
+        from types import SimpleNamespace
+
+        from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchExecutionTimeout
+        from aiq_api.jobs.crypto import ContentEncryptionConfig
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):
+                return AsyncContext()
+
+        order: list[str] = []
+
+        class TrackingRuntime:
+            def finalize_artifacts(self, *, interrupted):
+                order.append(f"harvest:{interrupted}")
+                return True
+
+            def finalize(self, *, interrupted):
+                order.append(f"finalize:{interrupted}")
+                return True
+
+        runtime = TrackingRuntime()
+        agent = SimpleNamespace(deepagents_runtime=runtime)
+        mock_job_store = MagicMock()
+
+        async def update_status(_job_id, status, **_kwargs):
+            order.append(f"status:{status.value}")
+
+        mock_job_store.update_status = AsyncMock(side_effect=update_status)
+        run_error = error or DeepResearchExecutionTimeout("job budget expired")
+        config = SimpleNamespace(workflow=None, functions={}, middleware={})
+        db_url = f"sqlite:///{tmp_path / 'timeout.db'}"
+
+        with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+            with patch("nat.runtime.loader.load_config", return_value=config):
+                with patch(
+                    "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                    return_value=FakeWorkflowBuilder(),
+                ):
+                    with patch(
+                        "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                        return_value=FakeExporterManager(),
+                    ):
+                        with patch("aiq_api.jobs.runner._load_agent_class", return_value=object):
+                            with patch(
+                                "aiq_api.jobs.runner._create_llm_provider",
+                                AsyncMock(return_value=(object(), object())),
+                            ):
+                                with patch("aiq_api.jobs.runner._create_agent_instance", return_value=agent):
+                                    with patch(
+                                        "aiq_api.jobs.runner._run_agent",
+                                        AsyncMock(side_effect=run_error),
+                                    ):
+                                        await run_agent_job(
+                                            False,
+                                            20,
+                                            "tcp://localhost:8786",
+                                            db_url,
+                                            "config.yml",
+                                            "job-1",
+                                            "input",
+                                            "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                                            "deep_research_agent",
+                                            content_encryption_policy=ContentEncryptionConfig(
+                                                mode="off"
+                                            ).policy_identity,
+                                        )
+
+        assert [entry for entry in order if entry.startswith("status:")] == [
+            f"status:{JobStatus.RUNNING.value}",
+            f"status:{JobStatus.FAILURE.value}",
+        ]
+        terminal_calls = [entry for entry in order if entry.startswith("finalize:")]
+        assert terminal_calls
+        assert all(entry == f"finalize:{expected_interrupted}" for entry in terminal_calls)
+        if expected_interrupted:
+            assert order.index("finalize:True") < order.index(f"status:{JobStatus.FAILURE.value}")
+            assert "harvest:False" not in order
+        else:
+            assert "harvest:False" in order
+            assert order.index(f"status:{JobStatus.FAILURE.value}") < order.index("finalize:False")
 
 
 class TestEventStore:
@@ -909,6 +1422,37 @@ class TestEventStore:
         events = EventStore.get_events(db_url, "test-job-1")
         assert len(events) == 1
         assert events[0]["type"] == "test.event"
+
+    def test_artifact_update_survives_event_store_round_trip(self, tmp_path):
+        """Generated-file metadata remains reconstructable after durable storage."""
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import Artifact
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import ArtifactKind
+        from aiq_api.jobs.event_store import EventStore
+
+        db_url = f"sqlite:///{tmp_path / 'test.db'}"
+        content_url = "/v1/jobs/async/job/job-1/artifacts/artifact-1/content"
+        artifact = Artifact(
+            artifact_id="artifact-1",
+            job_id="job-1",
+            kind=ArtifactKind.IMAGE,
+            mime_type="image/png",
+            filename="chart.png",
+            sandbox_path="/sandbox/job-1/aiq-artifacts/chart.png",
+            storage_uri="db://artifacts/artifact-1",
+            sha256="a" * 64,
+            size_bytes=128,
+            inline=True,
+        )
+
+        EventStore(db_url, "job-1").store(artifact.to_sse_payload(content_url))
+
+        event = EventStore.get_events(db_url, "job-1")[0]
+        assert event["type"] == "artifact.update"
+        assert event["name"] == "chart.png"
+        assert event["data"]["type"] == "file"
+        assert event["data"]["content_url"] == content_url
+        assert "content" not in event["data"]
+        assert event["data"]["artifact_id"] == "artifact-1"
 
     def test_get_events_empty(self, tmp_path):
         """Test get_events returns empty list for unknown job."""
@@ -1155,17 +1699,23 @@ class TestToolArtifactMapping:
 
 
 def test_get_worker_function_type_maps_async_deep_research_flag():
-    """Async deep research selects the deep research function type."""
+    """Async deep research selects the deep research function type for supported workflows."""
     from types import SimpleNamespace
 
+    from aiq_agent.agents.deep_researcher.register import DeepResearchWorkflowConfig
     from aiq_api.jobs.runner import _get_worker_function_type
 
-    enabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=True))
-    disabled_config = SimpleNamespace(workflow=SimpleNamespace(use_async_deep_research=False))
+    workflow = DeepResearchWorkflowConfig(use_async_deep_research=True)
+    enabled_config = SimpleNamespace(workflow=workflow)
+    disabled_config = SimpleNamespace(workflow=DeepResearchWorkflowConfig())
+    missing_flag_config = SimpleNamespace(workflow=SimpleNamespace())
     no_workflow_config = SimpleNamespace(workflow=None)
 
+    assert workflow.use_async_deep_research is True
+    assert workflow.model_dump()["use_async_deep_research"] is True
     assert _get_worker_function_type(enabled_config) == "deep_research_agent"
     assert _get_worker_function_type(disabled_config) is None
+    assert _get_worker_function_type(missing_flag_config) is None
     assert _get_worker_function_type(no_workflow_config) is None
 
 
@@ -1916,6 +2466,7 @@ class TestAsyncJobRunnerAgentFactory:
         from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
         from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
         from aiq_api.jobs.runner import _create_agent_instance
 
         class FakeDeepResearcherAgent:
@@ -1937,6 +2488,7 @@ class TestAsyncJobRunnerAgentFactory:
                 max_research_concurrency=None,
                 max_concurrent_source_tool_calls=None,
                 max_source_tool_batch_size=None,
+                resource_limits=None,
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
@@ -1953,6 +2505,7 @@ class TestAsyncJobRunnerAgentFactory:
                 self.max_research_concurrency = max_research_concurrency
                 self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
                 self.max_source_tool_batch_size = max_source_tool_batch_size
+                self.resource_limits = resource_limits
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
@@ -1964,6 +2517,16 @@ class TestAsyncJobRunnerAgentFactory:
             max_research_concurrency=2,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
+            resource_limits=DeepResearchResourceLimits(
+                max_input_chars=1024,
+                max_execution_seconds=60,
+                max_plan_bytes=4096,
+                max_research_queries=2,
+                max_total_query_chars=512,
+                max_research_note_bytes=2048,
+                max_total_research_note_bytes=4096,
+                max_source_tool_calls=8,
+            ),
         )
 
         agent = _create_agent_instance(
@@ -1989,6 +2552,8 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_research_concurrency == 2
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
+        assert agent.resource_limits is fn_config.resource_limits
+        assert agent.resource_limits.max_source_tool_calls == 8
 
     def test_create_agent_instance_allows_non_deep_agent_to_reuse_deep_config(self):
         """Async workers should not treat shared DeepResearchAgentConfig as a constructor contract."""
@@ -2080,6 +2645,7 @@ class TestAsyncJobRunnerAgentFactory:
         """Async construction preserves catalog and concurrency settings."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
         from aiq_agent.common import LLMProvider
         from aiq_agent.common import LLMRole
         from aiq_api.jobs.runner import _create_agent_instance
@@ -2095,6 +2661,7 @@ class TestAsyncJobRunnerAgentFactory:
             max_research_concurrency=2,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
+            resource_limits=DeepResearchResourceLimits(max_source_tool_calls=7),
         )
 
         agent = _create_agent_instance(
@@ -2113,6 +2680,58 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_research_concurrency == 2
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
+        assert agent.resource_limits is fn_config.resource_limits
+        assert agent.resource_limits.max_source_tool_calls == 7
+
+    @pytest.mark.asyncio
+    async def test_async_deep_researcher_rejects_empty_sources_when_citation_verification_disabled(self):
+        """The worker path enforces source selection even when citation verification is disabled."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+        from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.common import LLMProvider
+        from aiq_agent.common.citation_verification import EmptySourceRegistryError
+        from aiq_agent.common.citation_verification import EmptySourceRegistryReason
+        from aiq_api.jobs.runner import _create_agent_instance
+        from aiq_api.jobs.runner import _run_agent
+
+        class FakeMonitor:
+            is_cancelled = False
+
+            def start(self):
+                return None
+
+            def stop(self):
+                return None
+
+        mock_llm = MagicMock()
+        provider = LLMProvider()
+        provider.set_default(mock_llm)
+        agent = _create_agent_instance(
+            agent_cls=DeepResearcherAgent,
+            llm_provider=provider,
+            llm=mock_llm,
+            tools=[],
+            fn_config=DeepResearchAgentConfig(
+                orchestrator_llm="llm",
+                enable_citation_verification=False,
+            ),
+            verbose=False,
+            callbacks=[],
+            job_id="async-job-123",
+        )
+
+        with patch.object(agent, "_build_orchestrator_agent") as build_orchestrator:
+            with pytest.raises(EmptySourceRegistryError) as exc_info:
+                await _run_agent(
+                    agent=agent,
+                    input_text="Research this",
+                    monitor=FakeMonitor(),
+                    data_sources=[],
+                )
+
+        assert agent.enable_citation_verification is False
+        assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCES_SELECTED
+        build_orchestrator.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_run_agent_seeds_initial_files_when_state_supports_files(self):
@@ -2285,7 +2904,7 @@ class TestAsyncJobRunnerAgentFactory:
                     )
                 ]
             )
-            agent._build_orchestrator_agent(state)
+            agent._build_orchestrator_agent(state, final_report_tracker=FinalReportCommitTracker())
 
         kwargs = create.call_args.kwargs
         assert "skills" not in kwargs
@@ -2344,7 +2963,7 @@ class TestAsyncJobRunnerAgentFactory:
                 job_id="async-job-123",
             )
             state = DeepResearchAgentState(messages=[HumanMessage(content="Research without tools")])
-            agent._build_orchestrator_agent(state)
+            agent._build_orchestrator_agent(state, final_report_tracker=FinalReportCommitTracker())
 
         tool_names = [tool.name for tool in create.call_args.kwargs["tools"]]
         assert tool_names == ["think", "get_verified_sources", "run_research_batch"]
@@ -2382,6 +3001,7 @@ class TestAsyncJobRunnerAgentFactory:
                 max_research_concurrency=None,
                 max_concurrent_source_tool_calls=None,
                 max_source_tool_batch_size=None,
+                resource_limits=None,
             ):
                 raise TypeError("internal constructor failure")
 
@@ -2413,6 +3033,53 @@ class TestTerminalTeardown:
         # Must not raise when no sandbox runtime is present (non-sandbox agents).
         _teardown_sandbox(None, job_id="job-1", interrupted=False)
 
+    @pytest.mark.asyncio
+    async def test_terminal_event_flush_failure_is_nonfatal_and_sanitized(self, caplog):
+        from aiq_api.jobs.runner import _flush_event_store
+
+        event_store = MagicMock()
+        event_store.flush.side_effect = RuntimeError("secret-bearing database detail")
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            await _flush_event_store(event_store, job_id="job-1")
+
+        event_store.flush.assert_called_once_with()
+        assert "Event store flush failed for job job-1 (RuntimeError)" in caplog.text
+        assert "secret-bearing database detail" not in caplog.text
+
+    def test_runtime_finalizer_owns_cleanup_when_available(self):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize", "close", "terminate"])
+        _teardown_sandbox(runtime, job_id="job-1", interrupted=True)
+
+        runtime.finalize.assert_called_once_with(interrupted=True)
+        runtime.close.assert_not_called()
+        runtime.terminate.assert_not_called()
+
+    def test_runtime_finalizer_false_result_is_logged(self, caplog):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize"])
+        runtime.finalize.return_value = False
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup reported failure for job job-1" in caplog.text
+
+    def test_runtime_finalizer_exception_is_nonfatal_and_sanitized(self, caplog):
+        from aiq_api.jobs.runner import _teardown_sandbox
+
+        runtime = MagicMock(spec=["finalize"])
+        runtime.finalize.side_effect = RuntimeError("credential=do-not-log")
+
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup failed for job job-1 (RuntimeError)" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+
     def test_normal_path_calls_close(self):
         from aiq_api.jobs.runner import _teardown_sandbox
 
@@ -2439,19 +3106,53 @@ class TestTerminalTeardown:
 
         runtime.close.assert_called_once_with()
 
-    def test_never_raises_when_teardown_fails(self):
+    def test_fallback_teardown_exception_is_nonfatal_and_sanitized(self, caplog):
         from aiq_api.jobs.runner import _teardown_sandbox
 
         runtime = MagicMock(spec=["close", "terminate"])
-        runtime.close.side_effect = RuntimeError("sdk session close failed")
-        # Must swallow the error; teardown is best-effort on the terminal path.
-        _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+        runtime.close.side_effect = RuntimeError("credential=do-not-log")
 
-    def test_does_not_harvest(self):
+        with caplog.at_level("WARNING", logger="aiq_api.jobs.runner"):
+            _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
+
+        assert "Sandbox cleanup failed for job job-1 (RuntimeError)" in caplog.text
+        assert "credential=do-not-log" not in caplog.text
+
+    def test_finalizes_artifacts_before_close(self):
         from aiq_api.jobs.runner import _teardown_sandbox
 
-        # The single harvest happens in agent.run(); teardown must not call final_harvest.
-        runtime = MagicMock(spec=["close", "terminate", "final_harvest"])
+        order: list[str] = []
+        runtime = MagicMock(spec=["close", "terminate", "finalize_artifacts"])
+        runtime.finalize_artifacts.side_effect = lambda **_kwargs: order.append("harvest")
+        runtime.close.side_effect = lambda: order.append("close")
+
         _teardown_sandbox(runtime, job_id="job-1", interrupted=False)
 
-        runtime.final_harvest.assert_not_called()
+        runtime.finalize_artifacts.assert_called_once_with(interrupted=False)
+        assert order == ["harvest", "close"]
+
+    def test_harvest_persists_artifacts_without_releasing_sandbox(self):
+        from aiq_api.jobs.runner import _harvest_sandbox_artifacts
+
+        # Runs before the terminal status: artifacts must be persisted, but the
+        # unbounded close()/terminate() must NOT run here (deferred to finally),
+        # so a hanging SDK cleanup cannot strand a finished job in RUNNING.
+        runtime = MagicMock(spec=["close", "terminate", "finalize_artifacts"])
+        _harvest_sandbox_artifacts(runtime, job_id="job-1", interrupted=False)
+
+        runtime.finalize_artifacts.assert_called_once_with(interrupted=False)
+        runtime.close.assert_not_called()
+        runtime.terminate.assert_not_called()
+
+    def test_harvest_none_runtime_is_noop(self):
+        from aiq_api.jobs.runner import _harvest_sandbox_artifacts
+
+        _harvest_sandbox_artifacts(None, job_id="job-1", interrupted=False)
+
+    def test_harvest_never_raises_when_finalize_fails(self):
+        from aiq_api.jobs.runner import _harvest_sandbox_artifacts
+
+        runtime = MagicMock(spec=["finalize_artifacts"])
+        runtime.finalize_artifacts.side_effect = RuntimeError("artifact scan failed")
+        # Artifact capture cannot replace or block the job result.
+        _harvest_sandbox_artifacts(runtime, job_id="job-1", interrupted=False)

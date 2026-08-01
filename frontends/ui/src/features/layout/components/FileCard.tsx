@@ -24,8 +24,17 @@ export interface FileInfo {
   id: string
   /** File name/path */
   filename: string
-  /** File content */
-  content: string
+  /** Inline content for legacy text-file events */
+  content?: string
+  artifactId?: string
+  contentUrl?: string
+  kind?: string
+  mimeType?: string
+  sizeBytes?: number
+  sha256?: string
+  title?: string
+  caption?: string
+  inline?: boolean
   /** When file was created/updated */
   timestamp?: Date | string
 }
@@ -59,6 +68,12 @@ const isMarkdownFile = (filename: string): boolean => {
   return ['md', 'markdown'].includes(ext)
 }
 
+const formatBytes = (size: number): string => {
+  if (size < 1024) return `${size} B`
+  if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KiB`
+  return `${(size / (1024 * 1024)).toFixed(1)} MiB`
+}
+
 /**
  * Expandable card showing a file artifact's details.
  */
@@ -81,7 +96,7 @@ export const FileCard: FC<FileCardProps> = ({ file }) => {
       <Button
         kind="tertiary"
         size="small"
-        onClick={() => setIsExpanded(!isExpanded)}
+        onClick={() => file.content && setIsExpanded(!isExpanded)}
         aria-expanded={isExpanded}
         aria-controls={`file-content-${file.id}`}
         className="w-full justify-start text-left p-0"
@@ -101,6 +116,13 @@ export const FileCard: FC<FileCardProps> = ({ file }) => {
             <Text kind="label/semibold/sm" className="text-default truncate">
               {file.filename}
             </Text>
+            {(file.mimeType || file.sizeBytes !== undefined) && (
+              <Text kind="body/regular/xs" className="text-subtle truncate">
+                {[file.mimeType, file.sizeBytes !== undefined ? formatBytes(file.sizeBytes) : null]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </Text>
+            )}
           </Flex>
 
           {/* Line count */}
@@ -118,17 +140,31 @@ export const FileCard: FC<FileCardProps> = ({ file }) => {
           )}
 
           {/* Expand/collapse icon */}
-          <span
-            className={`
-              text-subtle transition-transform duration-200
-              ${isExpanded ? 'rotate-180' : ''}
-            `}
-            aria-hidden="true"
-          >
-            <ChevronDown className="h-4 w-4" />
-          </span>
+          {file.content && (
+            <span
+              className={`
+                text-subtle transition-transform duration-200
+                ${isExpanded ? 'rotate-180' : ''}
+              `}
+              aria-hidden="true"
+            >
+              <ChevronDown className="h-4 w-4" />
+            </span>
+          )}
         </Flex>
       </Button>
+
+      {file.contentUrl && (
+        <Flex className="px-3 pb-2">
+          <Button
+            kind="secondary"
+            size="small"
+            onClick={() => window.open(file.contentUrl, '_blank', 'noopener,noreferrer')}
+          >
+            Open file
+          </Button>
+        </Flex>
+      )}
 
       {/* Collapsed preview */}
       {!isExpanded && contentPreview && (

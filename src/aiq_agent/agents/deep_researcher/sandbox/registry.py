@@ -27,6 +27,7 @@ import logging
 from typing import TYPE_CHECKING
 
 from .capabilities import verify_capabilities
+from .logging_utils import log_sandbox_failure
 
 if TYPE_CHECKING:
     from .base import SandboxProvider
@@ -80,8 +81,14 @@ def _load_entry_point_providers() -> None:
     for entry_point in discovered:
         try:
             provider_cls = entry_point.load()
-        except Exception:  # noqa: BLE001 - a bad plugin must not break built-in resolution
-            logger.warning("Failed to load sandbox provider entry point '%s'", entry_point.name, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - a bad plugin must not break built-in resolution
+            log_sandbox_failure(
+                logger,
+                operation="provider_entry_point_load",
+                reason_code="provider_load_failed",
+                exc=exc,
+                provider=entry_point.name,
+            )
             continue
         register_sandbox_provider(entry_point.name, provider_cls)
         logger.info("Registered sandbox provider '%s' from entry point", entry_point.name)

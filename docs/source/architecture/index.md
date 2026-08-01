@@ -10,4 +10,4 @@ Understand how AI-Q processes queries, routes between agents, and produces resea
 - **[Overview](./overview.md)** — End-to-end system flow with diagrams
 - **[Agents](./agents/index.md)** — Individual agent architectures and internals
 - **[Data Flow](./data-flow.md)** — Request lifecycle, async jobs, SSE streaming
-- **[Deep Research Sandbox](./agents/sandbox.md)** — Modal sandbox behavior and operational notes
+- **[Deep Research Sandbox](./agents/sandbox.md)** — Provider-neutral sandbox architecture, including Modal and experimental OpenShell behavior

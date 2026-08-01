@@ -9,7 +9,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 - **Collection Management** - create/delete/list collections per session or use case
 - **File Management** - upload/delete/list files with status tracking (UPLOADING → INGESTING → SUCCESS/FAILED)
 - **Content Typing** - TEXT, TABLE, CHART, IMAGE enums for frontend rendering
-- **Backend Agnostic** - Swap between local (LlamaIndex), OpenSearch, and hosted RAG Blueprint without core agent code changes
+- **Backend Agnostic** - Swap between local (LlamaIndex), OpenSearch, Azure AI Search, and hosted RAG Blueprint without core agent code changes
 
 ---
 
@@ -36,6 +36,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 | `llamaindex` | `"llamaindex"` | Local Library | ChromaDB | Dev, prototyping, macOS/Linux |
 | `opensearch` | `"opensearch"` | Direct Client | OpenSearch k-NN | Self-hosted OpenSearch, Amazon OpenSearch Serverless |
 | `foundational_rag` | `"foundational_rag"` | Hosted Service | Remote Milvus | Production, multi-user |
+| `azure_ai_search` | `"azure_ai_search"` | Managed Service | Azure AI Search | Managed hybrid retrieval |
 
 **Local Library Mode** - Everything runs in your Python process. No external services needed.
 - **`llamaindex`** - LlamaIndex + ChromaDB. Lightweight, great for development. Works on macOS and Linux.
@@ -43,6 +44,9 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 **Hosted Service Mode** - Connects to deployed services via HTTP. Requires infrastructure but scales better.
 - **`foundational_rag`** - Connects to [NVIDIA RAG Blueprint](https://github.com/NVIDIA-AI-Blueprints/rag) via HTTP.
   - [Deployment Guide](https://github.com/NVIDIA-AI-Blueprints/rag/blob/main/docs/deploy-docker-self-hosted.md)
+- **`azure_ai_search`** - Uses one AI-Q-owned shared index in a managed Azure AI Search service. Collection and file
+  manifests isolate logical collections. Canonical UUID file IDs support status and deletion, while same-name uploads
+  coexist independently. See [`src/azure_ai_search/README.md`](src/azure_ai_search/README.md).
 
 **OpenSearch Mode** - Stores AIQ collections directly in OpenSearch vector indexes.
 - **`opensearch`** - Uses one OpenSearch index per AIQ collection/session. Supports unauthenticated local clusters,
@@ -64,6 +68,7 @@ export NVIDIA_API_KEY=nvapi-your-key-here
 uv pip install -e "sources/knowledge_layer[llamaindex]"        # Recommended for local dev - works on macOS/Linux
 uv pip install -e "sources/knowledge_layer[foundational_rag]"  # Requires deployed server
 uv pip install -e "sources/knowledge_layer[opensearch]"        # Requires OpenSearch/OpenSearch Serverless
+uv pip install -e "sources/knowledge_layer[azure_ai_search]"   # Requires an Azure AI Search service
 ```
 
 > **New to Knowledge Layer?** Start with `llamaindex` - it requires no external services and works on macOS and Linux.
@@ -87,7 +92,7 @@ functions:
   knowledge_search:
     _type: knowledge_retrieval      # NAT function type
     backend: llamaindex             # Required: which adapter to use
-    collection_name: my_docs        # Required: target collection
+    collection_name: my_docs        # Retrieval fallback when no session context is present
     top_k: 5                        # Results to return
 
     # Backend-specific options (each backend uses different fields):
@@ -99,7 +104,7 @@ functions:
     opensearch_auth_type: none                # opensearch only: none, basic, sigv4
 ```
 
-You can also use environment variable substitution in YAML for sensitive values:
+You can also use environment variable substitution in YAML for deployment-specific values:
 
 ```yaml
 functions:
@@ -182,7 +187,25 @@ functions:
 
 > **Separate Docker stacks:** When AI-Q and RAG run as separate Docker Compose stacks, connect the AI-Q backend to the RAG network: `docker network connect nvidia-rag aiq-agent`. See the [Docker Compose README](../../deploy/compose/README.md#networking-when-aiq-and-rag-run-as-separate-compose-stacks) for details.
 
+**Azure AI Search (Managed Service)**
+
+```yaml
+functions:
+  knowledge_search:
+    _type: knowledge_retrieval
+    backend: azure_ai_search
+    collection_name: ${COLLECTION_NAME:-aiq_default}
+    top_k: 5
+```
+
+Set `AZURE_SEARCH_ENDPOINT` and `NVIDIA_API_KEY`. Set `AZURE_SEARCH_API_KEY` to use key authentication; otherwise,
+Azure `DefaultAzureCredential` is used. Azure stores all logical collections, including UI session collections, in
+one AI-Q-owned physical index and applies `collection_id` filters to isolate ingestion and retrieval. See the
+[Azure AI Search example](../../docs/source/examples/azure-ai-search.md) for authentication, index, and embedding
+configuration.
+
 **OpenSearch (Self-hosted)**
+
 ```yaml
 functions:
   knowledge_search:
@@ -400,42 +423,25 @@ For more details, see the [Docker Compose README](../../deploy/compose/README.md
 
 ### Session Collections
 
-Both LlamaIndex and Foundational RAG support session-based collections (`s_<uuid>`) created by the UI. Each browser session gets its own isolated collection.
+All four shipped knowledge backends—LlamaIndex, Foundational RAG, Azure AI Search, and OpenSearch—support
+session-based collections (`s_<uuid>`) created by the UI. Each UI conversation gets its own isolated logical
+collection.
 
 #### How collection routing works
 
-When a request arrives the `knowledge_search` tool reads `Context.conversation_id` and uses it as the
-collection name, falling back to the static `collection_name` from YAML config when the context value
-is absent.
+Retrieval uses the active conversation or session collection when present and otherwise falls back to the configured
+`collection_name`. UI ingestion and retrieval share the UI-created session collection, while API ingestion selects its
+destination explicitly.
 
-`Context.conversation_id` is populated by the `nat` framework **from the `conversation-id` HTTP
-request header** (see `SessionManager.set_metadata_from_http_request` in the `nat` package).
-The AI-Q UI sets this header automatically for every WebSocket and HTTP request it sends, which is why
-session-isolated uploads work seamlessly through the UI.
+| Usage | Collection selection |
+|-------|----------------------|
+| UI ingestion | Active UI session collection |
+| UI retrieval | Active UI session collection |
+| API ingestion | Collection named by the ingestion operation |
+| API retrieval | `conversation-id`, then configured `collection_name` fallback |
 
-**Known limitation — `/v1/chat/completions` JSON body field is ignored.**
-The OpenAI-compatible `POST /v1/chat/completions` endpoint uses `nat.data_models.api_server.ChatRequest`
-as its request body model.  `ChatRequest` does **not** declare a `conversation_id` field; the model uses
-`extra="allow"`, so any `conversation_id` key in the JSON body is silently accepted and then discarded.
-The framework never reads it back into the context.
-
-Consequence: callers that send `{"messages": [...], "conversation_id": "my-collection"}` in the body
-will have that value silently dropped, and the tool will fall back to the configured `collection_name`
-default instead of routing to `my-collection`.
-
-**Workaround (until upstream `nat` is patched):** pass the collection name as the
-`conversation-id` HTTP header instead of a JSON body field:
-
-```bash
-curl -X POST http://localhost:8000/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -H "conversation-id: my-collection" \
-  -d '{"messages": [{"role": "user", "content": "..."}], "stream": false}'
-```
-
-This is tracked as a known gap.  The permanent fix requires adding `conversation_id` to `ChatRequest`
-and wiring it into `Context.conversation_id` inside the `nat` framework — a change that belongs in the
-upstream `nat` / `aiq_api` repository, not in this repo.
+For request-scoped selection, environment-variable usage, and `/v1/chat/completions` header behavior, see
+[Collection Routing](../../docs/source/customization/knowledge-layer.md#collection-routing).
 
 ### TTL Cleanup
 
@@ -505,17 +511,23 @@ Other file types are ingested normally but do not receive summaries.
 ingestion the summary LLM is not worker-serializable, so `generate_summary` is forced off and a
 warning is logged; use `opensearch_ingestion_mode: local` if you require summaries.
 
-> **Frontend file types:** The frontend file picker defaults to `.pdf,.docx,.txt,.md` (matching LlamaIndex). Set `FILE_UPLOAD_ACCEPTED_TYPES` to match your backend:
+> **Upload controls:** The frontend file picker and backend API default to `.pdf,.docx,.txt,.md` (matching
+> LlamaIndex). Set `FILE_UPLOAD_ACCEPTED_TYPES` to match your selected backend. The API validates the extension,
+> declared media type, and file content. `FILE_UPLOAD_MAX_SIZE_MB` limits each file and all files combined in one
+> request; `FILE_UPLOAD_MAX_FILE_COUNT` limits the number of files in one request.
 >
 > | Deployment | Where to set |
 > |-----------|-------------|
-> | **CLI** (`start_e2e.sh`) | `deploy/.env`: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md` |
-> | **Docker Compose** | `deploy/.env` (passed to frontend container automatically) |
-> | **Helm** | `deploy/helm/deployment-k8s/values.yaml` under the frontend app's `env` section |
+> | **CLI** (`start_e2e.sh`) | `deploy/.env` |
+> | **Docker Compose** | `deploy/.env` (passed to the frontend and backend containers) |
+> | **Helm** | `deploy/helm/deployment-k8s/values.yaml` under both the backend and frontend apps' `env` sections |
 >
 > Example for Foundational RAG:
+>
 > ```bash
 > FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md
+> FILE_UPLOAD_MAX_SIZE_MB=100
+> FILE_UPLOAD_MAX_FILE_COUNT=10
 > ```
 
 ### How It Works
@@ -551,7 +563,7 @@ The summary system works identically across all backends:
 | `unregister_summary()` | `aiq_agent.knowledge.factory` | Remove summary on file deletion |
 | `get_available_documents()` | `aiq_agent.knowledge.factory` | Retrieve summaries for agents |
 
-Both LlamaIndex and Foundational RAG adapters call these functions, ensuring consistent behavior regardless of backend choice.
+All four shipped adapters call these functions, ensuring consistent behavior regardless of backend choice.
 
 ### Summary Storage
 
@@ -1038,6 +1050,13 @@ Configuration values are resolved in the following order (highest to lowest prio
 | `KNOWLEDGE_RETRIEVER_BACKEND` | All | Default retriever backend (fallback if not in YAML) |
 | `KNOWLEDGE_INGESTOR_BACKEND` | All | Default ingestor backend (fallback if not in YAML) |
 | `AIQ_CHROMA_DIR` | llamaindex | ChromaDB persistence path |
+| `AZURE_SEARCH_ENDPOINT` | azure_ai_search | Azure AI Search service endpoint |
+| `AZURE_SEARCH_API_KEY` | azure_ai_search | Optional admin key; omit to use `DefaultAzureCredential` |
+| `AZURE_CLIENT_ID` | azure_ai_search | Client ID for the user-assigned managed identity used by `DefaultAzureCredential` |
+| `AIQ_AZURE_SEARCH_INDEX_PREFIX` | azure_ai_search | Deployment-unique prefix for the shared AI-Q index (default: `aiq`) |
+| `AIQ_EMBED_MODEL` | llamaindex, opensearch, azure_ai_search | Embedding model name |
+| `AIQ_EMBED_BASE_URL` | llamaindex, opensearch, azure_ai_search | Embedding API base URL |
+| `AIQ_EMBED_DIM` | azure_ai_search | Embedding dimensions (default: `2048`) |
 | `AIQ_SUMMARY_DB` | All | Summary database URL (SQLite or PostgreSQL) |
 | `RAG_SERVER_URL` | foundational_rag | Query server URL (port 8081) |
 | `RAG_INGEST_URL` | foundational_rag | Ingestion server URL (port 8082) |
@@ -1061,7 +1080,7 @@ Configuration values are resolved in the following order (highest to lowest prio
 | `OPENSEARCH_TIMEOUT` | opensearch | Request timeout in seconds (default `120`) |
 | `OPENSEARCH_BULK_BATCH_SIZE` | opensearch | Documents per bulk index request (default `100`) |
 | `OPENSEARCH_EMBEDDING_BATCH_SIZE` | opensearch | Texts per embedding request (default `16`) |
-| `COLLECTION_NAME` | All | Default collection name |
+| `COLLECTION_NAME` | All | Default retrieval collection when no conversation or session context is present |
 
 > **Advanced OpenSearch options:** Additional tuning parameters (kNN index settings `OPENSEARCH_ENGINE`, `OPENSEARCH_SPACE_TYPE`, `OPENSEARCH_M`, `OPENSEARCH_EF_CONSTRUCTION`, `OPENSEARCH_EF_SEARCH`; field name overrides `OPENSEARCH_VECTOR_FIELD`, `OPENSEARCH_TEXT_FIELD`; AOSS delete tuning `OPENSEARCH_AOSS_DELETE_MAX_BATCHES`, `OPENSEARCH_AOSS_DELETE_BACKOFF_SECONDS`; and `OPENSEARCH_MAX_RETRIES`) are available via YAML config or environment variable — see `sources/knowledge_layer/src/register.py` for defaults and descriptions.
 

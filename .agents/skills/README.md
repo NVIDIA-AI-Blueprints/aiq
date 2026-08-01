@@ -24,7 +24,7 @@ AI-Q has two distinct kinds of skill, separated by audience:
 | :-- | :-- | :-- |
 | **Audience** | Developers changing the AI-Q repo | Users calling a running AI-Q server |
 | **Location** | `.agents/skills/` (this directory) | top-level `skills/` |
-| **Examples** | `aiq-add-data-source`, `aiq-add-tool`, `aiq-release-qa`, `aiq-prepare-pr`, `aiq-customize-prompts-models`, `aiq-maintain-ci` | `aiq-deploy`, `aiq-research` |
+| **Examples** | `aiq-add-data-source`, `aiq-add-tool`, `aiq-configure-workflow`, `aiq-release-qa`, `aiq-prepare-pr`, `aiq-customize-prompts-models`, `aiq-maintain-ci` | `aiq-deploy`, `aiq-research` |
 | **Assumes** | A repo checkout and dev toolchain | A reachable AI-Q backend |
 
 Consumer skills under `skills/` are authored to be self-contained and exportable
