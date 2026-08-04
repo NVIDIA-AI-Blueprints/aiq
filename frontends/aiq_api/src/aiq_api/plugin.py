@@ -315,7 +315,9 @@ class AIQAPIPlugin(FastApiFrontEndPlugin):
 
     @override
     async def run(self) -> None:
-        if self.front_end_config.scheduler_address is not None:
+        scheduler_address = self.front_end_config.scheduler_address or os.environ.get("NAT_DASK_SCHEDULER_ADDRESS")
+        if scheduler_address is not None:
+            self.front_end_config.scheduler_address = scheduler_address
             await super().run()
             return
 
