@@ -33,16 +33,23 @@ paper search, and the second async-job layer. FastMCP owns the transport and the
 
 MCP is a separate uv project with its own `mcp/pyproject.toml`, `mcp/uv.lock`, and environment. The root AI-Q
 workspace excludes it and keeps `cryptography>=46.0.6,<47`, which is compatible with NAT's declared requirements.
-The frozen MCP release/container profile instead pins `cryptography==48.0.1` to replace the OpenSSL version
-bundled in earlier wheels.
+The frozen MCP release/container profile instead pins `cryptography==50.0.0` to replace vulnerable earlier
+releases.
 
-The supported distribution paths are the frozen MCP project in an AI-Q source checkout and the release container
-built from the repository root. Here, *standalone* describes the MCP process and transport boundary, not a generic
-Python wheel. `aiq-mcp-server` depends on `aiq-agent`, `tavily-web-search`, and other packages supplied by this
-repository; that complete dependency closure is not published to a Python package index. Its locally buildable
-wheel is an internal implementation artifact and is marked `Private :: Do Not Upload`.
+The release-supported platform is Linux x86_64 with CPython 3.13, using either the frozen MCP project in an AI-Q
+source checkout or the release container built from the repository root. CI validates the production environment
+and container on that platform. Other 64-bit source hosts are development-only. `cryptography` 50 no longer ships
+x86_64 macOS or 32-bit Windows wheels. Those platforms are unsupported by the frozen profile; run the Linux
+release container on a supported 64-bit Linux/container host. See the
+[MCP security policy](../../../mcp/SECURITY.md#platform-compatibility) for the validation required before claiming
+another target.
 
-The 48.0.1 override is security hardening for those supported runtime paths, not a functional MCP protocol
+Here, *standalone* describes the MCP process and transport boundary, not a generic Python wheel.
+`aiq-mcp-server` depends on `aiq-agent`, `tavily-web-search`, and other packages supplied by this repository; that
+complete dependency closure is not published to a Python package index. Its locally buildable wheel is an internal
+implementation artifact and is marked `Private :: Do Not Upload`.
+
+The 50.0.0 override is security hardening for those supported runtime paths, not a functional MCP protocol
 requirement or published package constraint. Use `mcp/uv.lock` through the commands below, or use the release
 container, to retain the audited dependency profile.
 

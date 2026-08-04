@@ -68,9 +68,15 @@ docker build -t aiq-mcp-server:local -f mcp/Dockerfile .
 That builder syncs the frozen MCP project (`uv sync --project /app/mcp`) from
 `mcp/uv.lock`, independently of the root image. The root image stays within
 NAT's `cryptography<47` constraint; the audited MCP container profile pins
-`cryptography==48.0.1` through an MCP-scoped uv override. The supported MCP
-distribution paths are the frozen source project and this release container;
-the repository-local dependency closure is not published as a generic wheel.
+`cryptography==50.0.0` through an MCP-scoped uv override. The release-supported
+platform is Linux x86_64 with CPython 3.13, which CI validates through the
+frozen production environment and this container. Other 64-bit source hosts
+are development-only; x86_64 macOS and 32-bit Windows are unsupported by the
+`cryptography` 50 wheel matrix. Run the release container on a supported 64-bit
+Linux/container host instead. See the
+[MCP security policy](../../../mcp/SECURITY.md#platform-compatibility) for the
+full contract. The repository-local dependency closure is not published as a
+generic wheel.
 
 ## Dev Stage
 

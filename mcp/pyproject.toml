@@ -54,7 +54,7 @@ dev = [
 where = ["src"]
 
 # The MCP release is intentionally a separate uv project. Its audited container
-# uses cryptography 48 without changing the NAT-supported dependency set used by
+# uses cryptography 50 without changing the NAT-supported dependency set used by
 # the root AI-Q workspace. These overrides are release-resolution policy; they
 # are not encoded in the locally built package metadata.
 [tool.uv]
@@ -63,8 +63,9 @@ prerelease = "allow"
 override-dependencies = [
     "authlib>=1.6.11,<2",
     "banks>=2.4.2,<3",
-    { package = { name = "nvidia-nat-core", version = "1.8.0" }, dependencies = ["cryptography>=48.0.1,<49"] },
-    { package = { name = "oci", version = "2.178.0" }, dependencies = ["cryptography>=48.0.1,<49"] },
+    { package = { name = "langchain-litellm", version = "0.6.6" }, dependencies = ["cryptography>=50.0.0,<51"] },
+    { package = { name = "nvidia-nat-core", version = "1.8.0" }, dependencies = ["cryptography>=50.0.0,<51"] },
+    { package = { name = "oci", version = "2.178.0" }, dependencies = ["cryptography>=50.0.0,<51"] },
     "defusedxml>=0.7.1,<0.8",
     "litellm>=1.83.7,<2",
     "lxml>=6.1.0,<7",

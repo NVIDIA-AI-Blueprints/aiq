@@ -378,9 +378,13 @@ the endpoint must not be exposed directly to an untrusted network. See [Expose A
 for the exact JSON protocol, health contracts, security model, and container deployment.
 
 MCP is an independent uv project with its own `mcp/uv.lock`. The root lock remains compatible with NAT's
-`cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==48.0.1` as a
-security hardening measure. The supported distribution paths are this source checkout and the release container;
-the MCP package's local path dependency closure is not published as a standalone wheel.
+`cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==50.0.0` as a
+security hardening measure. The release-supported platform is Linux x86_64 with CPython 3.13, through either the
+frozen source project or the release container. Other 64-bit source hosts are development-only; x86_64 macOS and
+32-bit Windows are unsupported because `cryptography` 50 does not publish those wheels. Run the release container
+on a supported 64-bit Linux/container host. The MCP package's local path dependency closure is not published as a
+standalone wheel. See the
+[MCP security policy](mcp/SECURITY.md#platform-compatibility) for the full platform contract.
 
 ### Benchmarks
 
