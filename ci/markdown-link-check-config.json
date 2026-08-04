@@ -25,9 +25,6 @@
             "pattern": "^https?://tavily\\.com/?$"
         },
         {
-            "pattern": "^https://build\\.nvidia\\.com.*"
-        },
-        {
             "pattern": "^https://exa\\.ai/?$"
         },
         {
