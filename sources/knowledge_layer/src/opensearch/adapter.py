@@ -483,12 +483,27 @@ class _OpenSearchConfigMixin:
         except Exception as e:
             logger.debug("Failed to update OpenSearch mapping metadata for %s: %s", index_name, e)
 
+    def _validate_index_embedding(self, index_name: str) -> dict[str, Any]:
+        """Reject persisted vectors created with a different or unknown embedding configuration."""
+        meta = self._get_index_meta(index_name)
+        persisted_model = meta.get("embedding_model")
+        persisted_dim = meta.get("embedding_dim")
+        if persisted_model == self.embed_model_name and persisted_dim == self.embedding_dim:
+            return meta
+
+        raise RuntimeError(
+            f"OpenSearch index {index_name!r} uses embedding model {persisted_model!r} with dimension "
+            f"{persisted_dim!r}, but AI-Q is configured for {self.embed_model_name!r} with dimension "
+            f"{self.embedding_dim}. Delete and re-ingest the collection before using the new embedding model."
+        )
+
     def _ensure_index(self, collection_name: str, description: str | None = None) -> str:
         """Create the collection index if it does not exist; returns the index name."""
         client = self._get_client()
         index_name = self._index_name_for_collection(collection_name)
         if client.indices.exists(index=index_name):
-            existing_name = self._get_index_meta(index_name).get("collection_name")
+            meta = self._validate_index_embedding(index_name)
+            existing_name = meta.get("collection_name")
             if existing_name is not None and existing_name != collection_name:
                 raise RuntimeError(
                     f"OpenSearch index {index_name} already belongs to collection {existing_name!r}; "
@@ -503,6 +518,7 @@ class _OpenSearchConfigMixin:
             # Otherwise the create failed for a real reason and the error must propagate.
             if not client.indices.exists(index=index_name):
                 raise
+            self._validate_index_embedding(index_name)
         return index_name
 
     def _update_collection_timestamp(self, collection_name: str) -> None:
@@ -1549,6 +1565,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
                     success=False,
                     error_message=f"Collection '{collection_name}' not found",
                 )
+            await asyncio.to_thread(self._validate_index_embedding, index_name)
 
             query_embedding = (await asyncio.to_thread(self._embed_texts, [query]))[0]
             body = self._build_search_body(query_embedding, top_k or self.default_top_k, filters)

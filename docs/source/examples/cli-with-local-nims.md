@@ -11,20 +11,22 @@ This example is based on `configs/config_cli_default.yml` with modifications to 
 
 ## Prerequisites
 
-You need Docker and NVIDIA GPUs with sufficient VRAM to run the NIM containers. Check the downloadable Nemotron 3 Ultra model card and support matrix for current self-hosted hardware requirements. The hosted default profile uses Nemotron Nano 3.5 Preview for intent and shallow research, but preview endpoint availability does not imply that a matching downloadable NIM image is available.
+You need Docker and NVIDIA GPUs with sufficient VRAM to run the NIM containers. Check the downloadable Nemotron 3 Ultra model card and support matrix for current self-hosted hardware requirements.
 
 ## Running NIM Containers
 
-Start the NIM model server locally using Docker:
+Authenticate to NGC, then start the NIM model server locally using Docker:
 
 ```bash
+echo "${NGC_API_KEY}" | docker login nvcr.io --username '$oauthtoken' --password-stdin
+
 # Pull and run the Nemotron NIM container
 # Adjust --gpus and CUDA_VISIBLE_DEVICES for your hardware
 docker run -d \
   --name nemotron-nim \
   --gpus all \
   -p 8001:8000 \
-  -e NVIDIA_API_KEY="${NVIDIA_API_KEY}" \
+  -e NGC_API_KEY="${NGC_API_KEY}" \
   nvcr.io/nim/nvidia/nemotron-3-ultra-550b-a55b:latest
 ```
 
@@ -150,8 +152,8 @@ workflow:
 ## Required Environment Variables
 
 ```bash
-# Only needed for pulling NIM container images (not for inference)
-export NVIDIA_API_KEY="nvapi-..."  # pragma: allowlist secret
+# Required to authenticate to NGC, pull the image, and download model artifacts
+export NGC_API_KEY="nvapi-..."  # pragma: allowlist secret
 
 # Web search still requires API keys (runs externally)
 export TAVILY_API_KEY="tvly-..."   # pragma: allowlist secret

@@ -269,6 +269,24 @@ OpenSearch creates one physical index per collection using `<opensearch_index_pr
 for OpenSearch index naming rules. The adapter stores collection metadata in mapping `_meta` and stores each text chunk
 as one OpenSearch document with a `knn_vector` field.
 
+#### Migrating an embedding model
+
+Persisted vectors are valid only for the exact embedding model that created them. AI-Q records that model identity in
+new Chroma collections and OpenSearch indexes and rejects ingestion or retrieval when the configured model differs.
+OpenSearch also validates the configured vector dimension. Collections created by older AI-Q versions do not have the
+required identity marker and are rejected rather than silently mixing embedding spaces.
+
+Before changing `AIQ_EMBED_MODEL` or the corresponding YAML setting:
+
+1. Delete each affected logical collection through the Knowledge API or UI. For Chroma development data, selecting a
+   new `AIQ_CHROMA_DIR` is also sufficient to create an isolated store.
+2. Configure the new embedding model and, for OpenSearch, its matching `opensearch_embedding_dim`.
+3. Recreate the collection and re-upload its source documents so every stored vector uses the new model.
+
+Azure AI Search already derives its physical index name from the embedding model and dimension and validates the same
+identity marker, so a changed model resolves to an isolated index. Its documents must still be uploaded to that new
+index before retrieval can return results.
+
 For session-isolated web uploads, AI-Q uses the conversation/session collection name, such as `s_<uuid>`. The OpenSearch
 adapter maps that session collection to a dynamic index in the same OpenSearch endpoint, for example
 `aiq-s_<uuid>`. The TTL cleanup task removes expired OpenSearch indexes based on their collection `_meta.updated_at`

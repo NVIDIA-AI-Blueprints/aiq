@@ -18,9 +18,9 @@ llms:
   nemotron_ultra_llm:
     _type: nim
     model_name: <a capable model>
-  nemotron_nano_agent_llm:
+  nemotron_ultra_writer_llm:
     _type: nim          # `openai` is also supported (also takes model_name)
-    model_name: <a smaller model>
+    model_name: <the same capable model with a larger output budget>
 ```
 
 ## Assign a model to an agent role

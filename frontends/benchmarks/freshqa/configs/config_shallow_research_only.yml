@@ -1,5 +1,5 @@
 # FreshQA shallow-research-only
-# Nemotron Nano on NVIDIA API Catalog; add judge (OpenAI or Gemini) for evaluator.
+# Nemotron Ultra on NVIDIA API Catalog; add judge (OpenAI or Gemini) for evaluator.
 
 general:
   telemetry:
@@ -13,18 +13,18 @@ general:
         project: "AIQ_v2_freshqa"
 
 llms:
-  nemotron_nano_agent_llm:
+  nemotron_ultra_agent_llm:
     _type: nim
-    model_name: nvidia/nemotron-nano-3.5-preview
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
-    top_p: 0.7
+    top_p: 0.9
     max_tokens: 8192
     num_retries: 5
     parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
   judge_llm:
     _type: openai
@@ -39,7 +39,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_nano_agent_llm
+    llm: nemotron_ultra_agent_llm
     max_llm_turns: 20
     tools:
       - web_search_tool

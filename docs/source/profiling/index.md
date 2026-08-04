@@ -149,9 +149,6 @@ tokenomics:
       "nvidia/nemotron-3-ultra-550b-a55b":
         input_per_1m_tokens: 0.60
         output_per_1m_tokens: 3.60
-      "nvidia/nemotron-nano-3.5-preview":
-        input_per_1m_tokens: 0.05
-        output_per_1m_tokens: 0.20
     tools:
       # Key "web_search" matches "advanced_web_search_tool" via substring lookup
       "web_search":

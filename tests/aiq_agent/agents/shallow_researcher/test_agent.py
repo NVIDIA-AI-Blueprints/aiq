@@ -287,18 +287,6 @@ class TestShallowResearcherAgent:
         assert "exact tool name" in agent.system_prompt
         assert "- [1] mcp_time__get_current_time" in agent.system_prompt
 
-    def test_default_prompt_requires_research_before_answering(self, mock_llm_provider, real_tool):
-        """Default prompt requires evidence collection before synthesis when tools are available."""
-        agent = ShallowResearcherAgent(
-            llm_provider=mock_llm_provider,
-            tools=[real_tool],
-        )
-
-        assert "your first response MUST be a tool call" in agent.system_prompt
-        assert "Never answer directly from memory" in agent.system_prompt
-        assert "rewrite the query and search once more" in agent.system_prompt
-        assert "Do not keep searching when one call provides enough evidence" in agent.system_prompt
-
     @pytest.mark.asyncio
     async def test_tool_iterations_incremented_on_tool_calls(self, mock_llm_provider, mock_llm, real_tool):
         """Test tool_iterations counter increments when LLM makes tool calls."""

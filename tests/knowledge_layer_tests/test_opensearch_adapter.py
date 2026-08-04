@@ -485,10 +485,76 @@ def test_ensure_index_rejects_reuse_for_different_collection():
     ingestor._client = fake_client
 
     index_name = ingestor._index_name_for_collection("alpha")
-    fake_client.indexes[index_name] = {"mappings": {"_meta": {"backend": "opensearch", "collection_name": "beta"}}}
+    fake_client.indexes[index_name] = {
+        "mappings": {
+            "_meta": {
+                "backend": "opensearch",
+                "collection_name": "beta",
+                "embedding_model": ingestor.embed_model_name,
+                "embedding_dim": ingestor.embedding_dim,
+            }
+        }
+    }
 
     with pytest.raises(RuntimeError):
         ingestor._ensure_index("alpha")
+
+
+@pytest.mark.parametrize(
+    ("embedding_model", "embedding_dim"),
+    [(None, None), ("nvidia/old-embed", 2048), ("nvidia/test-embed", 1024)],
+)
+def test_ensure_index_rejects_unknown_or_mismatched_embedding_configuration(
+    embedding_model: str | None,
+    embedding_dim: int | None,
+):
+    """Existing vectors must never be mixed with a different embedding space."""
+    fake_client = FakeOpenSearchClient()
+    ingestor = OpenSearchIngestor(
+        {"embed_model": "nvidia/test-embed", "embedding_dim": 2048, "start_ttl_cleanup": False}
+    )
+    ingestor._client = fake_client
+    index_name = ingestor._index_name_for_collection("docs")
+    fake_client.indexes[index_name] = {
+        "mappings": {
+            "_meta": {
+                "backend": "opensearch",
+                "collection_name": "docs",
+                "embedding_model": embedding_model,
+                "embedding_dim": embedding_dim,
+            }
+        }
+    }
+
+    with pytest.raises(RuntimeError, match="Delete and re-ingest"):
+        ingestor._ensure_index("docs")
+
+
+def test_retrieval_rejects_mismatched_embedding_configuration_before_query_embedding():
+    """Retrieval must fail closed before querying with vectors from another embedding space."""
+    fake_client = FakeOpenSearchClient()
+    retriever = OpenSearchRetriever({"embed_model": "nvidia/new-embed", "embedding_dim": 2048})
+    retriever._client = fake_client
+    index_name = retriever._index_name_for_collection("docs")
+    fake_client.indexes[index_name] = {
+        "mappings": {
+            "_meta": {
+                "backend": "opensearch",
+                "collection_name": "docs",
+                "embedding_model": "nvidia/old-embed",
+                "embedding_dim": 2048,
+            }
+        }
+    }
+
+    def unexpected_embedding(_texts):
+        raise AssertionError("query embedding must not run for an incompatible index")
+
+    retriever._embed_texts = unexpected_embedding
+    result = asyncio.run(retriever.retrieve("question", "docs"))
+
+    assert not result.success
+    assert "embedding model" in (result.error_message or "")
 
 
 def test_session_collection_names_are_safe_dynamic_indexes():
@@ -1196,6 +1262,15 @@ def test_ensure_index_recovers_when_concurrent_create_races(monkeypatch):
     fake_client = type("C", (), {})()
     fake_client.indices = type("I", (), {"exists": staticmethod(fake_exists), "create": staticmethod(fake_create)})()
     monkeypatch.setattr(ingestor, "_get_client", lambda: fake_client)
+    monkeypatch.setattr(
+        ingestor,
+        "_get_index_meta",
+        lambda _index: {
+            "collection_name": "smoke",
+            "embedding_model": ingestor.embed_model_name,
+            "embedding_dim": ingestor.embedding_dim,
+        },
+    )
 
     # Must not raise — race recovery should swallow the exists exception.
     result = ingestor._ensure_index("smoke")

@@ -44,13 +44,13 @@ Common issues and solutions for the AI-Q blueprint.
 
 ## Nemotron Hosted Endpoint Availability
 
-Nemotron Nano 3.5 Preview (`nvidia/nemotron-nano-3.5-preview`) and Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their NVIDIA-hosted endpoints can have limited availability during high demand. During peak periods you may observe:
+Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) is compatible and tested with AIQ, but its NVIDIA-hosted endpoint can have limited availability during high demand. During peak periods you may observe:
 
 - Elevated latency or timeouts on LLM inference calls
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
 - Degraded agent workflow performance due to upstream model availability
 
-**Default Configuration:** The default configs use Nemotron Nano 3.5 Preview for intent classification and shallow research, and Nemotron 3 Ultra for clarification and all deep-research roles. If hosted endpoints are saturated, retry after a short delay, reduce concurrency, or self-host a downloadable model for consistent throughput.
+**Default Configuration:** The default configs use Nemotron 3 Ultra for intent classification, shallow research, clarification, and all deep-research roles. If the hosted endpoint is saturated, retry after a short delay, reduce concurrency, or self-host a downloadable model for consistent throughput.
 
 ### Recommended Mitigation: Self-Host the Affected Model
 

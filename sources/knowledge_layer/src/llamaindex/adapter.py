@@ -68,11 +68,27 @@ from aiq_agent.knowledge.schema import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
+_CHROMA_EMBEDDING_MODEL_KEY = "aiq_embedding_model"
+
 # Default VLM model for image captioning
-# nemotron-nano is faster (12B vs 90B) - same as NV-Ingest service mode uses
+# Default multimodal model used for local image and chart extraction.
 DEFAULT_VLM_MODEL = os.environ.get("AIQ_VLM_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
 # Default VLM model base URL
 DEFAULT_VLM_BASE_URL = os.environ.get("AIQ_VLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
+
+
+def _validate_chroma_embedding_model(collection: Any, collection_name: str, expected_model: str) -> None:
+    """Reject persisted Chroma vectors created with a different or unknown embedding model."""
+    metadata = getattr(collection, "metadata", None) or {}
+    persisted_model = metadata.get(_CHROMA_EMBEDDING_MODEL_KEY)
+    if persisted_model == expected_model:
+        return
+
+    persisted_label = repr(persisted_model) if persisted_model else "an unknown legacy model"
+    raise RuntimeError(
+        f"Chroma collection {collection_name!r} was created with {persisted_label}, but AI-Q is configured "
+        f"for {expected_model!r}. Delete and re-ingest the collection before using the new embedding model."
+    )
 
 
 # Image extraction settings - filters out small icons/logos
@@ -456,7 +472,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
         extract_tables: Enable table extraction from PDFs (default: False)
         extract_charts: Enable chart extraction with structured data (default: False)
         extract_images: Enable image extraction with VLM captioning (default: False)
-        vlm_model: NVIDIA VLM for captioning (default: nvidia/llama-3.2-90b-vision-instruct)
+        vlm_model: NVIDIA VLM for captioning (default: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning)
 
     Environment variables:
         AIQ_CHROMA_DIR: Default ChromaDB persistence directory
@@ -775,11 +791,13 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                 collection_metadata["description"] = description
             if metadata:
                 collection_metadata.update(metadata)
+            collection_metadata[_CHROMA_EMBEDDING_MODEL_KEY] = self.embed_model_name
 
             collection = client.get_or_create_collection(
                 name=name,
                 metadata=collection_metadata,
             )
+            _validate_chroma_embedding_model(collection, name, self.embed_model_name)
 
             logger.info(f"Created collection: {name}")
 
@@ -1308,8 +1326,12 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
             # Get or create collection
             chroma_collection = chroma_client.get_or_create_collection(
                 name=collection_name,
-                metadata={"hnsw:space": "cosine"},
+                metadata={
+                    "hnsw:space": "cosine",
+                    _CHROMA_EMBEDDING_MODEL_KEY: self.embed_model_name,
+                },
             )
+            _validate_chroma_embedding_model(chroma_collection, collection_name, self.embed_model_name)
 
             # Set up vector store
             vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
@@ -1691,6 +1713,7 @@ class LlamaIndexRetriever(BaseRetriever):
                     success=False,
                     error_message=f"Collection '{collection_name}' not found",
                 )
+            _validate_chroma_embedding_model(chroma_collection, collection_name, self.embed_model_name)
 
             # Create vector store and index
             vector_store = ChromaVectorStore(chroma_collection=chroma_collection)

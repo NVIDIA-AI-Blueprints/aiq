@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # Hybrid Frontier Model
 
-This example uses NVIDIA NIM models for intent classification and shallow research
-(fast, low-cost) and a frontier model for deep research (higher quality reports).
+This example uses an NVIDIA NIM model for intent classification and shallow research,
+and a frontier model for deep research (higher quality reports).
 
 ## Prerequisites
 
@@ -18,27 +18,24 @@ This example uses NVIDIA NIM models for intent classification and shallow resear
 
 ```yaml
 llms:
-  # NIM models for fast paths (intent + shallow)
-  nemotron_nano_intent_llm:
+  # NIM profiles for intent and shallow research
+  nemotron_ultra_intent_llm:
     _type: nim
-    model_name: nvidia/nemotron-nano-3.5-preview
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.1
     max_tokens: 1024
     parallel_tool_calls: false
 
-  nemotron_nano_agent_llm:
+  nemotron_ultra_agent_llm:
     _type: nim
-    model_name: nvidia/nemotron-nano-3.5-preview
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
-    top_p: 0.7
     max_tokens: 8192
     parallel_tool_calls: false
-    chat_template_kwargs:
-      enable_thinking: true
 
   nemotron_ultra_llm:
     _type: nim
@@ -76,7 +73,7 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_nano_intent_llm
+    llm: nemotron_ultra_intent_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -91,7 +88,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_nano_agent_llm
+    llm: nemotron_ultra_agent_llm
     tools:
       - web_search_tool
       - knowledge_search

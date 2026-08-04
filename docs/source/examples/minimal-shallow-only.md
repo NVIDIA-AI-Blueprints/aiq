@@ -25,12 +25,12 @@ general:
 # ---------------------------------------------------------------------------
 # LLMs
 # ---------------------------------------------------------------------------
-# A single Nano LLM is sufficient for shallow research. The NIM type connects
+# A single role-specific Ultra LLM is sufficient for shallow research. The NIM type connects
 # to NVIDIA API Catalog.
 llms:
   research_llm:
     _type: nim
-    model_name: nvidia/nemotron-nano-3.5-preview
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2

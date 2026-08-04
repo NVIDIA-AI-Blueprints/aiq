@@ -10,18 +10,18 @@ LLMs are defined in the `llms` section and referenced by agents and tools. You c
 
 ```yaml
 llms:
-  nemotron_nano_agent_llm:
+  nemotron_ultra_agent_llm:
     _type: nim
-    model_name: nvidia/nemotron-nano-3.5-preview
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
-    top_p: 0.7
+    top_p: 0.9
     max_tokens: 8192
     num_retries: 5
     parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 ```
 
 **Example: NIM with thinking (for example, for deep research)**
@@ -37,10 +37,10 @@ llms:
     top_p: 0.7
     max_tokens: 16384
     chat_template_kwargs:
-      enable_thinking: false
+      enable_thinking: true
 ```
 
-**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_ultra_llm`, `llm: nemotron_nano_agent_llm`). Use different keys in `llms` and point agents at them to swap models per role.
+**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_ultra_llm`, `llm: nemotron_ultra_agent_llm`). Use different keys in `llms` and point agents at them to swap models per role.
 
 ## Using Downloadable NIMs (Self-Hosted)
 
@@ -76,24 +76,21 @@ llms:
 ```
 
 ```{note}
-**Hosted Endpoint Availability:** The default profiles use Nemotron Nano 3.5 Preview for intent and shallow research, and Nemotron 3 Ultra for clarification and every deep-research role. Shared hosted endpoints can have limited availability during high demand (HTTP 429 or 503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
+**Hosted Endpoint Availability:** The default profiles use Nemotron 3 Ultra for intent and shallow research, and Nemotron 3 Ultra for clarification and every deep-research role. Shared hosted endpoints can have limited availability during high demand (HTTP 429 or 503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
 ```
 
-You can mix hosted and local NIMs in the same config -- for example, use hosted Nano for the shallow researcher and a local downloadable Ultra NIM for deep research:
+You can mix hosted and local NIMs in the same config -- for example, use a hosted endpoint for shallow research and a local downloadable Ultra NIM for deep research:
 
 ```yaml
 llms:
-  hosted_nano_llm:
+  hosted_shallow_llm:
     _type: nim
-    model_name: nvidia/nemotron-nano-3.5-preview
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
-    top_p: 0.7
     max_tokens: 8192
     parallel_tool_calls: false
-    chat_template_kwargs:
-      enable_thinking: true
 
   local_ultra_llm:
     _type: nim
@@ -105,7 +102,7 @@ llms:
 functions:
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: hosted_nano_llm
+    llm: hosted_shallow_llm
     # ...
 
   deep_research_agent:

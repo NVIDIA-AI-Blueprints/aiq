@@ -61,12 +61,11 @@ general:
 # LLMs
 # ===========================================================================
 # Role-specific LLM configurations:
-# - Nano for intent classification and shallow research
-# - Ultra for clarification and every deep-research role
+# - Ultra for intent classification, shallow research, clarification, and every deep-research role
 llms:
-  nemotron_nano_intent_llm:
+  nemotron_ultra_intent_llm:
     _type: nim
-    model_name: nvidia/nemotron-nano-3.5-preview
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.1
@@ -77,18 +76,18 @@ llms:
     chat_template_kwargs:
       enable_thinking: false
 
-  nemotron_nano_agent_llm:
+  nemotron_ultra_agent_llm:
     _type: nim
-    model_name: nvidia/nemotron-nano-3.5-preview
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
-    top_p: 0.7
+    top_p: 0.9
     max_tokens: 8192
     num_retries: 5
     parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
   nemotron_ultra_llm:
     _type: nim
@@ -157,7 +156,7 @@ functions:
   # Has access to tools for context-aware routing decisions.
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_nano_intent_llm
+    llm: nemotron_ultra_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
@@ -184,7 +183,7 @@ functions:
   # Single-turn ReAct agent for quick queries.
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_nano_agent_llm
+    llm: nemotron_ultra_agent_llm
     tools:
       - web_search_tool
       - knowledge_search
