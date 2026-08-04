@@ -26,6 +26,7 @@ from deepagents.backends import CompositeBackend
 from deepagents.backends import StateBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents import create_agent
+from langchain.agents.middleware.types import ModelResponse
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
@@ -44,10 +45,12 @@ from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMid
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingPersistenceMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import StateMutationGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import StructuredResponseTextFallbackMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoQuotaMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
+from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
 from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
 from aiq_agent.agents.deep_researcher.resource_limits import StateBudgetLedger
 from aiq_agent.agents.deep_researcher.tools.source_registry import build_get_verified_sources_tool
@@ -61,6 +64,129 @@ class _ToolBindingFakeChatModel(FakeMessagesListChatModel):
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         return self
+
+
+class TestStructuredResponseTextFallbackMiddleware:
+    """Strictly recover provider responses that contain the requested contract as JSON text."""
+
+    @staticmethod
+    def _routing() -> dict[str, object]:
+        return {
+            "domain_id": "general",
+            "domain_name": "General",
+            "routing_reason": "Best fit",
+            "recommendations": [],
+            "fallback_sources": [],
+            "planner_guidance": "Use web search.",
+        }
+
+    def test_promotes_exact_schema_valid_json_in_agent(self) -> None:
+        payload = self._routing()
+        model = _ToolBindingFakeChatModel(responses=[AIMessage(content=json.dumps(payload))])
+        agent = create_agent(
+            model=model,
+            tools=[],
+            middleware=[StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)],
+            response_format=SourceRoutingPlan,
+        )
+
+        result = agent.invoke({"messages": [HumanMessage(content="Route this request.")]})
+
+        assert result["structured_response"] == SourceRoutingPlan.model_validate(payload)
+
+    def test_corrects_empty_response_in_agent(self) -> None:
+        payload = self._routing()
+        model = _ToolBindingFakeChatModel(responses=[AIMessage(content=""), AIMessage(content=json.dumps(payload))])
+        agent = create_agent(
+            model=model,
+            tools=[],
+            middleware=[StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)],
+            response_format=SourceRoutingPlan,
+        )
+
+        result = agent.invoke({"messages": [HumanMessage(content="Route this request.")]})
+
+        assert result["structured_response"] == SourceRoutingPlan.model_validate(payload)
+
+    @pytest.mark.parametrize(
+        "content",
+        ["", "```json\n{}\n```", "{}\nUse this routing plan.", "[]", "{}"],
+    )
+    def test_retries_non_exact_or_schema_invalid_content_without_tools(self, content: str) -> None:
+        payload = self._routing()
+        responses = [
+            ModelResponse(result=[AIMessage(content=content)]),
+            ModelResponse(result=[AIMessage(content=json.dumps(payload))]),
+        ]
+        request = MagicMock()
+        request.messages = [HumanMessage(content="Route this request.")]
+        corrected_request = object()
+        request.override.return_value = corrected_request
+        handler = MagicMock(side_effect=responses)
+        middleware = StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)
+
+        result = middleware.wrap_model_call(request, handler)
+
+        assert result.structured_response == SourceRoutingPlan.model_validate(payload)
+        assert handler.call_args_list == [((request,),), ((corrected_request,),)]
+        request.override.assert_called_once()
+        overrides = request.override.call_args.kwargs
+        assert overrides["tools"] == []
+        assert overrides["tool_choice"] is None
+        assert overrides["response_format"] is None
+        assert overrides["messages"][:-1] == request.messages
+        correction = overrides["messages"][-1]
+        assert isinstance(correction, HumanMessage)
+        assert "exactly one JSON object" in str(correction.content)
+        assert '"domain_id"' in str(correction.content)
+
+    @pytest.mark.asyncio
+    async def test_async_correction_is_bounded_to_one_retry(self) -> None:
+        responses = [
+            ModelResponse(result=[AIMessage(content="")]),
+            ModelResponse(result=[AIMessage(content="still invalid")]),
+        ]
+        request = MagicMock()
+        request.messages = [HumanMessage(content="Route this request.")]
+        corrected_request = object()
+        request.override.return_value = corrected_request
+        handler = AsyncMock(side_effect=responses)
+        middleware = StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)
+
+        result = await middleware.awrap_model_call(request, handler)
+
+        assert result is responses[1]
+        assert result.structured_response is None
+        assert handler.await_args_list == [((request,),), ((corrected_request,),)]
+
+    @pytest.mark.asyncio
+    async def test_preserves_native_structured_response(self) -> None:
+        structured = SourceRoutingPlan.model_validate(self._routing())
+        response = ModelResponse(result=[AIMessage(content="")], structured_response=structured)
+        middleware = StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)
+        handler = AsyncMock(return_value=response)
+
+        result = await middleware.awrap_model_call(None, handler)
+
+        assert result is response
+        handler.assert_awaited_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_does_not_intercept_tool_calls(self) -> None:
+        response = ModelResponse(
+            result=[
+                AIMessage(
+                    content=json.dumps(self._routing()),
+                    tool_calls=[{"name": "lookup_source_catalog", "args": {}, "id": "lookup-1"}],
+                )
+            ]
+        )
+        middleware = StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)
+
+        result = await middleware.awrap_model_call(None, AsyncMock(return_value=response))
+
+        assert result is response
+        assert result.structured_response is None
 
 
 class TestSourceRoutingGuardMiddleware:

@@ -32,6 +32,8 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
+from pydantic import BaseModel
+from pydantic import ValidationError
 
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
@@ -96,6 +98,63 @@ def _tool_result_failed(result: object) -> bool:
     """Return whether a filesystem tool result reports an error."""
     status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
     return status == "error"
+
+
+class StructuredResponseTextFallbackMiddleware(AgentMiddleware):
+    """Recover one exact JSON response when a provider skips the output tool."""
+
+    def __init__(self, schema: type[BaseModel]) -> None:
+        self.schema = schema
+        schema_json = json.dumps(schema.model_json_schema(), separators=(",", ":"), ensure_ascii=False)
+        self._correction = (
+            "The previous response did not produce the required structured result. Do not call tools. "
+            "Return exactly one JSON object matching this JSON Schema, with no Markdown fences or prose:\n"
+            f"{schema_json}"
+        )
+
+    def _promote(self, response: ModelResponse) -> ModelResponse:
+        if response.structured_response is not None or len(response.result) != 1:
+            return response
+        message = response.result[0]
+        if not isinstance(message, AIMessage) or message.tool_calls or not isinstance(message.content, str):
+            return response
+        try:
+            structured = self.schema.model_validate_json(message.content)
+        except ValidationError:
+            return response
+        logger.info("Recovered %s from schema-valid JSON message content", self.schema.__name__)
+        return ModelResponse(result=response.result, structured_response=structured)
+
+    @staticmethod
+    def _needs_correction(response: ModelResponse) -> bool:
+        if response.structured_response is not None or len(response.result) != 1:
+            return False
+        message = response.result[0]
+        return isinstance(message, AIMessage) and not message.tool_calls and isinstance(message.content, str)
+
+    def _correction_request(self, request):
+        return request.override(
+            messages=[*request.messages, HumanMessage(content=self._correction)],
+            tools=[],
+            tool_choice=None,
+            response_format=None,
+        )
+
+    def wrap_model_call(self, request, handler):
+        """Promote JSON text, with one tools-disabled corrective call when needed."""
+        response = self._promote(handler(request))
+        if not self._needs_correction(response):
+            return response
+        logger.warning("Retrying %s as a tools-disabled JSON response", self.schema.__name__)
+        return self._promote(handler(self._correction_request(request)))
+
+    async def awrap_model_call(self, request, handler):
+        """Promote JSON text, with one tools-disabled corrective call when needed."""
+        response = self._promote(await handler(request))
+        if not self._needs_correction(response):
+            return response
+        logger.warning("Retrying %s as a tools-disabled JSON response", self.schema.__name__)
+        return self._promote(await handler(self._correction_request(request)))
 
 
 class FinalReportCommitTracker:
