@@ -44,7 +44,7 @@ Common issues and solutions for the AI-Q blueprint.
 
 ## Nemotron Hosted Endpoint Availability
 
-Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) is compatible and tested with AIQ, but its NVIDIA-hosted endpoint can have limited availability during high demand. During peak periods you may observe:
+Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`) and Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their NVIDIA-hosted endpoints can have limited availability during high demand. During peak periods you may observe:
 
 - Elevated latency or timeouts on LLM inference calls
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
@@ -56,9 +56,16 @@ Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) is compatible and tested 
 
 For production and staging deployments that require consistent throughput and low-latency inference, self-host a downloadable NVIDIA NIM rather than relying on shared endpoints. Preview endpoint availability and downloadable NIM availability do not necessarily move in lockstep; verify the current model card before choosing an image.
 
-- [Self-host Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b?nim=self-hosted)
+- [Self-host Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/deploy?nim=self-hosted) for the default intent and shallow-research roles
+- [Self-host Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b?nim=self-hosted) for the default clarification and deep-research roles
 
-Once your self-hosted endpoint is running, update the corresponding `base_url` in your config to point at it:
+Once your self-hosted endpoint is running, update the corresponding `base_url` in your config to point at it. AIQ's configuration validator currently requires `NVIDIA_API_KEY` for every `_type: nim` profile, even when a local NIM does not enforce client authentication. Set a non-secret placeholder for the local deployment before starting AIQ:
+
+```bash
+export NVIDIA_API_KEY=local-nim
+```
+
+Then reference that variable in the local profile:
 
 ```yaml
 llms:
@@ -67,7 +74,7 @@ llms:
     # Use the identifier returned by the local NIM's /v1/models endpoint.
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://<your-ultra-endpoint>/v1"
-    api_key: ""
+    api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
     top_p: 0.7
     max_tokens: 16384
