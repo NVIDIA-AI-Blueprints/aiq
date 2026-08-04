@@ -82,21 +82,21 @@ vulnerability. New vulnerability records still fail the required CI check.
 
 ## Security dependency override
 
-The isolated MCP lock installs `cryptography==48.0.1` to replace the vulnerable
-OpenSSL bundled in earlier wheels. `nvidia-nat-core==1.8.0` and
-`oci==2.178.0` still declare upper bounds below 47, so the MCP project's uv
-override intentionally supersedes those stale bounds. The MCP config does not
-enable OCI or NAT authentication. The root AI-Q lock is separate and keeps
-`cryptography>=46.0.6,<47` so its environment remains within NAT's declared
-range.
+The isolated MCP lock installs `cryptography==50.0.0` to replace vulnerable
+earlier releases. `langchain-litellm==0.6.6` still declares an upper bound below
+49, while `nvidia-nat-core==1.8.0` and `oci==2.178.0` declare upper bounds below
+47, so the MCP project's uv override intentionally supersedes those stale
+bounds. The MCP config does not enable OCI or NAT authentication. The root AI-Q
+lock is separate and keeps `cryptography>=46.0.6,<47` so its environment remains
+within NAT's declared range.
 
 This override is security policy for the frozen MCP project and release
 container, not a functional requirement of MCP or a published package
-constraint. Only the frozen `mcp/uv.lock` profile carries the audited 48.0.1
+constraint. Only the frozen `mcp/uv.lock` profile carries the audited 50.0.0
 guarantee.
 
 `mcp/scripts/check_runtime_dependencies.py` performs the full installed
-requirement check and permits only those two exact owner/version/dependency/
+requirement check and permits only those three exact owner/version/dependency/
 specifier tuples. It fails on any other incompatibility and also fails when an
 upstream release makes an exception stale. The release image runs the same
 script with `--verify-imports`, which additionally imports every runtime

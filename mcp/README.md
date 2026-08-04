@@ -124,8 +124,8 @@ Set `AIQ_MCP_TEST_DB_URL` to a disposable Postgres database whose name ends in `
 `aiq_mcp_test`) to enable the ledger and checkpoint integration tests.
 
 The root `uv.lock` keeps `cryptography>=46.0.6,<47` for compatibility with NAT. The audited MCP release profile is
-resolved independently from `mcp/uv.lock` and pins `cryptography==48.0.1` to harden the bundled OpenSSL version.
-That pin is a uv override for the two supported runtime paths, not a functional MCP requirement or published
+resolved independently from `mcp/uv.lock` and pins `cryptography==50.0.0` to harden the bundled OpenSSL version.
+That pin is a uv override for the three supported runtime paths, not a functional MCP requirement or published
 package constraint.
 
 ## Container deployment

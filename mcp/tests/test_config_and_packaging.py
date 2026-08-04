@@ -211,17 +211,21 @@ def test_mcp_project_owns_its_sources_lock_and_scoped_cryptography_override() ->
 
     assert cryptography_overrides == [
         {
+            "package": {"name": "langchain-litellm", "version": "0.6.6"},
+            "dependencies": ["cryptography>=50.0.0,<51"],
+        },
+        {
             "package": {"name": "nvidia-nat-core", "version": "1.8.0"},
-            "dependencies": ["cryptography>=48.0.1,<49"],
+            "dependencies": ["cryptography>=50.0.0,<51"],
         },
         {
             "package": {"name": "oci", "version": "2.178.0"},
-            "dependencies": ["cryptography>=48.0.1,<49"],
+            "dependencies": ["cryptography>=50.0.0,<51"],
         },
     ]
 
     lock = tomllib.loads(_MCP_LOCK_PATH.read_text())
-    assert _locked_versions(lock, "cryptography") == {Version("48.0.1")}
+    assert _locked_versions(lock, "cryptography") == {Version("50.0.0")}
     assert any(package["name"] == "aiq-mcp-server" for package in lock["package"])
 
     local_sources = {
