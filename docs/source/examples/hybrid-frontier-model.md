@@ -19,24 +19,21 @@ and a frontier model for deep research (higher quality reports).
 ```yaml
 llms:
   # NIM profiles for intent and shallow research
-  nemotron_ultra_intent_llm:
+  nemotron_llm_intent:
     _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.5
+    max_tokens: 4096
+
+  nemotron_super_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-super-120b-a12b
+    base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.1
-    max_tokens: 1024
-    parallel_tool_calls: false
+    max_tokens: 16384
 
-  nemotron_ultra_agent_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
-    temperature: 0.2
-    max_tokens: 8192
-    parallel_tool_calls: false
-
+  # Frontier model for deep research (higher quality)
   nemotron_ultra_llm:
     _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
@@ -73,7 +70,7 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_ultra_intent_llm
+    llm: nemotron_llm_intent
     tools:
       - web_search_tool
       - knowledge_search
@@ -88,7 +85,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_ultra_agent_llm
+    llm: nemotron_super_llm
     tools:
       - web_search_tool
       - knowledge_search

@@ -137,7 +137,7 @@ functions:
   # Agents with no tools list inherit all registry tools
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_ultra_intent_llm
+    llm: nemotron_llm_intent
 
   clarifier_agent:
     _type: clarifier_agent

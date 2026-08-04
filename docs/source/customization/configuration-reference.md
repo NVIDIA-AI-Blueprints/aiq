@@ -119,7 +119,7 @@ llms:
 | `top_p` | `float` | `None` | Nucleus sampling threshold. When `None`, the API uses its server-side default. |
 | `max_tokens` | `int` | `300` | Maximum tokens in the response. Set higher values (for example, `16384` or `128000`) for research agents. |
 | `num_retries` | `int` | `5` | Number of retry attempts on API failure. |
-| `parallel_tool_calls` | `bool` | Provider default | Whether the provider can emit parallel tool calls. The default intent and shallow profiles set this to `false`. |
+| `parallel_tool_calls` | `bool` | Provider default | Whether the provider can emit parallel tool calls. |
 | `chat_template_kwargs` | `object` | -- | Extra arguments passed to the chat template. Use `enable_thinking: true` to activate the model's chain-of-thought reasoning. |
 
 ### Common LLM Configurations
@@ -128,8 +128,8 @@ Different agents benefit from different parameter profiles:
 
 | Role | Temperature | Top-p | Max Tokens | Notes |
 |------|------------|-------|------------|-------|
-| Intent classifier (Ultra) | `0.1` | `0.9` | `1024` | Short deterministic classification; thinking disabled |
-| Shallow researcher (Ultra) | `0.2` | `0.9` | `8192` | Tool-calling profile; parallel tool calls and thinking disabled |
+| Intent classifier (Super) | `0.5` | `0.9` | `4096` | Existing classification profile; thinking enabled |
+| Shallow researcher (Super) | `0.7` | `0.7` | `65536` | Existing research profile; thinking enabled |
 | Deep research roles (Ultra) | `0.2` | `0.7` | `16384` | Source routing, orchestration, planning, and research |
 | Deep research writer (Ultra) | `0.2` | `0.7` | `32768` | Larger report-writing budget |
 | Summary LLM (Gemma) | `0.1` | -- | `100` | Conservative, short document summaries |
@@ -379,7 +379,7 @@ Classifies user queries as meta (conversational) or research, and determines res
 functions:
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_ultra_intent_llm
+    llm: nemotron_llm_intent
     tools:
       - web_search_tool
       - paper_search_tool
@@ -588,31 +588,27 @@ general:
 
 # LLM definitions
 llms:
-  ultra_intent_llm:                     # Used by intent classifier
+  super_intent_llm:                     # Used by intent classifier
     _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
-    temperature: 0.1
+    temperature: 0.5
     top_p: 0.9
-    max_tokens: 1024
+    max_tokens: 4096
     num_retries: 5
-    parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: false
+      enable_thinking: true
 
-  ultra_agent_llm:                      # Used by shallow researcher
+  super_agent_llm:                      # Used by shallow researcher
     _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
-    temperature: 0.2
-    top_p: 0.9
-    max_tokens: 8192
+    temperature: 0.7
+    top_p: 0.7
+    max_tokens: 65536
     num_retries: 5
-    parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: false
+      enable_thinking: true
 
   ultra_llm:                           # Used by clarifier and deep research
     _type: nim
@@ -657,7 +653,7 @@ functions:
 
   intent_classifier:                   # Classifies queries, routes depth
     _type: intent_classifier
-    llm: ultra_intent_llm
+    llm: super_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
@@ -672,7 +668,7 @@ functions:
 
   shallow_research_agent:              # Fast single-pass research
     _type: shallow_research_agent
-    llm: ultra_agent_llm
+    llm: super_agent_llm
     tools:
       - web_search_tool
     max_llm_turns: 10

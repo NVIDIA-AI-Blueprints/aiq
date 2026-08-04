@@ -10,18 +10,14 @@ LLMs are defined in the `llms` section and referenced by agents and tools. You c
 
 ```yaml
 llms:
-  nemotron_ultra_agent_llm:
+  nemotron_super_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
-    temperature: 0.2
-    top_p: 0.9
+    temperature: 0.7
+    top_p: 0.7
     max_tokens: 8192
     num_retries: 5
-    parallel_tool_calls: false
-    chat_template_kwargs:
-      enable_thinking: false
 ```
 
 **Example: NIM with thinking (for example, for deep research)**
@@ -40,7 +36,7 @@ llms:
       enable_thinking: true
 ```
 
-**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_ultra_llm`, `llm: nemotron_ultra_agent_llm`). Use different keys in `llms` and point agents at them to swap models per role.
+**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_ultra_llm`, `llm: nemotron_super_llm`). Use different keys in `llms` and point agents at them to swap models per role.
 
 ## Using Downloadable NIMs (Self-Hosted)
 
@@ -76,7 +72,7 @@ llms:
 ```
 
 ```{note}
-**Hosted Endpoint Availability:** The default profiles use Nemotron 3 Ultra for intent and shallow research, and Nemotron 3 Ultra for clarification and every deep-research role. Shared hosted endpoints can have limited availability during high demand (HTTP 429 or 503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
+**Hosted Endpoint Availability:** The default profiles retain Nemotron 3 Super for intent and shallow research, and use Nemotron 3 Ultra for clarification and every deep-research role. Shared hosted endpoints can have limited availability during high demand (HTTP 429 or 503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
 ```
 
 You can mix hosted and local NIMs in the same config -- for example, use a hosted endpoint for shallow research and a local downloadable Ultra NIM for deep research:
@@ -85,12 +81,11 @@ You can mix hosted and local NIMs in the same config -- for example, use a hoste
 llms:
   hosted_shallow_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
-    temperature: 0.2
-    max_tokens: 8192
-    parallel_tool_calls: false
+    temperature: 0.7
+    max_tokens: 65536
 
   local_ultra_llm:
     _type: nim

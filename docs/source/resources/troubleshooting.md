@@ -50,7 +50,7 @@ Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) is compatible and tested 
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
 - Degraded agent workflow performance due to upstream model availability
 
-**Default Configuration:** The default configs use Nemotron 3 Ultra for intent classification, shallow research, clarification, and all deep-research roles. If the hosted endpoint is saturated, retry after a short delay, reduce concurrency, or self-host a downloadable model for consistent throughput.
+**Default Configuration:** The default configs retain Nemotron 3 Super for intent classification and shallow research, and use Nemotron 3 Ultra for clarification and all deep-research roles. If either hosted endpoint is saturated, retry after a short delay, reduce concurrency, or self-host a downloadable model for consistent throughput.
 
 ### Recommended Mitigation: Self-Host the Affected Model
 
