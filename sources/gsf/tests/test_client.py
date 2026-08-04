@@ -10,21 +10,37 @@ import pytest
 from gsf.client import GSFClient
 from gsf.errors import GSFError
 from gsf.errors import GSFErrorCode
-from gsf.models import QueryContextRequest
+from gsf.models import ChatCompletionsRequest
 from gsf.models import TextToSQLRequest
 
 
+def _sse_response(answer: dict) -> httpx.Response:
+    events = [
+        'data: {"type":"step","node":"construct_sql_from_candidates"}',
+        "",
+        f"data: {json.dumps({'type': 'result', 'answer': answer})}",
+        "",
+        "data: [DONE]",
+        "",
+    ]
+    return httpx.Response(
+        200,
+        content="\n".join(events).encode(),
+        headers={"content-type": "text/event-stream", "x-request-id": "header-request"},
+    )
+
+
 @pytest.mark.asyncio
-async def test_text_to_sql_sends_scoped_request_and_bounds_rows(text_to_sql_response: dict) -> None:
+async def test_text_to_sql_maps_database_to_target_db_and_bounds_rows(chat_sql_answer: dict) -> None:
     seen_request: httpx.Request | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal seen_request
         seen_request = request
-        return httpx.Response(200, json=text_to_sql_response, headers={"x-request-id": "header-request"})
+        return _sse_response(chat_sql_answer)
 
     client = GSFClient(
-        base_url="https://gsf.example",
+        base_url="https://gsf.example/",
         default_max_rows=1,
         transport=httpx.MockTransport(handler),
     )
@@ -36,42 +52,39 @@ async def test_text_to_sql_sends_scoped_request_and_bounds_rows(text_to_sql_resp
         )
 
     assert seen_request is not None
-    assert seen_request.url == "https://gsf.example/api/v1/text-to-sql"
+    assert seen_request.url == "https://gsf.example/api/chat/completions"
     assert seen_request.headers["authorization"] == "Bearer user-token"
+    assert seen_request.headers["accept"] == "text/event-stream"
     assert seen_request.headers["traceparent"] == "00-trace"
     assert json.loads(seen_request.content) == {
         "question": "Show revenue",
-        "database_name": "benchmark_db",
-        "execute": True,
-        "object_ids": [],
-        "max_rows": 1,
+        "prediction": False,
+        "target_db": "benchmark_db",
     }
+    assert [column.name for column in result.columns] == ["revenue"]
     assert result.rows == [{"revenue": 100}]
     assert result.truncated is True
+    assert result.response == "Revenue was returned for two quarters."
 
 
 @pytest.mark.asyncio
-async def test_query_context_omits_database_and_unwraps_data(query_context_response: dict) -> None:
+async def test_chat_completions_omits_target_db_and_supports_prediction(chat_sql_answer: dict) -> None:
     seen_payload: dict | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal seen_payload
         seen_payload = json.loads(request.content)
-        return httpx.Response(200, json={"data": query_context_response})
+        return _sse_response(chat_sql_answer)
 
-    client = GSFClient(base_url="https://gsf.example/", transport=httpx.MockTransport(handler))
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
     async with client:
-        result = await client.query_context(
-            QueryContextRequest(question="What revenue data is available?", token_budget=2_000),
+        result = await client.chat_completions(
+            ChatCompletionsRequest(question="Who will purchase next?", prediction=True),
             token="user-token",
         )
 
-    assert seen_payload == {
-        "question": "What revenue data is available?",
-        "object_ids": [],
-        "token_budget": 2_000,
-    }
-    assert result.request_id == "gsf-request-2"
+    assert seen_payload == {"question": "Who will purchase next?", "prediction": True}
+    assert result.answer == chat_sql_answer
 
 
 @pytest.mark.asyncio
@@ -82,14 +95,14 @@ async def test_client_normalizes_forbidden_without_leaking_body() -> None:
     client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
     async with client:
         with pytest.raises(GSFError) as raised:
-            await client.query_context(QueryContextRequest(question="Show data"), token="user-token")
+            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
 
     assert raised.value.code is GSFErrorCode.FORBIDDEN
     assert "secret" not in raised.value.message
 
 
 @pytest.mark.asyncio
-async def test_client_retries_rate_limit_then_succeeds(query_context_response: dict) -> None:
+async def test_client_retries_rate_limit_then_succeeds(chat_sql_answer: dict) -> None:
     attempts = 0
 
     async def handler(_request: httpx.Request) -> httpx.Response:
@@ -97,21 +110,21 @@ async def test_client_retries_rate_limit_then_succeeds(query_context_response: d
         attempts += 1
         if attempts == 1:
             return httpx.Response(429)
-        return httpx.Response(200, json=query_context_response)
+        return _sse_response(chat_sql_answer)
 
     client = GSFClient(base_url="https://gsf.example", max_retries=1, transport=httpx.MockTransport(handler))
     with patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep:
         async with client:
-            await client.query_context(QueryContextRequest(question="Show data"), token="user-token")
+            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
 
     assert attempts == 2
     sleep.assert_awaited_once_with(1)
 
 
 @pytest.mark.asyncio
-async def test_client_rejects_oversized_response(query_context_response: dict) -> None:
+async def test_client_rejects_oversized_response(chat_sql_answer: dict) -> None:
     async def handler(_request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json=query_context_response)
+        return _sse_response(chat_sql_answer)
 
     client = GSFClient(
         base_url="https://gsf.example",
@@ -120,7 +133,7 @@ async def test_client_rejects_oversized_response(query_context_response: dict) -
     )
     async with client:
         with pytest.raises(GSFError) as raised:
-            await client.query_context(QueryContextRequest(question="Show data"), token="user-token")
+            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
 
     assert raised.value.code is GSFErrorCode.RESPONSE_TOO_LARGE
 
@@ -133,6 +146,24 @@ async def test_client_rejects_malformed_response() -> None:
     client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
     async with client:
         with pytest.raises(GSFError) as raised:
-            await client.query_context(QueryContextRequest(question="Show data"), token="user-token")
+            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
 
     assert raised.value.code is GSFErrorCode.INVALID_RESPONSE
+
+
+@pytest.mark.asyncio
+async def test_client_maps_sse_error_without_leaking_message() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=b'data: {"type":"error","message":"secret database details"}\n\n',
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
+    async with client:
+        with pytest.raises(GSFError) as raised:
+            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
+
+    assert raised.value.code is GSFErrorCode.UPSTREAM_ERROR
+    assert "secret" not in raised.value.message

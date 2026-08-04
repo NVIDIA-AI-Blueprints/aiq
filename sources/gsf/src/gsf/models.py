@@ -31,11 +31,27 @@ class CatalogSearchRequest(GSFRequest):
     token_budget: int | None = Field(default=None, ge=1)
 
 
+class ChatCompletionsRequest(GSFRequest):
+    """Current GSF chat-completions request shared by SQL and prediction flows."""
+
+    question: str = Field(min_length=1, max_length=4_096)
+    conversation_id: str | None = None
+    prediction: bool | None = None
+    target_db: str | None = None
+
+
+class ChatCompletionResult(GSFResponse):
+    """Final structured answer extracted from the GSF SSE event stream."""
+
+    answer: dict[str, Any]
+    request_id: str | None = None
+
+
 class ResultColumn(GSFResponse):
     """A column in a bounded SQL result."""
 
     name: str
-    data_type: str
+    data_type: str | None = None
 
 
 class SemanticContext(GSFResponse):
@@ -50,29 +66,30 @@ class SemanticContext(GSFResponse):
 
 
 class TextToSQLRequest(GSFRequest):
-    """Generate validated SQL and optionally execute it with bounded results."""
+    """Generate and execute validated SQL with bounded results."""
 
     question: str = Field(min_length=1, max_length=4_096)
     database_name: str | None = None
-    execute: bool = True
-    object_ids: list[str] = Field(default_factory=list)
     max_rows: int = Field(default=1_000, ge=1)
 
 
 class TextToSQLResponse(GSFResponse):
     """Validated SQL, bounded rows, and semantic provenance returned by GSF."""
 
-    request_id: str
+    request_id: str | None = None
+    response: str | None = None
     sql: str
-    columns: list[ResultColumn]
-    rows: list[dict[str, Any]]
-    truncated: bool
-    objects_used: list[str] = Field(default_factory=list)
-    joins_used: list[dict[str, Any]] = Field(default_factory=list)
-    semantic_context: SemanticContext
-    validation_attempts: list[dict[str, Any]] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    timings: dict[str, int] = Field(default_factory=dict)
+    columns: list[ResultColumn] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    truncated: bool = False
+    custom_analyses_used: list[Any] | None = None
+    objects_used: list[str] | None = None
+    joins_used: list[dict[str, Any]] | None = None
+    semantic_context: SemanticContext | None = None
+    validation_attempts: list[dict[str, Any]] | None = None
+    assumptions: list[str] | None = None
+    warnings: list[str] | None = None
+    timings: dict[str, int | float] | None = None
 
 
 class QueryContextRequest(GSFRequest):
@@ -82,21 +99,3 @@ class QueryContextRequest(GSFRequest):
     database_name: str | None = None
     object_ids: list[str] = Field(default_factory=list)
     token_budget: int | None = Field(default=None, ge=1)
-
-
-class QueryContextResponse(GSFResponse):
-    """Token-budgeted semantic and physical metadata relevant to a question."""
-
-    request_id: str
-    tables: list[dict[str, Any]] = Field(default_factory=list)
-    columns: list[dict[str, Any]] = Field(default_factory=list)
-    keys: list[dict[str, Any]] = Field(default_factory=list)
-    join_paths: list[dict[str, Any]] = Field(default_factory=list)
-    values: list[dict[str, Any]] = Field(default_factory=list)
-    metrics: list[dict[str, Any]] = Field(default_factory=list)
-    grain: str | None = None
-    units: list[str] = Field(default_factory=list)
-    rules: list[str] = Field(default_factory=list)
-    omissions: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    truncated: bool = False

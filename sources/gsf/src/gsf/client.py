@@ -7,20 +7,17 @@ import asyncio
 import json
 from collections.abc import Mapping
 from typing import Any
-from typing import TypeVar
 
 import httpx
-from pydantic import BaseModel
 from pydantic import ValidationError
 
 from .errors import GSFError
 from .errors import GSFErrorCode
-from .models import QueryContextRequest
-from .models import QueryContextResponse
+from .models import ChatCompletionResult
+from .models import ChatCompletionsRequest
+from .models import ResultColumn
 from .models import TextToSQLRequest
 from .models import TextToSQLResponse
-
-ResponseT = TypeVar("ResponseT", bound=BaseModel)
 
 _FORWARDED_HEADER_NAMES = frozenset({"baggage", "traceparent", "tracestate", "x-correlation-id", "x-request-id"})
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
@@ -33,7 +30,6 @@ class GSFClient:
         self,
         *,
         base_url: str,
-        api_version: str = "v1",
         connect_timeout_seconds: float = 5.0,
         read_timeout_seconds: float = 60.0,
         max_retries: int = 2,
@@ -41,7 +37,7 @@ class GSFClient:
         default_max_rows: int = 1_000,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._api_base_url = f"{base_url.rstrip('/')}/api/{api_version.strip('/')}"
+        self._api_base_url = f"{base_url.rstrip('/')}/api"
         self._max_retries = max_retries
         self._max_response_bytes = max_response_bytes
         self._default_max_rows = default_max_rows
@@ -60,7 +56,6 @@ class GSFClient:
 
         return cls(
             base_url=str(config.base_url),
-            api_version=config.api_version,
             connect_timeout_seconds=config.connect_timeout_seconds,
             read_timeout_seconds=config.read_timeout_seconds,
             max_retries=config.max_retries,
@@ -84,54 +79,52 @@ class GSFClient:
         token: str,
         trace_headers: Mapping[str, str] | None = None,
     ) -> TextToSQLResponse:
-        """Call GSF text-to-SQL and enforce AI-Q's configured row ceiling."""
+        """Run the SQL branch of GSF chat completions and normalize its answer."""
 
         max_rows = min(request.max_rows, self._default_max_rows)
-        payload = request.model_dump(exclude_none=True)
-        payload["max_rows"] = max_rows
-        result = await self._post(
-            "text-to-sql",
-            payload,
-            response_model=TextToSQLResponse,
+        result = await self.chat_completions(
+            ChatCompletionsRequest(
+                question=request.question,
+                prediction=False,
+                target_db=request.database_name,
+            ),
             token=token,
             trace_headers=trace_headers,
-            capability="GSF text-to-SQL",
         )
-        if len(result.rows) > max_rows:
-            result.rows = result.rows[:max_rows]
-            result.truncated = True
-        return result
+        return self._normalize_text_to_sql(result, max_rows=max_rows)
 
-    async def query_context(
+    async def chat_completions(
         self,
-        request: QueryContextRequest,
+        request: ChatCompletionsRequest,
         *,
         token: str,
         trace_headers: Mapping[str, str] | None = None,
-    ) -> QueryContextResponse:
-        """Call GSF query-context and validate its token-budgeted metadata."""
+    ) -> ChatCompletionResult:
+        """Call the shared GSF chat endpoint and extract its final SSE result."""
 
-        return await self._post(
-            "query-context",
+        body, request_id, content_type = await self._post(
+            "chat/completions",
             request.model_dump(exclude_none=True),
-            response_model=QueryContextResponse,
             token=token,
             trace_headers=trace_headers,
-            capability="GSF query context",
+            capability="GSF chat completions",
+            accept="text/event-stream",
         )
+        answer = self._parse_chat_answer(body, content_type=content_type, request_id=request_id)
+        return ChatCompletionResult(answer=answer, request_id=request_id)
 
     async def _post(
         self,
         endpoint: str,
         payload: dict[str, Any],
         *,
-        response_model: type[ResponseT],
         token: str,
         trace_headers: Mapping[str, str] | None,
         capability: str,
-    ) -> ResponseT:
+        accept: str = "application/json",
+    ) -> tuple[bytes, str | None, str]:
         client = self._require_client()
-        headers = self._build_headers(token, trace_headers)
+        headers = self._build_headers(token, trace_headers, accept=accept)
         attempts = self._max_retries + 1
 
         for attempt in range(attempts):
@@ -155,7 +148,7 @@ class GSFClient:
                     raise error
 
                 body = await self._read_bounded(response, request_id=request_id)
-                return self._validate_response(body, response_model, request_id=request_id)
+                return body, request_id, response.headers.get("content-type", "")
             except GSFError:
                 raise
             except httpx.TimeoutException as exc:
@@ -188,9 +181,14 @@ class GSFClient:
         return self._client
 
     @staticmethod
-    def _build_headers(token: str, trace_headers: Mapping[str, str] | None) -> dict[str, str]:
+    def _build_headers(
+        token: str,
+        trace_headers: Mapping[str, str] | None,
+        *,
+        accept: str,
+    ) -> dict[str, str]:
         headers = {
-            "Accept": "application/json",
+            "Accept": accept,
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
@@ -215,19 +213,180 @@ class GSFClient:
                 raise self._response_too_large(request_id)
         return bytes(body)
 
-    @staticmethod
-    def _validate_response(body: bytes, response_model: type[ResponseT], *, request_id: str | None) -> ResponseT:
+    @classmethod
+    def _parse_chat_answer(cls, body: bytes, *, content_type: str, request_id: str | None) -> dict[str, Any]:
         try:
-            payload = json.loads(body)
-            if isinstance(payload, dict) and set(payload) == {"data"}:
-                payload = payload["data"]
-            return response_model.model_validate(payload)
-        except (json.JSONDecodeError, UnicodeDecodeError, ValidationError, TypeError) as exc:
+            text = body.decode("utf-8")
+            if "text/event-stream" not in content_type and not text.lstrip().startswith(("data:", ":")):
+                payload = json.loads(text)
+                return cls._answer_from_event(payload, request_id=request_id)
+
+            data_lines: list[str] = []
+            for line in [*text.splitlines(), ""]:
+                if line.startswith(":"):
+                    continue
+                if line.startswith("data:"):
+                    data_lines.append(line[5:].lstrip())
+                    continue
+                if line or not data_lines:
+                    continue
+                event_data = "\n".join(data_lines)
+                data_lines.clear()
+                if event_data == "[DONE]":
+                    continue
+                event = json.loads(event_data)
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") == "error":
+                    raise GSFError(
+                        GSFErrorCode.UPSTREAM_ERROR,
+                        "GSF chat completions failed.",
+                        request_id=request_id,
+                    )
+                if event.get("type") == "result":
+                    return cls._answer_from_event(event, request_id=request_id)
+        except GSFError:
+            raise
+        except (json.JSONDecodeError, UnicodeDecodeError, TypeError) as exc:
             raise GSFError(
                 GSFErrorCode.INVALID_RESPONSE,
                 "GSF returned an invalid response.",
                 request_id=request_id,
             ) from exc
+
+        raise GSFError(
+            GSFErrorCode.INVALID_RESPONSE,
+            "GSF response did not contain a final result.",
+            request_id=request_id,
+        )
+
+    @staticmethod
+    def _answer_from_event(payload: Any, *, request_id: str | None) -> dict[str, Any]:
+        if isinstance(payload, dict) and isinstance(payload.get("answer"), dict):
+            return payload["answer"]
+        if isinstance(payload, dict) and payload.get("type") is None:
+            return payload
+        raise GSFError(
+            GSFErrorCode.INVALID_RESPONSE,
+            "GSF returned an invalid final answer.",
+            request_id=request_id,
+        )
+
+    @classmethod
+    def _normalize_text_to_sql(cls, result: ChatCompletionResult, *, max_rows: int) -> TextToSQLResponse:
+        answer = result.answer
+        sql = answer.get("sql") or answer.get("sql_code")
+        if not isinstance(sql, str) or not sql.strip():
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF did not return validated SQL.",
+                request_id=result.request_id,
+            )
+
+        rows = cls._normalize_rows(answer.get("rows", answer.get("sql_response_from_db")), result.request_id)
+        upstream_truncated = bool(answer.get("truncated", False))
+        truncated = upstream_truncated or len(rows) > max_rows
+        rows = rows[:max_rows]
+        columns = cls._normalize_columns(answer.get("columns", answer.get("sql_columns")))
+        if not columns and rows:
+            columns = [ResultColumn(name=str(name)) for name in rows[0]]
+
+        try:
+            return TextToSQLResponse(
+                request_id=answer.get("request_id") or result.request_id,
+                response=answer.get("response"),
+                sql=sql,
+                columns=columns,
+                rows=rows,
+                truncated=truncated,
+                custom_analyses_used=answer.get("custom_analyses_used"),
+                objects_used=answer.get("objects_used"),
+                joins_used=answer.get("joins_used"),
+                semantic_context=answer.get("semantic_context"),
+                validation_attempts=answer.get("validation_attempts"),
+                assumptions=answer.get("assumptions"),
+                warnings=answer.get("warnings"),
+                timings=answer.get("timings"),
+            )
+        except ValidationError as exc:
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF returned invalid text-to-SQL data.",
+                request_id=result.request_id,
+            ) from exc
+
+    @staticmethod
+    def _normalize_columns(value: Any) -> list[ResultColumn]:
+        if not isinstance(value, list):
+            return []
+        columns: list[ResultColumn] = []
+        for column in value:
+            if isinstance(column, dict):
+                name = column.get("name") or column.get("column_name") or column.get("id")
+                if name is not None:
+                    columns.append(
+                        ResultColumn(
+                            name=str(name),
+                            data_type=column.get("data_type") or column.get("type"),
+                        )
+                    )
+            elif column is not None:
+                columns.append(ResultColumn(name=str(column)))
+        return columns
+
+    @staticmethod
+    def _normalize_rows(value: Any, request_id: str | None) -> list[dict[str, Any]]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            try:
+                value = json.loads(value)
+            except json.JSONDecodeError as exc:
+                raise GSFError(
+                    GSFErrorCode.INVALID_RESPONSE,
+                    "GSF returned invalid query rows.",
+                    request_id=request_id,
+                ) from exc
+        if isinstance(value, dict):
+            return [value]
+        if not isinstance(value, list):
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF returned invalid query rows.",
+                request_id=request_id,
+            )
+
+        rows: list[dict[str, Any]] = []
+        for item in value:
+            if isinstance(item, dict):
+                rows.append(item)
+                continue
+            if isinstance(item, str):
+                try:
+                    parsed = json.loads(item)
+                except json.JSONDecodeError as exc:
+                    raise GSFError(
+                        GSFErrorCode.INVALID_RESPONSE,
+                        "GSF returned invalid query rows.",
+                        request_id=request_id,
+                    ) from exc
+                if isinstance(parsed, dict):
+                    rows.append(parsed)
+                elif isinstance(parsed, list) and all(isinstance(row, dict) for row in parsed):
+                    rows.extend(parsed)
+                else:
+                    raise GSFError(
+                        GSFErrorCode.INVALID_RESPONSE,
+                        "GSF returned invalid query rows.",
+                        request_id=request_id,
+                    )
+            else:
+                raise GSFError(
+                    GSFErrorCode.INVALID_RESPONSE,
+                    "GSF returned invalid query rows.",
+                    request_id=request_id,
+                )
+        return rows
 
     def _response_too_large(self, request_id: str | None) -> GSFError:
         return GSFError(

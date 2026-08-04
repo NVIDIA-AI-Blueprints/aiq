@@ -33,7 +33,6 @@ class GSFFunctionGroupConfig(FunctionGroupBaseConfig, name="gsf"):
     """Shared configuration for AI-Q's GSF tools."""
 
     base_url: HttpUrl
-    api_version: str = "v1"
     connect_timeout_seconds: float = Field(default=5.0, gt=0)
     read_timeout_seconds: float = Field(default=60.0, gt=0)
     max_retries: int = Field(default=2, ge=0, le=5)
@@ -83,10 +82,11 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
             )
 
         async def text_to_sql(request: TextToSQLRequest) -> str:
-            """Generate validated SQL and optionally return bounded rows from authorized enterprise data.
+            """Generate validated SQL and return bounded rows from authorized enterprise data.
 
-            Use for an analytical question after the relevant structured-data scope is known. The result contains SQL,
-            rows, semantic context, warnings, and provenance; AI-Q remains responsible for analysis and synthesis.
+            Use for an analytical question after the relevant structured-data scope is known. The result contains SQL
+            and rows, plus semantic context, warnings, and provenance when GSF provides them. AI-Q remains responsible
+            for analysis and synthesis.
             """
 
             token = get_auth_token()
@@ -111,32 +111,15 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
                 )
 
         async def query_context(request: QueryContextRequest) -> str:
-            """Build compact, authorized, token-budgeted semantic context for SQL generation.
+            """Build GSF query context (not available in this integration yet)."""
 
-            Use when a downstream SQL-generation step needs relevant tables, columns, keys, joins, metrics, grain,
-            rules, omissions, and warnings without executing a query.
-            """
-
-            token = get_auth_token()
-            if not token:
-                return _authentication_error()
-            try:
-                result = await client.query_context(
-                    request,
-                    token=token,
-                    trace_headers=_request_trace_headers(),
+            del request
+            return _tool_error(
+                GSFError(
+                    GSFErrorCode.CAPABILITY_UNAVAILABLE,
+                    "GSF query context is unavailable.",
                 )
-                return result.model_dump_json(exclude_none=True)
-            except GSFError as error:
-                return _tool_error(error)
-            except Exception:
-                logger.error("Unexpected GSF query-context failure")
-                return _tool_error(
-                    GSFError(
-                        GSFErrorCode.UPSTREAM_ERROR,
-                        "GSF query context failed.",
-                    )
-                )
+            )
 
         group = FunctionGroup(config=config)
         group.add_function(
