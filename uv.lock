@@ -15,6 +15,7 @@ members = [
     "aiq-agent",
     "aiq-api",
     "aiq-debug",
+    "aiq-gsf",
     "aiq-research-cli",
     "deepsearch-qa-evaluator",
     "duckduckgo-news-search",
@@ -261,6 +262,7 @@ viz = [
 dev = [
     { name = "aiq-api" },
     { name = "aiq-debug" },
+    { name = "aiq-gsf" },
     { name = "aiq-research-cli" },
     { name = "dask", extra = ["distributed"] },
     { name = "duckduckgo-news-search" },
@@ -331,6 +333,7 @@ provides-extras = ["pii", "s3", "dev", "docs", "viz"]
 dev = [
     { name = "aiq-api", editable = "frontends/aiq_api" },
     { name = "aiq-debug", editable = "frontends/debug" },
+    { name = "aiq-gsf", editable = "sources/gsf" },
     { name = "aiq-research-cli", editable = "frontends/cli" },
     { name = "dask", extras = ["distributed"], specifier = ">=2024.1.0" },
     { name = "duckduckgo-news-search", editable = "sources/duckduckgo_news_search" },
@@ -416,6 +419,23 @@ requires-dist = [
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.0" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "aiq-gsf"
+version = "0.1.0"
+source = { editable = "sources/gsf" }
+dependencies = [
+    { name = "httpx" },
+    { name = "nvidia-nat-core" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27.0,<1" },
+    { name = "nvidia-nat-core", specifier = "==1.8.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
+]
 
 [[package]]
 name = "aiq-research-cli"

@@ -245,6 +245,7 @@ provides-extras = ["pii", "s3", "dev", "docs", "viz"]
 dev = [
     { name = "aiq-api", editable = "../frontends/aiq_api" },
     { name = "aiq-debug", editable = "../frontends/debug" },
+    { name = "aiq-gsf", editable = "../sources/gsf" },
     { name = "aiq-research-cli", editable = "../frontends/cli" },
     { name = "dask", extras = ["distributed"], specifier = ">=2024.1.0" },
     { name = "duckduckgo-news-search", editable = "../sources/duckduckgo_news_search" },
