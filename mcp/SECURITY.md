@@ -95,6 +95,20 @@ container, not a functional requirement of MCP or a published package
 constraint. Only the frozen `mcp/uv.lock` profile carries the audited 50.0.0
 guarantee.
 
+### Platform compatibility
+
+The audited MCP release profile is supported on Linux x86_64 with CPython 3.13. The required CI job creates and
+imports that exact frozen environment, then builds and boots the release container on the same platform. Running
+the frozen source project on other 64-bit hosts is a development convenience, not a release-validated distribution
+path.
+
+The upgrade to `cryptography==50.0.0` crosses the 49.0.0 compatibility boundary, which removed x86_64 macOS and
+32-bit Windows wheels. Those platforms are not supported by this frozen profile; run the Linux release container
+on a supported 64-bit Linux/container host. This platform narrowing does not affect the root AI-Q environment,
+which remains on NAT's declared `cryptography>=46.0.6,<47` range. Publishing or claiming support for another target
+requires a target-specific frozen-environment import check, vulnerability audit, license inventory, and protocol
+smoke.
+
 `mcp/scripts/check_runtime_dependencies.py` performs the full installed
 requirement check and permits only those three exact owner/version/dependency/
 specifier tuples. It fails on any other incompatibility and also fails when an

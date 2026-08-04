@@ -105,8 +105,12 @@ change crosses shared boundaries.
 - The root workspace excludes `mcp/`; maintain `uv.lock` and `mcp/uv.lock` as
   separate resolutions. The root uses the NAT-compatible
   `cryptography>=46.0.6,<47` range, while the frozen MCP release profile pins
-  `cryptography==48.0.1`. Keep the 48.x override scoped to `mcp/`: it is uv
-  lock policy and is not guaranteed by the published wheel metadata.
+  `cryptography==50.0.0`. Keep the 50.x override scoped to `mcp/`: it is uv
+  lock policy and is not guaranteed by the published wheel metadata. The
+  audited MCP profile is Linux x86_64 with CPython 3.13; other 64-bit source
+  hosts are development-only. x86_64 macOS and 32-bit Windows are unsupported
+  because `cryptography` 50 does not publish those wheels; run the release
+  container on a supported 64-bit Linux/container host.
 
 ## Security and auth rules
 
