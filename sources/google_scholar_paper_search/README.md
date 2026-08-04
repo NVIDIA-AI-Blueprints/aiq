@@ -116,7 +116,7 @@ Here is a complete configuration example showing how to integrate the paper sear
 llms:
   my_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-nano-30b-a3b
+    model_name: nvidia/nemotron-nano-3.5-preview
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.7
 

@@ -11,7 +11,7 @@ This example is based on `configs/config_cli_default.yml` with modifications to 
 
 ## Prerequisites
 
-You need Docker and NVIDIA GPUs with sufficient VRAM to run the NIM containers. Check the Nemotron Super model card and support matrix for current self-hosted hardware requirements.
+You need Docker and NVIDIA GPUs with sufficient VRAM to run the NIM containers. Check the downloadable Nemotron 3 Ultra model card and support matrix for current self-hosted hardware requirements. The hosted default profile uses Nemotron Nano 3.5 Preview for intent and shallow research, but preview endpoint availability does not imply that a matching downloadable NIM image is available.
 
 ## Running NIM Containers
 
@@ -25,25 +25,13 @@ docker run -d \
   --gpus all \
   -p 8001:8000 \
   -e NVIDIA_API_KEY="${NVIDIA_API_KEY}" \
-  nvcr.io/nim/nvidia/nemotron-3-super-120b-a12b:latest
+  nvcr.io/nim/nvidia/nemotron-3-ultra-550b-a55b:latest
 ```
 
 Verify the model is ready:
 
 ```bash
 curl http://localhost:8001/v1/models
-```
-
-For multi-model setups (for example, separate intent and research models), run additional containers on different ports:
-
-```bash
-# Smaller model for intent classification
-docker run -d \
-  --name nemotron-mini-nim \
-  --gpus '"device=1"' \
-  -p 8002:8000 \
-  -e NVIDIA_API_KEY="${NVIDIA_API_KEY}" \
-  nvcr.io/nim/nvidia/nemotron-mini-4b-instruct:latest
 ```
 
 ## Configuration
@@ -72,27 +60,28 @@ general:
 # instead of integrate.api.nvidia.com. No NVIDIA_API_KEY is needed for
 # inference (only for pulling the container image).
 llms:
-  nemotron_llm_intent:
+  local_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    # Use the identifier returned by this local NIM's /v1/models endpoint.
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "http://localhost:8001/v1"   # <-- Local NIM
-    temperature: 0.5
-    top_p: 0.9
-    max_tokens: 4096
-    num_retries: 3
-    chat_template_kwargs:
-      enable_thinking: true
-
-  nemotron_super_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "http://localhost:8001/v1"   # <-- Local NIM
-    temperature: 0.1
-    top_p: 0.3
+    temperature: 0.2
+    top_p: 0.7
     max_tokens: 16384
     num_retries: 3
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
+
+  local_ultra_writer_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "http://localhost:8001/v1"   # <-- Local NIM
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
+    num_retries: 3
+    chat_template_kwargs:
+      enable_thinking: false
 
 # ===========================================================================
 # Functions
@@ -115,14 +104,14 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: local_ultra_llm
     tools:
       - web_search_tool
       - paper_search_tool
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
+    llm: local_ultra_llm
     tools:
       - web_search_tool
     max_turns: 3
@@ -131,7 +120,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: local_ultra_llm
     tools:
       - web_search_tool
     max_llm_turns: 10
@@ -139,7 +128,11 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm
+    orchestrator_llm: local_ultra_llm
+    source_router_llm: local_ultra_llm
+    planner_llm: local_ultra_llm
+    researcher_llm: local_ultra_llm
+    writer_llm: local_ultra_writer_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool
@@ -203,7 +196,7 @@ The CLI script starts an interactive session. Type your research query and the s
 ## Tips for Local NIMs
 
 - **GPU memory**: Monitor with `nvidia-smi`. Size GPUs for the
-  `nvidia/nemotron-3-super-120b-a12b` NIM using the model card and support matrix.
+  `nvidia/nemotron-3-ultra-550b-a55b` NIM using the model card and support matrix.
 - **Startup time**: NIM containers take 2--5 minutes to load the model on first start. Wait until `/v1/models` returns a response.
 - **Multiple GPUs**: Use `--gpus '"device=0,1"'` to spread across GPUs, or run separate containers per GPU for different model roles.
 - **Networking**: If running inside Docker Compose, use container names instead of `localhost` for `base_url`.

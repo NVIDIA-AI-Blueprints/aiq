@@ -82,7 +82,7 @@ def test_public_mcp_config_preserves_reference_orchestration_choices() -> None:
     assert functions["intent_classifier"]["_type"] == "intent_classifier"
     assert functions["clarifier_agent"] == {
         "_type": "clarifier_agent",
-        "llm": "nemotron_super_llm",
+        "llm": "nemotron_ultra_llm",
         "max_turns": 3,
         "log_response_max_chars": 2000,
         "verbose": True,

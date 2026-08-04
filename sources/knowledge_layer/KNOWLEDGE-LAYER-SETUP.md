@@ -139,14 +139,14 @@ By default, LlamaIndex ingests text only and uses the NVIDIA hosted embedding an
 | Variable | Default | Description |
 |----------|---------|-------------|
 | **Embedding** | | |
-| `AIQ_EMBED_MODEL` | `nvidia/llama-nemotron-embed-vl-1b-v2` | NVIDIA embedding model |
+| `AIQ_EMBED_MODEL` | `nvidia/nemotron-3-embed-1b` | NVIDIA embedding model |
 | `AIQ_EMBED_BASE_URL` | `https://integrate.api.nvidia.com/v1` | Embedding API base URL — override for local NIM |
 | **Extraction Flags** | | |
 | `AIQ_EXTRACT_TABLES` | `false` | Extract tables from PDFs as markdown using pdfplumber |
 | `AIQ_EXTRACT_IMAGES` | `false` | Extract embedded images from PDFs and caption them with a VLM |
 | `AIQ_EXTRACT_CHARTS` | `false` | Classify images as charts and extract structured data (chart type, axis labels, data points) |
 | **Vision Model** | | |
-| `AIQ_VLM_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` | VLM for image captioning |
+| `AIQ_VLM_MODEL` | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | VLM for image captioning |
 | `AIQ_VLM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | VLM API base URL — override for local NIM |
 
 You can also set these in `deploy/.env`:
@@ -217,7 +217,7 @@ functions:
     opensearch_auth_type: none
     opensearch_index_prefix: aiq
     opensearch_embedding_dim: 2048
-    embed_model: nvidia/llama-nemotron-embed-vl-1b-v2
+    embed_model: nvidia/nemotron-3-embed-1b
     embed_base_url: https://integrate.api.nvidia.com/v1
 ```
 
@@ -479,7 +479,7 @@ When `generate_summary: true`, you **must** configure `summary_model` to referen
 llms:
   summary_llm:
     _type: nim
-    model_name: nvidia/nemotron-mini-4b-instruct
+    model_name: google/gemma-4-31b-it
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.3

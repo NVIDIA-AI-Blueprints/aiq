@@ -19,18 +19,30 @@ This example uses NVIDIA NIM models for intent classification and shallow resear
 ```yaml
 llms:
   # NIM models for fast paths (intent + shallow)
-  nemotron_llm_intent:
+  nemotron_nano_intent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-nano-3.5-preview
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5
-    max_tokens: 4096
-
-  nemotron_super_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
     temperature: 0.1
+    max_tokens: 1024
+    parallel_tool_calls: false
+
+  nemotron_nano_agent_llm:
+    _type: nim
+    model_name: nvidia/nemotron-nano-3.5-preview
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    max_tokens: 8192
+    parallel_tool_calls: false
+
+  nemotron_ultra_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     max_tokens: 16384
 
   # Frontier model for deep research (higher quality)
@@ -61,14 +73,14 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: nemotron_nano_intent_llm
     tools:
       - web_search_tool
       - knowledge_search
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
+    llm: nemotron_ultra_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -76,7 +88,7 @@ functions:
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: nemotron_nano_agent_llm
     tools:
       - web_search_tool
       - knowledge_search

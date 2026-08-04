@@ -112,7 +112,7 @@ functions:
 
     # Summarization options (optional, all backends):
     # generate_summary: true                  # Generate one-sentence summary per document
-    # summary_model: nemotron_super_llm             # LLM reference from llms: section (required if generate_summary is true)
+    # summary_model: summary_llm                    # LLM reference from llms: section (required if generate_summary is true)
     # summary_db: sqlite+aiosqlite:///./summaries.db  # Summary storage (SQLite or PostgreSQL)
 
     # Backend-specific options (each backend uses different fields):
@@ -126,7 +126,7 @@ functions:
     # opensearch_auth_type: none              # none, basic, or sigv4
     # opensearch_index_prefix: aiq
     # opensearch_ingestion_mode: local        # local, dask, or auto
-    # embed_model: nvidia/llama-nemotron-embed-vl-1b-v2
+    # embed_model: nvidia/nemotron-3-embed-1b
 ```
 
 You can also use environment variable substitution in YAML for deployment-specific values:
@@ -250,7 +250,7 @@ functions:
     opensearch_embedding_dim: ${OPENSEARCH_EMBEDDING_DIM:-2048}
     opensearch_ingestion_mode: ${OPENSEARCH_INGESTION_MODE:-auto}
     opensearch_dask_scheduler_address: ${NAT_DASK_SCHEDULER_ADDRESS:-}
-    embed_model: ${AIQ_EMBED_MODEL:-nvidia/llama-nemotron-embed-vl-1b-v2}
+    embed_model: ${AIQ_EMBED_MODEL:-nvidia/nemotron-3-embed-1b}
     embed_base_url: ${AIQ_EMBED_BASE_URL:-https://integrate.api.nvidia.com/v1}
 ```
 
@@ -280,7 +280,7 @@ All options below can be overridden via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | **Embedding** | | |
-| `AIQ_EMBED_MODEL` | `nvidia/llama-nemotron-embed-vl-1b-v2` | NVIDIA embedding model |
+| `AIQ_EMBED_MODEL` | `nvidia/nemotron-3-embed-1b` | NVIDIA embedding model |
 | `AIQ_EMBED_BASE_URL` | `https://integrate.api.nvidia.com/v1` | Embedding API base URL — override for local NIM |
 | `OPENSEARCH_EMBEDDING_DIM` | `2048` | OpenSearch vector dimension; must equal the selected embedding model's output length before index creation |
 | **Extraction Flags** | | |
@@ -288,7 +288,7 @@ All options below can be overridden via environment variables:
 | `AIQ_EXTRACT_IMAGES` | `false` | Extract and caption images with VLM |
 | `AIQ_EXTRACT_CHARTS` | `false` | Classify images as charts and extract structured data |
 | **Vision Model** | | |
-| `AIQ_VLM_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` | VLM for image captioning |
+| `AIQ_VLM_MODEL` | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | VLM for image captioning |
 | `AIQ_VLM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | VLM API base URL — override for local NIM |
 
 When enabled, the startup log shows the active mode:
@@ -307,7 +307,7 @@ Document summaries help research agents understand what files are available befo
 llms:
   summary_llm:
     _type: nim
-    model_name: nvidia/nemotron-mini-4b-instruct
+    model_name: google/gemma-4-31b-it
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.3
     max_tokens: 150

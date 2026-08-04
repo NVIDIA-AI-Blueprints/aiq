@@ -236,11 +236,11 @@ for configuration details.
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm
-    source_router_llm: nemotron_super_llm
-    planner_llm: nemotron_llm
-    researcher_llm: nemotron_llm
-    writer_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     enable_source_router: true
     enable_citation_verification: true
     max_research_concurrency: 6
@@ -261,7 +261,7 @@ similarly centralized and validated before shared-state mutation. See the
 for all enforced ceilings.
 
 ```{note}
-**Hosted Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) and Nemotron Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their hosted endpoints can have limited availability during high demand (HTTP 429/503 responses). The default configs use Nemotron Super for the `writer_llm` role and Nemotron Ultra for the other deep-research roles. For production deployments requiring consistent throughput, refer to the model-specific [self-hosting guidance](../../resources/troubleshooting.md#nemotron-super-and-ultra--hosted-endpoint-availability).
+**Hosted Endpoint Availability:** The default deep researcher uses Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) for every role, including `writer_llm`. Shared hosted endpoints can have limited availability during high demand (HTTP 429/503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
 ```
 
 ## Prompt Templates

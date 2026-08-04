@@ -24,7 +24,7 @@ It uses:
 
 Configuration options:
     persist_dir: Directory for ChromaDB persistence (default: /tmp/chroma_data)
-    embed_model: NVIDIA embedding model (default: nvidia/llama-nemotron-embed-vl-1b-v2)
+    embed_model: NVIDIA embedding model (default: nvidia/nemotron-3-embed-1b)
     embed_base_url: Embedding model base URL (default: https://integrate.api.nvidia.com/v1)
     chunk_size: Chunk size for text splitting (default: 1024, model supports up to 2048 tokens)
     chunk_overlap: Overlap between chunks (default: 128)
@@ -70,7 +70,7 @@ logger = logging.getLogger(__name__)
 
 # Default VLM model for image captioning
 # nemotron-nano is faster (12B vs 90B) - same as NV-Ingest service mode uses
-DEFAULT_VLM_MODEL = os.environ.get("AIQ_VLM_MODEL", "nvidia/nemotron-nano-12b-v2-vl")
+DEFAULT_VLM_MODEL = os.environ.get("AIQ_VLM_MODEL", "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning")
 # Default VLM model base URL
 DEFAULT_VLM_BASE_URL = os.environ.get("AIQ_VLM_BASE_URL", "https://integrate.api.nvidia.com/v1")
 
@@ -447,7 +447,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
 
     Configuration options:
         persist_dir: ChromaDB persistence directory (default from AIQ_CHROMA_DIR)
-        embed_model: NVIDIA embedding model name (default: nvidia/llama-nemotron-embed-vl-1b-v2)
+        embed_model: NVIDIA embedding model name (default: nvidia/nemotron-3-embed-1b)
         embed_base_url: Embedding model base URL (default: https://integrate.api.nvidia.com/v1)
         chunk_size: Text chunk size (default: 1024, model supports up to 2048 tokens)
         chunk_overlap: Chunk overlap (default: 128)
@@ -482,10 +482,10 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
     # @environment_variable AIQ_EMBED_MODEL
     # @category Knowledge Layer
     # @type str
-    # @default nvidia/llama-nemotron-embed-vl-1b-v2
+    # @default nvidia/nemotron-3-embed-1b
     # @required false
     # NVIDIA embedding model name for LlamaIndex vector encoding.
-    DEFAULT_EMBED_MODEL = os.environ.get("AIQ_EMBED_MODEL", "nvidia/llama-nemotron-embed-vl-1b-v2")
+    DEFAULT_EMBED_MODEL = os.environ.get("AIQ_EMBED_MODEL", "nvidia/nemotron-3-embed-1b")
 
     # @environment_variable AIQ_EMBED_BASE_URL
     # @category Knowledge Layer
@@ -528,7 +528,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
         self.persist_dir = self.config.get("persist_dir", self.DEFAULT_PERSIST_DIR)
         self.embed_base_url = self.config.get("embed_base_url", self.DEFAULT_EMBED_BASE_URL)
         self.embed_model_name = self.config.get("embed_model", self.DEFAULT_EMBED_MODEL)
-        # llama-nemotron-embed-vl-1b-v2 supports up to 2048 tokens
+        # Nemotron 3 Embed 1B supports inputs up to 2048 tokens.
         self.chunk_size = self.config.get("chunk_size", 1024)
         self.chunk_overlap = self.config.get("chunk_overlap", 128)
 
@@ -1603,7 +1603,7 @@ class LlamaIndexRetriever(BaseRetriever):
 
     # Default configuration from environment variables
     DEFAULT_PERSIST_DIR = os.environ.get("AIQ_CHROMA_DIR", "/tmp/chroma_data")
-    DEFAULT_EMBED_MODEL = os.environ.get("AIQ_EMBED_MODEL", "nvidia/llama-nemotron-embed-vl-1b-v2")
+    DEFAULT_EMBED_MODEL = os.environ.get("AIQ_EMBED_MODEL", "nvidia/nemotron-3-embed-1b")
     DEFAULT_EMBED_BASE_URL = os.environ.get("AIQ_EMBED_BASE_URL", "https://integrate.api.nvidia.com/v1")
     # @environment_variable AIQ_RETRIEVER_TOP_K
     # @category Knowledge Layer

@@ -92,32 +92,34 @@ and the [Observability](../deployment/observability.md) guide for:
 
 ## `llms` Section
 
-Defines named LLM instances. Each entry gets a user-chosen key (for example, `nemotron_super_llm`) that agents reference.
+Defines named LLM instances. Each entry gets a user-chosen key (for example, `nemotron_ultra_llm`) that agents reference.
 
 ```yaml
 llms:
-  nemotron_super_llm:
+  nemotron_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.1
-    top_p: 0.3
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
     max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `_type` | `str` | **required** | LLM provider type. Use `nim` for NVIDIA NIM endpoints, `openai` for OpenAI-compatible endpoints. |
-| `model_name` | `str` | **required** | Model identifier (for example, `nvidia/nemotron-3-super-120b-a12b`, `azure/openai/gpt-4.1-mini`). |
+| `model_name` | `str` | **required** | Model identifier (for example, `nvidia/nemotron-3-ultra-550b-a55b`, `azure/openai/gpt-4.1-mini`). |
 | `base_url` | `str` | `None` | API endpoint URL. Should always be set explicitly for NVIDIA NIM endpoints. |
 | `api_key` | `str` | -- | API key. If omitted, uses `NVIDIA_API_KEY` from the environment. |
 | `temperature` | `float` | `None` | Sampling temperature. Lower values produce more deterministic output. When `None`, the API uses its server-side default. |
 | `top_p` | `float` | `None` | Nucleus sampling threshold. When `None`, the API uses its server-side default. |
 | `max_tokens` | `int` | `300` | Maximum tokens in the response. Set higher values (for example, `16384` or `128000`) for research agents. |
 | `num_retries` | `int` | `5` | Number of retry attempts on API failure. |
+| `parallel_tool_calls` | `bool` | Provider default | Whether the provider can emit parallel tool calls. The default Nano profile sets this to `false`. |
 | `chat_template_kwargs` | `object` | -- | Extra arguments passed to the chat template. Use `enable_thinking: true` to activate the model's chain-of-thought reasoning. |
 
 ### Common LLM Configurations
@@ -126,10 +128,11 @@ Different agents benefit from different parameter profiles:
 
 | Role | Temperature | Top-p | Max Tokens | Notes |
 |------|------------|-------|------------|-------|
-| Intent classifier | `0.5` | `0.9` | `4096` | Moderate creativity for classification |
-| Shallow researcher | `0.1` | `0.3` | `16384` | Low temperature for factual accuracy |
-| Deep research orchestrator | `1.0` | `1.0` | `128000` | High temperature with thinking enabled for deep reasoning |
-| Summary LLM | `0.3` | -- | `100` | Conservative, short output for document summaries |
+| Intent classifier (Nano) | `0.1` | `0.9` | `1024` | Short deterministic classification; thinking disabled |
+| Shallow researcher (Nano) | `0.2` | `0.9` | `8192` | Tool-calling fast path; parallel tool calls and thinking disabled |
+| Deep research roles (Ultra) | `0.2` | `0.7` | `16384` | Source routing, orchestration, planning, and research |
+| Deep research writer (Ultra) | `0.2` | `0.7` | `32768` | Larger report-writing budget |
+| Summary LLM (Gemma) | `0.1` | -- | `100` | Conservative, short document summaries |
 
 ---
 
@@ -329,7 +332,7 @@ functions:
     opensearch_aws_service: ${OPENSEARCH_AWS_SERVICE:-aoss}
     opensearch_index_prefix: ${OPENSEARCH_INDEX_PREFIX:-aiq}
     opensearch_ingestion_mode: ${OPENSEARCH_INGESTION_MODE:-auto}
-    embed_model: ${AIQ_EMBED_MODEL:-nvidia/llama-nemotron-embed-vl-1b-v2}
+    embed_model: ${AIQ_EMBED_MODEL:-nvidia/nemotron-3-embed-1b}
 ```
 
 | Parameter | Type | Default | Description |
@@ -362,7 +365,7 @@ functions:
 | `opensearch_ingestion_mode` | `str` | `local` | Ingestion executor: `local`, `dask`, or `auto`. `auto` uses Dask only when a scheduler address is configured. |
 | `opensearch_dask_scheduler_address` | `str` | `None` | Dask scheduler for distributed ingestion. Also reads `NAT_DASK_SCHEDULER_ADDRESS`. |
 | `opensearch_dask_file_transfer` | `str` | `bytes` | Send uploads to Dask workers as `bytes` or shared filesystem `paths`. |
-| `embed_model` | `str` | `nvidia/llama-nemotron-embed-vl-1b-v2` | Embedding model for OpenSearch and Azure AI Search ingestion and retrieval. |
+| `embed_model` | `str` | `nvidia/nemotron-3-embed-1b` | Embedding model for OpenSearch and Azure AI Search ingestion and retrieval. |
 | `embed_base_url` | `str` | `https://integrate.api.nvidia.com/v1` | OpenAI-compatible embeddings endpoint for OpenSearch and Azure AI Search. |
 
 Refer to [Knowledge Layer](./knowledge-layer.md) for backend selection and the
@@ -376,7 +379,7 @@ Classifies user queries as meta (conversational) or research, and determines res
 functions:
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: nemotron_nano_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
@@ -451,11 +454,11 @@ batches those queries for researcher workers and delegates final synthesis to th
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm
-    source_router_llm: nemotron_super_llm
-    researcher_llm: nemotron_super_llm
-    planner_llm: nemotron_super_llm
-    writer_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     # tools omitted -> inherit every tool in data_source_registry
     exclude_tools:
       - web_search_tool
@@ -585,38 +588,55 @@ general:
 
 # LLM definitions
 llms:
-  intent_llm:                          # Used by intent classifier
+  nano_intent_llm:                     # Used by intent classifier
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-nano-3.5-preview
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5
-    top_p: 0.9
-    max_tokens: 4096
-    num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: true
-
-  research_llm:                        # Used by shallow researcher + clarifier
-    _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
     temperature: 0.1
-    top_p: 0.3
+    top_p: 0.9
+    max_tokens: 1024
+    num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: false
+
+  nano_agent_llm:                      # Used by shallow researcher
+    _type: nim
+    model_name: nvidia/nemotron-nano-3.5-preview
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.9
+    max_tokens: 8192
+    num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: false
+
+  ultra_llm:                           # Used by clarifier and deep research
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
     max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
-  deep_llm:                            # Used by deep research orchestrator
+  ultra_writer_llm:                    # Used by deep research writer
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
 # Tools and agents
 functions:
@@ -637,14 +657,14 @@ functions:
 
   intent_classifier:                   # Classifies queries, routes depth
     _type: intent_classifier
-    llm: intent_llm
+    llm: nano_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
 
   clarifier_agent:                     # Asks clarifying questions for deep research
     _type: clarifier_agent
-    llm: research_llm
+    llm: ultra_llm
     tools:
       - web_search_tool
     max_turns: 3
@@ -652,7 +672,7 @@ functions:
 
   shallow_research_agent:              # Fast single-pass research
     _type: shallow_research_agent
-    llm: research_llm
+    llm: nano_agent_llm
     tools:
       - web_search_tool
     max_llm_turns: 10
@@ -660,10 +680,11 @@ functions:
 
   deep_research_agent:                 # Multi-phase deep research
     _type: deep_research_agent
-    orchestrator_llm: deep_llm
-    researcher_llm: research_llm
-    source_router_llm: research_llm
-    writer_llm: deep_llm
+    orchestrator_llm: ultra_llm
+    researcher_llm: ultra_llm
+    source_router_llm: ultra_llm
+    planner_llm: ultra_llm
+    writer_llm: ultra_writer_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool

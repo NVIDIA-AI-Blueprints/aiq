@@ -28,55 +28,64 @@ general:
         - "*"
 
 llms:
-  nemotron_llm_intent:
+  nemotron_nano_intent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-nano-3.5-preview
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
     top_p: 0.9
-    max_tokens: 4096
+    max_tokens: 1024
     num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
-  nemotron_super_llm:
+  nemotron_nano_agent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-nano-3.5-preview
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
-    top_p: 0.7
-    max_tokens: 65536
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.9
+    max_tokens: 8192
     num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
   nemotron_ultra_llm:
     _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     top_p: 0.7
-    max_tokens: 65536
+    max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
-  gpt_oss_llm:
+  nemotron_ultra_writer_llm:
     _type: nim
-    model_name: openai/gpt-oss-120b
-    base_url: https://integrate.api.nvidia.com/v1
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 256000
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
-    max_retries: 10
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
+
+
 
   summary_llm:
     _type: nim
-    model_name: nvidia/nemotron-mini-4b-instruct
+    model_name: google/gemma-4-31b-it
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
-    temperature: 0.3
+    temperature: 0.1
     max_tokens: 100
 
 middleware:
@@ -212,19 +221,19 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: nemotron_nano_intent_llm
     verbose: true
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
+    llm: nemotron_ultra_llm
     max_turns: 3
     log_response_max_chars: 2000
     verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: nemotron_nano_agent_llm
     exclude_tools:
       - advanced_web_search_tool
     verbose: true
@@ -233,11 +242,11 @@ functions:
 
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: gpt_oss_llm
+    orchestrator_llm: nemotron_ultra_llm
     source_router_llm: nemotron_ultra_llm
     researcher_llm: nemotron_ultra_llm
-    planner_llm: gpt_oss_llm
-    writer_llm: gpt_oss_llm
+    planner_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     exclude_tools:
       - web_search_tool
     verbose: true
