@@ -65,7 +65,7 @@ llms:
     chat_template_kwargs:
       enable_thinking: true
 
-  # LLM for document summaries (shown in the UI after upload)
+  # LLM for clarification and deep-research roles
   nemotron_ultra_llm:
     _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b

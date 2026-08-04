@@ -30,6 +30,7 @@ REPLACED_REFERENCES = (
     ".".join(("inference-api", "nvidia", "com")),
 )
 SCANNED_SUFFIXES = {
+    ".baseline",
     ".example",
     ".ipynb",
     ".json",
