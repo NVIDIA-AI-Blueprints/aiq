@@ -61,34 +61,35 @@ general:
 # LLMs
 # ===========================================================================
 # Role-specific LLM configurations:
-# - Super for intent classification and shallow research
+# - Nemotron 3.5 Lightning for intent classification and shallow research
 # - Ultra for clarification and every deep-research role
 llms:
-  nemotron_llm_intent:
+  nemotron_lightning_intent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5    # Moderate: needs to reason about intent
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
     top_p: 0.9
-    max_tokens: 4096
+    max_tokens: 1024
     num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
-  nemotron_super_llm:
+  nemotron_lightning_agent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.1    # Low: factual research output
-    top_p: 0.3
-    max_tokens: 16384
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 8192
     num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
       enable_thinking: true
 
-# ===========================================================================
-# Functions (tools and agents)
-# ===========================================================================
   nemotron_ultra_llm:
     _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
@@ -156,7 +157,7 @@ functions:
   # Has access to tools for context-aware routing decisions.
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: nemotron_lightning_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
@@ -183,7 +184,7 @@ functions:
   # Single-turn ReAct agent for quick queries.
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: nemotron_lightning_agent_llm
     tools:
       - web_search_tool
       - knowledge_search

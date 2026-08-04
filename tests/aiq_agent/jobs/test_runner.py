@@ -73,6 +73,7 @@ import pytest
 
 from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommitTracker
 from aiq_agent.auth import Principal
+from aiq_agent.common.callbacks import SUPPRESS_OUTPUT_ARTIFACT_TAG
 from aiq_api.jobs.callbacks import ArtifactType
 from aiq_api.jobs.callbacks import DeepResearchEventCallback
 from aiq_api.jobs.callbacks import EventCategory
@@ -372,6 +373,19 @@ class TestDeepResearchEventCallback:
         call_args = mock_store.store.call_args[0][0]
         assert call_args["type"] == "llm.start"
         assert call_args["name"] == "gpt-4"
+
+    def test_suppressed_llm_output_keeps_lifecycle_without_publishing_content(self):
+        """Pre-evidence answers retain telemetry but cannot reach output artifacts or chunks."""
+        mock_store = MagicMock()
+        callback = DeepResearchEventCallback(event_store=mock_store)
+        tags = [SUPPRESS_OUTPUT_ARTIFACT_TAG]
+
+        callback.on_llm_new_token("rejected draft", tags=tags)
+        callback._extract_llm_response = MagicMock(return_value=("x" * 200, None, None, False))
+        callback.on_llm_end(MagicMock(), run_id="pre-evidence", tags=tags)
+
+        events = [stored.args[0] for stored in mock_store.store.call_args_list]
+        assert [event["type"] for event in events] == ["llm.end"]
 
 
 class TestSubmitDeepResearchJob:

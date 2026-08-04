@@ -17,7 +17,7 @@ the file from `configs/`. For the full nine-profile table, see
 3. **Model family**
    - Nemotron → most profiles
    - GPT-5.2 orchestration/planning/writing → `config_frontier_models.yml` (`OPENAI_API_KEY`)
-   - Default split → existing Super profiles for intent/shallow, with Ultra for deep research and a larger writer budget
+   - Default split → Nemotron 3.5 Lightning for intent/shallow; Ultra for clarification/deep research, with a larger writer budget
 
 4. **Optional features** — copy blocks from:
    - Guardrails → `config_web_default_guardrails.yml`

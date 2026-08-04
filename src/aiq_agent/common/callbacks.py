@@ -26,6 +26,9 @@ from aiq_agent.common.logging_utils import log_identifier_ref
 logger = logging.getLogger(__name__)
 
 
+SUPPRESS_OUTPUT_ARTIFACT_TAG = "aiq:suppress-output-artifact"
+
+
 YELLOW = "\033[33m"
 CYAN = "\033[36m"
 GREEN = "\033[32m"

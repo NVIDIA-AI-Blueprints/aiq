@@ -119,7 +119,7 @@ llms:
 | `top_p` | `float` | `None` | Nucleus sampling threshold. When `None`, the API uses its server-side default. |
 | `max_tokens` | `int` | `300` | Maximum tokens in the response. Set higher values (for example, `16384` or `128000`) for research agents. |
 | `num_retries` | `int` | `5` | Number of retry attempts on API failure. |
-| `parallel_tool_calls` | `bool` | Provider default | Whether the provider can emit parallel tool calls. |
+| `parallel_tool_calls` | `bool` | Provider default | Whether the provider can emit parallel tool calls. The default intent and shallow profiles set this to `false`. |
 | `chat_template_kwargs` | `object` | -- | Extra arguments passed to the chat template. Use `enable_thinking: true` to activate the model's chain-of-thought reasoning. |
 
 ### Common LLM Configurations
@@ -128,8 +128,8 @@ Different agents benefit from different parameter profiles:
 
 | Role | Temperature | Top-p | Max Tokens | Notes |
 |------|------------|-------|------------|-------|
-| Intent classifier (Super) | `0.5` | `0.9` | `4096` | Existing classification profile; thinking enabled |
-| Shallow researcher (Super) | `0.7` | `0.7` | `65536` | Existing research profile; thinking enabled |
+| Intent classifier (Nemotron 3.5 Lightning) | `0.1` | `0.9` | `1024` | Short deterministic classification; thinking disabled |
+| Shallow researcher (Nemotron 3.5 Lightning) | `0.2` | `0.7` | `8192` | Tool-calling profile; parallel tool calls disabled and thinking enabled |
 | Deep research roles (Ultra) | `0.2` | `0.7` | `16384` | Source routing, orchestration, planning, and research |
 | Deep research writer (Ultra) | `0.2` | `0.7` | `32768` | Larger report-writing budget |
 | Summary LLM (Gemma) | `0.1` | -- | `100` | Conservative, short document summaries |
@@ -379,7 +379,7 @@ Classifies user queries as meta (conversational) or research, and determines res
 functions:
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: nemotron_lightning_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
@@ -588,25 +588,29 @@ general:
 
 # LLM definitions
 llms:
-  super_intent_llm:                     # Used by intent classifier
+  lightning_intent_llm:                # Used by intent classifier
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
     top_p: 0.9
-    max_tokens: 4096
+    max_tokens: 1024
     num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 
-  super_agent_llm:                      # Used by shallow researcher
+  lightning_agent_llm:                 # Used by shallow researcher
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     top_p: 0.7
-    max_tokens: 65536
+    max_tokens: 8192
     num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
       enable_thinking: true
 
@@ -653,7 +657,7 @@ functions:
 
   intent_classifier:                   # Classifies queries, routes depth
     _type: intent_classifier
-    llm: super_intent_llm
+    llm: lightning_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
@@ -668,7 +672,7 @@ functions:
 
   shallow_research_agent:              # Fast single-pass research
     _type: shallow_research_agent
-    llm: super_agent_llm
+    llm: lightning_agent_llm
     tools:
       - web_search_tool
     max_llm_turns: 10
@@ -706,7 +710,7 @@ only the additional sections you need.
 | `configs/config_web_azure_ai_search.yml` | Web API | Azure AI Search knowledge retrieval and web search |
 | `configs/config_web_frag.yml` | Web API / Helm base | Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. Paper search is commented out. |
 | `configs/config_web_opensearch.yml` | Web API | Built-in OpenSearch knowledge backend plus Tavily. Supports unauthenticated or basic self-hosted OpenSearch and SigV4 (`es` or `aoss`); infrastructure and credentials are deployment opt-ins. |
-| `configs/config_frontier_models.yml` | Web API | Shipped LlamaIndex frontier profile: Nemotron 3 Super for intent/shallow, GPT-5.6 Sol for clarification/orchestration/planning/writing, GPT-5.6 Luna for source routing/research, and Gemma 4 for summaries. Requires `NVIDIA_API_KEY`, `OPENAI_API_KEY`, and `TAVILY_API_KEY` for the enabled Tavily tools; the commented paper-search opt-in requires `SERPER_API_KEY` when enabled. Validate the complete workflow against the configured provider endpoints before deployment. |
+| `configs/config_frontier_models.yml` | Web API | Shipped LlamaIndex frontier profile: Nemotron 3.5 Lightning for intent/shallow, GPT-5.6 Sol for clarification/orchestration/planning/writing, GPT-5.6 Luna for source routing/research, and Gemma 4 for summaries. Requires `NVIDIA_API_KEY`, `OPENAI_API_KEY`, and `TAVILY_API_KEY` for the enabled Tavily tools; the commented paper-search opt-in requires `SERPER_API_KEY` when enabled. Validate the complete workflow against the configured provider endpoints before deployment. |
 | `configs/config_web_default_guardrails.yml` | Web API | LlamaIndex with workflow Guardrails attached explicitly, shallow-agent Guardrails dynamically attached through `workflow_functions`, and async deep-agent Guardrails applied by the AI-Q runner from the same target configuration. |
 | `configs/config_web_frag_mcp_auth.yml` | Web API | Foundational RAG plus a protected per-user OAuth MCP source example. Requires a real protected MCP endpoint and shared token-store configuration; it is not a zero-config default. |
 | `configs/config_domain_routing_and_skills.yml` | Direct deep-research workflow | Automatic domain routing, Tavily, DuckDuckGo news, Polymarket, LlamaIndex, enabled Serper paper search, built-in skills, and a Modal sandbox. Requires the corresponding service credentials and Modal setup. |

@@ -42,6 +42,7 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from aiq_agent.common.callbacks import SUPPRESS_OUTPUT_ARTIFACT_TAG
 from aiq_agent.common.citation_verification import extract_http_urls
 from aiq_agent.common.citation_verification import get_session_registry
 
@@ -740,7 +741,7 @@ class AgentEventCallback(BaseCallbackHandler):
 
     def on_llm_new_token(self, token: str, **kwargs) -> None:
         """Emit a streaming llm.chunk event for each non-empty token."""
-        if token:
+        if token and SUPPRESS_OUTPUT_ARTIFACT_TAG not in (kwargs.get("tags") or []):
             self._emit(
                 IntermediateStepEvent(
                     category=EventCategory.LLM,
@@ -784,6 +785,7 @@ class AgentEventCallback(BaseCallbackHandler):
             and len(content) >= self.OUTPUT_MIN_LENGTH
             and not has_tool_calls
             and not self._contains_tool_call_syntax(content)
+            and SUPPRESS_OUTPUT_ARTIFACT_TAG not in (kwargs.get("tags") or [])
         ):
             output_category = self._get_output_category(agent_info)
             self._emit_artifact(

@@ -12,7 +12,7 @@ shallow research with GPT Sol/Luna for clarification and deep research.
 
 | Role | Model |
 | --- | --- |
-| Intent classification and shallow research | `nvidia/nemotron-3-super-120b-a12b` |
+| Intent classification and shallow research | `nvidia/nemotron-3.5-lightning-30b-a3b` |
 | Clarification, orchestration, and planning | `gpt-5.6-sol` |
 | Source routing and research | `gpt-5.6-luna` |
 | Report writing | `gpt-5.6-sol` with the writer token budget from the checked-in config |

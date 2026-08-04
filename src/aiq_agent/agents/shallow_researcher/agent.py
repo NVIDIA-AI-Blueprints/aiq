@@ -38,6 +38,7 @@ from langgraph.prebuilt import tools_condition
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.callbacks import SUPPRESS_OUTPUT_ARTIFACT_TAG
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
@@ -190,6 +191,8 @@ class ShallowResearcherAgent:
     def _build_graph(self) -> CompiledStateGraph:
         """Build the LangGraph StateGraph."""
 
+        source_tool_names = {tool.name for tool in self.tools}
+
         async def agent_node(state: ShallowResearchAgentState) -> dict[str, Any]:
             """Execute the agent with parallel call tracking and context anchoring."""
             messages = state.messages
@@ -244,9 +247,30 @@ class ShallowResearcherAgent:
                     return {"messages": [response], "tool_iterations": iterations}
 
                 llm = self._get_llm()
-                llm_with_tools = llm.bind_tools(self.tools, parallel_tool_calls=True) if self.tools else llm
+                llm_with_tools = llm.bind_tools(self.tools) if self.tools else llm
                 full_messages = [system_message] + processed_history
-                response = await llm_with_tools.ainvoke(full_messages)
+                pre_evidence_config = {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]} if iterations == 0 else None
+                response = await llm_with_tools.ainvoke(full_messages, config=pre_evidence_config)
+
+                if self.tools and iterations == 0 and not getattr(response, "tool_calls", None):
+                    logger.warning("Shallow researcher returned an answer before collecting evidence; retrying once")
+                    tool_required = HumanMessage(
+                        content=(
+                            "Research is required before answering. Call exactly one available research tool now. "
+                            "Do not provide a final answer until the tool result is available."
+                        )
+                    )
+                    retry_llm = llm.bind_tools(self.tools, parallel_tool_calls=False)
+                    response = await retry_llm.ainvoke(
+                        full_messages + [response, tool_required],
+                        config=pre_evidence_config,
+                    )
+                    retry_tool_calls = getattr(response, "tool_calls", None) or []
+                    if len(retry_tool_calls) != 1 or retry_tool_calls[0].get("name") not in source_tool_names:
+                        raise RuntimeError(
+                            "shallow_research_tool_required: model did not call exactly one allowed research tool "
+                            "after one retry"
+                        )
 
                 new_iterations = iterations
                 if hasattr(response, "tool_calls") and response.tool_calls:
@@ -275,8 +299,6 @@ class ShallowResearcherAgent:
         # data_source_registry then decides which of those are configured
         # data sources. Having both gates keeps behavior consistent across
         # agents and safe even if the global registry is ever polluted.
-        source_tool_names = {t.name for t in self.tools}
-
         async def tool_node_with_source_capture(state: ShallowResearchAgentState) -> dict[str, Any]:
             """Execute tools and capture source URLs/citations for verification.
 

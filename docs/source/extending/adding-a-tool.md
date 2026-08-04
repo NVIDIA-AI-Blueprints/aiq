@@ -279,7 +279,7 @@ Reference your tool in any workflow configuration:
 llms:
   research_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
 
 functions:
   my_search:

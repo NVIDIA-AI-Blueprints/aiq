@@ -1,5 +1,5 @@
 # FreshQA shallow-research-only
-# Nemotron Ultra on NVIDIA API Catalog; add judge (OpenAI or Gemini) for evaluator.
+# Nemotron 3.5 Lightning on NVIDIA API Catalog; add judge (OpenAI or Gemini) for evaluator.
 
 general:
   telemetry:
@@ -13,14 +13,16 @@ general:
         project: "AIQ_v2_freshqa"
 
 llms:
-  nemotron_super_llm:
+  nemotron_lightning_agent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     top_p: 0.7
-    max_tokens: 65536
+    max_tokens: 8192
     num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
       enable_thinking: true
 
@@ -31,13 +33,22 @@ llms:
     temperature: 0.1
 
 functions:
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information."
+        tools:
+          - web_search_tool
+
   web_search_tool:
-    _type: tavily_internet_search
+    _type: tavily_web_search
     max_results: 5
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: nemotron_lightning_agent_llm
     max_llm_turns: 20
     tools:
       - web_search_tool
