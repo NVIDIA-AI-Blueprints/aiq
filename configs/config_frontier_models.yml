@@ -2,7 +2,7 @@
 # It has the following features:
 # - GPT Sol for orchestration, planning, and report writing
 # - GPT Luna for source routing and research
-# - NVIDIA API Catalog access through the standard NVIDIA_API_KEY
+# - OpenAI API access through the standard OPENAI_API_KEY
 # - Knowledge retrieval using LlamaIndex
 # - Web search and Paper search tools by default
 
@@ -73,28 +73,25 @@ llms:
       enable_thinking: true
 
   gpt_sol_agent_llm:
-    _type: nim
-    model_name: openai/gpt-5.6-sol
-    base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
+    _type: openai
+    model_name: "gpt-5.6-sol"
+    api_key: ${OPENAI_API_KEY}
     max_tokens: 16384
     num_retries: 2
     parallel_tool_calls: false
 
   gpt_sol_writer_llm:
-    _type: nim
-    model_name: openai/gpt-5.6-sol
-    base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
+    _type: openai
+    model_name: "gpt-5.6-sol"
+    api_key: ${OPENAI_API_KEY}
     max_tokens: 32768
     num_retries: 2
     parallel_tool_calls: false
 
   gpt_luna_agent_llm:
-    _type: nim
-    model_name: openai/gpt-5.6-luna
-    base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
+    _type: openai
+    model_name: "gpt-5.6-luna"
+    api_key: ${OPENAI_API_KEY}
     max_tokens: 16384
     num_retries: 2
     parallel_tool_calls: false

@@ -51,10 +51,9 @@ def test_frontier_profile_uses_validated_gpt_role_split() -> None:
     llms = config["llms"]
 
     assert llms["gpt_sol_agent_llm"] == {
-        "_type": "nim",
-        "model_name": "openai/gpt-5.6-sol",
-        "base_url": "https://integrate.api.nvidia.com/v1",
-        "api_key": "${NVIDIA_API_KEY}",
+        "_type": "openai",
+        "model_name": "gpt-5.6-sol",
+        "api_key": "${OPENAI_API_KEY}",
         "max_tokens": 16384,
         "num_retries": 2,
         "parallel_tool_calls": False,
@@ -65,7 +64,7 @@ def test_frontier_profile_uses_validated_gpt_role_split() -> None:
     }
     assert llms["gpt_luna_agent_llm"] == {
         **llms["gpt_sol_agent_llm"],
-        "model_name": "openai/gpt-5.6-luna",
+        "model_name": "gpt-5.6-luna",
     }
     deep_research = config["functions"]["deep_research_agent"]
     assert {
