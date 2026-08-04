@@ -267,6 +267,21 @@ collection/index after changing dimensions because an existing `knn_vector` mapp
 The full shipped profile is
 [`configs/config_web_opensearch.yml`](../../../configs/config_web_opensearch.yml).
 
+#### Changing the embedding model
+
+Persisted vector stores are tied to both the embedding model and its output dimension. Changing only
+`AIQ_EMBED_MODEL` is not a compatible in-place update:
+
+- **Chroma:** stop AI-Q, delete the existing collection directory (or configure a new `AIQ_CHROMA_DIR`), restart, and
+  re-ingest every document.
+- **OpenSearch:** set `OPENSEARCH_EMBEDDING_DIM` to the new model's exact output length, delete the existing AI-Q
+  collection/index, and re-ingest every document. AI-Q rejects unmarked or incompatible indexes before ingestion or
+  retrieval.
+- **Azure AI Search:** model and dimension are part of the physical index identity; changing either creates an isolated
+  index that must be populated by re-ingestion.
+
+See the detailed [knowledge-layer setup migration procedure](../../../sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md#migrating-an-embedding-model).
+
 OpenSearch ingestion is text-only: it extracts text from PDF, DOCX, PPTX, and supported plain-text formats, but does not
 perform LlamaIndex table/image/chart extraction. Distributed Dask ingestion also disables document-summary generation
 because the configured summary LLM is not serialized to workers; use local ingestion when summaries are required.

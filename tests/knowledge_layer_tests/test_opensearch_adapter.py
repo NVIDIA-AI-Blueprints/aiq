@@ -336,7 +336,7 @@ def test_aoss_health_check_falls_back_to_cat_indices():
 
 def test_aoss_bulk_index_omits_document_ids_and_explicit_refresh():
     """Test that aoss bulk index omits document ids and explicit refresh."""
-    ingestor = OpenSearchIngestor({"auth_type": "sigv4", "aws_service": "aoss"})
+    ingestor = OpenSearchIngestor({"auth_type": "sigv4", "aws_service": "aoss", "embedding_dim": 4})
     fake_client = FakeAossClient()
     ingestor._client = fake_client
 
@@ -356,6 +356,21 @@ def test_aoss_bulk_index_omits_document_ids_and_explicit_refresh():
     assert fake_client.bulk_body is not None
     assert fake_client.bulk_body[0] == {"index": {"_index": "aiq-aoss-test"}}
     assert fake_client.bulk_refresh is False
+
+
+def test_bulk_index_rejects_mismatched_embedding_dimension_before_request():
+    """Ingestion vectors must match the mapping before any bulk request is sent."""
+    ingestor = OpenSearchIngestor({"auth_type": "sigv4", "aws_service": "aoss", "embedding_dim": 4})
+    fake_client = FakeAossClient()
+    ingestor._client = fake_client
+
+    with pytest.raises(RuntimeError, match="ingestion embedding 0 has dimension 3"):
+        ingestor._bulk_index_documents(
+            "aiq-aoss-test",
+            [{"chunk_id": "chunk-1", "embedding": [0.1, 0.2, 0.3]}],
+        )
+
+    assert fake_client.bulk_body is None
 
 
 def test_aoss_delete_searches_then_bulk_deletes_generated_ids():
@@ -555,6 +570,21 @@ def test_retrieval_rejects_mismatched_embedding_configuration_before_query_embed
 
     assert not result.success
     assert "embedding model" in (result.error_message or "")
+
+
+def test_retrieval_rejects_mismatched_query_dimension_before_search():
+    """Query vectors must match the persisted mapping before an OpenSearch request."""
+    fake_client = FakeOpenSearchClient()
+    retriever = OpenSearchRetriever({"embed_model": "nvidia/test-embed", "embedding_dim": 4})
+    retriever._client = fake_client
+    index_name = retriever._index_name_for_collection("docs")
+    fake_client.indexes[index_name] = retriever._index_mapping("docs")
+    retriever._embed_texts = lambda _texts: [[0.1, 0.2, 0.3]]
+
+    result = asyncio.run(retriever.retrieve("question", "docs"))
+
+    assert not result.success
+    assert "query embedding 0 has dimension 3" in (result.error_message or "")
 
 
 def test_session_collection_names_are_safe_dynamic_indexes():
@@ -1276,6 +1306,40 @@ def test_ensure_index_recovers_when_concurrent_create_races(monkeypatch):
     result = ingestor._ensure_index("smoke")
     assert result.startswith("aiq-smoke")
     assert len(exists_calls) == 2, "expected pre-create check + post-failure recovery check"
+
+
+def test_ensure_index_rejects_different_owner_after_concurrent_create_race(monkeypatch):
+    """A worker losing an index-creation race must not accept another collection's index."""
+    from opensearchpy.exceptions import RequestError
+
+    ingestor = OpenSearchIngestor({"start_ttl_cleanup": False})
+    exists_calls = 0
+
+    def fake_exists(index: str) -> bool:
+        nonlocal exists_calls
+        del index
+        exists_calls += 1
+        return exists_calls >= 2
+
+    def fake_create(index: str, body: dict[str, Any]) -> None:
+        del body
+        raise RequestError(400, "resource_already_exists_exception", {"index": index})
+
+    fake_client = type("C", (), {})()
+    fake_client.indices = type("I", (), {"exists": staticmethod(fake_exists), "create": staticmethod(fake_create)})()
+    monkeypatch.setattr(ingestor, "_get_client", lambda: fake_client)
+    monkeypatch.setattr(
+        ingestor,
+        "_get_index_meta",
+        lambda _index: {
+            "collection_name": "different-collection",
+            "embedding_model": ingestor.embed_model_name,
+            "embedding_dim": ingestor.embedding_dim,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="different-collection"):
+        ingestor._ensure_index("smoke")
 
 
 def test_list_files_aggregates_and_avoids_10k_hit_truncation(monkeypatch):

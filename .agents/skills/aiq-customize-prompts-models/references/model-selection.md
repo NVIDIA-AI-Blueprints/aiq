@@ -18,9 +18,11 @@ llms:
   nemotron_ultra_llm:
     _type: nim
     model_name: <a capable model>
+    max_tokens: 16384
   nemotron_ultra_writer_llm:
     _type: nim          # `openai` is also supported (also takes model_name)
-    model_name: <the same capable model with a larger output budget>
+    model_name: <the same capable model>
+    max_tokens: 32768   # larger report-writing budget
 ```
 
 ## Assign a model to an agent role

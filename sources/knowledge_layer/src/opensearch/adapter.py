@@ -497,18 +497,33 @@ class _OpenSearchConfigMixin:
             f"{self.embedding_dim}. Delete and re-ingest the collection before using the new embedding model."
         )
 
+    @staticmethod
+    def _validate_index_owner(index_name: str, collection_name: str, meta: dict[str, Any]) -> None:
+        """Reject a physical index that is owned by another or an unknown logical collection."""
+        existing_name = meta.get("collection_name")
+        if existing_name != collection_name:
+            raise RuntimeError(
+                f"OpenSearch index {index_name} belongs to collection {existing_name!r}; "
+                f"refusing to reuse it for {collection_name!r}"
+            )
+
+    def _validate_embedding_vectors(self, embeddings: list[list[float]], *, operation: str) -> None:
+        """Reject vectors whose lengths do not match the configured OpenSearch mapping."""
+        for position, embedding in enumerate(embeddings):
+            actual_dim = len(embedding)
+            if actual_dim != self.embedding_dim:
+                raise RuntimeError(
+                    f"OpenSearch {operation} embedding {position} has dimension {actual_dim}, "
+                    f"but the configured index dimension is {self.embedding_dim}"
+                )
+
     def _ensure_index(self, collection_name: str, description: str | None = None) -> str:
         """Create the collection index if it does not exist; returns the index name."""
         client = self._get_client()
         index_name = self._index_name_for_collection(collection_name)
         if client.indices.exists(index=index_name):
             meta = self._validate_index_embedding(index_name)
-            existing_name = meta.get("collection_name")
-            if existing_name is not None and existing_name != collection_name:
-                raise RuntimeError(
-                    f"OpenSearch index {index_name} already belongs to collection {existing_name!r}; "
-                    f"refusing to reuse it for {collection_name!r}"
-                )
+            self._validate_index_owner(index_name, collection_name, meta)
             return index_name
         try:
             client.indices.create(index=index_name, body=self._index_mapping(collection_name, description))
@@ -518,7 +533,8 @@ class _OpenSearchConfigMixin:
             # Otherwise the create failed for a real reason and the error must propagate.
             if not client.indices.exists(index=index_name):
                 raise
-            self._validate_index_embedding(index_name)
+            meta = self._validate_index_embedding(index_name)
+            self._validate_index_owner(index_name, collection_name, meta)
         return index_name
 
     def _update_collection_timestamp(self, collection_name: str) -> None:
@@ -1395,6 +1411,10 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
 
     def _bulk_index_documents(self, index_name: str, documents: list[dict[str, Any]]) -> None:
         """Bulk-index documents into the given index in batches; raises on any bulk error."""
+        self._validate_embedding_vectors(
+            [doc[self.vector_field] for doc in documents],
+            operation="ingestion",
+        )
         client = self._get_client()
         for start in range(0, len(documents), self.bulk_batch_size):
             batch = documents[start : start + self.bulk_batch_size]
@@ -1568,6 +1588,7 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
             await asyncio.to_thread(self._validate_index_embedding, index_name)
 
             query_embedding = (await asyncio.to_thread(self._embed_texts, [query]))[0]
+            self._validate_embedding_vectors([query_embedding], operation="query")
             body = self._build_search_body(query_embedding, top_k or self.default_top_k, filters)
             response = await asyncio.to_thread(client.search, index=index_name, body=body, request_timeout=self.timeout)
             chunks = [
