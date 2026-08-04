@@ -90,6 +90,8 @@ linkcheck_ignore = [
     r"http://127\.0\.0\.1.*",
     r".*github\.com.*",
     r".*githubusercontent\.com.*",
+    # Browser-valid NVIDIA Build pages return HTTP 202 to link probes.
+    r"^https://build\.nvidia\.com.*",
     # These specific Nimble URLs have a certificate chain that Python/OpenSSL
     # linkcheck cannot validate, although they remain browser-accessible.
     r"^https://nimbleway\.com/?$",
