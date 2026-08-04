@@ -156,6 +156,8 @@ def main() -> int:
         raise SystemExit(str(exc)) from exc
 
     lifetime_restart = os.getenv("DASK_LIFETIME_RESTART", "true").lower() != "false"
+    child_env = os.environ.copy()
+    child_env["NAT_DASK_SCHEDULER_ADDRESS"] = f"tcp://{_DASK_LOOPBACK_HOST}:{scheduler_port}"
     worker_proc = subprocess.Popen(
         _worker_args(
             scheduler_port,
@@ -165,12 +167,11 @@ def main() -> int:
             lifetime=lifetime,
             lifetime_restart=lifetime_restart,
         ),
+        env=child_env,
     )
 
     print("Waiting for worker to connect...", flush=True)
     time.sleep(3)
-
-    os.environ["NAT_DASK_SCHEDULER_ADDRESS"] = f"tcp://{_DASK_LOOPBACK_HOST}:{scheduler_port}"
 
     print("", flush=True)
     print("--------------------------------------------", flush=True)
@@ -179,7 +180,7 @@ def main() -> int:
     print("--------------------------------------------", flush=True)
     print("", flush=True)
 
-    web_proc = subprocess.Popen(["python", "/app/deploy/start_web.py"])
+    web_proc = subprocess.Popen(["python", "/app/deploy/start_web.py"], env=child_env)
     _install_signal_handlers(scheduler_proc, worker_proc, web_proc)
 
     try:

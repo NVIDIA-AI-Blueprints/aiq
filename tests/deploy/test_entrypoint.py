@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock
 
 from distributed import Client
 from distributed import LocalCluster
@@ -70,6 +71,28 @@ def test_embedded_dask_worker_can_disable_lifetime_restart() -> None:
     assert "--lifetime" in command
     assert "--lifetime-restart" not in command
     assert "--memory-limit" not in command
+
+
+def test_worker_and_web_processes_receive_scheduler_address(monkeypatch) -> None:
+    entrypoint = _load_entrypoint()
+    processes = [MagicMock(), MagicMock(), MagicMock()]
+    for process in processes:
+        process.poll.return_value = 0
+        process.wait.return_value = 0
+    popen = MagicMock(side_effect=processes)
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.setattr(entrypoint.subprocess, "Popen", popen)
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", MagicMock())
+    monkeypatch.setattr(entrypoint, "_install_signal_handlers", MagicMock())
+    monkeypatch.setattr(entrypoint.time, "sleep", MagicMock())
+
+    assert entrypoint.main() == 0
+
+    expected_address = f"tcp://{entrypoint._DASK_LOOPBACK_HOST}:8786"
+    worker_env = popen.call_args_list[1].kwargs["env"]
+    web_env = popen.call_args_list[2].kwargs["env"]
+    assert worker_env["NAT_DASK_SCHEDULER_ADDRESS"] == expected_address
+    assert web_env["NAT_DASK_SCHEDULER_ADDRESS"] == expected_address
 
 
 def test_embedded_dask_worker_advertises_only_loopback() -> None:

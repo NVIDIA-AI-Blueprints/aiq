@@ -146,6 +146,18 @@ class TestShallowResearcherAgent:
         assert agent.tools == []
         assert agent.tools_info == []
 
+    @pytest.mark.asyncio
+    async def test_empty_tools_invoke_unbound_llm(self, mock_llm_provider, mock_llm):
+        """An empty tool selection must omit the provider's tools property."""
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Answer without tools"))
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[])
+
+        result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="Answer directly")]))
+
+        assert result.messages[-1].content == "Answer without tools"
+        mock_llm.bind_tools.assert_not_called()
+        mock_llm.ainvoke.assert_awaited()
+
     def test_build_tools_info(self, mock_llm_provider, real_tool):
         """Test _build_tools_info correctly extracts tool information."""
         agent = ShallowResearcherAgent(

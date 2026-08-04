@@ -985,7 +985,12 @@ class SourceRegistryMiddleware(AgentMiddleware):
             if tool_name not in self._source_tool_names:
                 return result
             source_id = get_source_id_for_tool(tool_name)
-            sources = extract_sources_from_tool_result(tool_name, str(result.content), source_id=source_id)
+            sources = extract_sources_from_tool_result(
+                tool_name,
+                str(result.content),
+                source_id=source_id,
+                result_status=getattr(result, "status", None),
+            )
             async with self._lock:
                 active_registry = self.active_registry()
                 for source in sources:

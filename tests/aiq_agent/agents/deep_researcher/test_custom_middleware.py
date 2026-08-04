@@ -1260,8 +1260,8 @@ class TestSourceRegistryMiddleware:
         req.tool_call = {"name": tool_name}
         return req
 
-    def _make_tool_result(self, content: str):
-        return ToolMessage(content=content, tool_call_id="tc1")
+    def _make_tool_result(self, content: str, *, status: str = "success"):
+        return ToolMessage(content=content, tool_call_id="tc1", status=status)
 
     # -- URL extraction --
 
@@ -1289,6 +1289,16 @@ class TestSourceRegistryMiddleware:
 
         urls = {s.url for s in middleware.registry.all_sources()}
         assert urls == {"https://a.com/page", "https://b.com/page"}
+
+    @pytest.mark.asyncio
+    async def test_typed_error_result_is_not_captured(self, middleware):
+        content = "Search failed. See https://provider.example/errors/unknown"
+        handler = AsyncMock(return_value=self._make_tool_result(content, status="error"))
+        request = self._make_request("advanced_web_search_tool")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        assert middleware.registry.all_sources() == []
 
     @pytest.mark.asyncio
     async def test_knowledge_layer_citation_key_captured(self, middleware):
