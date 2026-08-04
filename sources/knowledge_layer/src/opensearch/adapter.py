@@ -1585,7 +1585,8 @@ class OpenSearchRetriever(_OpenSearchConfigMixin, BaseRetriever):
                     success=False,
                     error_message=f"Collection '{collection_name}' not found",
                 )
-            await asyncio.to_thread(self._validate_index_embedding, index_name)
+            meta = await asyncio.to_thread(self._validate_index_embedding, index_name)
+            self._validate_index_owner(index_name, collection_name, meta)
 
             query_embedding = (await asyncio.to_thread(self._embed_texts, [query]))[0]
             self._validate_embedding_vectors([query_embedding], operation="query")

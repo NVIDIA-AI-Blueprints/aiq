@@ -580,11 +580,51 @@ def test_retrieval_rejects_mismatched_query_dimension_before_search():
     index_name = retriever._index_name_for_collection("docs")
     fake_client.indexes[index_name] = retriever._index_mapping("docs")
     retriever._embed_texts = lambda _texts: [[0.1, 0.2, 0.3]]
+    search_calls = 0
+
+    def unexpected_search(*_args, **_kwargs):
+        nonlocal search_calls
+        search_calls += 1
+        raise AssertionError("search must not run for a mismatched query vector")
+
+    fake_client.search = unexpected_search
 
     result = asyncio.run(retriever.retrieve("question", "docs"))
 
     assert not result.success
     assert "query embedding 0 has dimension 3" in (result.error_message or "")
+    assert search_calls == 0
+
+
+def test_retrieval_rejects_mismatched_collection_owner_before_embedding_or_search():
+    """Retrieval must fail before model or OpenSearch calls when an index has another owner."""
+    fake_client = FakeOpenSearchClient()
+    retriever = OpenSearchRetriever({"embed_model": "nvidia/test-embed", "embedding_dim": 4})
+    retriever._client = fake_client
+    index_name = retriever._index_name_for_collection("docs")
+    fake_client.indexes[index_name] = retriever._index_mapping("another-collection")
+    embedding_calls = 0
+    search_calls = 0
+
+    def unexpected_embedding(_texts):
+        nonlocal embedding_calls
+        embedding_calls += 1
+        raise AssertionError("query embedding must not run for an index owned by another collection")
+
+    def unexpected_search(*_args, **_kwargs):
+        nonlocal search_calls
+        search_calls += 1
+        raise AssertionError("search must not run for an index owned by another collection")
+
+    retriever._embed_texts = unexpected_embedding
+    fake_client.search = unexpected_search
+
+    result = asyncio.run(retriever.retrieve("question", "docs"))
+
+    assert not result.success
+    assert "belongs to collection 'another-collection'" in (result.error_message or "")
+    assert embedding_calls == 0
+    assert search_calls == 0
 
 
 def test_session_collection_names_are_safe_dynamic_indexes():

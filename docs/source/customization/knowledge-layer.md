@@ -272,8 +272,9 @@ The full shipped profile is
 Persisted vector stores are tied to both the embedding model and its output dimension. Changing only
 `AIQ_EMBED_MODEL` is not a compatible in-place update:
 
-- **Chroma:** stop AI-Q, delete the existing collection directory (or configure a new `AIQ_CHROMA_DIR`), restart, and
-  re-ingest every document.
+- **Chroma:** delete only the affected logical collection through the Knowledge API or UI, then re-ingest its
+  documents. Configuring a new `AIQ_CHROMA_DIR` also creates an isolated store. Deleting the existing shared
+  `AIQ_CHROMA_DIR` removes every named collection in that store and can destroy unrelated data.
 - **OpenSearch:** set `OPENSEARCH_EMBEDDING_DIM` to the new model's exact output length, delete the existing AI-Q
   collection/index, and re-ingest every document. AI-Q rejects unmarked or incompatible indexes before ingestion or
   retrieval.
