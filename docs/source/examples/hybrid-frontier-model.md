@@ -34,8 +34,11 @@ llms:
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
+    top_p: 0.7
     max_tokens: 8192
     parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: true
 
   nemotron_ultra_llm:
     _type: nim

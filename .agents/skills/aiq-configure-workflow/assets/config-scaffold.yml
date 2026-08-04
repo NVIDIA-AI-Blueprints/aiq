@@ -17,17 +17,31 @@ general:
   # Web/API: copy general.front_end from config_web_default_llamaindex.yml
 
 llms:
-  nano_llm:
+  nano_intent_llm:
+    _type: nim
+    model_name: nvidia/nemotron-nano-3.5-preview
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
+    top_p: 0.9
+    max_tokens: 1024
+    num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: false
+
+  nano_agent_llm:
     _type: nim
     model_name: nvidia/nemotron-nano-3.5-preview
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
+    top_p: 0.7
     max_tokens: 8192
     num_retries: 5
     parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: false
+      enable_thinking: true
 
   ultra_llm:
     _type: nim
@@ -58,11 +72,11 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nano_llm
+    llm: nano_intent_llm
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nano_llm
+    llm: nano_agent_llm
 
   deep_research_agent:
     _type: deep_research_agent

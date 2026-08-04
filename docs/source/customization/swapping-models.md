@@ -16,12 +16,12 @@ llms:
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
-    top_p: 0.9
+    top_p: 0.7
     max_tokens: 8192
     num_retries: 5
     parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: false
+      enable_thinking: true
 ```
 
 **Example: NIM with thinking (for example, for deep research)**
@@ -89,8 +89,11 @@ llms:
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
+    top_p: 0.7
     max_tokens: 8192
     parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: true
 
   local_ultra_llm:
     _type: nim
