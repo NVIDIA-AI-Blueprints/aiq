@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-from gsf.models import ChatCompletionsRequest
 from gsf.models import QueryContextRequest
+from gsf.models import TextToPQLRequest
+from gsf.models import TextToPQLResponse
 from gsf.models import TextToSQLRequest
 from gsf.models import TextToSQLResponse
 from pydantic import ValidationError
@@ -16,18 +17,10 @@ def test_text_to_sql_request_supports_optional_database_name() -> None:
     assert request.max_rows == 1_000
 
 
-def test_chat_request_uses_gsf_target_db_contract() -> None:
-    payload = ChatCompletionsRequest(
-        question="Show quarterly revenue",
-        prediction=False,
-        target_db="benchmark_db",
-    ).model_dump(exclude_none=True)
+def test_text_to_pql_request_supports_optional_database_name() -> None:
+    request = TextToPQLRequest(question="Predict churn", database_name="benchmark_db")
 
-    assert payload == {
-        "question": "Show quarterly revenue",
-        "prediction": False,
-        "target_db": "benchmark_db",
-    }
+    assert request.database_name == "benchmark_db"
 
 
 def test_query_context_request_omits_optional_database_name() -> None:
@@ -48,6 +41,14 @@ def test_text_to_sql_response_accepts_missing_future_enrichments() -> None:
             "rows": [{"revenue": 100}],
         }
     )
+
+    assert result.request_id is None
+    assert result.semantic_context is None
+    assert result.warnings is None
+
+
+def test_text_to_pql_response_accepts_missing_future_enrichments() -> None:
+    result = TextToPQLResponse.model_validate({"pql": "PREDICT churn FOR customers NEXT 30 DAYS"})
 
     assert result.request_id is None
     assert result.semantic_context is None

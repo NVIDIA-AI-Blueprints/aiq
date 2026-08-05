@@ -18,6 +18,27 @@ def chat_sql_answer() -> dict:
 
 
 @pytest.fixture
+def chat_pql_answer() -> dict:
+    """Current GSF chat-completions PQL answer envelope."""
+
+    return {
+        "response": "A churn prediction query was generated.",
+        "pql_code": "PREDICT churn FOR customers NEXT 30 DAYS",
+        "objects_used": ["prediction:churn"],
+        "semantic_context": {
+            "metrics": [{"id": "prediction:churn"}],
+            "grain": "customer",
+            "units": [],
+            "filters": [],
+            "rules": [],
+            "omissions": [],
+        },
+        "warnings": [],
+        "timings": {"total_ms": 20},
+    }
+
+
+@pytest.fixture
 def text_to_sql_response() -> dict:
     """Normalized response used by the NAT registration tests."""
 
@@ -41,4 +62,26 @@ def text_to_sql_response() -> dict:
         "validation_attempts": [],
         "warnings": [],
         "timings": {"total_ms": 25},
+    }
+
+
+@pytest.fixture
+def text_to_pql_response() -> dict:
+    """Normalized PQL response used by the NAT registration tests."""
+
+    return {
+        "request_id": "gsf-request-2",
+        "response": "A churn prediction query was generated.",
+        "pql": "PREDICT churn FOR customers NEXT 30 DAYS",
+        "objects_used": ["prediction:churn"],
+        "semantic_context": {
+            "metrics": [{"id": "prediction:churn"}],
+            "grain": "customer",
+            "units": [],
+            "filters": [],
+            "rules": [],
+            "omissions": [],
+        },
+        "warnings": [],
+        "timings": {"total_ms": 20},
     }

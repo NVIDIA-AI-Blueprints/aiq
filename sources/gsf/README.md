@@ -9,13 +9,14 @@ This package exposes NVIDIA Generative Semantic Fabric (GSF) capabilities as a
 NeMo Agent Toolkit function group. The current implementation provides:
 
 - `gsf__text_to_sql`
+- `gsf__text_to_pql`
 
 `gsf__catalog_search` and `gsf__query_context` are registered as explicit
 `capability_unavailable` placeholders until their GSF API contracts are ready.
 
-The function group owns one shared HTTP connection pool. Authentication remains
-request-scoped: each tool invocation obtains the current AI-Q user token and
-passes it to GSF without storing it on the client.
+By default, the function group owns one shared HTTP connection pool and keeps
+authentication request-scoped: each tool invocation obtains the current AI-Q
+user token and passes it to GSF without storing it on the client.
 `GSF_BASE_URL` must point to GSF's auth-aware API origin.
 
 ```yaml
@@ -25,6 +26,7 @@ function_groups:
     base_url: ${GSF_BASE_URL:-http://gsf:3000}
     include:
       - text_to_sql
+      - text_to_pql
 
 functions:
   data_sources:
@@ -41,9 +43,32 @@ functions:
           - gsf
 ```
 
-Text-to-SQL uses GSF's `/api/chat/completions` SSE endpoint with
-`prediction: false`. Its optional AI-Q `database_name` input is sent to GSF as
-`target_db`, selecting an existing GSF connection rather than creating one.
-Future prediction tools can reuse the client transport with `prediction: true`.
+For local development and automated evaluation without an incoming AI-Q user
+token, explicitly configure a GSF password session. The credentials must come
+from environment variables and are used only when a tool is invoked:
+
+```yaml
+function_groups:
+  gsf:
+    _type: gsf
+    base_url: ${GSF_BASE_URL:-http://gsf:3000}
+    auth:
+      mode: password
+      email: ${GSF_EMAIL}
+      password: ${GSF_PASSWORD}
+    include:
+      - text_to_sql
+      - text_to_pql
+```
+
+When `auth` is omitted, the existing request-scoped AI-Q user-token flow is
+used. Password mode creates one GSF session when the function group starts,
+reuses its cookie for local development or evaluation calls, and signs out when
+the group closes. The client does not fall back between authentication methods.
+
+Text-to-SQL and text-to-PQL use GSF's `/api/chat/completions` SSE endpoint with
+`prediction: false` for SQL and `prediction: true` for PQL. Their optional AI-Q
+`database_name` input is sent to GSF as `target_db`, selecting an existing GSF
+connection rather than creating one.
 The adapter normalizes GSF's current response fields while preserving optional
 semantic and benchmarking fields as they become available.

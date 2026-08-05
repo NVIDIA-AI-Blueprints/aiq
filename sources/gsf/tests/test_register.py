@@ -7,9 +7,13 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from gsf.models import TextToPQLResponse
 from gsf.models import TextToSQLResponse
 from gsf.register import GSFFunctionGroupConfig
+from gsf.register import GSFPasswordAuthConfig
 from gsf.register import gsf_function_group
+
+_TEST_PASSWORD = "${TEST_GSF_PASSWORD}"
 
 
 class FakeClientContext:
@@ -23,6 +27,23 @@ class FakeClientContext:
         return None
 
 
+def test_password_auth_is_optional_and_keeps_secret_wrapped() -> None:
+    default_config = GSFFunctionGroupConfig(base_url="https://gsf.example")
+    password_config = GSFFunctionGroupConfig(
+        base_url="https://gsf.example",
+        auth={
+            "mode": "password",
+            "email": "developer@example.com",
+            "password": _TEST_PASSWORD,
+        },
+    )
+
+    assert default_config.auth is None
+    assert isinstance(password_config.auth, GSFPasswordAuthConfig)
+    assert password_config.auth.password.get_secret_value() == _TEST_PASSWORD
+    assert _TEST_PASSWORD not in repr(password_config)
+
+
 @pytest.mark.asyncio
 async def test_group_exposes_only_requested_tools(text_to_sql_response: dict) -> None:
     client = MagicMock()
@@ -34,6 +55,19 @@ async def test_group_exposes_only_requested_tools(text_to_sql_response: dict) ->
             tools = await group.get_accessible_functions()
 
     assert set(tools) == {"gsf__text_to_sql"}
+
+
+@pytest.mark.asyncio
+async def test_group_exposes_text_to_pql_when_requested(text_to_pql_response: dict) -> None:
+    client = MagicMock()
+    client.text_to_pql = AsyncMock(return_value=TextToPQLResponse.model_validate(text_to_pql_response))
+    config = GSFFunctionGroupConfig(base_url="https://gsf.example", include=["text_to_pql"])
+
+    with patch("gsf.register.GSFClient.from_config", return_value=FakeClientContext(client)):
+        async with gsf_function_group(config, MagicMock()) as group:
+            tools = await group.get_accessible_functions()
+
+    assert set(tools) == {"gsf__text_to_pql"}
 
 
 @pytest.mark.asyncio
@@ -57,6 +91,53 @@ async def test_text_to_sql_resolves_token_per_invocation(text_to_sql_response: d
     assert client.text_to_sql.await_args_list[0].kwargs["token"] == "token-one"
     assert client.text_to_sql.await_args_list[1].kwargs["token"] == "token-two"
     assert "token" not in client.__dict__
+
+
+@pytest.mark.asyncio
+async def test_text_to_pql_resolves_token_per_invocation(text_to_pql_response: dict) -> None:
+    client = MagicMock()
+    client.text_to_pql = AsyncMock(return_value=TextToPQLResponse.model_validate(text_to_pql_response))
+    config = GSFFunctionGroupConfig(base_url="https://gsf.example", include=["text_to_pql"])
+
+    with (
+        patch("gsf.register.GSFClient.from_config", return_value=FakeClientContext(client)),
+        patch("gsf.register.get_auth_token", return_value="token-one"),
+        patch("gsf.register._request_trace_headers", return_value={}),
+    ):
+        async with gsf_function_group(config, MagicMock()) as group:
+            tool = (await group.get_accessible_functions())["gsf__text_to_pql"]
+            result = json.loads(await tool.ainvoke({"question": "Predict churn"}))
+
+    assert result["request_id"] == "gsf-request-2"
+    assert client.text_to_pql.await_args.kwargs["token"] == "token-one"
+
+
+@pytest.mark.asyncio
+async def test_explicit_password_auth_does_not_resolve_user_token(text_to_sql_response: dict) -> None:
+    client = MagicMock()
+    client.text_to_sql = AsyncMock(return_value=TextToSQLResponse.model_validate(text_to_sql_response))
+    config = GSFFunctionGroupConfig(
+        base_url="https://gsf.example",
+        include=["text_to_sql"],
+        auth={
+            "mode": "password",
+            "email": "developer@example.com",
+            "password": _TEST_PASSWORD,
+        },
+    )
+
+    with (
+        patch("gsf.register.GSFClient.from_config", return_value=FakeClientContext(client)),
+        patch("gsf.register.get_auth_token") as get_auth_token,
+        patch("gsf.register._request_trace_headers", return_value={}),
+    ):
+        async with gsf_function_group(config, MagicMock()) as group:
+            tool = (await group.get_accessible_functions())["gsf__text_to_sql"]
+            result = json.loads(await tool.ainvoke({"question": "Show data"}))
+
+    assert result["request_id"] == "gsf-request-1"
+    get_auth_token.assert_not_called()
+    assert client.text_to_sql.await_args.kwargs["token"] is None
 
 
 @pytest.mark.asyncio

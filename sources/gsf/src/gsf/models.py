@@ -31,22 +31,6 @@ class CatalogSearchRequest(GSFRequest):
     token_budget: int | None = Field(default=None, ge=1)
 
 
-class ChatCompletionsRequest(GSFRequest):
-    """Current GSF chat-completions request shared by SQL and prediction flows."""
-
-    question: str = Field(min_length=1, max_length=4_096)
-    conversation_id: str | None = None
-    prediction: bool | None = None
-    target_db: str | None = None
-
-
-class ChatCompletionResult(GSFResponse):
-    """Final structured answer extracted from the GSF SSE event stream."""
-
-    answer: dict[str, Any]
-    request_id: str | None = None
-
-
 class ResultColumn(GSFResponse):
     """A column in a bounded SQL result."""
 
@@ -73,6 +57,13 @@ class TextToSQLRequest(GSFRequest):
     max_rows: int = Field(default=1_000, ge=1)
 
 
+class TextToPQLRequest(GSFRequest):
+    """Generate validated PQL for prediction workflows."""
+
+    question: str = Field(min_length=1, max_length=4_096)
+    database_name: str | None = None
+
+
 class TextToSQLResponse(GSFResponse):
     """Validated SQL, bounded rows, and semantic provenance returned by GSF."""
 
@@ -87,6 +78,19 @@ class TextToSQLResponse(GSFResponse):
     joins_used: list[dict[str, Any]] | None = None
     semantic_context: SemanticContext | None = None
     validation_attempts: list[dict[str, Any]] | None = None
+    assumptions: list[str] | None = None
+    warnings: list[str] | None = None
+    timings: dict[str, int | float] | None = None
+
+
+class TextToPQLResponse(GSFResponse):
+    """Validated PQL and semantic provenance returned by GSF."""
+
+    request_id: str | None = None
+    response: str | None = None
+    pql: str
+    objects_used: list[str] | None = None
+    semantic_context: SemanticContext | None = None
     assumptions: list[str] | None = None
     warnings: list[str] | None = None
     timings: dict[str, int | float] | None = None

@@ -5,22 +5,28 @@
 
 import asyncio
 import json
+import logging
 from collections.abc import Mapping
 from typing import Any
 
 import httpx
+from pydantic import SecretStr
 from pydantic import ValidationError
 
 from .errors import GSFError
 from .errors import GSFErrorCode
-from .models import ChatCompletionResult
-from .models import ChatCompletionsRequest
 from .models import ResultColumn
+from .models import TextToPQLRequest
+from .models import TextToPQLResponse
 from .models import TextToSQLRequest
 from .models import TextToSQLResponse
 
 _FORWARDED_HEADER_NAMES = frozenset({"baggage", "traceparent", "tracestate", "x-correlation-id", "x-request-id"})
 _RETRYABLE_STATUS_CODES = frozenset({429, 500, 502, 503, 504})
+_PASSWORD_SIGN_IN_PATH = "api/auth/sign-in/email"  # pragma: allowlist secret
+_PASSWORD_SIGN_OUT_PATH = "api/auth/sign-out"  # pragma: allowlist secret
+
+logger = logging.getLogger(__name__)
 
 
 class GSFClient:
@@ -35,12 +41,19 @@ class GSFClient:
         max_retries: int = 2,
         max_response_bytes: int = 5_000_000,
         default_max_rows: int = 1_000,
+        password_auth_email: str | None = None,
+        password_auth_password: SecretStr | None = None,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
-        self._api_base_url = f"{base_url.rstrip('/')}/api"
+        if (password_auth_email is None) != (password_auth_password is None):
+            raise ValueError("GSF password authentication requires both email and password")
+        self._base_url = base_url.rstrip("/")
+        self._api_base_url = f"{self._base_url}/api"
         self._max_retries = max_retries
         self._max_response_bytes = max_response_bytes
         self._default_max_rows = default_max_rows
+        self._password_auth_email = password_auth_email
+        self._password_auth_password = password_auth_password
         self._transport = transport
         self._timeout = httpx.Timeout(
             connect=connect_timeout_seconds,
@@ -54,6 +67,7 @@ class GSFClient:
     def from_config(cls, config: Any) -> "GSFClient":
         """Construct a client from the GSF function-group config without importing NAT."""
 
+        password_auth = getattr(config, "auth", None)
         return cls(
             base_url=str(config.base_url),
             connect_timeout_seconds=config.connect_timeout_seconds,
@@ -61,69 +75,111 @@ class GSFClient:
             max_retries=config.max_retries,
             max_response_bytes=config.max_response_bytes,
             default_max_rows=config.default_max_rows,
+            password_auth_email=password_auth.email if password_auth is not None else None,
+            password_auth_password=password_auth.password if password_auth is not None else None,
         )
 
     async def __aenter__(self) -> "GSFClient":
         self._client = httpx.AsyncClient(timeout=self._timeout, transport=self._transport)
+        if self._password_auth_email is not None:
+            try:
+                await self._sign_in_with_password(self._client)
+            except BaseException:
+                await self._client.aclose()
+                self._client = None
+                raise
         return self
 
     async def __aexit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
-        if self._client is not None:
-            await self._client.aclose()
+        client = self._client
+        if client is not None:
+            try:
+                if self._password_auth_email is not None:
+                    await self._sign_out_password_session(client)
+            finally:
+                await client.aclose()
             self._client = None
 
     async def text_to_sql(
         self,
         request: TextToSQLRequest,
         *,
-        token: str,
+        token: str | None,
         trace_headers: Mapping[str, str] | None = None,
     ) -> TextToSQLResponse:
         """Run the SQL branch of GSF chat completions and normalize its answer."""
 
         max_rows = min(request.max_rows, self._default_max_rows)
-        result = await self.chat_completions(
-            ChatCompletionsRequest(
-                question=request.question,
-                prediction=False,
-                target_db=request.database_name,
-            ),
+        payload: dict[str, Any] = {
+            "question": request.question,
+            "prediction": False,
+        }
+        if request.database_name is not None:
+            payload["target_db"] = request.database_name
+
+        answer, request_id = await self._chat_completions(
+            payload,
             token=token,
             trace_headers=trace_headers,
         )
-        return self._normalize_text_to_sql(result, max_rows=max_rows)
+        return self._normalize_text_to_sql(answer, request_id=request_id, max_rows=max_rows)
 
-    async def chat_completions(
+    async def text_to_pql(
         self,
-        request: ChatCompletionsRequest,
+        request: TextToPQLRequest,
         *,
-        token: str,
+        token: str | None,
         trace_headers: Mapping[str, str] | None = None,
-    ) -> ChatCompletionResult:
-        """Call the shared GSF chat endpoint and extract its final SSE result."""
+    ) -> TextToPQLResponse:
+        """Run the prediction branch of GSF chat completions and normalize its answer."""
 
+        payload: dict[str, Any] = {
+            "question": request.question,
+            "prediction": True,
+        }
+        if request.database_name is not None:
+            payload["target_db"] = request.database_name
+
+        answer, request_id = await self._chat_completions(
+            payload,
+            token=token,
+            trace_headers=trace_headers,
+        )
+        return self._normalize_text_to_pql(answer, request_id=request_id)
+
+    async def _chat_completions(
+        self,
+        payload: dict[str, Any],
+        *,
+        token: str | None,
+        trace_headers: Mapping[str, str] | None = None,
+    ) -> tuple[dict[str, Any], str | None]:
         body, request_id, content_type = await self._post(
             "chat/completions",
-            request.model_dump(exclude_none=True),
+            payload,
             token=token,
             trace_headers=trace_headers,
             capability="GSF chat completions",
             accept="text/event-stream",
         )
-        answer = self._parse_chat_answer(body, content_type=content_type, request_id=request_id)
-        return ChatCompletionResult(answer=answer, request_id=request_id)
+        return self._parse_chat_answer(body, content_type=content_type, request_id=request_id), request_id
 
     async def _post(
         self,
         endpoint: str,
         payload: dict[str, Any],
         *,
-        token: str,
+        token: str | None,
         trace_headers: Mapping[str, str] | None,
         capability: str,
         accept: str = "application/json",
     ) -> tuple[bytes, str | None, str]:
         client = self._require_client()
+        if self._password_auth_email is None and not token:
+            raise GSFError(
+                GSFErrorCode.AUTHENTICATION_REQUIRED,
+                "GSF authentication is required.",
+            )
         headers = self._build_headers(token, trace_headers, accept=accept)
         attempts = self._max_retries + 1
 
@@ -175,6 +231,46 @@ class GSFClient:
 
         raise AssertionError("unreachable")
 
+    async def _sign_in_with_password(self, client: httpx.AsyncClient) -> None:
+        try:
+            response = await client.post(
+                f"{self._base_url}/{_PASSWORD_SIGN_IN_PATH}",
+                json={
+                    "email": self._password_auth_email,
+                    "password": self._password_auth_password.get_secret_value(),
+                },
+            )
+        except httpx.TimeoutException as exc:
+            raise GSFError(
+                GSFErrorCode.TIMEOUT,
+                "GSF password sign-in timed out.",
+                retryable=True,
+            ) from exc
+        except httpx.TransportError as exc:
+            raise GSFError(
+                GSFErrorCode.UPSTREAM_ERROR,
+                "GSF password sign-in could not reach GSF.",
+                retryable=True,
+            ) from exc
+
+        if response.status_code >= 400:
+            raise GSFError(
+                GSFErrorCode.AUTHENTICATION_REQUIRED,
+                "GSF password sign-in was rejected.",
+            )
+
+    async def _sign_out_password_session(self, client: httpx.AsyncClient) -> None:
+        try:
+            response = await client.post(
+                f"{self._base_url}/{_PASSWORD_SIGN_OUT_PATH}",
+                json={},
+                headers={"Origin": self._base_url, "Referer": f"{self._base_url}/"},
+            )
+            if response.status_code >= 400:
+                logger.warning("GSF password session cleanup returned HTTP %s", response.status_code)
+        except httpx.HTTPError:
+            logger.warning("GSF password session cleanup did not complete")
+
     def _require_client(self) -> httpx.AsyncClient:
         if self._client is None:
             raise RuntimeError("GSFClient must be used as an async context manager")
@@ -182,16 +278,17 @@ class GSFClient:
 
     @staticmethod
     def _build_headers(
-        token: str,
+        token: str | None,
         trace_headers: Mapping[str, str] | None,
         *,
         accept: str,
     ) -> dict[str, str]:
         headers = {
             "Accept": accept,
-            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         for name, value in (trace_headers or {}).items():
             if name.lower() in _FORWARDED_HEADER_NAMES and value:
                 headers[name] = value
@@ -273,17 +370,22 @@ class GSFClient:
         )
 
     @classmethod
-    def _normalize_text_to_sql(cls, result: ChatCompletionResult, *, max_rows: int) -> TextToSQLResponse:
-        answer = result.answer
+    def _normalize_text_to_sql(
+        cls,
+        answer: Mapping[str, Any],
+        *,
+        request_id: str | None,
+        max_rows: int,
+    ) -> TextToSQLResponse:
         sql = answer.get("sql") or answer.get("sql_code")
         if not isinstance(sql, str) or not sql.strip():
             raise GSFError(
                 GSFErrorCode.INVALID_RESPONSE,
                 "GSF did not return validated SQL.",
-                request_id=result.request_id,
+                request_id=request_id,
             )
 
-        rows = cls._normalize_rows(answer.get("rows", answer.get("sql_response_from_db")), result.request_id)
+        rows = cls._normalize_rows(answer.get("rows", answer.get("sql_response_from_db")), request_id)
         upstream_truncated = bool(answer.get("truncated", False))
         truncated = upstream_truncated or len(rows) > max_rows
         rows = rows[:max_rows]
@@ -293,7 +395,7 @@ class GSFClient:
 
         try:
             return TextToSQLResponse(
-                request_id=answer.get("request_id") or result.request_id,
+                request_id=answer.get("request_id") or request_id,
                 response=answer.get("response"),
                 sql=sql,
                 columns=columns,
@@ -312,7 +414,35 @@ class GSFClient:
             raise GSFError(
                 GSFErrorCode.INVALID_RESPONSE,
                 "GSF returned invalid text-to-SQL data.",
-                request_id=result.request_id,
+                request_id=request_id,
+            ) from exc
+
+    @classmethod
+    def _normalize_text_to_pql(cls, answer: Mapping[str, Any], *, request_id: str | None) -> TextToPQLResponse:
+        pql = answer.get("pql") or answer.get("pql_code")
+        if not isinstance(pql, str) or not pql.strip():
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF did not return validated PQL.",
+                request_id=request_id,
+            )
+
+        try:
+            return TextToPQLResponse(
+                request_id=answer.get("request_id") or request_id,
+                response=answer.get("response"),
+                pql=pql,
+                objects_used=answer.get("objects_used"),
+                semantic_context=answer.get("semantic_context"),
+                assumptions=answer.get("assumptions"),
+                warnings=answer.get("warnings"),
+                timings=answer.get("timings"),
+            )
+        except ValidationError as exc:
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF returned invalid text-to-PQL data.",
+                request_id=request_id,
             ) from exc
 
     @staticmethod

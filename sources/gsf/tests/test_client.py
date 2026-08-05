@@ -10,8 +10,11 @@ import pytest
 from gsf.client import GSFClient
 from gsf.errors import GSFError
 from gsf.errors import GSFErrorCode
-from gsf.models import ChatCompletionsRequest
+from gsf.models import TextToPQLRequest
 from gsf.models import TextToSQLRequest
+from pydantic import SecretStr
+
+_TEST_PASSWORD = "${TEST_GSF_PASSWORD}"
 
 
 def _sse_response(answer: dict) -> httpx.Response:
@@ -68,7 +71,7 @@ async def test_text_to_sql_maps_database_to_target_db_and_bounds_rows(chat_sql_a
 
 
 @pytest.mark.asyncio
-async def test_chat_completions_omits_target_db_and_supports_prediction(chat_sql_answer: dict) -> None:
+async def test_text_to_sql_omits_optional_target_db(chat_sql_answer: dict) -> None:
     seen_payload: dict | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -78,13 +81,136 @@ async def test_chat_completions_omits_target_db_and_supports_prediction(chat_sql
 
     client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
     async with client:
-        result = await client.chat_completions(
-            ChatCompletionsRequest(question="Who will purchase next?", prediction=True),
+        result = await client.text_to_sql(
+            TextToSQLRequest(question="Show revenue"),
             token="user-token",
         )
 
-    assert seen_payload == {"question": "Who will purchase next?", "prediction": True}
-    assert result.answer == chat_sql_answer
+    assert seen_payload == {"question": "Show revenue", "prediction": False}
+    assert result.sql == "SELECT revenue FROM quarterly_results"
+
+
+@pytest.mark.asyncio
+async def test_text_to_pql_maps_database_to_target_db(chat_pql_answer: dict) -> None:
+    seen_payload: dict | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.content)
+        return _sse_response(chat_pql_answer)
+
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
+    async with client:
+        result = await client.text_to_pql(
+            TextToPQLRequest(question="Predict churn risk", database_name="benchmark_db"),
+            token="user-token",
+        )
+
+    assert seen_payload == {
+        "question": "Predict churn risk",
+        "prediction": True,
+        "target_db": "benchmark_db",
+    }
+    assert result.pql == "PREDICT churn FOR customers NEXT 30 DAYS"
+    assert result.response == "A churn prediction query was generated."
+
+
+@pytest.mark.asyncio
+async def test_password_auth_logs_in_uses_cookie_and_signs_out(chat_sql_answer: dict) -> None:
+    seen_paths: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/api/auth/sign-in/email":
+            assert json.loads(request.content) == {
+                "email": "developer@example.com",
+                "password": _TEST_PASSWORD,
+            }
+            return httpx.Response(
+                200,
+                json={"user": {"email": "developer@example.com"}},
+                headers={"set-cookie": "better-auth.session_token=session-value; Path=/; HttpOnly; SameSite=Lax"},
+            )
+        if request.url.path == "/api/auth/sign-out":
+            assert "better-auth.session_token=session-value" in request.headers["cookie"]
+            assert request.headers["origin"] == "https://gsf.example"
+            assert request.headers["referer"] == "https://gsf.example/"
+            return httpx.Response(200, json={"success": True})
+
+        assert request.url.path == "/api/chat/completions"
+        assert "better-auth.session_token=session-value" in request.headers["cookie"]
+        assert "authorization" not in request.headers
+        return _sse_response(chat_sql_answer)
+
+    client = GSFClient(
+        base_url="https://gsf.example",
+        password_auth_email="developer@example.com",  # pragma: allowlist secret
+        password_auth_password=SecretStr(_TEST_PASSWORD),
+        transport=httpx.MockTransport(handler),
+    )
+    async with client:
+        result = await client.text_to_sql(TextToSQLRequest(question="Show data"), token=None)
+
+    assert seen_paths == [
+        "/api/auth/sign-in/email",
+        "/api/chat/completions",
+        "/api/auth/sign-out",
+    ]
+    assert result.sql == "SELECT revenue FROM quarterly_results"
+
+
+@pytest.mark.asyncio
+async def test_password_session_is_reused_across_tool_calls(chat_sql_answer: dict) -> None:
+    seen_paths: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        seen_paths.append(request.url.path)
+        if request.url.path == "/api/auth/sign-in/email":
+            return httpx.Response(
+                200,
+                json={"user": {"email": "developer@example.com"}},
+                headers={"set-cookie": "better-auth.session_token=session-value; Path=/; HttpOnly; SameSite=Lax"},
+            )
+        if request.url.path == "/api/auth/sign-out":
+            return httpx.Response(200, json={"success": True})
+
+        assert "better-auth.session_token=session-value" in request.headers["cookie"]
+        return _sse_response(chat_sql_answer)
+
+    client = GSFClient(
+        base_url="https://gsf.example",
+        password_auth_email="developer@example.com",  # pragma: allowlist secret
+        password_auth_password=SecretStr(_TEST_PASSWORD),
+        transport=httpx.MockTransport(handler),
+    )
+    async with client:
+        await client.text_to_sql(TextToSQLRequest(question="First question"), token=None)
+        await client.text_to_sql(TextToSQLRequest(question="Second question"), token=None)
+
+    assert seen_paths == [
+        "/api/auth/sign-in/email",
+        "/api/chat/completions",
+        "/api/chat/completions",
+        "/api/auth/sign-out",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_client_without_password_auth_requires_bearer_before_http() -> None:
+    calls = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(500)
+
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
+    async with client:
+        with pytest.raises(GSFError) as raised:
+            await client.text_to_sql(TextToSQLRequest(question="Show data"), token=None)
+
+    assert raised.value.code is GSFErrorCode.AUTHENTICATION_REQUIRED
+    assert calls == 0
 
 
 @pytest.mark.asyncio
@@ -95,7 +221,7 @@ async def test_client_normalizes_forbidden_without_leaking_body() -> None:
     client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
     async with client:
         with pytest.raises(GSFError) as raised:
-            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
+            await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
 
     assert raised.value.code is GSFErrorCode.FORBIDDEN
     assert "secret" not in raised.value.message
@@ -115,7 +241,7 @@ async def test_client_retries_rate_limit_then_succeeds(chat_sql_answer: dict) ->
     client = GSFClient(base_url="https://gsf.example", max_retries=1, transport=httpx.MockTransport(handler))
     with patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep:
         async with client:
-            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
+            await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
 
     assert attempts == 2
     sleep.assert_awaited_once_with(1)
@@ -133,7 +259,7 @@ async def test_client_rejects_oversized_response(chat_sql_answer: dict) -> None:
     )
     async with client:
         with pytest.raises(GSFError) as raised:
-            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
+            await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
 
     assert raised.value.code is GSFErrorCode.RESPONSE_TOO_LARGE
 
@@ -146,7 +272,7 @@ async def test_client_rejects_malformed_response() -> None:
     client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
     async with client:
         with pytest.raises(GSFError) as raised:
-            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
+            await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
 
     assert raised.value.code is GSFErrorCode.INVALID_RESPONSE
 
@@ -163,7 +289,7 @@ async def test_client_maps_sse_error_without_leaking_message() -> None:
     client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
     async with client:
         with pytest.raises(GSFError) as raised:
-            await client.chat_completions(ChatCompletionsRequest(question="Show data"), token="user-token")
+            await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
 
     assert raised.value.code is GSFErrorCode.UPSTREAM_ERROR
     assert "secret" not in raised.value.message
