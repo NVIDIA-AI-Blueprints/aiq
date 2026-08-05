@@ -116,9 +116,7 @@ class SourceToolCallBudget:
         failed = source_tool_result_failed(result)
         async with self._lock:
             if self.circuit_open:
-                raise SourceToolCircuitOpen(
-                    f"Source-tool circuit is open after {self.consecutive_failures} consecutive provider failures"
-                )
+                return
             if not failed:
                 self.consecutive_failures = 0
                 return

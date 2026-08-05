@@ -28,6 +28,7 @@ from langchain_core.tools import InjectedToolArg
 from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
+from aiq_agent.agents.deep_researcher.tools import source_tool_batching
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolBudgetExceeded
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolCallBudget
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolCircuitOpen
@@ -101,13 +102,58 @@ async def test_late_success_cannot_reset_open_circuit_failure_count():
     with pytest.raises(SourceToolCircuitOpen, match="opened after 1 consecutive"):
         await budget.record_result("Error: provider unavailable")
     release_success.set()
-    with pytest.raises(SourceToolCircuitOpen, match="is open after 1 consecutive"):
-        await success_task
+    await success_task
 
     assert budget.circuit_open is True
     assert budget.consecutive_failures == 1
     with pytest.raises(SourceToolCircuitOpen, match="is open after 1 consecutive"):
         await budget.consume()
+
+
+@pytest.mark.asyncio
+async def test_batch_retains_success_that_finishes_after_sibling_opens_circuit(monkeypatch: pytest.MonkeyPatch):
+    good_started = asyncio.Event()
+    release_good = asyncio.Event()
+    circuit_opened = asyncio.Event()
+
+    @tool
+    async def search_tool(query: str) -> str:
+        """Search a source."""
+        if query == "good":
+            good_started.set()
+            await release_good.wait()
+            return "Late evidence at https://example.test/late-good"
+        await good_started.wait()
+        return "Error: provider unavailable"
+
+    record_result = source_tool_batching._record_source_tool_result
+
+    async def record_and_signal(result: object) -> None:
+        try:
+            await record_result(result)
+        except SourceToolCircuitOpen:
+            circuit_opened.set()
+            raise
+
+    monkeypatch.setattr(source_tool_batching, "_record_source_tool_result", record_and_signal)
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=2,
+        max_batch_size=2,
+    )[0]
+    token = activate_source_tool_budget(2, max_consecutive_failures=1)
+    try:
+        batch_task = asyncio.create_task(wrapped.ainvoke({"queries": ["good", "bad"]}))
+        await circuit_opened.wait()
+        release_good.set()
+        output = await batch_task
+
+        assert "## Query: good" in output
+        assert "https://example.test/late-good" in output
+        assert "## Query: bad" not in output
+    finally:
+        reset_source_tool_budget(token)
 
 
 @pytest.mark.asyncio
