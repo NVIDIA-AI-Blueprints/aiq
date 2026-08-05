@@ -40,6 +40,7 @@ from ..resource_limits import DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES
 DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS = 5
 DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE = 4
 DEFAULT_SOURCE_TOOL_CONCURRENCY_TIMEOUT = 120.0
+_SOURCE_TOOL_FAILURE_OUTPUT = "ERROR: Source batch returned no citable results."
 
 
 class SourceToolBudgetExceeded(RuntimeError):
@@ -243,7 +244,7 @@ def _format_batch_tool_output(results: list[tuple[str, str | None, str | None]])
         if error is None and output:
             parts.append(f"## Query: {query}\n{output}")
     if not parts:
-        return "ERROR: Source batch returned no citable results."
+        return _SOURCE_TOOL_FAILURE_OUTPUT
     return "\n\n---\n\n".join(parts)
 
 
@@ -321,6 +322,8 @@ def _make_throttled_source_tool(
                 await _record_source_tool_result(None)
                 raise
             await _record_source_tool_result(result)
+            if source_tool_result_failed(result):
+                return _SOURCE_TOOL_FAILURE_OUTPUT
         return result
 
     # Retain injected fields for runtime validation/forwarding. BaseTool derives

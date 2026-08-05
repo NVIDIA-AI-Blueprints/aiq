@@ -208,6 +208,29 @@ async def test_batch_filters_structured_failures_from_citable_output(failed_resu
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failed_result",
+    ["Error: provider unavailable", {}, {"status": "error"}],
+)
+async def test_throttled_wrapper_sanitizes_classified_source_failures(failed_result: object):
+    @tool
+    async def search_tool(query: str, limit: int) -> object:
+        """Search a source with a result limit."""
+        return failed_result
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=1,
+    )[0]
+
+    output = await wrapped.ainvoke({"query": "query", "limit": 1})
+
+    assert output == "ERROR: Source batch returned no citable results."
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("batchable", [True, False])
 async def test_provider_exception_counts_toward_source_circuit(batchable: bool):
     calls = 0
@@ -278,7 +301,9 @@ async def test_source_failure_wave_opens_circuit_before_another_provider_call():
     token = activate_source_tool_budget(20, max_consecutive_failures=3)
     try:
         for _ in range(2):
-            assert "Error 432" in await wrapped.ainvoke({"query": "q", "limit": 1})
+            assert await wrapped.ainvoke({"query": "q", "limit": 1}) == (
+                "ERROR: Source batch returned no citable results."
+            )
         with pytest.raises(SourceToolCircuitOpen, match="opened after 3 consecutive"):
             await wrapped.ainvoke({"query": "q", "limit": 1})
         with pytest.raises(SourceToolCircuitOpen, match="circuit is open"):
@@ -305,9 +330,13 @@ async def test_successful_source_result_resets_consecutive_failure_count():
     )[0]
     token = activate_source_tool_budget(20, max_consecutive_failures=2)
     try:
-        assert "Error" in await wrapped.ainvoke({"query": "q1", "limit": 1})
+        assert await wrapped.ainvoke({"query": "q1", "limit": 1}) == (
+            "ERROR: Source batch returned no citable results."
+        )
         assert await wrapped.ainvoke({"query": "q2", "limit": 1}) == "valid evidence"
-        assert "Error" in await wrapped.ainvoke({"query": "q3", "limit": 1})
+        assert await wrapped.ainvoke({"query": "q3", "limit": 1}) == (
+            "ERROR: Source batch returned no citable results."
+        )
         with pytest.raises(SourceToolCircuitOpen, match="opened after 2 consecutive"):
             await wrapped.ainvoke({"query": "q4", "limit": 1})
     finally:
