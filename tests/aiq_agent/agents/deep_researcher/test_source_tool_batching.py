@@ -117,7 +117,9 @@ async def test_provider_exception_counts_toward_source_circuit(batchable: bool):
     token = activate_source_tool_budget(2, max_consecutive_failures=2)
     try:
         if batchable:
-            assert "provider timed out" in await wrapped.ainvoke(invocation)
+            output = await wrapped.ainvoke(invocation)
+            assert "Source request failed." in output
+            assert "provider timed out" not in output
         else:
             with pytest.raises(TimeoutError, match="provider timed out"):
                 await wrapped.ainvoke(invocation)
@@ -261,7 +263,8 @@ async def test_batch_wrapper_represents_partial_failures_per_item():
     assert "## Query: good" in output
     assert "ok good" in output
     assert "## Query: bad" in output
-    assert "ERROR: backend unavailable" in output
+    assert "ERROR: Source request failed." in output
+    assert "backend unavailable" not in output
 
 
 @pytest.mark.asyncio

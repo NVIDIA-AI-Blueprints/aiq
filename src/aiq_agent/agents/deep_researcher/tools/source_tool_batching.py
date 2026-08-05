@@ -270,9 +270,9 @@ def _make_batch_source_tool(
                     result = await original_tool.ainvoke({input_field_name: query})
                 except SourceToolCircuitOpen:
                     raise
-                except Exception as exc:  # noqa: BLE001 - represented as per-item failure for the LLM
+                except Exception:  # noqa: BLE001 - represented as per-item failure for the LLM
                     await _record_source_tool_result(None)
-                    return query, None, str(exc)
+                    return query, None, "Source request failed."
                 await _record_source_tool_result(result)
             return query, str(result), None
 
