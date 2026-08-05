@@ -50,6 +50,7 @@ from .custom_middleware import FinalReportCommitTracker
 from .custom_middleware import FinalReportOwnershipGuardMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import RequiredOutputFileMiddleware
+from .custom_middleware import RequiredWriterDelegationMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import SourceRoutingGuardMiddleware
 from .custom_middleware import SourceRoutingPersistenceMiddleware
@@ -659,6 +660,7 @@ def build_deep_research_graph(
                     sandbox_enabled=context.runtime.execution_enabled,
                 ),
                 TodoQuotaMiddleware(resource_limits=context.resource_limits),
+                RequiredWriterDelegationMiddleware(tracker=context.final_report_tracker),
             ]
         ),
         permissions=context.permissions(ORCHESTRATOR_AGENT),

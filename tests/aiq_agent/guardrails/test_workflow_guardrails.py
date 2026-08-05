@@ -100,6 +100,11 @@ def _rail_response(
 @pytest.mark.parametrize(
     ("raw_input", "expected_query_texts"),
     [
+        pytest.param(
+            {"input_message": "Please follow up with customer@example.com.", "data_sources": ["docs"]},
+            ["Please follow up with customer@example.com."],
+            id="dict-nat-generate-input-message",
+        ),
         pytest.param(  # Plain string input.
             "Research NAT guardrails",
             ["Research NAT guardrails"],
@@ -329,6 +334,15 @@ async def test_pre_invoke_modifies_when_rail_modifies(
     ("raw_input", "assert_rewrite"),
     [
         pytest.param(
+            {"input_message": "Please follow up with customer@example.com.", "data_sources": ["docs"]},
+            lambda value, modified: (
+                value["input_message"] == modified
+                and value["data_sources"] == ["docs"]
+                and set(value.keys()) == {"input_message", "data_sources"}
+            ),
+            id="dict-nat-generate-input-message",
+        ),
+        pytest.param(
             {"message": "Please follow up with customer@example.com.", "data_sources": ["docs"]},
             lambda value, modified: (
                 value["message"] == modified
@@ -418,6 +432,14 @@ async def test_pre_invoke_modifies_when_rail_modifies(
             ),
             id="object-message-history",
         ),
+        pytest.param(
+            SimpleNamespace(
+                input_message="Please follow up with customer@example.com.",
+                data_sources=["docs"],
+            ),
+            lambda value, modified: value.input_message == modified and value.data_sources == ["docs"],
+            id="object-nat-generate-input-message",
+        ),
     ],
 )
 @pytest.mark.asyncio
@@ -490,12 +512,25 @@ async def test_pre_invoke_modifies_multimodal_content_text_leaf_in_place(
     ]
 
 
+@pytest.mark.parametrize(
+    "raw_input",
+    [
+        pytest.param(
+            "Please follow up with customer@example.com about this issue.",
+            id="plain-workflow-input",
+        ),
+        pytest.param(
+            {"input_message": "Please follow up with customer@example.com about this issue."},
+            id="nat-generate-input-message",
+        ),
+    ],
+)
 @pytest.mark.asyncio
 async def test_pre_invoke_block_skips_function_invocation(
     guardrails: _WorkflowGuardrails,
+    raw_input: object,
 ):
     """A blocked `detect sensitive data on input` response skips the wrapped function."""
-    raw_input = "Please follow up with customer@example.com about this issue."
     blocked_output = TEST_REFUSAL
 
     # Blocking input rails set context.output, so the wrapped workflow must not run.

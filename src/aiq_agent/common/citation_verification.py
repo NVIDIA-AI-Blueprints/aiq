@@ -526,7 +526,7 @@ def extract_sources_from_tool_result(
     # Reject provider/status payloads before running source parsers. Error
     # responses can contain documentation or request URLs, but those URLs are
     # diagnostics rather than evidence and must not satisfy citation checks.
-    if result_status == "error" or _is_non_citable_status_output(content):
+    if result_status == "error" or is_non_citable_status_output(content):
         return []
 
     name_lower = tool_name.lower()
@@ -552,7 +552,7 @@ def extract_sources_from_tool_result(
     return []
 
 
-def _is_non_citable_status_output(content: str) -> bool:
+def is_non_citable_status_output(content: str) -> bool:
     """Return whether content is a tool status/error message, not evidence."""
     normalized = re.sub(r"\s+", " ", content.strip()).rstrip(".").lower()
     if not normalized:

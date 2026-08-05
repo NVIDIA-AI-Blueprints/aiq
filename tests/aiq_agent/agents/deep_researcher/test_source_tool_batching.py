@@ -29,10 +29,85 @@ from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolBudgetExceeded
+from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolCircuitOpen
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolConcurrencyLimiter
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import activate_source_tool_budget
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import adapt_source_tools_for_research
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import reset_source_tool_budget
+from aiq_agent.agents.deep_researcher.tools.source_tool_batching import source_tool_result_failed
+
+
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ("Error: provider rate limited the request", True),
+        ("Error 432: provider capacity exhausted", True),
+        ("Search failed with status 429", True),
+        ('{"status_code": 429, "detail": "rate limited"}', True),
+        ({"status": 503, "error": "unavailable"}, True),
+        ("Search returned no results", True),
+        ("An article explaining HTTP error 429 handling patterns.", False),
+        ('<Document href="https://example.com">Evidence</Document>', False),
+    ],
+)
+def test_source_tool_result_failure_classifier_is_conservative(result: object, expected: bool):
+    assert source_tool_result_failed(result) is expected
+
+
+@pytest.mark.asyncio
+async def test_source_failure_wave_opens_circuit_before_another_provider_call():
+    calls = 0
+
+    @tool
+    async def search_tool(query: str, limit: int) -> str:
+        """Search a source."""
+        nonlocal calls
+        calls += 1
+        return "Error 432: provider capacity exhausted"
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=1,
+    )[0]
+    token = activate_source_tool_budget(20, max_consecutive_failures=3)
+    try:
+        for _ in range(2):
+            assert "Error 432" in await wrapped.ainvoke({"query": "q", "limit": 1})
+        with pytest.raises(SourceToolCircuitOpen, match="opened after 3 consecutive"):
+            await wrapped.ainvoke({"query": "q", "limit": 1})
+        with pytest.raises(SourceToolCircuitOpen, match="circuit is open"):
+            await wrapped.ainvoke({"query": "q", "limit": 1})
+        assert calls == 3
+    finally:
+        reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+async def test_successful_source_result_resets_consecutive_failure_count():
+    results = iter(["Error: transient", "valid evidence", "Error: transient", "Error: transient"])
+
+    @tool
+    async def search_tool(query: str, limit: int) -> str:
+        """Search a source."""
+        return next(results)
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=1,
+    )[0]
+    token = activate_source_tool_budget(20, max_consecutive_failures=2)
+    try:
+        assert "Error" in await wrapped.ainvoke({"query": "q1", "limit": 1})
+        assert await wrapped.ainvoke({"query": "q2", "limit": 1}) == "valid evidence"
+        assert "Error" in await wrapped.ainvoke({"query": "q3", "limit": 1})
+        with pytest.raises(SourceToolCircuitOpen, match="opened after 2 consecutive"):
+            await wrapped.ainvoke({"query": "q4", "limit": 1})
+    finally:
+        reset_source_tool_budget(token)
 
 
 @pytest.mark.asyncio

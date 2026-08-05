@@ -41,6 +41,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommit
 from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportOwnershipGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import PlanPersistenceMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import RequiredOutputFileMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import RequiredWriterDelegationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingPersistenceMiddleware
@@ -890,6 +891,59 @@ class TestRequiredOutputFileMiddleware:
                     "files": {"/shared/output.md": {"content": "# Planner prose"}},
                 }
             )
+
+
+class TestRequiredWriterDelegationMiddleware:
+    """The orchestrator gets one bounded chance to invoke the writer."""
+
+    @staticmethod
+    def _state(*, messages: list[object] | None = None, files: dict[str, object] | None = None) -> dict[str, object]:
+        return {
+            "messages": messages or [AIMessage(content="Research could not continue.")],
+            "files": files or {},
+        }
+
+    def test_terminal_orchestrator_response_requests_writer_delegation(self) -> None:
+        middleware = RequiredWriterDelegationMiddleware(tracker=FinalReportCommitTracker())
+
+        update = middleware.after_model(self._state(), None)
+
+        assert update is not None
+        assert update["jump_to"] == "model"
+        assert "writer-agent" in str(update["messages"][0].content)
+        assert "Do not perform or retry source research" in str(update["messages"][0].content)
+
+    def test_intermediate_tool_call_is_not_interrupted(self) -> None:
+        middleware = RequiredWriterDelegationMiddleware(tracker=FinalReportCommitTracker())
+        state = self._state(
+            messages=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "run_research_batch", "args": {}, "id": "research-1"}],
+                )
+            ]
+        )
+
+        assert middleware.after_model(state, None) is None
+
+    def test_committed_writer_output_allows_terminal_response(self) -> None:
+        tracker = FinalReportCommitTracker()
+        tracker.record("# Final report")
+        middleware = RequiredWriterDelegationMiddleware(tracker=tracker)
+        state = self._state(files={"/shared/output.md": {"content": "# Final report"}})
+
+        assert middleware.after_model(state, None) is None
+
+    def test_second_terminal_response_without_writer_fails_closed(self) -> None:
+        middleware = RequiredWriterDelegationMiddleware(tracker=FinalReportCommitTracker())
+        first = middleware.after_model(self._state(), None)
+        correction = first["messages"][0]
+        state = self._state(
+            messages=[AIMessage(content="No report."), correction, AIMessage(content="Still no report.")]
+        )
+
+        with pytest.raises(RuntimeError, match="^writer_output_not_committed$"):
+            middleware.after_model(state, None)
 
 
 class TestToolNameSanitizationMiddleware:

@@ -98,9 +98,11 @@ middleware:
           regex_detection:
             input:
               patterns:
-                - '(?i)\b(?:ignore|disregard|discard|override)\s+(?:(?:all|any|the)\s+)?(?:previous|prior|earlier)\s+instructions?\b'
-                - '(?i)reveal\s+(the\s+)?system\s+prompt'
-                - '(?i)\b(?:api[\s_-]*key|password)\s*(?::|=|\bis\b|\bequals?\b)\s*\S+'
+                # Shared by the workflow and direct research-agent boundaries so
+                # endpoint choice cannot bypass the baseline input policy.
+                - &prompt_override_pattern '(?i)\b(?:ignore|disregard|discard|override)\s+(?:(?:all|any|the)\s+)?(?:previous|prior|earlier)\s+instructions?\b'
+                - &system_prompt_pattern '(?i)reveal\s+(the\s+)?system\s+prompt'
+                - &secret_assignment_pattern '(?i)\b(?:api[\s_-]*key|password)\s*(?::|=|\bis\b|\bequals?\b)\s*\S+'
             output:
               patterns:
                 - '(?i)system\s+prompt\s*[:=]'
@@ -132,6 +134,9 @@ middleware:
           regex_detection:
             input:
               patterns:
+                - *prompt_override_pattern
+                - *system_prompt_pattern
+                - *secret_assignment_pattern
                 - '(?i)reveal\s+(the\s+)?tool\s+credentials'
                 - '(?i)show\s+(me\s+)?(your\s+)?tool\s+configuration'
             output:
@@ -165,6 +170,9 @@ middleware:
           regex_detection:
             input:
               patterns:
+                - *prompt_override_pattern
+                - *system_prompt_pattern
+                - *secret_assignment_pattern
                 - '(?i)dump\s+(all\s+)?documents'
                 - '(?i)exfiltrate\s+(the\s+)?knowledge\s+base'
             output:

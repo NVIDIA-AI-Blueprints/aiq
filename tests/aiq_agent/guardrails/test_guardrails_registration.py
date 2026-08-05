@@ -15,15 +15,31 @@
 
 """Tests for Guardrails middleware registration behavior."""
 
+from pathlib import Path
 from types import ModuleType
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+import yaml
 
 from aiq_agent.guardrails.deep_agent import register as deep_register
 from aiq_agent.guardrails.shallow_agent import register as shallow_register
 from aiq_agent.guardrails.workflow import register as workflow_register
+
+
+def test_default_guardrails_apply_baseline_input_policy_at_every_research_boundary():
+    """Public workflow and direct-agent routes must share the baseline input policy."""
+    config_path = Path(__file__).parents[3] / "configs" / "config_web_default_guardrails.yml"
+    config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    middleware = config["middleware"]
+
+    def input_patterns(name: str) -> set[str]:
+        return set(middleware[name]["guardrails"]["rails"]["config"]["regex_detection"]["input"]["patterns"])
+
+    workflow_patterns = input_patterns("workflow_guardrails")
+    assert workflow_patterns <= input_patterns("shallow_agent_guardrails")
+    assert workflow_patterns <= input_patterns("deep_agent_guardrails")
 
 
 @pytest.mark.asyncio

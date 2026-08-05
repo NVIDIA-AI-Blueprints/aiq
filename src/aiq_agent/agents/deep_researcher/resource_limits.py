@@ -27,6 +27,7 @@ DEFAULT_MAX_RESEARCH_QUERY_CHARS = 10_000
 DEFAULT_MAX_RESEARCH_NOTE_BYTES = 512 * 1024
 DEFAULT_MAX_TOTAL_RESEARCH_NOTE_BYTES = 10 * 1024 * 1024
 DEFAULT_MAX_SOURCE_TOOL_CALLS = 100
+DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES = 8
 DEFAULT_MAX_TODO_ITEMS = 20
 DEFAULT_MAX_TODO_ITEM_CHARS = 2048
 DEFAULT_MAX_TOTAL_TODO_CHARS = 10_000
@@ -272,6 +273,12 @@ class DeepResearchResourceLimits(BaseModel):
         ge=1,
         le=DEFAULT_MAX_SOURCE_TOOL_CALLS,
         description="Maximum AI-Q source-tool attempts and concrete batch items in one job.",
+    )
+    max_consecutive_source_tool_failures: int = Field(
+        default=DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES,
+        ge=1,
+        le=DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES,
+        description="Consecutive failed source-tool results allowed before the per-job circuit opens.",
     )
     max_todo_items: int = Field(
         default=DEFAULT_MAX_TODO_ITEMS,

@@ -608,6 +608,65 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
         return self._check_after_model(state)
 
 
+class RequiredWriterDelegationMiddleware(AgentMiddleware):
+    """Prevent the orchestrator from terminating before writer-owned publication.
+
+    Source failures can make an orchestrator conclude that no further research
+    is useful and return ordinary assistant text without ever delegating to the
+    writer. Give it one bounded corrective turn that forbids more research and
+    requires writer delegation. The writer's existing commit middleware remains
+    the only component allowed to publish the final report.
+    """
+
+    def __init__(
+        self,
+        *,
+        tracker: FinalReportCommitTracker,
+        max_retries: int = 1,
+        reason_code: str = "writer_output_not_committed",
+    ) -> None:
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        self.tracker = tracker
+        self.max_retries = max_retries
+        self.reason_code = reason_code
+        self._retry_message = (
+            "The run cannot finish because writer-agent has not committed /shared/output.md. "
+            "Do not perform or retry source research. Delegate to writer-agent now using the Writer Delegation "
+            "Template and the plan, research notes, verified sources, and explicit evidence gaps already available. "
+            "After writer-agent returns, return only its completion marker."
+        )
+
+    def _retry_count(self, messages: list[object]) -> int:
+        return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
+
+    def _check_after_model(self, state: object) -> dict[str, object] | None:
+        messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+        files = state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+        if not isinstance(messages, list) or not messages:
+            return None
+        last_message = messages[-1]
+        if not isinstance(last_message, AIMessage) or last_message.tool_calls:
+            return None
+        if self.tracker.committed_text(files, paths=FINAL_REPORT_STATE_PATHS) is not None:
+            return None
+        if self._retry_count(messages) >= self.max_retries:
+            raise RuntimeError(self.reason_code)
+
+        logger.warning("Orchestrator ended before writer delegation; requesting one corrective turn")
+        return {"messages": [HumanMessage(content=self._retry_message)], "jump_to": "model"}
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state, runtime):
+        """Require a synchronous orchestrator to delegate writer publication."""
+        return self._check_after_model(state)
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        """Require an asynchronous orchestrator to delegate writer publication."""
+        return self._check_after_model(state)
+
+
 # Common hallucinated tool name mappings
 _TOOL_NAME_ALIASES: dict[str, str] = {
     "open_file": "read_file",

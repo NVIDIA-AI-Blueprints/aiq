@@ -301,7 +301,10 @@ class DeepResearcherAgent:
             logger.info("Query: %s...", query[:100])
             logger.info("=" * 80)
 
-        budget_token = activate_source_tool_budget(self.resource_limits.max_source_tool_calls)
+        budget_token = activate_source_tool_budget(
+            self.resource_limits.max_source_tool_calls,
+            max_consecutive_failures=self.resource_limits.max_consecutive_source_tool_failures,
+        )
         try:
             execution_timeout = asyncio.timeout(self.resource_limits.max_execution_seconds)
             try:

@@ -6,6 +6,7 @@
 import pytest
 from pydantic import ValidationError
 
+from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_FINAL_REPORT_BYTES
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_RESEARCH_EXECUTION_SECONDS
 from aiq_agent.agents.deep_researcher.resource_limits import DEFAULT_MAX_RESEARCH_INPUT_CHARS
@@ -43,6 +44,7 @@ def test_resource_limit_defaults_equal_non_disableable_security_ceiling():
         "max_research_note_bytes": DEFAULT_MAX_RESEARCH_NOTE_BYTES,
         "max_total_research_note_bytes": DEFAULT_MAX_TOTAL_RESEARCH_NOTE_BYTES,
         "max_source_tool_calls": DEFAULT_MAX_SOURCE_TOOL_CALLS,
+        "max_consecutive_source_tool_failures": DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES,
         "max_todo_items": DEFAULT_MAX_TODO_ITEMS,
         "max_todo_item_chars": DEFAULT_MAX_TODO_ITEM_CHARS,
         "max_total_todo_chars": DEFAULT_MAX_TOTAL_TODO_CHARS,
@@ -64,6 +66,7 @@ def test_resource_limit_defaults_equal_non_disableable_security_ceiling():
         ("max_research_note_bytes", DEFAULT_MAX_RESEARCH_NOTE_BYTES),
         ("max_total_research_note_bytes", DEFAULT_MAX_TOTAL_RESEARCH_NOTE_BYTES),
         ("max_source_tool_calls", DEFAULT_MAX_SOURCE_TOOL_CALLS),
+        ("max_consecutive_source_tool_failures", DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES),
         ("max_todo_items", DEFAULT_MAX_TODO_ITEMS),
         ("max_todo_item_chars", DEFAULT_MAX_TODO_ITEM_CHARS),
         ("max_total_todo_chars", DEFAULT_MAX_TOTAL_TODO_CHARS),
@@ -90,6 +93,7 @@ def test_resource_limits_accept_downward_overrides_and_are_frozen():
         max_research_note_bytes=2048,
         max_total_research_note_bytes=4096,
         max_source_tool_calls=8,
+        max_consecutive_source_tool_failures=4,
         max_todo_items=5,
         max_todo_item_chars=128,
         max_total_todo_chars=512,

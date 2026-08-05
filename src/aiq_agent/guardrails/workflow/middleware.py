@@ -191,7 +191,11 @@ class _WorkflowGuardrails(GuardrailsMixin):
             if targets:
                 return targets
 
-            for field in ("query", "message", "text"):
+            # NAT's public ``/generate`` and ``/generate/stream`` routes pass
+            # ``input_message``. Keep it at the same workflow boundary as the
+            # OpenAI-compatible route instead of letting endpoint shape decide
+            # whether input rails execute.
+            for field in ("input_message", "query", "message", "text"):
                 item = raw_input.get(field)
                 if isinstance(item, str) and item.strip():
                     return [
@@ -207,6 +211,15 @@ class _WorkflowGuardrails(GuardrailsMixin):
         targets = self._extract_messages_targets(raw_input, messages)
         if targets:
             return targets
+
+        input_message = getattr(raw_input, "input_message", None)
+        if isinstance(input_message, str) and input_message.strip():
+            return [
+                self._target_from_text(
+                    input_message,
+                    lambda new_text: self._set_attr_value(raw_input, raw_input, "input_message", new_text),
+                )
+            ]
         return []
 
     def _extract_messages_targets(

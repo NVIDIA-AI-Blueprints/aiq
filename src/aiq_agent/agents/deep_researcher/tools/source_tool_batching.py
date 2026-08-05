@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import weakref
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -32,6 +33,10 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from aiq_agent.common.citation_verification import is_non_citable_status_output
+
+from ..resource_limits import DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES
+
 DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS = 5
 DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE = 4
 DEFAULT_SOURCE_TOOL_CONCURRENCY_TIMEOUT = 120.0
@@ -41,17 +46,44 @@ class SourceToolBudgetExceeded(RuntimeError):
     """Raised before an external call would exceed the per-job budget."""
 
 
+class SourceToolCircuitOpen(RuntimeError):
+    """Raised when a provider failure wave opens the per-job source circuit."""
+
+
+def source_tool_result_failed(result: object) -> bool:
+    """Return whether a source result is provider status rather than evidence.
+
+    The classifier is deliberately conservative: it recognizes whole-result
+    error/status shapes and leading provider errors, but does not treat an
+    arbitrary article mentioning an HTTP error as a failed tool call.
+    """
+    if result is None:
+        return True
+    if getattr(result, "status", None) == "error":
+        return True
+    text = json.dumps(result) if isinstance(result, dict) else str(result)
+    text = text.strip()
+    if not text:
+        return True
+    return is_non_citable_status_output(text)
+
+
 @dataclass
 class SourceToolCallBudget:
     """Concurrency-safe per-job counter inherited by nested researcher tasks."""
 
     max_calls: int
+    max_consecutive_failures: int = DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES
     used_calls: int = 0
+    consecutive_failures: int = 0
+    circuit_open: bool = False
     _lock: asyncio.Lock = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.max_calls < 1:
             raise ValueError("max_calls must be >= 1")
+        if self.max_consecutive_failures < 1:
+            raise ValueError("max_consecutive_failures must be >= 1")
         self._lock = asyncio.Lock()
 
     async def consume(self, count: int = 1) -> None:
@@ -59,11 +91,30 @@ class SourceToolCallBudget:
         if count < 1:
             raise ValueError("count must be >= 1")
         async with self._lock:
+            if self.circuit_open:
+                raise SourceToolCircuitOpen(
+                    f"Source-tool circuit is open after {self.consecutive_failures} consecutive provider failures"
+                )
             if self.used_calls + count > self.max_calls:
                 raise SourceToolBudgetExceeded(
                     f"Source-tool call budget exhausted ({self.used_calls}/{self.max_calls} calls used)"
                 )
             self.used_calls += count
+
+    async def record_result(self, result: object) -> None:
+        """Update consecutive-failure state and open the circuit when exhausted."""
+        failed = source_tool_result_failed(result)
+        async with self._lock:
+            if not failed:
+                self.consecutive_failures = 0
+                return
+
+            self.consecutive_failures += 1
+            if self.consecutive_failures >= self.max_consecutive_failures:
+                self.circuit_open = True
+                raise SourceToolCircuitOpen(
+                    f"Source-tool circuit opened after {self.consecutive_failures} consecutive provider failures"
+                )
 
 
 _source_tool_budget: ContextVar[SourceToolCallBudget | None] = ContextVar(
@@ -72,9 +123,15 @@ _source_tool_budget: ContextVar[SourceToolCallBudget | None] = ContextVar(
 )
 
 
-def activate_source_tool_budget(max_calls: int) -> Token[SourceToolCallBudget | None]:
+def activate_source_tool_budget(
+    max_calls: int,
+    *,
+    max_consecutive_failures: int = DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES,
+) -> Token[SourceToolCallBudget | None]:
     """Install a fresh budget for one deep-research run."""
-    return _source_tool_budget.set(SourceToolCallBudget(max_calls=max_calls))
+    return _source_tool_budget.set(
+        SourceToolCallBudget(max_calls=max_calls, max_consecutive_failures=max_consecutive_failures)
+    )
 
 
 def reset_source_tool_budget(token: Token[SourceToolCallBudget | None]) -> None:
@@ -86,6 +143,12 @@ async def _consume_source_tool_budget(count: int = 1) -> None:
     budget = _source_tool_budget.get()
     if budget is not None:
         await budget.consume(count)
+
+
+async def _record_source_tool_result(result: object) -> None:
+    budget = _source_tool_budget.get()
+    if budget is not None:
+        await budget.record_result(result)
 
 
 class SourceToolConcurrencyLimiter:
@@ -188,6 +251,7 @@ def _make_batch_source_tool(
             try:
                 async with limiter.limit():
                     result = await original_tool.ainvoke({input_field_name: query})
+                await _record_source_tool_result(result)
                 return query, str(result), None
             except Exception as exc:  # noqa: BLE001 - represented as per-item failure for the LLM
                 return query, None, str(exc)
@@ -219,6 +283,7 @@ def _make_throttled_source_tool(
         await _consume_source_tool_budget()
         async with limiter.limit():
             result = await original_tool.ainvoke(kwargs)
+        await _record_source_tool_result(result)
         return result
 
     # Retain injected fields for runtime validation/forwarding. BaseTool derives

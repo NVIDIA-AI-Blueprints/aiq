@@ -29,6 +29,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommit
 from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommitTracker
 from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportOwnershipGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import RequiredOutputFileMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import RequiredWriterDelegationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingPersistenceMiddleware
@@ -411,6 +412,10 @@ def test_graph_wires_filesystem_tool_call_guard_cross_cutting():
     )
     assert any(
         isinstance(middleware, TodoQuotaMiddleware) for middleware in create_graph.call_args.kwargs["middleware"]
+    )
+    assert any(
+        isinstance(middleware, RequiredWriterDelegationMiddleware)
+        for middleware in create_graph.call_args.kwargs["middleware"]
     )
     assert any(
         isinstance(middleware, FinalReportOwnershipGuardMiddleware)
