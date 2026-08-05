@@ -119,7 +119,8 @@ def _validate_registry(registry: dict, declared_functions: set[str], errors: lis
         for tool in tools:
             if tool not in declared_functions:
                 errors.append(
-                    f"source '{label}' lists tool '{tool}' in its tools:, but '{tool}' is not declared under functions:"
+                    f"source '{label}' lists tool '{tool}' in its tools:, but '{tool}' is not declared under "
+                    "functions: or function_groups:"
                 )
         for bool_field in ("default_enabled", "requires_auth"):
             if bool_field in source and not isinstance(source[bool_field], bool):
@@ -228,6 +229,10 @@ def validate(path: str) -> int:
         functions = {}
     declared_functions = set(functions.keys())
 
+    function_groups = data.get("function_groups") or {}
+    if not isinstance(function_groups, dict):
+        function_groups = {}
+
     for field, alias in _iter_refs(functions):
         if alias not in defined_aliases:
             defined = ", ".join(sorted(defined_aliases)) or "none"
@@ -247,7 +252,7 @@ def validate(path: str) -> int:
     if registry is None:
         warnings.append("no data_source_registry function found (fine for minimal configs).")
     else:
-        _validate_registry(registry, declared_functions, errors, warnings)
+        _validate_registry(registry, declared_functions | set(function_groups), errors, warnings)
 
     workflow = data.get("workflow")
     for agent_name in REQUIRED_WORKFLOW_AGENTS:
