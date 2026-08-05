@@ -22,6 +22,14 @@ _ROOT_MANIFEST_PATH = _REPO_ROOT / "pyproject.toml"
 _MCP_LOCK_PATH = _REPO_ROOT / "mcp" / "uv.lock"
 _ROOT_LOCK_PATH = _REPO_ROOT / "uv.lock"
 _SETUP_SCRIPT_PATH = _REPO_ROOT / "scripts" / "setup.sh"
+_CANONICAL_SECURITY_POLICY_PATHS = (
+    _REPO_ROOT / "AGENTS.md",
+    _REPO_ROOT / "README.md",
+    _REPO_ROOT / "docs" / "source" / "deployment" / "docker-build.md",
+    _REPO_ROOT / "docs" / "source" / "integration" / "mcp-server.md",
+    _REPO_ROOT / "mcp" / "README.md",
+    _REPO_ROOT / "mcp" / "SECURITY.md",
+)
 
 
 def _iter_strings(value: Any) -> Iterator[str]:
@@ -74,7 +82,7 @@ def test_public_mcp_config_preserves_reference_orchestration_choices() -> None:
     assert functions["intent_classifier"]["_type"] == "intent_classifier"
     assert functions["clarifier_agent"] == {
         "_type": "clarifier_agent",
-        "llm": "nemotron_super_llm",
+        "llm": "nemotron_ultra_llm",
         "max_turns": 3,
         "log_response_max_chars": 2000,
         "verbose": True,
@@ -178,7 +186,7 @@ def test_root_aiq_resolution_keeps_cryptography_in_the_nat_supported_range() -> 
     assert len(cryptography_policy) == 1
     assert Version("46.0.6") in cryptography_policy[0].specifier
     assert Version("47") not in cryptography_policy[0].specifier
-    assert Version("48.0.1") not in cryptography_policy[0].specifier
+    assert Version("50.0.0") not in cryptography_policy[0].specifier
 
     lock = tomllib.loads(_ROOT_LOCK_PATH.read_text())
     locked_versions = _locked_versions(lock, "cryptography")
@@ -211,17 +219,21 @@ def test_mcp_project_owns_its_sources_lock_and_scoped_cryptography_override() ->
 
     assert cryptography_overrides == [
         {
+            "package": {"name": "langchain-litellm", "version": "0.6.6"},
+            "dependencies": ["cryptography>=50.0.0,<51"],
+        },
+        {
             "package": {"name": "nvidia-nat-core", "version": "1.8.0"},
-            "dependencies": ["cryptography>=48.0.1,<49"],
+            "dependencies": ["cryptography>=50.0.0,<51"],
         },
         {
             "package": {"name": "oci", "version": "2.178.0"},
-            "dependencies": ["cryptography>=48.0.1,<49"],
+            "dependencies": ["cryptography>=50.0.0,<51"],
         },
     ]
 
     lock = tomllib.loads(_MCP_LOCK_PATH.read_text())
-    assert _locked_versions(lock, "cryptography") == {Version("48.0.1")}
+    assert _locked_versions(lock, "cryptography") == {Version("50.0.0")}
     assert any(package["name"] == "aiq-mcp-server" for package in lock["package"])
 
     local_sources = {
@@ -233,3 +245,18 @@ def test_mcp_project_owns_its_sources_lock_and_scoped_cryptography_override() ->
         "knowledge-layer": "../sources/knowledge_layer",
         "tavily-web-search": "../sources/tavily_web_search",
     }
+
+
+def test_mcp_cryptography_policy_is_consistent_across_canonical_docs() -> None:
+    for path in _CANONICAL_SECURITY_POLICY_PATHS:
+        text = path.read_text()
+        assert "cryptography==50.0.0" in text, path
+        assert "cryptography==48.0.1" not in text, path
+
+    security_policy = (_REPO_ROOT / "mcp" / "SECURITY.md").read_text()
+    for platform_contract in (
+        "Linux x86_64 with CPython 3.13",
+        "x86_64 macOS",
+        "32-bit Windows",
+    ):
+        assert platform_contract in security_policy

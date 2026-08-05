@@ -534,6 +534,39 @@ class TestChatResearcherAgent:
         }
 
     @pytest.mark.asyncio
+    async def test_run_deep_research_submitter_surfaces_safe_admission_failure(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        from aiq_api.jobs.admission import JobPrincipalCapacityExceededError
+
+        async def deep_orchestration(state):
+            return {
+                "user_intent": IntentResult(intent="research", raw=None),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="Complex"),
+            }
+
+        async def reject_submit(_state):
+            raise JobPrincipalCapacityExceededError
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            deep_research_job_submitter=reject_submit,
+        )
+
+        state = ChatResearcherState(messages=[HumanMessage(content="Compare CUDA vs OpenCL")])
+        result = await agent.run(state, thread_id="test-thread-admission-failure")
+
+        assert result["messages"][-1].content == JobPrincipalCapacityExceededError.public_message
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    @pytest.mark.asyncio
     async def test_deep_research_seeds_parent_report_for_inline_delta(
         self,
         mock_shallow_research,

@@ -37,13 +37,10 @@ Pricing lives in a YAML file under `tokenomics.pricing`. Prices are in **USD per
 tokenomics:
   pricing:
     models:
-      "openai/gpt-oss-120b":
-        input_per_1m_tokens: 1.75
-        output_per_1m_tokens: 14.00
-      "nvidia/nemotron-3-nano-30b-a3b":
-        input_per_1m_tokens: 0.12
-        output_per_1m_tokens: 0.50
-        cached_input_per_1m_tokens: 0.06   # optional — defaults to input price if omitted
+      # Illustrative market-equivalent rates; verify current provider pricing.
+      "nvidia/nemotron-3-ultra-550b-a55b":
+        input_per_1m_tokens: 0.60
+        output_per_1m_tokens: 3.60
     tools:
       # Tool name lookup is substring-based: "web_search" matches "advanced_web_search_tool"
       # and "tavily_search" because the key is a substring of those names.
@@ -58,7 +55,7 @@ tokenomics:
       output_per_1m_tokens: 4.00
 ```
 
-Model name lookup is: exact match → substring match → default. This means a key of `"gpt-oss"` will match a trace model name of `"openai/gpt-oss-120b"`.
+Model name lookup is: exact match → substring match → default. This means a key of `"nemotron-3-ultra"` will match a trace model name of `"nvidia/nemotron-3-ultra-550b-a55b"`.
 
 Tool name lookup follows the same substring rule. Unknown tools default to $0/call — no error is raised, so you can configure only the costly tools and omit free internal ones.
 

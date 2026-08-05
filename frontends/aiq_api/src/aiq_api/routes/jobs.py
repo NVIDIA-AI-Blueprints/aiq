@@ -501,6 +501,8 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
 
     from ..jobs.access import authorize_job_access
     from ..jobs.access import ensure_job_access_table
+    from ..jobs.admission import JobAdmissionError
+    from ..jobs.admission import ensure_deep_research_admission_table
     from ..jobs.crypto import ContentEncryptionConfigError
     from ..jobs.crypto import ContentEncryptionInvalidData
     from ..jobs.crypto import ContentEncryptionUnavailable
@@ -685,6 +687,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     )
     loop = asyncio.get_running_loop()
     await loop.run_in_executor(None, ensure_job_access_table, db_url)
+    await loop.run_in_executor(None, ensure_deep_research_admission_table, db_url)
     await loop.run_in_executor(None, _validate_artifact_store, db_url)
 
     @app.post(
@@ -697,12 +700,14 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         ),
         responses={
             400: {"description": "Unknown, internal-only, or unconfigured agent type, or invalid request"},
+            413: {"description": "Deep-research input exceeds the configured payload limit"},
             409: {
                 "description": (
                     "A custom job_id was supplied that collides with an existing job, or a selected "
                     "protected data source requires per-user OAuth connection"
                 )
             },
+            429: {"description": "Per-principal active-job or submission-rate limit reached"},
             422: {"description": "One or more unknown or agent-unavailable data source IDs"},
             500: {
                 "description": (
@@ -710,7 +715,11 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                     "or agent/tool configuration lookup failed unexpectedly"
                 )
             },
-            503: {"description": "Content encryption, Dask scheduler, or sandbox capacity is unavailable"},
+            503: {
+                "description": (
+                    "Content encryption, Dask scheduler, admission database, or deployment job capacity is unavailable"
+                )
+            },
         },
     )
     async def submit_job(
@@ -814,6 +823,9 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
             raise HTTPException(500, "Content encryption configuration is invalid")
         except JobIdConflictError:
             raise HTTPException(409, f"Job already exists: {req.job_id}")
+        except JobAdmissionError as e:
+            headers = {"Retry-After": str(e.retry_after_seconds)} if e.retry_after_seconds is not None else None
+            raise HTTPException(status_code=e.status_code, detail=e.public_message, headers=headers)
         except McpAuthRequiredError as e:
             # submit_agent_job runs the same MCP preflight and raises if a selected
             # protected source became disconnected between the route preflight above

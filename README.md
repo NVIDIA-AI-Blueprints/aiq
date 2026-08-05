@@ -108,17 +108,16 @@ The checked-in default CLI and web profiles use these core components:
 
 - [NVIDIA NeMo Agent Toolkit 1.8.0](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
 - [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) 0.6.5 or newer
-- [NVIDIA Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) for intent classification, shallow research, and deep-research writing in the default profiles
-- [NVIDIA Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b/modelcard) for deep-research source routing, orchestration, planning, and research in the default profiles
-- [NVIDIA nemotron-mini-4b-instruct](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/modelcard) (document summary, if used)
-- [NVIDIA llama-nemotron-embed-vl-1b-v2](https://build.nvidia.com/nvidia/llama-nemotron-embed-vl-1b-v2) (embedding model for llamaindex knowledge layer implementation, if used)
-- [NVIDIA nemotron-nano-12b-v2-vl](https://build.nvidia.com/nvidia/nemotron-nano-12b-v2-vl) (vision-language model for llamaindex knowledge layer implementation, if used)
+- [NVIDIA Nemotron 3 Super](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) for intent classification and shallow research in the default profiles
+- [NVIDIA Nemotron 3 Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) for clarification and every deep-research role in the default profiles
+- [Google Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) (document summary, if used)
+- [NVIDIA Nemotron 3 Embed 1B](https://build.nvidia.com/nvidia/nemotron-3-embed-1b) (embedding model for the knowledge layer, if used)
+- [NVIDIA Nemotron 3 Nano Omni 30B A3B Reasoning](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) (vision-language model for the LlamaIndex knowledge layer, if used)
 - [Tavily Search API](https://tavily.com/) for web search
 - Serper, SerpAPI, or SearchAPI for Google Scholar paper search
 
-Focused profiles can instead use [GPT-OSS-120B](https://build.nvidia.com/openai/gpt-oss-120b/modelcard)
-for deep-research orchestration, planning, and writing, or GPT-5.2 for those roles in the
-frontier-model example. Refer to [Configuration Files](#configuration-files); there is no single
+Focused profiles can instead use GPT-5.2 or other supported frontier models for selected
+deep-research roles. Refer to [Configuration Files](#configuration-files); there is no single
 all-features profile.
 
 ## Target Audience
@@ -151,11 +150,11 @@ When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), infere
 
 | Component | Default Model | Self-Hosted Hardware Reference |
 |-----------|---------------|-------------------------------|
-| LLM (intent, shallow research, deep-research writer) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super model card](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/modelcard) |
-| LLM (deep-research source router, orchestrator, planner, researcher) | `nvidia/nemotron-3-ultra-550b-a55b` in default profiles; GPT-OSS-120B or GPT-5.2 for selected roles in focused profiles | [Nemotron 3 Ultra model card](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b/modelcard) |
-| Document summary (optional) | `nvidia/nemotron-mini-4b-instruct` | [Nemotron Mini 4B](https://build.nvidia.com/nvidia/nemotron-mini-4b-instruct/) |
-| Text embedding | `nvidia/llama-nemotron-embed-vl-1b-v2` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
-| VLM (image/chart extraction, optional) | `nvidia/nemotron-nano-12b-v2-vl` | [Vision language model support matrix](https://docs.nvidia.com/nim/vision-language-models/latest/support-matrix.html#nemotron-nano-12b-v2-vl) |
+| LLM (intent classifier, shallow researcher) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) |
+| LLM (clarifier and all deep-research roles) | `nvidia/nemotron-3-ultra-550b-a55b` | [Nemotron 3 Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) |
+| Document summary (optional) | `google/gemma-4-31b-it` | [Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) |
+| Text embedding | `nvidia/nemotron-3-embed-1b` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
+| VLM (image/chart extraction, optional) | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | [Nemotron 3 Nano Omni](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 | Knowledge layer (Foundational RAG, optional) | -- | [RAG Blueprint support matrix](https://docs.nvidia.com/rag/latest/support-matrix.html) |
 
 For detailed installation instructions, refer to [Installation -- Hardware Requirements](docs/source/get-started/installation.md#hardware-requirements).
@@ -288,17 +287,17 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 
 | Config | Models | Description |
 |--------|--------|-------------|
-| `config_cli_default.yml` | Nemotron 3 Ultra; Nemotron 3 Super | CLI chat pipeline with Tavily and clarification; no knowledge backend. Paper search is a commented opt-in. |
-| `config_web_default_llamaindex.yml` | Nemotron 3 Ultra; Nemotron 3 Super; Nemotron Mini summary | Default web/API chat pipeline with LlamaIndex/ChromaDB and Tavily. Paper search is commented out. |
-| `config_web_frag.yml` | Nemotron 3 Ultra; Nemotron 3 Super | Web/API and Helm base with Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. |
-| `config_web_opensearch.yml` | Nemotron 3 Ultra; Nemotron 3 Super; NVIDIA embedding model | Web/API with built-in OpenSearch knowledge retrieval plus Tavily; supports self-hosted, `es`, and `aoss` authentication modes. |
-| `config_web_azure_ai_search.yml` | Nemotron 3 Ultra; Nemotron 3 Super; NVIDIA embedding model | Web/API with Azure AI Search knowledge retrieval plus Tavily; supports API-key and Azure identity authentication. |
-| `config_frontier_models.yml` | GPT-5.2; Nemotron 3 Ultra; Nemotron 3 Super; Nemotron Mini summary | LlamaIndex profile using GPT-5.2 for orchestration/planning/writing, Nemotron Ultra for routing/research, and Nemotron Super for shallow research. Requires `OPENAI_API_KEY`. |
-| `config_web_default_guardrails.yml` | GPT-OSS-120B; Nemotron 3 Ultra; Nemotron 3 Super; Nemotron Mini summary | LlamaIndex profile with workflow Guardrails explicitly attached, shallow-agent Guardrails dynamically attached through `workflow_functions`, and async deep-agent Guardrails applied by the AI-Q runner from the same target configuration. |
-| `config_web_frag_mcp_auth.yml` | Nemotron 3 Ultra; Nemotron 3 Super | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
-| `config_domain_routing_and_skills.yml` | Nemotron 3 Ultra; Nemotron 3 Super; Nemotron Mini summary | Direct deep-research profile with domain routing, DuckDuckGo news, Polymarket, enabled Serper paper search, LlamaIndex, built-in skills, and a fresh per-job Modal sandbox. |
-| `config_openshell.yml` | Nemotron 3 Ultra; Nemotron 3 Super; Nemotron Mini summary | Experimental web/API skills profile with artifact capture, fail-closed policy attestation, and one OpenShell sandbox per deep-research job. |
-| `config_mcp.yml` | Nemotron 3 Ultra; Nemotron 3 Super | Standalone MCP server. Public NIM + Tavily research with PostgreSQL-backed stateless submit/poll/report. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
+| `config_cli_default.yml` | Nemotron 3 Super/Ultra | CLI chat pipeline with Tavily and clarification; no knowledge backend. Paper search is a commented opt-in. |
+| `config_web_default_llamaindex.yml` | Nemotron 3 Super/Ultra; Gemma 4 summary | Default web/API chat pipeline with LlamaIndex/ChromaDB and Tavily. Paper search is commented out. |
+| `config_web_frag.yml` | Nemotron 3 Super/Ultra | Web/API and Helm base with Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. |
+| `config_web_opensearch.yml` | Nemotron 3 Super/Ultra; Nemotron 3 Embed | Web/API with built-in OpenSearch knowledge retrieval plus Tavily; supports self-hosted, `es`, and `aoss` authentication modes. |
+| `config_web_azure_ai_search.yml` | Nemotron 3 Super/Ultra; Nemotron 3 Embed | Web/API with Azure AI Search knowledge retrieval plus Tavily; supports API-key and Azure identity authentication. |
+| `config_frontier_models.yml` | GPT Sol/Luna; Nemotron 3 Super/Ultra; Gemma 4 summary | LlamaIndex profile using GPT Sol/Luna for deep research and Super for intent/shallow. Requires `OPENAI_API_KEY` and `NVIDIA_API_KEY`. |
+| `config_web_default_guardrails.yml` | Nemotron 3 Super/Ultra; Gemma 4 summary | LlamaIndex profile with workflow Guardrails explicitly attached, shallow-agent Guardrails dynamically attached through `workflow_functions`, and async deep-agent Guardrails applied by the AI-Q runner from the same target configuration. |
+| `config_web_frag_mcp_auth.yml` | Nemotron 3 Super/Ultra | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
+| `config_domain_routing_and_skills.yml` | Nemotron 3 Ultra; Gemma 4 summary | Direct deep-research profile with domain routing, DuckDuckGo news, Polymarket, enabled Serper paper search, LlamaIndex, built-in skills, and a fresh per-job Modal sandbox. |
+| `config_openshell.yml` | Nemotron 3 Super/Ultra; Gemma 4 summary | Experimental web/API skills profile with artifact capture, fail-closed policy attestation, and one OpenShell sandbox per deep-research job. |
+| `config_mcp.yml` | Nemotron 3 Super/Ultra | Standalone MCP server. Public NIM + Tavily research with PostgreSQL-backed stateless submit/poll/report. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Ways to Run the Agents
 
@@ -378,9 +377,13 @@ the endpoint must not be exposed directly to an untrusted network. See [Expose A
 for the exact JSON protocol, health contracts, security model, and container deployment.
 
 MCP is an independent uv project with its own `mcp/uv.lock`. The root lock remains compatible with NAT's
-`cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==48.0.1` as a
-security hardening measure. The supported distribution paths are this source checkout and the release container;
-the MCP package's local path dependency closure is not published as a standalone wheel.
+`cryptography<47` constraint, while the frozen MCP release/container profile pins `cryptography==50.0.0` as a
+security hardening measure. The release-supported platform is Linux x86_64 with CPython 3.13, through either the
+frozen source project or the release container. Other 64-bit source hosts are development-only; x86_64 macOS and
+32-bit Windows are unsupported because `cryptography` 50 does not publish those wheels. Run the release container
+on a supported 64-bit Linux/container host. The MCP package's local path dependency closure is not published as a
+standalone wheel. See the
+[MCP security policy](mcp/SECURITY.md#platform-compatibility) for the full platform contract.
 
 ### Benchmarks
 

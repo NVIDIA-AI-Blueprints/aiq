@@ -45,6 +45,40 @@ from aiq_agent.agents.deep_researcher.deepagents_runtime import resolve_skill_co
 SYNTHESIS_SKILL_SOURCE = f"{BUILTIN_SKILL_SOURCE}synthesis/"
 
 
+def test_frontier_profile_uses_validated_gpt_role_split() -> None:
+    """Keep the shipped GPT profile aligned with the validated Sol/Luna topology."""
+    config = yaml.safe_load(Path("configs/config_frontier_models.yml").read_text(encoding="utf-8"))
+    llms = config["llms"]
+
+    assert llms["gpt_sol_agent_llm"] == {
+        "_type": "openai",
+        "model_name": "gpt-5.6-sol",
+        "api_key": "${OPENAI_API_KEY}",
+        "max_tokens": 16384,
+        "num_retries": 2,
+        "parallel_tool_calls": False,
+    }
+    assert llms["gpt_sol_writer_llm"] == {
+        **llms["gpt_sol_agent_llm"],
+        "max_tokens": 32768,
+    }
+    assert llms["gpt_luna_agent_llm"] == {
+        **llms["gpt_sol_agent_llm"],
+        "model_name": "gpt-5.6-luna",
+    }
+    deep_research = config["functions"]["deep_research_agent"]
+    assert {
+        role: deep_research[f"{role}_llm"]
+        for role in ("orchestrator", "source_router", "researcher", "planner", "writer")
+    } == {
+        "orchestrator": "gpt_sol_agent_llm",
+        "source_router": "gpt_luna_agent_llm",
+        "researcher": "gpt_luna_agent_llm",
+        "planner": "gpt_sol_agent_llm",
+        "writer": "gpt_sol_writer_llm",
+    }
+
+
 def test_openshell_workflow_only_diverges_for_sandbox_wiring() -> None:
     """Keep the OpenShell workflow aligned with the standard web config."""
 

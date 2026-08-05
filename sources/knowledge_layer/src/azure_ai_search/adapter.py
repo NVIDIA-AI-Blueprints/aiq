@@ -89,7 +89,7 @@ def _coerce_config(config: dict[str, Any] | None) -> SimpleNamespace:
         "endpoint": os.environ.get("AZURE_SEARCH_ENDPOINT"),
         "api_key": os.environ.get("AZURE_SEARCH_API_KEY"),
         "embed_base_url": os.environ.get("AIQ_EMBED_BASE_URL") or "https://integrate.api.nvidia.com/v1",
-        "embed_model": os.environ.get("AIQ_EMBED_MODEL", "nvidia/llama-nemotron-embed-vl-1b-v2"),
+        "embed_model": os.environ.get("AIQ_EMBED_MODEL", "nvidia/nemotron-3-embed-1b"),
         "embed_dim": int(os.environ.get("AIQ_EMBED_DIM", "2048")),
         "collection_name": "default",
         "cleanup_files": False,

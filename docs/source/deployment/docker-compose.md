@@ -153,6 +153,13 @@ optional; leave the endpoint unset for AWS S3, and the prefix defaults to
 the standard AWS credential chain. When the provider is `s3`, artifact bytes are stored
 in the configured bucket and SQL stores artifact metadata only.
 
+The access-key example above is for local MinIO development only. For production,
+use workload identity or a short-lived role, restrict bucket access to the AI-Q worker
+identity and configured prefix, enable Block Public Access and TLS-only access, and
+enable storage-layer encryption such as SSE-KMS. AI-Q API ownership checks do not
+protect direct bucket access, and AI-Q does not application-encrypt artifact blob bytes.
+See [Production Considerations](./production.md#s3-security-responsibility).
+
 ### Frontend Runtime Settings
 
 | Variable | Default | Description |

@@ -60,10 +60,9 @@ general:
 # ===========================================================================
 # LLMs
 # ===========================================================================
-# Three LLM configurations for different roles:
-# - Intent classification (moderate creativity for routing decisions)
-# - Research (low temperature for factual output)
-# - Deep research orchestrator (high temperature for diverse planning)
+# Role-specific LLM configurations:
+# - Super for intent classification and shallow research
+# - Ultra for clarification and every deep-research role
 llms:
   nemotron_llm_intent:
     _type: nim
@@ -86,6 +85,33 @@ llms:
     num_retries: 5
     chat_template_kwargs:
       enable_thinking: true
+
+# ===========================================================================
+# Functions (tools and agents)
+# ===========================================================================
+  nemotron_ultra_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 16384
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
+
+  nemotron_ultra_writer_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
 
 # ===========================================================================
 # Functions (tools and agents)
@@ -143,7 +169,7 @@ functions:
   # deep_research_agent.
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
+    llm: nemotron_ultra_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -171,7 +197,11 @@ functions:
   # and synthesizes comprehensive reports.
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool

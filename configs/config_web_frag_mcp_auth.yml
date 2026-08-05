@@ -82,12 +82,25 @@ llms:
     _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     top_p: 0.7
-    max_tokens: 65536
+    max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
+
+  nemotron_ultra_writer_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
 
 functions:
   # =========================================================================
@@ -200,7 +213,7 @@ functions:
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
+    llm: nemotron_ultra_llm
     # tools: omitted -> inherits all from data_source_registry
     # exclude_tools: []
     max_turns: 3
@@ -223,7 +236,7 @@ functions:
     source_router_llm: nemotron_ultra_llm
     researcher_llm: nemotron_ultra_llm
     planner_llm: nemotron_ultra_llm
-    writer_llm: nemotron_super_llm
+    writer_llm: nemotron_ultra_writer_llm
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:
       - web_search_tool

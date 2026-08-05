@@ -11,10 +11,11 @@
 --   - aiq_checkpoints  (LangGraph conversation state)
 --
 -- Tables in aiq_jobs:
---   - job_info      — NAT JobStore metadata (status, timestamps, expiry)
---   - job_access    — AIQ-owned job ownership/access control metadata
---   - job_events    — SSE streaming events and job event persistence
---   - summaries     — Document summaries (collection + filename keyed)
+--   - job_info                — NAT JobStore metadata (status, timestamps, expiry)
+--   - job_access              — AIQ-owned job ownership/access control metadata
+--   - deep_research_admission — Atomic capacity and submission-rate reservations
+--   - job_events              — SSE streaming events and job event persistence
+--   - summaries               — Document summaries (collection + filename keyed)
 --
 -- Tables in aiq_checkpoints:
 --   - checkpoints           — LangGraph conversation checkpoints
@@ -58,10 +59,39 @@ CREATE TABLE IF NOT EXISTS job_access (
     owner_auth_type VARCHAR NOT NULL,
     owner_subject VARCHAR NOT NULL,
     owner_email VARCHAR,
+    conversation_id VARCHAR,
+    agent_type VARCHAR,
+    submission_token VARCHAR,
+    submission_expires_at DOUBLE PRECISION,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+ALTER TABLE job_access ADD COLUMN IF NOT EXISTS conversation_id VARCHAR;
+ALTER TABLE job_access ADD COLUMN IF NOT EXISTS agent_type VARCHAR;
+ALTER TABLE job_access ADD COLUMN IF NOT EXISTS submission_token VARCHAR;
+ALTER TABLE job_access ADD COLUMN IF NOT EXISTS submission_expires_at DOUBLE PRECISION;
+
 CREATE INDEX IF NOT EXISTS idx_job_access_owner ON job_access(owner_auth_type, owner_subject);
+-- Supports the report-follow-up default: "latest completed report job in this conversation".
+CREATE INDEX IF NOT EXISTS idx_job_access_conversation ON job_access(conversation_id);
+
+-- Deep-research admission reservations. Successful rows remain for the rolling
+-- submission-rate window; terminal/orphaned rows are cleaned on later admits.
+CREATE TABLE IF NOT EXISTS deep_research_admission (
+    job_id VARCHAR PRIMARY KEY,
+    reservation_token VARCHAR NOT NULL,
+    owner_auth_type VARCHAR NOT NULL,
+    owner_subject VARCHAR NOT NULL,
+    admitted_at DOUBLE PRECISION NOT NULL,
+    reservation_expires_at DOUBLE PRECISION NOT NULL
+);
+
+ALTER TABLE deep_research_admission ADD COLUMN IF NOT EXISTS reservation_token VARCHAR;
+DELETE FROM deep_research_admission WHERE reservation_token IS NULL;
+ALTER TABLE deep_research_admission ALTER COLUMN reservation_token SET NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_deep_research_admission_owner
+ON deep_research_admission(owner_auth_type, owner_subject, admitted_at);
 
 -- Job events table (SSE streaming, event persistence)
 CREATE TABLE IF NOT EXISTS job_events (

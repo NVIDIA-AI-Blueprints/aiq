@@ -145,10 +145,10 @@ tokenomics:
       "azure/openai/gpt-5.2":
         input_per_1m_tokens: 2.50
         output_per_1m_tokens: 10.00
-      "nvidia/nemotron-3-super-120b-a12b":
-        input_per_1m_tokens: 0.12
-        output_per_1m_tokens: 0.50
-        cached_input_per_1m_tokens: 0.10   # optional: omit to bill cached tokens at full input rate
+      # Illustrative market-equivalent rates; verify current provider pricing.
+      "nvidia/nemotron-3-ultra-550b-a55b":
+        input_per_1m_tokens: 0.60
+        output_per_1m_tokens: 3.60
     tools:
       # Key "web_search" matches "advanced_web_search_tool" via substring lookup
       "web_search":

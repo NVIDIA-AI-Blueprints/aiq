@@ -1,13 +1,13 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""submit_agent_job must forward the owner's canonical user_id as the last job arg
-so the worker can bind it on the NAT Context and per_user_mcp_client finds the token."""
+"""submit_agent_job forwards the owner's canonical user_id to the worker."""
 
 from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,10 +42,13 @@ def patched(monkeypatch):
         lambda _t: SimpleNamespace(class_path="pkg.mod.Agent", config_name="deep_research_agent", public=True),
     )
     monkeypatch.setattr(submit_mod, "create_job_access", MagicMock())
+    monkeypatch.setattr(submit_mod, "renew_job_access_reservation", MagicMock(return_value=True))
+    monkeypatch.setattr(submit_mod, "reserve_deep_research_job", AsyncMock(return_value="admission-token"))
+    monkeypatch.setattr(submit_mod, "renew_deep_research_job_reservation", AsyncMock(return_value=True))
     _FakeJobStore.last_job_args = None
 
 
-def test_submit_forwards_owner_user_id_as_last_arg(patched):
+def test_submit_forwards_owner_user_id_before_admission_token(patched):
     principal = Principal(type="jwt", sub="user-1", email="u@example.com")
     asyncio.run(
         submit_mod.submit_agent_job(
@@ -58,11 +61,13 @@ def test_submit_forwards_owner_user_id_as_last_arg(patched):
     )
     job_args = _FakeJobStore.last_job_args
     assert job_args is not None
-    # Owner user_id is appended last. Trailing worker args are:
-    # data_sources, auth_token, encryption policy, initial_files, output_metadata, owner_user_id.
-    assert job_args[-1] == principal_user_id(principal) == "jwt:user-1"
-    assert job_args[-5] == "token-1"
-    assert job_args[-4].mode == "off"
+    # Trailing worker args are:
+    # data_sources, auth_token, encryption policy, initial_files, output_metadata,
+    # owner_user_id, admission fencing token.
+    assert job_args[-2] == principal_user_id(principal) == "jwt:user-1"
+    assert job_args[-6] == "token-1"
+    assert job_args[-5].mode == "off"
+    assert isinstance(job_args[-1], str)
 
 
 def test_context_user_id_binding_mechanism():

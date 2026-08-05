@@ -35,57 +35,52 @@ Common issues and solutions for the AI-Q blueprint.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
-| HTTP 429 or 503 on deep research | Nemotron Super or Nemotron Ultra hosted endpoint availability | Retry after a short delay, reduce concurrency, or follow the [model-specific self-hosting guidance](#nemotron-super-and-ultra--hosted-endpoint-availability) for consistent throughput |
+| HTTP 429 or 503 on deep research | Nemotron hosted endpoint availability | Retry after a short delay, reduce concurrency, or follow the [self-hosting guidance](#nemotron-hosted-endpoint-availability) for consistent throughput |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
 | Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns`, or set `enable_clarifier: false` in the workflow to disable clarification |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
 | Job status stuck on RUNNING | Dask worker crashed | Check Dask logs; the ghost job reaper will eventually mark it FAILURE |
 | OpenShell setup, attestation, readiness, or deletion fails | Gateway, version, policy/config, image, or service-owner mismatch | Follow the canonical [OpenShell inspection and troubleshooting guide](../deployment/openshell.md#inspection-and-troubleshooting) |
 
-## Nemotron Super and Ultra — Hosted Endpoint Availability
+## Nemotron Hosted Endpoint Availability
 
-Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) and Nemotron Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their NVIDIA-hosted endpoints can have limited availability during high demand. During peak periods you may observe:
+Nemotron 3 Super (`nvidia/nemotron-3-super-120b-a12b`) and Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their NVIDIA-hosted endpoints can have limited availability during high demand. During peak periods you may observe:
 
 - Elevated latency or timeouts on LLM inference calls
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
 - Degraded agent workflow performance due to upstream model availability
 
-**Default Configuration:** The default configs use Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) for intent classification, shallow research, and deep-research writing, and Nemotron Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) for the other deep-research roles. If hosted endpoints are saturated, retry after a short delay, reduce concurrency, or self-host for consistent throughput.
+**Default Configuration:** The default configs retain Nemotron 3 Super for intent classification and shallow research, and use Nemotron 3 Ultra for clarification and all deep-research roles. If either hosted endpoint is saturated, retry after a short delay, reduce concurrency, or self-host a downloadable model for consistent throughput.
 
 ### Recommended Mitigation: Self-Host the Affected Model
 
-For production and staging deployments that require consistent throughput and low-latency inference, self-host the affected model with NVIDIA NIM rather than relying on shared endpoints:
+For production and staging deployments that require consistent throughput and low-latency inference, self-host a downloadable NVIDIA NIM rather than relying on shared endpoints. Preview endpoint availability and downloadable NIM availability do not necessarily move in lockstep; verify the current model card before choosing an image.
 
-- [Self-host Nemotron Super](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b?nim=self-hosted)
-- [Self-host Nemotron Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b?nim=self-hosted)
+- [Self-host Nemotron 3 Super 120B A12B](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b/deploy?nim=self-hosted) for the default intent and shallow-research roles
+- [Self-host Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b?nim=self-hosted) for the default clarification and deep-research roles
 
-Once your self-hosted endpoint is running, update the corresponding `base_url` in your config to point at it:
+Once your self-hosted endpoint is running, update the corresponding `base_url` in your config to point at it. AIQ's configuration validator currently requires `NVIDIA_API_KEY` for every `_type: nim` profile, even when a local NIM does not enforce client authentication. Set a non-secret placeholder for the local deployment before starting AIQ:
+
+```bash
+export NVIDIA_API_KEY=local-nim
+```
+
+Then reference that variable in the local profile:
 
 ```yaml
 llms:
-  nemotron_super_llm:
+  local_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "https://<your-brev-endpoint>/v1"
-    api_key: ""
-    temperature: 0.7
-    top_p: 0.7
-    max_tokens: 65536
-    num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: true
-
-  nemotron_ultra_llm:
-    _type: nim
+    # Use the identifier returned by the local NIM's /v1/models endpoint.
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://<your-ultra-endpoint>/v1"
-    api_key: ""
-    temperature: 0.7
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     top_p: 0.7
-    max_tokens: 65536
+    max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 ```
 
 ## Knowledge Layer Issues

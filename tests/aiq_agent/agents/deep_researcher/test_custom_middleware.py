@@ -15,6 +15,7 @@
 
 """Tests for custom middleware."""
 
+import json
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -25,6 +26,7 @@ from deepagents.backends import CompositeBackend
 from deepagents.backends import StateBackend
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from langchain.agents import create_agent
+from langchain.agents.middleware.types import ModelResponse
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
@@ -41,9 +43,16 @@ from aiq_agent.agents.deep_researcher.custom_middleware import PlanPersistenceMi
 from aiq_agent.agents.deep_researcher.custom_middleware import RequiredOutputFileMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingPersistenceMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import StateMutationGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import StructuredResponseTextFallbackMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import TodoQuotaMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
+from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
+from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
+from aiq_agent.agents.deep_researcher.resource_limits import StateBudgetLedger
 from aiq_agent.agents.deep_researcher.tools.source_registry import build_get_verified_sources_tool
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.data_source_registry import populate_from_config
@@ -55,6 +64,129 @@ class _ToolBindingFakeChatModel(FakeMessagesListChatModel):
 
     def bind_tools(self, tools, *, tool_choice=None, **kwargs):
         return self
+
+
+class TestStructuredResponseTextFallbackMiddleware:
+    """Strictly recover provider responses that contain the requested contract as JSON text."""
+
+    @staticmethod
+    def _routing() -> dict[str, object]:
+        return {
+            "domain_id": "general",
+            "domain_name": "General",
+            "routing_reason": "Best fit",
+            "recommendations": [],
+            "fallback_sources": [],
+            "planner_guidance": "Use web search.",
+        }
+
+    def test_promotes_exact_schema_valid_json_in_agent(self) -> None:
+        payload = self._routing()
+        model = _ToolBindingFakeChatModel(responses=[AIMessage(content=json.dumps(payload))])
+        agent = create_agent(
+            model=model,
+            tools=[],
+            middleware=[StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)],
+            response_format=SourceRoutingPlan,
+        )
+
+        result = agent.invoke({"messages": [HumanMessage(content="Route this request.")]})
+
+        assert result["structured_response"] == SourceRoutingPlan.model_validate(payload)
+
+    def test_corrects_empty_response_in_agent(self) -> None:
+        payload = self._routing()
+        model = _ToolBindingFakeChatModel(responses=[AIMessage(content=""), AIMessage(content=json.dumps(payload))])
+        agent = create_agent(
+            model=model,
+            tools=[],
+            middleware=[StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)],
+            response_format=SourceRoutingPlan,
+        )
+
+        result = agent.invoke({"messages": [HumanMessage(content="Route this request.")]})
+
+        assert result["structured_response"] == SourceRoutingPlan.model_validate(payload)
+
+    @pytest.mark.parametrize(
+        "content",
+        ["", "```json\n{}\n```", "{}\nUse this routing plan.", "[]", "{}"],
+    )
+    def test_retries_non_exact_or_schema_invalid_content_without_tools(self, content: str) -> None:
+        payload = self._routing()
+        responses = [
+            ModelResponse(result=[AIMessage(content=content)]),
+            ModelResponse(result=[AIMessage(content=json.dumps(payload))]),
+        ]
+        request = MagicMock()
+        request.messages = [HumanMessage(content="Route this request.")]
+        corrected_request = object()
+        request.override.return_value = corrected_request
+        handler = MagicMock(side_effect=responses)
+        middleware = StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)
+
+        result = middleware.wrap_model_call(request, handler)
+
+        assert result.structured_response == SourceRoutingPlan.model_validate(payload)
+        assert handler.call_args_list == [((request,),), ((corrected_request,),)]
+        request.override.assert_called_once()
+        overrides = request.override.call_args.kwargs
+        assert overrides["tools"] == []
+        assert overrides["tool_choice"] is None
+        assert overrides["response_format"] is None
+        assert overrides["messages"][:-1] == request.messages
+        correction = overrides["messages"][-1]
+        assert isinstance(correction, HumanMessage)
+        assert "exactly one JSON object" in str(correction.content)
+        assert '"domain_id"' in str(correction.content)
+
+    @pytest.mark.asyncio
+    async def test_async_correction_is_bounded_to_one_retry(self) -> None:
+        responses = [
+            ModelResponse(result=[AIMessage(content="")]),
+            ModelResponse(result=[AIMessage(content="still invalid")]),
+        ]
+        request = MagicMock()
+        request.messages = [HumanMessage(content="Route this request.")]
+        corrected_request = object()
+        request.override.return_value = corrected_request
+        handler = AsyncMock(side_effect=responses)
+        middleware = StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)
+
+        result = await middleware.awrap_model_call(request, handler)
+
+        assert result is responses[1]
+        assert result.structured_response is None
+        assert handler.await_args_list == [((request,),), ((corrected_request,),)]
+
+    @pytest.mark.asyncio
+    async def test_preserves_native_structured_response(self) -> None:
+        structured = SourceRoutingPlan.model_validate(self._routing())
+        response = ModelResponse(result=[AIMessage(content="")], structured_response=structured)
+        middleware = StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)
+        handler = AsyncMock(return_value=response)
+
+        result = await middleware.awrap_model_call(None, handler)
+
+        assert result is response
+        handler.assert_awaited_once_with(None)
+
+    @pytest.mark.asyncio
+    async def test_does_not_intercept_tool_calls(self) -> None:
+        response = ModelResponse(
+            result=[
+                AIMessage(
+                    content=json.dumps(self._routing()),
+                    tool_calls=[{"name": "lookup_source_catalog", "args": {}, "id": "lookup-1"}],
+                )
+            ]
+        )
+        middleware = StructuredResponseTextFallbackMiddleware(SourceRoutingPlan)
+
+        result = await middleware.awrap_model_call(None, AsyncMock(return_value=response))
+
+        assert result is response
+        assert result.structured_response is None
 
 
 class TestSourceRoutingGuardMiddleware:
@@ -316,6 +448,106 @@ class TestFinalReportOwnershipGuardMiddleware:
         handler.assert_awaited_once_with(request)
 
 
+class TestStateMutationGuardMiddleware:
+    """Model filesystem writes cannot mutate shared state outside writer ownership."""
+
+    @staticmethod
+    def _request(tool_name: str, path: str) -> MagicMock:
+        request = MagicMock()
+        request.tool_call = {"name": tool_name, "args": {"file_path": path}, "id": "tc1"}
+        return request
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("path", ["/shared/plan.json", "/shared/output.md", "/workspace/scratch.py"])
+    async def test_non_writer_without_sandbox_cannot_mutate_any_state_path(self, path: str) -> None:
+        middleware = StateMutationGuardMiddleware(writer=False, sandbox_enabled=False)
+        handler = AsyncMock()
+
+        result = await middleware.awrap_tool_call(self._request("write_file", path), handler)
+
+        assert result.status == "error"
+        assert str(result.content).startswith("state_mutation_role_denied:")
+        handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_writer_with_sandbox_can_write_workspace_but_not_shared_state(self) -> None:
+        middleware = StateMutationGuardMiddleware(writer=False, sandbox_enabled=True)
+        expected = ToolMessage(content="ok", tool_call_id="tc1")
+        handler = AsyncMock(return_value=expected)
+
+        workspace = await middleware.awrap_tool_call(self._request("write_file", "/workspace/scratch.py"), handler)
+        shared = await middleware.awrap_tool_call(self._request("write_file", "/shared/plan.json"), handler)
+
+        assert workspace is expected
+        assert shared.status == "error"
+        handler.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_name", "path", "reason"),
+        [
+            ("write_file", "/shared/plan.json", "writer_state_path_denied:"),
+            ("edit_file", "/shared/output.md", "writer_output_edit_not_supported:"),
+        ],
+    )
+    async def test_writer_is_limited_to_bounded_output_overwrite(
+        self,
+        tool_name: str,
+        path: str,
+        reason: str,
+    ) -> None:
+        middleware = StateMutationGuardMiddleware(writer=True, sandbox_enabled=True)
+        handler = AsyncMock()
+
+        result = await middleware.awrap_tool_call(self._request(tool_name, path), handler)
+
+        assert result.status == "error"
+        assert str(result.content).startswith(reason)
+        handler.assert_not_awaited()
+
+    @pytest.mark.parametrize(
+        ("writer", "tool_name", "path", "reason"),
+        [
+            (False, "write_file", "/shared/plan.json", "state_mutation_role_denied:"),
+            (True, "write_file", "/shared/plan.json", "writer_state_path_denied:"),
+            (True, "edit_file", "/shared/output.md", "writer_output_edit_not_supported:"),
+        ],
+    )
+    def test_sync_hook_enforces_same_state_mutation_policy(
+        self,
+        writer: bool,
+        tool_name: str,
+        path: str,
+        reason: str,
+    ) -> None:
+        middleware = StateMutationGuardMiddleware(writer=writer, sandbox_enabled=True)
+        handler = MagicMock()
+
+        result = middleware.wrap_tool_call(self._request(tool_name, path), handler)
+
+        assert result.status == "error"
+        assert str(result.content).startswith(reason)
+        handler.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("writer", "tool_name", "path"),
+        [
+            (False, "write_file", "/workspace/scratch.py"),
+            (False, "read_file", "/shared/plan.json"),
+            (True, "write_file", "/shared/output.md"),
+        ],
+    )
+    def test_sync_hook_delegates_allowed_calls(self, writer: bool, tool_name: str, path: str) -> None:
+        middleware = StateMutationGuardMiddleware(writer=writer, sandbox_enabled=True)
+        expected = ToolMessage(content="ok", tool_call_id="tc1")
+        handler = MagicMock(return_value=expected)
+
+        result = middleware.wrap_tool_call(self._request(tool_name, path), handler)
+
+        assert result is expected
+        handler.assert_called_once()
+
+
 class TestFinalReportCommitMiddleware:
     """Writer mutations are overwrite-capable and recorded only after success."""
 
@@ -396,46 +628,48 @@ class TestFinalReportCommitMiddleware:
         assert str(result.content).startswith("writer_output_path_invalid:")
 
     @pytest.mark.asyncio
-    async def test_successful_edit_refreshes_digest_from_downloaded_bytes(self) -> None:
-        tracker = FinalReportCommitTracker()
-        tracker.record("# Baseline")
-        backend = MagicMock()
-        backend.adownload_files = AsyncMock(
-            return_value=[SimpleNamespace(error=None, content=b"# Baseline\n\n![Chart](artifact://chart.png)")]
-        )
-        middleware = FinalReportCommitMiddleware(backend=backend, tracker=tracker)
-        expected = ToolMessage(content="edited", tool_call_id="tc1", status="success")
-
-        result = await middleware.awrap_tool_call(
-            self._request("edit_file", old_string="# Baseline", new_string="# Baseline"),
-            AsyncMock(return_value=expected),
-        )
-
-        assert result is expected
-        assert tracker.committed_text(
-            {"/shared/output.md": {"content": "# Baseline\n\n![Chart](artifact://chart.png)"}}
-        )
-
-    @pytest.mark.asyncio
-    async def test_failed_edit_keeps_previous_digest(self) -> None:
+    async def test_edit_is_rejected_before_backend_mutation(self) -> None:
         tracker = FinalReportCommitTracker()
         tracker.record("# Baseline")
         backend = MagicMock()
         backend.adownload_files = AsyncMock()
         middleware = FinalReportCommitMiddleware(backend=backend, tracker=tracker)
-        failed = ToolMessage(content="edit failed", tool_call_id="tc1", status="error")
+        handler = AsyncMock()
 
         result = await middleware.awrap_tool_call(
-            self._request("edit_file", old_string="missing", new_string="new"),
-            AsyncMock(return_value=failed),
+            self._request("edit_file", old_string="# Baseline", new_string="# Baseline"),
+            handler,
         )
 
-        assert result is failed
+        assert result.status == "error"
+        assert str(result.content).startswith("writer_output_edit_not_supported:")
+        assert "use write_file" in str(result.content)
+        handler.assert_not_awaited()
         backend.adownload_files.assert_not_awaited()
         assert tracker.committed_text({"/shared/output.md": {"content": "# Baseline"}}) == "# Baseline"
 
     @pytest.mark.asyncio
-    async def test_edit_exception_is_sanitized_and_keeps_previous_digest(self) -> None:
+    async def test_edit_rejection_keeps_previous_digest(self) -> None:
+        tracker = FinalReportCommitTracker()
+        tracker.record("# Baseline")
+        backend = MagicMock()
+        backend.adownload_files = AsyncMock()
+        middleware = FinalReportCommitMiddleware(backend=backend, tracker=tracker)
+        handler = AsyncMock()
+
+        result = await middleware.awrap_tool_call(
+            self._request("edit_file", old_string="missing", new_string="new"),
+            handler,
+        )
+
+        assert result.status == "error"
+        assert str(result.content).startswith("writer_output_edit_not_supported:")
+        handler.assert_not_awaited()
+        backend.adownload_files.assert_not_awaited()
+        assert tracker.committed_text({"/shared/output.md": {"content": "# Baseline"}}) == "# Baseline"
+
+    @pytest.mark.asyncio
+    async def test_edit_handler_is_never_called(self) -> None:
         tracker = FinalReportCommitTracker()
         tracker.record("# Baseline")
         backend = MagicMock()
@@ -448,10 +682,29 @@ class TestFinalReportCommitMiddleware:
         )
 
         assert result.status == "error"
-        assert str(result.content).startswith("writer_output_commit_failed:")
-        assert "sensitive backend detail" not in str(result.content)
+        assert str(result.content).startswith("writer_output_edit_not_supported:")
         backend.adownload_files.assert_not_awaited()
         assert tracker.committed_text({"/shared/output.md": {"content": "# Baseline"}}) == "# Baseline"
+
+    @pytest.mark.asyncio
+    async def test_oversized_write_is_rejected_before_backend_mutation(self) -> None:
+        limits = DeepResearchResourceLimits(max_final_report_bytes=4)
+        backend = MagicMock()
+        backend.aupload_files = AsyncMock()
+        middleware = FinalReportCommitMiddleware(
+            backend=backend,
+            tracker=FinalReportCommitTracker(),
+            resource_limits=limits,
+        )
+
+        result = await middleware.awrap_tool_call(
+            self._request("write_file", content="ééé"),
+            AsyncMock(),
+        )
+
+        assert result.status == "error"
+        assert str(result.content).startswith("writer_output_limit_exceeded:")
+        backend.aupload_files.assert_not_awaited()
 
     def test_trackers_do_not_share_commit_state_between_runs(self) -> None:
         first = FinalReportCommitTracker()
@@ -846,6 +1099,113 @@ class TestTodoSuppressionMiddleware:
         assert "write_todos" not in str(kwargs["system_message"].content)
 
 
+class TestTodoQuotaMiddleware:
+    """Tests for bounded orchestrator write_todos state replacement."""
+
+    @staticmethod
+    def _request(todos):
+        request = MagicMock()
+        request.tool_call = {
+            "name": "write_todos",
+            "args": {"todos": todos},
+            "id": "todo-call",
+        }
+        return request
+
+    def test_exact_todo_count_item_and_aggregate_boundaries_pass(self):
+        """Equality at every configured todo boundary still reaches the state tool."""
+        middleware = TodoQuotaMiddleware(
+            resource_limits=DeepResearchResourceLimits(
+                max_todo_items=2,
+                max_todo_item_chars=3,
+                max_total_todo_chars=6,
+            )
+        )
+        request = self._request(
+            [
+                {"content": "one", "status": "in_progress"},
+                {"content": "two", "status": "pending"},
+            ]
+        )
+        handler = MagicMock(return_value="updated")
+
+        assert middleware.wrap_tool_call(request, handler) == "updated"
+        handler.assert_called_once_with(request)
+
+    @pytest.mark.parametrize(
+        ("todos", "message"),
+        [
+            (
+                [
+                    {"content": "a", "status": "pending"},
+                    {"content": "b", "status": "pending"},
+                    {"content": "c", "status": "pending"},
+                ],
+                "2-item limit",
+            ),
+            ([{"content": "four", "status": "pending"}], "3-character limit"),
+            (
+                [
+                    {"content": "aaa", "status": "pending"},
+                    {"content": "bbb", "status": "pending"},
+                ],
+                "5-character aggregate",
+            ),
+        ],
+    )
+    def test_oversized_todos_return_tool_error_before_state_mutation(self, todos, message):
+        """Count, per-item, and aggregate overages remain recoverable by the model."""
+        middleware = TodoQuotaMiddleware(
+            resource_limits=DeepResearchResourceLimits(
+                max_todo_items=2,
+                max_todo_item_chars=3,
+                max_total_todo_chars=5,
+            )
+        )
+        handler = MagicMock()
+
+        result = middleware.wrap_tool_call(self._request(todos), handler)
+
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        assert result.tool_call_id == "todo-call"
+        assert message in str(result.content)
+        handler.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_async_oversized_todos_return_tool_error_before_state_mutation(self):
+        """The asynchronous guard has the same recoverable rejection contract."""
+        middleware = TodoQuotaMiddleware(
+            resource_limits=DeepResearchResourceLimits(
+                max_todo_items=1,
+                max_todo_item_chars=3,
+                max_total_todo_chars=3,
+            )
+        )
+        handler = AsyncMock()
+
+        result = await middleware.awrap_tool_call(
+            self._request([{"content": "one"}, {"content": "two"}]),
+            handler,
+        )
+
+        assert isinstance(result, ToolMessage)
+        assert result.status == "error"
+        assert "1-item limit" in str(result.content)
+        handler.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_non_todo_tool_is_unchanged(self):
+        """The quota middleware remains narrow to the single state-replacement tool."""
+        middleware = TodoQuotaMiddleware(resource_limits=DeepResearchResourceLimits(max_todo_items=1))
+        request = MagicMock()
+        request.tool_call = {"name": "think", "args": {"thought": "x"}, "id": "think-call"}
+        handler = AsyncMock(return_value="ok")
+
+        assert await middleware.awrap_tool_call(request, handler) == "ok"
+        handler.assert_awaited_once_with(request)
+
+
 class TestSourceRegistryMiddleware:
     """Tests for SourceRegistryMiddleware allowlist + source extraction."""
 
@@ -900,8 +1260,8 @@ class TestSourceRegistryMiddleware:
         req.tool_call = {"name": tool_name}
         return req
 
-    def _make_tool_result(self, content: str):
-        return ToolMessage(content=content, tool_call_id="tc1")
+    def _make_tool_result(self, content: str, *, status: str = "success"):
+        return ToolMessage(content=content, tool_call_id="tc1", status=status)
 
     # -- URL extraction --
 
@@ -929,6 +1289,16 @@ class TestSourceRegistryMiddleware:
 
         urls = {s.url for s in middleware.registry.all_sources()}
         assert urls == {"https://a.com/page", "https://b.com/page"}
+
+    @pytest.mark.asyncio
+    async def test_typed_error_result_is_not_captured(self, middleware):
+        content = "Search failed. See https://provider.example/errors/unknown"
+        handler = AsyncMock(return_value=self._make_tool_result(content, status="error"))
+        request = self._make_request("advanced_web_search_tool")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        assert middleware.registry.all_sources() == []
 
     @pytest.mark.asyncio
     async def test_knowledge_layer_citation_key_captured(self, middleware):
@@ -1246,6 +1616,70 @@ class _RecordingBackend:
         return [SimpleNamespace(path=path, error=None) for path, _ in files]
 
 
+class TestSourceRoutingPersistenceMiddleware:
+    """Source-routing state is written by middleware, not model filesystem tools."""
+
+    @staticmethod
+    def _routing() -> dict[str, object]:
+        return {
+            "domain_id": "general",
+            "domain_name": "General",
+            "routing_reason": "Best fit",
+            "recommendations": [],
+            "fallback_sources": [],
+            "planner_guidance": "Use web search.",
+        }
+
+    def test_persists_structured_response_to_shared_state(self) -> None:
+        backend = MagicMock()
+        backend.upload_files.return_value = [SimpleNamespace(path="/shared/source_routing.json", error=None)]
+        middleware = SourceRoutingPersistenceMiddleware(backend=backend)
+
+        middleware.after_agent({"structured_response": self._routing()}, None)
+
+        path, content = backend.upload_files.call_args.args[0][0]
+        assert path == "/shared/source_routing.json"
+        assert json.loads(content) == self._routing()
+
+    def test_rolls_back_budget_when_backend_rejects_route(self) -> None:
+        limits = DeepResearchResourceLimits(max_state_file_count=1)
+        ledger = StateBudgetLedger(limits=limits, files={}, sandbox_enabled=True)
+        backend = MagicMock()
+        backend.upload_files.return_value = [SimpleNamespace(path="/shared/source_routing.json", error="private")]
+        middleware = SourceRoutingPersistenceMiddleware(
+            backend=backend,
+            state_budget=ledger,
+            resource_limits=limits,
+        )
+
+        with pytest.raises(RuntimeError, match="Failed to persist source routing"):
+            middleware.after_agent({"structured_response": self._routing()}, None)
+
+        ledger.reserve([("/shared/plan.json", b"ok")])
+
+    def test_serialized_byte_boundary_uses_dedicated_source_routing_limit(self) -> None:
+        routing = self._routing()
+        serialized_size = len(json.dumps(routing, indent=2, ensure_ascii=False).encode("utf-8"))
+        accepted_backend = MagicMock()
+        accepted_backend.upload_files.return_value = [SimpleNamespace(path="/shared/source_routing.json", error=None)]
+        accepted = SourceRoutingPersistenceMiddleware(
+            backend=accepted_backend,
+            resource_limits=DeepResearchResourceLimits(max_source_routing_bytes=serialized_size),
+        )
+
+        accepted.after_agent({"structured_response": routing}, None)
+
+        accepted_backend.upload_files.assert_called_once()
+        rejected_backend = MagicMock()
+        rejected = SourceRoutingPersistenceMiddleware(
+            backend=rejected_backend,
+            resource_limits=DeepResearchResourceLimits(max_source_routing_bytes=serialized_size - 1),
+        )
+        with pytest.raises(ValueError, match=f"{serialized_size - 1}-byte serialized size limit"):
+            rejected.after_agent({"structured_response": routing}, None)
+        rejected_backend.upload_files.assert_not_called()
+
+
 class TestPlanPersistenceMiddleware:
     """Tests for PlanPersistenceMiddleware."""
 
@@ -1276,6 +1710,85 @@ class TestPlanPersistenceMiddleware:
         await mw.aafter_agent({}, runtime=None)
 
         assert backend.uploads == []
+
+    @pytest.mark.asyncio
+    async def test_plan_accepts_exact_query_character_boundary(self):
+        """Main-query plus subquery characters are counted exactly before upload."""
+        backend = _RecordingBackend()
+        middleware = PlanPersistenceMiddleware(
+            backend=backend,
+            resource_limits=DeepResearchResourceLimits(max_total_query_chars=5),
+        )
+        plan = {"queries": [{"query": "abc", "subqueries": ["de"]}]}
+
+        await middleware.aafter_agent({"structured_response": plan}, runtime=None)
+
+        assert len(backend.uploads) == 1
+
+    @pytest.mark.asyncio
+    async def test_plan_rejects_query_character_overage_before_upload(self):
+        """One aggregate query character over the quota cannot mutate shared state."""
+        backend = _RecordingBackend()
+        middleware = PlanPersistenceMiddleware(
+            backend=backend,
+            resource_limits=DeepResearchResourceLimits(max_total_query_chars=4),
+        )
+        plan = {"queries": [{"query": "abc", "subqueries": ["de"]}]}
+
+        with pytest.raises(ValueError, match="4-character aggregate query limit"):
+            await middleware.aafter_agent({"structured_response": plan}, runtime=None)
+
+        assert backend.uploads == []
+
+    @pytest.mark.asyncio
+    async def test_plan_serialized_byte_boundary_accepts_exact_and_rejects_one_less(self):
+        """Plan size is measured on the exact UTF-8 payload that would be uploaded."""
+        import json
+
+        plan = {"queries": [{"query": "abc", "subqueries": []}]}
+        serialized_size = len(json.dumps(plan, indent=2, ensure_ascii=False).encode("utf-8"))
+        accepted_backend = _RecordingBackend()
+        accepted = PlanPersistenceMiddleware(
+            backend=accepted_backend,
+            resource_limits=DeepResearchResourceLimits(max_plan_bytes=serialized_size),
+        )
+
+        await accepted.aafter_agent({"structured_response": plan}, runtime=None)
+
+        assert len(accepted_backend.uploads) == 1
+        rejected_backend = _RecordingBackend()
+        rejected = PlanPersistenceMiddleware(
+            backend=rejected_backend,
+            resource_limits=DeepResearchResourceLimits(max_plan_bytes=serialized_size - 1),
+        )
+        with pytest.raises(ValueError, match="serialized size limit"):
+            await rejected.aafter_agent({"structured_response": plan}, runtime=None)
+        assert rejected_backend.uploads == []
+
+    @pytest.mark.asyncio
+    async def test_plan_query_count_boundary_rejects_before_upload(self):
+        """The middleware independently enforces the job query-count ceiling."""
+        accepted_backend = _RecordingBackend()
+        accepted = PlanPersistenceMiddleware(
+            backend=accepted_backend,
+            resource_limits=DeepResearchResourceLimits(max_research_queries=2),
+        )
+        queries = [
+            {"query": "one", "subqueries": []},
+            {"query": "two", "subqueries": []},
+        ]
+
+        await accepted.aafter_agent({"structured_response": {"queries": queries}}, runtime=None)
+
+        assert len(accepted_backend.uploads) == 1
+        rejected_backend = _RecordingBackend()
+        rejected = PlanPersistenceMiddleware(
+            backend=rejected_backend,
+            resource_limits=DeepResearchResourceLimits(max_research_queries=1),
+        )
+        with pytest.raises(ValueError, match="1-query job limit"):
+            await rejected.aafter_agent({"structured_response": {"queries": queries}}, runtime=None)
+        assert rejected_backend.uploads == []
 
     def test_sync_after_agent_persists(self):
         """The synchronous hook persists via the same path (dict payloads supported)."""

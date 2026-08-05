@@ -34,6 +34,9 @@ release; the candidate will be stabilized before the final `v2.2.0` release.
 
 - The repository source Helm chart honors `helm install -n <namespace>` for every namespaced resource, including GitOps-rendered deployments; chart metadata advances to `aiq2-web` 2.1.1 with the `aiq` 0.0.5 dependency
 - NAT-exported async-job traces preserve configured workflow, task/batch, named-agent, and model/tool hierarchy across concurrent researchers without copying graph-state content into structural agent spans
+- Deep-research intake uses atomic per-principal, deployment-wide, and per-minute admission controls before Dask enqueue; each job also enforces hard input, runtime, plan, report, shared-state, query, note, todo, and source-tool budgets
+- Document ingestion enforces server-side file-count, per-file, aggregate-size, declared-type, and content validation using the same upload settings as the UI
+- The embedded Dask scheduler, dashboard, and worker listeners bind to loopback; production guidance defines the customer-operated security boundaries for external Dask, provider quotas, authentication, and S3-compatible artifact storage
 
 **Agent Skills, UX, and developer workflow**
 

@@ -23,6 +23,7 @@ from langchain_core.messages import HumanMessage
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import field_validator
+from pydantic import model_validator
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
@@ -50,6 +51,8 @@ from .agent import DeepResearcherAgent
 from .deepagents_runtime import DeepResearchSandboxConfig
 from .deepagents_runtime import DeepResearchSkillsConfig
 from .models import DeepResearchAgentState
+from .resource_limits import DeepResearchExecutionTimeout
+from .resource_limits import DeepResearchResourceLimits
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +113,10 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         ge=1,
         description="Maximum concrete inputs accepted by batch-capable source tool wrappers.",
     )
+    resource_limits: DeepResearchResourceLimits = Field(
+        default_factory=DeepResearchResourceLimits,
+        description="Hard per-job limits for request, plan, notes, source calls, and execution time.",
+    )
 
     @field_validator("skills", mode="before")
     @classmethod
@@ -124,6 +131,12 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         if isinstance(value, dict):
             return DeepResearchSandboxConfig.model_validate(value)
         return value
+
+    @model_validator(mode="after")
+    def _research_concurrency_fits_job_budget(self):
+        if self.max_research_concurrency > self.resource_limits.max_research_queries:
+            raise ValueError("max_research_concurrency cannot exceed resource_limits.max_research_queries")
+        return self
 
 
 @register_function(config_type=DeepResearchSkillsConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -235,6 +248,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         max_research_concurrency=config.max_research_concurrency,
         max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
         max_source_tool_batch_size=config.max_source_tool_batch_size,
+        resource_limits=config.resource_limits,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -272,6 +286,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     max_research_concurrency=config.max_research_concurrency,
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
+                    resource_limits=config.resource_limits,
                 )
                 owns_active_agent = True
 
@@ -280,7 +295,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
 
             result = await active_agent.run(state)
             return result
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, DeepResearchExecutionTimeout):
             interrupted = True
             raise
         except Exception:

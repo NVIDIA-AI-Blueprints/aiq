@@ -498,6 +498,7 @@ def extract_sources_from_tool_result(
     tool_name: str,
     content: str,
     source_id: str | None = None,
+    result_status: str | None = None,
 ) -> list[SourceEntry]:
     """Extract sources from a tool's output.
 
@@ -512,7 +513,8 @@ def extract_sources_from_tool_result(
     This means new sources (Bing, Perplexity, etc.) work automatically
     without any parser registration — as long as their output contains URLs.
 
-    The non-URL fallback is permissive on purpose: callers (the shallow and
+    A typed ``error`` result is never citable, even when its diagnostic body
+    contains URLs. The non-URL fallback is permissive on purpose: callers (the shallow and
     deep researchers) are responsible for deciding which tool calls are
     eligible to contribute sources, typically by limiting capture to the
     agent's loaded tool set. The optional ``source_id`` is stored on the
@@ -521,6 +523,12 @@ def extract_sources_from_tool_result(
     :func:`aiq_agent.common.data_source_registry.get_source_id_for_tool`,
     but it does not gate the fallback.
     """
+    # Reject provider/status payloads before running source parsers. Error
+    # responses can contain documentation or request URLs, but those URLs are
+    # diagnostics rather than evidence and must not satisfy citation checks.
+    if result_status == "error" or _is_non_citable_status_output(content):
+        return []
+
     name_lower = tool_name.lower()
     for match_fn, parser_fn in _PARSER_REGISTRY:
         if match_fn(name_lower):
@@ -533,9 +541,6 @@ def extract_sources_from_tool_result(
     entries = _parse_generic_urls(content, tool_name)
     if entries:
         return entries
-
-    if _is_non_citable_status_output(content):
-        return []
 
     # Non-URL fallback: register the tool result itself as a source whenever
     # the tool produced non-empty output. The caller has already decided
@@ -552,7 +557,35 @@ def _is_non_citable_status_output(content: str) -> bool:
     normalized = re.sub(r"\s+", " ", content.strip()).rstrip(".").lower()
     if not normalized:
         return False
-    if normalized.startswith("error:"):
+
+    try:
+        payload = json.loads(content)
+    except (json.JSONDecodeError, TypeError):
+        payload = None
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if error not in (None, False, "", [], {}):
+            return True
+        for key in ("status", "status_code", "statusCode", "http_status"):
+            status = payload.get(key)
+            try:
+                status_code = int(status)
+            except (TypeError, ValueError):
+                continue
+            if 400 <= status_code < 600:
+                return True
+
+    if re.match(r"^error(?:\s*[:=]|\s+[45]\d{2}\b)", normalized):
+        return True
+    if re.match(
+        r"^(?:search|request|tool)\b.{0,80}\b(?:error|failed|failure)\b.{0,40}\b(?:status\s*)?[45]\d{2}\b",
+        normalized,
+    ):
+        return True
+    if normalized.startswith(("{", "[")) and re.search(
+        r"[\"']?(?:status|status[_-]?code|http[_-]?status)[\"']?\s*[:=]\s*[\"']?[45]\d{2}\b",
+        normalized,
+    ):
         return True
     return normalized == "search returned no results" or normalized.endswith(" search returned no results")
 

@@ -65,6 +65,7 @@ logger = logging.getLogger(__name__)
 
 install_reconnectable_handler()
 
+_DASK_LOOPBACK_DASHBOARD_ADDRESS = "127.0.0.1:8787"
 
 _validators: list = []
 
@@ -227,7 +228,17 @@ class AIQAPIWorker(FastApiFrontEndPluginWorker):
 
     @override
     async def add_routes(self, app: FastAPI, builder: WorkflowBuilder):
-        await super().add_routes(app, builder)
+        # NAT registers direct async-generation routes when Dask is available.
+        # Those routes submit straight to NAT's JobStore and therefore bypass
+        # AI-Q's admission and job-ownership controls.  Hide Dask availability
+        # only while NAT registers its routes, then restore it before adding the
+        # guarded AI-Q async job API below.
+        dask_available = self._dask_available
+        self._dask_available = False
+        try:
+            await super().add_routes(app, builder)
+        finally:
+            self._dask_available = dask_available
 
         # =====================================================================
         # Async Job API routes
@@ -301,6 +312,43 @@ class AIQAPIPlugin(FastApiFrontEndPlugin):
     def __init__(self, full_config: Config, config: AIQAPIConfig):
         super().__init__(full_config=full_config)
         self.config = config
+
+    @override
+    async def run(self) -> None:
+        if self.front_end_config.scheduler_address is not None:
+            await super().run()
+            return
+
+        # NAT 1.8 creates its LocalCluster directly and does not expose a
+        # dashboard-address hook.  Its pinned Dask default is ``:8787``, which
+        # binds the dashboard on every interface even though cluster RPC is
+        # loopback-only.  Inject the safer constructor default for NAT's one
+        # local-cluster creation without copying NAT's run implementation.
+        #
+        # Restore the module symbol inside the constructor wrapper, before
+        # LocalCluster starts, so the compatibility shim cannot affect clusters
+        # created later in the process.
+        try:
+            import dask.distributed as dask_distributed
+        except ImportError:
+            # Preserve NAT's optional-Dask behavior.
+            await super().run()
+            return
+
+        local_cluster_factory = dask_distributed.LocalCluster
+
+        def local_cluster_with_loopback_dashboard(*args, **kwargs):
+            if dask_distributed.LocalCluster is local_cluster_with_loopback_dashboard:
+                dask_distributed.LocalCluster = local_cluster_factory
+            kwargs.setdefault("dashboard_address", _DASK_LOOPBACK_DASHBOARD_ADDRESS)
+            return local_cluster_factory(*args, **kwargs)
+
+        dask_distributed.LocalCluster = local_cluster_with_loopback_dashboard
+        try:
+            await super().run()
+        finally:
+            if dask_distributed.LocalCluster is local_cluster_with_loopback_dashboard:
+                dask_distributed.LocalCluster = local_cluster_factory
 
     @override
     def get_worker_class(self) -> type[FastApiFrontEndPluginWorkerBase]:

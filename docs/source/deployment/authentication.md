@@ -4,9 +4,18 @@ SPDX-License-Identifier: Apache-2.0
 -->
 # Authentication
 
-AIQ authentication is disabled by default for local development. When enabled, the web UI signs users
-in with an OAuth/OIDC provider and the backend validates the resulting JWT before serving protected
-API routes.
+AIQ authentication is disabled by default for local development. That mode represents
+one trusted user or trust domain; it is not a multi-user authorization boundary and
+must not be exposed directly to a shared or untrusted network. Customers operating a
+multi-user or externally reachable deployment must enable AIQ authentication or place
+AIQ behind a customer-managed authenticated gateway, and must own the corresponding
+authorization policy, network isolation, and edge rate limits.
+
+When AIQ authentication is configured, the web UI signs users in with an OAuth/OIDC
+provider, and the backend validates any presented bearer token or `idToken` cookie.
+External requests require a valid token when `REQUIRE_AUTH=true` and the request
+hostname is classified through `AIQ_EXTERNAL_HOSTNAMES`; requests outside that
+boundary remain on the trusted/internal path.
 
 Use this guide when you need to:
 

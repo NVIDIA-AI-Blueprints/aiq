@@ -97,7 +97,7 @@ repointing role fields — no Python changes.
 | Parameter | Typical use | Notes |
 |-----------|-------------|-------|
 | `_type` | `nim` or `openai` | Provider plugin |
-| `model_name` | required | e.g. `nvidia/nemotron-3-super-120b-a12b` |
+| `model_name` | required | e.g. `nvidia/nemotron-3-ultra-550b-a55b` |
 | `base_url` | NIM / compatible endpoint | Set explicitly for hosted NIM |
 | `api_key` | optional | Falls back to `NVIDIA_API_KEY` for NIM |
 | `temperature`, `top_p`, `max_tokens` | per role | See role table in configuration-reference |

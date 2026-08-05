@@ -78,4 +78,4 @@ Results are written to `frontends/benchmarks/deepsearch_qa/results` (or the `out
 
 | Config | Description |
 |--------|-------------|
-| `configs/config_deepsearch_qa.yml` | Default: Nemotron on integrate.api, OpenAI judge. Use for quickstart. |
+| `configs/config_deepsearch_qa.yml` | Default: Nemotron Ultra on NVIDIA API Catalog, OpenAI judge. Use for quickstart. |

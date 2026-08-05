@@ -417,7 +417,7 @@ def test_shared_embedding_defaults_match_adapter(monkeypatch):
 
     assert str(config.embed_base_url) == "https://integrate.api.nvidia.com/v1"
     assert adapter_config.embed_base_url == "https://integrate.api.nvidia.com/v1"
-    assert config.embed_model == "nvidia/llama-nemotron-embed-vl-1b-v2"
+    assert config.embed_model == "nvidia/nemotron-3-embed-1b"
     assert config.embed_dim == 2048
     assert adapter_config.embed_model == config.embed_model
     assert adapter_config.embed_dim == config.embed_dim

@@ -244,7 +244,8 @@ class ShallowResearcherAgent:
                     response = await self._get_llm().ainvoke(full_messages)
                     return {"messages": [response], "tool_iterations": iterations}
 
-                llm_with_tools = self._get_llm().bind_tools(self.tools, parallel_tool_calls=True)
+                llm = self._get_llm()
+                llm_with_tools = llm.bind_tools(self.tools, parallel_tool_calls=True) if self.tools else llm
                 full_messages = [system_message] + processed_history
                 response = await llm_with_tools.ainvoke(full_messages)
 
@@ -305,7 +306,12 @@ class ShallowResearcherAgent:
                             tool_name,
                         )
                         continue
-                    sources = extract_sources_from_tool_result(tool_name, str(msg.content), source_id=source_id)
+                    sources = extract_sources_from_tool_result(
+                        tool_name,
+                        str(msg.content),
+                        source_id=source_id,
+                        result_status=getattr(msg, "status", None),
+                    )
                     for source in sources:
                         active_registry.add(source)
                     if sources:

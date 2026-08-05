@@ -5,8 +5,8 @@ SPDX-License-Identifier: Apache-2.0
 
 # Hybrid Frontier Model
 
-This example uses NVIDIA NIM models for intent classification and shallow research
-(fast, low-cost) and a frontier model for deep research (higher quality reports).
+This example uses NVIDIA NIM models for intent classification, clarification, and shallow research,
+and a frontier model for deep research (higher quality reports).
 
 ## Prerequisites
 
@@ -18,7 +18,7 @@ This example uses NVIDIA NIM models for intent classification and shallow resear
 
 ```yaml
 llms:
-  # NIM models for fast paths (intent + shallow)
+  # NIM profiles for intent and shallow research
   nemotron_llm_intent:
     _type: nim
     model_name: nvidia/nemotron-3-super-120b-a12b
@@ -31,6 +31,15 @@ llms:
     model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.1
+    max_tokens: 16384
+
+  # NIM profile for clarification
+  nemotron_ultra_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     max_tokens: 16384
 
   # Frontier model for deep research (higher quality)
@@ -68,7 +77,7 @@ functions:
 
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
+    llm: nemotron_ultra_llm
     tools:
       - web_search_tool
       - knowledge_search

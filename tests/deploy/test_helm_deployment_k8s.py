@@ -208,6 +208,31 @@ def test_default_chart_does_not_provision_or_configure_redis():
     assert backend_env.isdisjoint({"MCP_TOKEN_STORE_TYPE", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD"})
 
 
+def test_upload_limits_are_aligned_between_backend_and_frontend():
+    values = yaml.safe_load((CHART_PATH / "values.yaml").read_text(encoding="utf-8"))
+    backend_env = values["aiq"]["apps"]["backend"]["env"]
+    frontend_env = values["aiq"]["apps"]["frontend"]["env"]
+    upload_variables = {
+        "FILE_UPLOAD_ACCEPTED_TYPES",
+        "FILE_UPLOAD_MAX_SIZE_MB",
+        "FILE_UPLOAD_MAX_FILE_COUNT",
+    }
+
+    assert {name: backend_env[name] for name in upload_variables} == {
+        name: frontend_env[name] for name in upload_variables
+    }
+
+
+def test_backend_wires_default_on_deep_research_admission_limits():
+    values = yaml.safe_load((CHART_PATH / "values.yaml").read_text(encoding="utf-8"))
+    backend_env = values["aiq"]["apps"]["backend"]["env"]
+
+    assert backend_env["AIQ_MAX_DEEP_RESEARCH_INPUT_CHARS"] == "32768"
+    assert backend_env["AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_PER_PRINCIPAL"] == "5"
+    assert backend_env["AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_GLOBAL"] == "50"
+    assert backend_env["AIQ_MAX_DEEP_RESEARCH_SUBMISSIONS_PER_MINUTE"] == "20"
+
+
 def test_backend_uses_separate_liveness_and_readiness_endpoints():
     manifests = render_chart()
 

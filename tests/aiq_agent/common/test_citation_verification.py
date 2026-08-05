@@ -460,6 +460,45 @@ class TestGenericUrlExtractor:
         )
         assert entries == []
 
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "Error 432: search request rejected",
+            "Search Error 432",
+            "Search failed with status 429",
+            '{"status_code": 429, "error": "rate limited"}',
+        ],
+    )
+    def test_provider_failure_statuses_are_not_citable(self, content):
+        entries = extract_sources_from_tool_result("web_search_tool", content, source_id="web_search")
+
+        assert entries == []
+
+    def test_error_payload_urls_are_not_citable(self):
+        content = '{"status": 432, "error": "see https://provider.example/errors/432"}'
+
+        entries = extract_sources_from_tool_result("web_search_tool", content, source_id="web_search")
+
+        assert entries == []
+
+    def test_typed_error_result_urls_are_not_citable(self):
+        entries = extract_sources_from_tool_result(
+            "web_search_tool",
+            "See https://provider.example/errors/unknown",
+            source_id="web_search",
+            result_status="error",
+        )
+
+        assert entries == []
+
+    def test_valid_http_status_explanation_remains_citable(self):
+        content = "An HTTP 404 status code means not found. See https://developer.mozilla.org/en-US/docs/Web/HTTP/404"
+
+        entries = extract_sources_from_tool_result("web_search_tool", content, source_id="web_search")
+
+        assert len(entries) == 1
+        assert entries[0].url == "https://developer.mozilla.org/en-US/docs/Web/HTTP/404"
+
     def test_duplicate_urls_deduplicated(self):
         content = "See https://example.com/page and also https://example.com/page for reference."
         entries = extract_sources_from_tool_result("any_tool", content)

@@ -16,7 +16,9 @@ from nat.utils.io.yaml_tools import yaml_load
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_PATH = REPO_ROOT / "deploy" / "compose" / "docker-compose.yaml"
+COMPOSE_INIT_DB_PATH = REPO_ROOT / "deploy" / "compose" / "init-db.sql"
 COMPOSE_README_PATH = REPO_ROOT / "deploy" / "compose" / "README.md"
+HELM_INIT_DB_PATH = REPO_ROOT / "deploy" / "helm" / "helm-charts-k8s" / "aiq" / "files" / "init-db.sql"
 DOCS_COMPOSE_PATH = REPO_ROOT / "docs" / "source" / "deployment" / "docker-compose.md"
 DOCS_PROJECT_PATH = REPO_ROOT / "docs" / "source" / "project.json"
 DOCS_VERSIONS_PATH = REPO_ROOT / "docs" / "source" / "versions1.json"
@@ -83,6 +85,55 @@ def test_default_compose_does_not_provision_or_configure_redis():
         entry.split("=", maxsplit=1)[0] for entry in backend.get("environment", []) if isinstance(entry, str)
     }
     assert backend_env.isdisjoint({"MCP_TOKEN_STORE_TYPE", "REDIS_HOST", "REDIS_PORT", "REDIS_PASSWORD"})
+
+
+def test_upload_limits_are_aligned_between_backend_and_frontend():
+    compose = load_compose()
+
+    def environment(service_name: str) -> dict[str, str]:
+        return {
+            name: value
+            for entry in compose["services"][service_name]["environment"]
+            for name, value in [entry.split("=", maxsplit=1)]
+        }
+
+    backend = environment("aiq-agent")
+    frontend = environment("frontend")
+    upload_variables = {
+        "FILE_UPLOAD_ACCEPTED_TYPES",
+        "FILE_UPLOAD_MAX_SIZE_MB",
+        "FILE_UPLOAD_MAX_FILE_COUNT",
+    }
+
+    assert {name: backend[name] for name in upload_variables} == {name: frontend[name] for name in upload_variables}
+
+
+def test_backend_wires_default_on_deep_research_admission_limits():
+    compose = load_compose()
+    backend_env = {
+        name: value
+        for entry in compose["services"]["aiq-agent"]["environment"]
+        for name, value in [entry.split("=", maxsplit=1)]
+    }
+
+    assert backend_env["AIQ_MAX_DEEP_RESEARCH_INPUT_CHARS"] == "${AIQ_MAX_DEEP_RESEARCH_INPUT_CHARS:-32768}"
+    assert backend_env["AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_PER_PRINCIPAL"] == (
+        "${AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_PER_PRINCIPAL:-5}"
+    )
+    assert backend_env["AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_GLOBAL"] == (
+        "${AIQ_MAX_ACTIVE_DEEP_RESEARCH_JOBS_GLOBAL:-50}"
+    )
+    assert backend_env["AIQ_MAX_DEEP_RESEARCH_SUBMISSIONS_PER_MINUTE"] == (
+        "${AIQ_MAX_DEEP_RESEARCH_SUBMISSIONS_PER_MINUTE:-20}"
+    )
+
+
+def test_database_initializers_precreate_deep_research_admission_schema():
+    for init_db_path in (COMPOSE_INIT_DB_PATH, HELM_INIT_DB_PATH):
+        init_sql = init_db_path.read_text(encoding="utf-8")
+        assert "CREATE INDEX IF NOT EXISTS idx_job_access_conversation" in init_sql
+        assert "CREATE TABLE IF NOT EXISTS deep_research_admission" in init_sql
+        assert "CREATE INDEX IF NOT EXISTS idx_deep_research_admission_owner" in init_sql
 
 
 def test_per_user_auth_compose_adds_private_redis_token_store(tmp_path: Path):

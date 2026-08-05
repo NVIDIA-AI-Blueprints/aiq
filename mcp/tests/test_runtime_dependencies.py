@@ -20,6 +20,11 @@ script_main = _NAMESPACE["main"]
 def _records() -> list[dict[str, object]]:
     return [
         {
+            "name": "langchain-litellm",
+            "version": "0.6.6",
+            "requires": ["cryptography>=46.0.5,<49.0.0"],
+        },
+        {
             "name": "nvidia-nat-core",
             "version": "1.8.0",
             "requires": ["cryptography<47,>=46.0.6"],
@@ -31,19 +36,20 @@ def _records() -> list[dict[str, object]]:
         },
         {
             "name": "cryptography",
-            "version": "48.0.1",
+            "version": "50.0.0",
             "requires": [],
         },
     ]
 
 
 def test_exact_security_overrides_are_visible() -> None:
-    result = validate_dependency_records(_records(), {"cryptography": "48.0.1"})
+    result = validate_dependency_records(_records(), {"cryptography": "50.0.0"})
 
     assert result == {
         "security_overrides": [
-            "nvidia-nat-core==1.8.0 requires cryptography<47,>=46.0.6; using 48.0.1",
-            "oci==2.178.0 requires cryptography<47.0.0,>=3.2.1; using 48.0.1",
+            "langchain-litellm==0.6.6 requires cryptography<49.0.0,>=46.0.5; using 50.0.0",
+            "nvidia-nat-core==1.8.0 requires cryptography<47,>=46.0.6; using 50.0.0",
+            "oci==2.178.0 requires cryptography<47.0.0,>=3.2.1; using 50.0.0",
         ]
     }
 
@@ -53,7 +59,7 @@ def test_unexpected_incompatibility_fails() -> None:
     records.append({"name": "new-package", "version": "1.0", "requires": ["cryptography<40"]})
 
     with pytest.raises(ValueError, match="unexpected dependency incompatibilities"):
-        validate_dependency_records(records, {"cryptography": "48.0.1"})
+        validate_dependency_records(records, {"cryptography": "50.0.0"})
 
 
 def test_changed_override_fails_closed() -> None:
@@ -61,15 +67,15 @@ def test_changed_override_fails_closed() -> None:
     records[0]["version"] = "1.8.1"
 
     with pytest.raises(ValueError, match="unexpected dependency incompatibilities"):
-        validate_dependency_records(records, {"cryptography": "48.0.1"})
+        validate_dependency_records(records, {"cryptography": "50.0.0"})
 
 
 def test_resolved_override_must_be_removed_from_policy() -> None:
     records = _records()
-    records[0]["requires"] = ["cryptography>=48.0.1"]
+    records[0]["requires"] = ["cryptography>=50.0.0"]
 
     with pytest.raises(ValueError, match="stale security override exceptions"):
-        validate_dependency_records(records, {"cryptography": "48.0.1"})
+        validate_dependency_records(records, {"cryptography": "50.0.0"})
 
 
 def test_missing_dependency_fails() -> None:

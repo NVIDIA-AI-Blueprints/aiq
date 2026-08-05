@@ -90,7 +90,7 @@ export const mapFunctionToCategory = (functionName: string): IntermediateStepCat
  * Check if a name represents an LLM model rather than a function/tool.
  * LLM models typically have format: "provider/org/model-name" or contain slashes.
  *
- * @param name - The name to check (e.g., "nvidia/nvidia/Nemotron-3-Nano-30B-A3B")
+ * @param name - The name to check (e.g., "nvidia/nemotron-3-ultra-550b-a55b")
  * @returns True if this appears to be an LLM model name
  */
 export const isLLMModel = (name: string): boolean => {
@@ -130,7 +130,7 @@ export const getWorkflowDisplayName = (functionName: string): string => {
  * Convert a snake_case or special function name to a human-readable display name.
  * Also handles LLM model names and tool prefixes.
  *
- * @param functionName - The raw function name (e.g., "web_search_tool", "<workflow>", "nvidia/nvidia/Nemotron-3-Nano-30B-A3B")
+ * @param functionName - The raw function name (e.g., "web_search_tool", "<workflow>", "nvidia/nemotron-3-ultra-550b-a55b")
  * @returns Human-readable name (e.g., "Web Search Tool", "Workflow", "Nemotron 3 Nano 30B")
  */
 export const getDisplayName = (functionName: string): string => {
@@ -142,7 +142,7 @@ export const getDisplayName = (functionName: string): string => {
     return 'Workflow'
   }
 
-  // Handle LLM model names (e.g., "nvidia/nvidia/Nemotron-3-Nano-30B-A3B")
+  // Handle LLM model names (e.g., "nvidia/nemotron-3-ultra-550b-a55b")
   if (isLLMModel(functionName)) {
     const parts = functionName.split('/')
     const modelName = parts[parts.length - 1] // Take last segment

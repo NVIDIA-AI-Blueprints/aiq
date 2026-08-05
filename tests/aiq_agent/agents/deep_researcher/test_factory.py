@@ -31,6 +31,10 @@ from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportOwners
 from aiq_agent.agents.deep_researcher.custom_middleware import RequiredOutputFileMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import SourceRoutingPersistenceMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import StateMutationGuardMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import StructuredResponseTextFallbackMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import TodoQuotaMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
@@ -47,6 +51,9 @@ from aiq_agent.agents.deep_researcher.factory import skill_filesystem_permission
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import ResearchPlan
+from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
+from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
+from aiq_agent.agents.deep_researcher.resource_limits import StateBudgetLedger
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 
@@ -116,9 +123,11 @@ def _graph_context(
 ) -> DeepResearchGraphContext:
     _, tool_set, middleware_set = _tool_set_and_middleware()
     runtime = runtime or DeepAgentsRuntime()
+    state = state or DeepResearchAgentState(messages=[])
+    limits = DeepResearchResourceLimits()
     return DeepResearchGraphContext(
         llm_provider=provider or _llm_provider(),
-        state=state or DeepResearchAgentState(messages=[]),
+        state=state,
         prompts=_prompts(),
         tools=[web_search_tool],
         runtime=runtime,
@@ -127,10 +136,16 @@ def _graph_context(
         domain_catalog_path=None,
         current_datetime="2026-06-03 12:00:00",
         max_research_concurrency=6,
+        resource_limits=limits,
         enable_source_router=enable_source_router,
         backend=runtime.backend,
         visibility_middleware=runtime_visibility_middleware(runtime),
         final_report_tracker=final_report_tracker or FinalReportCommitTracker(),
+        state_budget=StateBudgetLedger(
+            limits=limits,
+            files=state.files,
+            sandbox_enabled=runtime.execution_enabled,
+        ),
     )
 
 
@@ -228,7 +243,7 @@ def test_subagents_route_tools_and_writer_skills():
 
     by_name = {subagent["name"]: subagent for subagent in subagents}
     assert set(by_name) == {"source-router-agent", "planner-agent", "writer-agent"}
-    assert "response_format" not in by_name["source-router-agent"]
+    assert by_name["source-router-agent"]["response_format"] is SourceRoutingPlan
     assert _tool_names(by_name["source-router-agent"]["tools"]) == ["lookup_source_catalog"]
     assert "web_search_tool" not in _tool_names(by_name["source-router-agent"]["tools"])
     assert by_name["planner-agent"]["response_format"] is ResearchPlan
@@ -248,6 +263,18 @@ def test_subagents_route_tools_and_writer_skills():
     assert _check_fs_permission(by_name["planner-agent"]["permissions"], "read", "/skills/synthesis/") == "deny"
     assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["planner-agent"]["middleware"])
     assert any(isinstance(item, ToolVisibilityMiddleware) for item in by_name["writer-agent"]["middleware"])
+    assert any(isinstance(item, TodoSuppressionMiddleware) for item in by_name["source-router-agent"]["middleware"])
+    assert any(
+        isinstance(item, StructuredResponseTextFallbackMiddleware)
+        for item in by_name["source-router-agent"]["middleware"]
+    )
+    assert any(
+        isinstance(item, SourceRoutingPersistenceMiddleware) for item in by_name["source-router-agent"]["middleware"]
+    )
+    assert any(isinstance(item, TodoSuppressionMiddleware) for item in by_name["planner-agent"]["middleware"])
+    assert any(
+        isinstance(item, StructuredResponseTextFallbackMiddleware) for item in by_name["planner-agent"]["middleware"]
+    )
     assert any(isinstance(item, TodoSuppressionMiddleware) for item in by_name["writer-agent"]["middleware"])
     assert any(isinstance(item, RequiredOutputFileMiddleware) for item in by_name["writer-agent"]["middleware"])
 
@@ -260,6 +287,7 @@ def test_subagents_share_one_run_local_tracker_and_reserve_output_for_writer():
 
     for name in ("source-router-agent", "planner-agent"):
         assert any(isinstance(item, FinalReportOwnershipGuardMiddleware) for item in by_name[name]["middleware"])
+        assert any(isinstance(item, StateMutationGuardMiddleware) for item in by_name[name]["middleware"])
         assert not any(isinstance(item, FinalReportCommitMiddleware) for item in by_name[name]["middleware"])
         assert not any(isinstance(item, RequiredOutputFileMiddleware) for item in by_name[name]["middleware"])
 
@@ -289,6 +317,26 @@ def test_skill_filesystem_permissions_filter_unassigned_skill_collections():
     assert _check_fs_permission(permissions, "write", "/skills/synthesis/prediction-report-writer/SKILL.md") == "deny"
     assert _check_fs_permission(permissions, "read", "/skills/research/data-table-analysis/SKILL.md") == "deny"
     assert _apply_permissions_to_ls_results(permissions, entries) == ["/skills/synthesis/"]
+
+
+def test_non_writer_permissions_make_default_state_backend_read_only():
+    """Without a sandbox, every virtual path is state-backed and read-only to model tools."""
+    permissions = _graph_context().permissions("researcher-agent")
+
+    assert _check_fs_permission(permissions, "read", "/shared/plan.json") == "allow"
+    assert _check_fs_permission(permissions, "write", "/shared/research_note.json") == "deny"
+    assert _check_fs_permission(permissions, "write", "/workspace/analysis.py") == "deny"
+
+
+def test_non_writer_permissions_allow_sandbox_workspace_but_not_shared_state():
+    """With a sandbox, non-writers may use workspace files but cannot mutate StateBackend."""
+    runtime = MagicMock(spec=DeepAgentsRuntime)
+    runtime.execution_enabled = True
+    runtime.skills_enabled = False
+    permissions = _graph_context(runtime=runtime).permissions("planner-agent")
+
+    assert _check_fs_permission(permissions, "write", "/shared/plan.json") == "deny"
+    assert _check_fs_permission(permissions, "write", "/workspace/analysis.py") == "allow"
 
 
 def test_graph_uses_researcher_config_key_for_researcher_skills():
@@ -362,6 +410,9 @@ def test_graph_wires_filesystem_tool_call_guard_cross_cutting():
         for middleware in create_graph.call_args.kwargs["middleware"]
     )
     assert any(
+        isinstance(middleware, TodoQuotaMiddleware) for middleware in create_graph.call_args.kwargs["middleware"]
+    )
+    assert any(
         isinstance(middleware, FinalReportOwnershipGuardMiddleware)
         for middleware in create_researcher.call_args.kwargs["middleware"]
     )
@@ -371,6 +422,45 @@ def test_graph_wires_filesystem_tool_call_guard_cross_cutting():
     ):
         assert not any(isinstance(middleware, FinalReportCommitMiddleware) for middleware in middleware_stack)
         assert not any(isinstance(middleware, RequiredOutputFileMiddleware) for middleware in middleware_stack)
+
+
+def test_graph_default_limits_are_shared_with_state_budget_ledger():
+    """The graph and its ledger must enforce the exact same immutable limits instance."""
+    registry, tool_set, middleware_set = _tool_set_and_middleware()
+    runtime = DeepAgentsRuntime()
+    fake_graph = MagicMock()
+    fake_graph.with_config.return_value = fake_graph
+    fake_batch_tool = MagicMock()
+    fake_batch_tool.name = "run_research_batch"
+    fake_batch_tool.description = "Run research."
+
+    with (
+        patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=fake_graph),
+        patch("aiq_agent.agents.deep_researcher.factory.create_agent", return_value=MagicMock()),
+        patch("aiq_agent.agents.deep_researcher.factory.create_summarization_middleware", return_value=MagicMock()),
+        patch(
+            "aiq_agent.agents.deep_researcher.factory.build_research_batch_tool",
+            return_value=fake_batch_tool,
+        ) as build_batch_tool,
+    ):
+        build_deep_research_graph(
+            llm_provider=_llm_provider(),
+            state=DeepResearchAgentState(messages=[]),
+            prompts=_prompts(),
+            tools=[web_search_tool],
+            runtime=runtime,
+            tool_set=tool_set,
+            middleware_set=middleware_set,
+            source_registry_middleware=registry,
+            callbacks=[],
+            domain_catalog_path=None,
+            max_research_concurrency=6,
+            final_report_tracker=FinalReportCommitTracker(),
+        )
+
+    limits = build_batch_tool.call_args.kwargs["resource_limits"]
+    state_budget = build_batch_tool.call_args.kwargs["state_budget"]
+    assert state_budget._limits is limits
 
 
 def test_subagents_can_disable_source_router():
@@ -434,5 +524,6 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     assert "FilesystemMiddleware" in middleware_names
     assert "FakeSummarizationMiddleware" in middleware_names
     assert "PatchToolCallsMiddleware" in middleware_names
+    assert "StructuredResponseTextFallbackMiddleware" in middleware_names
     assert "ToolVisibilityMiddleware" in middleware_names
     assert kwargs["middleware"][-2] is shared_middleware[0]

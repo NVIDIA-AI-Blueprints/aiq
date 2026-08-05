@@ -1,5 +1,5 @@
 # FreshQA shallow-research-only
-# Nemotron on integrate.api; add judge (OpenAI or Gemini) for evaluator.
+# Nemotron Ultra on NVIDIA API Catalog; add judge (OpenAI or Gemini) for evaluator.
 
 general:
   telemetry:

@@ -378,6 +378,15 @@ class TestSubmitDeepResearchJob:
 
     principal = Principal(type="test", sub="user-1", email="test@example.com", name="Test User")
 
+    @pytest.fixture(autouse=True)
+    def _isolate_admission_store(self):
+        """Keep legacy submit tests scoped to submission wiring, not admission-store integration."""
+        with (
+            patch("aiq_api.jobs.submit.reserve_deep_research_job", new_callable=AsyncMock),
+            patch("aiq_api.jobs.submit.release_deep_research_job_reservation", new_callable=AsyncMock),
+        ):
+            yield
+
     @pytest.mark.asyncio
     async def test_submit_without_scheduler_raises(self):
         """Test submit_deep_research_job raises without NAT_DASK_SCHEDULER_ADDRESS."""
@@ -449,9 +458,10 @@ class TestSubmitDeepResearchJob:
         mock_job_store.submit_job.assert_called_once()
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
         # Trailing worker args: available_documents, data_sources, auth_token,
-        # encryption policy, initial_files, output_metadata, principal_user_id.
-        assert job_args[-6] == ["web_search"]
-        assert job_args[-4].mode == "off"
+        # encryption policy, initial_files, output_metadata, principal_user_id,
+        # admission fencing token.
+        assert job_args[-7] == ["web_search"]
+        assert job_args[-5].mode == "off"
 
     @pytest.mark.asyncio
     async def test_submit_agent_job_passes_initial_files_and_output_metadata(self):
@@ -486,9 +496,9 @@ class TestSubmitDeepResearchJob:
         assert result == "test-job-id"
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
         # Encryption policy precedes the upstream report-context arguments.
-        assert job_args[-4].mode == "off"
-        assert job_args[-3] == initial_files
-        assert job_args[-2] == output_metadata
+        assert job_args[-5].mode == "off"
+        assert job_args[-4] == initial_files
+        assert job_args[-3] == output_metadata
 
     @pytest.mark.asyncio
     async def test_submit_with_custom_job_id(self):
@@ -578,8 +588,8 @@ class TestSubmitDeepResearchJob:
         assert principal.email == "test@example.com"
 
     @pytest.mark.asyncio
-    async def test_submit_rolls_back_when_job_access_persistence_fails(self):
-        """Test submit_agent_job rolls back partial submission on access persistence failure."""
+    async def test_submit_stops_before_enqueue_when_job_access_persistence_fails(self):
+        """Ownership persistence must fail before any work is handed to Dask."""
         from aiq_api.jobs.submit import submit_agent_job
 
         mock_job_store = MagicMock()
@@ -599,20 +609,50 @@ class TestSubmitDeepResearchJob:
                         "aiq_api.jobs.submit.create_job_access",
                         side_effect=RuntimeError("db write failed"),
                     ):
-                        with patch("aiq_api.jobs.submit.rollback_job_submission") as rollback_job_submission:
-                            with pytest.raises(RuntimeError, match="db write failed"):
-                                await submit_agent_job(
-                                    agent_type="deep_researcher",
-                                    input_text="test query",
-                                    owner="test@example.com",
-                                )
+                        with pytest.raises(RuntimeError, match="db write failed"):
+                            await submit_agent_job(
+                                agent_type="deep_researcher",
+                                input_text="test query",
+                                owner="test@example.com",
+                            )
 
-        mock_job_store.submit_job.assert_called_once()
-        rollback_job_submission.assert_called_once_with("test-job-id", "sqlite:///./test.db")
+        mock_job_store.submit_job.assert_not_called()
 
 
 class TestRunAgentJobEncryption:
     """Tests for async worker encryption preflight behavior."""
+
+    @pytest.mark.asyncio
+    async def test_stale_admission_fencing_token_never_runs_worker(self):
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        mock_job_store = MagicMock()
+        mock_job_store.update_status = AsyncMock()
+
+        with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+            with patch(
+                "aiq_api.jobs.admission.is_deep_research_reservation_current",
+                return_value=False,
+            ):
+                await run_agent_job(
+                    False,
+                    20,
+                    "tcp://localhost:8786",
+                    "sqlite:///./test.db",
+                    "config.yml",
+                    "job-1",
+                    "input",
+                    "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                    "deep_research_agent",
+                    admission_token="stale-token",
+                )
+
+        mock_job_store.update_status.assert_awaited_once_with(
+            "job-1",
+            JobStatus.FAILURE,
+            error="submission admission lease lost",
+        )
 
     @pytest.mark.asyncio
     async def test_encryption_preflight_failure_marks_failure_before_running(self):
@@ -1232,6 +1272,138 @@ class TestRunAgentJobEncryption:
             ).one()
         assert tuple(running) == ("failure", "Select a source.", "encrypted-output")
         assert tuple(terminal) == ("success", None, "original")
+
+
+class TestDeepResearchTimeoutLifecycle:
+    """Job wall-clock expiry forcibly tears down external execution before failure."""
+
+    @pytest.mark.parametrize(
+        ("error", "expected_interrupted"),
+        [
+            pytest.param(
+                None,
+                True,
+                id="job-resource-timeout",
+            ),
+            pytest.param(
+                TimeoutError("provider request timed out"),
+                False,
+                id="inner-provider-timeout",
+            ),
+        ],
+    )
+    @pytest.mark.asyncio
+    async def test_only_job_resource_timeout_terminates_before_failure(
+        self,
+        error,
+        expected_interrupted,
+        tmp_path,
+        content_encryption_manager_guard,
+    ):
+        from types import SimpleNamespace
+
+        from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchExecutionTimeout
+        from aiq_api.jobs.crypto import ContentEncryptionConfig
+        from aiq_api.jobs.runner import run_agent_job
+        from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
+
+        class AsyncContext:
+            async def __aenter__(self):
+                return None
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+        class FakeWorkflowBuilder:
+            _telemetry_exporters = {}
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            def get_function_config(self, _name):
+                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+
+            async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
+                return []
+
+        class FakeExporterManager:
+            def start(self, *, context_state):
+                return AsyncContext()
+
+        order: list[str] = []
+
+        class TrackingRuntime:
+            def finalize_artifacts(self, *, interrupted):
+                order.append(f"harvest:{interrupted}")
+                return True
+
+            def finalize(self, *, interrupted):
+                order.append(f"finalize:{interrupted}")
+                return True
+
+        runtime = TrackingRuntime()
+        agent = SimpleNamespace(deepagents_runtime=runtime)
+        mock_job_store = MagicMock()
+
+        async def update_status(_job_id, status, **_kwargs):
+            order.append(f"status:{status.value}")
+
+        mock_job_store.update_status = AsyncMock(side_effect=update_status)
+        run_error = error or DeepResearchExecutionTimeout("job budget expired")
+        config = SimpleNamespace(workflow=None, functions={}, middleware={})
+        db_url = f"sqlite:///{tmp_path / 'timeout.db'}"
+
+        with patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store):
+            with patch("nat.runtime.loader.load_config", return_value=config):
+                with patch(
+                    "nat.builder.workflow_builder.WorkflowBuilder.from_config",
+                    return_value=FakeWorkflowBuilder(),
+                ):
+                    with patch(
+                        "nat.observability.exporter_manager.ExporterManager.from_exporters",
+                        return_value=FakeExporterManager(),
+                    ):
+                        with patch("aiq_api.jobs.runner._load_agent_class", return_value=object):
+                            with patch(
+                                "aiq_api.jobs.runner._create_llm_provider",
+                                AsyncMock(return_value=(object(), object())),
+                            ):
+                                with patch("aiq_api.jobs.runner._create_agent_instance", return_value=agent):
+                                    with patch(
+                                        "aiq_api.jobs.runner._run_agent",
+                                        AsyncMock(side_effect=run_error),
+                                    ):
+                                        await run_agent_job(
+                                            False,
+                                            20,
+                                            "tcp://localhost:8786",
+                                            db_url,
+                                            "config.yml",
+                                            "job-1",
+                                            "input",
+                                            "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                                            "deep_research_agent",
+                                            content_encryption_policy=ContentEncryptionConfig(
+                                                mode="off"
+                                            ).policy_identity,
+                                        )
+
+        assert [entry for entry in order if entry.startswith("status:")] == [
+            f"status:{JobStatus.RUNNING.value}",
+            f"status:{JobStatus.FAILURE.value}",
+        ]
+        terminal_calls = [entry for entry in order if entry.startswith("finalize:")]
+        assert terminal_calls
+        assert all(entry == f"finalize:{expected_interrupted}" for entry in terminal_calls)
+        if expected_interrupted:
+            assert order.index("finalize:True") < order.index(f"status:{JobStatus.FAILURE.value}")
+            assert "harvest:False" not in order
+        else:
+            assert "harvest:False" in order
+            assert order.index(f"status:{JobStatus.FAILURE.value}") < order.index("finalize:False")
 
 
 class TestEventStore:
@@ -2294,6 +2466,7 @@ class TestAsyncJobRunnerAgentFactory:
         from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
         from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSkillsConfig
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
         from aiq_api.jobs.runner import _create_agent_instance
 
         class FakeDeepResearcherAgent:
@@ -2315,6 +2488,7 @@ class TestAsyncJobRunnerAgentFactory:
                 max_research_concurrency=None,
                 max_concurrent_source_tool_calls=None,
                 max_source_tool_batch_size=None,
+                resource_limits=None,
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
@@ -2331,6 +2505,7 @@ class TestAsyncJobRunnerAgentFactory:
                 self.max_research_concurrency = max_research_concurrency
                 self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
                 self.max_source_tool_batch_size = max_source_tool_batch_size
+                self.resource_limits = resource_limits
 
         fn_config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
@@ -2342,6 +2517,16 @@ class TestAsyncJobRunnerAgentFactory:
             max_research_concurrency=2,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
+            resource_limits=DeepResearchResourceLimits(
+                max_input_chars=1024,
+                max_execution_seconds=60,
+                max_plan_bytes=4096,
+                max_research_queries=2,
+                max_total_query_chars=512,
+                max_research_note_bytes=2048,
+                max_total_research_note_bytes=4096,
+                max_source_tool_calls=8,
+            ),
         )
 
         agent = _create_agent_instance(
@@ -2367,6 +2552,8 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_research_concurrency == 2
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
+        assert agent.resource_limits is fn_config.resource_limits
+        assert agent.resource_limits.max_source_tool_calls == 8
 
     def test_create_agent_instance_allows_non_deep_agent_to_reuse_deep_config(self):
         """Async workers should not treat shared DeepResearchAgentConfig as a constructor contract."""
@@ -2458,6 +2645,7 @@ class TestAsyncJobRunnerAgentFactory:
         """Async construction preserves catalog and concurrency settings."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+        from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
         from aiq_agent.common import LLMProvider
         from aiq_agent.common import LLMRole
         from aiq_api.jobs.runner import _create_agent_instance
@@ -2473,6 +2661,7 @@ class TestAsyncJobRunnerAgentFactory:
             max_research_concurrency=2,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
+            resource_limits=DeepResearchResourceLimits(max_source_tool_calls=7),
         )
 
         agent = _create_agent_instance(
@@ -2491,6 +2680,8 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.max_research_concurrency == 2
         assert agent.max_concurrent_source_tool_calls == 3
         assert agent.max_source_tool_batch_size == 4
+        assert agent.resource_limits is fn_config.resource_limits
+        assert agent.resource_limits.max_source_tool_calls == 7
 
     @pytest.mark.asyncio
     async def test_async_deep_researcher_rejects_empty_sources_when_citation_verification_disabled(self):
@@ -2810,6 +3001,7 @@ class TestAsyncJobRunnerAgentFactory:
                 max_research_concurrency=None,
                 max_concurrent_source_tool_calls=None,
                 max_source_tool_batch_size=None,
+                resource_limits=None,
             ):
                 raise TypeError("internal constructor failure")
 

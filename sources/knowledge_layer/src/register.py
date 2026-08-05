@@ -255,7 +255,7 @@ class KnowledgeRetrievalConfig(FunctionBaseConfig, name="knowledge_retrieval"):
         description="How Dask ingestion workers receive files: bytes or paths.",
     )
     embed_model: str = Field(
-        default_factory=lambda: _env_value("AIQ_EMBED_MODEL", default="nvidia/llama-nemotron-embed-vl-1b-v2"),
+        default_factory=lambda: _env_value("AIQ_EMBED_MODEL", default="nvidia/nemotron-3-embed-1b"),
         description="Embedding model for OpenSearch and Azure AI Search ingestion and retrieval.",
     )
     embed_base_url: str = Field(

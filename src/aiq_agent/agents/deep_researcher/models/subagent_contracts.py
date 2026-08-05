@@ -15,12 +15,21 @@
 
 """Structured response contracts for deep researcher planning, research, and synthesis."""
 
+from typing import Annotated
 from typing import ClassVar
 from typing import Literal
 
 from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import StringConstraints
+
+from ..resource_limits import DEFAULT_MAX_RESEARCH_QUERIES
+
+ResearchQueryText = Annotated[str, StringConstraints(min_length=1, max_length=4096)]
+ResearchSubqueryText = Annotated[str, StringConstraints(min_length=1, max_length=2048)]
+ToolName = Annotated[str, StringConstraints(min_length=1, max_length=256)]
+ComponentId = Annotated[str, StringConstraints(min_length=1, max_length=256)]
 
 
 class _StrictContract(BaseModel):
@@ -99,28 +108,36 @@ class SourceRoutingPlan(_StrictContract):
 class ResearchQuery(_StrictContract):
     """Self-contained research query for a researcher worker."""
 
-    query: str = Field(description="Specific, self-contained search or document query.")
-    subqueries: list[str] = Field(
+    query: ResearchQueryText = Field(
+        description="Specific, self-contained search or document query.",
+    )
+    subqueries: list[ResearchSubqueryText] = Field(
         default_factory=list,
+        max_length=8,
         description=(
             "Optional ordered concrete search angles for distinct facets unlikely to be covered by the main query. "
             "Prefer leaving this empty for focused queries and creating separate ResearchQuery items for independent "
             "evidence needs."
         ),
     )
-    preferred_tools: list[str] = Field(
+    preferred_tools: list[ToolName] = Field(
         min_length=1,
+        max_length=16,
         description=(
             "Ordered exact available source tool names to prioritize for this query. "
             "The first item is the primary tool the researcher should use first."
         ),
     )
-    fallback_tools: list[str] = Field(
+    fallback_tools: list[ToolName] = Field(
         default_factory=list,
+        max_length=16,
         description="Ordered exact available source tool names to use for corroboration or gaps.",
     )
-    target_components: list[str] = Field(description="Answer components this query is intended to support.")
-    rationale: str = Field(description="Why this query is needed.")
+    target_components: list[ComponentId] = Field(
+        max_length=32,
+        description="Answer components this query is intended to support.",
+    )
+    rationale: str = Field(max_length=4096, description="Why this query is needed.")
 
 
 class ResearchPlan(_StrictContract):
@@ -129,7 +146,10 @@ class ResearchPlan(_StrictContract):
     task_analysis: TaskAnalysis = Field(description="Planner analysis of the user's request.")
     answer_strategy: AnswerStrategy = Field(description="Final answer shape and synthesis strategy.")
     constraints: list[Constraint] = Field(description="Lightweight requirements for the final answer.")
-    queries: list[ResearchQuery] = Field(description="Queries for researcher workers to execute.")
+    queries: list[ResearchQuery] = Field(
+        max_length=DEFAULT_MAX_RESEARCH_QUERIES,
+        description="Queries for researcher workers to execute.",
+    )
 
 
 class ResearchSource(_StrictContract):

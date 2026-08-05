@@ -227,6 +227,7 @@ for configuration details.
 | `skills` | `FunctionRef`, inline `deep_research_skills`, or `None` | `None` | Optional built-in skill assignments by agent name |
 | `sandbox` | `FunctionRef`, inline `deep_research_sandbox`, or `None` | `None` | Optional sandbox profile for DeepAgents `execute` support |
 | `enable_citation_verification` | `bool` | `true` | Verify generated citations against captured sources after final report extraction |
+| `resource_limits` | `DeepResearchResourceLimits` | hard ceilings | Per-job request, graph-time, plan, report, shared-state, note, todo, query, and source-call budgets; configurable downward only |
 | `verbose` | `bool` | `true` | Enable detailed logging |
 
 **Example YAML:**
@@ -235,21 +236,32 @@ for configuration details.
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm
-    source_router_llm: nemotron_super_llm
-    planner_llm: nemotron_llm
-    researcher_llm: nemotron_llm
-    writer_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     enable_source_router: true
     enable_citation_verification: true
     max_research_concurrency: 6
+    resource_limits:
+      max_research_queries: 20
+      max_source_tool_calls: 100
     verbose: true
     tools:
       - web_search_tool
 ```
 
+The researcher filesystem view treats `/shared/**` as read-only. Researchers
+return one schema-validated `ResearchNotes` object per accepted `ResearchQuery`;
+the parent `run_research_batch` tool alone applies note count/byte quotas and
+persists the note. Planner persistence and top-level todo replacement are
+similarly centralized and validated before shared-state mutation. See the
+[Configuration Reference](../../customization/configuration-reference.md#deep_research_agent)
+for all enforced ceilings.
+
 ```{note}
-**Hosted Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) and Nemotron Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their hosted endpoints can have limited availability during high demand (HTTP 429/503 responses). The default configs use Nemotron Super for the `writer_llm` role and Nemotron Ultra for the other deep-research roles. For production deployments requiring consistent throughput, refer to the model-specific [self-hosting guidance](../../resources/troubleshooting.md#nemotron-super-and-ultra--hosted-endpoint-availability).
+**Hosted Endpoint Availability:** The default deep researcher uses Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) for every role, including `writer_llm`. Shared hosted endpoints can have limited availability during high demand (HTTP 429/503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
 ```
 
 ## Prompt Templates

@@ -14,9 +14,15 @@ third-party `mcp` package.
 
 ## Supported distribution paths
 
-Run this component from an AI-Q source checkout with the frozen `mcp/uv.lock`, or use the release container built
-from the repository root. In this documentation, *standalone* describes the MCP process and transport boundary; it
-does not mean that `aiq-mcp-server` is a separately installable Python wheel.
+The release-supported runtime is Linux x86_64 with CPython 3.13, either through the release container built from
+the repository root or directly from an AI-Q source checkout with the frozen `mcp/uv.lock`. CI validates both the
+frozen production environment and the release container on that platform. Other 64-bit source hosts are
+development-only and do not carry the audited release guarantee. In particular, `cryptography` 50 no longer ships
+x86_64 macOS or 32-bit Windows wheels. Those platforms are unsupported by the frozen profile; run the Linux
+release container on a supported 64-bit Linux/container host.
+
+In this documentation, *standalone* describes the MCP process and transport boundary; it does not mean that
+`aiq-mcp-server` is a separately installable Python wheel.
 
 The MCP project depends on `aiq-agent`, `tavily-web-search`, and other packages supplied from this repository. That
 complete dependency closure is not published to a Python package index. The wheel that local build tooling may
@@ -124,9 +130,10 @@ Set `AIQ_MCP_TEST_DB_URL` to a disposable Postgres database whose name ends in `
 `aiq_mcp_test`) to enable the ledger and checkpoint integration tests.
 
 The root `uv.lock` keeps `cryptography>=46.0.6,<47` for compatibility with NAT. The audited MCP release profile is
-resolved independently from `mcp/uv.lock` and pins `cryptography==48.0.1` to harden the bundled OpenSSL version.
-That pin is a uv override for the two supported runtime paths, not a functional MCP requirement or published
-package constraint.
+resolved independently from `mcp/uv.lock` and pins `cryptography==50.0.0` to harden the bundled OpenSSL version.
+That pin uses three reviewed transitive compatibility exceptions; it is not a functional MCP requirement or
+published package constraint. Its audited support matrix is Linux x86_64 with CPython 3.13; see
+[`SECURITY.md`](SECURITY.md#platform-compatibility) for host-platform limitations.
 
 ## Container deployment
 

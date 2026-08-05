@@ -25,20 +25,20 @@ general:
 # ---------------------------------------------------------------------------
 # LLMs
 # ---------------------------------------------------------------------------
-# A single LLM is sufficient for shallow research. The NIM type connects to
-# NVIDIA's hosted inference endpoint. Adjust temperature for creativity vs
-# factuality trade-off.
+# A single role-specific Super LLM is sufficient for shallow research. The NIM type connects
+# to NVIDIA API Catalog.
 llms:
   research_llm:
     _type: nim
     model_name: nvidia/nemotron-3-super-120b-a12b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.1       # Low temperature for factual research
-    top_p: 0.3
-    max_tokens: 16384      # Max output length per LLM call
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.7
+    top_p: 0.7
+    max_tokens: 65536      # Max output length per LLM call
     num_retries: 5         # Retry on transient API failures
     chat_template_kwargs:
-      enable_thinking: true  # Enable chain-of-thought reasoning
+      enable_thinking: true
 
 # ---------------------------------------------------------------------------
 # Tools

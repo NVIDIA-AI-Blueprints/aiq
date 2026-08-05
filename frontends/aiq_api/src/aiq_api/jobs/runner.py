@@ -35,6 +35,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING
 from typing import Any
 
+from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchExecutionTimeout
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 
 from .callbacks import AgentEventCallback
@@ -61,6 +62,7 @@ _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
         "max_research_concurrency",
         "max_concurrent_source_tool_calls",
         "max_source_tool_batch_size",
+        "resource_limits",
     }
 )
 _CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
@@ -635,6 +637,7 @@ async def run_agent_job(
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
     owner_user_id: str | None = None,
+    admission_token: str | None = None,
 ):
     """
     Dask task to run any registered agent with cancellation support and telemetry.
@@ -673,6 +676,7 @@ async def run_agent_job(
         owner_user_id: Canonical per-user key (``principal_user_id``), set on the NAT
             Context so per_user_mcp_client retrieves the token the owner connected
             via /v1/auth/mcp/{id}/connect.
+        admission_token: Opaque deep-research fencing token captured at submit time.
     """
 
     # Propagate auth token into the current async task's context so tools
@@ -725,6 +729,27 @@ async def run_agent_job(
 
     try:
         job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
+        if admission_token is not None:
+            from .admission import is_deep_research_reservation_current
+
+            try:
+                reservation_is_current = await asyncio.to_thread(
+                    is_deep_research_reservation_current,
+                    db_url,
+                    job_id,
+                    admission_token,
+                )
+            except Exception as exc:  # noqa: BLE001 - worker admission fails closed
+                logger.warning(
+                    "Could not verify admission fencing token for job %s (error_type=%s)",
+                    job_id,
+                    type(exc).__name__,
+                )
+                reservation_is_current = False
+            if not reservation_is_current:
+                logger.warning("Rejected job %s because its admission fencing token is no longer current", job_id)
+                await job_store.update_status(job_id, JobStatus.FAILURE, error="submission admission lease lost")
+                return
         try:
             from .crypto import ContentEncryptionError
             from .crypto import ContentEncryptionPolicyMismatch
@@ -1083,6 +1108,13 @@ async def run_agent_job(
             logger.warning("Job %s already terminal or source-failure output persistence failed", job_id)
 
     except Exception as e:
+        resource_timeout = isinstance(e, DeepResearchExecutionTimeout)
+        if resource_timeout:
+            # A timed-out graph may still have a blocking provider call running
+            # outside the event loop. Terminate its sandbox before persisting the
+            # failure so external execution cannot outlive the job deadline.
+            interrupted = True
+            await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=True)
         logger.exception("Job %s failed: %s", job_id, type(e).__name__)
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
@@ -1091,7 +1123,8 @@ async def run_agent_job(
         # credentials or internal hostnames, and both the event stream and the
         # stored status are surfaced to the job's caller.
         sanitized_error = f"job failed ({type(e).__name__}); check server logs for details"
-        await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
+        if not resource_timeout:
+            await asyncio.to_thread(_harvest_sandbox_artifacts, sandbox_runtime, job_id=job_id, interrupted=False)
         _store_terminal_event_best_effort(
             event_store,
             {
@@ -1241,6 +1274,7 @@ def _create_agent_instance(
             max_research_concurrency=fn_config.max_research_concurrency,
             max_concurrent_source_tool_calls=fn_config.max_concurrent_source_tool_calls,
             max_source_tool_batch_size=fn_config.max_source_tool_batch_size,
+            resource_limits=fn_config.resource_limits,
         )
 
     if _constructor_accepts_explicit_kwargs(agent_cls, _CONFIGURABLE_AGENT_KWARGS):

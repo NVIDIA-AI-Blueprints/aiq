@@ -553,6 +553,13 @@ come from workload identity, deployment secrets, or the standard AWS credential 
 For local MinIO, `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` can hold the local
 MinIO credentials. Install the optional dependency with `uv sync --extra s3`.
 
+AI-Q API authorization protects access through the artifact API, not direct access to
+the operator-owned bucket. AI-Q does not application-encrypt artifact blob bytes.
+Production operators must use workload identity or a short-lived role, restrict object
+operations to the AI-Q worker identity and configured prefix, block public and non-TLS
+access, enable storage-layer encryption such as SSE-KMS, and audit object access.
+Static access keys are supported for local development only.
+
 Selecting `s3` does not automatically fall back to SQL if object storage fails. The selected
 provider applies to the whole application. Artifact cleanup follows the retention period and
 removes object bytes before SQL metadata.
