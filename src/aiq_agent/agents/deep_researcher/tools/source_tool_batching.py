@@ -59,6 +59,8 @@ def source_tool_result_failed(result: object) -> bool:
     """
     if result is None:
         return True
+    if isinstance(result, (dict, list)) and not result:
+        return True
     if getattr(result, "status", None) == "error":
         return True
     text = json.dumps(result) if isinstance(result, dict) else str(result)
@@ -100,6 +102,14 @@ class SourceToolCallBudget:
                     f"Source-tool call budget exhausted ({self.used_calls}/{self.max_calls} calls used)"
                 )
             self.used_calls += count
+
+    async def ensure_circuit_closed(self) -> None:
+        """Reject a queued invocation if an earlier provider call opened the circuit."""
+        async with self._lock:
+            if self.circuit_open:
+                raise SourceToolCircuitOpen(
+                    f"Source-tool circuit is open after {self.consecutive_failures} consecutive provider failures"
+                )
 
     async def record_result(self, result: object) -> None:
         """Update consecutive-failure state and open the circuit when exhausted."""
@@ -149,6 +159,12 @@ async def _record_source_tool_result(result: object) -> None:
     budget = _source_tool_budget.get()
     if budget is not None:
         await budget.record_result(result)
+
+
+async def _ensure_source_tool_circuit_closed() -> None:
+    budget = _source_tool_budget.get()
+    if budget is not None:
+        await budget.ensure_circuit_closed()
 
 
 class SourceToolConcurrencyLimiter:
@@ -248,13 +264,17 @@ def _make_batch_source_tool(
         await _consume_source_tool_budget(len(query_list))
 
         async def _call_one(query: str) -> tuple[str, str | None, str | None]:
-            try:
-                async with limiter.limit():
+            async with limiter.limit():
+                await _ensure_source_tool_circuit_closed()
+                try:
                     result = await original_tool.ainvoke({input_field_name: query})
+                except SourceToolCircuitOpen:
+                    raise
+                except Exception as exc:  # noqa: BLE001 - represented as per-item failure for the LLM
+                    await _record_source_tool_result(None)
+                    return query, None, str(exc)
                 await _record_source_tool_result(result)
-                return query, str(result), None
-            except Exception as exc:  # noqa: BLE001 - represented as per-item failure for the LLM
-                return query, None, str(exc)
+            return query, str(result), None
 
         results = await asyncio.gather(*(_call_one(query) for query in query_list))
         return _format_batch_tool_output(results)
@@ -282,8 +302,15 @@ def _make_throttled_source_tool(
     async def _run_throttled(**kwargs) -> object:
         await _consume_source_tool_budget()
         async with limiter.limit():
-            result = await original_tool.ainvoke(kwargs)
-        await _record_source_tool_result(result)
+            await _ensure_source_tool_circuit_closed()
+            try:
+                result = await original_tool.ainvoke(kwargs)
+            except SourceToolCircuitOpen:
+                raise
+            except Exception:
+                await _record_source_tool_result(None)
+                raise
+            await _record_source_tool_result(result)
         return result
 
     # Retain injected fields for runtime validation/forwarding. BaseTool derives

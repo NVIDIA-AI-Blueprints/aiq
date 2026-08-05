@@ -57,6 +57,7 @@ _SOURCE_ROUTING_PATH = "/shared/source_routing.json"
 _SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
 FINAL_REPORT_PATH = "/shared/output.md"
 FINAL_REPORT_STATE_PATHS = (FINAL_REPORT_PATH, "/output.md")
+_GENERATED_RETRY_MARKER = "aiq_generated_retry"
 _UNRESOLVED_SANDBOX_PATH_PATTERN = re.compile(
     r"<\s*sandbox_(?:artifact_dir|workdir)\s*>|\{\{\s*sandbox_(?:artifact_dir|workdir)\s*\}\}"
 )
@@ -573,7 +574,11 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
         return self.tracker.committed_text(files, paths=self.paths) is not None
 
     def _retry_count(self, messages: list[object]) -> int:
-        return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
+        return sum(
+            isinstance(message, HumanMessage)
+            and message.additional_kwargs.get(_GENERATED_RETRY_MARKER) == "required_output_file"
+            for message in messages
+        )
 
     def _check_after_model(self, state: object) -> dict[str, object] | None:
         messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
@@ -593,7 +598,12 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
 
         logger.warning("Agent reported completion before committing the required output; requesting corrective turn")
         return {
-            "messages": [HumanMessage(content=self._retry_message)],
+            "messages": [
+                HumanMessage(
+                    content=self._retry_message,
+                    additional_kwargs={_GENERATED_RETRY_MARKER: "required_output_file"},
+                )
+            ],
             "jump_to": "model",
         }
 
@@ -638,7 +648,11 @@ class RequiredWriterDelegationMiddleware(AgentMiddleware):
         )
 
     def _retry_count(self, messages: list[object]) -> int:
-        return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
+        return sum(
+            isinstance(message, HumanMessage)
+            and message.additional_kwargs.get(_GENERATED_RETRY_MARKER) == "required_writer_delegation"
+            for message in messages
+        )
 
     def _check_after_model(self, state: object) -> dict[str, object] | None:
         messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
@@ -654,7 +668,15 @@ class RequiredWriterDelegationMiddleware(AgentMiddleware):
             raise RuntimeError(self.reason_code)
 
         logger.warning("Orchestrator ended before writer delegation; requesting one corrective turn")
-        return {"messages": [HumanMessage(content=self._retry_message)], "jump_to": "model"}
+        return {
+            "messages": [
+                HumanMessage(
+                    content=self._retry_message,
+                    additional_kwargs={_GENERATED_RETRY_MARKER: "required_writer_delegation"},
+                )
+            ],
+            "jump_to": "model",
+        }
 
     @hook_config(can_jump_to=["model"])
     def after_model(self, state, runtime):

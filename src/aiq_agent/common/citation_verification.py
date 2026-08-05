@@ -568,6 +568,8 @@ def is_non_citable_status_output(content: str) -> bool:
             return True
         for key in ("status", "status_code", "statusCode", "http_status"):
             status = payload.get(key)
+            if isinstance(status, str) and status.strip().lower() == "error":
+                return True
             try:
                 status_code = int(status)
             except (TypeError, ValueError):

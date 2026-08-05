@@ -37,9 +37,17 @@ def test_default_guardrails_apply_baseline_input_policy_at_every_research_bounda
     def input_patterns(name: str) -> set[str]:
         return set(middleware[name]["guardrails"]["rails"]["config"]["regex_detection"]["input"]["patterns"])
 
-    workflow_patterns = input_patterns("workflow_guardrails")
-    assert workflow_patterns <= input_patterns("shallow_agent_guardrails")
-    assert workflow_patterns <= input_patterns("deep_agent_guardrails")
+    expected_baseline = {
+        (
+            r"(?i)\b(?:ignore|disregard|discard|override)\s+"
+            r"(?:(?:all|any|the)\s+)?(?:previous|prior|earlier)\s+instructions?\b"
+        ),
+        r"(?i)reveal\s+(the\s+)?system\s+prompt",
+        (r"(?i)\b(?:api[\s_-]*key|password)\s*" r"(?::|=|\bis\b|\bequals?\b)\s*\S+"),
+    }
+    assert expected_baseline <= input_patterns("workflow_guardrails")
+    assert expected_baseline <= input_patterns("shallow_agent_guardrails")
+    assert expected_baseline <= input_patterns("deep_agent_guardrails")
 
 
 @pytest.mark.asyncio

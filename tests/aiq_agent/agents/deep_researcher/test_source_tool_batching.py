@@ -45,6 +45,9 @@ from aiq_agent.agents.deep_researcher.tools.source_tool_batching import source_t
         ("Search failed with status 429", True),
         ('{"status_code": 429, "detail": "rate limited"}', True),
         ({"status": 503, "error": "unavailable"}, True),
+        ({}, True),
+        ([], True),
+        ({"status": "error"}, True),
         ("Search returned no results", True),
         ("An article explaining HTTP error 429 handling patterns.", False),
         ('<Document href="https://example.com">Evidence</Document>', False),
@@ -52,6 +55,77 @@ from aiq_agent.agents.deep_researcher.tools.source_tool_batching import source_t
 )
 def test_source_tool_result_failure_classifier_is_conservative(result: object, expected: bool):
     assert source_tool_result_failed(result) is expected
+
+
+@pytest.mark.asyncio
+async def test_batch_circuit_stops_queued_provider_calls_after_first_failure():
+    calls: list[str] = []
+
+    @tool
+    async def search_tool(query: str) -> str:
+        """Search a source."""
+        calls.append(query)
+        return "Error: provider unavailable"
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=2,
+    )[0]
+    token = activate_source_tool_budget(2, max_consecutive_failures=1)
+    try:
+        with pytest.raises(SourceToolCircuitOpen, match="opened after 1 consecutive"):
+            await wrapped.ainvoke({"queries": ["first", "second"]})
+        assert calls == ["first"]
+    finally:
+        reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batchable", [True, False])
+async def test_provider_exception_counts_toward_source_circuit(batchable: bool):
+    calls = 0
+
+    if batchable:
+
+        @tool
+        async def search_tool(query: str) -> str:
+            """Search a source."""
+            nonlocal calls
+            calls += 1
+            raise TimeoutError("provider timed out")
+
+        invocation = {"queries": "query"}
+    else:
+
+        @tool
+        async def search_tool(query: str, limit: int) -> str:
+            """Search a source."""
+            nonlocal calls
+            calls += 1
+            raise TimeoutError("provider timed out")
+
+        invocation = {"query": "query", "limit": 1}
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=2,
+    )[0]
+    token = activate_source_tool_budget(2, max_consecutive_failures=2)
+    try:
+        if batchable:
+            assert "provider timed out" in await wrapped.ainvoke(invocation)
+        else:
+            with pytest.raises(TimeoutError, match="provider timed out"):
+                await wrapped.ainvoke(invocation)
+        with pytest.raises(SourceToolCircuitOpen, match="opened after 2 consecutive"):
+            await wrapped.ainvoke(invocation)
+        assert calls == 2
+    finally:
+        reset_source_tool_budget(token)
 
 
 @pytest.mark.asyncio

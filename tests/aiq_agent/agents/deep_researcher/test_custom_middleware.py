@@ -823,6 +823,15 @@ class TestRequiredOutputFileMiddleware:
         with pytest.raises(RuntimeError, match="^writer_output_not_committed$"):
             middleware.after_model(still_missing, None)
 
+    def test_matching_user_input_does_not_consume_corrective_retry(self) -> None:
+        middleware = RequiredOutputFileMiddleware(tracker=FinalReportCommitTracker())
+        state = self._state(messages=[HumanMessage(content=middleware._retry_message), AIMessage(content=self.marker)])
+
+        update = middleware.after_model(state, None)
+
+        assert update is not None
+        assert update["jump_to"] == "model"
+
     @pytest.mark.asyncio
     @pytest.mark.parametrize("shared_route", [False, True])
     async def test_graph_overwrites_stale_planner_output_and_commits_writer_report(self, shared_route: bool) -> None:
@@ -944,6 +953,15 @@ class TestRequiredWriterDelegationMiddleware:
 
         with pytest.raises(RuntimeError, match="^writer_output_not_committed$"):
             middleware.after_model(state, None)
+
+    def test_matching_user_input_does_not_consume_delegation_retry(self) -> None:
+        middleware = RequiredWriterDelegationMiddleware(tracker=FinalReportCommitTracker())
+        state = self._state(messages=[HumanMessage(content=middleware._retry_message), AIMessage(content="No report.")])
+
+        update = middleware.after_model(state, None)
+
+        assert update is not None
+        assert update["jump_to"] == "model"
 
 
 class TestToolNameSanitizationMiddleware:
