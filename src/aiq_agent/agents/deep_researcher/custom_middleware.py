@@ -41,6 +41,7 @@ from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
+from aiq_agent.common.citation_verification import is_non_citable_status_output
 
 from .resource_limits import DeepResearchResourceLimits
 from .resource_limits import StateBudgetLedger
@@ -1065,10 +1066,13 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 tool_name = request.tool_call.get("name", "")
             if tool_name not in self._source_tool_names:
                 return result
+            content = str(result.content)
+            if is_non_citable_status_output(content):
+                return result
             source_id = get_source_id_for_tool(tool_name)
             sources = extract_sources_from_tool_result(
                 tool_name,
-                str(result.content),
+                content,
                 source_id=source_id,
                 result_status=getattr(result, "status", None),
             )

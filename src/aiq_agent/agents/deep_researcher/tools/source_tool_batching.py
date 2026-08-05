@@ -115,6 +115,10 @@ class SourceToolCallBudget:
         """Update consecutive-failure state and open the circuit when exhausted."""
         failed = source_tool_result_failed(result)
         async with self._lock:
+            if self.circuit_open:
+                raise SourceToolCircuitOpen(
+                    f"Source-tool circuit is open after {self.consecutive_failures} consecutive provider failures"
+                )
             if not failed:
                 self.consecutive_failures = 0
                 return
@@ -235,11 +239,13 @@ def _single_string_input_field(tool: BaseTool) -> str | None:
 
 
 def _format_batch_tool_output(results: list[tuple[str, str | None, str | None]]) -> str:
-    """Render grouped per-input output without hiding partial failures."""
+    """Render successful evidence without making failed-only batches citable."""
     parts: list[str] = []
     for query, output, error in results:
-        body = f"ERROR: {error}" if error else (output or "")
-        parts.append(f"## Query: {query}\n{body}")
+        if error is None and output:
+            parts.append(f"## Query: {query}\n{output}")
+    if not parts:
+        return "ERROR: Source batch returned no citable results."
     return "\n\n---\n\n".join(parts)
 
 
@@ -264,17 +270,23 @@ def _make_batch_source_tool(
         await _consume_source_tool_budget(len(query_list))
 
         async def _call_one(query: str) -> tuple[str, str | None, str | None]:
-            async with limiter.limit():
-                await _ensure_source_tool_circuit_closed()
-                try:
-                    result = await original_tool.ainvoke({input_field_name: query})
-                except SourceToolCircuitOpen:
-                    raise
-                except Exception:  # noqa: BLE001 - represented as per-item failure for the LLM
-                    await _record_source_tool_result(None)
+            try:
+                async with limiter.limit():
+                    await _ensure_source_tool_circuit_closed()
+                    try:
+                        result = await original_tool.ainvoke({input_field_name: query})
+                    except SourceToolCircuitOpen:
+                        raise
+                    except Exception:  # noqa: BLE001 - represented as per-item failure for the LLM
+                        await _record_source_tool_result(None)
+                        return query, None, "Source request failed."
+                    failed = source_tool_result_failed(result)
+                    await _record_source_tool_result(result)
+                if failed:
                     return query, None, "Source request failed."
-                await _record_source_tool_result(result)
-            return query, str(result), None
+                return query, str(result), None
+            except SourceToolCircuitOpen:
+                return query, None, "Source request skipped because the source circuit is open."
 
         results = await asyncio.gather(*(_call_one(query) for query in query_list))
         return _format_batch_tool_output(results)

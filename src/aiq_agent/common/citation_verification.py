@@ -562,6 +562,8 @@ def is_non_citable_status_output(content: str) -> bool:
         payload = json.loads(content)
     except (json.JSONDecodeError, TypeError):
         payload = None
+    if isinstance(payload, (dict, list)) and not payload:
+        return True
     if isinstance(payload, dict):
         error = payload.get("error")
         if error not in (None, False, "", [], {}):

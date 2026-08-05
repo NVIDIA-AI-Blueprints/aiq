@@ -1373,6 +1373,16 @@ class TestSourceRegistryMiddleware:
         assert middleware.registry.all_sources() == []
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("content", ["{}", "[]", '{"status": "error"}'])
+    async def test_failed_structured_result_is_not_registered_as_tool_evidence(self, middleware, content: str):
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("advanced_web_search_tool")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        assert middleware.registry.all_sources() == []
+
+    @pytest.mark.asyncio
     async def test_knowledge_layer_citation_key_captured(self, middleware):
         """Knowledge layer citation keys are captured via regex."""
         content = (

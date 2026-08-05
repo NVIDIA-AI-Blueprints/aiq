@@ -29,6 +29,7 @@ from langchain_core.tools import tool
 
 from aiq_agent.agents.deep_researcher.custom_middleware import SourceRegistryMiddleware
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolBudgetExceeded
+from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolCallBudget
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolCircuitOpen
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import SourceToolConcurrencyLimiter
 from aiq_agent.agents.deep_researcher.tools.source_tool_batching import activate_source_tool_budget
@@ -75,11 +76,89 @@ async def test_batch_circuit_stops_queued_provider_calls_after_first_failure():
     )[0]
     token = activate_source_tool_budget(2, max_consecutive_failures=1)
     try:
-        with pytest.raises(SourceToolCircuitOpen, match="opened after 1 consecutive"):
-            await wrapped.ainvoke({"queries": ["first", "second"]})
+        output = await wrapped.ainvoke({"queries": ["first", "second"]})
+        assert output == "ERROR: Source batch returned no citable results."
         assert calls == ["first"]
+        with pytest.raises(SourceToolCircuitOpen, match="circuit is open after 1 consecutive"):
+            await wrapped.ainvoke({"queries": "third"})
     finally:
         reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+async def test_late_success_cannot_reset_open_circuit_failure_count():
+    budget = SourceToolCallBudget(max_calls=2, max_consecutive_failures=1)
+    success_in_flight = asyncio.Event()
+    release_success = asyncio.Event()
+
+    async def finish_success() -> None:
+        success_in_flight.set()
+        await release_success.wait()
+        await budget.record_result("valid evidence")
+
+    success_task = asyncio.create_task(finish_success())
+    await success_in_flight.wait()
+    with pytest.raises(SourceToolCircuitOpen, match="opened after 1 consecutive"):
+        await budget.record_result("Error: provider unavailable")
+    release_success.set()
+    with pytest.raises(SourceToolCircuitOpen, match="is open after 1 consecutive"):
+        await success_task
+
+    assert budget.circuit_open is True
+    assert budget.consecutive_failures == 1
+    with pytest.raises(SourceToolCircuitOpen, match="is open after 1 consecutive"):
+        await budget.consume()
+
+
+@pytest.mark.asyncio
+async def test_batch_preserves_completed_success_when_sibling_opens_circuit():
+    calls: list[str] = []
+
+    @tool
+    async def search_tool(query: str) -> str:
+        """Search a source."""
+        calls.append(query)
+        if query == "bad":
+            return "Error: provider unavailable"
+        return "Evidence at https://example.test/good"
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=2,
+    )[0]
+    token = activate_source_tool_budget(2, max_consecutive_failures=1)
+    try:
+        output = await wrapped.ainvoke({"queries": ["good", "bad"]})
+
+        assert calls == ["good", "bad"]
+        assert "## Query: good" in output
+        assert "https://example.test/good" in output
+        assert "## Query: bad" not in output
+        assert "provider unavailable" not in output
+    finally:
+        reset_source_tool_budget(token)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failed_result", [{}, [], {"status": "error"}])
+async def test_batch_filters_structured_failures_from_citable_output(failed_result: object):
+    @tool
+    async def search_tool(query: str) -> object:
+        """Search a source."""
+        return failed_result
+
+    wrapped = adapt_source_tools_for_research(
+        [search_tool],
+        source_tool_names={"search_tool"},
+        max_concurrent_source_tool_calls=1,
+        max_batch_size=1,
+    )[0]
+
+    output = await wrapped.ainvoke({"queries": "query"})
+
+    assert output == "ERROR: Source batch returned no citable results."
 
 
 @pytest.mark.asyncio
@@ -117,15 +196,18 @@ async def test_provider_exception_counts_toward_source_circuit(batchable: bool):
     token = activate_source_tool_budget(2, max_consecutive_failures=2)
     try:
         if batchable:
-            output = await wrapped.ainvoke(invocation)
-            assert "Source request failed." in output
-            assert "provider timed out" not in output
+            assert await wrapped.ainvoke(invocation) == "ERROR: Source batch returned no citable results."
         else:
             with pytest.raises(TimeoutError, match="provider timed out"):
                 await wrapped.ainvoke(invocation)
-        with pytest.raises(SourceToolCircuitOpen, match="opened after 2 consecutive"):
-            await wrapped.ainvoke(invocation)
+        if batchable:
+            assert await wrapped.ainvoke(invocation) == "ERROR: Source batch returned no citable results."
+        else:
+            with pytest.raises(SourceToolCircuitOpen, match="opened after 2 consecutive"):
+                await wrapped.ainvoke(invocation)
         assert calls == 2
+        with pytest.raises(SourceToolCircuitOpen, match="circuit is open after 2 consecutive"):
+            await wrapped.ainvoke(invocation)
     finally:
         reset_source_tool_budget(token)
 
@@ -262,8 +344,7 @@ async def test_batch_wrapper_represents_partial_failures_per_item():
     assert sorted(calls) == ["bad", "good"]
     assert "## Query: good" in output
     assert "ok good" in output
-    assert "## Query: bad" in output
-    assert "ERROR: Source request failed." in output
+    assert "## Query: bad" not in output
     assert "backend unavailable" not in output
 
 
