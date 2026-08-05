@@ -17,6 +17,7 @@
 
 import asyncio
 from contextlib import suppress
+from datetime import datetime
 from typing import Annotated
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -50,6 +51,10 @@ from aiq_agent.agents.deep_researcher.tools.source_tool_batching import source_t
         ({}, True),
         ([], True),
         ({"status": "error"}, True),
+        ({"timestamp": datetime(2026, 8, 5)}, False),
+        ({"content": b"bytes"}, False),
+        ({"artifact": object()}, False),
+        ({"status": "error", "timestamp": datetime(2026, 8, 5)}, True),
         ("Search returned no results", True),
         ("An article explaining HTTP error 429 handling patterns.", False),
         ('<Document href="https://example.com">Evidence</Document>', False),
@@ -267,8 +272,7 @@ async def test_provider_exception_counts_toward_source_circuit(batchable: bool):
         if batchable:
             assert await wrapped.ainvoke(invocation) == "ERROR: Source batch returned no citable results."
         else:
-            with pytest.raises(TimeoutError, match="provider timed out"):
-                await wrapped.ainvoke(invocation)
+            assert await wrapped.ainvoke(invocation) == "ERROR: Source batch returned no citable results."
         if batchable:
             assert await wrapped.ainvoke(invocation) == "ERROR: Source batch returned no citable results."
         else:

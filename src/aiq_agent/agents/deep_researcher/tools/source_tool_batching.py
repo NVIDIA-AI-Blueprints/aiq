@@ -64,7 +64,7 @@ def source_tool_result_failed(result: object) -> bool:
         return True
     if getattr(result, "status", None) == "error":
         return True
-    text = json.dumps(result) if isinstance(result, dict) else str(result)
+    text = json.dumps(result, default=str) if isinstance(result, dict) else str(result)
     text = text.strip()
     if not text:
         return True
@@ -320,7 +320,7 @@ def _make_throttled_source_tool(
                 raise
             except Exception:
                 await _record_source_tool_result(None)
-                raise
+                return _SOURCE_TOOL_FAILURE_OUTPUT
             await _record_source_tool_result(result)
             if source_tool_result_failed(result):
                 return _SOURCE_TOOL_FAILURE_OUTPUT
