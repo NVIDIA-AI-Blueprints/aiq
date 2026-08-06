@@ -87,6 +87,7 @@ class TextToSQLResponse(GSFResponse):
     """Validated SQL, bounded rows, and semantic provenance returned by GSF."""
 
     request_id: str | None = None
+    thoughts: str | None = None
     sql: str
     columns: list[ResultColumn] = Field(default_factory=list)
     rows: list[dict[str, Any]] = Field(default_factory=list)

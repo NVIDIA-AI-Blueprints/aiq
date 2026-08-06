@@ -108,6 +108,8 @@ async def test_text_to_sql_resolves_token_per_invocation(text_to_sql_response: d
 
     assert first["request_id"] == "gsf-request-1"
     assert second["request_id"] == "gsf-request-1"
+    assert first["thoughts"] == "- Constructing SQL: Used quarterly_results."
+    assert second["thoughts"] == "- Constructing SQL: Used quarterly_results."
     assert "response" not in first
     assert "response" not in second
     assert client.text_to_sql.await_args_list[0].kwargs["token"] == "token-one"

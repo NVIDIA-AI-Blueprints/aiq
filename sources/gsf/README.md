@@ -77,6 +77,8 @@ The adapter normalizes GSF's current response fields while preserving optional
 semantic and benchmarking fields as they become available.
 For text-to-SQL, GSF's compatibility prose is discarded; AI-Q consumes the
 generated SQL, bounded rows, and any structured semantic provenance instead.
+GSF's optional `thoughts` summary is retained as diagnostic context, not as
+authoritative evidence.
 
 Catalog search uses `POST /api/question-entity-coverage` and returns entity
 coverage plus ranked semantic candidates for DS-agent grounding and routing.

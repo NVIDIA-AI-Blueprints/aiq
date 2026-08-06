@@ -83,6 +83,7 @@ def test_text_to_sql_response_accepts_missing_future_enrichments() -> None:
     )
 
     assert result.request_id is None
+    assert result.thoughts is None
     assert result.semantic_context is None
     assert result.warnings is None
 

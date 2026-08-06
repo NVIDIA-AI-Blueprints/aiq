@@ -126,6 +126,7 @@ async def test_text_to_sql_maps_database_to_target_db_and_bounds_rows(chat_sql_a
     assert [column.name for column in result.columns] == ["revenue"]
     assert result.rows == [{"revenue": 100}]
     assert result.truncated is True
+    assert result.thoughts == "- Constructing SQL: Used quarterly_results."
     assert "response" not in result.model_dump()
 
 

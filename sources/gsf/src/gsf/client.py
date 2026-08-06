@@ -445,6 +445,7 @@ class GSFClient:
         try:
             return TextToSQLResponse(
                 request_id=answer.get("request_id") or request_id,
+                thoughts=answer.get("thoughts"),
                 sql=sql,
                 columns=columns,
                 rows=rows,
