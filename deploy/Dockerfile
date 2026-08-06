@@ -44,8 +44,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
 ENV UV_PYTHON_INSTALL_DIR=/opt/uv-python
 
 RUN python3 -m pip install --break-system-packages --no-cache-dir uv \
-    && uv python install 3.13 \
-    && UV_PYTHON_BIN="$(uv python find 3.13)" \
+    && uv python install 3.13.14 \
+    && UV_PYTHON_BIN="$(uv python find 3.13.14)" \
     && ln -sf "$UV_PYTHON_BIN" /usr/local/bin/python \
     && ln -sf "$UV_PYTHON_BIN" /usr/local/bin/python3
 
@@ -112,7 +112,7 @@ RUN /app/.venv/bin/python -c "import aiq_api; import aiq_research_cli; import ai
 # =============================================================================
 # Stage 3: Development runtime
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS dev
+FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.8 AS dev
 
 WORKDIR /app
 
@@ -132,7 +132,7 @@ ENTRYPOINT ["python", "/app/deploy/entrypoint.py"]
 # =============================================================================
 # Stage 4: Release (production - no CLI)
 # =============================================================================
-FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.5 AS release
+FROM nvcr.io/nvidia/distroless/python:3.13-v4.0.8 AS release
 
 WORKDIR /app
 
