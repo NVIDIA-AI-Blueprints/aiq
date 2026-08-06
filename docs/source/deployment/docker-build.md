@@ -42,7 +42,7 @@ The builder stage handles all compilation and package installation:
 
 1. **System dependencies** -- Installs build tools, curl, git, and the system Python used to bootstrap `uv`; `uv` then installs the pinned Python 3.13.14 runtime.
 2. **Virtual environment** -- Creates a venv at `/app/.venv` using `uv` and Python 3.13.14.
-3. **Dependency installation** -- Runs `uv sync --frozen --extra pii --extra s3` against the root `uv.lock` to install locked runtime and default-group dependencies. The independent `mcp/` project is excluded from the root workspace, so the standalone MCP package and `mcp/uv.lock` are not part of this image.
+3. **Dependency installation** -- Runs `uv sync --frozen --extra pii --extra s3` against the root workspace's `uv.lock`, installing locked runtime dependencies, the `pii` and `s3` extras, and the default `dev` dependency group. The independent `mcp/` project is excluded from the root workspace, so the standalone MCP package and `mcp/uv.lock` are not part of this image.
 4. **Workspace packages** -- Installs application packages with `uv pip install -e` (the root package uses `--no-deps`):
    - Root workspace package (`aiq-agent`) using `uv pip install --no-sources --no-deps -e .`; `--no-sources` keeps workspace source overrides from coupling this image to packages that are intentionally absent from its build context.
    - `sources/google_scholar_paper_search` -- Google Scholar search
