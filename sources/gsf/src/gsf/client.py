@@ -419,7 +419,9 @@ class GSFClient:
 
     @classmethod
     def _normalize_text_to_pql(cls, answer: Mapping[str, Any], *, request_id: str | None) -> TextToPQLResponse:
-        pql = answer.get("pql") or answer.get("pql_code")
+        # GSF's prediction branch currently returns the PQL in ``sql_code`` so
+        # its frontend can render SQL and prediction results with one shape.
+        pql = answer.get("pql") or answer.get("pql_code") or answer.get("sql_code")
         if not isinstance(pql, str) or not pql.strip():
             raise GSFError(
                 GSFErrorCode.INVALID_RESPONSE,

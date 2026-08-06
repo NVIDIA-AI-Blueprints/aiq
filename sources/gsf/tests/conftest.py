@@ -23,7 +23,7 @@ def chat_pql_answer() -> dict:
 
     return {
         "response": "A churn prediction query was generated.",
-        "pql_code": "PREDICT churn FOR customers NEXT 30 DAYS",
+        "sql_code": "PREDICT churn FOR customers NEXT 30 DAYS",
         "objects_used": ["prediction:churn"],
         "semantic_context": {
             "metrics": [{"id": "prediction:churn"}],
