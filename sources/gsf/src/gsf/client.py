@@ -15,6 +15,8 @@ from pydantic import ValidationError
 
 from .errors import GSFError
 from .errors import GSFErrorCode
+from .models import CatalogSearchRequest
+from .models import CatalogSearchResponse
 from .models import ResultColumn
 from .models import TextToPQLRequest
 from .models import TextToPQLResponse
@@ -123,6 +125,32 @@ class GSFClient:
             trace_headers=trace_headers,
         )
         return self._normalize_text_to_sql(answer, request_id=request_id, max_rows=max_rows)
+
+    async def catalog_search(
+        self,
+        request: CatalogSearchRequest,
+        *,
+        token: str | None,
+        trace_headers: Mapping[str, str] | None = None,
+    ) -> CatalogSearchResponse:
+        """Find GSF semantic candidates and measure entity coverage."""
+
+        payload: dict[str, Any] = {
+            "question": request.question,
+            "max_distance": request.max_distance,
+        }
+        if request.database_name is not None:
+            payload["target_db"] = request.database_name
+
+        body, request_id, _content_type = await self._post(
+            "question-entity-coverage",
+            payload,
+            token=token,
+            trace_headers=trace_headers,
+            capability="GSF entity coverage",
+        )
+        data = self._parse_json_data(body, request_id=request_id)
+        return self._normalize_catalog_search(data, request_id=request_id, max_results=request.max_results)
 
     async def text_to_pql(
         self,
@@ -358,6 +386,27 @@ class GSFClient:
         )
 
     @staticmethod
+    def _parse_json_data(body: bytes, *, request_id: str | None) -> dict[str, Any]:
+        try:
+            payload = json.loads(body)
+        except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF returned an invalid response.",
+                request_id=request_id,
+            ) from exc
+
+        if isinstance(payload, dict) and isinstance(payload.get("data"), dict):
+            payload = payload["data"]
+        if not isinstance(payload, dict):
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF returned an invalid response.",
+                request_id=request_id,
+            )
+        return payload
+
+    @staticmethod
     def _answer_from_event(payload: Any, *, request_id: str | None) -> dict[str, Any]:
         if isinstance(payload, dict) and isinstance(payload.get("answer"), dict):
             return payload["answer"]
@@ -414,6 +463,37 @@ class GSFClient:
             raise GSFError(
                 GSFErrorCode.INVALID_RESPONSE,
                 "GSF returned invalid text-to-SQL data.",
+                request_id=request_id,
+            ) from exc
+
+    @staticmethod
+    def _normalize_catalog_search(
+        data: Mapping[str, Any],
+        *,
+        request_id: str | None,
+        max_results: int,
+    ) -> CatalogSearchResponse:
+        candidates = data.get("candidates")
+        if not isinstance(candidates, list):
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF returned invalid catalog-search data.",
+                request_id=request_id,
+            )
+
+        truncated = len(candidates) > max_results
+        try:
+            return CatalogSearchResponse(
+                request_id=data.get("request_id") or request_id,
+                coverage=data.get("coverage"),
+                candidates=candidates[:max_results],
+                uncovered_entities=data.get("uncovered_entities"),
+                truncated=truncated,
+            )
+        except ValidationError as exc:
+            raise GSFError(
+                GSFErrorCode.INVALID_RESPONSE,
+                "GSF returned invalid catalog-search data.",
                 request_id=request_id,
             ) from exc
 

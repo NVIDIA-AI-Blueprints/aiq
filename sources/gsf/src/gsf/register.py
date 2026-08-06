@@ -92,15 +92,29 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
     async with GSFClient.from_config(config) as client:
 
         async def catalog_search(request: CatalogSearchRequest) -> str:
-            """Search the GSF enterprise catalog (not available in this integration yet)."""
+            """Find GSF semantic candidates relevant to an enterprise-data question.
 
-            del request
-            return _tool_error(
-                GSFError(
-                    GSFErrorCode.CAPABILITY_UNAVAILABLE,
-                    "GSF catalog search is unavailable.",
+            Use the returned entity coverage and ranked candidates to ground routing and later analytical calls. This
+            returns catalog context, not a final answer to the user's question.
+            """
+
+            try:
+                result = await client.catalog_search(
+                    request,
+                    token=_resolve_request_token(config),
+                    trace_headers=_request_trace_headers(),
                 )
-            )
+                return result.model_dump_json(exclude_none=True)
+            except GSFError as error:
+                return _tool_error(error)
+            except Exception:
+                logger.error("Unexpected GSF catalog-search failure")
+                return _tool_error(
+                    GSFError(
+                        GSFErrorCode.UPSTREAM_ERROR,
+                        "GSF catalog search failed.",
+                    )
+                )
 
         async def text_to_sql(request: TextToSQLRequest) -> str:
             """Generate validated SQL and return bounded rows from authorized enterprise data.

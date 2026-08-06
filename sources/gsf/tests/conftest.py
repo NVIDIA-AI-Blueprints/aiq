@@ -5,6 +5,50 @@ import pytest
 
 
 @pytest.fixture
+def catalog_search_api_response() -> dict:
+    """Current GSF question-entity-coverage response envelope."""
+
+    return {
+        "data": {
+            "coverage": 0.5,
+            "candidates": [
+                {
+                    "label": "ColumnAttribute",
+                    "attribute": "recognized_revenue",
+                    "term": "Revenue",
+                    "id": "attr:revenue",
+                },
+                {
+                    "label": "SqlAttribute",
+                    "attribute": "net_revenue_sql",
+                    "term": "Net Revenue",
+                    "id": "sql-attr:net-revenue",
+                },
+            ],
+        }
+    }
+
+
+@pytest.fixture
+def catalog_search_response() -> dict:
+    """Normalized catalog response used by NAT registration tests."""
+
+    return {
+        "request_id": "gsf-catalog-request-1",
+        "coverage": 0.5,
+        "candidates": [
+            {
+                "label": "ColumnAttribute",
+                "attribute": "recognized_revenue",
+                "term": "Revenue",
+                "id": "attr:revenue",
+            }
+        ],
+        "truncated": False,
+    }
+
+
+@pytest.fixture
 def chat_sql_answer() -> dict:
     """Current GSF chat-completions SQL answer envelope."""
 

@@ -23,12 +23,31 @@ class GSFResponse(BaseModel):
 
 
 class CatalogSearchRequest(GSFRequest):
-    """Provisional catalog-search input retained for the unavailable placeholder."""
+    """Find semantic candidates relevant to an enterprise-data question."""
 
     question: str = Field(min_length=1, max_length=4_096)
     database_name: str | None = None
     max_results: int = Field(default=10, ge=1, le=100)
-    token_budget: int | None = Field(default=None, ge=1)
+    max_distance: float = Field(default=0.75, gt=0)
+
+
+class CatalogCandidate(GSFResponse):
+    """A semantic candidate returned by GSF entity-coverage search."""
+
+    label: str
+    attribute: str
+    term: str
+    id: str
+
+
+class CatalogSearchResponse(GSFResponse):
+    """Coverage and ranked semantic candidates returned by GSF."""
+
+    request_id: str | None = None
+    coverage: float = Field(ge=0, le=1)
+    candidates: list[CatalogCandidate]
+    uncovered_entities: list[str] | None = None
+    truncated: bool = False
 
 
 class ResultColumn(GSFResponse):

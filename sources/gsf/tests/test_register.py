@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from gsf.models import CatalogSearchResponse
 from gsf.models import TextToPQLResponse
 from gsf.models import TextToSQLResponse
 from gsf.register import GSFFunctionGroupConfig
@@ -24,7 +25,7 @@ class FakeClientContext:
         return self.client
 
     async def __aexit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
-        return None
+        pass
 
 
 def test_password_auth_is_optional_and_keeps_secret_wrapped() -> None:
@@ -68,6 +69,25 @@ async def test_group_exposes_text_to_pql_when_requested(text_to_pql_response: di
             tools = await group.get_accessible_functions()
 
     assert set(tools) == {"gsf__text_to_pql"}
+
+
+@pytest.mark.asyncio
+async def test_catalog_search_resolves_token_per_invocation(catalog_search_response: dict) -> None:
+    client = MagicMock()
+    client.catalog_search = AsyncMock(return_value=CatalogSearchResponse.model_validate(catalog_search_response))
+    config = GSFFunctionGroupConfig(base_url="https://gsf.example", include=["catalog_search"])
+
+    with (
+        patch("gsf.register.GSFClient.from_config", return_value=FakeClientContext(client)),
+        patch("gsf.register.get_auth_token", return_value="token-one"),
+        patch("gsf.register._request_trace_headers", return_value={}),
+    ):
+        async with gsf_function_group(config, MagicMock()) as group:
+            tool = (await group.get_accessible_functions())["gsf__catalog_search"]
+            result = json.loads(await tool.ainvoke({"question": "Find revenue metrics"}))
+
+    assert result["request_id"] == "gsf-catalog-request-1"
+    assert client.catalog_search.await_args.kwargs["token"] == "token-one"
 
 
 @pytest.mark.asyncio
@@ -162,7 +182,6 @@ async def test_missing_authentication_fails_closed() -> None:
 @pytest.mark.parametrize(
     ("tool_name", "tool_input", "message"),
     [
-        ("catalog_search", {"question": "Find revenue metrics"}, "GSF catalog search is unavailable."),
         ("query_context", {"question": "Show data"}, "GSF query context is unavailable."),
     ],
 )

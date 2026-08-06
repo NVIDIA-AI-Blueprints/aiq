@@ -10,6 +10,7 @@ import pytest
 from gsf.client import GSFClient
 from gsf.errors import GSFError
 from gsf.errors import GSFErrorCode
+from gsf.models import CatalogSearchRequest
 from gsf.models import TextToPQLRequest
 from gsf.models import TextToSQLRequest
 from pydantic import SecretStr
@@ -31,6 +32,64 @@ def _sse_response(answer: dict) -> httpx.Response:
         content="\n".join(events).encode(),
         headers={"content-type": "text/event-stream", "x-request-id": "header-request"},
     )
+
+
+@pytest.mark.asyncio
+async def test_catalog_search_uses_entity_coverage_path_maps_scope_and_bounds_candidates(
+    catalog_search_api_response: dict,
+) -> None:
+    seen_request: httpx.Request | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_request
+        seen_request = request
+        return httpx.Response(
+            200,
+            json=catalog_search_api_response,
+            headers={"x-request-id": "header-request"},
+        )
+
+    client = GSFClient(base_url="https://gsf.example/", transport=httpx.MockTransport(handler))
+    async with client:
+        result = await client.catalog_search(
+            CatalogSearchRequest(
+                question="Find revenue metrics",
+                database_name="benchmark_db",
+                max_results=1,
+                max_distance=0.5,
+            ),
+            token="user-token",
+            trace_headers={"traceparent": "00-trace", "authorization": "do-not-forward"},
+        )
+
+    assert seen_request is not None
+    assert seen_request.url == "https://gsf.example/api/question-entity-coverage"
+    assert seen_request.headers["authorization"] == "Bearer user-token"
+    assert seen_request.headers["accept"] == "application/json"
+    assert seen_request.headers["traceparent"] == "00-trace"
+    assert json.loads(seen_request.content) == {
+        "question": "Find revenue metrics",
+        "max_distance": 0.5,
+        "target_db": "benchmark_db",
+    }
+    assert result.request_id == "header-request"
+    assert result.coverage == 0.5
+    assert [candidate.id for candidate in result.candidates] == ["attr:revenue"]
+    assert result.uncovered_entities is None
+    assert result.truncated is True
+
+
+@pytest.mark.asyncio
+async def test_catalog_search_maps_missing_endpoint_to_capability_unavailable() -> None:
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
+    async with client:
+        with pytest.raises(GSFError) as raised:
+            await client.catalog_search(CatalogSearchRequest(question="Find revenue"), token="user-token")
+
+    assert raised.value.code is GSFErrorCode.CAPABILITY_UNAVAILABLE
 
 
 @pytest.mark.asyncio

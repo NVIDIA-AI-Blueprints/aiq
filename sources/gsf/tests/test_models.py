@@ -2,12 +2,52 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
+from gsf.models import CatalogCandidate
+from gsf.models import CatalogSearchRequest
+from gsf.models import CatalogSearchResponse
 from gsf.models import QueryContextRequest
 from gsf.models import TextToPQLRequest
 from gsf.models import TextToPQLResponse
 from gsf.models import TextToSQLRequest
 from gsf.models import TextToSQLResponse
 from pydantic import ValidationError
+
+
+def test_catalog_search_request_supports_optional_scope_and_search_controls() -> None:
+    request = CatalogSearchRequest(
+        question="Find revenue metrics",
+        database_name="benchmark_db",
+        max_results=20,
+        max_distance=0.5,
+    )
+
+    assert request.database_name == "benchmark_db"
+    assert request.max_results == 20
+    assert request.max_distance == 0.5
+
+
+def test_catalog_search_response_validates_coverage() -> None:
+    with pytest.raises(ValidationError):
+        CatalogSearchResponse(
+            coverage=1.5,
+            candidates=[
+                CatalogCandidate(
+                    label="ColumnAttribute",
+                    attribute="revenue",
+                    term="Revenue",
+                    id="attr:revenue",
+                )
+            ],
+        )
+
+
+def test_catalog_search_response_ignores_future_fields(catalog_search_response: dict) -> None:
+    catalog_search_response["future_gsf_metadata"] = {"enabled": True}
+
+    result = CatalogSearchResponse.model_validate(catalog_search_response)
+
+    assert result.request_id == "gsf-catalog-request-1"
+    assert not hasattr(result, "future_gsf_metadata")
 
 
 def test_text_to_sql_request_supports_optional_database_name() -> None:

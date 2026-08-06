@@ -10,9 +10,10 @@ NeMo Agent Toolkit function group. The current implementation provides:
 
 - `gsf__text_to_sql`
 - `gsf__text_to_pql`
+- `gsf__catalog_search`
 
-`gsf__catalog_search` and `gsf__query_context` are registered as explicit
-`capability_unavailable` placeholders until their GSF API contracts are ready.
+`gsf__query_context` is registered as an explicit `capability_unavailable`
+placeholder until its GSF API contract is ready.
 
 By default, the function group owns one shared HTTP connection pool and keeps
 authentication request-scoped: each tool invocation obtains the current AI-Q
@@ -25,6 +26,7 @@ function_groups:
     _type: gsf
     base_url: ${GSF_BASE_URL:-http://gsf:3000}
     include:
+      - catalog_search
       - text_to_sql
       - text_to_pql
 
@@ -57,6 +59,7 @@ function_groups:
       email: ${GSF_EMAIL}
       password: ${GSF_PASSWORD}
     include:
+      - catalog_search
       - text_to_sql
       - text_to_pql
 ```
@@ -72,3 +75,9 @@ Text-to-SQL and text-to-PQL use GSF's `/api/chat/completions` SSE endpoint with
 connection rather than creating one.
 The adapter normalizes GSF's current response fields while preserving optional
 semantic and benchmarking fields as they become available.
+
+Catalog search uses `POST /api/question-entity-coverage` and returns entity
+coverage plus ranked semantic candidates for DS-agent grounding and routing.
+Its optional `database_name` is sent as `target_db`. The current GSF endpoint
+does not enforce that selector yet, so database-scoped search depends on a GSF
+contract update.
