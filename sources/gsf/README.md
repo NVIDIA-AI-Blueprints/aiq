@@ -75,6 +75,8 @@ Text-to-SQL and text-to-PQL use GSF's `/api/chat/completions` SSE endpoint with
 connection rather than creating one.
 The adapter normalizes GSF's current response fields while preserving optional
 semantic and benchmarking fields as they become available.
+For text-to-SQL, GSF's compatibility prose is discarded; AI-Q consumes the
+generated SQL, bounded rows, and any structured semantic provenance instead.
 
 Catalog search uses `POST /api/question-entity-coverage` and returns entity
 coverage plus ranked semantic candidates for DS-agent grounding and routing.
