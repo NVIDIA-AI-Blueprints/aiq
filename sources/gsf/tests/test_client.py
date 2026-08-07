@@ -205,6 +205,25 @@ async def test_text_to_sql_preserves_unicode_line_separator_in_sse(chat_sql_answ
 
 
 @pytest.mark.asyncio
+async def test_text_to_sql_skips_malformed_intermediate_sse_event(chat_sql_answer: dict) -> None:
+    """Ignore a malformed progress event before a valid terminal result."""
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        result_event = json.dumps({"type": "result", "answer": chat_sql_answer})
+        return httpx.Response(
+            200,
+            content=f"data: {{malformed-step\n\ndata: {result_event}\n\ndata: [DONE]\n\n".encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
+    async with client:
+        result = await client.text_to_sql(TextToSQLRequest(question="Show revenue"), token="user-token")
+
+    assert result.sql == "SELECT revenue FROM quarterly_results"
+
+
+@pytest.mark.asyncio
 async def test_text_to_pql_maps_database_to_target_db(chat_pql_answer: dict) -> None:
     """Map prediction database scope to the GSF target_db field."""
 
@@ -376,6 +395,28 @@ async def test_client_retries_rate_limit_then_succeeds(chat_sql_answer: dict) ->
 
     assert attempts == 2
     sleep.assert_awaited_once_with(0.75)
+
+
+@pytest.mark.asyncio
+async def test_client_honors_retry_after_for_rate_limit(chat_sql_answer: dict) -> None:
+    """Prefer GSF's bounded Retry-After delay over local jitter."""
+
+    attempts = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return httpx.Response(429, headers={"Retry-After": "12"})
+        return _sse_response(chat_sql_answer)
+
+    client = GSFClient(base_url="https://gsf.example", max_retries=1, transport=httpx.MockTransport(handler))
+    with patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep:
+        async with client:
+            await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
+
+    assert attempts == 2
+    sleep.assert_awaited_once_with(12.0)
 
 
 @pytest.mark.asyncio

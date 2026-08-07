@@ -412,7 +412,12 @@ class GSFClient:
                 data_lines.clear()
                 if event_data == "[DONE]":
                     continue
-                event = json.loads(event_data)
+                try:
+                    event = json.loads(event_data)
+                except json.JSONDecodeError:
+                    # Step/progress events are observational. A malformed one
+                    # must not hide a later, valid terminal result event.
+                    continue
                 if not isinstance(event, dict):
                     continue
                 if event.get("type") == "error":
