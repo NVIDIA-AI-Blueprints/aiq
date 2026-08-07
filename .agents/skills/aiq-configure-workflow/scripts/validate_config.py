@@ -229,8 +229,9 @@ def validate(path: str) -> int:
         functions = {}
     declared_functions = set(functions.keys())
 
-    function_groups = data.get("function_groups") or {}
+    function_groups = data.get("function_groups", {})
     if not isinstance(function_groups, dict):
+        errors.append("`function_groups:` must be a mapping.")
         function_groups = {}
 
     for field, alias in _iter_refs(functions):

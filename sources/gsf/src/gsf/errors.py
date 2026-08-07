@@ -35,6 +35,8 @@ class GSFError(Exception):
         retryable: bool = False,
         request_id: str | None = None,
     ) -> None:
+        """Initialize a normalized failure without retaining response data."""
+
         super().__init__(message)
         self.code = code
         self.message = message
@@ -55,6 +57,8 @@ class GSFToolError(BaseModel):
 
     @classmethod
     def from_exception(cls, error: GSFError) -> "GSFToolError":
+        """Convert an internal exception to the serialized tool error shape."""
+
         return cls(
             code=error.code,
             retryable=error.retryable,

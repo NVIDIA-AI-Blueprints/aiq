@@ -1,6 +1,8 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+"""Tests for the typed GSF HTTP client."""
+
 import json
 from unittest.mock import AsyncMock
 from unittest.mock import patch
@@ -19,6 +21,8 @@ _TEST_PASSWORD = "${TEST_GSF_PASSWORD}"
 
 
 def _sse_response(answer: dict) -> httpx.Response:
+    """Build a representative GSF SSE result response."""
+
     events = [
         'data: {"type":"step","node":"construct_sql_from_candidates"}',
         "",
@@ -34,10 +38,30 @@ def _sse_response(answer: dict) -> httpx.Response:
     )
 
 
+@pytest.mark.parametrize(
+    ("email", "password"),
+    [
+        ("developer@example.com", None),
+        (None, SecretStr(_TEST_PASSWORD)),
+    ],
+)
+def test_password_auth_requires_both_email_and_password(email: str | None, password: SecretStr | None) -> None:
+    """Reject incomplete password-session credentials."""
+
+    with pytest.raises(ValueError):
+        GSFClient(
+            base_url="https://gsf.example",
+            password_auth_email=email,
+            password_auth_password=password,
+        )
+
+
 @pytest.mark.asyncio
 async def test_catalog_search_uses_entity_coverage_path_maps_scope_and_bounds_candidates(
     catalog_search_api_response: dict,
 ) -> None:
+    """Map catalog scope and enforce the candidate limit."""
+
     seen_request: httpx.Request | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -81,6 +105,8 @@ async def test_catalog_search_uses_entity_coverage_path_maps_scope_and_bounds_ca
 
 @pytest.mark.asyncio
 async def test_catalog_search_maps_missing_endpoint_to_capability_unavailable() -> None:
+    """Map a missing catalog endpoint to an unavailable capability."""
+
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(404)
 
@@ -94,7 +120,11 @@ async def test_catalog_search_maps_missing_endpoint_to_capability_unavailable() 
 
 @pytest.mark.asyncio
 async def test_text_to_sql_maps_database_to_target_db_and_bounds_rows(chat_sql_answer: dict) -> None:
+    """Map SQL scope and enforce the configured row limit."""
+
     seen_request: httpx.Request | None = None
+    chat_sql_answer["rows"] = None
+    chat_sql_answer["columns"] = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
         nonlocal seen_request
@@ -132,6 +162,8 @@ async def test_text_to_sql_maps_database_to_target_db_and_bounds_rows(chat_sql_a
 
 @pytest.mark.asyncio
 async def test_text_to_sql_omits_optional_target_db(chat_sql_answer: dict) -> None:
+    """Omit target_db when no database scope is requested."""
+
     seen_payload: dict | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -151,7 +183,31 @@ async def test_text_to_sql_omits_optional_target_db(chat_sql_answer: dict) -> No
 
 
 @pytest.mark.asyncio
+async def test_text_to_sql_preserves_unicode_line_separator_in_sse(chat_sql_answer: dict) -> None:
+    """Preserve Unicode separators inside SSE JSON string values."""
+
+    thoughts = "First decision.\u2028Second decision."
+    answer = {**chat_sql_answer, "thoughts": thoughts}
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        result_event = json.dumps({"type": "result", "answer": answer}, ensure_ascii=False)
+        return httpx.Response(
+            200,
+            content=f"data: {result_event}\n\ndata: [DONE]\n\n".encode(),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
+    async with client:
+        result = await client.text_to_sql(TextToSQLRequest(question="Show revenue"), token="user-token")
+
+    assert result.thoughts == thoughts
+
+
+@pytest.mark.asyncio
 async def test_text_to_pql_maps_database_to_target_db(chat_pql_answer: dict) -> None:
+    """Map prediction database scope to the GSF target_db field."""
+
     seen_payload: dict | None = None
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -177,6 +233,8 @@ async def test_text_to_pql_maps_database_to_target_db(chat_pql_answer: dict) -> 
 
 @pytest.mark.asyncio
 async def test_password_auth_logs_in_uses_cookie_and_signs_out(chat_sql_answer: dict) -> None:
+    """Use one Better Auth cookie from sign-in through sign-out."""
+
     seen_paths: list[str] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -186,6 +244,8 @@ async def test_password_auth_logs_in_uses_cookie_and_signs_out(chat_sql_answer: 
                 "email": "developer@example.com",
                 "password": _TEST_PASSWORD,
             }
+            assert request.headers["origin"] == "https://gsf.example"
+            assert request.headers["referer"] == "https://gsf.example/"
             return httpx.Response(
                 200,
                 json={"user": {"email": "developer@example.com"}},
@@ -221,6 +281,8 @@ async def test_password_auth_logs_in_uses_cookie_and_signs_out(chat_sql_answer: 
 
 @pytest.mark.asyncio
 async def test_password_session_is_reused_across_tool_calls(chat_sql_answer: dict) -> None:
+    """Reuse one password session across multiple GSF calls."""
+
     seen_paths: list[str] = []
 
     async def handler(request: httpx.Request) -> httpx.Response:
@@ -257,6 +319,8 @@ async def test_password_session_is_reused_across_tool_calls(chat_sql_answer: dic
 
 @pytest.mark.asyncio
 async def test_client_without_password_auth_requires_bearer_before_http() -> None:
+    """Fail before HTTP when neither password nor bearer auth exists."""
+
     calls = 0
 
     async def handler(_request: httpx.Request) -> httpx.Response:
@@ -275,6 +339,8 @@ async def test_client_without_password_auth_requires_bearer_before_http() -> Non
 
 @pytest.mark.asyncio
 async def test_client_normalizes_forbidden_without_leaking_body() -> None:
+    """Map forbidden responses without exposing upstream response text."""
+
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(403, text="secret database details")
 
@@ -289,6 +355,8 @@ async def test_client_normalizes_forbidden_without_leaking_body() -> None:
 
 @pytest.mark.asyncio
 async def test_client_retries_rate_limit_then_succeeds(chat_sql_answer: dict) -> None:
+    """Retry a rate-limited request with deterministic jitter."""
+
     attempts = 0
 
     async def handler(_request: httpx.Request) -> httpx.Response:
@@ -299,16 +367,118 @@ async def test_client_retries_rate_limit_then_succeeds(chat_sql_answer: dict) ->
         return _sse_response(chat_sql_answer)
 
     client = GSFClient(base_url="https://gsf.example", max_retries=1, transport=httpx.MockTransport(handler))
-    with patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep:
+    with (
+        patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep,
+        patch("gsf.client.random.random", return_value=0.5),
+    ):
         async with client:
             await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
 
     assert attempts == 2
-    sleep.assert_awaited_once_with(1)
+    sleep.assert_awaited_once_with(0.75)
+
+
+@pytest.mark.asyncio
+async def test_client_raises_rate_limited_after_retries_are_exhausted() -> None:
+    """Raise RATE_LIMITED after exhausting all configured attempts."""
+
+    attempts = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        return httpx.Response(429)
+
+    client = GSFClient(base_url="https://gsf.example", max_retries=2, transport=httpx.MockTransport(handler))
+    with (
+        patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep,
+        patch("gsf.client.random.random", return_value=0.5),
+    ):
+        async with client:
+            with pytest.raises(GSFError) as raised:
+                await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
+
+    assert attempts == 3
+    assert sleep.await_count == 2
+    assert raised.value.code is GSFErrorCode.RATE_LIMITED
+    assert raised.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_client_retries_connect_timeout_then_raises_timeout() -> None:
+    """Retry connect timeouts before returning the normalized timeout."""
+
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectTimeout("GSF connection timed out", request=request)
+
+    client = GSFClient(base_url="https://gsf.example", max_retries=2, transport=httpx.MockTransport(handler))
+    with (
+        patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep,
+        patch("gsf.client.random.random", return_value=0.5),
+    ):
+        async with client:
+            with pytest.raises(GSFError) as raised:
+                await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
+
+    assert attempts == 3
+    assert sleep.await_count == 2
+    assert raised.value.code is GSFErrorCode.TIMEOUT
+    assert raised.value.retryable is True
+
+
+@pytest.mark.asyncio
+async def test_client_does_not_retry_read_timeout() -> None:
+    """Avoid replaying a request after a read timeout."""
+
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ReadTimeout("GSF response timed out", request=request)
+
+    client = GSFClient(base_url="https://gsf.example", max_retries=2, transport=httpx.MockTransport(handler))
+    with patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep:
+        async with client:
+            with pytest.raises(GSFError) as raised:
+                await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
+
+    assert raised.value.code is GSFErrorCode.TIMEOUT
+    assert attempts == 1
+    sleep.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_client_does_not_retry_transport_error() -> None:
+    """Avoid replaying a request after a generic transport failure."""
+
+    attempts = 0
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        raise httpx.ConnectError("GSF connection failed", request=request)
+
+    client = GSFClient(base_url="https://gsf.example", max_retries=2, transport=httpx.MockTransport(handler))
+    with patch("gsf.client.asyncio.sleep", new_callable=AsyncMock) as sleep:
+        async with client:
+            with pytest.raises(GSFError) as raised:
+                await client.text_to_sql(TextToSQLRequest(question="Show data"), token="user-token")
+
+    assert attempts == 1
+    assert raised.value.code is GSFErrorCode.UPSTREAM_ERROR
+    assert raised.value.retryable is True
+    sleep.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_client_rejects_oversized_response(chat_sql_answer: dict) -> None:
+    """Reject a response that exceeds the configured byte ceiling."""
+
     async def handler(_request: httpx.Request) -> httpx.Response:
         return _sse_response(chat_sql_answer)
 
@@ -326,6 +496,8 @@ async def test_client_rejects_oversized_response(chat_sql_answer: dict) -> None:
 
 @pytest.mark.asyncio
 async def test_client_rejects_malformed_response() -> None:
+    """Reject a malformed non-SSE response."""
+
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"not-json")
 
@@ -339,6 +511,8 @@ async def test_client_rejects_malformed_response() -> None:
 
 @pytest.mark.asyncio
 async def test_client_maps_sse_error_without_leaking_message() -> None:
+    """Map SSE errors without exposing upstream error text."""
+
     async def handler(_request: httpx.Request) -> httpx.Response:
         return httpx.Response(
             200,

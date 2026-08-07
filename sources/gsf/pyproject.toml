@@ -3,7 +3,7 @@
 
 [build-system]
 build-backend = "setuptools.build_meta"
-requires = ["setuptools >= 83", "setuptools-scm>=8"]
+requires = ["setuptools >= 83"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

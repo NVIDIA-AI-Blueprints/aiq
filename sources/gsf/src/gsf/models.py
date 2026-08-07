@@ -44,7 +44,7 @@ class CatalogSearchResponse(GSFResponse):
     """Coverage and ranked semantic candidates returned by GSF."""
 
     request_id: str | None = None
-    coverage: float = Field(ge=0, le=1)
+    coverage: float | None = Field(default=None, ge=0, le=1)
     candidates: list[CatalogCandidate]
     uncovered_entities: list[str] | None = None
     truncated: bool = False

@@ -13,24 +13,21 @@ from pydantic import Field
 from pydantic import HttpUrl
 from pydantic import SecretStr
 
-from aiq_agent.auth.utils import get_auth_token
 from nat.builder.builder import Builder
 from nat.builder.context import Context
 from nat.builder.function import FunctionGroup
 from nat.cli.register_workflow import register_function_group
 from nat.data_models.function import FunctionGroupBaseConfig
 
+from .client import FORWARDED_HEADER_NAMES
 from .client import GSFClient
 from .errors import GSFError
 from .errors import GSFErrorCode
 from .errors import GSFToolError
 from .models import CatalogSearchRequest
-from .models import QueryContextRequest
 from .models import TextToSQLRequest
 
 logger = logging.getLogger(__name__)
-
-_TRACE_HEADER_NAMES = frozenset({"baggage", "traceparent", "tracestate", "x-correlation-id", "x-request-id"})
 
 
 class GSFPasswordAuthConfig(BaseModel):
@@ -56,7 +53,22 @@ class GSFFunctionGroupConfig(FunctionGroupBaseConfig, name="gsf"):
 
 
 def _tool_error(error: GSFError) -> str:
+    """Serialize an internal GSF exception for safe tool output."""
+
     return GSFToolError.from_exception(error).model_dump_json(exclude_none=True)
+
+
+def _get_auth_token() -> str | None:
+    """Lazily resolve the current AI-Q token for bearer authentication."""
+
+    try:
+        from aiq_agent.auth.utils import get_auth_token
+    except ImportError as exc:
+        raise GSFError(
+            GSFErrorCode.AUTHENTICATION_REQUIRED,
+            "AI-Q authentication support is unavailable.",
+        ) from exc
+    return get_auth_token()
 
 
 def _resolve_request_token(config: GSFFunctionGroupConfig) -> str | None:
@@ -64,7 +76,7 @@ def _resolve_request_token(config: GSFFunctionGroupConfig) -> str | None:
 
     if config.auth is not None:
         return None
-    token = get_auth_token()
+    token = _get_auth_token()
     if not token:
         raise GSFError(
             GSFErrorCode.AUTHENTICATION_REQUIRED,
@@ -74,14 +86,17 @@ def _resolve_request_token(config: GSFFunctionGroupConfig) -> str | None:
 
 
 def _request_trace_headers() -> Mapping[str, str]:
+    """Read and filter tracing headers from the current NAT context."""
+
     try:
         metadata = Context.get().metadata
         incoming = metadata.headers if metadata else None
     except Exception:
+        logger.debug("Unable to read request trace headers from NAT context", exc_info=True)
         return {}
     if not incoming:
         return {}
-    return {name: value for name, value in incoming.items() if name.lower() in _TRACE_HEADER_NAMES and value}
+    return {name: value for name, value in incoming.items() if name.lower() in FORWARDED_HEADER_NAMES and value}
 
 
 @register_function_group(config_type=GSFFunctionGroupConfig)
@@ -107,7 +122,7 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
             except GSFError as error:
                 return _tool_error(error)
             except Exception:
-                logger.error("Unexpected GSF catalog-search failure")
+                logger.exception("Unexpected GSF catalog-search failure")
                 return _tool_error(
                     GSFError(
                         GSFErrorCode.UPSTREAM_ERROR,
@@ -133,24 +148,13 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
             except GSFError as error:
                 return _tool_error(error)
             except Exception:
-                logger.error("Unexpected GSF text-to-SQL failure")
+                logger.exception("Unexpected GSF text-to-SQL failure")
                 return _tool_error(
                     GSFError(
                         GSFErrorCode.UPSTREAM_ERROR,
                         "GSF text-to-SQL failed.",
                     )
                 )
-
-        async def query_context(request: QueryContextRequest) -> str:
-            """Build GSF query context (not available in this integration yet)."""
-
-            del request
-            return _tool_error(
-                GSFError(
-                    GSFErrorCode.CAPABILITY_UNAVAILABLE,
-                    "GSF query context is unavailable.",
-                )
-            )
 
         group = FunctionGroup(config=config)
         group.add_function(
@@ -164,11 +168,5 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
             text_to_sql,
             input_schema=TextToSQLRequest,
             description=text_to_sql.__doc__,
-        )
-        group.add_function(
-            "query_context",
-            query_context,
-            input_schema=QueryContextRequest,
-            description=query_context.__doc__,
         )
         yield group
