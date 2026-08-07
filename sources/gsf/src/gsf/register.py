@@ -26,7 +26,6 @@ from .errors import GSFErrorCode
 from .errors import GSFToolError
 from .models import CatalogSearchRequest
 from .models import QueryContextRequest
-from .models import TextToPQLRequest
 from .models import TextToSQLRequest
 
 logger = logging.getLogger(__name__)
@@ -142,32 +141,6 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
                     )
                 )
 
-        async def text_to_pql(request: TextToPQLRequest) -> str:
-            """Generate validated PQL from an authorized enterprise-data prediction question.
-
-            Use for prediction-style analytical questions after the relevant structured-data scope is known. The
-            result contains PQL plus semantic context, warnings, and provenance when GSF provides them. AI-Q remains
-            responsible for analysis and synthesis.
-            """
-
-            try:
-                result = await client.text_to_pql(
-                    request,
-                    token=_resolve_request_token(config),
-                    trace_headers=_request_trace_headers(),
-                )
-                return result.model_dump_json(exclude_none=True)
-            except GSFError as error:
-                return _tool_error(error)
-            except Exception:
-                logger.error("Unexpected GSF text-to-PQL failure")
-                return _tool_error(
-                    GSFError(
-                        GSFErrorCode.UPSTREAM_ERROR,
-                        "GSF text-to-PQL failed.",
-                    )
-                )
-
         async def query_context(request: QueryContextRequest) -> str:
             """Build GSF query context (not available in this integration yet)."""
 
@@ -191,12 +164,6 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
             text_to_sql,
             input_schema=TextToSQLRequest,
             description=text_to_sql.__doc__,
-        )
-        group.add_function(
-            "text_to_pql",
-            text_to_pql,
-            input_schema=TextToPQLRequest,
-            description=text_to_pql.__doc__,
         )
         group.add_function(
             "query_context",

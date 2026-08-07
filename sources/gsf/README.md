@@ -9,11 +9,12 @@ This package exposes NVIDIA Generative Semantic Fabric (GSF) capabilities as a
 NeMo Agent Toolkit function group. The current implementation provides:
 
 - `gsf__text_to_sql`
-- `gsf__text_to_pql`
 - `gsf__catalog_search`
 
 `gsf__query_context` is registered as an explicit `capability_unavailable`
 placeholder until its GSF API contract is ready.
+PQL client and model groundwork remains internal, but no PQL tool is registered
+until its GSF contract and integration behavior are validated.
 
 By default, the function group owns one shared HTTP connection pool and keeps
 authentication request-scoped: each tool invocation obtains the current AI-Q
@@ -28,7 +29,6 @@ function_groups:
     include:
       - catalog_search
       - text_to_sql
-      - text_to_pql
 
 functions:
   data_sources:
@@ -61,7 +61,6 @@ function_groups:
     include:
       - catalog_search
       - text_to_sql
-      - text_to_pql
 ```
 
 When `auth` is omitted, the existing request-scoped AI-Q user-token flow is
@@ -69,10 +68,9 @@ used. Password mode creates one GSF session when the function group starts,
 reuses its cookie for local development or evaluation calls, and signs out when
 the group closes. The client does not fall back between authentication methods.
 
-Text-to-SQL and text-to-PQL use GSF's `/api/chat/completions` SSE endpoint with
-`prediction: false` for SQL and `prediction: true` for PQL. Their optional AI-Q
-`database_name` input is sent to GSF as `target_db`, selecting an existing GSF
-connection rather than creating one.
+Text-to-SQL uses GSF's `/api/chat/completions` SSE endpoint with
+`prediction: false`. Its optional AI-Q `database_name` input is sent to GSF as
+`target_db`, selecting an existing GSF connection rather than creating one.
 The adapter normalizes GSF's current response fields while preserving optional
 semantic and benchmarking fields as they become available.
 For text-to-SQL, GSF's compatibility prose is discarded; AI-Q consumes the
