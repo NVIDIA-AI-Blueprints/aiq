@@ -24,6 +24,7 @@ import logging
 import re
 from typing import Any
 from typing import cast
+from uuid import uuid4
 
 from langchain.tools import ToolRuntime
 from langchain_core.messages import HumanMessage
@@ -32,6 +33,8 @@ from langchain_core.tools import tool
 
 from ..models import ResearchNotes
 from ..models import ResearchQuery
+from ..researcher_context import CURRENT_RESEARCHER_GUARD_STATE
+from ..researcher_context import ResearcherRunGuardState
 from ..resource_limits import DeepResearchResourceLimits
 from ..resource_limits import StateBudgetLedger
 
@@ -65,7 +68,13 @@ def researcher_invoke_state(query: ResearchQuery, runtime: ToolRuntime | None) -
 
 
 def researcher_invoke_config(runtime: ToolRuntime | None, callbacks: list[Any]) -> dict[str, Any]:
-    """Build child-run config while preserving the active callback lineage."""
+    """Build child-run config while preserving the active callback lineage.
+
+    Only the keys that must not be shared with the parent run are dropped. ``recursion_limit``
+    is deliberately left in place: the researcher subgraph binds none of its own, so removing
+    the inherited value would silently drop it to LangGraph's default rather than leave it
+    unbounded.
+    """
     config = dict(runtime.config) if runtime is not None else {}
     config.pop("run_id", None)
     config.pop("configurable", None)
@@ -85,25 +94,31 @@ async def _run_research_query(
 ) -> ResearchNotes:
     """Run one researcher worker and return its structured notes."""
     async with semaphore:
+        # Scoped inside the semaphore so a queued worker holds no guard state while blocked and
+        # each admitted worker gets a fresh, isolated loop-guard budget.
+        guard_token = CURRENT_RESEARCHER_GUARD_STATE.set(ResearcherRunGuardState(invocation_id=uuid4().hex))
         try:
-            result = await researcher_runnable.ainvoke(
-                researcher_invoke_state(query, runtime),
-                config=researcher_invoke_config(runtime, callbacks),
-            )
-        except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-            raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
+            try:
+                result = await researcher_runnable.ainvoke(
+                    researcher_invoke_state(query, runtime),
+                    config=researcher_invoke_config(runtime, callbacks),
+                )
+            except Exception as exc:  # noqa: BLE001 - captured as per-item failure
+                raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
 
-        try:
-            structured = result.get("structured_response") if isinstance(result, dict) else None
-            if structured is None:
-                raise ValueError("researcher worker did not return structured ResearchNotes")
-            note = ResearchNotes.model_validate(structured)
-        except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-            raise ValueError(
-                f"researcher worker returned invalid ResearchNotes for query {query.query!r}: {exc}"
-            ) from exc
+            try:
+                structured = result.get("structured_response") if isinstance(result, dict) else None
+                if structured is None:
+                    raise ValueError("researcher worker did not return structured ResearchNotes")
+                note = ResearchNotes.model_validate(structured)
+            except Exception as exc:  # noqa: BLE001 - captured as per-item failure
+                raise ValueError(
+                    f"researcher worker returned invalid ResearchNotes for query {query.query!r}: {exc}"
+                ) from exc
 
-        return note
+            return note
+        finally:
+            CURRENT_RESEARCHER_GUARD_STATE.reset(guard_token)
 
 
 def _research_note_slug(text: str) -> str:

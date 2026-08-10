@@ -54,6 +54,8 @@ Your output will be used to write a cited final answer. Produce **in-depth, deta
 {% endif %}
 - Default source budget per ResearchQuery: one primary source-tool call, plus at most one fallback or corroboration call.
 - For broad survey queries, make at most one extra targeted follow-up after the first results, only when needed for target_components.
+{% if researcher_loop_guard_enabled | default(false) %}- Hard limit (runtime-enforced): at most {{ researcher_max_source_calls }} source-tool calls for this ResearchQuery, and at most {{ researcher_max_identical_source_calls }} call(s) with identical tool arguments. These are a backstop, not a target — follow the default budget above. Once either limit is reached the source tools and `think` are withdrawn; return your `ResearchNotes` immediately from the evidence already gathered and record every unsupported component as an explicit `ResearchGap`. Do not guess.
+{% endif %}
 - Prefer batch-capable source tool calls for related concrete search angles when the tool schema supports a list input.
 - When the primary source tool supports batch input and subqueries are still useful after assessing the main query, pass the remaining related concrete search angles as one ordered list.
 - Do not run every possible source angle; stop once findings are adequately grounded.
@@ -64,6 +66,12 @@ Your output will be used to write a cited final answer. Produce **in-depth, deta
 
 ## Handling Failures
 - Do NOT get stuck retrying - proceed with available information and return the structured ResearchNotes
+{% if researcher_loop_guard_enabled | default(false) %}- **When source tools are withdrawn, research is over — write the notes.** The runtime withdraws the source tools and `think` once this query reaches its hard limit. You will see one of: a tool result ending in a `[SYSTEM — ...]` notice, a result beginning `Source tool not executed: researcher loop guard reached ...`, or the source tools simply no longer being callable. All three mean the same thing: stop researching and return your `ResearchNotes` immediately.
+- Do not retry the withdrawn tool, do not look for another route to it, and do not substitute `ls`, `read_file`, `glob`, `grep`{% if execution_enabled %}, or `execute`{% endif %} for further research — those remain available for reading context, not for continuing to gather evidence.
+- The list under "Tool Availability and Prioritization" is the set you started with, not the set still callable. After a withdrawal it is out of date; trust what you can actually call.
+- Report honestly rather than guessing: put every unresolved item in `gaps` as a `ResearchGap` with a concrete `description`, its `impact`, and `suggested_follow_up_queries`. Keep the findings you did ground in sources. Never fill a missing fact from memory.
+- Set `evidence_judgment` to reflect the truncation — lower `relevance_score`, `confidence: "low"` where warranted, and a `rationale` stating the research was cut short by the source-call limit. The orchestrator and writer rely on this to tell a truncated note from a complete one.
+{% endif %}
 
 ## Output Format
 

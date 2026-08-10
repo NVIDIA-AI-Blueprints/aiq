@@ -51,6 +51,7 @@ from .custom_middleware import FinalReportOwnershipGuardMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import RequiredOutputFileMiddleware
 from .custom_middleware import RequiredWriterDelegationMiddleware
+from .custom_middleware import ResearcherLoopGuardMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import SourceRoutingGuardMiddleware
 from .custom_middleware import SourceRoutingPersistenceMiddleware
@@ -64,6 +65,7 @@ from .custom_middleware import ToolVisibilityMiddleware
 from .deepagents_runtime import BUILTIN_SKILL_SOURCE
 from .deepagents_runtime import DeepAgentsRuntime
 from .models import DeepResearchAgentState
+from .models import ResearcherLoopGuardConfig
 from .models import ResearchNotes
 from .models import ResearchPlan
 from .models import SourceRoutingPlan
@@ -278,6 +280,37 @@ def build_orchestrator_middleware(
     ]
 
 
+def build_researcher_middleware(
+    common_middleware: list[Any],
+    *,
+    tool_set: DeepResearchToolSet,
+    researcher_loop_guard: ResearcherLoopGuardConfig,
+) -> list[Any]:
+    """Extend the shared stack with the per-researcher loop guard.
+
+    The guard is placed immediately *before* ``ToolRetryMiddleware``. LangChain composes
+    ``wrap_tool_call`` wrappers first-in-list-outermost, so sitting outside the retry means one
+    logical source request that ``ToolRetryMiddleware`` retries three times is counted once and
+    retrying a transient failure never consumes the research budget. That is the only ordering
+    constraint: position relative to ``ToolNameSanitizationMiddleware`` does not matter, because
+    that middleware rewrites names in ``awrap_model_call`` - on the model node, before the tool
+    node runs - so every ``wrap_tool_call`` wrapper already sees the sanitized name.
+
+    ``tool_set.source_tool_names`` is correct even though the researcher is bound to the adapted
+    batch wrappers - those wrappers preserve the original tool name.
+    """
+    middleware = list(common_middleware)
+    tool_retry_index = next(i for i, item in enumerate(middleware) if isinstance(item, ToolRetryMiddleware))
+    middleware.insert(
+        tool_retry_index,
+        ResearcherLoopGuardMiddleware(
+            source_tool_names=tool_set.source_tool_names,
+            config=researcher_loop_guard,
+        ),
+    )
+    return middleware
+
+
 def build_source_router_middleware(*, extra_valid_tool_names: Sequence[str] = ()) -> list[Any]:
     """Build minimal middleware for the source-router-agent."""
     return [
@@ -294,6 +327,7 @@ def build_deep_research_middleware_set(
     source_registry_middleware: SourceRegistryMiddleware,
     enable_source_router: bool = True,
     artifact_manager: object | None = None,
+    researcher_loop_guard: ResearcherLoopGuardConfig | None = None,
 ) -> DeepResearchMiddlewareSet:
     """Build researcher, writer, and orchestrator middleware stacks."""
 
@@ -307,7 +341,11 @@ def build_deep_research_middleware_set(
         )
 
     return DeepResearchMiddlewareSet(
-        researcher=common(),
+        researcher=build_researcher_middleware(
+            common(),
+            tool_set=tool_set,
+            researcher_loop_guard=researcher_loop_guard or ResearcherLoopGuardConfig(),
+        ),
         planner=common(),
         writer=common(),
         orchestrator=build_orchestrator_middleware(
@@ -559,8 +597,10 @@ def build_deep_research_graph(
     state_budget: StateBudgetLedger | None = None,
     resource_limits: DeepResearchResourceLimits | None = None,
     enable_source_router: bool = True,
+    researcher_loop_guard: ResearcherLoopGuardConfig | None = None,
 ) -> Any:
     """Build the full DeepAgents graph for one deep research run."""
+    loop_guard = researcher_loop_guard or ResearcherLoopGuardConfig()
     # Cross-cutting middleware applied to every agent (researcher, subagents, orchestrator).
     # Agent-supplied execute timeouts are unreliable (LLMs pass milliseconds or arbitrarily
     # large values); clamp them to the configured sandbox lifetime so a single execute never
@@ -608,6 +648,9 @@ def build_deep_research_graph(
             "researcher",
             tools=context.tool_set.tools_info,
             execution_enabled=context.runtime.execution_enabled,
+            researcher_loop_guard_enabled=loop_guard.enabled,
+            researcher_max_source_calls=loop_guard.max_source_calls_per_query,
+            researcher_max_identical_source_calls=loop_guard.max_identical_source_calls,
         ),
         researcher_middleware=[
             *context.middleware_set.researcher,
