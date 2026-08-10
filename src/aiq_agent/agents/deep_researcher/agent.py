@@ -47,6 +47,7 @@ from .factory import build_deep_research_graph
 from .factory import build_deep_research_middleware_set
 from .factory import build_deep_research_tool_set
 from .models import DeepResearchAgentState
+from .models import ResearcherLoopGuardConfig
 from .resource_limits import DeepResearchExecutionTimeout
 from .resource_limits import DeepResearchResourceLimits
 from .resource_limits import StateBudgetLedger
@@ -88,6 +89,7 @@ class DeepResearcherAgent:
         max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
         max_source_tool_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
         resource_limits: DeepResearchResourceLimits | None = None,
+        researcher_loop_guard: ResearcherLoopGuardConfig | None = None,
     ) -> None:
         """
         Initialize the deep researcher agent.
@@ -108,6 +110,8 @@ class DeepResearcherAgent:
             max_concurrent_source_tool_calls: Shared source-tool concurrency limit across researcher workers.
             max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
             resource_limits: Hard per-job request, state, source-call, and wall-clock limits.
+            researcher_loop_guard: Per-researcher circuit breaker bounding one run_research_batch
+                worker's source calls, repeated requests, and consecutive think calls.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
@@ -117,6 +121,7 @@ class DeepResearcherAgent:
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
         self.resource_limits = resource_limits or DeepResearchResourceLimits()
+        self.researcher_loop_guard = researcher_loop_guard or ResearcherLoopGuardConfig()
         self.domain_catalog_path = domain_catalog_path
         self.enable_source_router = enable_source_router
         self.enable_citation_verification = enable_citation_verification
@@ -145,6 +150,7 @@ class DeepResearcherAgent:
                 source_registry_middleware=self.source_registry_middleware,
                 enable_source_router=self.enable_source_router,
                 artifact_manager=self.deepagents_runtime.artifact_manager,
+                researcher_loop_guard=self.researcher_loop_guard,
             )
 
             self.source_tool_names = self.tool_set.source_tool_names
@@ -207,6 +213,7 @@ class DeepResearcherAgent:
             enable_source_router=self.enable_source_router,
             max_research_concurrency=self.max_research_concurrency,
             resource_limits=self.resource_limits,
+            researcher_loop_guard=self.researcher_loop_guard,
             final_report_tracker=final_report_tracker,
             state_budget=state_budget,
         )

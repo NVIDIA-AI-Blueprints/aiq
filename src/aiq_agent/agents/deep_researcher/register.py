@@ -52,6 +52,7 @@ from .agent import DeepResearcherAgent
 from .deepagents_runtime import DeepResearchSandboxConfig
 from .deepagents_runtime import DeepResearchSkillsConfig
 from .models import DeepResearchAgentState
+from .models import ResearcherLoopGuardConfig
 from .resource_limits import DeepResearchExecutionTimeout
 from .resource_limits import DeepResearchResourceLimits
 
@@ -117,6 +118,14 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     resource_limits: DeepResearchResourceLimits = Field(
         default_factory=DeepResearchResourceLimits,
         description="Hard per-job limits for request, plan, notes, source calls, and execution time.",
+    )
+    researcher_loop_guard: ResearcherLoopGuardConfig = Field(
+        default_factory=ResearcherLoopGuardConfig,
+        description=(
+            "Per-researcher circuit breaker: source-call budget, repeated-request and "
+            "consecutive-think limits for one run_research_batch worker. Setting enabled=false "
+            "disables all three."
+        ),
     )
 
     @field_validator("skills", mode="before")
@@ -250,6 +259,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
         max_source_tool_batch_size=config.max_source_tool_batch_size,
         resource_limits=config.resource_limits,
+        researcher_loop_guard=config.researcher_loop_guard,
     )
 
     async def _run(state: DeepResearchAgentState) -> DeepResearchAgentState:
@@ -288,6 +298,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
                     resource_limits=config.resource_limits,
+                    researcher_loop_guard=config.researcher_loop_guard,
                 )
                 owns_active_agent = True
 

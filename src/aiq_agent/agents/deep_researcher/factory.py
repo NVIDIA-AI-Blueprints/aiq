@@ -51,6 +51,7 @@ from .custom_middleware import FinalReportOwnershipGuardMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import RequiredOutputFileMiddleware
 from .custom_middleware import RequiredWriterDelegationMiddleware
+from .custom_middleware import ResearcherLoopGuardMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import SourceRoutingGuardMiddleware
 from .custom_middleware import SourceRoutingPersistenceMiddleware
@@ -64,6 +65,7 @@ from .custom_middleware import ToolVisibilityMiddleware
 from .deepagents_runtime import BUILTIN_SKILL_SOURCE
 from .deepagents_runtime import DeepAgentsRuntime
 from .models import DeepResearchAgentState
+from .models import ResearcherLoopGuardConfig
 from .models import ResearchNotes
 from .models import ResearchPlan
 from .models import SourceRoutingPlan
@@ -85,6 +87,13 @@ FILESYSTEM_TOOL_NAMES = {
     "read_file",
     "write_file",
 }
+# A researcher turn costs two graph steps: the model node and the tool node. Exact for this
+# stack - no researcher middleware defines a before_model/after_model hook, which would add a
+# node per turn. A middleware that does must revisit the turn-to-step arithmetic below.
+GRAPH_STEPS_PER_TURN = 2
+# Extra steps for the one-off before_agent nodes (skills, tool-call patching) and for the
+# structured-output correction pass, none of which are normal turns.
+RESEARCHER_RECURSION_HEADROOM = 10
 ORCHESTRATOR_AGENT = "orchestrator"
 PLANNER_AGENT = "planner-agent"
 RESEARCHER_AGENT = "researcher-agent"
@@ -278,6 +287,37 @@ def build_orchestrator_middleware(
     ]
 
 
+def build_researcher_middleware(
+    common_middleware: list[Any],
+    *,
+    tool_set: DeepResearchToolSet,
+    researcher_loop_guard: ResearcherLoopGuardConfig,
+) -> list[Any]:
+    """Extend the shared stack with the per-researcher loop guard.
+
+    The guard is placed immediately *before* ``ToolRetryMiddleware``. LangChain composes
+    ``wrap_tool_call`` wrappers first-in-list-outermost, so sitting outside the retry means one
+    logical source request that ``ToolRetryMiddleware`` retries three times is counted once and
+    retrying a transient failure never consumes the research budget. That is the only ordering
+    constraint: position relative to ``ToolNameSanitizationMiddleware`` does not matter, because
+    that middleware rewrites names in ``awrap_model_call`` - on the model node, before the tool
+    node runs - so every ``wrap_tool_call`` wrapper already sees the sanitized name.
+
+    ``tool_set.source_tool_names`` is correct even though the researcher is bound to the adapted
+    batch wrappers - those wrappers preserve the original tool name.
+    """
+    middleware = list(common_middleware)
+    tool_retry_index = next(i for i, item in enumerate(middleware) if isinstance(item, ToolRetryMiddleware))
+    middleware.insert(
+        tool_retry_index,
+        ResearcherLoopGuardMiddleware(
+            source_tool_names=tool_set.source_tool_names,
+            config=researcher_loop_guard,
+        ),
+    )
+    return middleware
+
+
 def build_source_router_middleware(*, extra_valid_tool_names: Sequence[str] = ()) -> list[Any]:
     """Build minimal middleware for the source-router-agent."""
     return [
@@ -294,6 +334,7 @@ def build_deep_research_middleware_set(
     source_registry_middleware: SourceRegistryMiddleware,
     enable_source_router: bool = True,
     artifact_manager: object | None = None,
+    researcher_loop_guard: ResearcherLoopGuardConfig | None = None,
 ) -> DeepResearchMiddlewareSet:
     """Build researcher, writer, and orchestrator middleware stacks."""
 
@@ -307,7 +348,11 @@ def build_deep_research_middleware_set(
         )
 
     return DeepResearchMiddlewareSet(
-        researcher=common(),
+        researcher=build_researcher_middleware(
+            common(),
+            tool_set=tool_set,
+            researcher_loop_guard=researcher_loop_guard or ResearcherLoopGuardConfig(),
+        ),
         planner=common(),
         writer=common(),
         orchestrator=build_orchestrator_middleware(
@@ -378,8 +423,24 @@ def build_researcher_runnable(
     backend: Any = None,
     visibility_middleware: list[Any] | None = None,
     filesystem_permissions: list[FilesystemPermission] | None = None,
+    researcher_loop_guard: ResearcherLoopGuardConfig | None = None,
 ) -> Any:
-    """Build the reusable single-query researcher runnable."""
+    """Build the reusable single-query researcher runnable.
+
+    When the guard is enabled the returned runnable carries its own ``recursion_limit``, derived
+    from ``max_model_turns_per_query``. Without it the subgraph inherits the orchestrator's limit
+    of 2000 - roughly 1000 model turns - so a stuck worker grinds for a very long time and then
+    loses all its gathered evidence to a ``GraphRecursionError``.
+
+    The limit is a backstop, not the operative bound: the guard withdraws every tool on turn
+    ``max_model_turns_per_query``, so the worker finalizes into ``ResearchNotes`` a full turn
+    plus ``RESEARCHER_RECURSION_HEADROOM`` steps before the ceiling can be reached. Nothing is
+    bound when the guard is disabled - with no guard to force that finalization, a derived limit
+    would only convert long runs into ``GraphRecursionError``, so the subgraph deliberately falls
+    back to the orchestrator's limit. ``researcher_invoke_config`` mirrors this by leaving the
+    inherited value in place.
+    """
+    guard_config = researcher_loop_guard or ResearcherLoopGuardConfig()
     middleware: list[Any] = []
     if skill_sources:
         middleware.append(SkillsMiddleware(backend=backend, sources=skill_sources))
@@ -393,13 +454,17 @@ def build_researcher_runnable(
             *(visibility_middleware or []),
         ]
     )
-    return create_agent(
+    agent = create_agent(
         model=researcher_model,
         tools=researcher_tools,
         system_prompt=system_prompt,
         middleware=middleware,
         response_format=ResearchNotes,
     )
+    if not guard_config.enabled:
+        return agent
+    recursion_limit = guard_config.max_model_turns_per_query * GRAPH_STEPS_PER_TURN + RESEARCHER_RECURSION_HEADROOM
+    return agent.with_config({"recursion_limit": recursion_limit})
 
 
 def _subagent_spec(
@@ -559,8 +624,10 @@ def build_deep_research_graph(
     state_budget: StateBudgetLedger | None = None,
     resource_limits: DeepResearchResourceLimits | None = None,
     enable_source_router: bool = True,
+    researcher_loop_guard: ResearcherLoopGuardConfig | None = None,
 ) -> Any:
     """Build the full DeepAgents graph for one deep research run."""
+    loop_guard = researcher_loop_guard or ResearcherLoopGuardConfig()
     # Cross-cutting middleware applied to every agent (researcher, subagents, orchestrator).
     # Agent-supplied execute timeouts are unreliable (LLMs pass milliseconds or arbitrarily
     # large values); clamp them to the configured sandbox lifetime so a single execute never
@@ -608,7 +675,11 @@ def build_deep_research_graph(
             "researcher",
             tools=context.tool_set.tools_info,
             execution_enabled=context.runtime.execution_enabled,
+            researcher_loop_guard_enabled=loop_guard.enabled,
+            researcher_max_source_calls=loop_guard.max_source_calls_per_query,
+            researcher_max_identical_source_calls=loop_guard.max_identical_source_calls,
         ),
+        researcher_loop_guard=loop_guard,
         researcher_middleware=[
             *context.middleware_set.researcher,
             FinalReportOwnershipGuardMiddleware(),
@@ -630,6 +701,9 @@ def build_deep_research_graph(
         resource_limits=context.resource_limits,
         state_budget=context.state_budget,
         source_registry_middleware=source_registry_middleware,
+        # Only meaningful when the runnable carries a limit of its own; see
+        # build_researcher_runnable.
+        strip_inherited_recursion_limit=loop_guard.enabled,
     )
 
     orchestrator_tools = [*context.tool_set.helper_tools, research_batch_tool]

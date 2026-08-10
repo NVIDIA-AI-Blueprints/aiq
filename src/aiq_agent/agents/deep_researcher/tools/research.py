@@ -24,6 +24,7 @@ import logging
 import re
 from typing import Any
 from typing import cast
+from uuid import uuid4
 
 from langchain.tools import ToolRuntime
 from langchain_core.messages import HumanMessage
@@ -32,6 +33,8 @@ from langchain_core.tools import tool
 
 from ..models import ResearchNotes
 from ..models import ResearchQuery
+from ..researcher_context import CURRENT_RESEARCHER_GUARD_STATE
+from ..researcher_context import ResearcherRunGuardState
 from ..resource_limits import DeepResearchResourceLimits
 from ..resource_limits import StateBudgetLedger
 
@@ -64,11 +67,23 @@ def researcher_invoke_state(query: ResearchQuery, runtime: ToolRuntime | None) -
     return invoke_state
 
 
-def researcher_invoke_config(runtime: ToolRuntime | None, callbacks: list[Any]) -> dict[str, Any]:
+def researcher_invoke_config(
+    runtime: ToolRuntime | None,
+    callbacks: list[Any],
+    *,
+    strip_inherited_recursion_limit: bool = True,
+) -> dict[str, Any]:
     """Build child-run config while preserving the active callback lineage."""
     config = dict(runtime.config) if runtime is not None else {}
     config.pop("run_id", None)
     config.pop("configurable", None)
+    # The orchestrator graph runs at recursion_limit 2000 and that value propagates into every
+    # child config, where it would win the merge against the limit bound on the runnable. Drop
+    # it so the researcher subgraph uses its own. When the loop guard is disabled the runnable
+    # carries no limit of its own, and inheriting the parent's is the deliberate opt-out, so
+    # the caller passes False and the value is left alone.
+    if strip_inherited_recursion_limit:
+        config.pop("recursion_limit", None)
     config["run_name"] = RESEARCHER_AGENT_NAME
     if not config.get("callbacks") and callbacks:
         config["callbacks"] = callbacks
@@ -82,28 +97,39 @@ async def _run_research_query(
     runtime: ToolRuntime | None,
     callbacks: list[Any],
     semaphore: asyncio.Semaphore,
+    strip_inherited_recursion_limit: bool = True,
 ) -> ResearchNotes:
     """Run one researcher worker and return its structured notes."""
     async with semaphore:
+        # Scoped inside the semaphore so a queued worker holds no guard state while blocked and
+        # each admitted worker gets a fresh, isolated loop-guard budget.
+        guard_token = CURRENT_RESEARCHER_GUARD_STATE.set(ResearcherRunGuardState(invocation_id=uuid4().hex))
         try:
-            result = await researcher_runnable.ainvoke(
-                researcher_invoke_state(query, runtime),
-                config=researcher_invoke_config(runtime, callbacks),
-            )
-        except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-            raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
+            try:
+                result = await researcher_runnable.ainvoke(
+                    researcher_invoke_state(query, runtime),
+                    config=researcher_invoke_config(
+                        runtime,
+                        callbacks,
+                        strip_inherited_recursion_limit=strip_inherited_recursion_limit,
+                    ),
+                )
+            except Exception as exc:  # noqa: BLE001 - captured as per-item failure
+                raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
 
-        try:
-            structured = result.get("structured_response") if isinstance(result, dict) else None
-            if structured is None:
-                raise ValueError("researcher worker did not return structured ResearchNotes")
-            note = ResearchNotes.model_validate(structured)
-        except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-            raise ValueError(
-                f"researcher worker returned invalid ResearchNotes for query {query.query!r}: {exc}"
-            ) from exc
+            try:
+                structured = result.get("structured_response") if isinstance(result, dict) else None
+                if structured is None:
+                    raise ValueError("researcher worker did not return structured ResearchNotes")
+                note = ResearchNotes.model_validate(structured)
+            except Exception as exc:  # noqa: BLE001 - captured as per-item failure
+                raise ValueError(
+                    f"researcher worker returned invalid ResearchNotes for query {query.query!r}: {exc}"
+                ) from exc
 
-        return note
+            return note
+        finally:
+            CURRENT_RESEARCHER_GUARD_STATE.reset(guard_token)
 
 
 def _research_note_slug(text: str) -> str:
@@ -161,6 +187,7 @@ async def _run_research_queries(
     runtime: ToolRuntime | None,
     callbacks: list[Any],
     max_concurrency: int,
+    strip_inherited_recursion_limit: bool = True,
 ) -> tuple[list[ResearchQuery], list[ResearchNotes], list[str]]:
     """Run researcher workers concurrently and collect successful query/note pairs plus surfaced errors."""
     semaphore = asyncio.Semaphore(min(max_concurrency, len(queries)))
@@ -172,6 +199,7 @@ async def _run_research_queries(
                 runtime=runtime,
                 callbacks=callbacks,
                 semaphore=semaphore,
+                strip_inherited_recursion_limit=strip_inherited_recursion_limit,
             )
             for query in queries
         ),
@@ -200,6 +228,7 @@ def build_research_batch_tool(
     backend: Any | None = None,
     state_budget: StateBudgetLedger | None = None,
     source_registry_middleware: Any | None = None,
+    strip_inherited_recursion_limit: bool = True,
 ) -> BaseTool:
     """Build an orchestrator-only tool that runs researcher tasks concurrently."""
     limits = resource_limits or DeepResearchResourceLimits()
@@ -248,6 +277,7 @@ def build_research_batch_tool(
             runtime=runtime,
             callbacks=callbacks,
             max_concurrency=max_research_concurrency,
+            strip_inherited_recursion_limit=strip_inherited_recursion_limit,
         )
         note_files = _research_note_files(successful_queries, notes)
         batch_note_bytes = sum(len(content) for _, content in note_files)

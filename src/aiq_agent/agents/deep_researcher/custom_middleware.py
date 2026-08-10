@@ -44,6 +44,9 @@ from aiq_agent.common.citation_verification import extract_sources_from_tool_res
 from aiq_agent.common.citation_verification import is_non_citable_status_output
 from aiq_agent.common.logging_utils import log_content_metadata
 
+from .models.loop_guard import ResearcherLoopGuardConfig
+from .researcher_context import CURRENT_RESEARCHER_GUARD_STATE
+from .researcher_context import ResearcherRunGuardState
 from .resource_limits import DeepResearchResourceLimits
 from .resource_limits import StateBudgetLedger
 
@@ -1426,3 +1429,264 @@ class ToolResultPruningMiddleware(AgentMiddleware):
                 pruned_messages.append(msg)
 
         return await handler(request.override(messages=pruned_messages))
+
+
+_THINK_TOOL = "think"
+
+# Appended (never substituted) to the last allowed source result, so the evidence from that
+# final search survives the exhaustion signal. Read only by the researcher inside its own
+# subgraph: `run_research_batch` returns serialized ResearchNotes (or a per-item error string)
+# to the orchestrator, so researcher tool messages never cross that boundary and this wording
+# is not part of any orchestrator-facing contract. It pairs with the withdrawal guidance in
+# researcher.j2, which is what tells the model how to react to it.
+_RESEARCHER_BUDGET_NUDGE = (
+    "\n\n[SYSTEM — researcher source budget is exhausted. Stop searching and return your "
+    "ResearchNotes now using the evidence already gathered. Record every unsupported target "
+    "component as an explicit ResearchGap entry and set evidence_judgment to reflect the "
+    "truncation; do not guess.]"
+)
+
+
+def _canonical_source_signature(tool_name: str, args: object) -> str:
+    """Hash a source-tool name and its canonical arguments without retaining argument content.
+
+    Only JSON key *order* is canonicalized. Case and whitespace are not, so ``"AI research"``
+    and ``"ai research"`` produce different signatures and both may run.
+    """
+    try:
+        canonical_args = json.dumps(args, sort_keys=True, separators=(",", ":"), default=repr)
+    except (TypeError, ValueError):
+        canonical_args = repr(args)
+    payload = f"{tool_name}:{canonical_args}".encode()
+    return hashlib.sha256(payload).hexdigest()
+
+
+class ResearcherLoopGuardMiddleware(AgentMiddleware):
+    """Bound one researcher invocation's source calls, repeated requests, and think loops.
+
+    A deterministic circuit breaker for a single ``ResearchQuery`` executed by a
+    ``run_research_batch`` worker. It runs underneath the model, so it does not depend on the
+    model obeying prompt guidance. Four limits share one class and one ``enabled`` flag:
+
+    1. a flat budget of model-issued source-tool invocations (``max_source_calls_per_query``);
+    2. repeats of an identical tool name plus identical arguments
+       (``max_identical_source_calls``), which are blocked without being executed;
+    3. uninterrupted ``think`` calls (``max_consecutive_thinks``), which are warned about but
+       never blocked;
+    4. total model turns (``max_model_turns_per_query``).
+
+    Reaching (1) or (2) marks the invocation exhausted, which withdraws the source tools *and*
+    ``think`` from every later model call. Reaching (3) withdraws only ``think``. The guard
+    never terminates the sub-agent; it removes the tools that let it keep looping and steers it
+    to return ``ResearchNotes`` with explicit ``ResearchGap`` entries.
+
+    (4) is the one that closes rather than narrows the loop. (1)-(3) leave the filesystem tools
+    callable, so a worker that answers a withdrawal by re-reading ``/shared`` can still burn
+    turns until the subgraph's recursion limit raises ``GraphRecursionError`` - which discards
+    every note it had gathered, the exact failure this guard exists to prevent. On the final
+    turn the guard therefore withdraws *all* tools and disables native structured-output
+    binding. ``StructuredResponseTextFallbackMiddleware`` then promotes schema-valid JSON (or
+    makes one tools-disabled correction call), so the worker can still return ``ResearchNotes``
+    without sending providers an invalid empty tools array.
+
+    All mutable state lives in :data:`CURRENT_RESEARCHER_GUARD_STATE`, not on the instance,
+    because ``DeepResearcherAgent`` builds its middleware once and reuses it across concurrent
+    workers and requests. When no state is installed (planner, writer, orchestrator) the guard
+    is a pass-through.
+    """
+
+    def __init__(
+        self,
+        *,
+        source_tool_names: set[str] | frozenset[str],
+        config: ResearcherLoopGuardConfig,
+    ) -> None:
+        """Bind the guard to the source-tool names it counts and its configured limits."""
+        self._source_tool_names = frozenset(source_tool_names)
+        self._config = config
+
+    @staticmethod
+    def _mark_exhausted(state: ResearcherRunGuardState, reason: str) -> None:
+        """Record why this invocation's research budget ended."""
+        state.exhausted = True
+        state.exhaustion_reason = reason
+
+    @staticmethod
+    def _append_nudge(result):
+        """Append the exhaustion notice to a tool result, preserving its evidence."""
+        try:
+            return result.model_copy(update={"content": f"{result.content}{_RESEARCHER_BUDGET_NUDGE}"})
+        except Exception:  # noqa: BLE001 - the nudge is best-effort; tool withdrawal is the hard guarantee
+            return result
+
+    @staticmethod
+    def _blocked_result(tool_call: dict, reason: str) -> ToolMessage:
+        """Build the error result returned in place of a source call that was not executed."""
+        return ToolMessage(
+            content=(
+                f"Source tool not executed: researcher loop guard reached {reason}. The source "
+                "budget is exhausted. Stop searching and return your ResearchNotes using the "
+                "evidence already gathered; record unsupported requirements as ResearchGap "
+                "entries and set evidence_judgment to reflect the truncation."
+            ),
+            tool_call_id=tool_call.get("id", "researcher-loop-guard"),
+            name=tool_call.get("name", "source-tool"),
+            status="error",
+        )
+
+    def _filter_tools(self, tools: list[object]) -> list[object]:
+        """Return the tool list with tools this invocation may no longer use removed."""
+        state = CURRENT_RESEARCHER_GUARD_STATE.get()
+        if not self._config.enabled or state is None:
+            return tools
+        hidden = set()
+        if state.exhausted:
+            hidden.update(self._source_tool_names)
+            hidden.add(_THINK_TOOL)
+        elif state.think_blocked:
+            hidden.add(_THINK_TOOL)
+        if not hidden:
+            return tools
+        return [tool for tool in tools if _request_tool_name(tool) not in hidden]
+
+    def _guard_model_request(self, request):
+        """Count this turn and return the request with the tools it may still use.
+
+        On the final allowed turn every tool and the native response format are withdrawn. The
+        outer text-fallback middleware promotes or corrects the resulting JSON into
+        ``ResearchNotes``, ending the invocation before ``GraphRecursionError``. Below that,
+        only the exhausted source/think tools go.
+
+        The count can overshoot by one: this guard sits *inside*
+        ``StructuredResponseTextFallbackMiddleware``, whose corrective second call re-enters
+        here. Overshooting stops the worker a turn early, which is the safe direction, and the
+        recursion limit keeps its headroom for exactly this.
+        """
+        state = CURRENT_RESEARCHER_GUARD_STATE.get()
+        if not self._config.enabled or state is None:
+            return request
+
+        state.model_turn_count += 1
+        turn_limit = self._config.max_model_turns_per_query
+        if state.model_turn_count < turn_limit:
+            return request.override(tools=self._filter_tools(request.tools))
+
+        logger.warning(
+            "Researcher loop guard forcing finalization | invocation=%s turns=%d/%d",
+            state.invocation_id,
+            state.model_turn_count,
+            turn_limit,
+        )
+        return request.override(tools=[], tool_choice=None, response_format=None)
+
+    def wrap_model_call(self, request, handler):
+        """Count the turn and withdraw tools before a synchronous model call."""
+        return handler(self._guard_model_request(request))
+
+    async def awrap_model_call(self, request, handler):
+        """Count the turn and withdraw tools before an asynchronous model call."""
+        return await handler(self._guard_model_request(request))
+
+    async def awrap_tool_call(self, request, handler):
+        """Route a tool call to the think or source-budget guard, or pass it straight through."""
+        state = CURRENT_RESEARCHER_GUARD_STATE.get()
+        tool_call = getattr(request, "tool_call", None)
+        if not self._config.enabled or state is None or not isinstance(tool_call, dict):
+            return await handler(request)
+
+        name = tool_call.get("name")
+        if name == _THINK_TOOL:
+            return await self._guard_think(request, handler, state, name)
+        # Any non-think call breaks a think streak and makes `think` available again. Resetting
+        # before dispatch also preserves that contract when the non-think tool itself fails.
+        state.consecutive_think_count = 0
+        state.think_blocked = False
+        if name not in self._source_tool_names:
+            return await handler(request)
+        return await self._guard_source_call(request, handler, state, tool_call, name)
+
+    async def _guard_think(self, request, handler, state: ResearcherRunGuardState, name: str):
+        """Count uninterrupted think calls and overwrite the result with a warning at the limit.
+
+        Thinking is never blocked - the handler always runs. Past the threshold the result text
+        is replaced with a corrective warning and ``think`` is withdrawn from later model calls,
+        which closes the pure think-loop. The alternating ``think -> same_search`` loop is caught
+        by the identical-request rule instead.
+        """
+        state.consecutive_think_count += 1
+        count = state.consecutive_think_count
+        result = await handler(request)
+        if count < self._config.max_consecutive_thinks:
+            return result
+
+        state.think_blocked = True
+        logger.warning(
+            "Researcher loop guard blocked further thinking | invocation=%s tool=%s thinks=%d/%d",
+            state.invocation_id,
+            name,
+            count,
+            self._config.max_consecutive_thinks,
+        )
+        warning = (
+            f"Thought recorded. WARNING: You have called 'think' {count} times in a row without "
+            "taking action. `think` is now withdrawn. Call a real tool or return your "
+            "ResearchNotes instead of thinking again."
+        )
+        try:
+            # Overwrite rather than append: a think result carries no evidence worth preserving.
+            return result.model_copy(update={"content": warning})
+        except Exception:  # noqa: BLE001 - the warning is best-effort; tool withdrawal is the hard guarantee
+            return result
+
+    async def _guard_source_call(
+        self,
+        request,
+        handler,
+        state: ResearcherRunGuardState,
+        tool_call: dict,
+        name: str,
+    ):
+        """Enforce the source-call budget and the identical-request limit for one invocation."""
+        budget = self._config.max_source_calls_per_query
+        if state.exhausted or state.source_call_count >= budget:
+            self._mark_exhausted(state, "total source-call budget")
+            logger.warning(
+                "Researcher loop guard blocked source call | invocation=%s tool=%s calls=%d/%d reason=total_budget",
+                state.invocation_id,
+                name,
+                state.source_call_count,
+                budget,
+            )
+            return self._blocked_result(tool_call, "the total source-call budget")
+
+        signature = _canonical_source_signature(name, tool_call.get("args", {}))
+        identical_count = state.source_signature_counts.get(signature, 0)
+        if identical_count >= self._config.max_identical_source_calls:
+            self._mark_exhausted(state, "repeated source-call signature")
+            logger.warning(
+                "Researcher loop guard blocked repeated source call | "
+                "invocation=%s tool=%s repeats=%d/%d reason=repeated_signature",
+                state.invocation_id,
+                name,
+                identical_count,
+                self._config.max_identical_source_calls,
+            )
+            return self._blocked_result(tool_call, "the repeated source-call limit")
+
+        # Count before awaiting so source calls dispatched together in one assistant turn share
+        # a single hard ceiling instead of all passing the check and then all executing.
+        state.source_call_count += 1
+        state.source_signature_counts[signature] = identical_count + 1
+        result = await handler(request)
+
+        if state.source_call_count >= budget:
+            self._mark_exhausted(state, "total source-call budget")
+            logger.info(
+                "Researcher source-call budget reached | invocation=%s tool=%s calls=%d/%d",
+                state.invocation_id,
+                name,
+                state.source_call_count,
+                budget,
+            )
+            return self._append_nudge(result)
+        return result

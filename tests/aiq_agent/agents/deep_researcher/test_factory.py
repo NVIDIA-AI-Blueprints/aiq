@@ -520,7 +520,8 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
 
     kwargs = create.call_args.kwargs
     middleware_names = [item.__class__.__name__ for item in kwargs["middleware"]]
-    assert result is researcher_agent
+    # The runnable is returned wrapped in its own recursion limit rather than bare.
+    assert result is researcher_agent.with_config.return_value
     assert kwargs["model"] is researcher_model
     assert kwargs["tools"] == [web_search_tool]
     assert kwargs["response_format"] is ResearchNotes
