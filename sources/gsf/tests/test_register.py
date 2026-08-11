@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 from gsf.models import CatalogSearchResponse
+from gsf.models import TextToPQLResponse
 from gsf.models import TextToSQLResponse
 from gsf.register import GSFFunctionGroupConfig
 from gsf.register import GSFPasswordAuthConfig
@@ -91,6 +92,21 @@ async def test_group_exposes_only_requested_tools(text_to_sql_response: dict) ->
             tools = await group.get_accessible_functions()
 
     assert set(tools) == {"gsf__text_to_sql"}
+
+
+@pytest.mark.asyncio
+async def test_group_exposes_text_to_pql_when_requested(text_to_pql_response: dict) -> None:
+    """Expose the prediction tool only when selected by the function-group include list."""
+
+    client = MagicMock()
+    client.text_to_pql = AsyncMock(return_value=TextToPQLResponse.model_validate(text_to_pql_response))
+    config = GSFFunctionGroupConfig(base_url="https://gsf.example", include=["text_to_pql"])
+
+    with patch("gsf.register.GSFClient.from_config", return_value=FakeClientContext(client)):
+        async with gsf_function_group(config, MagicMock()) as group:
+            tools = await group.get_accessible_functions()
+
+    assert set(tools) == {"gsf__text_to_pql"}
 
 
 @pytest.mark.asyncio

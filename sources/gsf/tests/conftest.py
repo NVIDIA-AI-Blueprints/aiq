@@ -70,7 +70,11 @@ def chat_pql_answer() -> dict:
 
     return {
         "response": "A churn prediction query was generated.",
+        "thoughts": "- Constructing PQL: Predicted customer churn over 30 days.",
         "sql_code": "PREDICT churn FOR customers NEXT 30 DAYS",
+        "sql_columns": [{"name": "customer_id"}, {"name": "score"}],
+        "sql_response_from_db": ['[{"customer_id":"customer-1","score":0.9}]'],
+        "custom_analyses_used": [],
         "objects_used": ["prediction:churn"],
         "semantic_context": {
             "metrics": [{"id": "prediction:churn"}],
@@ -119,7 +123,12 @@ def text_to_pql_response() -> dict:
     return {
         "request_id": "gsf-request-2",
         "response": "A churn prediction query was generated.",
+        "thoughts": "- Constructing PQL: Predicted customer churn over 30 days.",
         "pql": "PREDICT churn FOR customers NEXT 30 DAYS",
+        "columns": [{"name": "customer_id"}, {"name": "score"}],
+        "rows": [{"customer_id": "customer-1", "score": 0.9}],
+        "truncated": False,
+        "custom_analyses_used": [],
         "objects_used": ["prediction:churn"],
         "semantic_context": {
             "metrics": [{"id": "prediction:churn"}],

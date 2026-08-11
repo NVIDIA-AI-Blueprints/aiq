@@ -78,12 +78,14 @@ def test_text_to_sql_request_supports_optional_database_name() -> None:
     assert request.max_rows == 1_000
 
 
-def test_text_to_pql_request_supports_optional_database_name() -> None:
-    """Accept an optional database scope for prediction requests."""
+def test_text_to_pql_request_omits_database_selector_by_default() -> None:
+    """Leave prediction routing unscoped for normal AI-Q calls."""
 
-    request = TextToPQLRequest(question="Predict churn", database_name="benchmark_db")
+    request = TextToPQLRequest(question="Predict churn")
 
-    assert request.database_name == "benchmark_db"
+    assert request.database_name is None
+    assert request.max_rows == 1_000
+    assert "database_name" not in request.model_dump(exclude_none=True)
 
 
 def test_query_context_request_omits_optional_database_name() -> None:
@@ -123,6 +125,10 @@ def test_text_to_pql_response_accepts_missing_future_enrichments() -> None:
     result = TextToPQLResponse.model_validate({"pql": "PREDICT churn FOR customers NEXT 30 DAYS"})
 
     assert result.request_id is None
+    assert result.thoughts is None
+    assert result.columns == []
+    assert result.rows == []
+    assert result.truncated is False
     assert result.semantic_context is None
     assert result.warnings is None
 

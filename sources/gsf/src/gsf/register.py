@@ -25,6 +25,7 @@ from .errors import GSFError
 from .errors import GSFErrorCode
 from .errors import GSFToolError
 from .models import CatalogSearchRequest
+from .models import TextToPQLRequest
 from .models import TextToSQLRequest
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,32 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
                     )
                 )
 
+        async def text_to_pql(request: TextToPQLRequest) -> str:
+            """Run a prediction question through GSF's Kumo/PQL path.
+
+            Use for questions that ask what is likely to happen, which entities are most likely to experience an
+            outcome, or for a forecast. The result preserves GSF's generated PQL, prediction response, bounded rows,
+            and available diagnostics so callers can distinguish successful execution from a reported failure.
+            """
+
+            try:
+                result = await client.text_to_pql(
+                    request,
+                    token=_resolve_request_token(config),
+                    trace_headers=_request_trace_headers(),
+                )
+                return result.model_dump_json(exclude_none=True)
+            except GSFError as error:
+                return _tool_error(error)
+            except Exception:
+                logger.exception("Unexpected GSF text-to-PQL failure")
+                return _tool_error(
+                    GSFError(
+                        GSFErrorCode.UPSTREAM_ERROR,
+                        "GSF text-to-PQL failed.",
+                    )
+                )
+
         group = FunctionGroup(config=config)
         group.add_function(
             "catalog_search",
@@ -168,5 +195,11 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
             text_to_sql,
             input_schema=TextToSQLRequest,
             description=text_to_sql.__doc__,
+        )
+        group.add_function(
+            "text_to_pql",
+            text_to_pql,
+            input_schema=TextToPQLRequest,
+            description=text_to_pql.__doc__,
         )
         yield group

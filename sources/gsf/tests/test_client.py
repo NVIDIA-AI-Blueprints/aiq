@@ -224,8 +224,8 @@ async def test_text_to_sql_skips_malformed_intermediate_sse_event(chat_sql_answe
 
 
 @pytest.mark.asyncio
-async def test_text_to_pql_maps_database_to_target_db(chat_pql_answer: dict) -> None:
-    """Map prediction database scope to the GSF target_db field."""
+async def test_text_to_pql_uses_prediction_routing_without_database_scope(chat_pql_answer: dict) -> None:
+    """Route predictions without selecting a database in the AI-Q tool call."""
 
     seen_payload: dict | None = None
 
@@ -237,6 +237,36 @@ async def test_text_to_pql_maps_database_to_target_db(chat_pql_answer: dict) -> 
     client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
     async with client:
         result = await client.text_to_pql(
+            TextToPQLRequest(question="Predict churn risk"),
+            token="user-token",
+        )
+
+    assert seen_payload == {
+        "question": "Predict churn risk",
+        "prediction": True,
+    }
+    assert result.pql == "PREDICT churn FOR customers NEXT 30 DAYS"
+    assert result.response == "A churn prediction query was generated."
+    assert result.thoughts == "- Constructing PQL: Predicted customer churn over 30 days."
+    assert [column.name for column in result.columns] == ["customer_id", "score"]
+    assert result.rows == [{"customer_id": "customer-1", "score": 0.9}]
+    assert result.truncated is False
+
+
+@pytest.mark.asyncio
+async def test_text_to_pql_supports_optional_benchmark_database_scope(chat_pql_answer: dict) -> None:
+    """Forward an explicitly configured benchmark database without making it the default path."""
+
+    seen_payload: dict | None = None
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal seen_payload
+        seen_payload = json.loads(request.content)
+        return _sse_response(chat_pql_answer)
+
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
+    async with client:
+        await client.text_to_pql(
             TextToPQLRequest(question="Predict churn risk", database_name="benchmark_db"),
             token="user-token",
         )
@@ -246,8 +276,30 @@ async def test_text_to_pql_maps_database_to_target_db(chat_pql_answer: dict) -> 
         "prediction": True,
         "target_db": "benchmark_db",
     }
-    assert result.pql == "PREDICT churn FOR customers NEXT 30 DAYS"
-    assert result.response == "A churn prediction query was generated."
+
+
+@pytest.mark.asyncio
+async def test_text_to_pql_preserves_failure_diagnostics_without_pql() -> None:
+    """Return GSF's prediction failure explanation even when it produced no PQL."""
+
+    answer = {
+        "response": "Prediction could not be completed because no valid entity was found.",
+        "thoughts": "- Preparing candidates: No primary-key entity matched the question.",
+        "sql_code": None,
+        "sql_columns": [],
+        "sql_response_from_db": None,
+    }
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        return _sse_response(answer)
+
+    client = GSFClient(base_url="https://gsf.example", transport=httpx.MockTransport(handler))
+    async with client:
+        result = await client.text_to_pql(TextToPQLRequest(question="Predict demand"), token="user-token")
+
+    assert result.pql is None
+    assert result.response == "Prediction could not be completed because no valid entity was found."
+    assert result.rows == []
 
 
 @pytest.mark.asyncio

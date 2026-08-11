@@ -177,6 +177,7 @@ class GSFClient:
     ) -> TextToPQLResponse:
         """Run the prediction branch of GSF chat completions and normalize its answer."""
 
+        max_rows = min(request.max_rows, self._default_max_rows)
         payload: dict[str, Any] = {
             "question": request.question,
             "prediction": True,
@@ -189,7 +190,7 @@ class GSFClient:
             token=token,
             trace_headers=trace_headers,
         )
-        return self._normalize_text_to_pql(answer, request_id=request_id)
+        return self._normalize_text_to_pql(answer, request_id=request_id, max_rows=max_rows)
 
     async def _chat_completions(
         self,
@@ -564,24 +565,45 @@ class GSFClient:
             ) from exc
 
     @classmethod
-    def _normalize_text_to_pql(cls, answer: Mapping[str, Any], *, request_id: str | None) -> TextToPQLResponse:
-        """Normalize current and legacy GSF prediction fields into PQL output."""
+    def _normalize_text_to_pql(
+        cls,
+        answer: Mapping[str, Any],
+        *,
+        request_id: str | None,
+        max_rows: int,
+    ) -> TextToPQLResponse:
+        """Normalize GSF's shared chat fields into bounded prediction output."""
 
         # GSF's prediction branch currently returns the PQL in ``sql_code`` so
         # its frontend can render SQL and prediction results with one shape.
         pql = answer.get("pql") or answer.get("pql_code") or answer.get("sql_code")
-        if not isinstance(pql, str) or not pql.strip():
+        pql = pql if isinstance(pql, str) and pql.strip() else None
+        response = answer.get("response")
+        if pql is None and (not isinstance(response, str) or not response.strip()):
             raise GSFError(
                 GSFErrorCode.INVALID_RESPONSE,
-                "GSF did not return validated PQL.",
+                "GSF returned neither PQL nor prediction diagnostics.",
                 request_id=request_id,
             )
+
+        rows = cls._normalize_rows(answer.get("rows") or answer.get("sql_response_from_db"), request_id)
+        upstream_truncated = bool(answer.get("truncated", False))
+        truncated = upstream_truncated or len(rows) > max_rows
+        rows = rows[:max_rows]
+        columns = cls._normalize_columns(answer.get("columns") or answer.get("sql_columns"))
+        if not columns and rows:
+            columns = [ResultColumn(name=str(name)) for name in rows[0]]
 
         try:
             return TextToPQLResponse(
                 request_id=answer.get("request_id") or request_id,
-                response=answer.get("response"),
+                response=response,
+                thoughts=answer.get("thoughts"),
                 pql=pql,
+                columns=columns,
+                rows=rows,
+                truncated=truncated,
+                custom_analyses_used=answer.get("custom_analyses_used"),
                 objects_used=answer.get("objects_used"),
                 semantic_context=answer.get("semantic_context"),
                 assumptions=answer.get("assumptions"),

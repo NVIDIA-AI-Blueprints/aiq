@@ -77,10 +77,14 @@ class TextToSQLRequest(GSFRequest):
 
 
 class TextToPQLRequest(GSFRequest):
-    """Generate validated PQL for prediction workflows."""
+    """Run a natural-language question through GSF's PQL prediction path."""
 
     question: str = Field(min_length=1, max_length=4_096)
-    database_name: str | None = None
+    database_name: str | None = Field(
+        default=None,
+        description="Optional benchmark-only database selector; normal AI-Q calls leave this unset.",
+    )
+    max_rows: int = Field(default=1_000, ge=1)
 
 
 class TextToSQLResponse(GSFResponse):
@@ -103,11 +107,16 @@ class TextToSQLResponse(GSFResponse):
 
 
 class TextToPQLResponse(GSFResponse):
-    """Validated PQL and semantic provenance returned by GSF."""
+    """PQL, bounded prediction results, and diagnostic context returned by GSF."""
 
     request_id: str | None = None
     response: str | None = None
-    pql: str
+    thoughts: str | None = None
+    pql: str | None = None
+    columns: list[ResultColumn] = Field(default_factory=list)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    truncated: bool = False
+    custom_analyses_used: list[Any] | None = None
     objects_used: list[str] | None = None
     semantic_context: SemanticContext | None = None
     assumptions: list[str] | None = None

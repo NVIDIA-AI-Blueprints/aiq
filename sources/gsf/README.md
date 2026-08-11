@@ -3,21 +3,19 @@ SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# AI-Q GSF source
+# GSF as a data source
 
-This package exposes NVIDIA Generative Semantic Fabric (GSF) capabilities as a
-NeMo Agent Toolkit function group. The current implementation provides:
+This package connects AI-Q to NVIDIA Generative Semantic Fabric (GSF).
 
-- `gsf__text_to_sql`
-- `gsf__catalog_search`
+## Tools
 
-PQL client and model groundwork remains internal, but no PQL tool is registered
-until its GSF contract and integration behavior are validated.
+- `gsf__catalog_search`: finds relevant semantic objects.
+- `gsf__text_to_sql`: answers analytical questions with SQL and bounded rows.
+- `gsf__text_to_pql`: runs predictive questions through the GSF/Kumo path.
 
-By default, the function group owns one shared HTTP connection pool and keeps
-authentication request-scoped: each tool invocation obtains the current AI-Q
-user token and passes it to GSF without storing it on the client.
-`GSF_BASE_URL` must point to GSF's auth-aware API origin.
+## Configuration
+
+Set `GSF_BASE_URL` to GSF's auth-aware API origin and add the function group to the data-source registry:
 
 ```yaml
 function_groups:
@@ -27,6 +25,7 @@ function_groups:
     include:
       - catalog_search
       - text_to_sql
+      - text_to_pql
 
 functions:
   data_sources:
@@ -43,9 +42,11 @@ functions:
           - gsf
 ```
 
-For local development and automated evaluation without an incoming AI-Q user
-token, explicitly configure a GSF password session. The credentials must come
-from environment variables:
+When `auth` is omitted, each tool invocation obtains the current AI-Q user token and forwards it to GSF without
+storing it on the shared client.
+
+For local development or automated evaluation without an incoming AI-Q user token, explicitly configure password
+authentication using environment variables:
 
 ```yaml
 function_groups:
@@ -56,26 +57,16 @@ function_groups:
       mode: password
       email: ${GSF_EMAIL}
       password: ${GSF_PASSWORD}
-    include:
-      - catalog_search
-      - text_to_sql
 ```
 
-When `auth` is omitted, the existing request-scoped AI-Q user-token flow is
-used. Password mode creates one GSF session when the function group starts,
-reuses its cookie for local development or evaluation calls, and signs out when
-the group closes. The client does not fall back between authentication methods.
+Password mode creates one GSF session when the function group starts, reuses its cookie for all tool calls, and signs
+out when the function group closes. The client does not fall back between authentication methods. Do not put
+credentials directly in the configuration file.
 
-Text-to-SQL uses GSF's `/api/chat/completions` SSE endpoint with
-`prediction: false`. Its optional AI-Q `database_name` input is sent to GSF as
-`target_db`, selecting an existing GSF connection rather than creating one.
-The adapter normalizes GSF's current response fields while preserving optional
-semantic and benchmarking fields as they become available.
-For text-to-SQL, GSF's compatibility prose is discarded; AI-Q consumes the
-generated SQL, bounded rows, and any structured semantic provenance instead.
-GSF's optional `thoughts` summary is retained as diagnostic context, not as
-authoritative evidence.
+## API mapping
 
-Catalog search uses `POST /api/question-entity-coverage` and returns entity
-coverage plus ranked semantic candidates for DS-agent grounding and routing.
-Its optional `database_name` is sent as `target_db`.
+- Catalog search calls `POST /api/question-entity-coverage`.
+- Text-to-SQL calls `POST /api/chat/completions` with `prediction: false`.
+- Text-to-PQL calls `POST /api/chat/completions` with `prediction: true`.
+- Normal AI-Q calls rely on GSF's routing and omit database selection.
+- Automated benchmarks may explicitly set optional `database_name`; AI-Q forwards it to GSF as `target_db`.
