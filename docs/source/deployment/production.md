@@ -104,6 +104,10 @@ backup_complete=1
 trap - EXIT
 ```
 
+If the block exits unsuccessfully, its cleanup trap removes temporary files and any partially published backup set.
+Confirm that no archives with that backup ID remain, resume the paused writers, investigate the failure, and use a new
+backup ID on the next scheduled run or retry.
+
 If the Compose container name was customized, set `AIQ_POSTGRES_CONTAINER` to that container name.
 
 Treat these archives as sensitive data. Before copying them to backup storage, encrypt them with an
