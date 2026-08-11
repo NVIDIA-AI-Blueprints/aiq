@@ -378,6 +378,30 @@ functions:
 Refer to [Knowledge Layer](./knowledge-layer.md) for backend selection and the
 [Amazon OpenSearch Serverless](../deployment/aws-opensearch-serverless.md) guide for SigV4, IAM, and AOSS setup.
 
+### `gsf` function group
+
+The GSF function group exposes `gsf__catalog_search` for semantic discovery and
+`gsf__text_to_sql` for validated, bounded structured-data queries. Declare it
+under the top-level `function_groups` section:
+
+```yaml
+function_groups:
+  gsf:
+    _type: gsf
+    base_url: ${GSF_BASE_URL}
+    auth:
+      mode: password
+      email: ${GSF_EMAIL}
+      password: ${GSF_PASSWORD}
+    include:
+      - catalog_search
+      - text_to_sql
+```
+
+Omit `auth` in an authenticated AI-Q deployment to forward the current user's
+bearer token. Password mode is intended for local development and evaluation.
+Refer to `sources/gsf/README.md` for the complete contract and limits.
+
 ### `intent_classifier`
 
 Classifies user queries as meta (conversational) or research, and determines research depth (shallow vs. deep).
@@ -450,6 +474,30 @@ functions:
 | `max_llm_turns` | `int` | `10` | Maximum number of LLM turns (includes both reasoning and tool-calling steps). |
 | `max_tool_iterations` | `int` | `5` | Maximum tool-calling iterations before forcing synthesis. |
 | `verbose` | `bool` | `false` | Enable verbose logging. |
+
+### `data_science_agent`
+
+Adaptive ReAct agent for structured-data analysis, document retrieval, web
+evidence, and final synthesis.
+
+```yaml
+functions:
+  data_science_agent:
+    _type: data_science_agent
+    llm: data_science_llm
+    # tools omitted -> inherit every tool in data_source_registry
+    recursion_limit: 64
+    verbose: true
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `llm` | `str` | **required** | LLM used for tool selection, analysis, and synthesis. |
+| `tools` | `list[str]` | `[]` | Explicit callable tools. An empty list inherits all tool and function-group references in `data_source_registry`. |
+| `exclude_tools` | `list[str]` | `[]` | Exact runtime tool names removed after inherited or explicit tools are resolved. |
+| `interaction_mode` | `interactive` or `headless` | `interactive` | In `headless` mode, never wait for clarification; resolve supported assumptions and perform one bounded synthesis retry if needed. |
+| `recursion_limit` | `int` | `64` | Hard LangGraph step limit for one adaptive run. Minimum `4`. |
+| `verbose` | `bool` | `false` | Enable verbose tracing. |
 
 ### `deep_research_agent`
 
@@ -563,7 +611,9 @@ A writer that wants inline charts must be assigned the `visualization` collectio
 
 ## `workflow` Section
 
-Defines the top-level orchestrator that wires together all agents.
+Defines the top-level workflow. The normal product pipeline uses
+`chat_deepresearcher_agent`; direct DS Agent development uses
+`data_science_workflow`.
 
 ```yaml
 workflow:
@@ -578,7 +628,7 @@ workflow:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `_type` | `str` | **required** | Workflow type. Use `chat_deepresearcher_agent` for the full pipeline. |
+| `_type` | `str` | **required** | Use `chat_deepresearcher_agent` for the full pipeline or `data_science_workflow` to run the DS Agent directly. |
 | `enable_escalation` | `bool` | `true` | Allow the intent classifier to route queries to deep research. When `false`, all research queries use shallow research only. |
 | `enable_clarifier` | `bool` | `true` | Run the clarifier agent before deep research to gather user requirements. |
 | `use_async_deep_research` | `bool` | `false` | Submit deep research as an async background job (requires [Dask](https://www.dask.org/) scheduler). |
@@ -718,13 +768,14 @@ workflow:
 
 ## Provided Config Files
 
-The repository includes eleven top-level workflow configurations. They are focused reference profiles, not cumulative
+The repository includes twelve top-level workflow configurations. They are focused reference profiles, not cumulative
 layers, and no single profile enables every capability. Start from the profile closest to the deployment and merge
 only the additional sections you need.
 
 | File | Mode | Enabled behavior and opt-ins |
 |------|------|------------------------------|
 | `configs/config_cli_default.yml` | CLI | Chat pipeline with Tavily web search and clarification. No knowledge backend. Paper search is present only as a commented opt-in. |
+| `configs/config_cli_data_science.yml` | Direct DS Agent CLI | GSF catalog/text-to-SQL and Tavily web search without the top-level router. Knowledge retrieval is intentionally disabled. |
 | `configs/config_web_default_llamaindex.yml` | Web API | Default chat pipeline with LlamaIndex/ChromaDB knowledge retrieval and Tavily. Paper search is commented out. |
 | `configs/config_web_azure_ai_search.yml` | Web API | Azure AI Search knowledge retrieval and web search |
 | `configs/config_web_frag.yml` | Web API / Helm base | Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. Paper search is commented out. |

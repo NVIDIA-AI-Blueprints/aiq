@@ -178,6 +178,7 @@ and feature guides under `docs/source/customization/`.
 | `shallow_research_agent` | always | `llm` |
 | `deep_research_agent` | always | `orchestrator_llm`, `planner_llm`, `researcher_llm`, `writer_llm`, `source_router_llm` |
 | `clarifier_agent` | `workflow.enable_clarifier: true` | `llm` |
+| `data_science_agent` | direct `data_science_workflow` | `llm` |
 
 ---
 
@@ -195,6 +196,10 @@ workflow:
 ```
 
 Full defaults table: `configuration-reference.md` § `workflow`.
+
+For direct DS Agent development, use `_type: data_science_workflow` and define
+`data_science_agent`; the chat-only intent, shallow, and deep functions are not
+required in that profile.
 
 ---
 

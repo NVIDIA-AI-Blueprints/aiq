@@ -1,0 +1,51 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Regression tests for the maintainer workflow-config validator."""
+
+import importlib.util
+from pathlib import Path
+
+import yaml
+
+_VALIDATOR_PATH = (
+    Path(__file__).parents[2] / ".agents" / "skills" / "aiq-configure-workflow" / "scripts" / "validate_config.py"
+)
+_SPEC = importlib.util.spec_from_file_location("aiq_validate_config", _VALIDATOR_PATH)
+assert _SPEC is not None and _SPEC.loader is not None
+_VALIDATOR = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_VALIDATOR)
+
+
+def _write_config(tmp_path: Path, data: dict) -> Path:
+    path = tmp_path / "config.yml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+    return path
+
+
+def test_direct_data_science_workflow_is_valid(tmp_path, capsys):
+    path = _write_config(
+        tmp_path,
+        {
+            "llms": {"model": {"_type": "nim", "model_name": "test"}},
+            "functions": {"data_science_agent": {"_type": "data_science_agent", "llm": "model"}},
+            "workflow": {"_type": "data_science_workflow"},
+        },
+    )
+
+    assert _VALIDATOR.validate(str(path)) == 0
+    assert "RESULT: no errors" in capsys.readouterr().out
+
+
+def test_direct_data_science_workflow_requires_agent_function(tmp_path, capsys):
+    path = _write_config(
+        tmp_path,
+        {
+            "llms": {"model": {"_type": "nim", "model_name": "test"}},
+            "functions": {},
+            "workflow": {"_type": "data_science_workflow"},
+        },
+    )
+
+    assert _VALIDATOR.validate(str(path)) == 1
+    assert "workflow requires function 'data_science_agent'" in capsys.readouterr().out

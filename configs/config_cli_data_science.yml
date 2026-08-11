@@ -1,0 +1,75 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# Direct local Data Science Agent profile. This bypasses the top-level AI-Q
+# router until the data-science route is integrated.
+#
+# Required: INFERENCE_NVIDIA_API_KEY, AIQ_INFERENCE_BASE_URL,
+# TAVILY_API_KEY, GSF_BASE_URL, GSF_EMAIL, GSF_PASSWORD. Knowledge retrieval
+# is intentionally disabled in this profile.
+
+general:
+  telemetry:
+    logging:
+      console:
+        _type: console
+        level: INFO
+
+llms:
+  data_science_llm:
+    _type: openai
+    model_name: ${AIQ_DATA_SCIENCE_MODEL:-azure/openai/gpt-5.6-terra}
+    base_url: ${AIQ_INFERENCE_BASE_URL}
+    api_key: ${INFERENCE_NVIDIA_API_KEY}
+    reasoning_effort: medium
+    max_tokens: 32768
+    num_retries: 2
+    request_timeout: 600
+
+function_groups:
+  gsf:
+    _type: gsf
+    base_url: ${GSF_BASE_URL}
+    auth:
+      mode: password
+      email: ${GSF_EMAIL}
+      password: ${GSF_PASSWORD}
+    include:
+      - catalog_search
+      - text_to_sql
+    connect_timeout_seconds: 10
+    read_timeout_seconds: ${GSF_READ_TIMEOUT_SECONDS:-600}
+    max_retries: 2
+    default_max_rows: 1000
+
+functions:
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: structured_data
+        name: "Enterprise Structured Data"
+        description: "Discover enterprise semantics and execute bounded analytical queries through GSF."
+        tools:
+          - gsf
+      - id: web_search
+        name: "Web Search"
+        description: "Search the public web for current and external information."
+        tools:
+          - web_search_tool
+
+  web_search_tool:
+    _type: tavily_web_search
+    max_results: 5
+    advanced_search: true
+    max_content_length: 2000
+
+  data_science_agent:
+    _type: data_science_agent
+    llm: data_science_llm
+    # tools omitted: inherit GSF and web tools from data_sources
+    interaction_mode: ${AIQ_DS_INTERACTION_MODE:-interactive}
+    recursion_limit: 64
+    verbose: true
+
+workflow:
+  _type: data_science_workflow

@@ -30,6 +30,9 @@ Canonical references:
 | `SERPAPI_API_KEY` | SerpAPI paper search |
 | `SEARCHAPI_API_KEY` | SearchAPI paper search |
 | `RAG_SERVER_URL`, `RAG_INGEST_URL` | Foundational RAG profiles |
+| `GSF_BASE_URL`, `GSF_EMAIL`, `GSF_PASSWORD` | Direct DS Agent profile with a local GSF password session |
+| `GSF_READ_TIMEOUT_SECONDS` | Optional GSF read timeout override for long analytical calls |
+| `AIQ_DS_INTERACTION_MODE` | `interactive` by default; set `headless` for non-interactive DS evaluation |
 
 ## Web API, auth, and tracing
 
