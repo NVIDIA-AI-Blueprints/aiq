@@ -13,7 +13,7 @@ AI-Q 2.2 ships these exact model assignments and parameters:
 | Configuration | Intent and shallow roles | Clarification and deep-research roles | Optional summary role |
 | --- | --- | --- | --- |
 | `configs/config_cli_default.yml`, `configs/config_web_default_llamaindex.yml` | `nvidia/nemotron-3.5-lightning-30b-a3b` | `nvidia/nemotron-3-ultra-550b-a55b` for clarification, orchestration, source routing, research, planning, and writing | `google/gemma-4-31b-it` in the web profile |
-| `configs/config_frontier_models.yml` | `nvidia/nemotron-3.5-lightning-30b-a3b` | `gpt-5.6-sol` for clarification, orchestration, planning, and writing; `gpt-5.6-luna` for source routing and research | `google/gemma-4-31b-it` |
+| `configs/config_frontier_models.yml` | `gpt-5.6-luna` | `gpt-5.6-sol` for clarification, orchestration, planning, and writing; `gpt-5.6-luna` for source routing and research | `google/gemma-4-31b-it` |
 
 The checked-in files define the documented compatibility boundary; they are not a substitute for an end-to-end run
 against your provider endpoints and credentials. Changing a model, endpoint, role assignment, prompt, or inference

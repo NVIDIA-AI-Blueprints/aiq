@@ -5,14 +5,14 @@ SPDX-License-Identifier: Apache-2.0
 
 # Hybrid Frontier Model
 
-The checked-in `configs/config_frontier_models.yml` profile combines NVIDIA NIM models for intent classification and
-shallow research with GPT Sol/Luna for clarification and deep research.
+The checked-in `configs/config_frontier_models.yml` profile uses GPT Luna for bounded classification and research
+roles, GPT Sol for coordination and writing, and NVIDIA NIM for document summaries.
 
 ## Shipped Configuration
 
 | Role | Model |
 | --- | --- |
-| Intent classification and shallow research | `nvidia/nemotron-3.5-lightning-30b-a3b` |
+| Intent classification and shallow research | `gpt-5.6-luna` with role-specific token budgets |
 | Clarification, orchestration, and planning | `gpt-5.6-sol` |
 | Source routing and research | `gpt-5.6-luna` |
 | Report writing | `gpt-5.6-sol` with the writer token budget from the checked-in config |
@@ -31,7 +31,7 @@ as experimental until the complete workflow passes evaluation.
 
 ## Prerequisites
 
-- `NVIDIA_API_KEY` for NVIDIA NIM models
+- `NVIDIA_API_KEY` for the Gemma document-summary model
 - `OPENAI_API_KEY` for the GPT Sol/Luna roles
 - `TAVILY_API_KEY` for the default web-search tools
 

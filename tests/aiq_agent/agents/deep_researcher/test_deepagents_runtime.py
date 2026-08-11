@@ -50,6 +50,18 @@ def test_frontier_profile_uses_validated_gpt_role_split() -> None:
     config = yaml.safe_load(Path("configs/config_frontier_models.yml").read_text(encoding="utf-8"))
     llms = config["llms"]
 
+    assert llms["gpt_luna_intent_llm"] == {
+        "_type": "openai",
+        "model_name": "gpt-5.6-luna",
+        "api_key": "${OPENAI_API_KEY}",
+        "max_tokens": 1024,
+        "num_retries": 2,
+        "parallel_tool_calls": False,
+    }
+    assert llms["gpt_luna_shallow_llm"] == {
+        **llms["gpt_luna_intent_llm"],
+        "max_tokens": 8192,
+    }
     assert llms["gpt_sol_agent_llm"] == {
         "_type": "openai",
         "model_name": "gpt-5.6-sol",
@@ -66,6 +78,8 @@ def test_frontier_profile_uses_validated_gpt_role_split() -> None:
         **llms["gpt_sol_agent_llm"],
         "model_name": "gpt-5.6-luna",
     }
+    assert config["functions"]["intent_classifier"]["llm"] == "gpt_luna_intent_llm"
+    assert config["functions"]["shallow_research_agent"]["llm"] == "gpt_luna_shallow_llm"
     deep_research = config["functions"]["deep_research_agent"]
     assert {
         role: deep_research[f"{role}_llm"]

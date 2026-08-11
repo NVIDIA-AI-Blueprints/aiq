@@ -83,6 +83,7 @@ def _registered_source_tools(config: dict) -> set[str]:
 def test_default_profiles_use_role_appropriate_models(config_path: Path):
     config = _load_config(config_path)
     functions = config.get("functions", {})
+    is_frontier_profile = config_path.name == "config_frontier_models.yml"
 
     for function in functions.values():
         if not isinstance(function, dict):
@@ -90,6 +91,8 @@ def test_default_profiles_use_role_appropriate_models(config_path: Path):
 
         function_type = function.get("_type")
         if function_type == "intent_classifier":
+            if is_frontier_profile:
+                continue
             alias = function["llm"]
             assert alias == "nemotron_lightning_intent_llm"
             assert _model_for_alias(config, alias) == LIGHTNING_MODEL
@@ -101,6 +104,8 @@ def test_default_profiles_use_role_appropriate_models(config_path: Path):
             assert not config["llms"][alias]["parallel_tool_calls"]
             assert not _thinking_enabled(config, alias)
         elif function_type == "shallow_research_agent":
+            if is_frontier_profile:
+                continue
             alias = function["llm"]
             assert alias == "nemotron_lightning_agent_llm"
             assert _model_for_alias(config, alias) == LIGHTNING_MODEL
@@ -111,9 +116,9 @@ def test_default_profiles_use_role_appropriate_models(config_path: Path):
             assert config["llms"][alias]["max_tokens"] == 8192
             assert not config["llms"][alias]["parallel_tool_calls"]
             assert _thinking_enabled(config, alias)
-        elif config_path.name != "config_frontier_models.yml" and function_type == "clarifier_agent":
+        elif not is_frontier_profile and function_type == "clarifier_agent":
             assert _model_for_alias(config, function["llm"]) == ULTRA_MODEL
-        elif config_path.name != "config_frontier_models.yml" and function_type == "deep_research_agent":
+        elif not is_frontier_profile and function_type == "deep_research_agent":
             assert function["writer_llm"] == "nemotron_ultra_writer_llm"
             for role in (
                 "orchestrator_llm",
