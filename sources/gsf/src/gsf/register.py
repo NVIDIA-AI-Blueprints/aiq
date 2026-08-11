@@ -92,8 +92,11 @@ def _request_trace_headers() -> Mapping[str, str]:
     try:
         metadata = Context.get().metadata
         incoming = metadata.headers if metadata else None
-    except Exception:
-        logger.debug("Unable to read request trace headers from NAT context", exc_info=True)
+    except Exception as exc:
+        logger.debug(
+            "Unable to read request trace headers from NAT context (error_type=%s)",
+            type(exc).__name__,
+        )
         return {}
     if not incoming:
         return {}
@@ -122,8 +125,11 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
                 return result.model_dump_json(exclude_none=True)
             except GSFError as error:
                 return _tool_error(error)
-            except Exception:
-                logger.exception("Unexpected GSF catalog-search failure")
+            except Exception as exc:
+                logger.error(
+                    "Unexpected GSF catalog-search failure (error_type=%s)",
+                    type(exc).__name__,
+                )
                 return _tool_error(
                     GSFError(
                         GSFErrorCode.UPSTREAM_ERROR,
@@ -148,8 +154,11 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
                 return result.model_dump_json(exclude_none=True)
             except GSFError as error:
                 return _tool_error(error)
-            except Exception:
-                logger.exception("Unexpected GSF text-to-SQL failure")
+            except Exception as exc:
+                logger.error(
+                    "Unexpected GSF text-to-SQL failure (error_type=%s)",
+                    type(exc).__name__,
+                )
                 return _tool_error(
                     GSFError(
                         GSFErrorCode.UPSTREAM_ERROR,
@@ -174,8 +183,11 @@ async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
                 return result.model_dump_json(exclude_none=True)
             except GSFError as error:
                 return _tool_error(error)
-            except Exception:
-                logger.exception("Unexpected GSF text-to-PQL failure")
+            except Exception as exc:
+                logger.error(
+                    "Unexpected GSF text-to-PQL failure (error_type=%s)",
+                    type(exc).__name__,
+                )
                 return _tool_error(
                     GSFError(
                         GSFErrorCode.UPSTREAM_ERROR,
