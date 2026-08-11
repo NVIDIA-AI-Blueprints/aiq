@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from collections.abc import Callable
 from collections.abc import Sequence
 from pathlib import Path
@@ -31,11 +30,13 @@ from langchain_core.tools import BaseTool
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
 from aiq_agent.common import validate_research_source_configuration
+from aiq_agent.common.citation_verification import CitationIntegrityError
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
+from aiq_agent.common.logging_utils import log_content_metadata
 
 from .custom_middleware import FinalReportCommitTracker
 from .custom_middleware import SourceRegistryMiddleware
@@ -298,7 +299,7 @@ class DeepResearcherAgent:
         if messages:
             logger.info("=" * 80)
             logger.info("Deep Research Subagent: Starting workflow")
-            logger.info("Query: %s...", query[:100])
+            logger.info("Query: %s", log_content_metadata(query))
             logger.info("=" * 80)
 
         budget_token = activate_source_tool_budget(
@@ -355,6 +356,7 @@ class DeepResearcherAgent:
                 raise RuntimeError("writer_output_not_committed")
 
             # Post-process: verify citations against source registry
+            citation_registry = None
             if self.enable_citation_verification and self.source_registry_middleware.has_sources():
                 registry = self.source_registry_middleware.active_registry()
                 verification = verify_citations(
@@ -363,23 +365,12 @@ class DeepResearcherAgent:
                     reference_sources=self.source_registry_middleware.get_source_entries(mode="compact"),
                 )
                 if verification.removed_citations:
-                    removed_details = []
-                    for c in verification.removed_citations:
-                        url_match = re.search(r"https?://\S+", c.get("line", ""))
-                        url_str = url_match.group(0).rstrip(".,;)") if url_match else "(no url)"
-                        removed_details.append(f"[{c['number']}] {c['reason']}: {url_str}")
                     logger.info(
-                        "Citation verification removed %d invalid citation(s):\n  %s",
+                        "Citation verification removed %d invalid citation(s)",
                         len(verification.removed_citations),
-                        "\n  ".join(removed_details),
                     )
                 final_message = verification.verified_report
-                if not verification.valid_citations:
-                    logger.warning(
-                        "Citation verification found no valid citations in writer-agent output; "
-                        "returning the generated report without failing the job. "
-                        "This may indicate unsupported citation formatting or over-aggressive verification."
-                    )
+                citation_registry = registry
             # Post-process: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
             sanitization = sanitize_report(final_message)
             final_message = sanitization.sanitized_report
@@ -405,11 +396,23 @@ class DeepResearcherAgent:
                         exc_info=True,
                     )
 
+            final_cited_urls: list[str] | None = None
+            if citation_registry is not None:
+                final_verification = verify_citations(final_message, citation_registry)
+                if not final_verification.valid_citations:
+                    raise CitationIntegrityError()
+                final_message = final_verification.verified_report
+                final_cited_urls = list(
+                    dict.fromkeys(
+                        citation["url"] for citation in final_verification.valid_citations if citation.get("url")
+                    )
+                )
+
             # Re-emit the verified/sanitized report so the frontend overwrites
             # the raw version that on_llm_end auto-emitted during ainvoke().
             for cb in self.callbacks:
                 if hasattr(cb, "emit_final_report"):
-                    cb.emit_final_report(final_message)
+                    cb.emit_final_report(final_message, cited_urls=final_cited_urls)
                     break
 
             self._replace_last_message_content(result, final_message)
@@ -422,10 +425,18 @@ class DeepResearcherAgent:
 
         except EmptySourceRegistryError as ex:
             if ex.reason is not EmptySourceRegistryReason.NO_SOURCE_RESULTS:
-                logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
+                logger.error(
+                    "Deep Research Subagent failed (error_type=%s detail_%s)",
+                    type(ex).__name__,
+                    log_content_metadata(ex),
+                )
             raise
         except Exception as ex:
-            logger.error("Deep Research Subagent failed: %s", ex, exc_info=True)
+            logger.error(
+                "Deep Research Subagent failed (error_type=%s detail_%s)",
+                type(ex).__name__,
+                log_content_metadata(ex),
+            )
             raise
         finally:
             reset_source_tool_budget(budget_token)

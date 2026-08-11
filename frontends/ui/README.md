@@ -193,7 +193,7 @@ The lazy loading is automatic and seamless - you don't need to do anything speci
 From the **UI directory** (`frontends/ui/`):
 
 ```bash
-docker build -t aiq-blueprint-ui:latest .
+docker build -f deploy/Dockerfile -t aiq-blueprint-ui:latest .
 ```
 
 ### Run

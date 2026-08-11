@@ -40,6 +40,7 @@ from typing import Any
 
 from fastapi import Body
 from fastapi import FastAPI
+from fastapi import Header
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
 from fastapi.routing import APIRoute
@@ -724,6 +725,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
     )
     async def submit_job(
         req: Annotated[JobSubmitRequest, Body(openapi_examples=JOB_SUBMIT_EXAMPLES)],
+        conversation_id: Annotated[str | None, Header(alias="conversation-id")] = None,
     ) -> JobStatusResponse:
         """Submit a new async job for deep research or other registered agents."""
         try:
@@ -807,6 +809,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
                 expiry_seconds=expiry,
                 data_sources=req.data_sources,
                 auth_token=auth_token,
+                conversation_id=conversation_id,
                 skip_encryption_readiness_check=True,
             )
         except ContentEncryptionUnavailable as e:
@@ -1675,6 +1678,13 @@ def _process_artifact_update(
         url = data.get("url") or content
         if _is_valid_url(url):
             sources_cited.add(_normalize_url(url))
+    elif artifact_type == "output" and data.get("output_category") == "final_report":
+        final_cited_urls = data.get("cited_urls")
+        if isinstance(final_cited_urls, list):
+            # The verified final report is authoritative. Intermediate LLM
+            # output can contain citations that finalization later removes.
+            sources_cited.clear()
+            sources_cited.update(_normalize_url(url) for url in final_cited_urls if _is_valid_url(url))
 
     if content:
         outputs.append(

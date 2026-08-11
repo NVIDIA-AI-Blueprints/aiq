@@ -15,6 +15,8 @@
 
 """Tests for citation verification module."""
 
+import logging
+
 import pytest
 
 from aiq_agent.common.citation_verification import _PARSER_REGISTRY
@@ -654,6 +656,31 @@ class TestVerifyCitations:
         reg.add(SourceEntry(url="https://valid.com/article2", title="Article 2", source_type="tavily"))
         reg.add(SourceEntry(citation_key="report.pdf, p.15", title="report.pdf", source_type="knowledge_layer"))
         return reg
+
+    def test_verification_and_sanitization_logs_do_not_expose_source_locators(self, caplog):
+        registry = SourceRegistry()
+        private_url = "https://private.example/document?access_token=secret-value"
+        rejected_url = "https://fabricated.example/private-path"
+        citation_key = "confidential-plan.pdf, p.7"
+        shortened_url = "https://bit.ly/private-report"
+        registry.add(SourceEntry(url=private_url, title="Private", source_type="web"))
+        registry.add(SourceEntry(citation_key=citation_key, source_type="knowledge_layer"))
+        report = (
+            "Supported [1] [2], unsupported [3].\n\n"
+            "## Sources\n"
+            f"[1] Private: {private_url}\n"
+            f"[2] {citation_key}\n"
+            f"[3] Fabricated: {rejected_url}"
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="aiq_agent.common.citation_verification"):
+            verify_citations(report, registry)
+            sanitize_report(f"Short link [1].\n\n## Sources\n[1] Short: {shortened_url}")
+
+        assert private_url not in caplog.text
+        assert rejected_url not in caplog.text
+        assert citation_key not in caplog.text
+        assert shortened_url not in caplog.text
 
     def test_empty_registry_returns_unchanged(self):
         registry = SourceRegistry()

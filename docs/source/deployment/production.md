@@ -43,12 +43,54 @@ Back up the following databases regularly:
 - **`aiq_jobs`** -- Contains the `job_info` table (job metadata) and `job_events` table (event stream). This is the critical operational data store.
 - **`aiq_checkpoints`** -- Contains [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agent state checkpoints. These allow resumption of interrupted research workflows.
 
-For managed databases, enable automated daily backups with at least 7 days of retention. For self-managed PostgreSQL, use `pg_dump` on a schedule:
+For managed databases, enable automated daily backups with at least 7 days of retention. For self-managed PostgreSQL,
+install PostgreSQL client tools on the backup host and run `pg_dump` on a schedule.
+
+The shipped Compose stack already includes the matching PostgreSQL client tools in its `aiq-postgres` container. Create
+portable custom-format archives without requiring `pg_dump` on the host:
 
 ```bash
-pg_dump -U aiq -d aiq_jobs > aiq_jobs_$(date +%Y%m%d).sql
-pg_dump -U aiq -d aiq_checkpoints > aiq_checkpoints_$(date +%Y%m%d).sql
+docker exec aiq-postgres \
+  pg_dump --format=custom --no-owner --no-privileges -U aiq -d aiq_jobs \
+  > aiq_jobs_$(date +%Y%m%d).dump
+docker exec aiq-postgres \
+  pg_dump --format=custom --no-owner --no-privileges -U aiq -d aiq_checkpoints \
+  > aiq_checkpoints_$(date +%Y%m%d).dump
 ```
+
+If the Compose container name was customized, replace `aiq-postgres` with that container name.
+
+Do not wait for an incident to test restoration. On an isolated restore environment, create disposable databases,
+restore both archives with `--exit-on-error`, and inspect their tables. The following example verifies the local
+Compose archives; replace `YYYYMMDD` with the backup date:
+
+```bash
+docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'DROP DATABASE IF EXISTS aiq_jobs_restore_check'
+docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'CREATE DATABASE aiq_jobs_restore_check'
+docker exec -i aiq-postgres \
+  pg_restore --exit-on-error -U aiq -d aiq_jobs_restore_check \
+  < aiq_jobs_YYYYMMDD.dump
+docker exec aiq-postgres psql -U aiq -d aiq_jobs_restore_check -c '\dt'
+
+docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'DROP DATABASE IF EXISTS aiq_checkpoints_restore_check'
+docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'CREATE DATABASE aiq_checkpoints_restore_check'
+docker exec -i aiq-postgres \
+  pg_restore --exit-on-error -U aiq -d aiq_checkpoints_restore_check \
+  < aiq_checkpoints_YYYYMMDD.dump
+docker exec aiq-postgres psql -U aiq -d aiq_checkpoints_restore_check -c '\dt'
+
+docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'DROP DATABASE aiq_jobs_restore_check'
+docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'DROP DATABASE aiq_checkpoints_restore_check'
+```
+
+Keep restore testing isolated from a live deployment so the application cannot write to the databases during the
+check.
 
 ## Artifact Storage
 

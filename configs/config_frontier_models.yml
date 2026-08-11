@@ -1,10 +1,11 @@
-# This is an example configuration for GPT frontier model mode.
+# This is the shipped GPT frontier model profile. Validate the complete workflow
+# with these exact provider endpoints and credentials before deployment.
 # It has the following features:
 # - GPT Sol for orchestration, planning, and report writing
 # - GPT Luna for source routing and research
 # - OpenAI API access through the standard OPENAI_API_KEY
 # - Knowledge retrieval using LlamaIndex
-# - Web search and Paper search tools by default
+# - Web search by default; Paper search is available as a commented opt-in
 
 general:
   use_uvloop: true

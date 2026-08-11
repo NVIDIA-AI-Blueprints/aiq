@@ -46,6 +46,7 @@ from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
 from aiq_agent.common.logging_utils import log_identifier_ref
 
 try:
@@ -179,7 +180,7 @@ class ChatResearcherAgent:
             if self.validate_deep_research_tools_fn:
                 is_valid, error_msg = self.validate_deep_research_tools_fn(state.data_sources)
                 if not is_valid:
-                    logger.error("Deep research tools validation failed: %s", error_msg)
+                    logger.error("Deep research tools validation failed (detail_%s)", log_content_metadata(error_msg))
                     return Command(
                         goto=END,
                         update={
@@ -217,8 +218,8 @@ class ChatResearcherAgent:
             trimmed_messages: list[BaseMessage] = trim_message_history(state.messages, self.max_history)
 
             logger.debug(
-                "shallow_research_node: ChatResearcherState.available_documents = %s",
-                state.available_documents,
+                "shallow_research_node: available_document_count=%d",
+                len(state.available_documents or []),
             )
 
             try:
@@ -246,7 +247,11 @@ class ChatResearcherAgent:
                 }
             except Exception as e:
                 if _AuthError and isinstance(e, _AuthError):
-                    logger.warning("Auth error in shallow research: %s", e)
+                    logger.warning(
+                        "Auth error in shallow research (error_type=%s detail_%s)",
+                        type(e).__name__,
+                        log_content_metadata(e),
+                    )
                     err_msg = str(e)
                     return {
                         "messages": [AIMessage(content=err_msg)],
@@ -257,7 +262,11 @@ class ChatResearcherAgent:
                             escalate_to_deep=False,
                         ),
                     }
-                logger.exception("Error in shallow research: %s", e)
+                logger.error(
+                    "Error in shallow research (error_type=%s detail_%s)",
+                    type(e).__name__,
+                    log_content_metadata(e),
+                )
                 err_msg = "An error occurred while researching your question. Please try again."
                 # Same rationale as EmptySourceRegistryError: the system is certain an error
                 # occurred; escalating to deep research will not resolve an unexpected exception.
@@ -310,7 +319,11 @@ class ChatResearcherAgent:
                     # turn — submit_agent_job raises McpAuthRequiredError (an AuthError)
                     # before enqueue when a selected source isn't connected.
                     if _AuthError and isinstance(e, _AuthError):
-                        logger.warning("Auth required before deep research submit: %s", e)
+                        logger.warning(
+                            "Auth required before deep research submit (error_type=%s detail_%s)",
+                            type(e).__name__,
+                            log_content_metadata(e),
+                        )
                         return {
                             "messages": [AIMessage(content=str(e))],
                             "workflow_outcome": _research_workflow_failure(),
@@ -366,14 +379,22 @@ class ChatResearcherAgent:
                 }
             except Exception as e:
                 if _AuthError and isinstance(e, _AuthError):
-                    logger.warning("Auth error in deep research: %s", e)
+                    logger.warning(
+                        "Auth error in deep research (error_type=%s detail_%s)",
+                        type(e).__name__,
+                        log_content_metadata(e),
+                    )
                     return {
                         "messages": [AIMessage(content=str(e))],
                         "workflow_outcome": _research_workflow_failure(),
                     }
                 # Inline (synchronous CLI) path: a raised exception would crash the whole CLI turn.
                 # Degrade to a chat message instead (the error is logged for debugging).
-                logger.error("Inline deep research failed (error_type=%s)", type(e).__name__, exc_info=True)
+                logger.error(
+                    "Inline deep research failed (error_type=%s detail_%s)",
+                    type(e).__name__,
+                    log_content_metadata(e),
+                )
                 return {
                     "messages": [
                         AIMessage(content="I ran into an error while producing that report. Please try again.")
@@ -587,7 +608,7 @@ class ChatResearcherAgent:
 
         if messages:
             query = messages[-1].content
-            logger.info("Query: %s...", str(query)[:100] if query else "")
+            logger.info("Query: %s", log_content_metadata(query or ""))
         result = await self._graph.ainvoke(input_state, config=graph_config)
 
         logger.info("ChatResearcherAgent: Workflow complete")

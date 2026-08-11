@@ -236,11 +236,15 @@ curl -X POST http://localhost:8000/v1/collections/my-docs/documents \
 # Submit a query
 curl -X POST http://localhost:8000/v1/jobs/async/submit \
   -H "Content-Type: application/json" \
+  -H "conversation-id: my-docs" \
   -d '{"agent_type": "shallow_researcher", "input": "What is CUDA?"}'
 
 # Stream events
 curl -N http://localhost:8000/v1/jobs/async/job/{job_id}/stream
 ```
+
+The `conversation-id` header selects the collection used for retrieval. Keep it equal to the collection used in the
+upload path (`my-docs` in this example); without the header, retrieval uses the config's `collection_name` fallback.
 
 ## Key Differences from Foundational RAG
 

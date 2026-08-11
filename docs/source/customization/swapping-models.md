@@ -6,6 +6,22 @@ SPDX-License-Identifier: Apache-2.0
 
 LLMs are defined in the `llms` section and referenced by agents and tools. You can swap NIM models, change parameters, or add alternative providers.
 
+## Shipped Profiles and Validation Boundary
+
+AI-Q 2.2 ships these exact model assignments and parameters:
+
+| Configuration | Intent and shallow roles | Clarification and deep-research roles | Optional summary role |
+| --- | --- | --- | --- |
+| `configs/config_cli_default.yml`, `configs/config_web_default_llamaindex.yml` | `nvidia/nemotron-3-super-120b-a12b` | `nvidia/nemotron-3-ultra-550b-a55b` for clarification, orchestration, source routing, research, planning, and writing | `google/gemma-4-31b-it` in the web profile |
+| `configs/config_frontier_models.yml` | `nvidia/nemotron-3-super-120b-a12b` | `gpt-5.6-sol` for clarification, orchestration, planning, and writing; `gpt-5.6-luna` for source routing and research | `google/gemma-4-31b-it` |
+
+The checked-in files define the documented compatibility boundary; they are not a substitute for an end-to-end run
+against your provider endpoints and credentials. Changing a model, endpoint, role assignment, prompt, or inference
+parameter creates a custom profile outside that boundary. OpenAI-compatible transport alone does not establish
+workflow compatibility. Other bring-your-own models can require provider-specific prompt, hyperparameter,
+tool-calling, and structured-output tuning, and should be treated as experimental until the complete workflow is
+evaluated in that exact configuration.
+
 **Example: NIM model (default)**
 
 ```yaml

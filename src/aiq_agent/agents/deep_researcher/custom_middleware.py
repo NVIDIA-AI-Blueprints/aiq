@@ -42,6 +42,7 @@ from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 from aiq_agent.common.citation_verification import is_non_citable_status_output
+from aiq_agent.common.logging_utils import log_content_metadata
 
 from .resource_limits import DeepResearchResourceLimits
 from .resource_limits import StateBudgetLedger
@@ -722,21 +723,21 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
         if "<|channel|>" in name:
             candidate = name.split("<|channel|>", maxsplit=1)[0]
             if candidate in self.valid_tool_names:
-                logger.info("Sanitized tool name: '%s' -> '%s'", name, candidate)
+                logger.info("Sanitized tool name (original_%s) -> '%s'", log_content_metadata(name), candidate)
                 return candidate
 
         # 2. Strip dot suffix if base name is valid
         if "." in name:
             candidate = name.split(".", maxsplit=1)[0]
             if candidate in self.valid_tool_names:
-                logger.info("Sanitized tool name: '%s' -> '%s'", name, candidate)
+                logger.info("Sanitized tool name (original_%s) -> '%s'", log_content_metadata(name), candidate)
                 return candidate
 
         # 3. Map common hallucinated names
         if name in _TOOL_NAME_ALIASES:
             mapped = _TOOL_NAME_ALIASES[name]
             if mapped in self.valid_tool_names:
-                logger.info("Mapped tool name: '%s' -> '%s'", name, mapped)
+                logger.info("Mapped tool name (original_%s) -> '%s'", log_content_metadata(name), mapped)
                 return mapped
 
         return name
@@ -954,11 +955,12 @@ class ToolRetryMiddleware(AgentMiddleware):
                 if attempt < self.max_retries:
                     tool_name = request.tool_call.get("name", "?") if hasattr(request, "tool_call") else "?"
                     logger.warning(
-                        "Tool %s failed (attempt %d/%d): %s",
+                        "Tool %s failed (attempt %d/%d, error_type=%s, detail_%s)",
                         tool_name,
                         attempt + 1,
                         self.max_retries + 1,
-                        e,
+                        type(e).__name__,
+                        log_content_metadata(e),
                     )
                     await asyncio.sleep(delay)
                     delay *= self.backoff_factor
@@ -1082,10 +1084,9 @@ class SourceRegistryMiddleware(AgentMiddleware):
                     active_registry.add(source)
             if sources:
                 logger.info(
-                    "[CitationRegistry] Captured %d source(s) from %s: %s",
+                    "[CitationRegistry] Captured %d source(s) from %s",
                     len(sources),
                     tool_name,
-                    [s.url or s.citation_key for s in sources],
                 )
         return result
 
@@ -1250,7 +1251,12 @@ class SourceRoutingPersistenceMiddleware(AgentMiddleware):
         errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
         if errors:
             self.state_budget.rollback(reservation)
-            logger.error("Failed to persist source routing to %s: %s", self.path, "; ".join(errors))
+            logger.error(
+                "Failed to persist source routing to %s (error_count=%d detail_%s)",
+                self.path,
+                len(errors),
+                log_content_metadata("; ".join(errors)),
+            )
             raise RuntimeError(f"Failed to persist source routing to {self.path}")
 
     def after_agent(self, state, runtime):
@@ -1359,9 +1365,12 @@ class PlanPersistenceMiddleware(AgentMiddleware):
         errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
         if errors:
             self.state_budget.rollback(reservation)
-            # Raw backend detail stays in logs; the raised error reaches the job status /
-            # caller, so it must not echo backend-internal strings (hostnames, paths, etc.).
-            logger.error("Failed to persist plan to %s: %s", self.path, "; ".join(errors))
+            logger.error(
+                "Failed to persist plan to %s (error_count=%d detail_%s)",
+                self.path,
+                len(errors),
+                log_content_metadata("; ".join(errors)),
+            )
             raise RuntimeError(f"Failed to persist the research plan to {self.path}")
 
     def after_agent(self, state, runtime):

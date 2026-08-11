@@ -312,13 +312,15 @@ For advanced Jinja2 patterns (source hierarchy, default values, whitespace contr
 
 ## Testing Templates
 
-Set the `DEBUG_PROMPTS` environment variable to log rendered prompts:
+Set the `DEBUG_PROMPTS` environment variable to log prompt-rendering metadata:
 
 ```bash
 DEBUG_PROMPTS=1 .venv/bin/nat run --config_file configs/my_config.yml --input "test query"
 ```
 
-This logs the fully rendered system prompt before each LLM call, letting you verify variable substitution and conditional rendering.
+This logs the rendered prompt size and a stable correlation reference. It does not log the rendered prompt or
+user-provided content. Validate exact variable substitution and conditional rendering with unit tests that use
+synthetic, non-sensitive inputs.
 
 ## Best Practices
 

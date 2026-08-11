@@ -45,6 +45,7 @@ from aiq_agent.common.citation_verification import extract_sources_from_tool_res
 from aiq_agent.common.citation_verification import get_session_registry
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
+from aiq_agent.common.logging_utils import log_content_metadata
 
 from ...common import LLMProvider
 from ...common import LLMRole
@@ -216,16 +217,14 @@ class ShallowResearcherAgent:
                 current_datetime=current_datetime,
                 available_documents=[doc.model_dump() for doc in available_documents],
             )
-            # DEBUG: Log the system prompt (can be removed in production)
+            # Preserve prompt-shape diagnostics without writing customer or
+            # configuration content to logs.
             if os.environ.get("DEBUG_PROMPTS"):
-                logger.debug("Rendered system prompt:\n%s", rendered_system_prompt)
+                logger.debug("Rendered system prompt: %s", log_content_metadata(rendered_system_prompt))
 
             system_message = SystemMessage(content=rendered_system_prompt)
 
             processed_history = list(messages)
-
-            if os.environ.get("DEBUG_PROMPTS"):
-                logger.debug("Rendered system prompt:\n%s", rendered_system_prompt)
 
             try:
                 if iterations >= self.max_tool_iterations:
@@ -258,7 +257,11 @@ class ShallowResearcherAgent:
                 return {"messages": [response], "tool_iterations": new_iterations}
 
             except Exception as ex:
-                logger.error("Failed in agent_node: %s", ex)
+                logger.error(
+                    "Failed in agent_node (error_type=%s detail_%s)",
+                    type(ex).__name__,
+                    log_content_metadata(ex),
+                )
                 raise
 
         builder = StateGraph(ShallowResearchAgentState)
@@ -316,10 +319,9 @@ class ShallowResearcherAgent:
                         active_registry.add(source)
                     if sources:
                         logger.info(
-                            "[CitationRegistry] Captured %d source(s) from %s: %s",
+                            "[CitationRegistry] Captured %d source(s) from %s",
                             len(sources),
                             tool_name,
-                            [s.url or s.citation_key for s in sources],
                         )
             return result
 
@@ -403,13 +405,19 @@ class ShallowResearcherAgent:
                 # Step 2: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
                 sanitization = sanitize_report(content)
                 content = sanitization.sanitized_report
+                final_verification = verify_citations(content, registry)
+                final_cited_urls = list(
+                    dict.fromkeys(
+                        citation["url"] for citation in final_verification.valid_citations if citation.get("url")
+                    )
+                )
 
                 # Emit verified/sanitized report so the frontend shows the
                 # cleaned version (overwrites the raw draft auto-emitted
                 # during ainvoke).
                 for cb in self.callbacks:
                     if hasattr(cb, "emit_final_report"):
-                        cb.emit_final_report(content)
+                        cb.emit_final_report(content, cited_urls=final_cited_urls)
                         break
 
                 if hasattr(last_msg, "model_copy"):

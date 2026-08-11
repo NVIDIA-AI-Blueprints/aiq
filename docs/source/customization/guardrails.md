@@ -7,6 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 
 AI-Q can use NeMo Guardrails through NeMo Agent Toolkit middleware to evaluate selected workflow and agent-boundary inputs and outputs. Guardrails can pass content through unchanged, block content with a configured refusal, or modify selected fields before execution continues.
 
+```{important}
+`configs/config_web_default_guardrails.yml` is a reference integration, not a universal end-to-end security policy.
+Guardrail policies and acceptable false-positive/false-negative tradeoffs are deployment-specific. Operators must adapt
+the rails to their requirements and test every exposed route and execution boundary before relying on them as a
+security control.
+```
+
 AI-Q provides middleware types for workflow, shallow-research, and deep-research boundaries. In
 `configs/config_web_default_guardrails.yml`, the workflow middleware is explicitly attached under `workflow.middleware`.
 The shallow middleware is dynamically attached by targeting `shallow_research_agent` under `workflow_functions`.
@@ -154,5 +161,8 @@ Guardrails middleware is available at these AI-Q boundaries:
 - Deep researcher input and output messages
 
 The reference profile actively guards all three boundaries described above.
+
+This scope applies only to the middleware and fields explicitly attached in the active configuration. It does not
+replace authentication, authorization, network controls, secret handling, or deployment-specific policy validation.
 
 For the complete YAML schema and general configuration conventions, refer to [Configuration Reference](./configuration-reference.md).

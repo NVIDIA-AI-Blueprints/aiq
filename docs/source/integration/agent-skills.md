@@ -197,11 +197,18 @@ From the parent directory containing the installed skills, run:
 ```bash
 test -f aiq-deploy/SKILL.md
 test -d aiq-deploy/references
-python3 aiq-research/scripts/aiq.py
+python3 aiq-research/scripts/aiq.py --help
 ```
 
-Expected `aiq-research/scripts/aiq.py` output starts with:
+The help check does not require a running backend and must exit successfully. Expected output starts with:
 
 ```text
 Usage: aiq.py <command> [args]
+```
+
+With an AI-Q backend running, verify the public consumer boundary before invoking research:
+
+```bash
+python3 aiq-research/scripts/aiq.py health
+python3 aiq-research/scripts/aiq.py agents
 ```

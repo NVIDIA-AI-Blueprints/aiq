@@ -34,6 +34,7 @@ from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -298,8 +299,12 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         except (asyncio.CancelledError, DeepResearchExecutionTimeout):
             interrupted = True
             raise
-        except Exception:
-            logger.exception("Error in deep research execution")
+        except Exception as exc:
+            logger.error(
+                "Error in deep research execution (error_type=%s detail_%s)",
+                type(exc).__name__,
+                log_content_metadata(exc),
+            )
             raise
         finally:
             if owns_active_agent:

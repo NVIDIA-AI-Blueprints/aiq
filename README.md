@@ -52,7 +52,7 @@ limitations under the License.
 
 ## Overview
 
-The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and uses [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview). It gives you both **quick, cited answers** and **in-depth, report-style research** in one system, with benchmarks and evaluation harnesses so you can measure quality and improve over time.
+The NVIDIA AI-Q Blueprint is a deployable research backend built on the [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview). Teams can self-host the application boundary and connect deployment-owned models, data sources, authentication, policy controls, storage, and observability. It provides both **quick, cited answers** and **in-depth, report-style research**, plus benchmarks and evaluation harnesses for measuring quality. AI-Q is focused on governed research workflows; it is not a general-purpose coding-agent harness.
 
 <p align="center">
 <img src="./docs/assets/AIQ-arch-light.png" alt="AI-Q Architecture" width="800">
@@ -116,9 +116,11 @@ The checked-in default CLI and web profiles use these core components:
 - [Tavily Search API](https://tavily.com/) for web search
 - Serper, SerpAPI, or SearchAPI for Google Scholar paper search
 
-Focused profiles can instead use GPT-5.2 or other supported frontier models for selected
-deep-research roles. Refer to [Configuration Files](#configuration-files); there is no single
-all-features profile.
+The shipped frontier profile, `configs/config_frontier_models.yml`, uses GPT-5.6 Sol for deep-research orchestration,
+planning, and writing, and GPT-5.6 Luna for source routing and research. Treat any bring-your-own model or modified
+profile as an experimental customization until the complete workflow is evaluated with that exact model, prompt,
+hyperparameter, tool-calling, and structured-output configuration. Refer to
+[Configuration Files](#configuration-files); there is no single all-features profile.
 
 ## Target Audience
 
@@ -292,7 +294,7 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 | `config_web_frag.yml` | Nemotron 3 Super/Ultra | Web/API and Helm base with Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. |
 | `config_web_opensearch.yml` | Nemotron 3 Super/Ultra; Nemotron 3 Embed | Web/API with built-in OpenSearch knowledge retrieval plus Tavily; supports self-hosted, `es`, and `aoss` authentication modes. |
 | `config_web_azure_ai_search.yml` | Nemotron 3 Super/Ultra; Nemotron 3 Embed | Web/API with Azure AI Search knowledge retrieval plus Tavily; supports API-key and Azure identity authentication. |
-| `config_frontier_models.yml` | GPT Sol/Luna; Nemotron 3 Super/Ultra; Gemma 4 summary | LlamaIndex profile using GPT Sol/Luna for deep research and Super for intent/shallow. Requires `OPENAI_API_KEY` and `NVIDIA_API_KEY`. |
+| `config_frontier_models.yml` | GPT Sol/Luna; Nemotron 3 Super; Gemma 4 summary | LlamaIndex profile using GPT Sol/Luna for deep research and Super for intent/shallow. Requires `OPENAI_API_KEY` and `NVIDIA_API_KEY`. |
 | `config_web_default_guardrails.yml` | Nemotron 3 Super/Ultra; Gemma 4 summary | LlamaIndex profile with workflow Guardrails explicitly attached, shallow-agent Guardrails dynamically attached through `workflow_functions`, and async deep-agent Guardrails applied by the AI-Q runner from the same target configuration. |
 | `config_web_frag_mcp_auth.yml` | Nemotron 3 Super/Ultra | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
 | `config_domain_routing_and_skills.yml` | Nemotron 3 Ultra; Gemma 4 summary | Direct deep-research profile with domain routing, DuckDuckGo news, Polymarket, enabled Serper paper search, LlamaIndex, built-in skills, and a fresh per-job Modal sandbox. |
@@ -445,8 +447,7 @@ If your config enables Phoenix tracing, start the Phoenix server before running 
 Start server (separate terminal):
 
 ```bash
-source .venv/bin/activate
-phoenix serve
+uvx --from arize-phoenix phoenix serve
 ```
 
 For detailed benchmark documentation, refer to:
@@ -498,7 +499,7 @@ indicate availability in a published release.
 - End users are responsible for ensuring the availability of their deployment.
 - End users are responsible for building, and patching, the container images to keep them up to date.
 - The end users are responsible for ensuring that OSS packages used by the developer blueprint are current.
-- The logs from middleware, backend, and demo app are printed to standard out. They can include input prompts and output completions for development purposes. The end users are advised to handle logging securely and avoid information leakage for production use cases.
+- The built-in workflow and agent logger paths redact raw prompts, tool payloads, and model completions. Enabled source adapters, external middleware, model and tool providers, tracing exporters, and reverse proxies can have separate request-logging and retention behavior; audit and configure every enabled component independently, and keep production logs access-controlled.
 
 
 ## License

@@ -567,6 +567,41 @@ class TestShallowResearcherSourceRegistryGating:
         )
 
     @pytest.mark.asyncio
+    async def test_missing_url_citation_fallback_emits_authoritative_metadata(self, mock_llm_provider, mock_llm):
+        """A single verified URL appended by fallback must be persisted as cited."""
+        populate_from_config(
+            [
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "description": "Search the web for real-time information.",
+                    "tools": ["web_search_with_urls"],
+                }
+            ]
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
+        )
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[tool_call_response, AIMessage(content="CUDA is a parallel computing platform.")]
+        )
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_with_urls],
+            callbacks=[callback],
+        )
+
+        result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        assert "https://docs.nvidia.com/cuda/" in result.messages[-1].content
+        callback.emit_final_report.assert_called_once_with(
+            result.messages[-1].content,
+            cited_urls=["https://docs.nvidia.com/cuda/"],
+        )
+
+    @pytest.mark.asyncio
     async def test_missing_citation_fallback_skips_ambiguous_multi_source_registry(self, mock_llm_provider, mock_llm):
         """Do not inject the first captured source when multiple sources exist."""
         populate_from_config(
@@ -596,9 +631,11 @@ class TestShallowResearcherSourceRegistryGating:
         final_response = AIMessage(content="CUDA is a parallel computing platform.")
         mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
 
+        callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[mcp_time__get_current_time, web_search_with_urls],
+            callbacks=[callback],
         )
 
         state = ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA? Also note the time.")])
@@ -609,6 +646,7 @@ class TestShallowResearcherSourceRegistryGating:
         assert sources[0].citation_key == "mcp_time__get_current_time"
         assert any(source.url == "https://docs.nvidia.com/cuda/" for source in sources)
         assert result.messages[-1].content == "CUDA is a parallel computing platform."
+        callback.emit_final_report.assert_called_once_with(result.messages[-1].content, cited_urls=[])
 
     @pytest.mark.asyncio
     async def test_registered_exact_data_source_tool_without_urls_is_captured(self, mock_llm_provider, mock_llm):

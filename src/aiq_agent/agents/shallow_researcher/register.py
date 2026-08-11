@@ -28,6 +28,7 @@ from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -164,7 +165,12 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                         from langchain_core.messages import AIMessage
 
                         return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=str(exc))])
-                    logger.exception("Failed to resolve per-user MCP tools for shallow research; continuing")
+                    logger.error(
+                        "Failed to resolve per-user MCP tools for shallow research; continuing "
+                        "(error_type=%s detail_%s)",
+                        type(exc).__name__,
+                        log_content_metadata(exc),
+                    )
 
                 # Build the agent with this turn's tool set.
                 active_agent = ShallowResearcherAgent(
@@ -178,8 +184,12 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                 validate_research_source_configuration(data_sources, "shallow research", selected_tools)
 
                 return await active_agent.run(state)
-        except Exception:
-            logger.exception("Error in shallow research execution.")
+        except Exception as exc:
+            logger.error(
+                "Error in shallow research execution (error_type=%s detail_%s)",
+                type(exc).__name__,
+                log_content_metadata(exc),
+            )
             raise
 
     yield FunctionInfo.from_fn(_run, description="Shallow research agent for fast, bounded research.")

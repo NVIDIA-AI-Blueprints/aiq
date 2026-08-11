@@ -105,16 +105,6 @@ def _resolve_admission_principal(principal: Principal) -> Principal:
     return Principal(type="anonymous", sub="anonymous")
 
 
-def _current_conversation_id() -> str | None:
-    """Best-effort read of the originating conversation id from the NAT context."""
-    try:
-        from nat.builder.context import ContextState
-
-        return ContextState.get().conversation_id.get()
-    except Exception:
-        return None
-
-
 def _get_parent_trace_context() -> tuple[
     str | None,  # parent_span_id
     str | None,  # parent_function_id
@@ -180,6 +170,7 @@ async def submit_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    conversation_id: str | None = None,
     skip_encryption_readiness_check: bool = False,
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
@@ -202,6 +193,9 @@ async def submit_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
+        conversation_id: Optional originating conversation ID. REST callers
+            pass the ``conversation-id`` header explicitly because custom
+            FastAPI routes do not run inside NAT's execution context.
         skip_encryption_readiness_check: Skip the internal readiness check when
             the caller already performed it off the event loop.
         initial_files: Optional DeepAgents virtual filesystem files to seed into worker state.
@@ -332,7 +326,14 @@ async def submit_agent_job(
     reservation_ttl_seconds = (
         admission_limits.reservation_ttl_seconds if admission_limits is not None else DEFAULT_RESERVATION_TTL_SECONDS
     )
-    submission_conversation_id = _current_conversation_id()
+    parent_trace_context = _get_parent_trace_context()
+    if conversation_id is not None:
+        parent_trace_context = (
+            *parent_trace_context[:5],
+            conversation_id,
+            parent_trace_context[6],
+        )
+    submission_conversation_id = parent_trace_context[5]
 
     async def _release_submission_reservations() -> None:
         """Conditionally release only reservations owned by this submitter."""
@@ -458,7 +459,7 @@ async def submit_agent_job(
                 input_text,
                 agent_config.class_path,
                 agent_config.config_name,
-                *_get_parent_trace_context(),
+                *parent_trace_context,
                 available_documents,
                 data_sources,
                 auth_token,

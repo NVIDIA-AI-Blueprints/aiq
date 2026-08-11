@@ -175,6 +175,7 @@ middleware:
                 - *secret_assignment_pattern
                 - '(?i)dump\s+(all\s+)?documents'
                 - '(?i)exfiltrate\s+(the\s+)?knowledge\s+base'
+                - '(?i)\b(?:dump|exfiltrate)(?:\s+and\s+(?:dump|exfiltrate))?\s+(?:(?:all|the)\s+)?(?:documents?|knowledge\s+base)\b'
             output:
               patterns:
                 - '(?i)api[_-]?key\s*[:=]'

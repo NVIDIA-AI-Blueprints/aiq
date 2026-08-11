@@ -30,6 +30,7 @@ from langchain_core.messages import SystemMessage
 from aiq_agent.common import extract_json
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.logging_utils import log_content_metadata
 
 from ..models import ChatResearcherState
 from ..models import DepthDecision
@@ -221,21 +222,30 @@ class IntentClassifier:
             }
         except Exception as e:
             if _is_llm_api_unavailable(e):
-                logger.exception(
-                    "LLM API unreachable (e.g. 404 model/function not found): %s.",
-                    str(e).split("\n")[0],
+                logger.error(
+                    "LLM API unreachable (e.g. 404 model/function not found) (error_type=%s detail_%s)",
+                    type(e).__name__,
+                    log_content_metadata(e),
                 )
                 return {
                     "user_intent": IntentResult(intent="meta", raw=None),
                     "messages": [AIMessage(content=_LLM_UNAVAILABLE_MESSAGE)],
                 }
             if _is_timeout_error(e):
-                logger.exception("LLM call failed with timeout (e.g. 504 Gateway Time-out): %s", e)
+                logger.error(
+                    "LLM call failed with timeout (e.g. 504 Gateway Time-out) (error_type=%s detail_%s)",
+                    type(e).__name__,
+                    log_content_metadata(e),
+                )
                 return {
                     "user_intent": IntentResult(intent="meta", raw=None),
                     "messages": [AIMessage(content=_LLM_TIMEOUT_MESSAGE)],
                 }
-            logger.exception("Error in orchestration: %s", e)
+            logger.error(
+                "Error in orchestration (error_type=%s detail_%s)",
+                type(e).__name__,
+                log_content_metadata(e),
+            )
             err_msg = "We couldn't process your request due to a temporary error. Please try again."
             return {
                 "user_intent": IntentResult(intent="meta", raw=None),
@@ -265,7 +275,11 @@ class IntentClassifier:
             logger.warning("Intent classifier JSON repair timed out.")
             return None
         except Exception as e:
-            logger.warning("Intent classifier JSON repair failed: %s", e)
+            logger.warning(
+                "Intent classifier JSON repair failed (error_type=%s detail_%s)",
+                type(e).__name__,
+                log_content_metadata(e),
+            )
             return None
 
         repaired = extract_json((response.content or "").strip())

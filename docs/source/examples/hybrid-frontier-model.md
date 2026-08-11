@@ -5,121 +5,55 @@ SPDX-License-Identifier: Apache-2.0
 
 # Hybrid Frontier Model
 
-This example uses NVIDIA NIM models for intent classification, clarification, and shallow research,
-and a frontier model for deep research (higher quality reports).
+The checked-in `configs/config_frontier_models.yml` profile combines NVIDIA NIM models for intent classification and
+shallow research with GPT Sol/Luna for clarification and deep research.
+
+## Shipped Configuration
+
+| Role | Model |
+| --- | --- |
+| Intent classification and shallow research | `nvidia/nemotron-3-super-120b-a12b` |
+| Clarification, orchestration, and planning | `gpt-5.6-sol` |
+| Source routing and research | `gpt-5.6-luna` |
+| Report writing | `gpt-5.6-sol` with the writer token budget from the checked-in config |
+| Document summaries | `google/gemma-4-31b-it` |
+
+Use the profile as checked in so role assignments, inference parameters, retry limits, and structured-response behavior
+stay aligned with the documented configuration. Before deployment, run the complete workflow against the exact provider
+endpoints and credentials you intend to use.
+
+```{important}
+Other bring-your-own models or modified role assignments are custom profiles outside this documented combination.
+OpenAI-compatible transport does not guarantee equivalent tool-calling or structured-output behavior. A custom model
+can require provider-specific prompt, hyperparameter, tool-calling, and structured-output tuning and should be treated
+as experimental until the complete workflow passes evaluation.
+```
 
 ## Prerequisites
 
-- `NVIDIA_API_KEY` for NIM models
-- `LLM_API_KEY_FOR_FRONTIER_MODEL` for frontier model (state-of-the-art models for high-quality outputs; examples include GPT-5.2 from OpenAI, OPUS-4.6 from Anthropic, etc.)
-- `TAVILY_API_KEY` for web search
+- `NVIDIA_API_KEY` for NVIDIA NIM models
+- `OPENAI_API_KEY` for the GPT Sol/Luna roles
+- `TAVILY_API_KEY` for the default web-search tools
 
-## Configuration
+Set these values in `deploy/.env`; do not store credentials in the YAML file.
 
-```yaml
-llms:
-  # NIM profiles for intent and shallow research
-  nemotron_llm_intent:
-    _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5
-    max_tokens: 4096
+## Run the Profile
 
-  nemotron_super_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.1
-    max_tokens: 16384
-
-  # NIM profile for clarification
-  nemotron_ultra_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3-ultra-550b-a55b
-    base_url: "https://integrate.api.nvidia.com/v1"
-    api_key: ${NVIDIA_API_KEY}
-    temperature: 0.2
-    max_tokens: 16384
-
-  # Frontier model for deep research (higher quality)
-  frontier_llm:
-    _type: openai
-    model_name: ${FRONTIER_MODEL_NAME}
-    api_key: ${LLM_API_KEY_FOR_FRONTIER_MODEL}
-    base_url: ${API_URL_FOR_FRONTIER_MODEL}
-    temperature: 1.0
-    max_tokens: 128000
-
-functions:
-  web_search_tool:
-    _type: tavily_web_search
-    max_results: 5
-
-  advanced_web_search_tool:
-    _type: tavily_web_search
-    max_results: 2
-    advanced_search: true
-
-  knowledge_search:
-    _type: knowledge_retrieval
-    backend: llamaindex
-    collection_name: ${COLLECTION_NAME:-test_collection}
-    top_k: 5
-    chroma_dir: ${AIQ_CHROMA_DIR:-/tmp/chroma_data}
-
-  intent_classifier:
-    _type: intent_classifier
-    llm: nemotron_llm_intent
-    tools:
-      - web_search_tool
-      - knowledge_search
-
-  clarifier_agent:
-    _type: clarifier_agent
-    llm: nemotron_ultra_llm
-    tools:
-      - web_search_tool
-      - knowledge_search
-    max_turns: 3
-
-  shallow_research_agent:
-    _type: shallow_research_agent
-    llm: nemotron_super_llm
-    tools:
-      - web_search_tool
-      - knowledge_search
-    max_llm_turns: 10
-    max_tool_iterations: 5
-
-  deep_research_agent:
-    _type: deep_research_agent
-    orchestrator_llm: frontier_llm    # Frontier model here
-    tools:
-      - advanced_web_search_tool
-      - knowledge_search
-
-workflow:
-  _type: chat_deepresearcher_agent
-  enable_escalation: true
-  enable_clarifier: true
-```
-
-## How to Run
-
-Save the configuration above to `configs/config_hybrid_frontier.yml`, then run:
+Start the web API from the repository root:
 
 ```bash
-# Web mode (recommended)
-dotenv -f deploy/.env run .venv/bin/nat serve \
-  --config_file configs/config_hybrid_frontier.yml
-
-# CLI interactive mode
-./scripts/start_cli.sh \
-  --config_file configs/config_hybrid_frontier.yml
+uv run dotenv -f deploy/.env run nat serve \
+  --config_file configs/config_frontier_models.yml
 ```
 
-## How It Works
+For Docker Compose, set the following value in `deploy/.env` before starting the stack:
 
-The hybrid setup keeps shallow queries fast and cheap (NIM models respond in seconds) while
-routing complex deep research to a frontier model that produces higher-quality reports.
+```bash
+BACKEND_CONFIG=/app/configs/config_frontier_models.yml
+```
+
+Then follow the standard [Docker Compose](../deployment/docker-compose.md) startup procedure.
+
+To create a custom model profile, copy the checked-in configuration, change model references in YAML rather than
+Python, and evaluate the resulting workflow. Refer to [Swapping Models](../customization/swapping-models.md) for the
+support boundary and role-mapping guidance.

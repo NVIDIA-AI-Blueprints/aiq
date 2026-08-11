@@ -17,6 +17,7 @@
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -45,9 +46,11 @@ from aiq_agent.agents.deep_researcher.tools.research import build_research_batch
 from aiq_agent.agents.deep_researcher.tools.research import researcher_invoke_state
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
+from aiq_agent.common.citation_verification import CitationIntegrityError
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.citation_verification import SourceEntry
+from aiq_agent.common.logging_utils import log_content_metadata
 from aiq_api.jobs.callbacks import AgentEventCallback
 
 
@@ -1581,6 +1584,34 @@ class TestDeepResearcherAgent:
             assert len(result.messages) > 0
 
     @pytest.mark.asyncio
+    async def test_run_logs_query_metadata_without_customer_content(
+        self,
+        mock_llm_provider,
+        real_tool,
+        mock_create_deep_agent,
+        caplog,
+    ):
+        secret_query = "research CUDA using nvapi-vdr-fake-secret-do-not-log"  # pragma: allowlist secret
+        caplog.set_level(logging.INFO, logger="aiq_agent.agents.deep_researcher.agent")
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_create_deep_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(DEFAULT_REPORT),
+            ),
+        ):
+            from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            agent.source_registry_middleware.registry.add(SourceEntry(url="https://example.com"))
+
+            await agent.run(DeepResearchAgentState(messages=[HumanMessage(content=secret_query)]))
+
+        assert secret_query not in caplog.text
+        assert "nvapi-vdr-fake-secret-do-not-log" not in caplog.text
+        assert log_content_metadata(secret_query) in caplog.text
+
+    @pytest.mark.asyncio
     async def test_run_counts_query_and_clarifier_at_exact_input_boundary(
         self,
         mock_llm_provider,
@@ -1772,7 +1803,11 @@ class TestDeepResearcherAgent:
                 with pytest.raises(Exception, match="Agent error"):
                     await agent.run(state)
             assert mock_agent.ainvoke.await_count == 1
-            assert caplog.messages.count("Deep Research Subagent failed: Agent error") == 1
+            expected_log = (
+                f"Deep Research Subagent failed (error_type=Exception detail_{log_content_metadata('Agent error')})"
+            )
+            assert caplog.messages.count(expected_log) == 1
+            assert "Agent error" not in caplog.text
 
     @pytest.mark.parametrize(
         ("data_sources", "enable_citation_verification", "expected_reason"),
@@ -2248,12 +2283,14 @@ class TestDeepResearcherCitationVerification:
         return web_search_tool
 
     @pytest.mark.asyncio
-    async def test_run_returns_report_when_verify_finds_no_valid_citations(self, mock_llm_provider, real_tool, caplog):
-        """Verifier false negatives degrade to a warning instead of discarding the report."""
+    async def test_run_fails_closed_when_finalization_removes_all_verified_citations(
+        self, mock_llm_provider, real_tool
+    ):
+        """A citationless post-processed report must not be published as a successful result."""
         from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
 
         report = "CUDA findings here [1].\n\n## Sources\n[1] CUDA Docs: https://docs.nvidia.com/cuda/"
-        sanitized_report = f"{report}\n"
+        sanitized_report = "CUDA findings here.\n\n## Sources\n"
         deep_result = {
             "messages": [AIMessage(content="done")],
             "files": output_markdown_file(report),
@@ -2287,28 +2324,35 @@ class TestDeepResearcherCitationVerification:
                 SourceEntry(url="https://docs.nvidia.com/cuda/", title="CUDA Docs", tool_name="web_search")
             )
 
-            # Force the verifier to report "no valid citations" while leaving the report unchanged,
-            # so we can assert post-processing does not synthesize a citation.
+            # The citation verifies initially, but a later finalization step drops
+            # both its marker and source definition.
             with (
                 patch(
                     "aiq_agent.agents.deep_researcher.agent.verify_citations",
-                    return_value=MagicMock(
-                        verified_report=report,
-                        removed_citations=[],
-                        valid_citations=[],
-                    ),
+                    side_effect=[
+                        MagicMock(
+                            verified_report=report,
+                            removed_citations=[],
+                            valid_citations=[
+                                {
+                                    "number": 1,
+                                    "url": "https://docs.nvidia.com/cuda/",
+                                    "citation_key": None,
+                                    "line": "[1] CUDA Docs: https://docs.nvidia.com/cuda/",
+                                }
+                            ],
+                        ),
+                        MagicMock(verified_report=sanitized_report, removed_citations=[], valid_citations=[]),
+                    ],
                 ),
                 patch(
                     "aiq_agent.agents.deep_researcher.agent.sanitize_report",
                     return_value=MagicMock(sanitized_report=sanitized_report),
                 ),
-                caplog.at_level("WARNING", logger="aiq_agent.agents.deep_researcher.agent"),
             ):
                 state = DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
-                result = await agent.run(state)
-
-        assert result.messages[-1].content == sanitized_report
-        assert "Citation verification found no valid citations" in caplog.text
+                with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
+                    await agent.run(state)
 
     @pytest.mark.asyncio
     async def test_run_verifies_and_sanitizes_writer_markdown(self, mock_llm_provider, real_tool):
@@ -2336,7 +2380,8 @@ class TestDeepResearcherCitationVerification:
                 return_value=committed_tracker(raw_answer),
             ),
         ):
-            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+            callback = MagicMock(spec=AgentEventCallback)
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool], callbacks=[callback])
             agent.source_registry_middleware.registry.add(
                 SourceEntry(url="https://docs.nvidia.com/cuda/", title="CUDA Docs", tool_name="web_search")
             )
@@ -2344,11 +2389,32 @@ class TestDeepResearcherCitationVerification:
             with (
                 patch(
                     "aiq_agent.agents.deep_researcher.agent.verify_citations",
-                    return_value=MagicMock(
-                        verified_report=verified_answer,
-                        removed_citations=[],
-                        valid_citations=[MagicMock()],
-                    ),
+                    side_effect=[
+                        MagicMock(
+                            verified_report=verified_answer,
+                            removed_citations=[],
+                            valid_citations=[
+                                {
+                                    "number": 1,
+                                    "url": "https://docs.nvidia.com/cuda/",
+                                    "citation_key": None,
+                                    "line": "[1] CUDA Docs: https://docs.nvidia.com/cuda/",
+                                }
+                            ],
+                        ),
+                        MagicMock(
+                            verified_report=sanitized_answer,
+                            removed_citations=[],
+                            valid_citations=[
+                                {
+                                    "number": 1,
+                                    "url": "https://docs.nvidia.com/cuda/",
+                                    "citation_key": None,
+                                    "line": "[1] CUDA Docs: https://docs.nvidia.com/cuda/",
+                                }
+                            ],
+                        ),
+                    ],
                 ) as verify,
                 patch(
                     "aiq_agent.agents.deep_researcher.agent.sanitize_report",
@@ -2358,6 +2424,90 @@ class TestDeepResearcherCitationVerification:
                 state = DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
                 result = await agent.run(state)
 
-        verify.assert_called_once()
+        assert verify.call_count == 2
         sanitize.assert_called_once_with(verified_answer)
+        callback.emit_final_report.assert_called_once_with(
+            sanitized_answer,
+            cited_urls=["https://docs.nvidia.com/cuda/"],
+        )
         assert result.messages[-1].content == sanitized_answer
+
+    @pytest.mark.asyncio
+    async def test_run_publishes_report_reverified_after_artifact_post_processing(self, mock_llm_provider, real_tool):
+        """Artifact post-processing cannot reintroduce an unverified citation into the published report."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        valid_url = "https://docs.nvidia.com/cuda/"
+        invalid_url = "https://fabricated.example/source"
+        report = f"CUDA is documented [1].\n\n## Sources\n[1] CUDA Docs: {valid_url}"
+        artifact_augmented_report = (
+            "CUDA is documented [1]. Fabricated claim [2].\n\n"
+            f"## Sources\n[1] CUDA Docs: {valid_url}\n[2] Fabricated: {invalid_url}"
+        )
+        deep_result = {
+            "messages": [AIMessage(content="done")],
+            "files": output_markdown_file(report),
+        }
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value=deep_result)
+
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(report),
+            ),
+        ):
+            callback = MagicMock(spec=AgentEventCallback)
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool], callbacks=[callback])
+            agent.source_registry_middleware.registry.add(
+                SourceEntry(url=valid_url, title="CUDA Docs", tool_name="web_search")
+            )
+            artifact_manager = MagicMock()
+            artifact_manager.store.list.return_value = []
+            artifact_manager.resolve_report_references.side_effect = lambda content, _produced: content
+            artifact_manager.ensure_inline_artifacts_embedded.side_effect = lambda content, _produced: content
+            artifact_manager.append_artifact_index.return_value = artifact_augmented_report
+            agent.deepagents_runtime.artifact_manager = artifact_manager
+
+            result = await agent.run(DeepResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        published_report = result.messages[-1].content
+        assert invalid_url not in published_report
+        assert "Fabricated claim" in published_report
+        assert "[2]" not in published_report
+        assert valid_url in published_report
+        callback.emit_final_report.assert_called_once_with(published_report, cited_urls=[valid_url])
+
+    @pytest.mark.asyncio
+    async def test_run_structurally_reverifies_fuzzy_knowledge_citation(self, mock_llm_provider, real_tool):
+        """Equivalent knowledge citation formatting must survive final integrity verification."""
+        from aiq_agent.agents.deep_researcher.agent import DeepResearcherAgent
+
+        report = "The internal result is supported [1].\n\n## Sources\n[1] Internal source report.pdf covers page 15"
+        deep_result = {
+            "messages": [AIMessage(content="done")],
+            "files": output_markdown_file(report),
+        }
+        mock_agent = MagicMock()
+        mock_agent.with_config = MagicMock(return_value=mock_agent)
+        mock_agent.ainvoke = AsyncMock(return_value=deep_result)
+
+        with (
+            patch("aiq_agent.agents.deep_researcher.factory.create_deep_agent", return_value=mock_agent),
+            patch(
+                "aiq_agent.agents.deep_researcher.agent.FinalReportCommitTracker",
+                return_value=committed_tracker(report),
+            ),
+        ):
+            callback = MagicMock(spec=AgentEventCallback)
+            agent = DeepResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool], callbacks=[callback])
+            agent.source_registry_middleware.registry.add(
+                SourceEntry(citation_key="report.pdf, p.15", source_type="knowledge_layer")
+            )
+
+            result = await agent.run(DeepResearchAgentState(messages=[HumanMessage(content="Summarize the report")]))
+
+        assert "report.pdf covers page 15" in result.messages[-1].content
+        callback.emit_final_report.assert_called_once_with(result.messages[-1].content, cited_urls=[])

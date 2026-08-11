@@ -91,8 +91,8 @@ Try one of these example queries to observe the system in action:
 
 ### What to Expect
 
-- **Shallow queries** produce a concise answer with inline citations and source links within a few seconds.
-- **Deep queries** trigger a multi-phase research process (planning, research, synthesis) that produces a structured report with a table of contents, inline citations, and a references section. This takes longer (typically 1--3 minutes depending on complexity).
+- **Shallow queries** typically produce a concise answer with inline citations and source links in under a minute.
+- **Deep queries** trigger a multi-phase research process (planning, research, synthesis) that produces a structured report with a table of contents, inline citations, and a references section. This commonly takes several minutes and can exceed ten minutes depending on the query, models, providers, and data sources.
 
 The system automatically routes queries to the appropriate depth based on complexity. You do not need to specify shallow vs. deep -- the orchestration node decides for you.
 
