@@ -46,32 +46,45 @@ Back up the following databases regularly:
 For managed databases, enable automated daily backups with at least 7 days of retention. For self-managed PostgreSQL,
 install PostgreSQL client tools on the backup host and run `pg_dump` on a schedule.
 
-The shipped Compose stack already includes the matching PostgreSQL client tools in its `aiq-postgres` container. Create
-portable custom-format archives without requiring `pg_dump` on the host:
+The shipped Compose stack already includes the matching PostgreSQL client tools in its `aiq-postgres` container. Set
+`AIQ_BACKUP_DIR` to an absolute path outside the repository, and create portable custom-format archives there without
+requiring `pg_dump` on the host:
 
 ```bash
+: "${AIQ_BACKUP_DIR:?Set AIQ_BACKUP_DIR to an absolute path outside the repository}"
+umask 077
+install -d -m 0700 "$AIQ_BACKUP_DIR"
+backup_date=$(date +%Y%m%d)
+
 docker exec aiq-postgres \
   pg_dump --format=custom --no-owner --no-privileges -U aiq -d aiq_jobs \
-  > aiq_jobs_$(date +%Y%m%d).dump
+  > "$AIQ_BACKUP_DIR/aiq_jobs_${backup_date}.dump"
 docker exec aiq-postgres \
   pg_dump --format=custom --no-owner --no-privileges -U aiq -d aiq_checkpoints \
-  > aiq_checkpoints_$(date +%Y%m%d).dump
+  > "$AIQ_BACKUP_DIR/aiq_checkpoints_${backup_date}.dump"
 ```
 
 If the Compose container name was customized, replace `aiq-postgres` with that container name.
 
-Do not wait for an incident to test restoration. On an isolated restore environment, create disposable databases,
-restore both archives with `--exit-on-error`, and inspect their tables. The following example verifies the local
-Compose archives; replace `YYYYMMDD` with the backup date:
+Treat these archives as sensitive data. Before copying them to backup storage, encrypt them with an
+organization-approved backup system, protect transfers in transit, keep encryption keys separate from the archives,
+and restrict read and restore access to the required operators and service identities.
+
+Do not wait for an incident to test restoration. On an isolated restore environment, retrieve and decrypt the archives
+into a restricted directory, set `AIQ_BACKUP_DIR` to that directory, create disposable databases, restore both archives
+with `--exit-on-error`, and inspect their tables. The following example verifies the local Compose archives; replace
+`YYYYMMDD` with the backup date:
 
 ```bash
+: "${AIQ_BACKUP_DIR:?Set AIQ_BACKUP_DIR to the restricted archive directory}"
+
 docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
   -c 'DROP DATABASE IF EXISTS aiq_jobs_restore_check'
 docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
   -c 'CREATE DATABASE aiq_jobs_restore_check'
 docker exec -i aiq-postgres \
   pg_restore --exit-on-error -U aiq -d aiq_jobs_restore_check \
-  < aiq_jobs_YYYYMMDD.dump
+  < "$AIQ_BACKUP_DIR/aiq_jobs_YYYYMMDD.dump"
 docker exec aiq-postgres psql -U aiq -d aiq_jobs_restore_check -c '\dt'
 
 docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
@@ -80,7 +93,7 @@ docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
   -c 'CREATE DATABASE aiq_checkpoints_restore_check'
 docker exec -i aiq-postgres \
   pg_restore --exit-on-error -U aiq -d aiq_checkpoints_restore_check \
-  < aiq_checkpoints_YYYYMMDD.dump
+  < "$AIQ_BACKUP_DIR/aiq_checkpoints_YYYYMMDD.dump"
 docker exec aiq-postgres psql -U aiq -d aiq_checkpoints_restore_check -c '\dt'
 
 docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \

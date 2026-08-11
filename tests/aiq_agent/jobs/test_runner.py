@@ -63,6 +63,7 @@ Test coverage:
         - Error message filtering for CancelledError
 """
 
+import inspect
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import call
@@ -492,7 +493,10 @@ class TestSubmitDeepResearchJob:
 
         assert result == "test-job-id"
         job_args = mock_job_store.submit_job.call_args.kwargs["job_args"]
-        assert job_args[14] == "customer-collection"
+        from aiq_api.jobs.runner import run_agent_job
+
+        worker_args = inspect.signature(run_agent_job).bind(*job_args).arguments
+        assert worker_args["parent_conversation_id"] == "customer-collection"
 
     @pytest.mark.asyncio
     async def test_submit_agent_job_passes_initial_files_and_output_metadata(self):
@@ -660,12 +664,14 @@ class TestRunAgentJobConversationContext:
             (None, "test_collection"),
         ],
     )
+    @pytest.mark.parametrize("owner_user_id", ["jwt:user-9", None])
     @pytest.mark.asyncio
     async def test_worker_binds_conversation_before_tool_construction_and_invocation(
         self,
         tmp_path,
         conversation_id,
         expected_collection,
+        owner_user_id,
     ):
         import asyncio
         from types import SimpleNamespace
@@ -689,7 +695,9 @@ class TestRunAgentJobConversationContext:
                 self._conversation_id = construction_conversation_id
 
             async def ainvoke(self):
-                observed["invocation"] = self._conversation_id
+                context = Context.get()
+                observed["invocation_conversation_id"] = context.conversation_id
+                observed["invocation_user_id"] = context.user_id
                 return self._conversation_id or "test_collection"
 
         class FakeWorkflowBuilder:
@@ -706,9 +714,10 @@ class TestRunAgentJobConversationContext:
 
             async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
                 async def build_tool():
-                    conversation_id_at_construction = Context.get().conversation_id
-                    observed["construction"] = conversation_id_at_construction
-                    return ContextAwareKnowledgeTool(conversation_id_at_construction)
+                    context = Context.get()
+                    observed["construction_conversation_id"] = context.conversation_id
+                    observed["construction_user_id"] = context.user_id
+                    return ContextAwareKnowledgeTool(context.conversation_id)
 
                 # NAT's WorkflowBuilder.get_tools constructs tools in tasks via
                 # asyncio.gather, which snapshots ContextVars at task creation.
@@ -729,7 +738,8 @@ class TestRunAgentJobConversationContext:
         config = SimpleNamespace(functions={}, middleware={})
         db_url = f"sqlite:///{tmp_path / 'conversation-context.db'}"
         outer_context = ContextState.get()
-        outer_token = outer_context.conversation_id.set("stale-parent-context")
+        outer_conversation_token = outer_context.conversation_id.set("stale-parent-context")
+        outer_user_token = outer_context.user_id.set("jwt:stale-owner")
         try:
             with (
                 patch("nat.front_ends.fastapi.async_jobs.job_store.JobStore", return_value=mock_job_store),
@@ -761,16 +771,21 @@ class TestRunAgentJobConversationContext:
                     "shallow_research_agent",
                     parent_conversation_id=conversation_id,
                     content_encryption_policy=ContentEncryptionConfig(mode="off").policy_identity,
+                    owner_user_id=owner_user_id,
                 )
 
             assert observed == {
-                "construction": conversation_id,
-                "invocation": conversation_id,
+                "construction_conversation_id": conversation_id,
+                "construction_user_id": owner_user_id,
+                "invocation_conversation_id": conversation_id,
+                "invocation_user_id": owner_user_id,
                 "resolved_collection": expected_collection,
             }
             assert outer_context.conversation_id.get() == "stale-parent-context"
+            assert outer_context.user_id.get() == "jwt:stale-owner"
         finally:
-            outer_context.conversation_id.reset(outer_token)
+            outer_context.user_id.reset(outer_user_token)
+            outer_context.conversation_id.reset(outer_conversation_token)
 
 
 class TestRunAgentJobEncryption:

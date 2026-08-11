@@ -284,8 +284,9 @@ general:
 
 For quick debugging without any external services, enable the built-in `VerboseTraceCallback` logger. This callback
 records execution metadata directly to the console without printing raw prompts, tool arguments, tool results, or
-model responses. Enabled source adapters and external providers or exporters can have separate logging behavior and
-must be audited independently.
+model responses. This metadata-only guarantee applies only to `VerboseTraceCallback`. Phoenix and other exporters,
+enabled source adapters, and external providers can still receive or retain raw prompts, tool arguments, tool results,
+and model responses; configure and audit their redaction, retention, and access controls independently.
 
 ### Enable via CLI
 

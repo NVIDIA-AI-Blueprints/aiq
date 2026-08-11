@@ -35,7 +35,8 @@ async def test_report_rewriter_uses_parent_report_context_and_emits_output_file(
     provider = LLMProvider()
     provider.configure(LLMRole.REPORT_WRITER, writer_llm)
     callback = MagicMock()
-    agent = ReportRewriterAgent(llm_provider=provider, tools=[], callbacks=[callback])
+    duplicate_callback = MagicMock()
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[], callbacks=[callback, duplicate_callback])
 
     state = ReportRewriterAgentState(
         messages=[HumanMessage(content="Remove the appendix.")],
@@ -55,6 +56,7 @@ async def test_report_rewriter_uses_parent_report_context_and_emits_output_file(
     assert "Remove the appendix." in rendered_prompt
     assert "complete standalone Markdown report" in rendered_prompt
     callback.emit_final_report.assert_called_once_with("# Revised Report\n\nUpdated body.", cited_urls=[])
+    duplicate_callback.emit_final_report.assert_not_called()
 
 
 @pytest.mark.asyncio

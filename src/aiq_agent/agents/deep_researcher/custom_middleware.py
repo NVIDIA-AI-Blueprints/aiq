@@ -955,8 +955,8 @@ class ToolRetryMiddleware(AgentMiddleware):
                 if attempt < self.max_retries:
                     tool_name = request.tool_call.get("name", "?") if hasattr(request, "tool_call") else "?"
                     logger.warning(
-                        "Tool %s failed (attempt %d/%d, error_type=%s, detail_%s)",
-                        tool_name,
+                        "Tool call failed (tool_%s, attempt %d/%d, error_type=%s, detail_%s)",
+                        log_content_metadata(tool_name),
                         attempt + 1,
                         self.max_retries + 1,
                         type(e).__name__,

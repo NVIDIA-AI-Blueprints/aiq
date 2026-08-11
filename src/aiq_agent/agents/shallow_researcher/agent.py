@@ -406,6 +406,7 @@ class ShallowResearcherAgent:
                 sanitization = sanitize_report(content)
                 content = sanitization.sanitized_report
                 final_verification = verify_citations(content, registry)
+                content = final_verification.verified_report
                 final_cited_urls = list(
                     dict.fromkeys(
                         citation["url"] for citation in final_verification.valid_citations if citation.get("url")

@@ -50,6 +50,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import StructuredRespons
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoQuotaMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolRetryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
 from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
 from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
@@ -1058,6 +1059,30 @@ class TestToolNameSanitizationMiddleware:
         assert not result.result[0].tool_calls
 
 
+class TestToolRetryMiddleware:
+    """Tests for metadata-safe tool retry diagnostics."""
+
+    @pytest.mark.asyncio
+    async def test_retry_log_redacts_model_tool_name_and_error_detail(self, caplog):
+        tool_name = "tool_VDR_MODEL_SECRET_7e91"  # pragma: allowlist secret
+        error_detail = "backend VDR_TOOL_ERROR_SECRET_91ad"  # pragma: allowlist secret
+        request = SimpleNamespace(tool_call={"name": tool_name})
+        handler = AsyncMock(side_effect=[RuntimeError(error_detail), "ok"])
+        middleware = ToolRetryMiddleware(max_retries=1, initial_delay=0)
+
+        with caplog.at_level(logging.WARNING, logger="aiq_agent.agents.deep_researcher.custom_middleware"):
+            result = await middleware.awrap_tool_call(request, handler)
+
+        assert result == "ok"
+        assert handler.await_count == 2
+        assert tool_name not in caplog.text
+        assert error_detail not in caplog.text
+        assert log_content_metadata(tool_name) in caplog.text
+        assert log_content_metadata(error_detail) in caplog.text
+        assert "attempt 1/2" in caplog.text
+        assert "error_type=RuntimeError" in caplog.text
+
+
 class TestToolVisibilityMiddleware:
     """Tests for hiding tools from model requests."""
 
@@ -1752,9 +1777,10 @@ class TestSourceRoutingPersistenceMiddleware:
         )
 
         with caplog.at_level(logging.ERROR, logger="aiq_agent.agents.deep_researcher.custom_middleware"):
-            with pytest.raises(RuntimeError, match="Failed to persist source routing"):
+            with pytest.raises(RuntimeError, match="Failed to persist source routing") as exc:
                 middleware.after_agent({"structured_response": self._routing()}, None)
 
+        assert error_detail not in str(exc.value)
         assert error_detail not in caplog.text
         assert log_content_metadata(f"/shared/source_routing.json: {error_detail}") in caplog.text
         ledger.reserve([("/shared/plan.json", b"ok")])

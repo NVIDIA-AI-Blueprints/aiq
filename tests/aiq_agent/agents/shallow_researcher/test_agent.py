@@ -753,6 +753,43 @@ class TestShallowResearcherSourceCaptureIntegration:
         assert result.messages[-1].content
 
     @pytest.mark.asyncio
+    async def test_final_verification_report_is_published_with_its_cited_urls(self, mock_llm_provider, mock_llm):
+        """The final report body and authoritative URL set come from the same verification pass."""
+        source_url = "https://docs.nvidia.com/cuda/"
+        draft_report = f"CUDA is a parallel computing platform [1].\n\n## Sources\n[1] CUDA Docs: {source_url}"
+        verified_report = f"CUDA is a parallel computing platform.\n\n## Sources\n[1] CUDA Docs: {source_url}"
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, AIMessage(content=draft_report)])
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_with_urls],
+            callbacks=[callback],
+        )
+        first_verification = MagicMock(
+            verified_report=draft_report,
+            valid_citations=[{"url": source_url}],
+            removed_citations=[],
+        )
+        final_verification = MagicMock(
+            verified_report=verified_report,
+            valid_citations=[{"url": source_url}],
+            removed_citations=[],
+        )
+
+        with patch(
+            "aiq_agent.agents.shallow_researcher.agent.verify_citations",
+            side_effect=[first_verification, final_verification],
+        ):
+            result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        assert result.messages[-1].content == verified_report
+        callback.emit_final_report.assert_called_once_with(verified_report, cited_urls=[source_url])
+
+    @pytest.mark.asyncio
     async def test_invalid_citation_removed_end_to_end(self, mock_llm_provider, mock_llm):
         """Citations not backed by registry sources are removed from output."""
         tool_call_response = AIMessage(

@@ -662,6 +662,7 @@ async def run_agent_job(
     # jobs in the same Dask worker process don't leak tokens across tasks.
     _auth_token_reset = None
     _conversation_id_reset = None
+    _user_id_reset = None
     context_state = None
     if auth_token:
         from ._auth_context import job_auth_token
@@ -787,6 +788,9 @@ async def run_agent_job(
 
         context_state = ContextState.get()
         _conversation_id_reset = context_state.conversation_id.set(parent_conversation_id)
+        # Always shadow the inherited identity, including for ownerless jobs,
+        # so a reused worker context cannot expose a prior owner's MCP tokens.
+        _user_id_reset = context_state.user_id.set(owner_user_id)
 
         async with WorkflowBuilder.from_config(config=config) as builder:
             await _attach_middleware_to_function(builder, config, agent_config_name)
@@ -801,12 +805,6 @@ async def run_agent_job(
                     fn_config = fn_config.model_copy(update={"skills": skills_config, "sandbox": sandbox_config})
 
             provider, llm = await _create_llm_provider(builder, fn_config)
-
-            # Bind the job owner's identity on the NAT context before tools are built,
-            # so per_user_mcp_client resolves the token this user connected via
-            # /v1/auth/mcp/{id}/connect (keyed by principal_user_id).
-            if owner_user_id:
-                context_state.user_id.set(owner_user_id)
 
             # Resolve tools: use explicit list or auto-inherit from data_source_registry
             tool_refs = fn_config.tools
@@ -1142,6 +1140,8 @@ async def run_agent_job(
         await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=interrupted)
         await _flush_event_store(event_store, job_id=job_id)
         # Restore job-scoped ContextVars for worker task reuse.
+        if _user_id_reset is not None and context_state is not None:
+            context_state.user_id.reset(_user_id_reset)
         if _conversation_id_reset is not None and context_state is not None:
             context_state.conversation_id.reset(_conversation_id_reset)
         if _auth_token_reset is not None:
