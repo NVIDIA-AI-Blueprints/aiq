@@ -47,6 +47,10 @@ Back up both databases for either deployment profile. Do not change `AIQ_CHECKPO
 without migrating its checkpoint tables; doing so makes existing resumable workflow state unavailable to the
 application.
 
+The two dumps are separate PostgreSQL snapshots. Before running the commands below, pause the API, workers, and any
+other writers to either database. Resume them only after both final archives have been published; this defines the
+shared recovery point for the backup set.
+
 For managed databases, enable automated daily backups with at least 7 days of retention. For self-managed PostgreSQL,
 install PostgreSQL client tools on the backup host and run `pg_dump` on a schedule.
 
@@ -67,6 +71,7 @@ if [[ -e "$jobs_archive" || -e "$checkpoints_archive" ]]; then
   echo "Refusing to replace an existing backup set: $backup_id" >&2
   exit 1
 fi
+backup_complete=0
 jobs_tmp=
 checkpoints_tmp=
 cleanup() {
@@ -76,6 +81,9 @@ cleanup() {
   fi
   if [[ -n "$checkpoints_tmp" ]]; then
     rm -f -- "$checkpoints_tmp" || true
+  fi
+  if (( ! backup_complete )); then
+    rm -f -- "$jobs_archive" "$checkpoints_archive" || true
   fi
   return "$exit_status"
 }
@@ -92,6 +100,7 @@ docker exec "$AIQ_POSTGRES_CONTAINER" \
 
 mv "$jobs_tmp" "$jobs_archive"
 mv "$checkpoints_tmp" "$checkpoints_archive"
+backup_complete=1
 trap - EXIT
 ```
 
@@ -107,8 +116,19 @@ with `--exit-on-error`, and inspect their tables. The following example verifies
 `YYYYMMDDTHHMMSSZ-PID-RANDOM` with the shared backup ID in the two archive names:
 
 ```bash
+set -euo pipefail
 : "${AIQ_BACKUP_DIR:?Set AIQ_BACKUP_DIR to the restricted archive directory}"
 : "${AIQ_POSTGRES_CONTAINER:=aiq-postgres}"
+
+restore_cleanup() {
+  local exit_status=$?
+  docker exec "$AIQ_POSTGRES_CONTAINER" psql -U aiq -d postgres \
+    -c 'DROP DATABASE IF EXISTS aiq_jobs_restore_check' || true
+  docker exec "$AIQ_POSTGRES_CONTAINER" psql -U aiq -d postgres \
+    -c 'DROP DATABASE IF EXISTS aiq_checkpoints_restore_check' || true
+  return "$exit_status"
+}
+trap restore_cleanup EXIT
 
 docker exec "$AIQ_POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
   -c 'DROP DATABASE IF EXISTS aiq_jobs_restore_check'
@@ -127,11 +147,6 @@ docker exec -i "$AIQ_POSTGRES_CONTAINER" \
   pg_restore --exit-on-error -U aiq -d aiq_checkpoints_restore_check \
   < "$AIQ_BACKUP_DIR/aiq_checkpoints_YYYYMMDDTHHMMSSZ-PID-RANDOM.dump"
 docker exec "$AIQ_POSTGRES_CONTAINER" psql -U aiq -d aiq_checkpoints_restore_check -c '\dt'
-
-docker exec "$AIQ_POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
-  -c 'DROP DATABASE aiq_jobs_restore_check'
-docker exec "$AIQ_POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
-  -c 'DROP DATABASE aiq_checkpoints_restore_check'
 ```
 
 Keep restore testing isolated from a live deployment so the application cannot write to the databases during the
