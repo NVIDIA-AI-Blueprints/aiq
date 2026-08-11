@@ -51,17 +51,31 @@ The shipped Compose stack already includes the matching PostgreSQL client tools 
 requiring `pg_dump` on the host:
 
 ```bash
+set -euo pipefail
 : "${AIQ_BACKUP_DIR:?Set AIQ_BACKUP_DIR to an absolute path outside the repository}"
 umask 077
 install -d -m 0700 "$AIQ_BACKUP_DIR"
-backup_date=$(date +%Y%m%d)
+backup_id="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+jobs_archive="$AIQ_BACKUP_DIR/aiq_jobs_${backup_id}.dump"
+checkpoints_archive="$AIQ_BACKUP_DIR/aiq_checkpoints_${backup_id}.dump"
+if [[ -e "$jobs_archive" || -e "$checkpoints_archive" ]]; then
+  echo "Refusing to replace an existing backup set: $backup_id" >&2
+  exit 1
+fi
+jobs_tmp=$(mktemp "$AIQ_BACKUP_DIR/.aiq_jobs_${backup_id}.XXXXXXXX.dump.tmp")
+checkpoints_tmp=$(mktemp "$AIQ_BACKUP_DIR/.aiq_checkpoints_${backup_id}.XXXXXXXX.dump.tmp")
+trap 'rm -f "$jobs_tmp" "$checkpoints_tmp"' EXIT
 
 docker exec aiq-postgres \
   pg_dump --format=custom --no-owner --no-privileges -U aiq -d aiq_jobs \
-  > "$AIQ_BACKUP_DIR/aiq_jobs_${backup_date}.dump"
+  > "$jobs_tmp"
 docker exec aiq-postgres \
   pg_dump --format=custom --no-owner --no-privileges -U aiq -d aiq_checkpoints \
-  > "$AIQ_BACKUP_DIR/aiq_checkpoints_${backup_date}.dump"
+  > "$checkpoints_tmp"
+
+mv "$jobs_tmp" "$jobs_archive"
+mv "$checkpoints_tmp" "$checkpoints_archive"
+trap - EXIT
 ```
 
 If the Compose container name was customized, replace `aiq-postgres` with that container name.
@@ -73,7 +87,7 @@ and restrict read and restore access to the required operators and service ident
 Do not wait for an incident to test restoration. On an isolated restore environment, retrieve and decrypt the archives
 into a restricted directory, set `AIQ_BACKUP_DIR` to that directory, create disposable databases, restore both archives
 with `--exit-on-error`, and inspect their tables. The following example verifies the local Compose archives; replace
-`YYYYMMDD` with the backup date:
+`YYYYMMDDTHHMMSSZ-PID-RANDOM` with the shared backup ID in the two archive names:
 
 ```bash
 : "${AIQ_BACKUP_DIR:?Set AIQ_BACKUP_DIR to the restricted archive directory}"
@@ -84,7 +98,7 @@ docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
   -c 'CREATE DATABASE aiq_jobs_restore_check'
 docker exec -i aiq-postgres \
   pg_restore --exit-on-error -U aiq -d aiq_jobs_restore_check \
-  < "$AIQ_BACKUP_DIR/aiq_jobs_YYYYMMDD.dump"
+  < "$AIQ_BACKUP_DIR/aiq_jobs_YYYYMMDDTHHMMSSZ-PID-RANDOM.dump"
 docker exec aiq-postgres psql -U aiq -d aiq_jobs_restore_check -c '\dt'
 
 docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
@@ -93,7 +107,7 @@ docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
   -c 'CREATE DATABASE aiq_checkpoints_restore_check'
 docker exec -i aiq-postgres \
   pg_restore --exit-on-error -U aiq -d aiq_checkpoints_restore_check \
-  < "$AIQ_BACKUP_DIR/aiq_checkpoints_YYYYMMDD.dump"
+  < "$AIQ_BACKUP_DIR/aiq_checkpoints_YYYYMMDDTHHMMSSZ-PID-RANDOM.dump"
 docker exec aiq-postgres psql -U aiq -d aiq_checkpoints_restore_check -c '\dt'
 
 docker exec aiq-postgres psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
