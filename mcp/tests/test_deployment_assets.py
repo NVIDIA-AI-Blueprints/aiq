@@ -22,6 +22,7 @@ _INIT_SQL = _REPO_ROOT / "mcp" / "deploy" / "init-mcp-db.sql"
 _DOCKERIGNORE = _REPO_ROOT / ".dockerignore"
 _SMOKE_SCRIPT = _REPO_ROOT / "mcp" / "scripts" / "protocol_smoke.py"
 _THIRD_PARTY_LICENSE = _REPO_ROOT / "LICENSE-THIRD-PARTY"
+_SIDEBAR_TEMPLATE = _REPO_ROOT / "docs" / "source" / "_templates" / "sidebar-nav-bs.html"
 
 _RELEASE_NOTICE_COMPONENTS = (
     "loguru 0.7.3",
@@ -30,6 +31,7 @@ _RELEASE_NOTICE_COMPONENTS = (
     "py-rust-stemmers 0.1.8",
     "pathspec 1.1.1",
     "crc32c 2.7.1",
+    "en-core-web-lg 3.8.0",
     "crossbeam-deque 0.8.6",
     "crossbeam-epoch 0.9.18",
     "crossbeam-utils 0.8.21",
@@ -92,6 +94,9 @@ _EXPECTED_VERBATIM_LABELS = (
     "crc32c 2.7.1 AUTHORS.google-crc32c",
     "Intel slicing-by-8 BSD-2-Clause notice and full terms",
     "Mark Adler notice and upstream alteration notice",
+    "en-core-web-lg 3.8.0 LICENSE",
+    "en-core-web-lg 3.8.0 LICENSES_SOURCES",
+    "pydata-sphinx-theme 0.16.1 BSD-3-Clause LICENSE",
 )
 _EXPECTED_VERBATIM_SHA256 = (
     "e0affae8:4147849a:9e507840:ebed9ac8:1e5f9ec0:f781f855:85e4a359:41a627a7",
@@ -130,6 +135,9 @@ _EXPECTED_VERBATIM_SHA256 = (
     "5d01d648:d5dd8271:6aac655a:4ab793a5:d56a0d4f:e357f1ba:71d4751f:41b47c15",
     "f8de74b6:c268ec04:e433d410:273a4075:fc506825:d4002485:a88a1157:55a9bb42",
     "3b9af289:61ab403a:b9005f0e:2cb6ec41:3564ce47:d15d2511:839fa061:9efb03e9",
+    "4a923943:099e2d38:13d7d282:ebb9d29f:089b7da:9ffc007b:c929ab50:f57555ee3",
+    "03737400:64971302:ab8882af:3ba85776:8da2e50c:de7486ec:936b3a00:7f49c4e1",
+    "618a8cd0:4f2e0c95:634f616a:1ced3584:dbbe7854:ce0037b9:e78bed0f:ca19ae59",
 )
 
 _EXPECTED_SQL_HASH = "05c27bca7385f6127017bee72ae067d02a49849db73b483d42868aaaf90341c7"  # pragma: allowlist secret
@@ -191,7 +199,16 @@ def _release_notice_section(text: str, section_number: int) -> str:
     section_marker = f"{separator}{section_number}. "
     section_start = text.index(section_marker, addendum_start) + len(separator)
     next_section = text.find(f"{separator}{section_number + 1}. ", section_start)
-    return text[section_start:] if next_section == -1 else text[section_start:next_section]
+    if next_section == -1:
+        end_marker = (
+            "\n============================================================================\nEND OF AI-Q 2.2 RELEASE"
+        )
+        next_section = text.index(end_marker, section_start)
+    return text[section_start:next_section]
+
+
+def _verbatim_payload(text: str, label: str) -> str:
+    return text.split(f"BEGIN VERBATIM: {label}\n", 1)[1].split(f"\nEND VERBATIM: {label}", 1)[0]
 
 
 def test_release_dockerfile_is_public_reproducible_and_non_root() -> None:
@@ -242,14 +259,18 @@ def test_aiq_final_images_include_project_and_third_party_licenses() -> None:
 
 def test_release_third_party_notice_contains_reviewed_payloads() -> None:
     text = _THIRD_PARTY_LICENSE.read_text()
-    sections = {number: _release_notice_section(text, number) for number in range(1, 6)}
-    rust_components = _RELEASE_NOTICE_COMPONENTS[6:]
+    sections = {number: _release_notice_section(text, number) for number in range(1, 7)}
+    rust_components = _RELEASE_NOTICE_COMPONENTS[7:]
+    assert "release-specific for the six distributions named there" in text
+    assert "A separate source-distribution-only\naddendum follows it." in text
+    assert "This release-specific addendum covers the six Python distributions identified" in text
     expected_components_by_section = {
         1: ("loguru 0.7.3",),
         2: ("nemoguardrails 0.21.0", "Inter 3.019"),
         3: ("py-rust-stemmers 0.1.8", *rust_components),
         4: ("pathspec 1.1.1",),
         5: ("crc32c 2.7.1",),
+        6: ("en-core-web-lg 3.8.0",),
     }
     for section_number, components in expected_components_by_section.items():
         missing_components = [component for component in components if component not in sections[section_number]]
@@ -296,6 +317,31 @@ def test_release_third_party_notice_contains_reviewed_payloads() -> None:
             "Copyright (C) 2013 Mark Adler",
             "GNU LESSER GENERAL PUBLIC LICENSE",
         ),
+        6: (
+            (
+                "https://github.com/explosion/spacy-models/releases/download/"
+                "en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl"
+            ),
+            "SHA-256: 293e9547a655b25499198ab15a525b05b9407a75f10255e405e8c3854329ab63",
+            "Wheel member: en_core_web_lg-3.8.0.dist-info/LICENSE",
+            "Raw SHA-256: 3933c176979b68bc6d0bcc902c7d6c130f1d127f476f17ba5cdba8d99cfd0012",
+            "Wheel member: en_core_web_lg-3.8.0.dist-info/LICENSES_SOURCES",
+            "Raw SHA-256: ea21333cecd2593c1fea842e9362bedf7b556abfb97cd08ce0650f2228b2eb58",
+            "Copyright 2021 ExplosionAI GmbH",
+            "# OntoNotes 5",
+            "* License: commercial (licensed by Explosion)",
+            "# ClearNLP Constituent-to-Dependency Conversion",
+            "* License: Citation provided for reference, no code packaged with model",
+            "# WordNet 3.0",
+            "Permission to use, copy, modify and distribute this software and",
+            "WordNet 3.0 Copyright 2006 by Princeton University.  All rights reserved.",
+            'THIS SOFTWARE AND DATABASE IS PROVIDED "AS IS" AND PRINCETON',
+            "The name of Princeton University or Princeton may not be used in",
+            "Title to copyright in this software, database and",
+            "# Explosion Vectors (OSCAR 2109 + Wikipedia + OpenSubtitles + WMT News Crawl)",
+            "* License: CC0",
+            "1. Copyright and Related Rights.",
+        ),
     }
     for section_number, notices in expected_notices_by_section.items():
         missing_notices = [notice for notice in notices if notice not in sections[section_number]]
@@ -311,9 +357,68 @@ def test_release_third_party_notice_contains_reviewed_payloads() -> None:
     assert end_labels == begin_labels
     assert len(_EXPECTED_VERBATIM_LABELS) == len(_EXPECTED_VERBATIM_SHA256)
     for label, expected_sha256 in zip(_EXPECTED_VERBATIM_LABELS, _EXPECTED_VERBATIM_SHA256, strict=True):
-        payload = text.split(f"BEGIN VERBATIM: {label}\n", 1)[1].split(f"\nEND VERBATIM: {label}", 1)[0]
+        payload = _verbatim_payload(text, label)
         assert hashlib.sha256(payload.encode()).hexdigest() == expected_sha256.replace(":", "")
     assert "/licenses/LICENSE-THIRD-PARTY" in text
+
+
+def test_source_only_pydata_notice_and_local_template_preserve_bsd_terms() -> None:
+    notices = _THIRD_PARTY_LICENSE.read_text()
+    source_addendum = notices.split("AI-Q 2.2 SOURCE-DISTRIBUTION-ONLY ATTRIBUTION ADDENDUM", 1)[1]
+    source_addendum = source_addendum.split("END OF AI-Q 2.2 SOURCE-DISTRIBUTION-ONLY ATTRIBUTION ADDENDUM", 1)[0]
+    template = _SIDEBAR_TEMPLATE.read_text()
+
+    assert _SIDEBAR_TEMPLATE.is_file()
+    assert "docs/source/_templates/sidebar-nav-bs.html" in source_addendum
+    assert (
+        "This addendum applies to the AI-Q source distribution only. The referenced\n"
+        "documentation template is not installed in the AI-Q release container."
+    ) in source_addendum
+    assert "pydata-sphinx-theme v0.16.1" in source_addendum
+    upstream_commit = "c47786b993c85f0f442cc8d6e6b55e5d4e92b6b9"  # pragma: allowlist secret
+    expected_urls = (
+        "https://github.com/pydata/pydata-sphinx-theme/releases/tag/v0.16.1",
+        f"https://github.com/pydata/pydata-sphinx-theme/commit/{upstream_commit}",
+        (
+            "https://raw.githubusercontent.com/pydata/pydata-sphinx-theme/"
+            f"{upstream_commit}/src/pydata_sphinx_theme/theme/pydata_sphinx_theme/components/sidebar-nav-bs.html"
+        ),
+        f"https://raw.githubusercontent.com/pydata/pydata-sphinx-theme/{upstream_commit}/LICENSE",
+    )
+    for url in expected_urls:
+        assert url in source_addendum
+    assert "Decoded SHA-256: d92fc698623827d7204139dee7874fbd7447f9256b8199acbd71cf8ee53d6f64" in source_addendum
+    assert "Copyright (c) 2018, pandas" in source_addendum
+    assert "Licenses: BSD-3-Clause AND Apache-2.0" in source_addendum
+
+    license_payload = _verbatim_payload(notices, "pydata-sphinx-theme 0.16.1 BSD-3-Clause LICENSE")
+    separator = "----------------------------------------------------------------------------"
+    bsd_license = license_payload.split(f"{separator}\n", 1)[1]
+    bsd_license = bsd_license.rsplit(f"\n{separator}", 1)[0]
+    template_license = "BSD 3-Clause License" + template.split("BSD 3-Clause License", 1)[1].split("\n#}", 1)[0]
+    assert template_license == bsd_license
+    assert "* Redistributions of source code must retain the above copyright notice" in bsd_license
+    assert "* Redistributions in binary form must reproduce the above copyright notice" in bsd_license
+    assert "* Neither the name of the copyright holder nor the names of its" in bsd_license
+    assert 'THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"' in bsd_license
+
+    assert "SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES." in template
+    assert "SPDX-FileCopyrightText: Copyright (c) 2018, pandas" in template
+    assert "SPDX-License-Identifier: BSD-3-Clause AND Apache-2.0" in template
+    assert (
+        "Modified by NVIDIA from pydata-sphinx-theme v0.16.1 sidebar-nav-bs.html:\n"
+        "https://github.com/pydata/pydata-sphinx-theme/blob/v0.16.1/"
+        "src/pydata_sphinx_theme/theme/pydata_sphinx_theme/components/sidebar-nav-bs.html"
+    ) in template
+    assert (
+        'The NVIDIA modifications remove the "Section Navigation" title, use a "Table\n'
+        'of Contents" accessibility label, and generate the navigation tree from depth\n'
+        "zero."
+    ) in template
+    rendered_template = template.split("#}", 1)[1]
+    assert "Section Navigation" not in rendered_template
+    assert "aria-label=\"{{ _('Table of Contents') }}\"" in rendered_template
+    assert "startdepth=0" in rendered_template
 
 
 def test_init_sql_preserves_reference_schema_and_upgrade_history() -> None:
