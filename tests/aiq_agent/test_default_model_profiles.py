@@ -19,6 +19,10 @@ CONFIG_GLOBS = (
 )
 CONFIG_PATHS = tuple(sorted(path for pattern in CONFIG_GLOBS for path in REPO_ROOT.glob(pattern)))
 FRESHQA_CONFIG_PATHS = tuple(sorted(REPO_ROOT.glob("frontends/benchmarks/freshqa/configs/*.yml")))
+SHALLOW_PROFILE_PATHS = (
+    REPO_ROOT / "configs/config_web_default_guardrails.yml",
+    REPO_ROOT / "configs/config_frontier_models.yml",
+)
 
 DEPRECATED_REFERENCES = (
     "/".join(("nvidia", "nemotron-3-super-120b-a12b")),
@@ -141,6 +145,15 @@ def test_freshqa_research_tools_are_registered_data_sources(config_path: Path):
             "deep_research_agent",
         }:
             assert set(function.get("tools", [])) <= source_tools
+
+
+@pytest.mark.parametrize("config_path", SHALLOW_PROFILE_PATHS, ids=lambda path: path.name)
+def test_shallow_profiles_use_the_shared_citation_prompt(config_path: Path):
+    """Default Lightning and frontier Luna must share the hardened prompt and runtime path."""
+    config = _load_config(config_path)
+    shallow = config["functions"]["shallow_research_agent"]
+
+    assert "system_prompt" not in shallow
 
 
 def test_deprecated_model_and_endpoint_references_are_absent():

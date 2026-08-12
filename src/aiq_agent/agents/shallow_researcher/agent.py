@@ -39,6 +39,7 @@ from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.callbacks import SUPPRESS_OUTPUT_ARTIFACT_TAG
+from aiq_agent.common.citation_verification import CitationIntegrityError
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
@@ -58,6 +59,12 @@ logger = logging.getLogger(__name__)
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
 
+_SOURCE_SECTION_HEADING_RE = re.compile(
+    r"^[^\S\n]*(?:#{1,3}[^\S\n]+(?:Sources|References)|\*\*(?:Sources|References):?\*\*)[^\S\n]*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
+
 
 def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
     """Append one verified citation when the model omitted references."""
@@ -65,23 +72,12 @@ def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
     if not citation_target:
         return report_text
 
-    # verify_citations may strip every citation line under a **References:**
-    # (or ## References / ## Sources) header and leave the empty header
-    # behind. Drop that trailing header before we append our own so the final
-    # output has exactly one references section.
     content = report_text.rstrip()
-    content = re.sub(
-        r"\n{1,2}\*\*References:?\*\*\s*$",
-        "",
-        content,
-        flags=re.IGNORECASE,
-    ).rstrip()
-    content = re.sub(
-        r"\n{1,2}#{2,3}\s+(?:References|Sources)\s*$",
-        "",
-        content,
-        flags=re.IGNORECASE,
-    ).rstrip()
+    # Replace any existing source section.  This also handles a model that
+    # emitted a valid source definition but forgot the required inline marker.
+    source_heading = _SOURCE_SECTION_HEADING_RE.search(content)
+    if source_heading is not None:
+        content = content[: source_heading.start()].rstrip()
     if content.endswith((".", "!", "?")):
         content = f"{content[:-1]} [1]{content[-1]}"
     else:
@@ -94,6 +90,34 @@ def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
         reference = f"- [1] {citation_target}"
 
     return f"{content}\n\n**References:**\n{reference}"
+
+
+def _has_citation_integrity(report_text: str, valid_citations: Sequence[dict[str, Any]]) -> bool:
+    """Return whether a verified report has both a source and an inline marker."""
+    valid_numbers = {
+        int(number)
+        for citation in valid_citations
+        if (number := citation.get("number")) is not None and str(number).isdigit()
+    }
+    if not valid_numbers:
+        return False
+
+    source_heading = _SOURCE_SECTION_HEADING_RE.search(report_text)
+    if source_heading is None:
+        return False
+    body = report_text[: source_heading.start()]
+    return any(int(number) in valid_numbers for number in _INLINE_CITATION_RE.findall(body))
+
+
+def _format_citation_repair_sources(sources: Sequence[SourceEntry]) -> str:
+    """Render numbered source lines that a repair pass can copy verbatim."""
+    lines: list[str] = []
+    for number, source in enumerate(sources, 1):
+        if source.url:
+            lines.append(f"- [{number}] Source {number} - {source.url}")
+        elif source.citation_key:
+            lines.append(f"- [{number}] {source.citation_key}")
+    return "\n".join(lines)
 
 
 class ShallowResearcherAgent:
@@ -187,6 +211,56 @@ class ShallowResearcherAgent:
     def _get_llm(self) -> BaseChatModel:
         """Get the LLM for shallow research."""
         return self.llm_provider.get(LLMRole.RESEARCHER)
+
+    async def _repair_missing_citations(
+        self,
+        messages: Sequence[Any],
+        sources: Sequence[SourceEntry],
+    ) -> str:
+        """Run one bounded, tool-free repair against captured source identities."""
+        source_catalog = _format_citation_repair_sources(sources)
+        if not source_catalog:
+            raise CitationIntegrityError()
+
+        repair_system = SystemMessage(
+            content=(
+                "You are a deterministic citation-repair editor. Do not answer the original question again from "
+                "memory and do not call tools. Rewrite only the immediately preceding draft. Keep only claims "
+                "supported by prior tool results. Your response is invalid unless it contains at least one inline "
+                "[N] marker and a final **References:** section copied from the allowed reference lines."
+            )
+        )
+        repair_request = HumanMessage(
+            content=(
+                "The immediately preceding draft failed the citation contract. Rewrite it once using only claims "
+                "supported by the prior tool results. Preserve the answer's meaning, remove unsupported claims, "
+                "and do not call tools. Add an inline [N] marker after each externally verified claim and finish "
+                "with a `**References:**` section. Copy the corresponding allowed reference lines verbatim; never "
+                "invent or reconstruct a URL. Return only the repaired report.\n\n"
+                f"Allowed reference lines:\n{source_catalog}"
+            )
+        )
+        repair_config: dict[str, Any] = {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
+        if self.callbacks:
+            repair_config["callbacks"] = self.callbacks
+
+        try:
+            response = await self._get_llm().ainvoke(
+                [repair_system, *messages, repair_request],
+                config=repair_config,
+            )
+        except Exception as ex:
+            logger.warning(
+                "Shallow citation repair failed (error_type=%s detail_%s)",
+                type(ex).__name__,
+                log_content_metadata(ex),
+            )
+            raise CitationIntegrityError() from ex
+
+        repaired_content = getattr(response, "content", None)
+        if not isinstance(repaired_content, str) or not repaired_content.strip():
+            raise CitationIntegrityError()
+        return repaired_content
 
     def _build_graph(self) -> CompiledStateGraph:
         """Build the LangGraph StateGraph."""
@@ -422,12 +496,40 @@ class ShallowResearcherAgent:
                     )
                     content = verification.verified_report
                     sources = registry.all_sources()
-                    if not verification.valid_citations and len(sources) == 1:
+                    citation_integrity = _has_citation_integrity(content, verification.valid_citations)
+                    if not citation_integrity and len(sources) == 1:
                         content = _append_minimal_citation(content, sources[0])
+                    elif not citation_integrity:
+                        logger.info(
+                            "Shallow report is missing citation integrity; attempting one bounded repair "
+                            "(registered_sources=%d)",
+                            len(sources),
+                        )
+                        content = await self._repair_missing_citations(validated_result["messages"], sources)
+                        repair_verification = verify_citations(content, registry, reference_sources=sources)
+                        content = repair_verification.verified_report
+                        if not _has_citation_integrity(content, repair_verification.valid_citations):
+                            logger.warning(
+                                "Shallow citation repair did not restore integrity "
+                                "(registered_sources=%d verified_sources=%d)",
+                                len(sources),
+                                len(repair_verification.valid_citations),
+                            )
                 # Step 2: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
                 sanitization = sanitize_report(content)
                 content = sanitization.sanitized_report
                 final_verification = verify_citations(content, registry)
+                if not _has_citation_integrity(
+                    final_verification.verified_report,
+                    final_verification.valid_citations,
+                ):
+                    logger.warning(
+                        "Shallow report failed final citation integrity check "
+                        "(registered_sources=%d verified_sources=%d)",
+                        len(registry.all_sources()),
+                        len(final_verification.valid_citations),
+                    )
+                    raise CitationIntegrityError()
                 content = final_verification.verified_report
                 final_cited_urls = list(
                     dict.fromkeys(
