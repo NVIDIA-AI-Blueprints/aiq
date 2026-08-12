@@ -1446,6 +1446,12 @@ _RESEARCHER_BUDGET_NUDGE = (
     "truncation; do not guess.]"
 )
 
+# Stored in `ResearcherRunGuardState.exhaustion_reason` and reused verbatim in the log line and
+# the blocked-call ToolMessage, so all three name the same cause. Phrased to read correctly after
+# "researcher loop guard reached the ...".
+_REASON_TOTAL_BUDGET = "total source-call budget"
+_REASON_REPEATED = "repeated source-call limit"
+
 
 def _canonical_source_signature(tool_name: str, args: object) -> str:
     """Hash a source-tool name and its canonical arguments without retaining argument content.
@@ -1493,6 +1499,16 @@ class ResearcherLoopGuardMiddleware(AgentMiddleware):
     because ``DeepResearcherAgent`` builds its middleware once and reuses it across concurrent
     workers and requests. When no state is installed (planner, writer, orchestrator) the guard
     is a pass-through.
+
+    The tool hook is **async-only**: ``awrap_tool_call`` is implemented and ``wrap_tool_call`` is
+    not. LangChain puts an async-only middleware into the synchronous tool chain as well, so a
+    sync ``invoke``/``stream`` of a researcher raises ``NotImplementedError`` from the base class
+    rather than silently skipping the guard. That is the researcher stack's contract rather than
+    this class's: ``ToolRetryMiddleware`` - which this guard is deliberately ordered against -
+    ``SourceRegistryMiddleware`` and the rest of the tool-node middleware around it are async-only
+    for the same reason, and ``tools/research.py::_run_research_query`` drives the researcher
+    exclusively through ``ainvoke``. The *model* hook implements both forms because it has no such
+    surrounding constraint.
     """
 
     def __init__(
@@ -1505,11 +1521,22 @@ class ResearcherLoopGuardMiddleware(AgentMiddleware):
         self._source_tool_names = frozenset(source_tool_names)
         self._config = config
 
+    @property
+    def config(self) -> ResearcherLoopGuardConfig:
+        """The limits this guard enforces, so a caller can render prompts from the enforcer."""
+        return self._config
+
     @staticmethod
     def _mark_exhausted(state: ResearcherRunGuardState, reason: str) -> None:
-        """Record why this invocation's research budget ended."""
+        """Record why this invocation's research budget ended, keeping the first cause.
+
+        First writer wins. Once any rule exhausts the run, every later source call takes the
+        already-exhausted branch of :meth:`_guard_source_call`; overwriting here would relabel a
+        repeated-signature block as a budget block in the log and in the returned ``ToolMessage``.
+        """
         state.exhausted = True
-        state.exhaustion_reason = reason
+        if state.exhaustion_reason is None:
+            state.exhaustion_reason = reason
 
     @staticmethod
     def _append_nudge(result):
@@ -1649,29 +1676,33 @@ class ResearcherLoopGuardMiddleware(AgentMiddleware):
         """Enforce the source-call budget and the identical-request limit for one invocation."""
         budget = self._config.max_source_calls_per_query
         if state.exhausted or state.source_call_count >= budget:
-            self._mark_exhausted(state, "total source-call budget")
+            self._mark_exhausted(state, _REASON_TOTAL_BUDGET)
+            # Read the reason back rather than reusing the one just passed in: an earlier rule may
+            # already own this exhaustion, and the block must be reported under its real cause.
+            reason = state.exhaustion_reason or _REASON_TOTAL_BUDGET
             logger.warning(
-                "Researcher loop guard blocked source call | invocation=%s tool=%s calls=%d/%d reason=total_budget",
+                "Researcher loop guard blocked source call | invocation=%s tool=%s calls=%d/%d reason=%s",
                 state.invocation_id,
                 name,
                 state.source_call_count,
                 budget,
+                reason,
             )
-            return self._blocked_result(tool_call, "the total source-call budget")
+            return self._blocked_result(tool_call, f"the {reason}")
 
         signature = _canonical_source_signature(name, tool_call.get("args", {}))
         identical_count = state.source_signature_counts.get(signature, 0)
         if identical_count >= self._config.max_identical_source_calls:
-            self._mark_exhausted(state, "repeated source-call signature")
+            self._mark_exhausted(state, _REASON_REPEATED)
             logger.warning(
-                "Researcher loop guard blocked repeated source call | "
-                "invocation=%s tool=%s repeats=%d/%d reason=repeated_signature",
+                "Researcher loop guard blocked repeated source call | invocation=%s tool=%s repeats=%d/%d reason=%s",
                 state.invocation_id,
                 name,
                 identical_count,
                 self._config.max_identical_source_calls,
+                _REASON_REPEATED,
             )
-            return self._blocked_result(tool_call, "the repeated source-call limit")
+            return self._blocked_result(tool_call, f"the {_REASON_REPEATED}")
 
         # Count before awaiting so source calls dispatched together in one assistant turn share
         # a single hard ceiling instead of all passing the check and then all executing.
@@ -1680,7 +1711,7 @@ class ResearcherLoopGuardMiddleware(AgentMiddleware):
         result = await handler(request)
 
         if state.source_call_count >= budget:
-            self._mark_exhausted(state, "total source-call budget")
+            self._mark_exhausted(state, _REASON_TOTAL_BUDGET)
             logger.info(
                 "Researcher source-call budget reached | invocation=%s tool=%s calls=%d/%d",
                 state.invocation_id,

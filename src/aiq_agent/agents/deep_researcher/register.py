@@ -122,9 +122,9 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
     researcher_loop_guard: ResearcherLoopGuardConfig = Field(
         default_factory=ResearcherLoopGuardConfig,
         description=(
-            "Per-researcher circuit breaker: source-call budget, repeated-request and "
-            "consecutive-think limits for one run_research_batch worker. Setting enabled=false "
-            "disables all three."
+            "Per-researcher circuit breaker: source-call budget, repeated-request, "
+            "consecutive-think and model-turn limits for one run_research_batch worker. Setting "
+            "enabled=false disables all four."
         ),
     )
 

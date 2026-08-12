@@ -111,7 +111,7 @@ class DeepResearcherAgent:
             max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
             resource_limits: Hard per-job request, state, source-call, and wall-clock limits.
             researcher_loop_guard: Per-researcher circuit breaker bounding one run_research_batch
-                worker's source calls, repeated requests, and consecutive think calls.
+                worker's source calls, repeated requests, consecutive think calls, and model turns.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []

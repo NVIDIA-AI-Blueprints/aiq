@@ -300,7 +300,14 @@ def build_researcher_middleware(
     batch wrappers - those wrappers preserve the original tool name.
     """
     middleware = list(common_middleware)
-    tool_retry_index = next(i for i, item in enumerate(middleware) if isinstance(item, ToolRetryMiddleware))
+    tool_retry_index = next(
+        (i for i, item in enumerate(middleware) if isinstance(item, ToolRetryMiddleware)),
+        None,
+    )
+    if tool_retry_index is None:
+        # The ordering above is the whole point of this function, so a shared stack that stops
+        # carrying the anchor must fail loudly here rather than silently mis-place the guard.
+        raise ValueError("ToolRetryMiddleware missing from the shared stack; the researcher loop guard has no anchor")
     middleware.insert(
         tool_retry_index,
         ResearcherLoopGuardMiddleware(
@@ -309,6 +316,18 @@ def build_researcher_middleware(
         ),
     )
     return middleware
+
+
+def installed_researcher_loop_guard(middleware: Sequence[Any]) -> ResearcherLoopGuardConfig | None:
+    """Return the loop-guard limits actually installed in a researcher stack, if any.
+
+    Lets the researcher prompt be rendered from the middleware that enforces the limits instead of
+    from a separately supplied config, so the two can never disagree.
+    """
+    for item in middleware:
+        if isinstance(item, ResearcherLoopGuardMiddleware):
+            return item.config
+    return None
 
 
 def build_source_router_middleware(*, extra_valid_tool_names: Sequence[str] = ()) -> list[Any]:
@@ -599,8 +618,19 @@ def build_deep_research_graph(
     enable_source_router: bool = True,
     researcher_loop_guard: ResearcherLoopGuardConfig | None = None,
 ) -> Any:
-    """Build the full DeepAgents graph for one deep research run."""
-    loop_guard = researcher_loop_guard or ResearcherLoopGuardConfig()
+    """Build the full DeepAgents graph for one deep research run.
+
+    ``researcher_loop_guard`` only supplies the prompt limits when ``middleware_set`` carries no
+    guard of its own. The installed middleware wins, because it is what actually enforces them.
+    """
+    # Render the researcher prompt from the guard that will enforce it: the middleware set is
+    # built by a separate call, so trusting the argument would let a caller print limits that
+    # nothing enforces.
+    loop_guard = (
+        installed_researcher_loop_guard(middleware_set.researcher)
+        or researcher_loop_guard
+        or ResearcherLoopGuardConfig()
+    )
     # Cross-cutting middleware applied to every agent (researcher, subagents, orchestrator).
     # Agent-supplied execute timeouts are unreliable (LLMs pass milliseconds or arbitrarily
     # large values); clamp them to the configured sandbox lifetime so a single execute never

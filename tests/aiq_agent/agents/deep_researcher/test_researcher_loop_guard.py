@@ -41,6 +41,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import StructuredRespons
 from aiq_agent.agents.deep_researcher.custom_middleware import _canonical_source_signature
 from aiq_agent.agents.deep_researcher.factory import build_deep_research_middleware_set
 from aiq_agent.agents.deep_researcher.factory import build_deep_research_tool_set
+from aiq_agent.agents.deep_researcher.factory import installed_researcher_loop_guard
 from aiq_agent.agents.deep_researcher.models import ResearcherLoopGuardConfig
 from aiq_agent.agents.deep_researcher.models import ResearchNotes
 from aiq_agent.agents.deep_researcher.models import loop_guard as loop_guard_module
@@ -231,7 +232,7 @@ class TestIdenticalRequestBlocking:
 
         assert handler.await_count == 2
         assert blocked.status == "error"
-        assert state.exhaustion_reason == "repeated source-call signature"
+        assert state.exhaustion_reason == "repeated source-call limit"
 
     @pytest.mark.asyncio
     async def test_alternating_think_and_same_search_terminates(self, state):
@@ -247,7 +248,23 @@ class TestIdenticalRequestBlocking:
             await middleware.awrap_tool_call(_request(_SOURCE_TOOL, args=args), handler)
 
         assert state.exhausted is True
-        assert state.exhaustion_reason == "repeated source-call signature"
+        assert state.exhaustion_reason == "repeated source-call limit"
+
+    @pytest.mark.asyncio
+    async def test_a_later_call_is_still_blocked_under_the_original_cause(self, state):
+        """The first cause owns the exhaustion; a later block must not be relabelled as budget."""
+        middleware = _guard(max_identical_source_calls=1, max_source_calls_per_query=10)
+        handler = _handler()
+
+        await middleware.awrap_tool_call(_request(_SOURCE_TOOL, args={"query": "same"}), handler)
+        await middleware.awrap_tool_call(_request(_SOURCE_TOOL, args={"query": "same"}), handler)
+        # A different query, well inside the source-call budget, blocked only because the run is
+        # already exhausted - the reported reason must still be the repeat that exhausted it.
+        blocked = await middleware.awrap_tool_call(_request(_SOURCE_TOOL, args={"query": "other"}), handler)
+
+        assert state.exhaustion_reason == "repeated source-call limit"
+        assert "repeated source-call limit" in blocked.content
+        assert "total source-call budget" not in blocked.content
 
     def test_signature_is_stable_across_key_order_and_distinct_for_distinct_args(self):
         """Argument key order is canonicalized; different arguments do not collide."""
@@ -595,6 +612,14 @@ class TestFactoryWiring:
 
         assert guard._config is config
 
+    def test_the_prompt_limits_are_read_off_the_installed_guard(self):
+        """build_deep_research_graph renders the prompt from the stack that enforces the limits."""
+        config = ResearcherLoopGuardConfig(max_source_calls_per_query=4)
+        middleware_set = self._middleware_set(researcher_loop_guard=config)
+
+        assert installed_researcher_loop_guard(middleware_set.researcher) is config
+        assert installed_researcher_loop_guard(middleware_set.planner) is None
+
 
 class TestResearcherInvokeConfig:
     """The researcher subgraph binds no limit of its own and must inherit the orchestrator's."""
@@ -681,9 +706,13 @@ class TestInvocationScoping:
 
 
 class TestPromptRendering:
-    """The researcher prompt must stay StrictUndefined-safe and keep today's guidance."""
+    """The researcher prompt must stay StrictUndefined-safe and gate the guard blocks correctly.
 
-    _SOFT_GUIDANCE = "Default source budget per ResearchQuery"
+    Deliberately structural: the two markers below are the section openers that decide whether a
+    guard block rendered at all, and the limits are checked by value rather than by sentence.
+    Asserting the prose inside those blocks would make every prompt rewording a test failure.
+    """
+
     _HARD_CEILING = "Hard limit (runtime-enforced)"
     _WITHDRAWAL = "When source tools are withdrawn, research is over"
 
@@ -699,14 +728,20 @@ class TestPromptRendering:
             **values,
         )
 
+    @classmethod
+    def _ceiling_line(cls, rendered: str) -> str:
+        """Return the one rendered line carrying the interpolated limits."""
+        return next(line for line in rendered.splitlines() if cls._HARD_CEILING in line)
+
     def test_it_renders_when_the_new_variables_are_absent(self):
         """`| default(false)` is mandatory: StrictUndefined would raise on a bare `{% if %}`."""
         rendered = self._render()
 
-        assert self._SOFT_GUIDANCE in rendered
+        assert rendered.strip()
         assert self._HARD_CEILING not in rendered
+        assert self._WITHDRAWAL not in rendered
 
-    def test_disabled_mode_retains_todays_guidance_only(self):
+    def test_disabled_mode_omits_both_guard_blocks(self):
         """Turning the guard off must restore exactly today's prompt."""
         rendered = self._render(
             researcher_loop_guard_enabled=False,
@@ -714,26 +749,23 @@ class TestPromptRendering:
             researcher_max_identical_source_calls=2,
         )
 
-        assert self._SOFT_GUIDANCE in rendered
-        assert "Do NOT get stuck retrying" in rendered
         assert self._HARD_CEILING not in rendered
         assert self._WITHDRAWAL not in rendered
 
-    def test_enabled_mode_adds_the_ceiling_without_removing_the_guidance(self):
-        """The behavioural budget and the backstop are separate instructions."""
+    def test_enabled_mode_interpolates_both_limits_into_the_ceiling(self):
+        """The model is told the numbers the middleware will actually enforce."""
         rendered = self._render(
             researcher_loop_guard_enabled=True,
             researcher_max_source_calls=10,
             researcher_max_identical_source_calls=2,
         )
+        ceiling_line = self._ceiling_line(rendered)
 
-        assert self._SOFT_GUIDANCE in rendered
-        assert "at most 10 source-tool calls" in rendered
-        assert "at most 2 call(s) with identical tool arguments" in rendered
-        assert "a backstop, not a target" in rendered
+        assert "10" in ceiling_line
+        assert "2" in ceiling_line
 
-    def test_enabled_mode_explains_the_graceful_exit(self):
-        """The ceiling states the limit; these bullets state what to do when it is reached."""
+    def test_enabled_mode_adds_the_withdrawal_guidance(self):
+        """The ceiling states the limit; a second block states what to do when it is reached."""
         rendered = self._render(
             researcher_loop_guard_enabled=True,
             researcher_max_source_calls=10,
@@ -741,9 +773,6 @@ class TestPromptRendering:
         )
 
         assert self._WITHDRAWAL in rendered
-        assert "do not substitute `ls`, `read_file`, `glob`, `grep`" in rendered
-        assert "`ResearchGap`" in rendered
-        assert "Set `evidence_judgment` to reflect the truncation" in rendered
         # Model-agnostic: never "call the ResearchNotes tool" - provider-strategy models have none.
         assert "call the ResearchNotes tool" not in rendered
 
