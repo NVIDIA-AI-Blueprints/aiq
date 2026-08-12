@@ -322,11 +322,12 @@ class TestShallowResearcherAgent:
             citation_repair_timeout=0.001,
         )
 
-        with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
-            await agent._repair_missing_citations(
-                [HumanMessage(content="Draft")],
-                [SourceEntry(url="https://example.com/source")],
-            )
+        async with asyncio.timeout(0.1):
+            with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
+                await agent._repair_missing_citations(
+                    [HumanMessage(content="Draft")],
+                    [SourceEntry(url="https://example.com/source")],
+                )
 
     @pytest.mark.asyncio
     async def test_initial_answer_without_tool_call_is_retried(self, mock_llm_provider, mock_llm, real_tool):
@@ -1371,6 +1372,14 @@ class TestAppendMinimalCitation:
         assert "Closing answer [1]." in result
         assert "Old source" not in result
 
+    def test_preserves_marker_first_answer_immediately_after_reference_block(self):
+        report = "## Sources\n[1] mcp_time__get_current_time\n[1] CUDA is a parallel computing platform."
+
+        result = _append_minimal_citation(report, self._tool_source())
+
+        assert "CUDA is a parallel computing platform" in result
+        assert result.count("mcp_time__get_current_time") == 1
+
 
 class TestCitationIntegrity:
     """Tests for the final inline-plus-source publication invariant."""
@@ -1401,3 +1410,8 @@ class TestCitationIntegrity:
         )
 
         assert not _has_citation_integrity(report, [{"number": 1, "url": "https://example.com/first"}])
+
+    def test_preserves_marker_first_answer_after_reference_definitions(self):
+        report = "## Sources\n[1] mcp_time__get_current_time\n[1] CUDA is a parallel computing platform."
+
+        assert _has_citation_integrity(report, [{"number": 1, "citation_key": "mcp_time__get_current_time"}])

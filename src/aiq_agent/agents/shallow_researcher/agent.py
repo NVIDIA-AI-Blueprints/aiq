@@ -69,7 +69,31 @@ _SOURCE_SECTION_HEADING_RE = re.compile(
     re.IGNORECASE,
 )
 _INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
-_REFERENCE_ENTRY_LINE_RE = re.compile(r"^[^\S\n]*(?:[-*][^\S\n]*)?\[\d+\][^\S\n]+.*$")
+_REFERENCE_ENTRY_LINE_RE = re.compile(r"^[^\S\n]*(?P<bullet>[-*][^\S\n]*)?\[(?P<number>\d+)\][^\S\n]+(?P<target>.+)$")
+_REFERENCE_TARGET_RE = re.compile(
+    r"(?:https?://\S+|[^\s,]+\.\w{2,5}(?:,[^\n]+)?|[A-Za-z0-9]+(?:_+[A-Za-z0-9]+)+)$",
+    re.IGNORECASE,
+)
+
+
+def _reference_entry_number(line: str, previous_number: int | None) -> int | None:
+    """Return a reference number only for an unambiguous definition line."""
+    match = _REFERENCE_ENTRY_LINE_RE.fullmatch(line)
+    if match is None:
+        return None
+
+    number = int(match.group("number"))
+    if previous_number is not None and number <= previous_number:
+        # Reference definitions are unique and ordered. A repeated/reset
+        # marker begins answer prose, even when it immediately follows them.
+        return None
+
+    target = match.group("target").strip()
+    if match.group("bullet") is None and _REFERENCE_TARGET_RE.search(target) is None:
+        # An unbulleted marker-first sentence is answer text. Verified
+        # unbulleted definitions carry a URL, file/page key, or tool key.
+        return None
+    return number
 
 
 def _source_section_spans(report_text: str) -> list[tuple[int, int]]:
@@ -94,9 +118,12 @@ def _source_section_spans(report_text: str) -> list[tuple[int, int]]:
             first_definition += 1
 
         after_definitions = first_definition
-        while after_definitions < len(lines) and _REFERENCE_ENTRY_LINE_RE.fullmatch(
-            lines[after_definitions].rstrip("\r\n")
-        ):
+        previous_number: int | None = None
+        while after_definitions < len(lines):
+            number = _reference_entry_number(lines[after_definitions].rstrip("\r\n"), previous_number)
+            if number is None:
+                break
+            previous_number = number
             after_definitions += 1
 
         if after_definitions > first_definition:
