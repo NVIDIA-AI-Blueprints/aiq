@@ -62,15 +62,75 @@ AGENT_DIR = Path(__file__).parent
 
 _SOURCE_SECTION_HEADING_RE = re.compile(
     r"^[^\S\n]*(?:"
-    r"#{1,6}[^\S\n]+(?:Sources|References)\b[^\n]*"
-    r"|\*\*(?:Sources|References):?\*\*[^\n]*"
-    r"|(?:Sources|References):[^\n]*"
-    r"|(?:Sources|References)"
+    r"#{1,6}[^\S\n]+(?:Sources|References):?"
+    r"|\*\*(?:Sources|References):?\*\*:?"
+    r"|(?:Sources|References):?"
     r")[^\S\n]*$",
-    re.IGNORECASE | re.MULTILINE,
+    re.IGNORECASE,
 )
 _INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
-_REFERENCE_ENTRY_LINE_RE = re.compile(r"^[^\S\n]*(?:[-*][^\S\n]*)?\[\d+\][^\S\n]+.*$", re.MULTILINE)
+_REFERENCE_ENTRY_LINE_RE = re.compile(r"^[^\S\n]*(?:[-*][^\S\n]*)?\[\d+\][^\S\n]+.*$")
+
+
+def _source_section_spans(report_text: str) -> list[tuple[int, int]]:
+    """Locate canonical source headings with definitions, or empty trailing headings."""
+    lines = report_text.splitlines(keepends=True)
+    offsets: list[int] = []
+    offset = 0
+    for line in lines:
+        offsets.append(offset)
+        offset += len(line)
+
+    spans: list[tuple[int, int]] = []
+    line_index = 0
+    while line_index < len(lines):
+        heading = lines[line_index].rstrip("\r\n")
+        if _SOURCE_SECTION_HEADING_RE.fullmatch(heading) is None:
+            line_index += 1
+            continue
+
+        first_definition = line_index + 1
+        while first_definition < len(lines) and not lines[first_definition].strip():
+            first_definition += 1
+
+        after_definitions = first_definition
+        while after_definitions < len(lines) and _REFERENCE_ENTRY_LINE_RE.fullmatch(
+            lines[after_definitions].rstrip("\r\n")
+        ):
+            after_definitions += 1
+
+        if after_definitions > first_definition:
+            # Blank lines after a definition block are section separators, not
+            # answer content. Consume them so preserved prose keeps its spacing.
+            next_content = after_definitions
+            while next_content < len(lines) and not lines[next_content].strip():
+                next_content += 1
+            end = offsets[next_content] if next_content < len(lines) else len(report_text)
+            spans.append((offsets[line_index], end))
+            line_index = next_content
+        elif first_definition == len(lines):
+            spans.append((offsets[line_index], len(report_text)))
+            break
+        else:
+            # An exact heading followed by prose is answer content, not a
+            # reference section, and must not be removed.
+            line_index += 1
+
+    return spans
+
+
+def _remove_source_sections(report_text: str, spans: Sequence[tuple[int, int]]) -> str:
+    """Remove only recognized source-section spans, preserving surrounding prose."""
+    if not spans:
+        return report_text
+
+    pieces: list[str] = []
+    previous_end = 0
+    for start, end in spans:
+        pieces.append(report_text[previous_end:start])
+        previous_end = end
+    pieces.append(report_text[previous_end:])
+    return "".join(pieces)
 
 
 def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
@@ -79,12 +139,9 @@ def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
     if not citation_target:
         return report_text
 
-    content = report_text.rstrip()
-    # Replace any existing source section.  This also handles a model that
-    # emitted a valid source definition but forgot the required inline marker.
-    source_heading = _SOURCE_SECTION_HEADING_RE.search(content)
-    if source_heading is not None:
-        content = content[: source_heading.start()].rstrip()
+    # Replace only canonical source sections. Similar-looking answer headings
+    # and prose (for example, "Sources of renewable energy") are content.
+    content = _remove_source_sections(report_text, _source_section_spans(report_text)).rstrip()
     if content.endswith((".", "!", "?")):
         content = f"{content[:-1]} [1]{content[-1]}"
     else:
@@ -109,22 +166,12 @@ def _has_citation_integrity(report_text: str, valid_citations: Sequence[dict[str
     if not valid_numbers:
         return False
 
-    source_heading = _SOURCE_SECTION_HEADING_RE.search(report_text)
-    if source_heading is None:
+    source_sections = _source_section_spans(report_text)
+    if not source_sections:
         return False
-    # Source-definition lines contain [N] labels but are not inline citations.
-    # Remove only the contiguous definition block after the heading; matching
-    # globally would also erase valid prose that begins with an inline marker.
-    tail_lines = report_text[source_heading.end() :].splitlines(keepends=True)
-    first_definition = 0
-    while first_definition < len(tail_lines) and not tail_lines[first_definition].strip():
-        first_definition += 1
-    after_definitions = first_definition
-    while after_definitions < len(tail_lines) and _REFERENCE_ENTRY_LINE_RE.fullmatch(
-        tail_lines[after_definitions].rstrip("\r\n")
-    ):
-        after_definitions += 1
-    prose = report_text[: source_heading.start()] + "".join(tail_lines[after_definitions:])
+    # Definition labels are not inline citations. Remove every recognized
+    # source block so a later duplicate block cannot satisfy the invariant.
+    prose = _remove_source_sections(report_text, source_sections)
     return any(int(number) in valid_numbers for number in _INLINE_CITATION_RE.findall(prose))
 
 
@@ -330,6 +377,7 @@ class ShallowResearcherAgent:
             processed_history = list(messages)
 
             try:
+                draft_config = {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
                 if iterations >= self.max_tool_iterations:
                     logger.warning("Max iterations (%d) reached. Forcing synthesis.", iterations)
 
@@ -343,14 +391,13 @@ class ShallowResearcherAgent:
                     )
 
                     full_messages = [system_message] + processed_history + [synthesis_anchor]
-                    response = await self._get_llm().ainvoke(full_messages)
+                    response = await self._get_llm().ainvoke(full_messages, config=draft_config)
                     return {"messages": [response], "tool_iterations": iterations}
 
                 llm = self._get_llm()
                 llm_with_tools = llm.bind_tools(self.tools) if self.tools else llm
                 full_messages = [system_message] + processed_history
-                pre_evidence_config = {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]} if iterations == 0 else None
-                response = await llm_with_tools.ainvoke(full_messages, config=pre_evidence_config)
+                response = await llm_with_tools.ainvoke(full_messages, config=draft_config)
 
                 if self.tools and iterations == 0 and not getattr(response, "tool_calls", None):
                     logger.warning("Shallow researcher returned an answer before collecting evidence; retrying once")
@@ -363,7 +410,7 @@ class ShallowResearcherAgent:
                     retry_llm = llm.bind_tools(self.tools, parallel_tool_calls=False)
                     response = await retry_llm.ainvoke(
                         full_messages + [response, tool_required],
-                        config=pre_evidence_config,
+                        config=draft_config,
                     )
                     retry_tool_calls = getattr(response, "tool_calls", None) or []
                     if len(retry_tool_calls) != 1 or retry_tool_calls[0].get("name") not in source_tool_names:

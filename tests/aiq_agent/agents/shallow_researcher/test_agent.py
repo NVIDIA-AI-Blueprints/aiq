@@ -348,7 +348,7 @@ class TestShallowResearcherAgent:
             call([real_tool]),
             call([real_tool], parallel_tool_calls=False),
         ]
-        for invocation in mock_llm.ainvoke.await_args_list[:2]:
+        for invocation in mock_llm.ainvoke.await_args_list:
             assert invocation.kwargs["config"] == {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
 
     @pytest.mark.asyncio
@@ -494,9 +494,11 @@ class TestShallowResearcherAgent:
     async def test_forced_synthesis_adds_instruction_message(self, mock_llm_provider, mock_llm, real_tool):
         """Test that forced synthesis adds instruction to synthesize."""
         captured_messages = []
+        captured_configs = []
 
-        async def capture_messages(messages):
+        async def capture_messages(messages, *, config):
             captured_messages.append(messages)
+            captured_configs.append(config)
             return AIMessage(content="Synthesized response")
 
         mock_llm.ainvoke = AsyncMock(side_effect=capture_messages)
@@ -521,6 +523,7 @@ class TestShallowResearcherAgent:
             "synthesize" in str(msg.content).lower() for msg in last_call_messages if hasattr(msg, "content")
         )
         assert synthesis_instruction_found
+        assert captured_configs == [{"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}]
 
 
 # ---------------------------------------------------------------------------
@@ -795,7 +798,12 @@ class TestShallowResearcherSourceRegistryGating:
         )
         final_response = AIMessage(content="CUDA is a parallel computing platform.")
         repaired_response = AIMessage(
-            content="CUDA is a parallel computing platform [2]. The current time came from the time tool [1]."
+            content=(
+                "CUDA is a parallel computing platform [2]. The current time came from the time tool [1].\n\n"
+                "**References:**\n"
+                "- [1] mcp_time__get_current_time\n"
+                "- [2] Source 2 - https://docs.nvidia.com/cuda/"
+            )
         )
         bound_llm = MagicMock()
         bound_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
@@ -876,6 +884,8 @@ class TestShallowResearcherSourceRegistryGating:
             )
 
         assert mock_llm.ainvoke.await_count == 3
+        for invocation in mock_llm.ainvoke.await_args_list:
+            assert invocation.kwargs["config"]["tags"] == [SUPPRESS_OUTPUT_ARTIFACT_TAG]
         callback.emit_final_report.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1328,34 +1338,44 @@ class TestAppendMinimalCitation:
 
         assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
 
-    @pytest.mark.parametrize(
-        "heading",
-        [
-            "###### References and notes",
-            "Sources:",
-            "**References:** selected sources",
-        ],
-    )
-    def test_replaces_supported_heading_variants(self, heading):
+    @pytest.mark.parametrize("heading", ["###### References", "Sources:", "**References:**"])
+    def test_replaces_canonical_heading_variants(self, heading):
         report = f"Body sentence.\n\n{heading}\n[1] mcp_time__get_current_time"
 
         result = _append_minimal_citation(report, self._tool_source())
 
-        assert heading not in result
+        assert result.count("**References:**") == 1
         assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
+
+    @pytest.mark.parametrize(
+        "report",
+        [
+            "## Sources of renewable energy\nSolar is renewable.",
+            "## References to previous work\nPrior work remains relevant.",
+            "Sources: market revenue grew last year.",
+            "Sources:\nMarket revenue grew last year.",
+        ],
+    )
+    def test_preserves_source_like_answer_content(self, report):
+        result = _append_minimal_citation(report, self._tool_source())
+
+        assert report.removesuffix(".") in result
+        assert result.endswith("**References:**\n- [1] mcp_time__get_current_time")
+
+    def test_replaces_reference_definitions_without_discarding_trailing_answer(self):
+        report = "Opening answer.\n\n## References\n- [1] Old source - https://example.com/old\n\nClosing answer."
+
+        result = _append_minimal_citation(report, self._tool_source())
+
+        assert "Opening answer." in result
+        assert "Closing answer [1]." in result
+        assert "Old source" not in result
 
 
 class TestCitationIntegrity:
     """Tests for the final inline-plus-source publication invariant."""
 
-    @pytest.mark.parametrize(
-        "heading",
-        [
-            "###### References and notes",
-            "Sources:",
-            "**References:** selected sources",
-        ],
-    )
+    @pytest.mark.parametrize("heading", ["###### References", "Sources:", "**References:**"])
     def test_accepts_inline_marker_outside_reference_definitions(self, heading):
         report = f"{heading}\n- [1] Source - https://example.com/source\n\nAnswer [1]."
 
@@ -1370,3 +1390,14 @@ class TestCitationIntegrity:
         report = "[1] CUDA is a parallel computing platform.\n\nSources:\n- [1] CUDA - https://example.com/cuda"
 
         assert _has_citation_integrity(report, [{"number": 1, "url": "https://example.com/cuda"}])
+
+    def test_does_not_count_definitions_across_multiple_source_sections(self):
+        report = (
+            "Answer without a marker.\n\n"
+            "## Sources\n"
+            "- [1] First - https://example.com/first\n\n"
+            "## References\n"
+            "- [1] Second - https://example.com/second"
+        )
+
+        assert not _has_citation_integrity(report, [{"number": 1, "url": "https://example.com/first"}])
