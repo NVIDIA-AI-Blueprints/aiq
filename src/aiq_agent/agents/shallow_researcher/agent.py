@@ -113,10 +113,18 @@ def _has_citation_integrity(report_text: str, valid_citations: Sequence[dict[str
     if source_heading is None:
         return False
     # Source-definition lines contain [N] labels but are not inline citations.
-    # Remove both the heading and definitions before accepting markers anywhere
-    # else, including a short answer that a provider placed after the section.
-    prose = report_text[: source_heading.start()] + report_text[source_heading.end() :]
-    prose = _REFERENCE_ENTRY_LINE_RE.sub("", prose)
+    # Remove only the contiguous definition block after the heading; matching
+    # globally would also erase valid prose that begins with an inline marker.
+    tail_lines = report_text[source_heading.end() :].splitlines(keepends=True)
+    first_definition = 0
+    while first_definition < len(tail_lines) and not tail_lines[first_definition].strip():
+        first_definition += 1
+    after_definitions = first_definition
+    while after_definitions < len(tail_lines) and _REFERENCE_ENTRY_LINE_RE.fullmatch(
+        tail_lines[after_definitions].rstrip("\r\n")
+    ):
+        after_definitions += 1
+    prose = report_text[: source_heading.start()] + "".join(tail_lines[after_definitions:])
     return any(int(number) in valid_numbers for number in _INLINE_CITATION_RE.findall(prose))
 
 

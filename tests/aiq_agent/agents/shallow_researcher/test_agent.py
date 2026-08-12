@@ -555,12 +555,17 @@ def weather_observation_tool(location: str) -> str:
 def knowledge_search(query: str) -> str:
     """Search uploaded documents and return file citation metadata."""
     return (
-        "Found 1 relevant document(s):\n\n"
+        "Found 2 relevant document(s):\n\n"
         "--- Result 1 ---\n"
         "Source: report.pdf\n"
         "Page: 15\n"
         "Citation: report.pdf, p.15\n\n"
-        f"Relevant content for {query}."
+        f"Relevant content for {query}.\n\n"
+        "--- Result 2 ---\n"
+        "Source: appendix.pdf\n"
+        "Page: 4\n"
+        "Citation: appendix.pdf, p.4\n\n"
+        "Supporting appendix content."
     )
 
 
@@ -697,7 +702,13 @@ class TestShallowResearcherSourceRegistryGating:
             tool_calls=[{"name": "knowledge_search", "args": {"query": "revenue summary"}, "id": "1"}],
         )
         uncited_summary = AIMessage(content="The uploaded report says revenue increased.")
-        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, uncited_summary])
+        repaired_summary = AIMessage(
+            content=("The uploaded report says revenue increased [1].\n\n**References:**\n- [1] report.pdf, p.15")
+        )
+        bound_llm = MagicMock()
+        bound_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, uncited_summary])
+        mock_llm.bind_tools = MagicMock(return_value=bound_llm)
+        mock_llm.ainvoke = AsyncMock(return_value=repaired_summary)
         callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
@@ -710,11 +721,14 @@ class TestShallowResearcherSourceRegistryGating:
         )
 
         sources = agent.source_registry.all_sources()
-        assert len(sources) == 1
+        assert len(sources) == 2
         assert sources[0].citation_key == "report.pdf, p.15"
         assert sources[0].source_type == "knowledge_layer"
+        assert sources[1].citation_key == "appendix.pdf, p.4"
         assert "The uploaded report says revenue increased [1]." in result.messages[-1].content
         assert "[1] report.pdf, p.15" in result.messages[-1].content
+        assert bound_llm.ainvoke.await_count == 2
+        mock_llm.ainvoke.assert_awaited_once()
         callback.emit_final_report.assert_called_once_with(result.messages[-1].content, cited_urls=[])
 
     @pytest.mark.asyncio
@@ -1351,3 +1365,8 @@ class TestCitationIntegrity:
         report = "Answer without a marker.\n\nSources:\n- [1] Source - https://example.com/source"
 
         assert not _has_citation_integrity(report, [{"number": 1, "url": "https://example.com/source"}])
+
+    def test_preserves_answer_line_that_begins_with_an_inline_marker(self):
+        report = "[1] CUDA is a parallel computing platform.\n\nSources:\n- [1] CUDA - https://example.com/cuda"
+
+        assert _has_citation_integrity(report, [{"number": 1, "url": "https://example.com/cuda"}])
