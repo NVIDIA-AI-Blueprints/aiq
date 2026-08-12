@@ -26,6 +26,7 @@ _THIRD_PARTY_LICENSE = _REPO_ROOT / "LICENSE-THIRD-PARTY"
 _RELEASE_NOTICE_COMPONENTS = (
     "loguru 0.7.3",
     "nemoguardrails 0.21.0",
+    "Inter 3.019",
     "py-rust-stemmers 0.1.8",
     "pathspec 1.1.1",
     "crc32c 2.7.1",
@@ -58,7 +59,8 @@ _EXPECTED_VERBATIM_LABELS = (
     "loguru 0.7.3 LICENSE",
     "nemoguardrails 0.21.0 LICENSE.md",
     "nemoguardrails 0.21.0 Apache License 2.0",
-    "Chatbot-UI legacy branch LICENSE",
+    "nemoguardrails 0.21.0 LICENCES-3rd-party",
+    "Inter 3.019 LICENSE.txt (SIL Open Font License 1.1)",
     "Setuptools 82.0.0 MIT LICENSE",
     "autocommand 2.2.2 GNU LGPL version 3",
     "GNU GPL version 3 incorporated by LGPL version 3",
@@ -95,7 +97,8 @@ _EXPECTED_VERBATIM_SHA256 = (
     "e0affae8:4147849a:9e507840:ebed9ac8:1e5f9ec0:f781f855:85e4a359:41a627a7",
     "e64c3f40:7e9f0bf5:54123118:7565c628:07203845:f2d3fa9b:bffff54b:40e08fd7",
     "c5e0634b:49c6aeed:dfcad0d7:9a063491:1dca6d67:a869fdde:c7941190:1bd175ae",
-    "3ccb866f:edd7aedd:7a2e2ea4:2faae973:4193f48b:5efb398c:df068dfe:581333c2",
+    "9dc41f44:d3b5386d:146b5b64:8b5a1704:f7d880c3:7a0005ce:e33d76c1:fa359bb2",
+    "cf6b2123:84273706:19bbe36f:75ac8732:5adf4e70:083aa675:7e577116:95505e7a",
     "f4bdd270:089565b7:e04e8b56:3250949c:362941d8:a2291120:78474d77:c507990e",
     "19bac021:6792027e:9c658307:7bc7b0d9:ef995237:007a6df8:28420e77:cd0baf80",
     "9a70b6b9:34e7fd69:58de126c:9fd689e1:d56d0c4f:3215fd8d:e5e5fb4a:7ae37df4",
@@ -240,10 +243,10 @@ def test_aiq_final_images_include_project_and_third_party_licenses() -> None:
 def test_release_third_party_notice_contains_reviewed_payloads() -> None:
     text = _THIRD_PARTY_LICENSE.read_text()
     sections = {number: _release_notice_section(text, number) for number in range(1, 6)}
-    rust_components = _RELEASE_NOTICE_COMPONENTS[5:]
+    rust_components = _RELEASE_NOTICE_COMPONENTS[6:]
     expected_components_by_section = {
         1: ("loguru 0.7.3",),
-        2: ("nemoguardrails 0.21.0",),
+        2: ("nemoguardrails 0.21.0", "Inter 3.019"),
         3: ("py-rust-stemmers 0.1.8", *rust_components),
         4: ("pathspec 1.1.1",),
         5: ("crc32c 2.7.1",),
@@ -256,7 +259,22 @@ def test_release_third_party_notice_contains_reviewed_payloads() -> None:
         1: ("Copyright (c) 2017",),
         2: (
             "Copyright (c) 2023 NVIDIA CORPORATION & AFFILIATES",
+            (
+                "Attribution Statements: Nvidia actively chooses the MIT license to apply to files with this "
+                "copyright and license."
+            ),
             "Copyright (c) 2023 Mckay Wrigley",
+            "Inter 3.019",
+            "Copyright (c) 2016-2020 The Inter Project Authors.",
+            '"Inter" is trademark of Rasmus Andersson.',
+            "SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007",
+            (
+                "Source: https://raw.githubusercontent.com/rsms/inter/"
+                "0a5106e0bde18df09374066bf3a7998e3546307d/LICENSE.txt"
+            ),
+            "Wheel member: nemoguardrails-0.21.0.dist-info/LICENCES-3rd-party",
+            "SHA-256: 20c77c71c35608683e7176aa5f093a00fdf3112848cebcd06c04e84dc852d939",
+            "SHA-256: 4d7d9c95e7d7f2f0ebf76d5e0b344826b74e903a34028ee18ab54bb639e45906",
             "Copyright (c) Facebook, Inc. and its affiliates.",
             "Copyright (c) 2015-2021 Martin Hensel",
             "tailwindcss v3.3.3 | MIT License",
