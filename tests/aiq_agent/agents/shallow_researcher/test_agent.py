@@ -551,6 +551,19 @@ def weather_observation_tool(location: str) -> str:
     return f"Current conditions for {location}: clear, 68F"
 
 
+@tool
+def knowledge_search(query: str) -> str:
+    """Search uploaded documents and return file citation metadata."""
+    return (
+        "Found 1 relevant document(s):\n\n"
+        "--- Result 1 ---\n"
+        "Source: report.pdf\n"
+        "Page: 15\n"
+        "Citation: report.pdf, p.15\n\n"
+        f"Relevant content for {query}."
+    )
+
+
 class TestShallowResearcherSourceRegistryGating:
     """Tests that shallow source capture is gated by data_source_registry."""
 
@@ -665,6 +678,44 @@ class TestShallowResearcherSourceRegistryGating:
         assert result.messages[-1].content.rstrip() == (
             "It's currently 4:54 AM in Tokyo [1].\n\n## Sources\n- [1] mcp_time__get_current_time"
         )
+
+    @pytest.mark.asyncio
+    async def test_missing_uploaded_document_citation_is_repaired_before_publication(self, mock_llm_provider, mock_llm):
+        """Knowledge-search summaries enforce file citation keys without requiring public URLs."""
+        populate_from_config(
+            [
+                {
+                    "id": "knowledge_layer",
+                    "name": "Knowledge Layer",
+                    "description": "Search uploaded documents.",
+                    "tools": ["knowledge_search"],
+                }
+            ]
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[{"name": "knowledge_search", "args": {"query": "revenue summary"}, "id": "1"}],
+        )
+        uncited_summary = AIMessage(content="The uploaded report says revenue increased.")
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, uncited_summary])
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[knowledge_search],
+            callbacks=[callback],
+        )
+
+        result = await agent.run(
+            ShallowResearchAgentState(messages=[HumanMessage(content="Summarize the uploaded revenue report.")])
+        )
+
+        sources = agent.source_registry.all_sources()
+        assert len(sources) == 1
+        assert sources[0].citation_key == "report.pdf, p.15"
+        assert sources[0].source_type == "knowledge_layer"
+        assert "The uploaded report says revenue increased [1]." in result.messages[-1].content
+        assert "[1] report.pdf, p.15" in result.messages[-1].content
+        callback.emit_final_report.assert_called_once_with(result.messages[-1].content, cited_urls=[])
 
     @pytest.mark.asyncio
     async def test_missing_url_citation_fallback_emits_authoritative_metadata(self, mock_llm_provider, mock_llm):
