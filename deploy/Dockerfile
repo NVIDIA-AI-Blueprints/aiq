@@ -118,6 +118,7 @@ WORKDIR /app
 
 COPY --from=dev-builder /opt/uv-python /opt/uv-python
 COPY --from=dev-builder /app /app
+COPY LICENSE LICENSE-THIRD-PARTY /licenses/
 
 USER 1000:1000
 
@@ -139,6 +140,7 @@ WORKDIR /app
 # Copy from base builder (no CLI)
 COPY --from=builder /opt/uv-python /opt/uv-python
 COPY --from=builder /app /app
+COPY LICENSE LICENSE-THIRD-PARTY /licenses/
 
 USER 1000:1000
 

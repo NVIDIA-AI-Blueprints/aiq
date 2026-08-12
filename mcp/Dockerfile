@@ -71,7 +71,7 @@ WORKDIR /app
 
 COPY --from=builder --chown=10001:10001 /opt/venv /opt/venv
 COPY --chown=10001:10001 configs/config_mcp.yml /app/configs/config_mcp.yml
-COPY --chown=10001:10001 LICENSE /licenses/LICENSE
+COPY --chown=10001:10001 LICENSE LICENSE-THIRD-PARTY /licenses/
 
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
