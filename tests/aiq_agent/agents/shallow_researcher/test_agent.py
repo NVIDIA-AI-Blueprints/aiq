@@ -15,6 +15,8 @@
 
 """Tests for the ShallowResearcherAgent."""
 
+import asyncio
+import re
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import call
@@ -28,6 +30,7 @@ from langchain_core.tools import tool
 
 from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
 from aiq_agent.agents.shallow_researcher.agent import _append_minimal_citation
+from aiq_agent.agents.shallow_researcher.agent import _has_citation_integrity
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
@@ -105,6 +108,7 @@ class TestShallowResearcherAgent:
         assert len(agent.tools) == 1
         assert agent.max_llm_turns == 10
         assert agent.max_tool_iterations == 5
+        assert agent.citation_repair_timeout == 60.0
         assert agent.callbacks == []
         assert agent.system_prompt is not None
 
@@ -293,16 +297,36 @@ class TestShallowResearcherAgent:
             )
             assert "research" in agent.system_prompt.lower()
 
-    def test_default_prompt_requires_research_and_exact_citations(self, mock_llm_provider, real_tool):
-        """Default prompt preserves the tested compact research and citation contract."""
+    def test_default_prompt_has_structural_citation_contract(self, mock_llm_provider, real_tool):
+        """Default prompt preserves the shared research and citation contract."""
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[real_tool],
         )
 
-        assert "your first response MUST be a tool call" in agent.system_prompt
-        assert "Cite every externally verified claim inline" in agent.system_prompt
-        assert "using an exact URL returned by a tool" in agent.system_prompt
+        assert re.search(r"\[\d+\]", agent.system_prompt)
+        assert "**References:**" in agent.system_prompt
+        assert "- [1] mcp_time__get_current_time" in agent.system_prompt
+
+    @pytest.mark.asyncio
+    async def test_citation_repair_timeout_fails_closed(self, mock_llm_provider, mock_llm):
+        """A stalled provider cannot extend a completed shallow run indefinitely."""
+
+        async def stalled_repair(*_args, **_kwargs):
+            await asyncio.sleep(1)
+
+        mock_llm.ainvoke = AsyncMock(side_effect=stalled_repair)
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[],
+            citation_repair_timeout=0.001,
+        )
+
+        with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
+            await agent._repair_missing_citations(
+                [HumanMessage(content="Draft")],
+                [SourceEntry(url="https://example.com/source")],
+            )
 
     @pytest.mark.asyncio
     async def test_initial_answer_without_tool_call_is_retried(self, mock_llm_provider, mock_llm, real_tool):
@@ -708,7 +732,10 @@ class TestShallowResearcherSourceRegistryGating:
         repaired_response = AIMessage(
             content="CUDA is a parallel computing platform [2]. The current time came from the time tool [1]."
         )
-        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response, repaired_response])
+        bound_llm = MagicMock()
+        bound_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+        mock_llm.bind_tools = MagicMock(return_value=bound_llm)
+        mock_llm.ainvoke = AsyncMock(return_value=repaired_response)
 
         callback = MagicMock()
         agent = ShallowResearcherAgent(
@@ -730,10 +757,11 @@ class TestShallowResearcherSourceRegistryGating:
             result.messages[-1].content,
             cited_urls=["https://docs.nvidia.com/cuda/"],
         )
-        assert mock_llm.ainvoke.await_count == 3
-        repair_call = mock_llm.ainvoke.await_args_list[-1]
+        assert bound_llm.ainvoke.await_count == 2
+        mock_llm.ainvoke.assert_awaited_once()
+        assert mock_llm.bind_tools.call_count == 2
+        repair_call = mock_llm.ainvoke.await_args
         assert repair_call.kwargs["config"]["tags"] == [SUPPRESS_OUTPUT_ARTIFACT_TAG]
-        assert "do not call tools" in repair_call.args[0][-1].content
         assert isinstance(repair_call.args[0][0], SystemMessage)
 
     @pytest.mark.asyncio
@@ -1234,3 +1262,41 @@ class TestAppendMinimalCitation:
         result = _append_minimal_citation(report, self._tool_source())
 
         assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
+
+    @pytest.mark.parametrize(
+        "heading",
+        [
+            "###### References and notes",
+            "Sources:",
+            "**References:** selected sources",
+        ],
+    )
+    def test_replaces_supported_heading_variants(self, heading):
+        report = f"Body sentence.\n\n{heading}\n[1] mcp_time__get_current_time"
+
+        result = _append_minimal_citation(report, self._tool_source())
+
+        assert heading not in result
+        assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
+
+
+class TestCitationIntegrity:
+    """Tests for the final inline-plus-source publication invariant."""
+
+    @pytest.mark.parametrize(
+        "heading",
+        [
+            "###### References and notes",
+            "Sources:",
+            "**References:** selected sources",
+        ],
+    )
+    def test_accepts_inline_marker_outside_reference_definitions(self, heading):
+        report = f"{heading}\n- [1] Source - https://example.com/source\n\nAnswer [1]."
+
+        assert _has_citation_integrity(report, [{"number": 1, "url": "https://example.com/source"}])
+
+    def test_does_not_treat_reference_definition_as_inline_citation(self):
+        report = "Answer without a marker.\n\nSources:\n- [1] Source - https://example.com/source"
+
+        assert not _has_citation_integrity(report, [{"number": 1, "url": "https://example.com/source"}])

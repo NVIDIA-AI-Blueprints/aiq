@@ -2,11 +2,16 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 import yaml
 
+from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
+from aiq_agent.common import LLMProvider
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SHARED_SHALLOW_PROMPT = REPO_ROOT / "src/aiq_agent/agents/shallow_researcher/prompts/researcher.j2"
 
 ULTRA_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 LIGHTNING_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
@@ -152,8 +157,11 @@ def test_shallow_profiles_use_the_shared_citation_prompt(config_path: Path):
     """Default Lightning and frontier Luna must share the hardened prompt and runtime path."""
     config = _load_config(config_path)
     shallow = config["functions"]["shallow_research_agent"]
+    agent = ShallowResearcherAgent(llm_provider=MagicMock(spec=LLMProvider), tools=[])
 
+    assert shallow["_type"] == "shallow_research_agent"
     assert "system_prompt" not in shallow
+    assert agent.system_prompt == SHARED_SHALLOW_PROMPT.read_text(encoding="utf-8")
 
 
 def test_deprecated_model_and_endpoint_references_are_absent():

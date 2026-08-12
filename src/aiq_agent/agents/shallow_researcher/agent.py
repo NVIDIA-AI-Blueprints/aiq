@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -60,10 +61,16 @@ logger = logging.getLogger(__name__)
 AGENT_DIR = Path(__file__).parent
 
 _SOURCE_SECTION_HEADING_RE = re.compile(
-    r"^[^\S\n]*(?:#{1,3}[^\S\n]+(?:Sources|References)|\*\*(?:Sources|References):?\*\*)[^\S\n]*$",
+    r"^[^\S\n]*(?:"
+    r"#{1,6}[^\S\n]+(?:Sources|References)\b[^\n]*"
+    r"|\*\*(?:Sources|References):?\*\*[^\n]*"
+    r"|(?:Sources|References):[^\n]*"
+    r"|(?:Sources|References)"
+    r")[^\S\n]*$",
     re.IGNORECASE | re.MULTILINE,
 )
 _INLINE_CITATION_RE = re.compile(r"\[(\d+)\]")
+_REFERENCE_ENTRY_LINE_RE = re.compile(r"^[^\S\n]*(?:[-*][^\S\n]*)?\[\d+\][^\S\n]+.*$", re.MULTILINE)
 
 
 def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
@@ -105,8 +112,12 @@ def _has_citation_integrity(report_text: str, valid_citations: Sequence[dict[str
     source_heading = _SOURCE_SECTION_HEADING_RE.search(report_text)
     if source_heading is None:
         return False
-    body = report_text[: source_heading.start()]
-    return any(int(number) in valid_numbers for number in _INLINE_CITATION_RE.findall(body))
+    # Source-definition lines contain [N] labels but are not inline citations.
+    # Remove both the heading and definitions before accepting markers anywhere
+    # else, including a short answer that a provider placed after the section.
+    prose = report_text[: source_heading.start()] + report_text[source_heading.end() :]
+    prose = _REFERENCE_ENTRY_LINE_RE.sub("", prose)
+    return any(int(number) in valid_numbers for number in _INLINE_CITATION_RE.findall(prose))
 
 
 def _format_citation_repair_sources(sources: Sequence[SourceEntry]) -> str:
@@ -153,6 +164,7 @@ class ShallowResearcherAgent:
         system_prompt: str | None = None,
         max_llm_turns: int = 10,
         max_tool_iterations: int = 5,
+        citation_repair_timeout: float = 60.0,
         callbacks: list[Any] | None = None,
     ) -> None:
         """
@@ -166,12 +178,15 @@ class ShallowResearcherAgent:
             max_llm_turns: Maximum LLM interaction turns (default 10).
             max_tool_iterations: Maximum tool-calling iterations before forcing
                                 synthesis (default 5).
+            citation_repair_timeout: Maximum seconds for the one-shot citation
+                                     repair call (default 60).
             callbacks: Optional list of LangGraph callbacks.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools)
         self.max_llm_turns = max_llm_turns
         self.max_tool_iterations = max_tool_iterations
+        self.citation_repair_timeout = citation_repair_timeout
         self.callbacks = callbacks or []
 
         # Load prompts
@@ -245,9 +260,12 @@ class ShallowResearcherAgent:
             repair_config["callbacks"] = self.callbacks
 
         try:
-            response = await self._get_llm().ainvoke(
-                [repair_system, *messages, repair_request],
-                config=repair_config,
+            response = await asyncio.wait_for(
+                self._get_llm().ainvoke(
+                    [repair_system, *messages, repair_request],
+                    config=repair_config,
+                ),
+                timeout=self.citation_repair_timeout,
             )
         except Exception as ex:
             logger.warning(
