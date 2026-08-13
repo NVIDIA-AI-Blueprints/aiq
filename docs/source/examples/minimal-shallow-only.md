@@ -59,7 +59,7 @@ functions:
     tools:
       - web_search
     max_llm_turns: 10    # Max reasoning steps before forced output
-    max_tool_iterations: 5    # Max tool invocations per session
+    max_tool_iterations: 2    # Max total calls: initial search + one retry
 
 # ---------------------------------------------------------------------------
 # Workflow

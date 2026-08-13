@@ -15,7 +15,6 @@
 
 """State models for shallow research agent."""
 
-from operator import add
 from typing import Annotated
 from typing import Any
 
@@ -40,7 +39,7 @@ class ShallowResearchAgentState(BaseModel):
         available_documents: User-uploaded documents with summaries for context.
         collection_name: Knowledge collection name (for fetching documents).
         tool_iterations: Counter for tool-calling iterations.
-        turn_sources: Sources captured by tool calls in this shallow turn.
+        turn_sources: Sources captured by the latest tool attempt in this turn.
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
@@ -50,4 +49,6 @@ class ShallowResearchAgentState(BaseModel):
     available_documents: list[AvailableDocument] | None = None
     collection_name: str | None = None
     tool_iterations: int = 0
-    turn_sources: Annotated[list[SourceEntry], add] = Field(default_factory=list)
+    # Evidence ownership is attempt-scoped: a rewritten-query retry replaces
+    # the rejected attempt instead of extending its citation allowlist.
+    turn_sources: list[SourceEntry] = Field(default_factory=list)

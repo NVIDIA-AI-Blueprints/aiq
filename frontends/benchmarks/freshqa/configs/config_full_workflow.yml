@@ -90,7 +90,7 @@ functions:
     tools:
       - web_search_tool
     max_llm_turns: 10
-    max_tool_iterations: 5
+    max_tool_iterations: 2
     verbose: true
 
   deep_research_agent:

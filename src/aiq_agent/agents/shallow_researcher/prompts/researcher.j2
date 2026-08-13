@@ -27,7 +27,7 @@ Pass the **rewritten query** to the search tool. This greatly improves result re
 ## Research Rules
 - **Only use tools listed** in the Available Tools section below. Do not assume access to tools not listed. If no web search tool is listed, you have NO web access.
 - **Reject false premises**: If the evidence does not support the question's premise, say so directly. Never substitute a related person, product, event, title, or status to satisfy the requested detail.
-- **Loop Prevention**: Max 2 calls per tool. If results are empty, change your search string once or move to synthesis.
+- **Loop Prevention**: Make at most 2 research calls total: one initial search and, only if needed, one rewritten-query retry. If the retry is empty, move to synthesis without calling another tool.
 
 ## Citation Rules
 Cite sources inline with [1], [2], etc. Include a `**References:**` section at the end.

@@ -107,7 +107,7 @@ class TestShallowResearcherAgent:
         assert agent.llm_provider == mock_llm_provider
         assert len(agent.tools) == 1
         assert agent.max_llm_turns == 10
-        assert agent.max_tool_iterations == 5
+        assert agent.max_tool_iterations == 2
         assert agent.callbacks == []
         assert agent.system_prompt is not None
 
@@ -337,7 +337,7 @@ class TestShallowResearcherAgent:
         assert result.messages[-1].content == "Evidence-backed answer"
         assert mock_llm.ainvoke.await_count == 3
         assert mock_llm.bind_tools.call_args_list[:2] == [
-            call([real_tool]),
+            call([real_tool], parallel_tool_calls=False),
             call([real_tool], parallel_tool_calls=False),
         ]
         for invocation in mock_llm.ainvoke.await_args_list:
@@ -383,7 +383,7 @@ class TestShallowResearcherAgent:
         assert "--- BEGIN UNTRUSTED REFERENCE CATALOG ---" in synthesis_messages[-1].content
         assert "--- END UNTRUSTED REFERENCE CATALOG ---" in synthesis_messages[-1].content
         assert mock_llm.bind_tools.call_args_list == [
-            call([web_search_with_urls]),
+            call([web_search_with_urls], parallel_tool_calls=False),
             call([web_search_with_urls], parallel_tool_calls=False),
         ]
         assert result.messages[-1].content == final_answer.content
@@ -417,9 +417,37 @@ class TestShallowResearcherAgent:
 
         assert mock_llm.ainvoke.await_count == 2
         assert mock_llm.bind_tools.call_args_list == [
-            call([real_tool]),
+            call([real_tool], parallel_tool_calls=False),
             call([real_tool], parallel_tool_calls=False),
         ]
+
+    @pytest.mark.asyncio
+    async def test_multiple_initial_tool_calls_are_rejected_before_execution(self, mock_llm_provider, mock_llm):
+        """Parallel or batched initial calls cannot produce tool side effects."""
+        executed_queries: list[str] = []
+
+        @tool
+        def counted_search(query: str) -> str:
+            """Record a search execution."""
+            executed_queries.append(query)
+            return "Search result"
+
+        mock_llm.ainvoke = AsyncMock(
+            return_value=AIMessage(
+                content="",
+                tool_calls=[
+                    {"name": "counted_search", "args": {"query": "CUDA"}, "id": "initial-tool-1"},
+                    {"name": "counted_search", "args": {"query": "GPU"}, "id": "initial-tool-2"},
+                ],
+            )
+        )
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[counted_search])
+
+        with pytest.raises(RuntimeError, match="exactly one allowed research tool"):
+            await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        assert executed_queries == []
+        mock_llm.bind_tools.assert_called_once_with([counted_search], parallel_tool_calls=False)
 
     @pytest.mark.asyncio
     async def test_retry_with_unknown_tool_fails_closed(self, mock_llm_provider, mock_llm, real_tool):
@@ -486,6 +514,43 @@ class TestShallowResearcherAgent:
         assert result is not None
         # The unbounded LLM should have been called (without tools)
         mock_llm.ainvoke.assert_called()
+
+    @pytest.mark.parametrize(("configured_limit", "expected_tool_calls"), [(1, 1), (2, 2), (5, 2)])
+    @pytest.mark.asyncio
+    async def test_tool_call_limit_contract(
+        self,
+        mock_llm_provider,
+        mock_llm,
+        real_tool,
+        configured_limit,
+        expected_tool_calls,
+    ):
+        """Legacy limits above two load but never permit more than two calls."""
+        responses = [
+            AIMessage(
+                content="",
+                tool_calls=[{"name": "web_search_tool", "args": {"query": "CUDA"}, "id": "search-1"}],
+            )
+        ]
+        if expected_tool_calls == 2:
+            responses.append(
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "web_search_tool", "args": {"query": "official CUDA"}, "id": "search-2"}],
+                )
+            )
+        responses.append(AIMessage(content="Final answer"))
+        mock_llm.ainvoke = AsyncMock(side_effect=responses)
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[real_tool],
+            max_tool_iterations=configured_limit,
+        )
+
+        result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        assert result.tool_iterations == expected_tool_calls
+        assert mock_llm.ainvoke.await_count == expected_tool_calls + 1
 
     def test_state_has_tool_iterations_field(self):
         """Test that ShallowResearchAgentState has tool_iterations field."""
@@ -601,11 +666,26 @@ def relevance_retry_search(query: str) -> str:
 def retry_after_failure_search(query: str) -> str:
     """Fail the initial query and return CUDA evidence for a rewritten query."""
     if "official" not in query.lower():
-        raise RuntimeError("temporary search failure")
+        raise RuntimeError(
+            "temporary search failure DUMMY_SECRET_TOKEN_123 at https://internal-search.example.invalid/private"
+        )
     return (
         '<Document href="https://docs.nvidia.com/cuda/">\n'
         "<title>\nCUDA Toolkit Documentation\n</title>\n"
         "CUDA is a parallel computing platform.\n"
+        "</Document>"
+    )
+
+
+@tool
+def irrelevant_then_empty_search(query: str) -> str:
+    """Return irrelevant evidence once, then no citable evidence on retry."""
+    if "official" in query.lower():
+        return "Search returned no results"
+    return (
+        '<Document href="https://weather.example/sf">\n'
+        "<title>\nSan Francisco Weather\n</title>\n"
+        "Current conditions are clear.\n"
         "</Document>"
     )
 
@@ -830,95 +910,70 @@ class TestShallowResearcherSourceRegistryGating:
         callback.emit_final_report.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_cited_multi_source_first_draft_is_published_without_repair(self, mock_llm_provider, mock_llm):
-        """A cited multi-source first draft is published without another LLM call."""
+    async def test_cited_first_draft_is_published_without_repair(self, mock_llm_provider, mock_llm):
+        """A cited first draft is published without another LLM call."""
         populate_from_config(
             [
-                {
-                    "id": "mcp_time",
-                    "name": "MCP Time",
-                    "description": "Get current time and timezone information through MCP.",
-                    "tools": ["mcp_time"],
-                },
                 {
                     "id": "web_search",
                     "name": "Web Search",
                     "description": "Search the web for real-time information.",
                     "tools": ["web_search_with_urls"],
                 },
-            ],
-            group_names={"mcp_time"},
+            ]
         )
         tool_call_response = AIMessage(
             content="",
-            tool_calls=[
-                {"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"},
-                {"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "2"},
-            ],
+            tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
         )
         cited_response = AIMessage(
             content=(
-                "CUDA is a parallel computing platform [2]. The current time came from the time tool [1].\n\n"
-                "**References:**\n"
-                "- [1] mcp_time__get_current_time\n"
-                "- [2] Source 2 - https://docs.nvidia.com/cuda/"
+                "CUDA is a parallel computing platform [1].\n\n"
+                "**References:**\n- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
             )
         )
         bound_llm = MagicMock()
-        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
+        bound_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, cited_response])
         mock_llm.bind_tools = MagicMock(return_value=bound_llm)
-        mock_llm.ainvoke = AsyncMock(return_value=cited_response)
+        mock_llm.ainvoke = AsyncMock()
 
         callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
-            tools=[mcp_time__get_current_time, web_search_with_urls],
+            tools=[web_search_with_urls],
             callbacks=[callback],
         )
 
-        state = ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA? Also note the time.")])
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
         result = await agent.run(state)
 
         sources = agent.source_registry.all_sources()
-        assert len(sources) >= 2
-        assert sources[0].citation_key == "mcp_time__get_current_time"
-        assert any(source.url == "https://docs.nvidia.com/cuda/" for source in sources)
-        assert "CUDA is a parallel computing platform [2]" in result.messages[-1].content
-        assert "mcp_time__get_current_time" in result.messages[-1].content
+        assert [source.url for source in sources] == ["https://docs.nvidia.com/cuda/"]
+        assert "CUDA is a parallel computing platform [1]" in result.messages[-1].content
         callback.emit_final_report.assert_called_once_with(
             result.messages[-1].content,
             cited_urls=["https://docs.nvidia.com/cuda/"],
         )
-        bound_llm.ainvoke.assert_awaited_once()
-        mock_llm.ainvoke.assert_awaited_once()
-        assert mock_llm.bind_tools.call_count == 1
+        assert bound_llm.ainvoke.await_count == 2
+        mock_llm.ainvoke.assert_not_awaited()
+        assert mock_llm.bind_tools.call_count == 2
 
     @pytest.mark.asyncio
-    async def test_uncited_multi_source_first_draft_fails_closed_without_repair(self, mock_llm_provider, mock_llm):
-        """An uncited multi-source draft fails closed without another LLM call."""
+    async def test_uncited_first_draft_fails_closed_without_repair(self, mock_llm_provider, mock_llm):
+        """An uncited draft fails closed without another LLM call."""
         populate_from_config(
             [
-                {
-                    "id": "mcp_time",
-                    "name": "MCP Time",
-                    "description": "Get current time and timezone information through MCP.",
-                    "tools": ["mcp_time"],
-                },
                 {
                     "id": "web_search",
                     "name": "Web Search",
                     "description": "Search the web for real-time information.",
                     "tools": ["web_search_with_urls"],
                 },
-            ],
-            group_names={"mcp_time"},
+            ]
         )
         tool_call_response = AIMessage(
             content="",
-            tool_calls=[
-                {"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"},
-                {"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "2"},
-            ],
+            tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
         )
         source_only_draft = AIMessage(
             content=(
@@ -927,23 +982,21 @@ class TestShallowResearcherSourceRegistryGating:
             )
         )
         bound_llm = MagicMock()
-        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
+        bound_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, source_only_draft])
         mock_llm.bind_tools = MagicMock(return_value=bound_llm)
-        mock_llm.ainvoke = AsyncMock(return_value=source_only_draft)
+        mock_llm.ainvoke = AsyncMock()
         callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
-            tools=[mcp_time__get_current_time, web_search_with_urls],
+            tools=[web_search_with_urls],
             callbacks=[callback],
         )
 
         with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
-            await agent.run(
-                ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA? Also note the time.")])
-            )
+            await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
 
-        bound_llm.ainvoke.assert_awaited_once()
-        mock_llm.ainvoke.assert_awaited_once()
+        assert bound_llm.ainvoke.await_count == 2
+        mock_llm.ainvoke.assert_not_awaited()
         callback.emit_final_report.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1011,7 +1064,12 @@ class TestShallowResearcherSourceCaptureIntegration:
                     "id": "web_search",
                     "name": "Web Search",
                     "description": "Search the web for real-time information.",
-                    "tools": ["web_search_with_urls", "relevance_retry_search", "retry_after_failure_search"],
+                    "tools": [
+                        "web_search_with_urls",
+                        "relevance_retry_search",
+                        "retry_after_failure_search",
+                        "irrelevant_then_empty_search",
+                    ],
                 }
             ]
         )
@@ -1069,8 +1127,8 @@ class TestShallowResearcherSourceCaptureIntegration:
         )
         final_response = AIMessage(
             content=(
-                "CUDA is a parallel computing platform [2].\n\n"
-                "**References:**\n- [2] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
+                "CUDA is a parallel computing platform [1].\n\n"
+                "**References:**\n- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
             )
         )
         mock_llm.ainvoke = AsyncMock(side_effect=[first_search, rewritten_search, final_response])
@@ -1082,20 +1140,56 @@ class TestShallowResearcherSourceCaptureIntegration:
         result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
 
         sources = agent.source_registry.all_sources()
-        assert [source.url for source in sources] == [
-            "https://weather.example/sf",
-            "https://docs.nvidia.com/cuda/",
-        ]
+        assert [source.url for source in sources] == ["https://docs.nvidia.com/cuda/"]
         relevance_messages = mock_llm.ainvoke.await_args_list[1].args[0]
         assert "RELEVANCE CHECK" in relevance_messages[-1].content
         assert mock_llm.bind_tools.call_args_list == [
-            call([relevance_retry_search]),
+            call([relevance_retry_search], parallel_tool_calls=False),
             call([relevance_retry_search], parallel_tool_calls=False),
         ]
         assert mock_llm.ainvoke.await_count == 3
         assert "CUDA is a parallel computing platform [1]." in result.messages[-1].content
         assert "https://docs.nvidia.com/cuda/" in result.messages[-1].content
         assert "https://weather.example/sf" not in result.messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_empty_retry_discards_rejected_first_attempt(self, mock_llm_provider, mock_llm):
+        """An empty retry cannot leave irrelevant first-attempt evidence citable."""
+        first_search = AIMessage(
+            content="",
+            tool_calls=[{"name": "irrelevant_then_empty_search", "args": {"query": "CUDA"}, "id": "search-1"}],
+        )
+        rewritten_search = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "irrelevant_then_empty_search",
+                    "args": {"query": "official NVIDIA CUDA documentation"},
+                    "id": "search-2",
+                }
+            ],
+        )
+        unsupported_final = AIMessage(
+            content=(
+                "CUDA is a parallel computing platform [1].\n\n"
+                "**References:**\n- [1] San Francisco Weather - https://weather.example/sf"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[first_search, rewritten_search, unsupported_final])
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[irrelevant_then_empty_search],
+            callbacks=[callback],
+        )
+
+        with pytest.raises(EmptySourceRegistryError) as exc_info:
+            await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        assert exc_info.value.generated_answer is None
+        assert "CUDA is a parallel" not in exc_info.value.public_response
+        assert agent.source_registry.all_sources() == []
+        callback.emit_final_report.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_irrelevant_result_cannot_be_auto_attached_to_uncited_answer(self, mock_llm_provider, mock_llm):
@@ -1154,8 +1248,14 @@ class TestShallowResearcherSourceCaptureIntegration:
         assert [source.url for source in agent.source_registry.all_sources()] == ["https://docs.nvidia.com/cuda/"]
         retry_messages = mock_llm.ainvoke.await_args_list[1].args[0]
         assert "produced no citable source" in retry_messages[-1].content
+        serialized_retry = "\n".join(str(message.content) for message in retry_messages)
+        assert "DUMMY_SECRET_TOKEN_123" not in serialized_retry
+        assert "internal-search.example.invalid" not in serialized_retry
+        failed_tool_message = next(message for message in retry_messages if isinstance(message, ToolMessage))
+        assert failed_tool_message.status == "error"
+        assert failed_tool_message.content == "Research tool execution failed. Retry with a more specific query."
         assert mock_llm.bind_tools.call_args_list == [
-            call([retry_after_failure_search]),
+            call([retry_after_failure_search], parallel_tool_calls=False),
             call([retry_after_failure_search], parallel_tool_calls=False),
         ]
         assert "CUDA is a parallel computing platform [1]." in result.messages[-1].content
@@ -1427,7 +1527,7 @@ class TestShallowResearcherSessionRegistry:
         ],
     )
     @pytest.mark.asyncio
-    async def test_empty_registry_classification_preserves_sanitized_answer(
+    async def test_empty_registry_classification_omits_uncited_draft(
         self,
         mock_llm_provider,
         mock_llm,
@@ -1445,10 +1545,11 @@ class TestShallowResearcherSessionRegistry:
             await agent.run(state)
 
         assert exc_info.value.reason is expected_reason
-        assert exc_info.value.generated_answer == "Draft answer with "
+        assert exc_info.value.generated_answer is None
+        assert "Draft answer" not in exc_info.value.public_response
 
     @pytest.mark.asyncio
-    async def test_enabled_source_empty_result_preserves_generated_answer(self, mock_llm_provider, mock_llm):
+    async def test_enabled_source_empty_result_omits_uncited_draft(self, mock_llm_provider, mock_llm):
         populate_from_config(
             [
                 {
@@ -1471,7 +1572,12 @@ class TestShallowResearcherSessionRegistry:
         )
         generated_answer = "No supporting sources were found, so I cannot provide a sourced answer."
         mock_llm.ainvoke = AsyncMock(side_effect=[tool_call, AIMessage(content=generated_answer)])
-        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[empty_web_search_tool])
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[empty_web_search_tool],
+            callbacks=[callback],
+        )
         state = ShallowResearchAgentState(
             messages=[HumanMessage(content="Summarize quantum computing.")],
             data_sources=["web"],
@@ -1484,9 +1590,11 @@ class TestShallowResearcherSessionRegistry:
             reset_registry()
 
         assert exc_info.value.reason is EmptySourceRegistryReason.NO_SOURCE_RESULTS
-        assert exc_info.value.generated_answer == generated_answer
+        assert exc_info.value.generated_answer is None
         assert "Try rephrasing the question" in exc_info.value.public_response
+        assert generated_answer not in exc_info.value.public_response
         assert mock_llm.ainvoke.await_count == 2
+        callback.emit_final_report.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_registry_without_final_message_raises_typed_failure(self, mock_llm_provider):

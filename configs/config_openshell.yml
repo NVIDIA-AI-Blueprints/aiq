@@ -141,7 +141,7 @@ functions:
       - advanced_web_search_tool
     verbose: true
     max_llm_turns: 10
-    max_tool_iterations: 5
+    max_tool_iterations: 2
 
   # OpenShell configuration: skills + sandbox
   deep_research_skills:

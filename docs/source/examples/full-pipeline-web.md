@@ -189,7 +189,7 @@ functions:
       - web_search_tool
       - knowledge_search
     max_llm_turns: 10
-    max_tool_iterations: 5
+    max_tool_iterations: 2
 
   # -------------------------------------------------------------------------
   # Deep research agent

@@ -432,7 +432,7 @@ functions:
       - web_search_tool
       - knowledge_search
     max_llm_turns: 10
-    max_tool_iterations: 5
+    max_tool_iterations: 2
     verbose: true
 ```
 
@@ -441,7 +441,7 @@ functions:
 | `llm` | `str` | **required** | LLM for research and synthesis. |
 | `tools` | `list[str]` | `[]` | Search tools available to the agent. |
 | `max_llm_turns` | `int` | `10` | Maximum number of LLM turns (includes both reasoning and tool-calling steps). |
-| `max_tool_iterations` | `int` | `5` | Maximum tool-calling iterations before forcing synthesis. |
+| `max_tool_iterations` | `int` | `2` | Maximum total tool calls before synthesis. Values above two remain valid but are capped at two. |
 | `verbose` | `bool` | `false` | Enable verbose logging. |
 
 ### `deep_research_agent`
@@ -676,7 +676,7 @@ functions:
     tools:
       - web_search_tool
     max_llm_turns: 10
-    max_tool_iterations: 5
+    max_tool_iterations: 2
 
   deep_research_agent:                 # Multi-phase deep research
     _type: deep_research_agent

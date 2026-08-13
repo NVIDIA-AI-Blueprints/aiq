@@ -1311,7 +1311,7 @@ def _create_agent_instance(
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            max_tool_iterations=getattr(fn_config, "max_tool_iterations", 5),
+            max_tool_iterations=getattr(fn_config, "max_tool_iterations", 2),
             callbacks=callbacks,
         )
     except TypeError:

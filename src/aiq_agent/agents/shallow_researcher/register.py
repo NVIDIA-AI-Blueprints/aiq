@@ -59,8 +59,11 @@ class ShallowResearchAgentConfig(FunctionBaseConfig, name="shallow_research_agen
     )
     max_llm_turns: int = Field(default=10, description="Maximum number of LLM turns")
     max_tool_iterations: int = Field(
-        default=5,
-        description="Maximum tool-calling iterations before synthesis; shallow research is capped at two calls",
+        default=2,
+        description=(
+            "Maximum total tool calls before synthesis. Values above two are accepted for compatibility "
+            "but capped at two"
+        ),
     )
     verbose: bool = Field(default=False, description="Whether to enable verbose logging")
 

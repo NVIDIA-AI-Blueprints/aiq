@@ -1150,16 +1150,49 @@ class TestRunAgentJobEncryption:
         update_job_output.assert_not_awaited()
 
     @pytest.mark.parametrize(
-        ("reason", "generated_answer", "initial_status"),
+        ("reason", "generated_answer", "initial_status", "agent_class_path", "function_name"),
         [
-            ("no_sources_selected", None, "running"),
-            ("no_source_results", "# Preserved report", "running"),
-            ("no_source_results", "# Race-losing report", "success"),
+            (
+                "no_sources_selected",
+                None,
+                "running",
+                "aiq_agent.agents.shallow_researcher.agent.ShallowResearcherAgent",
+                "shallow_research_agent",
+            ),
+            (
+                "no_source_results",
+                None,
+                "running",
+                "aiq_agent.agents.shallow_researcher.agent.ShallowResearcherAgent",
+                "shallow_research_agent",
+            ),
+            (
+                "no_source_results",
+                "# Preserved report",
+                "running",
+                "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                "deep_research_agent",
+            ),
+            (
+                "no_source_results",
+                "# Race-losing report",
+                "success",
+                "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                "deep_research_agent",
+            ),
         ],
     )
     @pytest.mark.asyncio
     async def test_empty_source_failure_persists_actionable_error_and_encrypted_outcome(
-        self, monkeypatch, tmp_path, reason, generated_answer, initial_status, content_encryption_manager_guard
+        self,
+        monkeypatch,
+        tmp_path,
+        reason,
+        generated_answer,
+        initial_status,
+        agent_class_path,
+        function_name,
+        content_encryption_manager_guard,
     ):
         import base64
         from contextlib import ExitStack
@@ -1258,8 +1291,8 @@ class TestRunAgentJobEncryption:
                 "config.yml",
                 "job-1",
                 "input",
-                "aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
-                "deep_research_agent",
+                agent_class_path,
+                function_name,
                 content_encryption_policy=encryption_policy,
             )
 

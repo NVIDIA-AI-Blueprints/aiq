@@ -59,6 +59,8 @@ logger = logging.getLogger(__name__)
 
 # Path to this agent's directory (for loading prompts)
 AGENT_DIR = Path(__file__).parent
+MAX_SHALLOW_TOOL_CALLS = 2
+_SAFE_TOOL_ERROR_MESSAGE = "Research tool execution failed. Retry with a more specific query."
 
 _SOURCE_SECTION_HEADING_RE = re.compile(
     r"^[^\S\n]*(?:"
@@ -223,6 +225,11 @@ def _has_citation_integrity(report_text: str, valid_citations: Sequence[dict[str
     return any(int(number) in valid_numbers for number in _INLINE_CITATION_RE.findall(prose))
 
 
+def _safe_tool_error_message(_error: Exception) -> str:
+    """Return a model-safe tool failure without exposing exception details."""
+    return _SAFE_TOOL_ERROR_MESSAGE
+
+
 class ShallowResearcherAgent:
     """
     Shallow research agent for fast, bounded research with tool-calling.
@@ -242,7 +249,7 @@ class ShallowResearcherAgent:
         >>> agent = ShallowResearcherAgent(
         ...     llm_provider=provider,
         ...     tools=[web_search_tool, doc_search_tool],
-        ...     max_tool_iterations=5,
+        ...     max_tool_iterations=2,
         ... )
         >>> state = ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")])
         >>> result = await agent.run(state)
@@ -255,7 +262,7 @@ class ShallowResearcherAgent:
         *,
         system_prompt: str | None = None,
         max_llm_turns: int = 10,
-        max_tool_iterations: int = 5,
+        max_tool_iterations: int = MAX_SHALLOW_TOOL_CALLS,
         callbacks: list[Any] | None = None,
     ) -> None:
         """
@@ -267,9 +274,9 @@ class ShallowResearcherAgent:
             system_prompt: Optional custom system prompt. If not provided,
                           loads system.j2 from prompts.
             max_llm_turns: Maximum LLM interaction turns (default 10).
-            max_tool_iterations: Maximum tool-calling iterations before forcing
-                                synthesis. Shallow research has an absolute cap
-                                of two calls (default 5).
+            max_tool_iterations: Maximum total tool calls before synthesis.
+                                Values above two remain accepted for legacy
+                                callers but are capped at two (default 2).
             callbacks: Optional list of LangGraph callbacks.
         """
         self.llm_provider = llm_provider
@@ -362,7 +369,7 @@ class ShallowResearcherAgent:
             # Keep the model's relevance decision on the first post-tool turn;
             # registry identity proves provenance, not that the source supports
             # the answer.
-            research_limit = min(self.max_tool_iterations, 2)
+            research_limit = min(self.max_tool_iterations, MAX_SHALLOW_TOOL_CALLS)
             has_tool_result = bool(processed_history and isinstance(processed_history[-1], ToolMessage))
             research_exhausted = iterations >= research_limit
             relevance_retry_available = has_tool_result and not research_exhausted
@@ -451,15 +458,16 @@ class ShallowResearcherAgent:
 
                     full_messages = [system_message] + processed_history + [synthesis_anchor]
                     response = await self._get_llm().ainvoke(full_messages, config=draft_config)
+                    if getattr(response, "tool_calls", None):
+                        raise RuntimeError(
+                            "shallow_research_budget_exhausted: model called a tool after the research limit"
+                        )
                     return {"messages": [response], "tool_iterations": iterations}
 
                 llm = self._get_llm()
                 llm_with_tools = llm
                 if self.tools:
-                    if has_tool_result:
-                        llm_with_tools = llm.bind_tools(self.tools, parallel_tool_calls=False)
-                    else:
-                        llm_with_tools = llm.bind_tools(self.tools)
+                    llm_with_tools = llm.bind_tools(self.tools, parallel_tool_calls=False)
                 full_messages = [system_message] + processed_history
                 response = await llm_with_tools.ainvoke(full_messages, config=draft_config)
 
@@ -483,16 +491,15 @@ class ShallowResearcherAgent:
                             "after one retry"
                         )
 
-                retry_tool_calls = getattr(response, "tool_calls", None) or []
-                if relevance_retry_available and retry_tool_calls:
-                    if len(retry_tool_calls) != 1 or retry_tool_calls[0].get("name") not in source_tool_names:
-                        raise RuntimeError(
-                            "shallow_research_relevance_retry: model must call exactly one allowed research tool"
-                        )
+                tool_calls = getattr(response, "tool_calls", None) or []
+                if tool_calls and (len(tool_calls) != 1 or tool_calls[0].get("name") not in source_tool_names):
+                    raise RuntimeError(
+                        "shallow_research_tool_call_contract: model must call exactly one allowed research tool"
+                    )
 
                 new_iterations = iterations
-                if hasattr(response, "tool_calls") and response.tool_calls:
-                    added_calls = len(response.tool_calls)
+                if tool_calls:
+                    added_calls = len(tool_calls)
                     new_iterations += added_calls
                     logger.info("Added %d tool calls to budget. Total: %d", added_calls, new_iterations)
 
@@ -513,7 +520,7 @@ class ShallowResearcherAgent:
         # Convert tool exceptions into ToolMessages so a failed first search
         # consumes its attempt but can still use the one bounded relevance
         # retry. If the retry also fails, the empty registry fails closed.
-        tool_node = ToolNode(self.tools, handle_tool_errors=True)
+        tool_node = ToolNode(self.tools, handle_tool_errors=_safe_tool_error_message)
 
         # Per-agent allowlist mirrors the deep researcher: only tools this
         # agent was loaded with are candidates for source capture. The
@@ -537,9 +544,6 @@ class ShallowResearcherAgent:
             contributing to the citation registry.
             """
             result = await tool_node.ainvoke(state)
-            # Resolve registry at call time (not build time) so each request
-            # writes to its own session-scoped registry when available.
-            active_registry = get_session_registry() or self.source_registry
             turn_sources: list[SourceEntry] = []
             for msg in result.get("messages", []):
                 if isinstance(msg, ToolMessage) and msg.content:
@@ -559,8 +563,6 @@ class ShallowResearcherAgent:
                         source_id=source_id,
                         result_status=getattr(msg, "status", None),
                     )
-                    for source in sources:
-                        active_registry.add(source)
                     turn_sources.extend(sources)
                     if sources:
                         logger.info(
@@ -592,20 +594,18 @@ class ShallowResearcherAgent:
         Returns:
             Updated state with response in messages.
         """
-        # ``turn_sources`` uses an additive graph reducer, so callers may pass
-        # entries returned by a previous invocation. Reset it at the run
-        # boundary before collecting evidence for this turn.
+        # Callers may pass state returned by a previous invocation. Reset its
+        # attempt-scoped evidence before collecting sources for this turn.
         state = state.model_copy(update={"turn_sources": []})
 
         # Resolve the registry for this request: session-scoped (conversation
         # mode) or instance-scoped with clear (standalone mode).  We use a
         # local variable so we never mutate the shared agent instance.
         session_registry = get_session_registry()
-        if session_registry is not None:
-            registry = session_registry
-        else:
+        if session_registry is None:
             self.source_registry.clear()
-            registry = self.source_registry
+        persistent_registry = session_registry if session_registry is not None else self.source_registry
+        registry = persistent_registry
 
         recursion_limit = (self.max_llm_turns * 2) + 10
         config = {"recursion_limit": recursion_limit}
@@ -635,13 +635,11 @@ class ShallowResearcherAgent:
                 research_type="shallow research",
                 enable_logging=False,
             )
-            generated_answer = sanitize_report(content).sanitized_report if content is not None else None
             raise EmptySourceRegistryError(
                 "shallow research",
                 unavailable_tools=unavailable,
                 available_count=available_count,
                 reason=classify_empty_source_registry_reason(state.data_sources, available_count, unavailable),
-                generated_answer=generated_answer,
             )
 
         if validated_result.get("messages"):
@@ -681,6 +679,12 @@ class ShallowResearcherAgent:
                     )
                     raise CitationIntegrityError()
                 content = final_verification.verified_report
+                if registry is not persistent_registry:
+                    # Promote only the final attempt's evidence, and only after
+                    # its answer passes citation verification. Rejected attempts
+                    # never enter the conversation-scoped allowlist.
+                    for source in registry.all_sources():
+                        persistent_registry.add(source)
                 final_cited_urls = list(
                     dict.fromkeys(
                         citation["url"] for citation in final_verification.valid_citations if citation.get("url")

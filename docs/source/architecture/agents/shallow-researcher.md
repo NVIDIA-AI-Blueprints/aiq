@@ -17,7 +17,9 @@ with configurable iteration limits.
 The shallow path is optimized for speed and cost:
 
 - A single LLM with bound tools handles the full research cycle
-- Tool calls are counted against a budget (`max_tool_iterations`)
+- Tool calls are counted against a total budget (`max_tool_iterations`): one
+  initial search and, when needed, one rewritten-query retry. Values above two
+  remain loadable for compatibility but the runtime caps them at two.
 - When the budget is exhausted, a synthesis anchor forces the LLM to produce
   a final answer with citations instead of making more tool calls
 - Context compaction keeps the message window manageable for long tool chains
@@ -99,7 +101,7 @@ Configured through `ShallowResearchAgentConfig` (NeMo Agent Toolkit type name: `
 | `llm` | `LLMRef` | required | LLM to use for research |
 | `tools` | `list[FunctionRef \| FunctionGroupRef]` | `[]` | Tools available for research (web search, document search, etc.) |
 | `max_llm_turns` | `int` | `10` | Maximum LLM interaction turns |
-| `max_tool_iterations` | `int` | `5` | Maximum tool calls before forcing synthesis |
+| `max_tool_iterations` | `int` | `2` | Maximum total tool calls before synthesis; values above two are accepted but capped at two |
 | `verbose` | `bool` | `false` | Enable verbose logging |
 
 **Example YAML:**
@@ -112,7 +114,7 @@ functions:
     tools:
       - web_search_tool
     max_llm_turns: 10
-    max_tool_iterations: 5
+    max_tool_iterations: 2
     verbose: true
 ```
 
@@ -144,7 +146,8 @@ queries with the full context the user assumed but did not state.
 
 ### Synthesis Anchor
 
-When `tool_iterations >= max_tool_iterations`, the agent appends a
+When `tool_iterations` reaches the effective limit
+(`min(max_tool_iterations, 2)`), the agent appends a
 `HumanMessage` synthesis anchor after the conversation history:
 
 > "You have exhausted your research budget. Synthesize the final answer now
