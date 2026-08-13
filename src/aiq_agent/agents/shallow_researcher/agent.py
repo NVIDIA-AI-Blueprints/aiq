@@ -17,7 +17,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 import re
@@ -183,6 +182,18 @@ def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
     return f"{content}\n\n**References:**\n{reference}"
 
 
+def _format_synthesis_source_catalog(sources: Sequence[SourceEntry]) -> str:
+    """Render registry-backed reference rows for the first synthesis draft."""
+    rows: list[str] = []
+    for number, source in enumerate(sources, 1):
+        if source.url:
+            title = " ".join((source.title or source.url).split())
+            rows.append(f"- [{number}] {title} - {source.url}")
+        elif source.citation_key:
+            rows.append(f"- [{number}] {source.citation_key}")
+    return "\n".join(rows)
+
+
 def _has_citation_integrity(report_text: str, valid_citations: Sequence[dict[str, Any]]) -> bool:
     """Return whether a verified report has both a source and an inline marker."""
     valid_numbers = {
@@ -199,18 +210,17 @@ def _has_citation_integrity(report_text: str, valid_citations: Sequence[dict[str
     # Definition labels are not inline citations. Remove every recognized
     # source block so a later duplicate block cannot satisfy the invariant.
     prose = _remove_source_sections(report_text, source_sections)
+    # A malformed source block can leave a verified definition behind (for
+    # example, out-of-order or blank-separated rows). Exclude exact verified
+    # definition lines as well so their [N] labels cannot masquerade as prose.
+    valid_definition_lines = {
+        str(line).strip()
+        for citation in valid_citations
+        if (line := citation.get("line")) is not None and str(line).strip()
+    }
+    if valid_definition_lines:
+        prose = "\n".join(line for line in prose.splitlines() if line.strip() not in valid_definition_lines)
     return any(int(number) in valid_numbers for number in _INLINE_CITATION_RE.findall(prose))
-
-
-def _format_citation_repair_sources(sources: Sequence[SourceEntry]) -> str:
-    """Render numbered source lines that a repair pass can copy verbatim."""
-    lines: list[str] = []
-    for number, source in enumerate(sources, 1):
-        if source.url:
-            lines.append(f"- [{number}] Source {number} - {source.url}")
-        elif source.citation_key:
-            lines.append(f"- [{number}] {source.citation_key}")
-    return "\n".join(lines)
 
 
 class ShallowResearcherAgent:
@@ -246,7 +256,6 @@ class ShallowResearcherAgent:
         system_prompt: str | None = None,
         max_llm_turns: int = 10,
         max_tool_iterations: int = 5,
-        citation_repair_timeout: float = 60.0,
         callbacks: list[Any] | None = None,
     ) -> None:
         """
@@ -260,15 +269,12 @@ class ShallowResearcherAgent:
             max_llm_turns: Maximum LLM interaction turns (default 10).
             max_tool_iterations: Maximum tool-calling iterations before forcing
                                 synthesis (default 5).
-            citation_repair_timeout: Maximum seconds for the one-shot citation
-                                     repair call (default 60).
             callbacks: Optional list of LangGraph callbacks.
         """
         self.llm_provider = llm_provider
         self.tools = list(tools)
         self.max_llm_turns = max_llm_turns
         self.max_tool_iterations = max_tool_iterations
-        self.citation_repair_timeout = citation_repair_timeout
         self.callbacks = callbacks or []
 
         # Load prompts
@@ -308,59 +314,6 @@ class ShallowResearcherAgent:
     def _get_llm(self) -> BaseChatModel:
         """Get the LLM for shallow research."""
         return self.llm_provider.get(LLMRole.RESEARCHER)
-
-    async def _repair_missing_citations(
-        self,
-        messages: Sequence[Any],
-        sources: Sequence[SourceEntry],
-    ) -> str:
-        """Run one bounded, tool-free repair against captured source identities."""
-        source_catalog = _format_citation_repair_sources(sources)
-        if not source_catalog:
-            raise CitationIntegrityError()
-
-        repair_system = SystemMessage(
-            content=(
-                "You are a deterministic citation-repair editor. Do not answer the original question again from "
-                "memory and do not call tools. Rewrite only the immediately preceding draft. Keep only claims "
-                "supported by prior tool results. Your response is invalid unless it contains at least one inline "
-                "[N] marker and a final **References:** section copied from the allowed reference lines."
-            )
-        )
-        repair_request = HumanMessage(
-            content=(
-                "The immediately preceding draft failed the citation contract. Rewrite it once using only claims "
-                "supported by the prior tool results. Preserve the answer's meaning, remove unsupported claims, "
-                "and do not call tools. Add an inline [N] marker after each externally verified claim and finish "
-                "with a `**References:**` section. Copy the corresponding allowed reference lines verbatim; never "
-                "invent or reconstruct a URL. Return only the repaired report.\n\n"
-                f"Allowed reference lines:\n{source_catalog}"
-            )
-        )
-        repair_config: dict[str, Any] = {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
-        if self.callbacks:
-            repair_config["callbacks"] = self.callbacks
-
-        try:
-            response = await asyncio.wait_for(
-                self._get_llm().ainvoke(
-                    [repair_system, *messages, repair_request],
-                    config=repair_config,
-                ),
-                timeout=self.citation_repair_timeout,
-            )
-        except Exception as ex:
-            logger.warning(
-                "Shallow citation repair failed (error_type=%s detail_%s)",
-                type(ex).__name__,
-                log_content_metadata(ex),
-            )
-            raise CitationIntegrityError() from ex
-
-        repaired_content = getattr(response, "content", None)
-        if not isinstance(repaired_content, str) or not repaired_content.strip():
-            raise CitationIntegrityError()
-        return repaired_content
 
     def _build_graph(self) -> CompiledStateGraph:
         """Build the LangGraph StateGraph."""
@@ -403,6 +356,41 @@ class ShallowResearcherAgent:
 
             processed_history = list(messages)
 
+            # Put the output contract next to the evidence it governs. Smaller
+            # models can lose system-level formatting requirements once tool
+            # results dominate the context, so re-anchor them on synthesis turns.
+            has_tool_result = bool(processed_history and isinstance(processed_history[-1], ToolMessage))
+            source_catalog = ""
+            if has_tool_result:
+                active_registry = get_session_registry() or self.source_registry
+                source_catalog = _format_synthesis_source_catalog(active_registry.all_sources())
+                if source_catalog:
+                    processed_history.append(
+                        HumanMessage(
+                            content=(
+                                "SYNTHESIS ONLY. Do not call a tool. Answer the original question now using only the "
+                                "tool evidence above. Cite supported factual claims with [N], using the numbering "
+                                "below. Copy each reference row you use exactly; do not rewrite titles or URLs. "
+                                "Return only this structure:\n"
+                                "<concise answer with inline [N] citations>\n\n"
+                                "**References:**\n"
+                                "<verbatim rows selected from the allowed catalog>\n\n"
+                                "Allowed reference catalog:\n"
+                                f"{source_catalog}\n\n"
+                                "A response without at least one inline [N] and its matching verbatim row is invalid."
+                            )
+                        )
+                    )
+                else:
+                    processed_history.append(
+                        HumanMessage(
+                            content=(
+                                "The latest tool result produced no citable source. Call exactly one research tool "
+                                "again with a more specific query. Do not answer until citable evidence is available."
+                            )
+                        )
+                    )
+
             try:
                 draft_config = {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
                 if iterations >= self.max_tool_iterations:
@@ -411,9 +399,10 @@ class ShallowResearcherAgent:
                     # Anchor instruction at the end to combat "Loss in the Middle"
                     synthesis_anchor = HumanMessage(
                         content=(
-                            "You have exhausted your research budget. Synthesize the final answer now "
-                            "using the citations [1], [2] and the '## References' format. "
-                            "Do not attempt any further tool calls."
+                            "You have exhausted your research budget. Synthesize the final answer now and do not call "
+                            "another tool. Cite only prior tool evidence with inline [N] markers and a non-empty "
+                            "**References:** section whose URLs or document citation keys are copied exactly from the "
+                            "tool results. Do not defer citations to a later pass."
                         )
                     )
 
@@ -422,7 +411,11 @@ class ShallowResearcherAgent:
                     return {"messages": [response], "tool_iterations": iterations}
 
                 llm = self._get_llm()
-                llm_with_tools = llm.bind_tools(self.tools) if self.tools else llm
+                # Once a tool result has produced registry-backed evidence, the
+                # next turn is synthesis-only. Keeping tools bound here invites
+                # smaller models to search repeatedly instead of formatting the
+                # already-available answer and citations.
+                llm_with_tools = llm if source_catalog else (llm.bind_tools(self.tools) if self.tools else llm)
                 full_messages = [system_message] + processed_history
                 response = await llm_with_tools.ainvoke(full_messages, config=draft_config)
 
@@ -600,21 +593,12 @@ class ShallowResearcherAgent:
                     if not citation_integrity and len(sources) == 1:
                         content = _append_minimal_citation(content, sources[0])
                     elif not citation_integrity:
-                        logger.info(
-                            "Shallow report is missing citation integrity; attempting one bounded repair "
+                        logger.warning(
+                            "Shallow report is missing citation integrity; refusing uncited multi-source draft "
                             "(registered_sources=%d)",
                             len(sources),
                         )
-                        content = await self._repair_missing_citations(validated_result["messages"], sources)
-                        repair_verification = verify_citations(content, registry, reference_sources=sources)
-                        content = repair_verification.verified_report
-                        if not _has_citation_integrity(content, repair_verification.valid_citations):
-                            logger.warning(
-                                "Shallow citation repair did not restore integrity "
-                                "(registered_sources=%d verified_sources=%d)",
-                                len(sources),
-                                len(repair_verification.valid_citations),
-                            )
+                        raise CitationIntegrityError()
                 # Step 2: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
                 sanitization = sanitize_report(content)
                 content = sanitization.sanitized_report

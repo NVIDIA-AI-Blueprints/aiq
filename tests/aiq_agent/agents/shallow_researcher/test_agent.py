@@ -15,7 +15,6 @@
 
 """Tests for the ShallowResearcherAgent."""
 
-import asyncio
 import re
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -25,11 +24,11 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
-from langchain_core.messages import SystemMessage
 from langchain_core.tools import tool
 
 from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
 from aiq_agent.agents.shallow_researcher.agent import _append_minimal_citation
+from aiq_agent.agents.shallow_researcher.agent import _format_synthesis_source_catalog
 from aiq_agent.agents.shallow_researcher.agent import _has_citation_integrity
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import LLMProvider
@@ -108,7 +107,6 @@ class TestShallowResearcherAgent:
         assert len(agent.tools) == 1
         assert agent.max_llm_turns == 10
         assert agent.max_tool_iterations == 5
-        assert agent.citation_repair_timeout == 60.0
         assert agent.callbacks == []
         assert agent.system_prompt is not None
 
@@ -133,6 +131,16 @@ class TestShallowResearcherAgent:
 
         assert agent.max_llm_turns == 5
         assert agent.max_tool_iterations == 3
+
+    def test_formats_registry_sources_for_synthesis(self):
+        sources = [
+            SourceEntry(title=" CUDA   Toolkit\nDocumentation ", url="https://docs.nvidia.com/cuda/"),
+            SourceEntry(citation_key="report.pdf, p.15"),
+        ]
+
+        assert _format_synthesis_source_catalog(sources) == (
+            "- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/\n- [2] report.pdf, p.15"
+        )
 
     def test_init_with_callbacks(self, mock_llm_provider, real_tool):
         """Test ShallowResearcherAgent initialization with callbacks."""
@@ -307,27 +315,8 @@ class TestShallowResearcherAgent:
         assert re.search(r"\[\d+\]", agent.system_prompt)
         assert "**References:**" in agent.system_prompt
         assert "- [1] mcp_time__get_current_time" in agent.system_prompt
-
-    @pytest.mark.asyncio
-    async def test_citation_repair_timeout_fails_closed(self, mock_llm_provider, mock_llm):
-        """A stalled provider cannot extend a completed shallow run indefinitely."""
-
-        async def stalled_repair(*_args, **_kwargs):
-            await asyncio.sleep(1)
-
-        mock_llm.ainvoke = AsyncMock(side_effect=stalled_repair)
-        agent = ShallowResearcherAgent(
-            llm_provider=mock_llm_provider,
-            tools=[],
-            citation_repair_timeout=0.001,
-        )
-
-        async with asyncio.timeout(0.1):
-            with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
-                await agent._repair_missing_citations(
-                    [HumanMessage(content="Draft")],
-                    [SourceEntry(url="https://example.com/source")],
-                )
+        assert "Your draft is discarded" in agent.system_prompt
+        assert "Do not use alternative markers" in agent.system_prompt
 
     @pytest.mark.asyncio
     async def test_initial_answer_without_tool_call_is_retried(self, mock_llm_provider, mock_llm, real_tool):
@@ -351,6 +340,28 @@ class TestShallowResearcherAgent:
         ]
         for invocation in mock_llm.ainvoke.await_args_list:
             assert invocation.kwargs["config"] == {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
+
+    @pytest.mark.asyncio
+    async def test_post_tool_synthesis_reanchors_citation_contract(self, mock_llm_provider, mock_llm, real_tool):
+        """The final synthesis call keeps the citation contract adjacent to tool evidence."""
+        tool_call = AIMessage(
+            content="",
+            tool_calls=[{"name": "web_search_tool", "args": {"query": "CUDA"}, "id": "tool-call"}],
+        )
+        final_answer = AIMessage(content="Evidence-backed answer")
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call, final_answer])
+
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
+        await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        synthesis_messages = mock_llm.ainvoke.await_args_list[1].args[0]
+        assert isinstance(synthesis_messages[-1], HumanMessage)
+        assert "SYNTHESIS ONLY" in synthesis_messages[-1].content
+        assert "Allowed reference catalog" in synthesis_messages[-1].content
+        assert "- [1] https://example.com - https://example.com" in synthesis_messages[-1].content
+        assert "**References:**" in synthesis_messages[-1].content
+        assert "matching verbatim row is invalid" in synthesis_messages[-1].content
+        assert mock_llm.bind_tools.call_count == 1
 
     @pytest.mark.asyncio
     async def test_repeated_answer_without_tool_call_fails_closed(self, mock_llm_provider, mock_llm, real_tool):
@@ -674,7 +685,10 @@ class TestShallowResearcherSourceRegistryGating:
             tool_calls=[{"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"}],
         )
         final_response = AIMessage(content="It's currently 4:54 AM in Tokyo.")
-        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+        bound_llm = MagicMock()
+        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
+        mock_llm.bind_tools = MagicMock(return_value=bound_llm)
+        mock_llm.ainvoke = AsyncMock(return_value=final_response)
 
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
@@ -687,10 +701,12 @@ class TestShallowResearcherSourceRegistryGating:
         assert result.messages[-1].content.rstrip() == (
             "It's currently 4:54 AM in Tokyo [1].\n\n## Sources\n- [1] mcp_time__get_current_time"
         )
+        bound_llm.ainvoke.assert_awaited_once()
+        mock_llm.ainvoke.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_missing_uploaded_document_citation_is_repaired_before_publication(self, mock_llm_provider, mock_llm):
-        """Knowledge-search summaries enforce file citation keys without requiring public URLs."""
+    async def test_cited_uploaded_document_first_draft_is_published_without_repair(self, mock_llm_provider, mock_llm):
+        """A cited knowledge-search draft is published without another LLM call."""
         populate_from_config(
             [
                 {
@@ -705,14 +721,13 @@ class TestShallowResearcherSourceRegistryGating:
             content="",
             tool_calls=[{"name": "knowledge_search", "args": {"query": "revenue summary"}, "id": "1"}],
         )
-        uncited_summary = AIMessage(content="The uploaded report says revenue increased.")
-        repaired_summary = AIMessage(
+        cited_summary = AIMessage(
             content=("The uploaded report says revenue increased [1].\n\n**References:**\n- [1] report.pdf, p.15")
         )
         bound_llm = MagicMock()
-        bound_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, uncited_summary])
+        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
         mock_llm.bind_tools = MagicMock(return_value=bound_llm)
-        mock_llm.ainvoke = AsyncMock(return_value=repaired_summary)
+        mock_llm.ainvoke = AsyncMock(return_value=cited_summary)
         callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
@@ -731,7 +746,7 @@ class TestShallowResearcherSourceRegistryGating:
         assert sources[1].citation_key == "appendix.pdf, p.4"
         assert "The uploaded report says revenue increased [1]." in result.messages[-1].content
         assert "[1] report.pdf, p.15" in result.messages[-1].content
-        assert bound_llm.ainvoke.await_count == 2
+        bound_llm.ainvoke.assert_awaited_once()
         mock_llm.ainvoke.assert_awaited_once()
         callback.emit_final_report.assert_called_once_with(result.messages[-1].content, cited_urls=[])
 
@@ -752,9 +767,10 @@ class TestShallowResearcherSourceRegistryGating:
             content="",
             tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
         )
-        mock_llm.ainvoke = AsyncMock(
-            side_effect=[tool_call_response, AIMessage(content="CUDA is a parallel computing platform.")]
-        )
+        bound_llm = MagicMock()
+        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
+        mock_llm.bind_tools = MagicMock(return_value=bound_llm)
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="CUDA is a parallel computing platform."))
         callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
@@ -769,10 +785,12 @@ class TestShallowResearcherSourceRegistryGating:
             result.messages[-1].content,
             cited_urls=["https://docs.nvidia.com/cuda/"],
         )
+        bound_llm.ainvoke.assert_awaited_once()
+        mock_llm.ainvoke.assert_awaited_once()
 
     @pytest.mark.asyncio
-    async def test_missing_citations_are_repaired_once_for_multiple_sources(self, mock_llm_provider, mock_llm):
-        """Ambiguous multi-source drafts get one bounded repair instead of a guessed citation."""
+    async def test_cited_multi_source_first_draft_is_published_without_repair(self, mock_llm_provider, mock_llm):
+        """A cited multi-source first draft is published without another LLM call."""
         populate_from_config(
             [
                 {
@@ -797,8 +815,7 @@ class TestShallowResearcherSourceRegistryGating:
                 {"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "2"},
             ],
         )
-        final_response = AIMessage(content="CUDA is a parallel computing platform.")
-        repaired_response = AIMessage(
+        cited_response = AIMessage(
             content=(
                 "CUDA is a parallel computing platform [2]. The current time came from the time tool [1].\n\n"
                 "**References:**\n"
@@ -807,9 +824,9 @@ class TestShallowResearcherSourceRegistryGating:
             )
         )
         bound_llm = MagicMock()
-        bound_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
+        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
         mock_llm.bind_tools = MagicMock(return_value=bound_llm)
-        mock_llm.ainvoke = AsyncMock(return_value=repaired_response)
+        mock_llm.ainvoke = AsyncMock(return_value=cited_response)
 
         callback = MagicMock()
         agent = ShallowResearcherAgent(
@@ -831,16 +848,13 @@ class TestShallowResearcherSourceRegistryGating:
             result.messages[-1].content,
             cited_urls=["https://docs.nvidia.com/cuda/"],
         )
-        assert bound_llm.ainvoke.await_count == 2
+        bound_llm.ainvoke.assert_awaited_once()
         mock_llm.ainvoke.assert_awaited_once()
-        assert mock_llm.bind_tools.call_count == 2
-        repair_call = mock_llm.ainvoke.await_args
-        assert repair_call.kwargs["config"]["tags"] == [SUPPRESS_OUTPUT_ARTIFACT_TAG]
-        assert isinstance(repair_call.args[0][0], SystemMessage)
+        assert mock_llm.bind_tools.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_failed_multi_source_repair_is_not_published(self, mock_llm_provider, mock_llm):
-        """A single unsuccessful repair fails closed without emitting an uncited report."""
+    async def test_uncited_multi_source_first_draft_fails_closed_without_repair(self, mock_llm_provider, mock_llm):
+        """An uncited multi-source draft fails closed without another LLM call."""
         populate_from_config(
             [
                 {
@@ -871,7 +885,10 @@ class TestShallowResearcherSourceRegistryGating:
                 "**References:**\n- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
             )
         )
-        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, source_only_draft, source_only_draft])
+        bound_llm = MagicMock()
+        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
+        mock_llm.bind_tools = MagicMock(return_value=bound_llm)
+        mock_llm.ainvoke = AsyncMock(return_value=source_only_draft)
         callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
@@ -884,9 +901,8 @@ class TestShallowResearcherSourceRegistryGating:
                 ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA? Also note the time.")])
             )
 
-        assert mock_llm.ainvoke.await_count == 3
-        for invocation in mock_llm.ainvoke.await_args_list:
-            assert invocation.kwargs["config"]["tags"] == [SUPPRESS_OUTPUT_ARTIFACT_TAG]
+        bound_llm.ainvoke.assert_awaited_once()
+        mock_llm.ainvoke.assert_awaited_once()
         callback.emit_final_report.assert_not_called()
 
     @pytest.mark.asyncio
@@ -1393,7 +1409,33 @@ class TestCitationIntegrity:
     def test_does_not_treat_reference_definition_as_inline_citation(self):
         report = "Answer without a marker.\n\nSources:\n- [1] Source - https://example.com/source"
 
-        assert not _has_citation_integrity(report, [{"number": 1, "url": "https://example.com/source"}])
+        assert not _has_citation_integrity(
+            report,
+            [{"number": 1, "url": "https://example.com/source", "line": "- [1] Source - https://example.com/source"}],
+        )
+
+    @pytest.mark.parametrize(
+        "report",
+        [
+            (
+                "Answer without a marker.\n\nSources:\n"
+                "- [2] Second - https://example.com/second\n"
+                "- [1] First - https://example.com/first"
+            ),
+            (
+                "Answer without a marker.\n\nSources:\n"
+                "- [1] First - https://example.com/first\n\n"
+                "- [2] Second - https://example.com/second"
+            ),
+        ],
+    )
+    def test_does_not_treat_malformed_reference_definitions_as_inline_citations(self, report):
+        valid_citations = [
+            {"number": 1, "url": "https://example.com/first", "line": "- [1] First - https://example.com/first"},
+            {"number": 2, "url": "https://example.com/second", "line": "- [2] Second - https://example.com/second"},
+        ]
+
+        assert not _has_citation_integrity(report, valid_citations)
 
     def test_preserves_answer_line_that_begins_with_an_inline_marker(self):
         report = "[1] CUDA is a parallel computing platform.\n\nSources:\n- [1] CUDA - https://example.com/cuda"
