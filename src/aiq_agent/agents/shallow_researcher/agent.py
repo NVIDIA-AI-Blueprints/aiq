@@ -205,9 +205,15 @@ def _format_synthesis_source_catalog(sources: Sequence[SourceEntry]) -> str:
             if title:
                 rows.append(f"- [{number}] {title} - {source.url}")
         elif source.citation_key:
-            citation_key = canonicalize_text(source.citation_key)
-            if citation_key:
-                rows.append(f"- [{number}] {citation_key}")
+            # Citation keys are registry identities, so preserve safe values
+            # byte-for-byte. Rewriting them here would make the model's copied
+            # reference fail verification against the raw registry entry.
+            if source.citation_key != source.citation_key.strip() or any(
+                char != " " and (char.isspace() or unicodedata.category(char).startswith("C"))
+                for char in source.citation_key
+            ):
+                continue
+            rows.append(f"- [{number}] {source.citation_key}")
     return "\n".join(rows)
 
 
