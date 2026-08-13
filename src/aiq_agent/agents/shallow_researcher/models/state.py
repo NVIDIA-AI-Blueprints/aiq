@@ -15,13 +15,16 @@
 
 """State models for shallow research agent."""
 
+from operator import add
 from typing import Annotated
 from typing import Any
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
+from pydantic import Field
 
+from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.knowledge import AvailableDocument
 
 
@@ -37,6 +40,7 @@ class ShallowResearchAgentState(BaseModel):
         available_documents: User-uploaded documents with summaries for context.
         collection_name: Knowledge collection name (for fetching documents).
         tool_iterations: Counter for tool-calling iterations.
+        turn_sources: Sources captured by tool calls in this shallow turn.
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
@@ -46,3 +50,4 @@ class ShallowResearchAgentState(BaseModel):
     available_documents: list[AvailableDocument] | None = None
     collection_name: str | None = None
     tool_iterations: int = 0
+    turn_sources: Annotated[list[SourceEntry], add] = Field(default_factory=list)

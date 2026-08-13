@@ -344,33 +344,47 @@ class TestShallowResearcherAgent:
             assert invocation.kwargs["config"] == {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
 
     @pytest.mark.asyncio
-    async def test_post_tool_synthesis_reanchors_citation_contract(self, mock_llm_provider, mock_llm, real_tool):
+    async def test_post_tool_synthesis_reanchors_citation_contract(self, mock_llm_provider, mock_llm):
         """The final synthesis call keeps the citation contract adjacent to tool evidence."""
+        reset_registry()
+        populate_from_config(
+            [
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "description": "Search the web.",
+                    "tools": ["web_search_with_urls"],
+                }
+            ]
+        )
         tool_call = AIMessage(
             content="",
-            tool_calls=[{"name": "web_search_tool", "args": {"query": "CUDA"}, "id": "tool-call"}],
+            tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "tool-call"}],
         )
         final_answer = AIMessage(
             content=(
                 "CUDA is a parallel computing platform [1].\n\n"
-                "**References:**\n- [1] https://example.com - https://example.com"
+                "**References:**\n- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
             )
         )
         mock_llm.ainvoke = AsyncMock(side_effect=[tool_call, final_answer])
 
-        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[real_tool])
-        result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[web_search_with_urls])
+        try:
+            result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+        finally:
+            reset_registry()
 
         synthesis_messages = mock_llm.ainvoke.await_args_list[1].args[0]
         assert isinstance(synthesis_messages[0], SystemMessage)
         assert isinstance(synthesis_messages[-2], ToolMessage)
         assert isinstance(synthesis_messages[-1], HumanMessage)
-        assert "- [1] https://example.com - https://example.com" in synthesis_messages[-1].content
+        assert "- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/" in synthesis_messages[-1].content
         assert "--- BEGIN UNTRUSTED REFERENCE CATALOG ---" in synthesis_messages[-1].content
         assert "--- END UNTRUSTED REFERENCE CATALOG ---" in synthesis_messages[-1].content
         assert mock_llm.bind_tools.call_args_list == [
-            call([real_tool]),
-            call([real_tool], parallel_tool_calls=False),
+            call([web_search_with_urls]),
+            call([web_search_with_urls], parallel_tool_calls=False),
         ]
         assert result.messages[-1].content == final_answer.content
 
@@ -1305,6 +1319,72 @@ class TestShallowResearcherSessionRegistry:
             assert "prior-turn.example.com/article" in result.messages[-1].content
         finally:
             set_session_registry(None)
+
+    @pytest.mark.asyncio
+    async def test_empty_current_turn_does_not_reuse_prior_session_source(self, mock_llm_provider, mock_llm):
+        """Prior-turn sources cannot suppress the bounded retry or validate its final draft."""
+        from aiq_agent.common.citation_verification import set_session_registry
+
+        reset_registry()
+        populate_from_config(
+            [
+                {
+                    "id": "web",
+                    "name": "Web Search",
+                    "description": "Search the web.",
+                    "tools": ["empty_web_search_tool"],
+                }
+            ]
+        )
+        session_reg = SourceRegistry()
+        session_reg.add(SourceEntry(url="https://prior-turn.example.com/article", title="Prior Article"))
+        first_search = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "empty_web_search_tool",
+                    "args": {"query": "current question"},
+                    "id": "empty-search-1",
+                }
+            ],
+        )
+        rewritten_search = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "empty_web_search_tool",
+                    "args": {"query": "more specific current question"},
+                    "id": "empty-search-2",
+                }
+            ],
+        )
+        stale_final = AIMessage(
+            content=(
+                "Answer based on stale evidence [1].\n\n"
+                "**References:**\n- [1] Prior Article - https://prior-turn.example.com/article"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[first_search, rewritten_search, stale_final])
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[empty_web_search_tool],
+            callbacks=[callback],
+        )
+
+        set_session_registry(session_reg)
+        try:
+            with pytest.raises(EmptySourceRegistryError):
+                await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="Current question")]))
+        finally:
+            set_session_registry(None)
+            reset_registry()
+
+        retry_messages = mock_llm.ainvoke.await_args_list[1].args[0]
+        assert "produced no citable source" in retry_messages[-1].content
+        assert "prior-turn.example.com" not in retry_messages[-1].content
+        assert mock_llm.ainvoke.await_count == 3
+        callback.emit_final_report.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_run_clears_registry_in_standalone_mode(self, mock_llm_provider, mock_llm):

@@ -67,6 +67,7 @@ class TestShallowResearchAgentState:
 
         assert state.user_info is None
         assert state.tools_info is None
+        assert state.turn_sources == []
 
     def test_state_message_accumulation(self):
         """Test that messages properly accumulate."""

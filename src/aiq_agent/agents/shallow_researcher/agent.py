@@ -368,8 +368,7 @@ class ShallowResearcherAgent:
             relevance_retry_available = has_tool_result and not research_exhausted
             source_catalog = ""
             if has_tool_result:
-                active_registry = get_session_registry() or self.source_registry
-                source_catalog = _format_synthesis_source_catalog(active_registry.all_sources())
+                source_catalog = _format_synthesis_source_catalog(state.turn_sources)
                 if source_catalog and relevance_retry_available:
                     processed_history.append(
                         HumanMessage(
@@ -536,6 +535,7 @@ class ShallowResearcherAgent:
             # Resolve registry at call time (not build time) so each request
             # writes to its own session-scoped registry when available.
             active_registry = get_session_registry() or self.source_registry
+            turn_sources: list[SourceEntry] = []
             for msg in result.get("messages", []):
                 if isinstance(msg, ToolMessage) and msg.content:
                     tool_name = getattr(msg, "name", "") or ""
@@ -556,13 +556,14 @@ class ShallowResearcherAgent:
                     )
                     for source in sources:
                         active_registry.add(source)
+                    turn_sources.extend(sources)
                     if sources:
                         logger.info(
                             "[CitationRegistry] Captured %d source(s) from %s",
                             len(sources),
                             tool_name,
                         )
-            return result
+            return {**result, "turn_sources": turn_sources}
 
         builder.add_node("agent", agent_node)
         builder.add_node("tools", tool_node_with_source_capture)
@@ -604,6 +605,14 @@ class ShallowResearcherAgent:
 
         # Post-process: verify citations against source registry
         validated_result = dict(result)
+        if validated_result.get("tool_iterations", 0) > 0:
+            # Session registries intentionally span conversation turns. Once
+            # this turn performed research, verify only sources returned by
+            # this turn so stale evidence cannot suppress retries or validate
+            # an unrelated follow-up answer.
+            registry = SourceRegistry()
+            for source in validated_result.get("turn_sources", []):
+                registry.add(source)
         last_msg = validated_result["messages"][-1] if validated_result.get("messages") else None
         content = str(last_msg.content) if last_msg is not None and getattr(last_msg, "content", None) else None
 
