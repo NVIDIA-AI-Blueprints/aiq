@@ -1322,7 +1322,7 @@ class TestShallowResearcherSessionRegistry:
 
     @pytest.mark.asyncio
     async def test_empty_current_turn_does_not_reuse_prior_session_source(self, mock_llm_provider, mock_llm):
-        """Prior-turn sources cannot suppress the bounded retry or validate its final draft."""
+        """Prior session and input-state sources cannot become current-turn evidence."""
         from aiq_agent.common.citation_verification import set_session_registry
 
         reset_registry()
@@ -1375,7 +1375,14 @@ class TestShallowResearcherSessionRegistry:
         set_session_registry(session_reg)
         try:
             with pytest.raises(EmptySourceRegistryError):
-                await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="Current question")]))
+                await agent.run(
+                    ShallowResearchAgentState(
+                        messages=[HumanMessage(content="Current question")],
+                        turn_sources=[
+                            SourceEntry(url="https://stale-state.example.com/article", title="Stale State Article")
+                        ],
+                    )
+                )
         finally:
             set_session_registry(None)
             reset_registry()
@@ -1383,6 +1390,7 @@ class TestShallowResearcherSessionRegistry:
         retry_messages = mock_llm.ainvoke.await_args_list[1].args[0]
         assert "produced no citable source" in retry_messages[-1].content
         assert "prior-turn.example.com" not in retry_messages[-1].content
+        assert "stale-state.example.com" not in retry_messages[-1].content
         assert mock_llm.ainvoke.await_count == 3
         callback.emit_final_report.assert_not_called()
 

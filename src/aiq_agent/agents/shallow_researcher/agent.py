@@ -587,6 +587,11 @@ class ShallowResearcherAgent:
         Returns:
             Updated state with response in messages.
         """
+        # ``turn_sources`` uses an additive graph reducer, so callers may pass
+        # entries returned by a previous invocation. Reset it at the run
+        # boundary before collecting evidence for this turn.
+        state = state.model_copy(update={"turn_sources": []})
+
         # Resolve the registry for this request: session-scoped (conversation
         # mode) or instance-scoped with clear (standalone mode).  We use a
         # local variable so we never mutate the shared agent instance.
