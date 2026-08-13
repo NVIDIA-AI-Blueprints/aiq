@@ -29,7 +29,6 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
-from aiq_agent.agents.shallow_researcher.agent import _append_minimal_citation
 from aiq_agent.agents.shallow_researcher.agent import _format_synthesis_source_catalog
 from aiq_agent.agents.shallow_researcher.agent import _has_citation_integrity
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
@@ -369,7 +368,10 @@ class TestShallowResearcherAgent:
         assert "- [1] https://example.com - https://example.com" in synthesis_messages[-1].content
         assert "--- BEGIN UNTRUSTED REFERENCE CATALOG ---" in synthesis_messages[-1].content
         assert "--- END UNTRUSTED REFERENCE CATALOG ---" in synthesis_messages[-1].content
-        assert mock_llm.bind_tools.call_count == 1
+        assert mock_llm.bind_tools.call_args_list == [
+            call([real_tool]),
+            call([real_tool], parallel_tool_calls=False),
+        ]
         assert result.messages[-1].content == final_answer.content
 
     @pytest.mark.asyncio
@@ -564,6 +566,37 @@ def web_search_with_urls(query: str) -> str:
 
 
 @tool
+def relevance_retry_search(query: str) -> str:
+    """Return an irrelevant first result and CUDA evidence for a rewritten query."""
+    if "official" in query.lower():
+        return (
+            '<Document href="https://docs.nvidia.com/cuda/">\n'
+            "<title>\nCUDA Toolkit Documentation\n</title>\n"
+            "CUDA is a parallel computing platform.\n"
+            "</Document>"
+        )
+    return (
+        '<Document href="https://weather.example/sf">\n'
+        "<title>\nSan Francisco Weather\n</title>\n"
+        "Current conditions are clear.\n"
+        "</Document>"
+    )
+
+
+@tool
+def retry_after_failure_search(query: str) -> str:
+    """Fail the initial query and return CUDA evidence for a rewritten query."""
+    if "official" not in query.lower():
+        raise RuntimeError("temporary search failure")
+    return (
+        '<Document href="https://docs.nvidia.com/cuda/">\n'
+        "<title>\nCUDA Toolkit Documentation\n</title>\n"
+        "CUDA is a parallel computing platform.\n"
+        "</Document>"
+    )
+
+
+@tool
 def mcp_time__get_current_time(timezone: str = "UTC") -> str:
     """Get the current time for a timezone."""
     return "2026-05-11T14:30:00+09:00"
@@ -623,7 +656,7 @@ class TestShallowResearcherSourceRegistryGating:
             tool_calls=[{"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"}],
         )
         final_response = AIMessage(
-            content=("The current time was returned by the MCP tool.\n\n## Sources\n[1] mcp_time__get_current_time")
+            content=("The current time was returned by the MCP tool [1].\n\n## Sources\n[1] mcp_time__get_current_time")
         )
         mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
 
@@ -657,7 +690,7 @@ class TestShallowResearcherSourceRegistryGating:
             tool_calls=[{"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"}],
         )
         final_response = AIMessage(
-            content=("The current time was returned by the MCP tool.\n\n## Sources\n[1] mcp_time__get_current_time")
+            content=("The current time was returned by the MCP tool [1].\n\n## Sources\n[1] mcp_time__get_current_time")
         )
         mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
 
@@ -676,8 +709,8 @@ class TestShallowResearcherSourceRegistryGating:
         assert result.messages[-1].content.rstrip().endswith("[1] mcp_time__get_current_time")
 
     @pytest.mark.asyncio
-    async def test_missing_tool_result_citation_is_appended(self, mock_llm_provider, mock_llm):
-        """Captured non-URL tool sources are appended when the model omits references."""
+    async def test_missing_tool_result_citation_fails_closed(self, mock_llm_provider, mock_llm):
+        """An uncited non-URL tool answer is not repaired by attaching a source identity."""
         populate_from_config(
             [
                 {
@@ -694,10 +727,7 @@ class TestShallowResearcherSourceRegistryGating:
             tool_calls=[{"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"}],
         )
         final_response = AIMessage(content="It's currently 4:54 AM in Tokyo.")
-        bound_llm = MagicMock()
-        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
-        mock_llm.bind_tools = MagicMock(return_value=bound_llm)
-        mock_llm.ainvoke = AsyncMock(return_value=final_response)
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
 
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
@@ -705,13 +735,10 @@ class TestShallowResearcherSourceRegistryGating:
         )
 
         state = ShallowResearchAgentState(messages=[HumanMessage(content="What time is it in Tokyo?")])
-        result = await agent.run(state)
+        with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
+            await agent.run(state)
 
-        assert result.messages[-1].content.rstrip() == (
-            "It's currently 4:54 AM in Tokyo [1].\n\n## Sources\n- [1] mcp_time__get_current_time"
-        )
-        bound_llm.ainvoke.assert_awaited_once()
-        mock_llm.ainvoke.assert_awaited_once()
+        assert mock_llm.ainvoke.await_count == 2
 
     @pytest.mark.asyncio
     async def test_cited_uploaded_document_first_draft_is_published_without_repair(self, mock_llm_provider, mock_llm):
@@ -733,10 +760,7 @@ class TestShallowResearcherSourceRegistryGating:
         cited_summary = AIMessage(
             content=("The uploaded report says revenue increased [1].\n\n**References:**\n- [1] report.pdf, p.15")
         )
-        bound_llm = MagicMock()
-        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
-        mock_llm.bind_tools = MagicMock(return_value=bound_llm)
-        mock_llm.ainvoke = AsyncMock(return_value=cited_summary)
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, cited_summary])
         callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
@@ -755,13 +779,12 @@ class TestShallowResearcherSourceRegistryGating:
         assert sources[1].citation_key == "appendix.pdf, p.4"
         assert "The uploaded report says revenue increased [1]." in result.messages[-1].content
         assert "[1] report.pdf, p.15" in result.messages[-1].content
-        bound_llm.ainvoke.assert_awaited_once()
-        mock_llm.ainvoke.assert_awaited_once()
+        assert mock_llm.ainvoke.await_count == 2
         callback.emit_final_report.assert_called_once_with(result.messages[-1].content, cited_urls=[])
 
     @pytest.mark.asyncio
-    async def test_missing_url_citation_fallback_emits_authoritative_metadata(self, mock_llm_provider, mock_llm):
-        """A single verified URL appended by fallback must be persisted as cited."""
+    async def test_uncited_single_url_draft_fails_closed(self, mock_llm_provider, mock_llm):
+        """A source identity is never auto-attached to an uncited answer."""
         populate_from_config(
             [
                 {
@@ -776,10 +799,9 @@ class TestShallowResearcherSourceRegistryGating:
             content="",
             tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
         )
-        bound_llm = MagicMock()
-        bound_llm.ainvoke = AsyncMock(return_value=tool_call_response)
-        mock_llm.bind_tools = MagicMock(return_value=bound_llm)
-        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="CUDA is a parallel computing platform."))
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[tool_call_response, AIMessage(content="CUDA is a parallel computing platform.")]
+        )
         callback = MagicMock()
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
@@ -787,15 +809,11 @@ class TestShallowResearcherSourceRegistryGating:
             callbacks=[callback],
         )
 
-        result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+        with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
+            await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
 
-        assert "https://docs.nvidia.com/cuda/" in result.messages[-1].content
-        callback.emit_final_report.assert_called_once_with(
-            result.messages[-1].content,
-            cited_urls=["https://docs.nvidia.com/cuda/"],
-        )
-        bound_llm.ainvoke.assert_awaited_once()
-        mock_llm.ainvoke.assert_awaited_once()
+        assert mock_llm.ainvoke.await_count == 2
+        callback.emit_final_report.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_cited_multi_source_first_draft_is_published_without_repair(self, mock_llm_provider, mock_llm):
@@ -931,7 +949,7 @@ class TestShallowResearcherSourceRegistryGating:
             content="",
             tool_calls=[{"name": "weather_observation_tool", "args": {"location": "San Francisco"}, "id": "1"}],
         )
-        final_response = AIMessage(content="The weather is clear.\n\n## Sources\n[1] weather_observation_tool")
+        final_response = AIMessage(content="The weather is clear [1].\n\n## Sources\n[1] weather_observation_tool")
         mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, final_response])
 
         agent = ShallowResearcherAgent(
@@ -979,7 +997,7 @@ class TestShallowResearcherSourceCaptureIntegration:
                     "id": "web_search",
                     "name": "Web Search",
                     "description": "Search the web for real-time information.",
-                    "tools": ["web_search_with_urls"],
+                    "tools": ["web_search_with_urls", "relevance_retry_search", "retry_after_failure_search"],
                 }
             ]
         )
@@ -995,7 +1013,7 @@ class TestShallowResearcherSourceCaptureIntegration:
         )
         final_response = AIMessage(
             content=(
-                "CUDA is a parallel computing platform.\n\n"
+                "CUDA is a parallel computing platform [1].\n\n"
                 "## Sources\n"
                 "[1] CUDA Toolkit Documentation: https://docs.nvidia.com/cuda/"
             )
@@ -1017,6 +1035,116 @@ class TestShallowResearcherSourceCaptureIntegration:
 
         # Final output should exist and have been processed
         assert result.messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_irrelevant_first_result_can_trigger_one_bounded_retry(self, mock_llm_provider, mock_llm):
+        """The first post-tool turn keeps tools available for one relevance retry."""
+        first_search = AIMessage(
+            content="",
+            tool_calls=[{"name": "relevance_retry_search", "args": {"query": "CUDA"}, "id": "search-1"}],
+        )
+        rewritten_search = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "relevance_retry_search",
+                    "args": {"query": "official NVIDIA CUDA documentation"},
+                    "id": "search-2",
+                }
+            ],
+        )
+        final_response = AIMessage(
+            content=(
+                "CUDA is a parallel computing platform [2].\n\n"
+                "**References:**\n- [2] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[first_search, rewritten_search, final_response])
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[relevance_retry_search],
+        )
+
+        result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        sources = agent.source_registry.all_sources()
+        assert [source.url for source in sources] == [
+            "https://weather.example/sf",
+            "https://docs.nvidia.com/cuda/",
+        ]
+        relevance_messages = mock_llm.ainvoke.await_args_list[1].args[0]
+        assert "RELEVANCE CHECK" in relevance_messages[-1].content
+        assert mock_llm.bind_tools.call_args_list == [
+            call([relevance_retry_search]),
+            call([relevance_retry_search], parallel_tool_calls=False),
+        ]
+        assert mock_llm.ainvoke.await_count == 3
+        assert "CUDA is a parallel computing platform [1]." in result.messages[-1].content
+        assert "https://docs.nvidia.com/cuda/" in result.messages[-1].content
+        assert "https://weather.example/sf" not in result.messages[-1].content
+
+    @pytest.mark.asyncio
+    async def test_irrelevant_result_cannot_be_auto_attached_to_uncited_answer(self, mock_llm_provider, mock_llm):
+        """Ignoring the relevance retry fails closed instead of citing unrelated evidence."""
+        first_search = AIMessage(
+            content="",
+            tool_calls=[{"name": "relevance_retry_search", "args": {"query": "CUDA"}, "id": "search-1"}],
+        )
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[first_search, AIMessage(content="CUDA is a parallel computing platform.")]
+        )
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[relevance_retry_search],
+            callbacks=[callback],
+        )
+
+        with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
+            await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        callback.emit_final_report.assert_not_called()
+        assert mock_llm.ainvoke.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_failed_first_tool_call_can_trigger_one_bounded_retry(self, mock_llm_provider, mock_llm):
+        """A handled tool error leaves the single rewritten-query retry available."""
+        first_search = AIMessage(
+            content="",
+            tool_calls=[{"name": "retry_after_failure_search", "args": {"query": "CUDA"}, "id": "search-1"}],
+        )
+        rewritten_search = AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "name": "retry_after_failure_search",
+                    "args": {"query": "official NVIDIA CUDA documentation"},
+                    "id": "search-2",
+                }
+            ],
+        )
+        final_response = AIMessage(
+            content=(
+                "CUDA is a parallel computing platform [1].\n\n"
+                "**References:**\n- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[first_search, rewritten_search, final_response])
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[retry_after_failure_search],
+        )
+
+        result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
+
+        assert [source.url for source in agent.source_registry.all_sources()] == ["https://docs.nvidia.com/cuda/"]
+        retry_messages = mock_llm.ainvoke.await_args_list[1].args[0]
+        assert "produced no citable source" in retry_messages[-1].content
+        assert mock_llm.bind_tools.call_args_list == [
+            call([retry_after_failure_search]),
+            call([retry_after_failure_search], parallel_tool_calls=False),
+        ]
+        assert "CUDA is a parallel computing platform [1]." in result.messages[-1].content
 
     @pytest.mark.asyncio
     async def test_final_verification_report_is_published_with_its_cited_urls(self, mock_llm_provider, mock_llm):
@@ -1312,98 +1440,6 @@ class TestShallowResearcherSessionRegistry:
             assert agent.source_registry is original_registry
         finally:
             set_session_registry(None)
-
-
-class TestAppendMinimalCitation:
-    """Unit tests for the `_append_minimal_citation` fallback."""
-
-    def _tool_source(self) -> SourceEntry:
-        return SourceEntry(
-            source_type="tool_result",
-            citation_key="mcp_time__get_current_time",
-            tool_name="mcp_time__get_current_time",
-        )
-
-    def test_strips_leftover_bold_references_header(self):
-        # Simulates verify_citations stripping every fabricated citation under
-        # a **References:** section but leaving the bare header behind.
-        report = "Body sentence.\n\n**References:**\n"
-
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert result.count("**References:**") == 1
-        assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
-
-    def test_strips_leftover_references_heading(self):
-        report = "Body sentence.\n\n## References\n"
-
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert "## References" not in result
-        assert result.count("**References:**") == 1
-
-    def test_strips_leftover_sources_heading(self):
-        report = "Body sentence.\n\n### Sources\n"
-
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert "### Sources" not in result
-        assert result.count("**References:**") == 1
-
-    def test_no_leftover_header_passes_through(self):
-        report = "Body sentence."
-
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
-
-    def test_replaces_source_only_section_and_adds_inline_marker(self):
-        report = "Body sentence.\n\n## Sources\n[1] mcp_time__get_current_time"
-
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
-
-    @pytest.mark.parametrize("heading", ["###### References", "Sources:", "**References:**"])
-    def test_replaces_canonical_heading_variants(self, heading):
-        report = f"Body sentence.\n\n{heading}\n[1] mcp_time__get_current_time"
-
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert result.count("**References:**") == 1
-        assert result == "Body sentence [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
-
-    @pytest.mark.parametrize(
-        "report",
-        [
-            "## Sources of renewable energy\nSolar is renewable.",
-            "## References to previous work\nPrior work remains relevant.",
-            "Sources: market revenue grew last year.",
-            "Sources:\nMarket revenue grew last year.",
-        ],
-    )
-    def test_preserves_source_like_answer_content(self, report):
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert report.removesuffix(".") in result
-        assert result.endswith("**References:**\n- [1] mcp_time__get_current_time")
-
-    def test_replaces_reference_definitions_without_discarding_trailing_answer(self):
-        report = "Opening answer.\n\n## References\n- [1] Old source - https://example.com/old\n\nClosing answer."
-
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert "Opening answer." in result
-        assert "Closing answer [1]." in result
-        assert "Old source" not in result
-
-    def test_preserves_marker_first_answer_immediately_after_reference_block(self):
-        report = "## Sources\n[1] mcp_time__get_current_time\n[1] CUDA is a parallel computing platform."
-
-        result = _append_minimal_citation(report, self._tool_source())
-
-        assert "CUDA is a parallel computing platform" in result
-        assert result.count("mcp_time__get_current_time") == 1
 
 
 class TestCitationIntegrity:

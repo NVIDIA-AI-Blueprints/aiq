@@ -58,7 +58,10 @@ class ShallowResearchAgentConfig(FunctionBaseConfig, name="shallow_research_agen
         description="Tool names to exclude when inheriting from registry.",
     )
     max_llm_turns: int = Field(default=10, description="Maximum number of LLM turns")
-    max_tool_iterations: int = Field(default=5, description="Maximum tool-calling iterations before forcing synthesis")
+    max_tool_iterations: int = Field(
+        default=5,
+        description="Maximum tool-calling iterations before synthesis; shallow research is capped at two calls",
+    )
     verbose: bool = Field(default=False, description="Whether to enable verbose logging")
 
 
