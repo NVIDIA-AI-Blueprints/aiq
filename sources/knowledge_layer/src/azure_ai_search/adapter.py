@@ -56,6 +56,8 @@ from aiq_agent.knowledge.base import FileInfo
 from aiq_agent.knowledge.base import TTLCleanupMixin
 from aiq_agent.knowledge.schema import FileStatus
 
+from ..utils import summarize_document
+
 logger = logging.getLogger(__name__)
 
 _BACKEND_NAME = "azure_ai_search"
@@ -1091,7 +1093,11 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             if collection is None or collection.get("status") != _COLLECTION_ACTIVE:
                 raise RuntimeError(f"Collection {collection_name!r} became unavailable during ingestion")
 
-            summary = self._generate_summary("\n".join(texts), file_name) if self.cfg.generate_summary else None
+            summary = (
+                summarize_document("\n".join(texts), file_name, self._summary_llm, _SUMMARY_MAX_CHARS)
+                if self.cfg.generate_summary
+                else None
+            )
             self._update_collection_timestamp(collection_name)
         except Exception as processing_error:  # noqa: BLE001
             try:
@@ -1210,19 +1216,6 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         if ids:
             self._delete_document_ids(client, ids)
         return len(ids)
-
-    def _generate_summary(self, text: str, file_name: str) -> str | None:
-        if self._summary_llm is None:
-            return None
-        snippet = text[:_SUMMARY_MAX_CHARS]
-        prompt = f"Summarise the following document ({file_name}) in one sentence (max 30 words):\n\n{snippet}"
-        try:
-            response = self._summary_llm.invoke(prompt)
-            summary = getattr(response, "content", None) or str(response)
-            return summary.strip() or None
-        except Exception:  # noqa: BLE001
-            logger.exception("Summary generation failed for %s", file_name)
-            return None
 
     def _update_job(self, job_id: str, **fields: Any) -> None:
         with self._jobs_lock:

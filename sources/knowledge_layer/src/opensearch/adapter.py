@@ -52,6 +52,8 @@ from aiq_agent.knowledge.schema import IngestionJobStatus
 from aiq_agent.knowledge.schema import JobState
 from aiq_agent.knowledge.schema import RetrievalResult
 
+from ..utils import summarize_document
+
 logger = logging.getLogger(__name__)
 
 # @environment_variable OPENSEARCH_URL
@@ -158,28 +160,6 @@ def _parse_timestamp(value: Any) -> datetime | None:
         except ValueError:
             return None
     return None
-
-
-def _generate_document_summary(text_content: str, file_name: str, llm=None) -> str | None:
-    """Generate a one-sentence document summary using the configured LangChain LLM."""
-    if llm is None or not text_content.strip():
-        return None
-
-    prompt = (
-        "Summarize this uploaded document in one concise sentence for a research assistant. "
-        "Focus on the document's topic and likely usefulness.\n\n"
-        f"Document: {file_name}\n\n"
-        f"Content excerpt:\n{text_content[:SUMMARY_MAX_INPUT_CHARS]}"
-    )
-
-    try:
-        response = llm.invoke(prompt)
-        summary = getattr(response, "content", response)
-        summary_text = str(summary).strip()
-        return summary_text[:500] if summary_text else None
-    except Exception as e:
-        logger.warning("Summary generation failed for %s: %s", file_name, e)
-        return None
 
 
 def _read_text_file(file_path: Path) -> list[tuple[str, int | None, dict[str, Any]]]:
@@ -1260,7 +1240,8 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         """Generate a one-sentence document summary if the feature is enabled."""
         if not self.generate_summary_enabled:
             return None
-        return _generate_document_summary(text_content, file_name, self.summary_llm)
+        summary = summarize_document(text_content, file_name, self.summary_llm, SUMMARY_MAX_INPUT_CHARS)
+        return summary[:500] if summary else None
 
     async def health_check(self) -> bool:
         """Return True if the OpenSearch cluster is reachable."""

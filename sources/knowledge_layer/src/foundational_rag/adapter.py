@@ -78,6 +78,8 @@ from aiq_agent.knowledge.schema import IngestionJobStatus
 from aiq_agent.knowledge.schema import JobState
 from aiq_agent.knowledge.schema import RetrievalResult
 
+from ..utils import summarize_document
+
 # Suppress InsecureRequestWarning when verify_ssl=False
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
@@ -234,22 +236,15 @@ def _generate_file_summary(file_path: str, llm=None) -> str | None:
     if llm is None:
         return None
 
-    if Path(file_path).suffix.lower() not in SUMMARIZABLE_EXTENSIONS:
+    filepath = Path(file_path)
+    if filepath.suffix.lower() not in SUMMARIZABLE_EXTENSIONS:
         return None
 
     text = _extract_text(file_path)
     if not text:
         return None
 
-    prompt = f"Summarize in ONE sentence:\n\n{text}"
-
-    try:
-        response = llm.invoke(prompt)
-        content = response.content if hasattr(response, "content") else str(response)
-        return content.strip()
-    except Exception as e:
-        logger.warning("Summary generation via LLM failed: %s", e)
-        return None
+    return summarize_document(text, filepath.name, llm, SUMMARY_MAX_CHARS)
 
 
 @register_retriever("foundational_rag")
