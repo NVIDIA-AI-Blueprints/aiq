@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from gsf.client import GSFClient
 from gsf.models import CatalogSearchResponse
 from gsf.models import TextToPQLResponse
 from gsf.models import TextToSQLResponse
@@ -39,8 +40,8 @@ class FakeClientContext:
         pass
 
 
-def test_password_auth_is_optional_and_keeps_secret_wrapped() -> None:
-    """Keep optional password configuration secret-wrapped."""
+def test_password_auth_is_optional_and_carries_only_environment_name() -> None:
+    """Keep password values out of serializable function-group configuration."""
 
     default_config = GSFFunctionGroupConfig(base_url="https://gsf.example")
     password_config = GSFFunctionGroupConfig(
@@ -48,14 +49,57 @@ def test_password_auth_is_optional_and_keeps_secret_wrapped() -> None:
         auth={
             "mode": "password",
             "email": "developer@example.com",
-            "password": _TEST_PASSWORD,
+            "password": "CUSTOM_GSF_PASSWORD",  # pragma: allowlist secret
         },
     )
 
     assert default_config.auth is None
     assert isinstance(password_config.auth, GSFPasswordAuthConfig)
-    assert password_config.auth.password.get_secret_value() == _TEST_PASSWORD
-    assert _TEST_PASSWORD not in repr(password_config)
+    assert password_config.auth.password == "CUSTOM_GSF_PASSWORD"  # pragma: allowlist secret
+    assert "password=SecretStr" not in repr(password_config)
+
+
+def test_password_auth_reads_environment_after_workflow_interpolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve the exact secret after a JSON round trip like NAT's worker boundary."""
+
+    password = "literal ${MUST_NOT_EXPAND} # fragment"  # pragma: allowlist secret
+    monkeypatch.setenv("GSF_PASSWORD", password)
+    monkeypatch.setenv("MUST_NOT_EXPAND", "changed")
+
+    config = GSFFunctionGroupConfig(
+        base_url="https://gsf.example",
+        auth={
+            "mode": "password",
+            "email": "developer@example.com",
+        },
+    )
+    serialized = config.model_dump_json()
+    reconstructed = GSFFunctionGroupConfig.model_validate_json(serialized)
+    client = GSFClient.from_config(reconstructed)
+
+    assert reconstructed.auth is not None
+    assert reconstructed.auth.password == "GSF_PASSWORD"  # pragma: allowlist secret
+    assert client._password_auth_password is not None
+    assert client._password_auth_password.get_secret_value() == password
+    assert password not in serialized
+    assert "**********" not in serialized
+
+
+def test_password_auth_requires_environment_password(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail configuration clearly when password mode lacks GSF_PASSWORD."""
+
+    monkeypatch.delenv("GSF_PASSWORD", raising=False)
+
+    config = GSFFunctionGroupConfig(
+        base_url="https://gsf.example",
+        auth={
+            "mode": "password",
+            "email": "developer@example.com",
+        },
+    )
+
+    with pytest.raises(ValueError, match="GSF_PASSWORD"):
+        GSFClient.from_config(config)
 
 
 def test_request_trace_headers_forwards_only_allowlisted_nonempty_values() -> None:
@@ -171,7 +215,7 @@ async def test_explicit_password_auth_does_not_resolve_user_token(text_to_sql_re
         auth={
             "mode": "password",
             "email": "developer@example.com",
-            "password": _TEST_PASSWORD,
+            "password": "GSF_PASSWORD",  # pragma: allowlist secret
         },
     )
 

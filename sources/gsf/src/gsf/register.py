@@ -11,7 +11,6 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import HttpUrl
-from pydantic import SecretStr
 
 from nat.builder.builder import Builder
 from nat.builder.context import Context
@@ -38,7 +37,7 @@ class GSFPasswordAuthConfig(BaseModel):
 
     mode: Literal["password"]
     email: str = Field(min_length=1)
-    password: SecretStr
+    password: str = Field(default="GSF_PASSWORD", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class GSFFunctionGroupConfig(FunctionGroupBaseConfig, name="gsf"):

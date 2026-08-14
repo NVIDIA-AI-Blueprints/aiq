@@ -18,6 +18,7 @@
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 
+from aiq_agent.agents.chat_researcher.models import CatalogRoutingResponse
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
@@ -107,6 +108,23 @@ class TestChatResearcherState:
         assert state.shallow_result is None
         assert state.data_sources is None
         assert state.active_report_job_id is None
+        assert state.catalog_context is None
+        assert state.catalog_request_id is None
+
+    def test_state_with_catalog_context(self):
+        catalog = CatalogRoutingResponse(
+            request_id="request-1",
+            coverage=0.5,
+            candidates=[],
+        )
+        state = ChatResearcherState(
+            messages=[HumanMessage(content="Test")],
+            catalog_context=catalog,
+            catalog_request_id=catalog.request_id,
+        )
+
+        assert state.catalog_context == catalog
+        assert state.catalog_request_id == "request-1"
 
     def test_state_with_data_sources(self):
         """Test state with data_sources."""

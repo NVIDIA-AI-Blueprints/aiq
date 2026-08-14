@@ -30,6 +30,7 @@ from langchain_core.tools import tool
 
 from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
 from aiq_agent.agents.shallow_researcher.agent import _append_minimal_citation
+from aiq_agent.agents.shallow_researcher.agent import _format_chat_references
 from aiq_agent.agents.shallow_researcher.agent import _has_citation_integrity
 from aiq_agent.agents.shallow_researcher.models import ShallowResearchAgentState
 from aiq_agent.common import LLMProvider
@@ -685,7 +686,7 @@ class TestShallowResearcherSourceRegistryGating:
         result = await agent.run(state)
 
         assert result.messages[-1].content.rstrip() == (
-            "It's currently 4:54 AM in Tokyo [1].\n\n## Sources\n- [1] mcp_time__get_current_time"
+            "It's currently 4:54 AM in Tokyo [1].\n\n**References:**\n- [1] mcp_time__get_current_time"
         )
 
     @pytest.mark.asyncio
@@ -998,7 +999,7 @@ class TestShallowResearcherSourceCaptureIntegration:
         """The final report body and authoritative URL set come from the same verification pass."""
         source_url = "https://docs.nvidia.com/cuda/"
         draft_report = f"CUDA is a parallel computing platform [1].\n\n## Sources\n[1] CUDA Docs: {source_url}"
-        verified_report = draft_report
+        verified_report = _format_chat_references(draft_report)
         tool_call_response = AIMessage(
             content="",
             tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
@@ -1415,3 +1416,15 @@ class TestCitationIntegrity:
         report = "## Sources\n[1] mcp_time__get_current_time\n[1] CUDA is a parallel computing platform."
 
         assert _has_citation_integrity(report, [{"number": 1, "citation_key": "mcp_time__get_current_time"}])
+
+
+class TestFormatChatReferences:
+    def test_removes_empty_sources_heading(self):
+        assert _format_chat_references("Body sentence.\n\n## Sources\n") == "Body sentence."
+
+    def test_uses_compact_heading_for_populated_sources(self):
+        report = "Body sentence [1].\n\n## Sources\n[1] Example: https://example.com/article"
+
+        assert _format_chat_references(report) == (
+            "Body sentence [1].\n\n**References:**\n[1] Example: https://example.com/article"
+        )

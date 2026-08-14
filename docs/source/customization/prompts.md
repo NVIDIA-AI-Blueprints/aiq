@@ -12,6 +12,7 @@ Each agent in the AI-Q blueprint uses [Jinja2](https://jinja.palletsprojects.com
 | Template | Consumer | Purpose |
 |----------|----------|---------|
 | `src/aiq_agent/agents/chat_researcher/prompts/intent_classification.j2` | Intent Classifier | Classifies queries as meta or research, determines depth (shallow/deep), generates meta responses |
+| `src/aiq_agent/agents/chat_researcher/prompts/context_aware_intent_router.j2` | Context-aware Intent Router | Classifies interactions, selects classic depth, and performs bounded catalog discovery for GSF-enabled workflows |
 | `src/aiq_agent/agents/shallow_researcher/prompts/researcher.j2` | Shallow Researcher | Defines the research persona, tool usage strategy, source hierarchy, and citation rules |
 | `src/aiq_agent/agents/deep_researcher/prompts/orchestrator.j2` | Deep Research Orchestrator | Coordinates ordered routing, planning, batched research, and writer delegation; it does not call source tools directly |
 | `src/aiq_agent/agents/deep_researcher/prompts/source_router.j2` | Source Router | Selects an advisory route from the request-allowed source catalog before planning |
@@ -44,6 +45,7 @@ src/aiq_agent/agents/
     chat_researcher/
         prompts/
             intent_classification.j2   # Routing prompt
+            context_aware_intent_router.j2  # Catalog-aware routing prompt
 ```
 
 The naming convention follows each runtime role. `source_registry.j2` is a middleware-rendered fragment rather than an agent system prompt.
@@ -104,6 +106,13 @@ Each template receives different variables depending on the agent context.
 | `tools` | `list[dict]` | Available tools (each has `name` and `description` keys) |
 | `query` | `str` | The user's query text |
 | `active_report_available` | `bool` | Whether the conversation has a report that can be edited or extended |
+
+The GSF-enabled context-aware router also receives catalog availability and
+configured search bounds. For a mixed enterprise-and-public request, it sends a
+contiguous enterprise-data span copied verbatim from the user request as the
+catalog tool's `question`. It does not create a public-research subquery or
+plan, and the original user request remains the downstream research input.
+Python rejects a catalog question that is not a verbatim span of that request.
 
 ### Shallow Researcher
 

@@ -203,6 +203,10 @@ _URL_CLOSING_DELIMITERS = {")": "(", "]": "[", "}": "{"}
 
 def clean_extracted_url(candidate: str) -> str:
     """Remove prose wrappers from a URL without corrupting balanced delimiters."""
+    # A Markdown link whose label is also a URL is captured as one candidate,
+    # for example ``https://example.com](https://example.com)``. Prefer the
+    # actual link target before trimming its unmatched closing delimiter.
+    candidate = candidate.rsplit("](", maxsplit=1)[-1]
     cleaned = unescape(candidate).strip().rstrip(_URL_TRAILING_PUNCTUATION)
     while cleaned and (opener := _URL_CLOSING_DELIMITERS.get(cleaned[-1])):
         closer = cleaned[-1]

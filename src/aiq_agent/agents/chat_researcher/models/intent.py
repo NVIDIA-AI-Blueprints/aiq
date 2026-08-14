@@ -20,7 +20,7 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-RouteTarget = Literal["meta", "report", "new_research"]
+RouteTarget = Literal["meta", "report", "new_research", "hybrid_research"]
 ReportAction = Literal["ask", "edit"]
 
 

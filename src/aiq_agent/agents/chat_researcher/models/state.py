@@ -24,6 +24,7 @@ from pydantic import BaseModel
 
 from aiq_agent.knowledge import AvailableDocument
 
+from .catalog import CatalogRoutingResponse
 from .depth import DepthDecision
 from .intent import IntentResult
 from .result import ShallowResult
@@ -75,6 +76,8 @@ class ChatResearcherState(BaseModel):
     available_documents: list[AvailableDocument] | None = None
     skip_clarifier: bool = False
     active_report_job_id: str | None = None
+    catalog_context: CatalogRoutingResponse | None = None
+    catalog_request_id: str | None = None
     # The most recent report produced inline in this session (synchronous CLI mode), carried
     # across turns by the keep-if-set reducer so report follow-up works without an async job.
     last_report_markdown: Annotated[str | None, _keep_if_set] = None

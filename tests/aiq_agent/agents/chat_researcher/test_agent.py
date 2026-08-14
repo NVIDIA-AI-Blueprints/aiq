@@ -24,6 +24,7 @@ from langchain_core.messages import HumanMessage
 
 from aiq_agent.agents.chat_researcher.agent import ChatResearcherAgent
 from aiq_agent.agents.chat_researcher.models import RESEARCH_WORKFLOW_FAILURE_ERROR
+from aiq_agent.agents.chat_researcher.models import CatalogRoutingResponse
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.chat_researcher.models import DepthDecision
 from aiq_agent.agents.chat_researcher.models import IntentResult
@@ -194,6 +195,31 @@ class TestChatResearcherAgent:
 
         assert result is not None
         assert "messages" in result
+
+    @pytest.mark.asyncio
+    async def test_intent_routing_failure_is_bounded(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        async def failing_router(_state):
+            raise RuntimeError("private provider detail")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=failing_router,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+            thread_id="test-routing-failure",
+        )
+
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "private provider detail" not in result["messages"][-1].content
 
     @pytest.mark.asyncio
     async def test_run_shallow_research_flow(
@@ -375,6 +401,57 @@ class TestChatResearcherAgent:
         result = await agent.run(state, thread_id="test-thread")
 
         assert result is not None
+
+    @pytest.mark.asyncio
+    async def test_hybrid_target_routes_to_placeholder(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        calls = []
+
+        catalog = CatalogRoutingResponse(
+            request_id="catalog-request-1",
+            coverage=1,
+            candidates=[
+                {
+                    "label": "ColumnAttribute",
+                    "attribute": "recognized_revenue",
+                    "term": "Revenue",
+                    "id": "attr:revenue",
+                }
+            ],
+        )
+
+        async def hybrid_orchestration(_state):
+            return {
+                "user_intent": IntentResult(intent="research", target="hybrid_research"),
+                "catalog_context": catalog,
+                "catalog_request_id": catalog.request_id,
+            }
+
+        async def hybrid_placeholder(state):
+            calls.append((state.catalog_request_id, state.catalog_context))
+            return {}
+
+        async def fail_if_called(_state):
+            raise AssertionError("classic research should not run")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=hybrid_orchestration,
+            shallow_research_fn=fail_if_called,
+            deep_research_fn=fail_if_called,
+            clarifier_fn=mock_clarifier,
+            hybrid_research_fn=hybrid_placeholder,
+        )
+
+        await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Analyze revenue")]),
+            thread_id="test-hybrid-placeholder",
+        )
+
+        assert calls == [("catalog-request-1", catalog)]
 
     @pytest.mark.asyncio
     async def test_run_report_ask_routes_to_inline_report_answer(
@@ -643,6 +720,53 @@ class TestChatResearcherAgent:
         assert captured["files"].get("/shared/original_report.md") == "# FIFA World Cup 2026\n\nBody."
         assert captured["query"] == "expand the economic impact section with new 2025 data"
         assert result["last_report_markdown"] == "# Updated Report\n\nWith delta."
+
+    @pytest.mark.asyncio
+    async def test_delta_research_bypasses_clarifier(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+    ):
+        captured = {}
+
+        async def deep_orchestration(_state):
+            return {
+                "user_intent": IntentResult(
+                    intent="research", target="new_research", use_parent_report_context=True, raw=None
+                ),
+                "depth_decision": DepthDecision(decision="deep", raw_reasoning="delta"),
+            }
+
+        async def clarifier(_state):
+            raise AssertionError("report delta should not invoke the clarifier")
+
+        async def submit_deep(state):
+            captured["query"] = state.original_query
+            captured["uses_parent_report"] = state.user_intent.use_parent_report_context
+            return "delta-job"
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=deep_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=clarifier,
+            enable_clarifier=True,
+            deep_research_job_submitter=submit_deep,
+        )
+        query = "update the report with Japan statistics"
+        state = ChatResearcherState(
+            messages=[
+                HumanMessage(content="write the original report"),
+                AIMessage(content="the original report"),
+                HumanMessage(content=query),
+            ],
+            active_report_job_id="parent-job",
+        )
+
+        result = await agent.run(state, thread_id="test-delta-bypass-clarifier")
+
+        assert captured == {"query": query, "uses_parent_report": True}
+        assert "delta-job" in result["messages"][-1].content
 
     @pytest.mark.asyncio
     async def test_inline_deep_research_sends_clean_query_not_report_history(

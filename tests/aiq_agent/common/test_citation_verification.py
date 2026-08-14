@@ -995,6 +995,19 @@ class TestVerifyCitations:
         result = verify_citations(report, registry)
         assert len(result.valid_citations) == 1
 
+    def test_references_with_markdown_link_urls(self, registry):
+        report = (
+            "Finding [1][2].\n\n"
+            "**References:**\n"
+            "- [1] Article 1 - [https://valid.com/article1](https://valid.com/article1)\n"
+            "- [2] Article 2 - [https://valid.com/article2](https://valid.com/article2)"
+        )
+
+        result = verify_citations(report, registry)
+
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
     def test_references_bold_without_colon(self, registry):
         """Model sometimes outputs **References** without the colon."""
         report = "Finding [1].\n\n**References**\n- [1] Article 1 - https://valid.com/article1"
