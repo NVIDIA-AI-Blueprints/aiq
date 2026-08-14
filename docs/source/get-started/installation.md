@@ -32,6 +32,14 @@ When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), infere
 | VLM (image/chart extraction, optional) | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | [Nemotron 3 Nano Omni](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 | Knowledge layer (Foundational RAG, optional) | -- | [RAG Blueprint support matrix](https://docs.nvidia.com/rag/latest/support-matrix.html) |
 
+```{warning}
+The NVIDIA API Catalog serving profile for Nemotron 3.5 Lightning has a known shallow citation-output limitation.
+AI-Q fails closed rather than publishing a citation-incomplete draft. The Brev getting-started launchable therefore
+uses Nemotron Ultra for shallow research while retaining Lightning for intent classification. See
+[Troubleshooting](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog) for details and the
+self-hosted Lightning option.
+```
+
 ## Automated Setup (Recommended)
 
 The setup script handles everything -- virtual environment, Python dependencies, and UI dependencies:

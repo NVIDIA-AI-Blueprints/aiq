@@ -9,6 +9,12 @@ This guide walks through creating a new tool (NeMo Agent Toolkit function) end-t
 
 The pattern follows the existing Tavily web search tool at `sources/tavily_web_search/`.
 
+```{note}
+The model block later in this guide demonstrates wiring only. The NVIDIA API Catalog serving profile for Nemotron 3.5
+Lightning has a known [shallow citation-output limitation](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog).
+AI-Q fails closed rather than publishing citation-incomplete drafts.
+```
+
 ---
 
 ## Prerequisites

@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -12,6 +13,7 @@ from aiq_agent.common import LLMProvider
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SHARED_SHALLOW_PROMPT = REPO_ROOT / "src/aiq_agent/agents/shallow_researcher/prompts/researcher.j2"
+BREV_GETTING_STARTED_NOTEBOOK = REPO_ROOT / "docs/notebooks/0_Getting_Started_with_AIQ.ipynb"
 
 ULTRA_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 LIGHTNING_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
@@ -162,6 +164,36 @@ def test_shallow_profiles_use_the_shared_citation_prompt(config_path: Path):
     assert shallow["_type"] == "shallow_research_agent"
     assert "system_prompt" not in shallow
     assert agent.system_prompt == SHARED_SHALLOW_PROMPT.read_text(encoding="utf-8")
+
+
+def test_brev_getting_started_uses_ultra_for_shallow_research():
+    """The Brev launchable avoids the hosted Lightning shallow-serving limitation."""
+    notebook = json.loads(BREV_GETTING_STARTED_NOTEBOOK.read_text(encoding="utf-8"))
+    config_cells = [
+        cell
+        for cell in notebook["cells"]
+        if cell.get("cell_type") == "code"
+        and cell.get("source", [""])[0].startswith("%%writefile config_simple_researcher.yml")
+    ]
+
+    assert len(config_cells) == 1
+    config = yaml.safe_load("".join(config_cells[0]["source"][2:]))
+    shallow = config["functions"]["shallow_research_agent"]
+    shallow_alias = shallow["llm"]
+    web_search = config["functions"]["web_search_tool"]
+
+    assert config["functions"]["intent_classifier"]["llm"] == "nemotron_lightning_intent_llm"
+    assert shallow_alias == "nemotron_ultra_shallow_llm"
+    assert _model_for_alias(config, shallow_alias) == ULTRA_MODEL
+    assert config["llms"][shallow_alias]["max_tokens"] == 8192
+    assert not config["llms"][shallow_alias]["parallel_tool_calls"]
+    assert _thinking_enabled(config, shallow_alias)
+    assert "nemotron_lightning_agent_llm" not in config["llms"]
+    assert shallow["max_llm_turns"] == 20
+    assert shallow["max_tool_iterations"] == 5
+    assert web_search["max_results"] == 5
+    assert web_search["max_retries"] == 3
+    assert not web_search["advanced_search"]
 
 
 def test_deprecated_model_and_endpoint_references_are_absent():
