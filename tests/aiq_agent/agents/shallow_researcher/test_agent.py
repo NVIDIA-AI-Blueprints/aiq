@@ -999,7 +999,11 @@ class TestShallowResearcherSourceCaptureIntegration:
         """The final report body and authoritative URL set come from the same verification pass."""
         source_url = "https://docs.nvidia.com/cuda/"
         draft_report = f"CUDA is a parallel computing platform [1].\n\n## Sources\n[1] CUDA Docs: {source_url}"
-        verified_report = _format_chat_references(draft_report)
+        expected_report = (
+            "CUDA is a parallel computing platform [1].\n\n"
+            "**References:**\n"
+            "[1] CUDA Docs: https://docs.nvidia.com/cuda/"
+        )
         tool_call_response = AIMessage(
             content="",
             tool_calls=[{"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "1"}],
@@ -1017,7 +1021,7 @@ class TestShallowResearcherSourceCaptureIntegration:
             removed_citations=[],
         )
         final_verification = MagicMock(
-            verified_report=verified_report,
+            verified_report=draft_report,
             valid_citations=[{"number": 1, "url": source_url}],
             removed_citations=[],
         )
@@ -1028,8 +1032,8 @@ class TestShallowResearcherSourceCaptureIntegration:
         ):
             result = await agent.run(ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA?")]))
 
-        assert result.messages[-1].content == verified_report
-        callback.emit_final_report.assert_called_once_with(verified_report, cited_urls=[source_url])
+        assert result.messages[-1].content == expected_report
+        callback.emit_final_report.assert_called_once_with(expected_report, cited_urls=[source_url])
 
     @pytest.mark.asyncio
     async def test_finalization_cannot_publish_a_report_after_losing_inline_citations(

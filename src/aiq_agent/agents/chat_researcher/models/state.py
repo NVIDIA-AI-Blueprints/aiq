@@ -47,7 +47,6 @@ class ChatResearcherState(BaseModel):
 
     Attributes:
         messages: Conversation history with LangGraph message reducer.
-        tools_info: Information about available tools.
         user_info: Optional user information for personalization.
         data_sources: Optional list of user-selected data source IDs.
         user_intent: Result of intent classification.
@@ -60,6 +59,14 @@ class ChatResearcherState(BaseModel):
         skip_clarifier: When True the clarifier node is bypassed regardless of
             ``enable_clarifier``.  Set automatically for API-key and anonymous
             callers so headless workflows do not stall waiting for user input.
+        active_report_job_id: Identifier of the active asynchronous report used
+            for report follow-up turns.
+        catalog_context: Validated catalog routing result supplied to hybrid
+            research; reset at each turn boundary.
+        catalog_request_id: Request identifier associated with
+            ``catalog_context``; reset at each turn boundary.
+        last_report_markdown: Most recent report produced inline, retained
+            across turns for report follow-up when no report job is available.
         workflow_outcome: Explicit terminal workflow failure when a node
             degrades an exception to fallback text; reset at each turn boundary.
     """

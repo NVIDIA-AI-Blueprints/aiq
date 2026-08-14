@@ -95,9 +95,9 @@ class RouterRunContext(TypedDict):
     catalog_max_distance: float
     current_datetime: str
     max_catalog_results: int
-    protocol_retry: bool
+    protocol_retry: Literal["none", "catalog_call_required", "catalog_disabled"]
     query: str
-    user_info: dict[str, Any]
+    user_info: dict[str, str]
 
 
 def _prompt_middleware(prompt: str):
@@ -108,11 +108,18 @@ def _prompt_middleware(prompt: str):
     ) -> ModelResponse:
         context = request.runtime.context
         system_prompt = render_prompt_template(prompt, **context)
-        if context["protocol_retry"]:
+        if context["protocol_retry"] == "catalog_call_required":
             system_prompt += (
                 "\n\nThe previous attempt declared catalog_action=search without calling the catalog tool. "
                 "Call it exactly once now. Do not reclassify the request as meta or report to avoid the call. "
                 "Keep catalog_action=search and select the final standalone or hybrid route from the catalog result."
+            )
+        elif context["protocol_retry"] == "catalog_disabled":
+            system_prompt += (
+                "\n\nThe previous attempt selected catalog_action=search even though the catalog source is disabled. "
+                "Correct the protocol now: return route=standalone_research and catalog_action=skip, preserve the "
+                "classic research depth selected from the user request, and do not reclassify the request as meta or "
+                "report. The catalog tool is unavailable for this request."
             )
         return await handler(request.override(system_message=SystemMessage(content=system_prompt)))
 
@@ -153,6 +160,13 @@ class ContextAwareIntentRouter:
                 ToolCallLimitMiddleware(tool_name=catalog_tool.name, run_limit=1, exit_behavior="error"),
             ],
         )
+        self.no_catalog_agent = create_agent(
+            model=llm,
+            tools=[],
+            response_format=ToolStrategy(EntryDecision),
+            context_schema=RouterRunContext,
+            middleware=[_prompt_middleware(prompt)],
+        )
 
     async def run(self, state: ChatResearcherState) -> dict[str, Any]:
         if not state.messages:
@@ -160,11 +174,14 @@ class ContextAwareIntentRouter:
 
         query = get_latest_user_query(state.messages)
         catalog_enabled = state.data_sources is None or self.catalog_source_id in state.data_sources
+        agent = self.agent if catalog_enabled else self.no_catalog_agent
         route_on_first_attempt: str | None = None
         catalog_action_on_first_attempt: str | None = None
-        for attempt in range(2):
-            result = await asyncio.wait_for(
-                self.agent.ainvoke(
+        disabled_catalog_depth: str | None = None
+        retry_reason: Literal["none", "catalog_call_required", "catalog_disabled"] = "none"
+        async with asyncio.timeout(self.llm_timeout):
+            for attempt in range(2):
+                result = await agent.ainvoke(
                     {"messages": [HumanMessage(content=query)]},
                     config={"callbacks": self.callbacks} if self.callbacks else None,
                     context={
@@ -174,49 +191,81 @@ class ContextAwareIntentRouter:
                         "catalog_max_distance": self.catalog_max_distance,
                         "current_datetime": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "max_catalog_results": self.max_catalog_results,
-                        "protocol_retry": attempt == 1,
+                        "protocol_retry": retry_reason,
                         "query": query,
-                        "user_info": state.user_info or {},
+                        "user_info": _router_user_info(state.user_info),
                     },
-                ),
-                timeout=self.llm_timeout,
-            )
-            decision = EntryDecision.model_validate(result.get("structured_response"))
-            decision = _normalize_report_route(decision, state)
-            if attempt == 0:
-                route_on_first_attempt = decision.route
-                catalog_action_on_first_attempt = decision.catalog_action
-            elif route_on_first_attempt in _RESEARCH_ROUTES and decision.route not in _RESEARCH_ROUTES:
-                raise RoutingProtocolError("Protocol retry changed the request interaction route")
-            elif catalog_action_on_first_attempt == "search" and decision.catalog_action != "search":
-                raise RoutingProtocolError("Protocol retry changed the required catalog action")
-
-            exchanges = _catalog_exchanges(result.get("messages", []), self.catalog_tool_name)
-            research_route = decision.route in _RESEARCH_ROUTES
-            catalog_required = research_route and decision.catalog_action == "search"
-            if catalog_required and not catalog_enabled:
-                raise RoutingProtocolError("Catalog search was selected while the catalog source is disabled")
-            if catalog_required and not exchanges:
-                if attempt == 0:
-                    continue
-                raise RoutingProtocolError("Required catalog search completed without catalog lookup")
-            if catalog_required and exchanges:
-                _validate_catalog_call(
-                    exchanges[0][0],
-                    query=query,
-                    input_schema=self.catalog_input_schema,
-                    max_results=self.max_catalog_results,
-                    max_distance=self.catalog_max_distance,
                 )
-            return _build_state_update(
-                decision,
-                exchanges,
-                state,
-                catalog_confidence_threshold=self.catalog_confidence_threshold,
-                max_catalog_results=self.max_catalog_results,
-            )
+                decision = EntryDecision.model_validate(result.get("structured_response"))
+                decision = _normalize_report_route(decision, state)
+
+                if not catalog_enabled:
+                    catalog_required = decision.route in _RESEARCH_ROUTES and decision.catalog_action == "search"
+                    if retry_reason == "catalog_disabled":
+                        decision = _disabled_catalog_fallback(decision, disabled_catalog_depth)
+                    elif catalog_required:
+                        disabled_catalog_depth = get_preclassified_depth() or decision.research_depth
+                        retry_reason = "catalog_disabled"
+                        continue
+                    return _build_state_update(
+                        decision,
+                        [],
+                        state,
+                        catalog_confidence_threshold=self.catalog_confidence_threshold,
+                        max_catalog_results=self.max_catalog_results,
+                    )
+
+                if attempt == 0:
+                    route_on_first_attempt = decision.route
+                    catalog_action_on_first_attempt = decision.catalog_action
+                elif route_on_first_attempt in _RESEARCH_ROUTES and decision.route not in _RESEARCH_ROUTES:
+                    raise RoutingProtocolError("Protocol retry changed the request interaction route")
+                elif catalog_action_on_first_attempt == "search" and decision.catalog_action != "search":
+                    raise RoutingProtocolError("Protocol retry changed the required catalog action")
+
+                exchanges = _catalog_exchanges(result.get("messages", []), self.catalog_tool_name)
+                research_route = decision.route in _RESEARCH_ROUTES
+                catalog_required = research_route and decision.catalog_action == "search"
+                if catalog_required and not exchanges:
+                    if attempt == 0:
+                        retry_reason = "catalog_call_required"
+                        continue
+                    raise RoutingProtocolError("Required catalog search completed without catalog lookup")
+                if catalog_required and exchanges:
+                    _validate_catalog_call(
+                        exchanges[0][0],
+                        query=query,
+                        input_schema=self.catalog_input_schema,
+                        max_results=self.max_catalog_results,
+                        max_distance=self.catalog_max_distance,
+                    )
+                return _build_state_update(
+                    decision,
+                    exchanges,
+                    state,
+                    catalog_confidence_threshold=self.catalog_confidence_threshold,
+                    max_catalog_results=self.max_catalog_results,
+                )
 
         raise AssertionError("Protocol retry loop exhausted")
+
+
+def _router_user_info(user_info: dict[str, Any] | None) -> dict[str, str]:
+    if not user_info or not isinstance(user_info.get("name"), str):
+        return {}
+    return {"name": user_info["name"]}
+
+
+def _disabled_catalog_fallback(decision: EntryDecision, preserved_depth: str | None) -> EntryDecision:
+    depth = get_preclassified_depth() or preserved_depth or decision.research_depth or "shallow"
+    return decision.model_copy(
+        update={
+            "route": "standalone_research",
+            "catalog_action": "skip",
+            "meta_response": None,
+            "research_depth": depth,
+        }
+    )
 
 
 def _normalize_report_route(decision: EntryDecision, state: ChatResearcherState) -> EntryDecision:
@@ -261,9 +310,7 @@ def _catalog_response(message: ToolMessage) -> CatalogRoutingResponse:
         except json.JSONDecodeError as error:
             raise RoutingProtocolError("Catalog tool returned invalid JSON") from error
     if isinstance(payload, dict) and payload.get("status") == "error":
-        code = payload.get("code")
-        suffix = f" ({code})" if isinstance(code, str) and code else ""
-        raise RoutingProtocolError(f"Catalog tool failed{suffix}")
+        raise RoutingProtocolError("Catalog tool failed")
     try:
         return CatalogRoutingResponse.model_validate(payload)
     except ValidationError as error:

@@ -261,7 +261,8 @@ class ContextAwareIntentRouterConfig(FunctionBaseConfig, name="context_aware_int
     verbose: bool = Field(default=False)
     llm_timeout: float = Field(
         default=90,
-        description="Timeout in seconds for the intent-classification LLM call. Default 90 if not set.",
+        gt=0,
+        description="Overall timeout in seconds across the initial routing call and any protocol-correction attempt.",
     )
 
 

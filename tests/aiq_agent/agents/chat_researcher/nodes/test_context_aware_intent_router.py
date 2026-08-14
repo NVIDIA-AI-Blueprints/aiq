@@ -3,7 +3,10 @@
 
 """Tests for catalog-aware entry routing."""
 
+import asyncio
 import json
+from pathlib import Path
+from time import monotonic
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -13,7 +16,6 @@ from langchain_core.messages import ToolMessage
 from langchain_core.outputs import ChatGeneration
 from langchain_core.outputs import ChatResult
 from langchain_core.tools import tool
-from pydantic import BaseModel
 from pydantic import ValidationError
 
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
@@ -21,6 +23,9 @@ from aiq_agent.agents.chat_researcher.nodes.context_aware_intent_router import C
 from aiq_agent.agents.chat_researcher.nodes.context_aware_intent_router import EntryDecision
 from aiq_agent.agents.chat_researcher.nodes.context_aware_intent_router import RoutingProtocolError
 from aiq_agent.agents.chat_researcher.preclassification import preclassified_depth
+from aiq_agent.agents.chat_researcher.register import ContextAwareIntentRouterConfig
+from aiq_agent.common import load_prompt
+from aiq_agent.common import render_prompt_template
 
 CATALOG_TOOL = "gsf__catalog_search"
 CATALOG_CANDIDATE = {
@@ -31,11 +36,15 @@ CATALOG_CANDIDATE = {
 }
 
 
-class CatalogToolInput(BaseModel):
-    question: str
-    database_name: str | None = None
-    max_results: int = 10
-    max_distance: float = 0.75
+@tool
+def gsf__catalog_search(
+    question: str,
+    database_name: str | None = None,
+    max_results: int = 10,
+    max_distance: float = 0.75,
+) -> str:
+    """Search the semantic catalog."""
+    return question
 
 
 def _decision(
@@ -64,6 +73,17 @@ class FakeAgent:
 
     async def ainvoke(self, inputs, *, config, context):
         self.contexts.append(context)
+        return next(self.results)
+
+
+class DelayedFakeAgent(FakeAgent):
+    def __init__(self, results, delays):
+        super().__init__(results)
+        self.delays = iter(delays)
+
+    async def ainvoke(self, inputs, *, config, context):
+        self.contexts.append(context)
+        await asyncio.sleep(next(self.delays))
         return next(self.results)
 
 
@@ -98,16 +118,15 @@ def _catalog_messages(payload, question="query"):
 
 
 def _router(*results):
-    router = ContextAwareIntentRouter.__new__(ContextAwareIntentRouter)
-    router.agent = FakeAgent(results)
-    router.catalog_tool_name = CATALOG_TOOL
-    router.catalog_input_schema = CatalogToolInput
-    router.catalog_source_id = "gsf"
-    router.max_catalog_results = 10
-    router.catalog_confidence_threshold = 0.6
-    router.catalog_max_distance = 0.75
-    router.callbacks = []
-    router.llm_timeout = 5
+    router = ContextAwareIntentRouter(
+        ScriptedModel(responses=[]),
+        gsf__catalog_search,
+        "User query: {{ query }}",
+        llm_timeout=5,
+    )
+    fake_agent = FakeAgent(results)
+    router.agent = fake_agent
+    router.no_catalog_agent = fake_agent
     return router
 
 
@@ -156,8 +175,43 @@ def test_entry_decision_enforces_catalog_action_by_route():
         )
 
 
-def test_router_builds_one_create_agent_with_catalog_tool(monkeypatch):
-    captured = {}
+@pytest.mark.parametrize("llm_timeout", [0, -0.1])
+def test_context_aware_router_config_rejects_non_positive_timeout(llm_timeout):
+    with pytest.raises(ValidationError):
+        ContextAwareIntentRouterConfig(llm="router_llm", catalog_tool="catalog_tool", llm_timeout=llm_timeout)
+
+
+def test_context_aware_router_config_accepts_positive_timeout():
+    config = ContextAwareIntentRouterConfig(llm="router_llm", catalog_tool="catalog_tool", llm_timeout=0.1)
+
+    assert config.llm_timeout == 0.1
+
+
+def test_real_router_prompt_includes_name_but_not_email():
+    prompt = load_prompt(
+        Path(__file__).parents[5] / "src/aiq_agent/agents/chat_researcher/prompts",
+        "context_aware_intent_router.j2",
+    )
+
+    rendered = render_prompt_template(
+        prompt,
+        active_report_available=False,
+        catalog_confidence_threshold=0.6,
+        catalog_enabled=False,
+        catalog_max_distance=0.75,
+        current_datetime="2026-08-14 12:00:00",
+        max_catalog_results=10,
+        protocol_retry="none",
+        query="Hello",
+        user_info={"name": "Ada", "email": "ada@example.com"},
+    )
+
+    assert "User: Ada" in rendered
+    assert "ada@example.com" not in rendered
+
+
+def test_router_builds_catalog_and_no_catalog_agents(monkeypatch):
+    captured = []
 
     @tool
     def catalog_search(question: str) -> str:
@@ -165,8 +219,9 @@ def test_router_builds_one_create_agent_with_catalog_tool(monkeypatch):
         return question
 
     def fake_create_agent(**kwargs):
-        captured.update(kwargs)
-        return object()
+        agent = object()
+        captured.append((kwargs, agent))
+        return agent
 
     monkeypatch.setattr(
         "aiq_agent.agents.chat_researcher.nodes.context_aware_intent_router.create_agent",
@@ -175,10 +230,22 @@ def test_router_builds_one_create_agent_with_catalog_tool(monkeypatch):
 
     router = ContextAwareIntentRouter(object(), catalog_search, "User query: {{ query }}")
 
-    assert router.agent is not None
-    assert captured["tools"] == [catalog_search]
-    assert captured["context_schema"] is not None
-    assert len(captured["middleware"]) == 2
+    assert len(captured) == 2
+    catalog_kwargs, catalog_agent = captured[0]
+    no_catalog_kwargs, no_catalog_agent = captured[1]
+    assert router.agent is catalog_agent
+    assert router.no_catalog_agent is no_catalog_agent
+    assert catalog_kwargs["tools"] == [catalog_search]
+    assert no_catalog_kwargs["tools"] == []
+    assert catalog_kwargs["context_schema"] is not None
+    assert no_catalog_kwargs["context_schema"] is not None
+    assert len(catalog_kwargs["middleware"]) == 2
+    assert len(no_catalog_kwargs["middleware"]) == 1
+    assert router.catalog_source_id == "gsf"
+    assert router.max_catalog_results == 10
+    assert router.catalog_confidence_threshold == 0.6
+    assert router.catalog_max_distance == 0.75
+    assert router.llm_timeout == 90
 
 
 @pytest.mark.asyncio
@@ -272,6 +339,60 @@ async def test_compiled_agent_can_return_public_skip_without_catalog_call():
 
 
 @pytest.mark.asyncio
+async def test_compiled_no_catalog_agent_corrects_search_without_exposing_tool():
+    @tool
+    async def catalog(question: str, max_results: int, max_distance: float) -> str:
+        """Search the semantic catalog."""
+        raise AssertionError("Disabled catalog tool must not execute")
+
+    model = ScriptedModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "EntryDecision",
+                        "args": {
+                            "route": "standalone_research",
+                            "catalog_action": "search",
+                            "meta_response": None,
+                            "research_depth": "deep",
+                            "route_reasoning": "The request appears to need enterprise data.",
+                        },
+                        "id": "decision-1",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+            AIMessage(
+                content="",
+                tool_calls=[
+                    {
+                        "name": "EntryDecision",
+                        "args": {
+                            "route": "standalone_research",
+                            "catalog_action": "skip",
+                            "meta_response": None,
+                            "research_depth": "shallow",
+                            "route_reasoning": "The disabled source requires classic research.",
+                        },
+                        "id": "decision-2",
+                        "type": "tool_call",
+                    }
+                ],
+            ),
+        ]
+    )
+    router = ContextAwareIntentRouter(model, catalog, "User query: {{ query }}")
+
+    result = await router.run(_state("Research internal revenue trends", data_sources=["web_search"]))
+
+    assert result["user_intent"].target == "new_research"
+    assert result["depth_decision"].decision == "deep"
+    assert model.calls == 2
+
+
+@pytest.mark.asyncio
 async def test_meta_returns_directly_without_catalog():
     router = _router(
         {
@@ -280,7 +401,7 @@ async def test_meta_returns_directly_without_catalog():
         }
     )
 
-    result = await router.run(_state("Hello", user_info={"name": "Ada"}))
+    result = await router.run(_state("Hello", user_info={"name": "Ada", "email": "ada@example.com"}))
 
     assert result["user_intent"].target == "meta"
     assert result["messages"][0].content == "Hello."
@@ -348,20 +469,30 @@ async def test_disabled_catalog_source_uses_skip_path_without_a_call():
     result = await router.run(_state(data_sources=["web_search"]))
 
     assert result["user_intent"].target == "new_research"
-    assert router.agent.contexts[0]["catalog_enabled"] is False
+    assert router.no_catalog_agent.contexts[0]["catalog_enabled"] is False
 
 
 @pytest.mark.asyncio
-async def test_search_is_rejected_when_catalog_source_is_disabled():
+async def test_disabled_catalog_search_degrades_after_one_correction_attempt():
     router = _router(
         {
-            "structured_response": _decision(route="standalone_research", research_depth="shallow"),
+            "structured_response": _decision(route="standalone_research", research_depth="deep"),
             "messages": [],
-        }
+        },
+        {
+            "structured_response": _decision(route="hybrid_research"),
+            "messages": [],
+        },
     )
 
-    with pytest.raises(RoutingProtocolError, match="catalog source is disabled"):
-        await router.run(_state(data_sources=["web_search"]))
+    result = await router.run(_state(data_sources=["web_search"]))
+
+    assert result["user_intent"].target == "new_research"
+    assert result["depth_decision"].decision == "deep"
+    assert [context["protocol_retry"] for context in router.no_catalog_agent.contexts] == [
+        "none",
+        "catalog_disabled",
+    ]
 
 
 @pytest.mark.parametrize("depth", ["shallow", "deep"])
@@ -547,8 +678,62 @@ async def test_serialized_catalog_error_is_rejected():
         }
     )
 
-    with pytest.raises(RoutingProtocolError, match="authentication_required"):
+    with pytest.raises(RoutingProtocolError, match="^Catalog tool failed$") as exc_info:
         await router.run(_state())
+
+    assert "authentication_required" not in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_catalog_tool_message_error_status_takes_precedence_over_valid_content():
+    messages = _catalog_messages(
+        {
+            "request_id": "request-status-error",
+            "coverage": 0.6,
+            "candidates": [CATALOG_CANDIDATE],
+        }
+    )
+    messages[1] = ToolMessage(
+        content=messages[1].content,
+        name=CATALOG_TOOL,
+        tool_call_id="catalog-1",
+        status="error",
+    )
+    router = _router(
+        {
+            "structured_response": _decision(route="hybrid_research"),
+            "messages": messages,
+        }
+    )
+
+    with pytest.raises(RoutingProtocolError, match="^Catalog tool failed$"):
+        await router.run(_state())
+
+
+@pytest.mark.asyncio
+async def test_catalog_tool_artifact_takes_precedence_over_invalid_content():
+    messages = _catalog_messages({})
+    messages[1] = ToolMessage(
+        content="not-json",
+        artifact={
+            "request_id": "request-artifact",
+            "coverage": 0.6,
+            "candidates": [CATALOG_CANDIDATE],
+        },
+        name=CATALOG_TOOL,
+        tool_call_id="catalog-1",
+    )
+    router = _router(
+        {
+            "structured_response": _decision(route="hybrid_research"),
+            "messages": messages,
+        }
+    )
+
+    result = await router.run(_state())
+
+    assert result["user_intent"].target == "hybrid_research"
+    assert result["catalog_request_id"] == "request-artifact"
 
 
 @pytest.mark.asyncio
@@ -585,7 +770,44 @@ async def test_missing_catalog_call_retries_same_agent_once():
 
     await router.run(_state())
 
-    assert [context["protocol_retry"] for context in router.agent.contexts] == [False, True]
+    assert [context["protocol_retry"] for context in router.agent.contexts] == [
+        "none",
+        "catalog_call_required",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_protocol_retry_shares_one_overall_timeout_budget():
+    decision = _decision(route="standalone_research", research_depth="shallow")
+    router = _router(
+        {"structured_response": decision, "messages": []},
+        {"structured_response": decision, "messages": []},
+    )
+    delayed_agent = DelayedFakeAgent(router.agent.results, delays=[0.2, 10])
+    router.agent = delayed_agent
+    router.llm_timeout = 0.3
+
+    started = monotonic()
+    with pytest.raises(TimeoutError):
+        await router.run(_state())
+    elapsed = monotonic() - started
+
+    assert 0.25 <= elapsed < 0.4
+    assert len(delayed_agent.contexts) == 2
+
+
+@pytest.mark.asyncio
+async def test_router_preserves_external_cancellation():
+    router = _router({"structured_response": _decision(route="meta", meta_response="Hello."), "messages": []})
+    delayed_agent = DelayedFakeAgent(router.agent.results, delays=[10])
+    router.agent = delayed_agent
+    task = asyncio.create_task(router.run(_state()))
+
+    await asyncio.sleep(0)
+    task.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
 
 
 @pytest.mark.asyncio
@@ -919,4 +1141,4 @@ async def test_report_route_without_active_report_normalizes_to_catalog_skip():
     result = await router.run(_state())
 
     assert result["user_intent"].target == "new_research"
-    assert [context["protocol_retry"] for context in router.agent.contexts] == [False]
+    assert [context["protocol_retry"] for context in router.agent.contexts] == ["none"]
