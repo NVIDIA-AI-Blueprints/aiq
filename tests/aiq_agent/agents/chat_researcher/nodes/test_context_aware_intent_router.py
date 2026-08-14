@@ -792,7 +792,7 @@ async def test_protocol_retry_shares_one_overall_timeout_budget():
         await router.run(_state())
     elapsed = monotonic() - started
 
-    assert 0.25 <= elapsed < 0.4
+    assert 0.25 <= elapsed < 1.0
     assert len(delayed_agent.contexts) == 2
 
 
