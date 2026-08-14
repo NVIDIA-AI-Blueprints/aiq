@@ -9,6 +9,12 @@ The complete AI-Q blueprint configuration with all features enabled: intent clas
 
 This is based on `configs/config_web_frag.yml`, which is the default for Helm deployments.
 
+```{note}
+This example preserves the shipped Lightning shallow profile. The NVIDIA API Catalog serving profile has a known
+[shallow citation-output limitation](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog).
+AI-Q fails closed rather than publishing citation-incomplete drafts.
+```
+
 ## Configuration
 
 ```yaml

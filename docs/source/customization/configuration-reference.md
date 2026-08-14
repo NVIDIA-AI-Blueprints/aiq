@@ -7,6 +7,13 @@ SPDX-License-Identifier: Apache-2.0
 
 The AI-Q blueprint is configured through a single YAML file that defines LLMs, tools, agents, and the workflow. The NeMo Agent Toolkit reads this file at startup and wires everything together.
 
+```{note}
+The NVIDIA API Catalog serving profile for Nemotron 3.5 Lightning has a known shallow citation-output limitation.
+AI-Q fails closed rather than publishing citation-incomplete drafts. See
+[Troubleshooting](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog) before using this hosted
+profile for shallow research.
+```
+
 ## Config File Structure
 
 Every config file has four top-level sections:

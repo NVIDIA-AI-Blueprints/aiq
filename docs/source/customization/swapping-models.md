@@ -22,6 +22,14 @@ workflow compatibility. Other bring-your-own models can require provider-specifi
 tool-calling, and structured-output tuning, and should be treated as experimental until the complete workflow is
 evaluated in that exact configuration.
 
+```{warning}
+Nemotron 3.5 Lightning can intermittently produce citation-incomplete or malformed shallow drafts when served through
+the NVIDIA API Catalog endpoint. AI-Q fails closed rather than publishing those drafts. See
+[Nemotron 3.5 Lightning on NVIDIA API Catalog](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog)
+for the validated mitigation choices. Model weights alone do not define the compatibility boundary; the serving
+profile is part of the deployment contract.
+```
+
 **Example: NIM model (default)**
 
 ```yaml
@@ -92,7 +100,7 @@ llms:
 ```
 
 ```{note}
-**Hosted Endpoint Availability:** The default profiles use Nemotron 3.5 Lightning for intent and shallow research, and Nemotron 3 Ultra for clarification and every deep-research role. Shared hosted endpoints can have limited availability during high demand (HTTP 429 or 503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
+**Hosted Endpoint Availability:** The default profiles use Nemotron 3.5 Lightning for intent and shallow research, and Nemotron 3 Ultra for clarification and every deep-research role. Shared hosted endpoints can have limited availability during high demand (HTTP 429 or 503 responses), and the API Catalog Lightning serving profile has a separate [shallow citation-output limitation](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
 ```
 
 You can mix hosted and local NIMs in the same config -- for example, use a hosted endpoint for shallow research and a local downloadable Ultra NIM for deep research:

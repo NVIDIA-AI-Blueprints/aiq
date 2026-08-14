@@ -116,6 +116,12 @@ The checked-in default CLI and web profiles use these core components:
 - [Tavily Search API](https://tavily.com/) for web search
 - Serper, SerpAPI, or SearchAPI for Google Scholar paper search
 
+> **Known hosted-serving limitation:** Nemotron 3.5 Lightning can intermittently produce citation-incomplete or
+> malformed shallow drafts when served through NVIDIA API Catalog. AI-Q fails closed instead of publishing those
+> drafts. The Brev getting-started launchable uses Nemotron Ultra for shallow research; the general-purpose shipped
+> profiles retain Lightning. See [Troubleshooting](docs/source/resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog)
+> for details and the self-hosted Lightning option.
+
 The shipped frontier profile, `configs/config_frontier_models.yml`, uses GPT-5.6 Luna for intent classification,
 shallow research, source routing, and deep-research execution, with GPT-5.6 Sol for clarification, orchestration,
 planning, and writing. Treat any bring-your-own model or modified profile as an experimental customization until the
