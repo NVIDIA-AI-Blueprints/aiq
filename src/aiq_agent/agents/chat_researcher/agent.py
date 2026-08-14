@@ -626,13 +626,19 @@ class ChatResearcherAgent:
         logger.info("ChatResearcherAgent: Starting workflow")
 
         if isinstance(state, dict):
-            input_state = {**state, "catalog_context": None, "catalog_request_id": None}
+            input_state = {
+                **state,
+                "database_name": state.get("database_name"),
+                "catalog_context": None,
+                "catalog_request_id": None,
+            }
             messages = state.get("messages", [])
         else:
             input_state = {
                 "messages": state.messages,
                 "user_info": state.user_info,
                 "data_sources": state.data_sources,
+                "database_name": state.database_name,
                 "available_documents": state.available_documents,
                 "shallow_result": None,  # reset at turn boundary to avoid stale checkpoint state
                 "workflow_outcome": None,

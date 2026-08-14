@@ -53,6 +53,7 @@ from .models import ChatResearcherResponse
 from .models import ChatResearcherState
 from .models import WorkflowFailure
 from .models import WorkflowSuccess
+from .utils import _extract_database_name_from_request_metadata
 from .utils import _extract_query_context
 
 logger = logging.getLogger(__name__)
@@ -694,6 +695,8 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         logger.info("skip_clarifier=%s", skip_clarifier)
 
         request_context = _extract_query_context(query)
+        if request_context.database_name is None:
+            request_context.database_name = _extract_database_name_from_request_metadata(Context.get().metadata)
         query_text = request_context.query_text
         data_sources = request_context.data_sources
         logger.info("ChatDeepResearcherAgent query_%s", log_content_metadata(query_text))
@@ -751,6 +754,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 messages=[HumanMessage(content=query_text)],
                 user_info=user_info_dict,
                 data_sources=data_sources,
+                database_name=request_context.database_name,
                 available_documents=available_documents,
                 skip_clarifier=skip_clarifier,
                 active_report_job_id=effective_report_job_id,

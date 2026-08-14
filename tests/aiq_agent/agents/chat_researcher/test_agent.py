@@ -1172,6 +1172,45 @@ class TestChatResearcherAgent:
         assert captured_state["data_sources"] == []
 
     @pytest.mark.asyncio
+    async def test_run_propagates_and_clears_database_scope(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """Each turn passes its optional database scope without retaining an earlier value."""
+        captured_scopes = []
+
+        async def capturing_intent_classifier(state):
+            captured_scopes.append(state.database_name)
+            return {
+                "user_intent": IntentResult(intent="meta", raw=None),
+                "messages": [AIMessage(content="Hello!")],
+            }
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=capturing_intent_classifier,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+        )
+        thread_id = "test-database-scope"
+
+        await agent.run(
+            ChatResearcherState(
+                messages=[HumanMessage(content="Show internal revenue")],
+                database_name="finance_prod",
+            ),
+            thread_id=thread_id,
+        )
+        await agent.run(
+            {"messages": [HumanMessage(content="Who holds this public office?")]},
+            thread_id=thread_id,
+        )
+
+        assert captured_scopes == ["finance_prod", None]
+
+    @pytest.mark.asyncio
     async def test_in_session_report_routes_ask_without_job_id(
         self,
         mock_shallow_research,

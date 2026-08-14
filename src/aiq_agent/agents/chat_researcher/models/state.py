@@ -18,6 +18,7 @@
 from typing import Annotated
 from typing import Any
 
+from gsf.models import DatabaseName
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
@@ -49,6 +50,7 @@ class ChatResearcherState(BaseModel):
         messages: Conversation history with LangGraph message reducer.
         user_info: Optional user information for personalization.
         data_sources: Optional list of user-selected data source IDs.
+        database_name: Optional validated GSF database scope for this request.
         user_intent: Result of intent classification.
         depth_decision: Result of depth routing.
         final_report: The final research report.
@@ -74,6 +76,7 @@ class ChatResearcherState(BaseModel):
     messages: Annotated[list[AnyMessage], add_messages]
     user_info: dict[str, Any] | None = None
     data_sources: list[str] | None = None
+    database_name: DatabaseName | None = None
     user_intent: IntentResult | None = None
     depth_decision: DepthDecision | None = None
     final_report: str | None = None

@@ -15,8 +15,10 @@
 
 """Tests for ChatResearcherState model."""
 
+import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from pydantic import ValidationError
 
 from aiq_agent.agents.chat_researcher.models import CatalogRoutingResponse
 from aiq_agent.agents.chat_researcher.models import ChatResearcherState
@@ -107,6 +109,7 @@ class TestChatResearcherState:
         assert state.final_report is None
         assert state.shallow_result is None
         assert state.data_sources is None
+        assert state.database_name is None
         assert state.active_report_job_id is None
         assert state.catalog_context is None
         assert state.catalog_request_id is None
@@ -152,6 +155,12 @@ class TestChatResearcherState:
         )
 
         assert state.active_report_job_id == "job-1"
+
+    def test_state_validates_database_name(self):
+        state = ChatResearcherState(messages=[], database_name="finance_prod")
+        assert state.database_name == "finance_prod"
+        with pytest.raises(ValidationError):
+            ChatResearcherState(messages=[], database_name="finance prod")
 
     def test_state_with_last_report_markdown(self):
         """State can carry the in-session report markdown for jobless follow-up."""
