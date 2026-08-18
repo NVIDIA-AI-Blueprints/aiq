@@ -30,6 +30,7 @@ from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
 from deepagents.middleware.skills import SkillsMiddleware
 from deepagents.middleware.summarization import create_summarization_middleware
 from langchain.agents import create_agent
+from langchain.agents.middleware import ModelCallLimitMiddleware
 from langchain.agents.middleware import ModelRetryMiddleware
 from langchain.agents.middleware import ToolRetryMiddleware
 from langchain_core.language_models import BaseChatModel
@@ -41,6 +42,7 @@ from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import render_prompt_template
 
+from .custom_middleware import RESEARCHER_FINALIZATION_MODEL_CALLS
 from .custom_middleware import ArtifactHarvestMiddleware
 from .custom_middleware import EmptyContentFixMiddleware
 from .custom_middleware import ExecuteTimeoutClampMiddleware
@@ -51,6 +53,7 @@ from .custom_middleware import FinalReportOwnershipGuardMiddleware
 from .custom_middleware import PlanPersistenceMiddleware
 from .custom_middleware import RequiredOutputFileMiddleware
 from .custom_middleware import RequiredWriterDelegationMiddleware
+from .custom_middleware import ResearcherFinalizationMiddleware
 from .custom_middleware import SourceRegistryMiddleware
 from .custom_middleware import SourceRoutingGuardMiddleware
 from .custom_middleware import SourceRoutingPersistenceMiddleware
@@ -141,6 +144,7 @@ class DeepResearchGraphContext:
     domain_catalog_path: str | None
     current_datetime: str
     max_research_concurrency: int
+    max_researcher_model_calls: int
     resource_limits: DeepResearchResourceLimits
     enable_source_router: bool
     backend: Any
@@ -373,6 +377,7 @@ def build_researcher_runnable(
     researcher_model: BaseChatModel,
     researcher_tools: list[BaseTool],
     researcher_middleware: list[Any],
+    max_researcher_model_calls: int,
     system_prompt: str,
     skill_sources: list[str] | None = None,
     backend: Any = None,
@@ -388,6 +393,11 @@ def build_researcher_runnable(
             FilesystemMiddleware(backend=backend, _permissions=filesystem_permissions),
             create_summarization_middleware(researcher_model, backend),
             PatchToolCallsMiddleware(),
+            ModelCallLimitMiddleware(
+                run_limit=max_researcher_model_calls + RESEARCHER_FINALIZATION_MODEL_CALLS,
+                exit_behavior="error",
+            ),
+            ResearcherFinalizationMiddleware(max_model_calls=max_researcher_model_calls),
             StructuredResponseTextFallbackMiddleware(ResearchNotes),
             *researcher_middleware,
             *(visibility_middleware or []),
@@ -555,6 +565,7 @@ def build_deep_research_graph(
     callbacks: list[Any],
     domain_catalog_path: str | None,
     max_research_concurrency: int,
+    max_researcher_model_calls: int,
     final_report_tracker: FinalReportCommitTracker,
     state_budget: StateBudgetLedger | None = None,
     resource_limits: DeepResearchResourceLimits | None = None,
@@ -587,6 +598,7 @@ def build_deep_research_graph(
         domain_catalog_path=domain_catalog_path,
         current_datetime=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         max_research_concurrency=max_research_concurrency,
+        max_researcher_model_calls=max_researcher_model_calls,
         resource_limits=limits,
         enable_source_router=enable_source_router,
         backend=runtime.backend,
@@ -617,6 +629,7 @@ def build_deep_research_graph(
                 sandbox_enabled=context.runtime.execution_enabled,
             ),
         ],
+        max_researcher_model_calls=context.max_researcher_model_calls,
         skill_sources=researcher_skill_sources,
         backend=context.backend,
         visibility_middleware=context.visibility_middleware,
