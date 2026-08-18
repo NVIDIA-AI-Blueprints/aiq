@@ -244,7 +244,8 @@ def _generate_file_summary(file_path: str, llm=None) -> str | None:
     if not text:
         return None
 
-    return summarize_document(text, filepath.name, llm, SUMMARY_MAX_CHARS)
+    # Foundational RAG did not provide a file name, so we exclude it here
+    return summarize_document(text, llm, input_max_chars=SUMMARY_MAX_CHARS)
 
 
 @register_retriever("foundational_rag")

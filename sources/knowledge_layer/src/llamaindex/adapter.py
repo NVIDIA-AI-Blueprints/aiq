@@ -1354,8 +1354,12 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                         last = text_documents[-1].get_content() if len(text_documents) > 1 else ""
                         combined = f"{first}\n...\n{last}" if last else first
                         executor = ThreadPoolExecutor(max_workers=1)
+                        # LlamaIndex did not provide a file name, so we exclude it here
                         summary_future = executor.submit(
-                            summarize_document, combined, file_name, self.summary_llm, SUMMARY_MAX_INPUT_CHARS
+                            summarize_document,
+                            combined,
+                            self.summary_llm,
+                            input_max_chars=SUMMARY_MAX_INPUT_CHARS,
                         )
 
                     # 2. Extract tables (PDF only)

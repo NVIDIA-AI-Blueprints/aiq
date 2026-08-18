@@ -1240,7 +1240,12 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         """Generate a one-sentence document summary if the feature is enabled."""
         if not self.generate_summary_enabled:
             return None
-        summary = summarize_document(text_content, file_name, self.summary_llm, SUMMARY_MAX_INPUT_CHARS)
+        summary = summarize_document(
+            text_content,
+            self.summary_llm,
+            file_name=file_name,
+            input_max_chars=SUMMARY_MAX_INPUT_CHARS,
+        )
         return summary[:500] if summary else None
 
     async def health_check(self) -> bool:

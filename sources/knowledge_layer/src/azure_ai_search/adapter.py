@@ -1094,7 +1094,12 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
                 raise RuntimeError(f"Collection {collection_name!r} became unavailable during ingestion")
 
             summary = (
-                summarize_document("\n".join(texts), file_name, self._summary_llm, _SUMMARY_MAX_CHARS)
+                summarize_document(
+                    "\n".join(texts),
+                    self._summary_llm,
+                    file_name=file_name,
+                    input_max_chars=_SUMMARY_MAX_CHARS,
+                )
                 if self.cfg.generate_summary
                 else None
             )
