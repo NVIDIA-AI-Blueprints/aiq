@@ -13,7 +13,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .loop_guard import ResearcherLoopGuardConfig
 from .state import DeepResearchAgentState
 from .subagent_contracts import AnswerComponent
 from .subagent_contracts import AnswerStrategy
@@ -41,7 +40,6 @@ __all__ = [
     "ResearchPlan",
     "ResearchQuery",
     "ResearchSource",
-    "ResearcherLoopGuardConfig",
     "SourceRecommendation",
     "SourceRoutingPlan",
     "TaskAnalysis",

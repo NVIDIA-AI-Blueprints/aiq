@@ -494,12 +494,6 @@ functions:
       max_todo_items: 20
       max_todo_item_chars: 2048
       max_total_todo_chars: 10000
-    researcher_loop_guard:
-      enabled: true
-      max_source_calls_per_query: 25
-      max_identical_source_calls: 3
-      max_consecutive_thinks: 3
-      max_model_turns_per_query: 60
     verbose: true
 ```
 
@@ -521,7 +515,6 @@ functions:
 | `max_concurrent_source_tool_calls` | `int` | `5` | Shared cap on concurrent source-tool calls across all researcher workers in the run. |
 | `max_source_tool_batch_size` | `int` | `4` | Maximum concrete inputs accepted by a batch-capable source-tool wrapper in one call. |
 | `resource_limits` | object | See below | Non-disableable per-job request, graph, state, and provider-call ceilings. Values may be reduced but cannot exceed the defaults. |
-| `researcher_loop_guard` | object | See below | Per-researcher circuit breaker bounding one `run_research_batch` worker. Optional; omitting it uses the defaults. |
 | `verbose` | `bool` | `true` | Enable verbose logging. |
 
 `resource_limits` is enforced in both synchronous and async-job construction:
@@ -547,72 +540,6 @@ functions:
 `max_research_concurrency` cannot exceed `resource_limits.max_research_queries`.
 When lowering the job-wide query budget below the default concurrency of `6`,
 lower `max_research_concurrency` in the same configuration.
-
-#### Researcher loop guard
-
-`researcher_loop_guard` bounds **one researcher worker** — a single `ResearchQuery` executed inside
-`run_research_batch`. It is a deterministic circuit breaker that runs underneath the model, so it does not depend on
-the model following prompt guidance. `resource_limits` is its complement: that bounds the whole job, this bounds one
-worker.
-
-| Parameter | Default | Max | Enforcement boundary |
-|-----------|---------|-----|----------------------|
-| `enabled` | `true` | — | Set `false` to disable every limit below at once. There is no partial-disable mode, and no tool is withdrawn while it is `false`. |
-| `max_source_calls_per_query` | `25` | `100` | Model-issued source-tool invocations for one `ResearchQuery`. |
-| `max_identical_source_calls` | `3` | `10` | Invocations of one source tool with identical arguments. The repeat is not executed. |
-| `max_consecutive_thinks` | `3` | `10` | Uninterrupted `think` calls. Any other tool call resets the streak. |
-| `max_model_turns_per_query` | `60` | `250` | Total model calls for one `ResearchQuery`, searching or not. On the last turn every tool is withdrawn. |
-
-Each limit is validated on both sides (minimum `1`, maximum as above); a value outside the range is a startup failure,
-not a silent clamp. Unlike `resource_limits`, whose defaults are also its maxima because those limits may only be
-tightened, these ceilings sit *above* their defaults: raising a breaker that fires on healthy runs is the supported
-tuning path, and the ceiling only bounds how far it can be raised. `max_source_calls_per_query` is capped at the same
-value as the job-wide `resource_limits.max_source_tool_calls`, so one worker can never be budgeted above what the
-whole job is allowed to retrieve.
-
-When `max_source_calls_per_query` is reached, the guard preserves the last search result and appends an exhaustion
-notice to it. When a later identical request would exceed `max_identical_source_calls`, that request is not executed
-and the guard returns an error `ToolMessage`. In either case, it withdraws the source tools and `think` from every
-later model call. The worker is directed to return its `ResearchNotes` from the evidence already gathered, recording
-unsupported components as explicit `ResearchGap` entries and lowering `evidence_judgment` to mark the note as
-truncated. It is a graceful degradation, not a failure — the worker still contributes notes.
-
-Those three limits narrow the loop rather than close it: the filesystem tools stay callable, so a worker can still
-spend turns re-reading `/shared` after a withdrawal. `max_model_turns_per_query` closes it. It counts every model
-call, and on the final one the guard withdraws *all* tools and disables native structured-output binding. The
-structured-response text fallback then promotes schema-valid JSON, or makes one tools-disabled correction call, so
-the worker can still return `ResearchNotes` without sending a provider an empty `tools` array.
-
-**What `max_source_calls_per_query` counts.** Model-issued *invocations*, not concrete provider calls. One
-batch-capable invocation carrying four queries costs **one** unit of this budget but four concrete calls against
-`resource_limits.max_source_tool_calls`. The four limits in play bound different things:
-
-| Limit | Scope | Bounds |
-|-------|-------|--------|
-| `researcher_loop_guard.max_source_calls_per_query` | One researcher invocation | Model-issued search *iterations* |
-| `max_source_tool_batch_size` | One tool invocation | Concrete inputs in one logical call |
-| `max_concurrent_source_tool_calls` | Whole job | Concrete calls executing concurrently |
-| `resource_limits.max_source_tool_calls` | Whole job | Aggregate concrete attempts and batch items |
-
-Two consequences worth knowing:
-
-- **The repeated-request rule matches whole invocations.** Its signature covers the tool name plus the complete
-  canonical argument object, and canonicalizes argument key *order* only — not case or whitespace. Re-sending an
-  identical batch is caught; two different batches that share individual queries are not deduplicated item by item,
-  and `"AI research"` and `"ai research"` are distinct requests.
-- **Framework retries cost one unit, not several.** The guard sits outside the tool-retry middleware, so a request
-  retried three times after a transient failure still consumes a single unit.
-
-The guard is enforced only for `deep_research_agent` researcher workers; the planner, writer, and orchestrator stacks
-are unaffected. Because `chat_researcher` resolves the deep researcher by function name rather than building its own
-graph, configuring `researcher_loop_guard` under `deep_research_agent` automatically covers the chat researcher's
-deep path. `shallow_research_agent` is a separate agent and is not affected.
-
-To see how often the breaker fires in a run, grep the logs for `Researcher source-call budget reached` (INFO, on
-exhaustion), `Researcher loop guard blocked` (WARNING, per blocked call), and
-`Researcher loop guard forcing finalization` (WARNING, on the turn ceiling). A breaker that fires on healthy runs is
-set too low: raise it. The symptom is `ResearchNotes` with spurious `ResearchGap` entries rather than an obvious
-failure.
 
 `data_sources` request filtering happens after this configured tool set is resolved. It removes tools mapped to
 unselected registry sources but preserves configured tools with no source mapping. Router recommendations become
