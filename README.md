@@ -98,6 +98,12 @@ Recent changes include:
   chart honors the selected release namespace, and the UI improves concurrent-research activity,
   session recovery, and WebSocket reliability.
 
+AI-Q v2.2.0 is published on NVIDIA NGC as the
+[`aiq-agent` backend container](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/containers/aiq-agent/2.2.0),
+[`aiq-frontend` web container](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/containers/aiq-frontend/2.2.0),
+and [`aiq2-web` Helm chart](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/helm-charts/aiq2-web/2.2.0).
+Each artifact uses version `2.2.0`.
+
 See the [changelog](CHANGELOG.md) for detailed release history; the linked feature docs describe
 configuration and current limitations.
 
@@ -115,6 +121,12 @@ The checked-in default CLI and web profiles use these core components:
 - [NVIDIA Nemotron 3 Nano Omni 30B A3B Reasoning](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) (vision-language model for the LlamaIndex knowledge layer, if used)
 - [Tavily Search API](https://tavily.com/) for web search
 - Serper, SerpAPI, or SearchAPI for Google Scholar paper search
+
+> **Known hosted-serving limitation:** Nemotron 3.5 Lightning can intermittently produce citation-incomplete or
+> malformed shallow drafts when served through NVIDIA API Catalog. AI-Q fails closed instead of publishing those
+> drafts. The Brev getting-started launchable uses Nemotron Ultra for shallow research; the general-purpose shipped
+> profiles retain Lightning. See [Troubleshooting](docs/source/resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog)
+> for details and the self-hosted Lightning option.
 
 The shipped frontier profile, `configs/config_frontier_models.yml`, uses GPT-5.6 Luna for intent classification,
 shallow research, source routing, and deep-research execution, with GPT-5.6 Sol for clarification, orchestration,

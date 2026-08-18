@@ -9,6 +9,13 @@ The simplest possible configuration: a single shallow research agent with web se
 
 This is a good starting point for understanding the config structure before adding complexity.
 
+```{warning}
+This example preserves the shipped Lightning shallow profile. The NVIDIA API Catalog serving profile has a known
+[shallow citation-output limitation](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog).
+AI-Q fails closed rather than publishing citation-incomplete drafts. Use Nemotron Ultra for the shallow role or a
+validated self-hosted Lightning profile when reliability is the priority.
+```
+
 ## Configuration
 
 ```yaml
