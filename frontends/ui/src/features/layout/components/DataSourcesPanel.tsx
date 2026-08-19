@@ -10,15 +10,17 @@
 
 'use client'
 
-import { type FC, memo, useCallback, useEffect, useMemo, useState } from 'react'
-import { Flex, Text, SidePanel, SegmentedControl, Switch, Button, Banner } from '@/adapters/ui'
+import { type FC, memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Flex, Text, SegmentedControl, Switch, Button, Banner } from '@/adapters/ui'
 import { createMcpAuthClient, openAuthPopupAndWait } from '@/adapters/api'
 import { useShallow } from 'zustand/react/shallow'
-import { Globe, LoadingSpinner } from '@/adapters/ui/icons'
+import { Close, Globe, LoadingSpinner } from '@/adapters/ui/icons'
 import { useAuth } from '@/adapters/auth'
+import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { useLayoutStore } from '../store'
 import { useIsCurrentSessionBusy, useChatStore } from '@/features/chat'
-import type { DataSource } from '../data-sources'
+import { type DataSource, getDataSourceDisplay } from '../data-sources'
+import { cn } from '@/shared/lib/cn'
 import { DataConnectionCard } from './DataConnectionCard'
 import { FileSourcesTab } from './FileSourcesTab'
 import { UploadOrchestrator } from '@/features/documents'
@@ -56,8 +58,10 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     dataSourcesError: s.dataSourcesError,
   })))
 
+  const panelRef = useRef<HTMLDivElement>(null)
+  const openerRef = useRef<HTMLElement | null>(null)
+
   const closeRightPanel = useLayoutStore((s) => s.closeRightPanel)
-  const openRightPanel = useLayoutStore((s) => s.openRightPanel)
   const setDataSourcesPanelTab = useLayoutStore((s) => s.setDataSourcesPanelTab)
   const toggleDataSource = useLayoutStore((s) => s.toggleDataSource)
   const setEnabledDataSources = useLayoutStore((s) => s.setEnabledDataSources)
@@ -74,6 +78,19 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     }
   }, [isOpen, idToken, refreshDataSourceStatus])
 
+  useEffect(() => {
+    const el = panelRef.current
+    if (isOpen) {
+      openerRef.current = document.activeElement as HTMLElement | null
+      el?.removeAttribute('inert')
+      return
+    }
+    el?.setAttribute('inert', '')
+    const opener = openerRef.current
+    openerRef.current = null
+    opener?.focus?.()
+  }, [isOpen])
+
   // Check if current session is busy with operations
   const isBusy = useIsCurrentSessionBusy()
 
@@ -86,30 +103,35 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
   // Convert array to Set for efficient lookups
   const enabledSourcesSet = new Set(enabledDataSourceIds)
 
-  // Convert API data sources to UI format - no fallback
+  // Convert API data sources to UI format. Names/descriptions come from the
+  // frontend display-override; per-user auth metadata is preserved for the
+  // per-user OAuth connect flow.
   const displaySources: DataSource[] = useMemo(() => {
     if (!availableDataSources || availableDataSources.length === 0) {
       return []
     }
-    return availableDataSources.map((source) => ({
-      id: source.id,
-      name: source.name,
-      description: source.description ?? '',
-      category: source.category ?? 'enterprise',
-      defaultEnabled: source.default_enabled ?? true,
-      requiresAuth: source.requires_auth ?? false,
-      perUserAuth: source.per_user_auth
-        ? {
-            required: source.per_user_auth.required,
-            provider: source.per_user_auth.provider,
-            mcpServerId: source.per_user_auth.mcp_server_id,
-            status: source.per_user_auth.status,
-            connectUrl: source.per_user_auth.connect_url,
-            expiresAt: source.per_user_auth.expires_at,
-            lastError: source.per_user_auth.last_error,
-          }
-        : undefined,
-    }))
+    return availableDataSources.map((source) => {
+      const display = getDataSourceDisplay(source)
+      return {
+        id: source.id,
+        name: display.name,
+        description: display.description,
+        category: source.category ?? 'enterprise',
+        defaultEnabled: source.default_enabled ?? true,
+        requiresAuth: source.requires_auth ?? false,
+        perUserAuth: source.per_user_auth
+          ? {
+              required: source.per_user_auth.required,
+              provider: source.per_user_auth.provider,
+              mcpServerId: source.per_user_auth.mcp_server_id,
+              status: source.per_user_auth.status,
+              connectUrl: source.per_user_auth.connect_url,
+              expiresAt: source.per_user_auth.expires_at,
+              lastError: source.per_user_auth.last_error,
+            }
+          : undefined,
+      }
+    })
   }, [availableDataSources])
 
   // Check if any sources require authentication
@@ -117,16 +139,7 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
     return displaySources.some((source) => source.requiresAuth)
   }, [displaySources])
 
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      if (open) {
-        openRightPanel('data-sources')
-      } else {
-        closeRightPanel()
-      }
-    },
-    [openRightPanel, closeRightPanel]
-  )
+  const prefersReducedMotion = useReducedMotion()
 
   const handleToggle = useCallback(
     (sourceId: string, enabled: boolean) => {
@@ -220,182 +233,215 @@ export const DataSourcesPanel: FC<DataSourcesPanelProps> = memo(function DataSou
   }, [anyAvailableEnabled, setEnabledDataSources, availableSources, saveDataSourcesToConversation])
 
   return (
-    <SidePanel
-      className="side-panel-dock-under-header bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px]"
-      open={isOpen}
-      onOpenChange={handleOpenChange}
-      side="right"
-      bordered
-      closeOnClickOutside={false}
-      style={
-        {
-          height: 'calc(100vh - 3.5rem)',
-        } as React.CSSProperties
-      }
-      slotHeading={
-        <Flex align="center" gap="2">
-          <Globe className="h-5 w-5" />
-          Data Sources
-        </Flex>
-      }
-      slotFooter={
-        dataSourcesPanelTab === 'connections' ? (
-          <Text kind="body/regular/xs" className="text-subtle">
-            {enabledAvailableCount} of {availableCount} available connections enabled. Enabled
-            connections will be available to the AI assistant.
-          </Text>
-        ) : (
-          <Text kind="body/regular/xs" className="text-left text-subtle">
-            Attached files will be always available to agents until deleted.
-          </Text>
-        )
-      }
+    <div
+      ref={panelRef}
+      className={cn(
+        'border-base bg-surface-base h-full shrink-0 overflow-hidden',
+        isOpen && 'border-l'
+      )}
+      style={{
+        width: isOpen ? '400px' : '0px',
+        minWidth: isOpen ? '400px' : '0px',
+        transition: prefersReducedMotion
+          ? 'none'
+          : 'width 600ms ease-in-out, min-width 600ms ease-in-out',
+      }}
+      aria-hidden={!isOpen}
     >
-      {/* Tab Navigation */}
-      <Flex className="mb-4">
-        <SegmentedControl
-          value={dataSourcesPanelTab}
-          onValueChange={handleTabChange}
-          size="small"
-          className="w-full"
-          items={[
-            { value: 'connections', children: 'Connections' },
-            { value: 'files', children: 'Files' },
-          ]}
-        />
-      </Flex>
-
-      {/* Tab Content */}
-      {dataSourcesPanelTab === 'connections' ? (
-        /* Data Sources Tab */
-        <Flex direction="col" className="flex-1 overflow-y-auto">
-          {/* Auth Warning Banner - shown when authenticated sources exist but no valid token */}
-          {hasAuthenticatedSources && !hasValidToken && (
-            <Banner
-              kind="inline"
-              status={!authRequired ? 'info' : 'warning'}
-              className="mb-6 px-4 py-3"
-            >
-              {!authRequired
-                ? 'Enable authentication to access additional data sources.'
-                : 'Sign in to access additional data sources.'}
-            </Banner>
-          )}
-
-          {/* Connect failure feedback so a failed attempt isn't silent */}
-          {connectError && (
-            <Banner kind="inline" status="error" className="mb-6 px-4 py-3">
-              {connectError}
-            </Banner>
-          )}
-
-          {/* All Connections Toggle */}
-          <Text kind="label/semibold/xs" className="text-subtle mb-3 uppercase">
-            All Connections
-          </Text>
-          <Flex
-            align="center"
-            justify="between"
-            role="button"
-            tabIndex={isBusy ? -1 : 0}
-            onClick={isBusy ? undefined : handleToggleAll}
-            onKeyDown={(e) => {
-              if (!isBusy && (e.key === 'Enter' || e.key === ' ')) {
-                e.preventDefault()
-                handleToggleAll()
-              }
-            }}
-            className={`border-base mb-4 rounded-lg border p-3 transition-colors ${
-              isBusy ? 'cursor-not-allowed opacity-50' : 'cursor-pointer hover:bg-surface-raised-50'
-            }`}
-            aria-pressed={anyAvailableEnabled}
-            aria-disabled={isBusy}
-            aria-label={
-              isBusy
-                ? 'All available connections (disabled during operations)'
-                : `All available connections: ${anyAvailableEnabled ? 'enabled' : 'disabled'}`
-            }
-            title={isBusy ? 'Data source changes disabled during active operations' : undefined}
-          >
-            <Text kind="label/semibold/sm" className="text-primary">
-            Disable / Enable All
+      <Flex
+        direction="col"
+        className="h-full w-[400px]"
+        style={{
+          visibility: isOpen ? 'visible' : 'hidden',
+          opacity: isOpen ? 1 : 0,
+          transition: prefersReducedMotion
+            ? 'none'
+            : isOpen
+              ? 'opacity 100ms ease-in-out, visibility 0ms'
+              : 'opacity 100ms ease-in-out 500ms, visibility 0ms 600ms',
+        }}
+      >
+        {/* Header with close affordance */}
+        <Flex
+          align="center"
+          justify="between"
+          className="border-base shrink-0 border-b py-4 pl-6 pr-4"
+        >
+          <Flex align="center" gap="2">
+            <Globe className="h-5 w-5" />
+            <Text kind="label/semibold/md" className="text-primary">
+              Data Sources
             </Text>
-            {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
-            <div onClick={(e) => e.stopPropagation()}>
-              <Switch
-                size="small"
-                checked={anyAvailableEnabled}
-                onCheckedChange={handleToggleAll}
-                disabled={isBusy}
-                aria-label={
-                  isBusy
-                    ? 'Toggle all connections (disabled)'
-                    : anyAvailableEnabled
-                      ? 'Disable all connections'
-                      : 'Enable all connections'
-                }
-              />
-            </div>
+          </Flex>
+          <Button
+            kind="tertiary"
+            size="small"
+            onClick={closeRightPanel}
+            aria-label="Close data sources panel"
+            title="Close data sources"
+          >
+            <Close className="h-4 w-4" aria-hidden="true" />
+          </Button>
+        </Flex>
+
+        <Flex direction="col" className="flex-1 overflow-hidden px-6 py-4">
+          {/* Tab Navigation */}
+          <Flex className="mb-4">
+            <SegmentedControl
+              value={dataSourcesPanelTab}
+              onValueChange={handleTabChange}
+              size="small"
+              className="w-full"
+              items={[
+                { value: 'connections', children: 'Connections' },
+                { value: 'files', children: 'Files' },
+              ]}
+            />
           </Flex>
 
-          {/* Individual Connections */}
-          <Text kind="label/semibold/xs" className="text-subtle mb-3 uppercase">
-            Individual Connections ({displaySources.length})
-          </Text>
+          {/* Tab Content */}
+          {dataSourcesPanelTab === 'connections' ? (
+            /* Data Sources Tab */
+            <Flex direction="col" className="flex-1 overflow-y-auto">
+              {/* Auth Warning Banner - shown when authenticated sources exist but no valid token */}
+              {hasAuthenticatedSources && !hasValidToken && (
+                <Banner
+                  kind="inline"
+                  status={!authRequired ? 'info' : 'warning'}
+                  className="mb-6 px-4 py-3"
+                >
+                  {!authRequired
+                    ? 'Enable authentication to access additional data sources.'
+                    : 'Sign in to access additional data sources.'}
+                </Banner>
+              )}
 
-          {dataSourcesLoading ? (
-            <Flex align="center" justify="center" className="py-8">
-              <LoadingSpinner size="medium" aria-label="Loading data sources" />
-            </Flex>
-          ) : dataSourcesError ? (
-            <Flex direction="col" align="center" className="py-4">
-              <Text kind="body/regular/sm" className="text-error mb-2">
-                Unable to load data sources
-              </Text>
-              <Text kind="body/regular/xs" className="text-subtle mb-3">
-                {dataSourcesError}
-              </Text>
-              <Button
-                kind="secondary"
-                size="small"
-                onClick={() => fetchDataSources()}
-                aria-label="Retry loading data sources"
+              {/* Connect failure feedback so a failed attempt isn't silent */}
+              {connectError && (
+                <Banner kind="inline" status="error" className="mb-6 px-4 py-3">
+                  {connectError}
+                </Banner>
+              )}
+
+              {/* All Connections Toggle */}
+              <Text
+                kind="label/semibold/xs"
+                className="text-subtle mb-3 font-mono uppercase tracking-[0.08em]"
               >
-                Retry
-              </Button>
-            </Flex>
-          ) : displaySources.length === 0 ? (
-            <Flex direction="col" align="center" className="py-4">
-              <Text kind="body/regular/sm" className="text-subtle">
-                No data sources available
+                All Connections
               </Text>
+              <Flex
+                align="center"
+                justify="between"
+                className={cn(
+                  'surface-card mb-4 border p-3',
+                  isBusy
+                    ? 'border-base opacity-50'
+                    : anyAvailableEnabled
+                      ? 'brand-tint border'
+                      : 'border-base'
+                )}
+                title={
+                  isBusy ? 'Data source changes disabled during active operations' : undefined
+                }
+              >
+                <Text kind="label/semibold/sm" className="text-primary">
+                  Disable / Enable All
+                </Text>
+                <Switch
+                  size="small"
+                  checked={anyAvailableEnabled}
+                  onCheckedChange={handleToggleAll}
+                  disabled={isBusy}
+                  aria-label={
+                    isBusy
+                      ? 'Toggle all connections (disabled)'
+                      : anyAvailableEnabled
+                        ? 'Disable all connections'
+                        : 'Enable all connections'
+                  }
+                />
+              </Flex>
+
+              {/* Individual Connections */}
+              <Text
+                kind="label/semibold/xs"
+                className="text-subtle mb-3 font-mono uppercase tracking-[0.08em]"
+              >
+                Individual Connections ({displaySources.length})
+              </Text>
+
+              {dataSourcesLoading ? (
+                <Flex align="center" justify="center" className="py-8">
+                  <LoadingSpinner size="medium" aria-label="Loading data sources" />
+                </Flex>
+              ) : dataSourcesError ? (
+                <Flex direction="col" align="center" className="py-4">
+                  <Text kind="body/regular/sm" className="text-error mb-2">
+                    Unable to load data sources
+                  </Text>
+                  <Text kind="body/regular/xs" className="text-subtle mb-3">
+                    {dataSourcesError}
+                  </Text>
+                  <Button
+                    kind="secondary"
+                    size="small"
+                    onClick={() => fetchDataSources(idToken)}
+                    aria-label="Retry loading data sources"
+                  >
+                    Retry
+                  </Button>
+                </Flex>
+              ) : displaySources.length === 0 ? (
+                <Flex direction="col" align="center" className="py-4">
+                  <Text kind="body/regular/sm" className="text-subtle">
+                    No data sources available
+                  </Text>
+                </Flex>
+              ) : (
+                <Flex direction="col" gap="2">
+                  {displaySources.map((source) => {
+                    const isSourceAvailable = !source.requiresAuth || hasValidToken
+                    return (
+                      <DataConnectionCard
+                        key={source.id}
+                        source={source}
+                        isEnabled={enabledSourcesSet.has(source.id)}
+                        isAvailable={isSourceAvailable}
+                        isBusy={isBusy}
+                        unavailableReason={
+                          !isSourceAvailable
+                            ? 'Sign in required to access this data source'
+                            : undefined
+                        }
+                        onToggle={handleToggle}
+                        onConnect={handleConnect}
+                      />
+                    )
+                  })}
+                </Flex>
+              )}
             </Flex>
           ) : (
-            <Flex direction="col" gap="2">
-              {displaySources.map((source) => {
-                const isSourceAvailable = !source.requiresAuth || hasValidToken
-                return (
-                  <DataConnectionCard
-                    key={source.id}
-                    source={source}
-                    isEnabled={enabledSourcesSet.has(source.id)}
-                    isAvailable={isSourceAvailable}
-                    isBusy={isBusy}
-                    unavailableReason={
-                      !isSourceAvailable ? 'Sign in required to access this data source' : undefined
-                    }
-                    onToggle={handleToggle}
-                    onConnect={handleConnect}
-                  />
-                )
-              })}
-            </Flex>
+            /* File Sources Tab */
+            <FileSourcesTab onDeleteFile={onDeleteFile} />
           )}
         </Flex>
-      ) : (
-        /* File Sources Tab */
-        <FileSourcesTab onDeleteFile={onDeleteFile} />
-      )}
-    </SidePanel>
+
+        {/* Footer summary */}
+        <Flex direction="col" className="border-base shrink-0 border-t px-6 py-3">
+          {dataSourcesPanelTab === 'connections' ? (
+            <Text kind="body/regular/xs" className="text-subtle">
+              {enabledAvailableCount} of {availableCount} available connections enabled. Enabled
+              connections will be available to the AI assistant.
+            </Text>
+          ) : (
+            <Text kind="body/regular/xs" className="text-subtle">
+              Attached files will be always available to agents until deleted.
+            </Text>
+          )}
+        </Flex>
+      </Flex>
+    </div>
   )
 })

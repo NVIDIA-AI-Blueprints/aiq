@@ -15,7 +15,7 @@ import { type FC, useMemo } from 'react'
 import { Flex, Text, Button } from '@/adapters/ui'
 import { useShallow } from 'zustand/react/shallow'
 import { LoadingSpinner } from '@/adapters/ui/icons'
-import { type DataSource } from '../data-sources'
+import { type DataSource, getDataSourceDisplay } from '../data-sources'
 import { DataConnectionCard } from './DataConnectionCard'
 import { useLayoutStore } from '../store'
 
@@ -30,31 +30,42 @@ interface DataConnectionsTabProps {
  * Tab content for managing data connections.
  * Displays available data sources with enable/disable toggles.
  */
-export const DataConnectionsTab: FC<DataConnectionsTabProps> = ({
-  enabledSourceIds,
-  onToggle,
-}) => {
-  const { availableDataSources, dataSourcesLoading, dataSourcesError } =
-    useLayoutStore(useShallow((s) => ({
+export const DataConnectionsTab: FC<DataConnectionsTabProps> = ({ enabledSourceIds, onToggle }) => {
+  const { availableDataSources, dataSourcesLoading, dataSourcesError } = useLayoutStore(
+    useShallow((s) => ({
       availableDataSources: s.availableDataSources,
       dataSourcesLoading: s.dataSourcesLoading,
       dataSourcesError: s.dataSourcesError,
-    })))
+    }))
+  )
   const fetchDataSources = useLayoutStore((s) => s.fetchDataSources)
 
-  // Convert API data sources to UI format - no fallback
   const displaySources: DataSource[] = useMemo(() => {
     if (!availableDataSources || availableDataSources.length === 0) {
       return []
     }
-    return availableDataSources.map((source) => ({
-      id: source.id,
-      name: source.name,
-      description: source.description ?? '',
-      category: source.category ?? 'enterprise',
-      defaultEnabled: true,
-      requiresAuth: source.requires_auth ?? false,
-    }))
+    return availableDataSources.map((source) => {
+      const display = getDataSourceDisplay(source)
+      return {
+        id: source.id,
+        name: display.name,
+        description: display.description,
+        category: source.category ?? 'enterprise',
+        defaultEnabled: true,
+        requiresAuth: source.requires_auth ?? false,
+        perUserAuth: source.per_user_auth
+          ? {
+              required: source.per_user_auth.required,
+              provider: source.per_user_auth.provider,
+              mcpServerId: source.per_user_auth.mcp_server_id,
+              status: source.per_user_auth.status,
+              connectUrl: source.per_user_auth.connect_url,
+              expiresAt: source.per_user_auth.expires_at,
+              lastError: source.per_user_auth.last_error,
+            }
+          : undefined,
+      }
+    })
   }, [availableDataSources])
 
   if (dataSourcesLoading) {
@@ -68,7 +79,6 @@ export const DataConnectionsTab: FC<DataConnectionsTabProps> = ({
     )
   }
 
-  // Show error state when API fails - no fallback to hardcoded sources
   if (dataSourcesError) {
     return (
       <Flex direction="col" align="center" justify="center" className="flex-1 py-8">
@@ -90,7 +100,6 @@ export const DataConnectionsTab: FC<DataConnectionsTabProps> = ({
     )
   }
 
-  // Show empty state if no sources available
   if (displaySources.length === 0) {
     return (
       <Flex direction="col" align="center" justify="center" className="flex-1 py-8">
@@ -103,7 +112,10 @@ export const DataConnectionsTab: FC<DataConnectionsTabProps> = ({
 
   return (
     <Flex direction="col" className="flex-1 overflow-y-auto">
-      <Text kind="label/semibold/xs" className="text-subtle mb-3 uppercase">
+      <Text
+        kind="label/semibold/xs"
+        className="text-subtle mb-3 font-mono uppercase tracking-widest"
+      >
         Available Sources ({displaySources.length})
       </Text>
 

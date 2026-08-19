@@ -140,10 +140,8 @@ const useExpiryLabel = (
       return
     }
 
-    // Compute immediately
     setLabel(formatExpiryLabel(computeMsRemaining(uploadedAt, intervalHours)))
 
-    // Re-evaluate every 60 seconds
     const id = setInterval(() => {
       setLabel(formatExpiryLabel(computeMsRemaining(uploadedAt, intervalHours)))
     }, 60_000)
@@ -193,7 +191,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
       `}
     >
       <Flex align="center" gap="3" className="min-w-0 flex-1">
-        {/* File Icon or Spinner */}
+        {}
         {config.showSpinner ? (
           <Spinner size="small" aria-label={config.label} />
         ) : (
@@ -204,9 +202,9 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
           />
         )}
 
-        {/* Content */}
+        {}
         <Flex direction="col" gap="1" className="min-w-0 flex-1">
-          {/* Title, file size, and timestamp */}
+          {}
           <Flex align="center" gap="2" className="min-w-0">
             <Text kind="label/semibold/sm" className="text-primary truncate">
               {title}
@@ -226,16 +224,16 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
             )}
           </Flex>
 
-          {/* Description (if provided) */}
+          {}
           {description && (
             <Text kind="body/regular/xs" className="text-subtle line-clamp-2">
               {description}
             </Text>
           )}
 
-          {/* Status and expiration row */}
+          {}
           <Flex align="center" gap="2" className="mt-1">
-            {/* Status indicator */}
+            {}
             <Flex align="center" gap="1">
               {status === 'available' && <span className="text-success text-xs">✓</span>}
               {status === 'error' && <span className="text-error text-xs">✕</span>}
@@ -247,7 +245,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
               </Text>
             </Flex>
 
-            {/* Expiration countdown */}
+            {}
             {expiryLabel && (
               <>
                 <span className="text-subtle">•</span>
@@ -261,7 +259,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
             )}
           </Flex>
 
-          {/* Error message */}
+          {}
           {status === 'error' && errorMessage && (
             <Text kind="body/regular/xs" className="text-error mt-1">
               {errorMessage}
@@ -269,7 +267,7 @@ export const FileSourceCard: FC<FileSourceCardProps> = ({
           )}
         </Flex>
 
-        {/* Delete button */}
+        {}
         <Button
           kind="tertiary"
           size="small"

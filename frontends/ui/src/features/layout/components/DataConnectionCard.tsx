@@ -12,8 +12,9 @@
 
 import { type FC, useCallback, useState } from 'react'
 import { Flex, Text, Switch, Button } from '@/adapters/ui'
-import { Globe } from '@/adapters/ui/icons'
-import type { DataSource } from '../data-sources'
+import { SourceKindIcon } from '@/shared/components/Sources/SourceKindIcon'
+import { cn } from '@/shared/lib/cn'
+import { type DataSource, getDataSourceKind } from '../data-sources'
 
 interface DataConnectionCardProps {
   /** Data source configuration */
@@ -107,13 +108,16 @@ export const DataConnectionCard: FC<DataConnectionCardProps> = ({
       tabIndex={canToggle ? 0 : -1}
       onClick={handleCardClick}
       onKeyDown={handleCardKeyDown}
-      className={`border-base rounded-lg border p-3 transition-colors ${
+      className={cn(
+        'surface-card group flex items-center justify-between border p-3',
         isDisabled
-          ? 'cursor-not-allowed opacity-50'
-          : canToggle
-            ? 'cursor-pointer hover:bg-surface-raised-50'
-            : ''
-      }`}
+          ? 'border-base cursor-not-allowed opacity-50'
+          : isEnabled
+            ? 'brand-tint cursor-pointer border'
+            : canToggle
+              ? 'border-base hover:bg-surface-raised-50 cursor-pointer'
+              : 'border-base'
+      )}
       aria-pressed={isEnabled}
       aria-disabled={!canToggle}
       aria-label={`${source.name}: ${isEnabled ? 'enabled' : 'disabled'}${!canToggle ? ' (disabled)' : ''}`}
@@ -126,15 +130,18 @@ export const DataConnectionCard: FC<DataConnectionCardProps> = ({
       }
     >
       <Flex align="center" gap="3" className="min-w-0 flex-1">
-        <Flex
-          align="center"
-          justify="center"
-          className={`h-9 w-9 flex-shrink-0 rounded-lg ${
-            isDisabled ? 'bg-surface-sunken' : 'bg-surface-raised'
-          }`}
+        <span
+          className={cn(
+            'grid h-9 w-9 flex-shrink-0 place-items-center rounded-lg transition-colors',
+            isDisabled
+              ? 'bg-surface-sunken text-subtle'
+              : isEnabled
+                ? 'brand-chip'
+                : 'bg-surface-raised text-secondary'
+          )}
         >
-          <Globe className={`h-5 w-5 ${isDisabled ? 'text-subtle' : 'text-secondary'}`} />
-        </Flex>
+          <SourceKindIcon kind={getDataSourceKind(source.id)} className="h-5 w-5" />
+        </span>
         <Flex direction="col" className="min-w-0">
           <Text kind="label/semibold/sm" className={isDisabled ? 'text-subtle' : 'text-primary'}>
             {source.name}

@@ -18,6 +18,8 @@ describe('useLayoutStore', () => {
     // Reset store to initial state before each test (matches store.ts initialState)
     useLayoutStore.setState({
       isSessionsPanelOpen: false,
+      sessionsCollapsed: false,
+      sessionsAutoCollapsed: false,
       rightPanel: 'data-sources',
       researchPanelTab: 'tasks',
       dataSourcesPanelTab: 'connections',
@@ -27,6 +29,8 @@ describe('useLayoutStore', () => {
       knowledgeLayerAvailable: false,
       dataSourcesLoading: false,
       dataSourcesError: null,
+      promptDraft: null,
+      selectedModel: undefined,
     })
   })
 
@@ -129,6 +133,90 @@ describe('useLayoutStore', () => {
       useLayoutStore.getState().closeRightPanel()
 
       expect(useLayoutStore.getState().rightPanel).toBeNull()
+    })
+  })
+
+  describe('sessions sidebar collapse model', () => {
+    test('toggleSessionsSidebar flips collapsed and clears auto-collapse', () => {
+      useLayoutStore.setState({ sessionsAutoCollapsed: true })
+
+      useLayoutStore.getState().toggleSessionsSidebar()
+
+      expect(useLayoutStore.getState().sessionsCollapsed).toBe(true)
+      expect(useLayoutStore.getState().sessionsAutoCollapsed).toBe(false)
+    })
+
+    test('setSessionsCollapsed sets collapsed and clears auto-collapse', () => {
+      useLayoutStore.setState({ sessionsAutoCollapsed: true })
+
+      useLayoutStore.getState().setSessionsCollapsed(true)
+
+      expect(useLayoutStore.getState().sessionsCollapsed).toBe(true)
+      expect(useLayoutStore.getState().sessionsAutoCollapsed).toBe(false)
+    })
+
+    test('opening a research/data-sources panel auto-collapses the sidebar', () => {
+      useLayoutStore.setState({ sessionsCollapsed: false, rightPanel: null })
+
+      useLayoutStore.getState().openRightPanel('research')
+
+      expect(useLayoutStore.getState().rightPanel).toBe('research')
+      expect(useLayoutStore.getState().sessionsCollapsed).toBe(true)
+      expect(useLayoutStore.getState().sessionsAutoCollapsed).toBe(true)
+    })
+
+    test('closing after an auto-collapse restores the sidebar', () => {
+      useLayoutStore.setState({ sessionsCollapsed: false, rightPanel: null })
+      useLayoutStore.getState().openRightPanel('research')
+
+      useLayoutStore.getState().closeRightPanel()
+
+      expect(useLayoutStore.getState().rightPanel).toBeNull()
+      expect(useLayoutStore.getState().sessionsCollapsed).toBe(false)
+      expect(useLayoutStore.getState().sessionsAutoCollapsed).toBe(false)
+    })
+
+    test('does not auto-restore a sidebar the user collapsed manually', () => {
+      useLayoutStore.setState({ sessionsCollapsed: true, sessionsAutoCollapsed: false, rightPanel: 'research' })
+
+      useLayoutStore.getState().closeRightPanel()
+
+      expect(useLayoutStore.getState().sessionsCollapsed).toBe(true)
+    })
+  })
+
+  describe('promptDraft and selectedModel', () => {
+    test('setPromptDraft stores and clears the composer draft', () => {
+      useLayoutStore.getState().setPromptDraft('half a question')
+      expect(useLayoutStore.getState().promptDraft).toBe('half a question')
+
+      useLayoutStore.getState().setPromptDraft(null)
+      expect(useLayoutStore.getState().promptDraft).toBeNull()
+    })
+
+    test('selectedModel defaults to undefined and is settable', () => {
+      expect(useLayoutStore.getState().selectedModel).toBeUndefined()
+
+      useLayoutStore.getState().setSelectedModel('custom-model')
+
+      expect(useLayoutStore.getState().selectedModel).toBe('custom-model')
+    })
+
+    test('setSelectedModel(undefined) restores the backend default', () => {
+      useLayoutStore.getState().setSelectedModel('gpt-5.4')
+
+      useLayoutStore.getState().setSelectedModel(undefined)
+
+      expect(useLayoutStore.getState().selectedModel).toBeUndefined()
+    })
+
+    test('resetComposerState clears the draft and selected model', () => {
+      useLayoutStore.setState({ promptDraft: 'half a question', selectedModel: 'gpt-5.4' })
+
+      useLayoutStore.getState().resetComposerState()
+
+      expect(useLayoutStore.getState().promptDraft).toBeNull()
+      expect(useLayoutStore.getState().selectedModel).toBeUndefined()
     })
   })
 

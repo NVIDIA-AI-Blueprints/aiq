@@ -28,18 +28,8 @@ export {
 } from './components'
 
 // Thinking sub-tabs and cards
-export {
-  AgentsTab,
-  AgentCard,
-  ToolCallsTab,
-  ToolCallCard,
-  ThoughtTracesTab,
-  ThoughtCard,
-  FilesTab,
-  SourceCard,
-} from './components'
+export { AgentsTab, AgentCard, ThoughtCard, SourceCard } from './components'
 export type { AgentInfo } from './components'
-export type { ToolCallInfo } from './components'
 export type { ThoughtInfo } from './components'
 export type { FileInfo } from './components'
 export type { SourceInfo } from './components'

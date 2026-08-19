@@ -14,10 +14,33 @@
  * - hasAnyBusySession store method (global check)
  */
 
-import type { ChatMessage, DeepResearchJobStatus } from '../types'
+import type { ChatMessage, Conversation, DeepResearchJobStatus } from '../types'
 
 /** Non-terminal deep research statuses that indicate an active server-side job */
 const ACTIVE_JOB_STATUSES: readonly DeepResearchJobStatus[] = ['submitted', 'running']
+
+/** Epoch ms of the most recent user-typed message, or null when the session has none. */
+export const lastUserMessageTime = (messages: ChatMessage[]): number | null => {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const messageType = messages[i].messageType || (messages[i].role === 'user' ? 'user' : 'assistant')
+    if (messageType === 'user') {
+      return new Date(messages[i].timestamp).getTime()
+    }
+  }
+  return null
+}
+
+/** Epoch ms used to order the session list: the last user query, falling back to last update or creation. */
+const sessionRecency = (conversation: Conversation): number => {
+  const userTime = lastUserMessageTime(conversation.messages)
+  if (userTime !== null) return userTime
+  return new Date(conversation.updatedAt ?? conversation.createdAt).getTime()
+}
+
+/** Sessions ordered most-recent first by the timestamp of their last user query (stable for ties). */
+export const sortConversationsByLastUserMessage = <T extends Conversation>(
+  conversations: readonly T[]
+): T[] => [...conversations].sort((a, b) => sessionRecency(b) - sessionRecency(a))
 
 /**
  * True when the user has never sent a typed chat message in this session.

@@ -4,8 +4,10 @@
 /**
  * SessionsPanel Component
  *
- * Left panel displaying session history with new session and delete all buttons.
- * Slides in from the left and overlays content.
+ * Persistent left sidebar of session history. Pushes the chat rather than
+ * overlaying it, and collapses to a slim icon rail. The top actions (toggle,
+ * new session, search) share one fixed-height row in both states, so their
+ * icons keep the same size and position when the rail expands.
  */
 
 'use client'
@@ -13,6 +15,8 @@
 import {
   type FC,
   type KeyboardEvent,
+  type ReactNode,
+  type Ref,
   memo,
   useCallback,
   useMemo,
@@ -20,14 +24,16 @@ import {
   useRef,
   useEffect,
 } from 'react'
-import { Flex, Text, Button, SidePanel } from '@/adapters/ui'
+import { Flex, Text, Button } from '@/adapters/ui'
 import { useShallow } from 'zustand/react/shallow'
 import {
   Chat,
   ChatMessage,
+  Close,
   DocumentCheckmark,
   Edit,
   LoadingSpinner,
+  Menu,
   Plus,
   Search,
   SelectEllipse,
@@ -35,9 +41,13 @@ import {
 } from '@/adapters/ui/icons'
 import { useLayoutStore } from '../store'
 import { useChatStore } from '@/features/chat'
+import { useReducedMotion } from '@/hooks/use-reduced-motion'
 import { checkStorageHealth } from '@/features/chat/lib/storage-manager'
+import { cn } from '@/shared/lib/cn'
 import { DeleteSessionConfirmationModal } from './DeleteSessionConfirmationModal'
 import { DeleteAllSessionsConfirmationModal } from './DeleteAllSessionsConfirmationModal'
+
+const RAIL_SESSION_LIMIT = 12
 
 interface Session {
   id: string
@@ -66,8 +76,44 @@ interface SessionsPanelProps {
 }
 
 /**
- * Sessions panel with history grouped by date.
- * Opens from the left side of the screen.
+ * A single top-level nav row (toggle / new / search). Fixed height with a
+ * fixed-size icon slot so the icon stays put when the rail expands; the label
+ * only appears in the expanded state.
+ */
+const NavRow: FC<{
+  icon: ReactNode
+  label: string
+  collapsed: boolean
+  onClick?: () => void
+  disabled?: boolean
+  ariaLabel?: string
+  title?: string
+  buttonRef?: Ref<HTMLButtonElement>
+}> = ({ icon, label, collapsed, onClick, disabled = false, ariaLabel, title, buttonRef }) => (
+  <button
+    ref={buttonRef}
+    type="button"
+    onClick={onClick}
+    disabled={disabled}
+    aria-label={ariaLabel ?? label}
+    title={title ?? label}
+    className={cn(
+      'flex h-10 w-full items-center rounded-lg transition-colors',
+      collapsed ? 'justify-center px-0' : 'gap-3 px-3',
+      disabled ? 'cursor-not-allowed opacity-50' : 'hover:bg-surface-raised-50 cursor-pointer'
+    )}
+  >
+    <span className="text-secondary grid h-5 w-5 shrink-0 place-items-center">{icon}</span>
+    {!collapsed && (
+      <Text kind="label/regular/sm" className="text-primary truncate">
+        {label}
+      </Text>
+    )}
+  </button>
+)
+
+/**
+ * Sessions sidebar with history grouped by date, collapsible to an icon rail.
  */
 export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel({
   sessions = [],
@@ -78,17 +124,18 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
   onDeleteAllSessions,
   onRenameSession,
 }) {
-  const isSessionsPanelOpen = useLayoutStore((s) => s.isSessionsPanelOpen)
-  const setSessionsPanelOpen = useLayoutStore((s) => s.setSessionsPanelOpen)
+  const collapsed = useLayoutStore((s) => s.sessionsCollapsed)
+  const toggleSidebar = useLayoutStore((s) => s.toggleSessionsSidebar)
+  const setCollapsed = useLayoutStore((s) => s.setSessionsCollapsed)
+  const prefersReducedMotion = useReducedMotion()
 
   const isSessionBusy = useChatStore((s) => s.isSessionBusy)
   const anySessionBusy = useChatStore((s) => s.hasAnyBusySession())
   const refreshDeepResearchSessionStatuses = useChatStore(
     (s) => s.refreshDeepResearchSessionStatuses
   )
-  // Navigation-specific busy check: only shallow thinking (WebSocket) and HITL prompts
-  // block session switching. Deep research runs server-side and can be reconnected,
-  // so it should NOT prevent navigation.
+  // Navigation is blocked while a shallow run streams OR while a HITL prompt is
+  // pending. Deep research runs server-side and does NOT block navigation.
   const { isStreaming, hasPendingInteraction } = useChatStore(
     useShallow((s) => ({
       isStreaming: s.isStreaming,
@@ -96,26 +143,28 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
     }))
   )
   const isNavigationBlocked = isStreaming || hasPendingInteraction
+
   const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
   const [deleteModalOpen, setDeleteModalOpen] = useState(false)
   const [deleteAllModalOpen, setDeleteAllModalOpen] = useState(false)
   const [sessionToDelete, setSessionToDelete] = useState<string | null>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const searchTriggerRef = useRef<HTMLButtonElement>(null)
   const refreshStatusesInFlightRef = useRef(false)
 
-  // Storage usage percentage — refreshes only when the panel opens
   const [storagePercent, setStoragePercent] = useState<number>(0)
   useEffect(() => {
-    if (isSessionsPanelOpen) {
-      const { percentUsed } = checkStorageHealth()
-      setStoragePercent(Math.round(percentUsed))
-      if (!refreshStatusesInFlightRef.current) {
-        refreshStatusesInFlightRef.current = true
-        void Promise.resolve(refreshDeepResearchSessionStatuses()).finally(() => {
-          refreshStatusesInFlightRef.current = false
-        })
-      }
+    if (collapsed) return
+    const { percentUsed } = checkStorageHealth()
+    setStoragePercent(Math.round(percentUsed))
+    if (!refreshStatusesInFlightRef.current) {
+      refreshStatusesInFlightRef.current = true
+      void Promise.resolve(refreshDeepResearchSessionStatuses()).finally(() => {
+        refreshStatusesInFlightRef.current = false
+      })
     }
-  }, [isSessionsPanelOpen, refreshDeepResearchSessionStatuses])
+  }, [collapsed, refreshDeepResearchSessionStatuses])
 
   const handleDeleteClick = useCallback((sessionId: string) => {
     setSessionToDelete(sessionId)
@@ -137,154 +186,287 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
     onDeleteAllSessions?.()
   }, [onDeleteAllSessions])
 
-  const handleOpenChange = useCallback(
-    (open: boolean) => {
-      setSessionsPanelOpen(open)
-    },
-    [setSessionsPanelOpen]
-  )
-
-  const handleClose = useCallback(() => {
-    setSessionsPanelOpen(false)
-  }, [setSessionsPanelOpen])
-
   const handleNewSession = useCallback(() => {
     onNewSession?.()
-    handleClose()
-  }, [onNewSession, handleClose])
+  }, [onNewSession])
 
   const handleSessionClick = useCallback(
     (sessionId: string) => {
       onSelectSession?.(sessionId)
-      handleClose()
     },
-    [onSelectSession, handleClose]
+    [onSelectSession]
   )
 
+  const focusSearch = useCallback(() => {
+    requestAnimationFrame(() => searchInputRef.current?.focus())
+  }, [])
+
+  const handleSearchClick = useCallback(() => {
+    if (collapsed) setCollapsed(false)
+    setSearchOpen(true)
+    focusSearch()
+  }, [collapsed, setCollapsed, focusSearch])
+
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false)
+    setSearchQuery('')
+    requestAnimationFrame(() => searchTriggerRef.current?.focus())
+  }, [])
+
+  const clearSearch = useCallback(() => {
+    setSearchQuery('')
+    focusSearch()
+  }, [focusSearch])
+
+  const namedSessions = useMemo(() => sessions.filter((s) => s.title.trim() !== ''), [sessions])
+
   const filteredSessions = useMemo(() => {
-    if (!searchQuery.trim()) return sessions.filter((s) => s.title.trim() !== '')
+    if (!searchOpen || !searchQuery.trim()) return namedSessions
     const query = searchQuery.toLowerCase()
-    return sessions.filter((s) => s.title.toLowerCase().includes(query) && s.title.trim() !== '')
-  }, [sessions, searchQuery])
+    return namedSessions.filter((s) => s.title.toLowerCase().includes(query))
+  }, [namedSessions, searchOpen, searchQuery])
 
   const groupedSessions = useMemo(() => groupSessionsByDate(filteredSessions), [filteredSessions])
+  const railSessions = useMemo(() => namedSessions.slice(0, RAIL_SESSION_LIMIT), [namedSessions])
+  const hasSessions = namedSessions.length > 0
   const isEmptyState = filteredSessions.length === 0
+
   return (
-    <SidePanel
-      className="side-panel-dock-under-header bg-surface-base top-[var(--header-height)] h-[calc(100vh-var(--header-height))] w-[406px]"
-      open={isSessionsPanelOpen}
-      onOpenChange={handleOpenChange}
-      side="left"
-      bordered
-      closeOnClickOutside={false}
-      forceMount
-      slotHeading={
-        <Flex align="center" gap="2">
-          <ChatMessage />
-          <Text kind="label/semibold/md">Sessions</Text>
-        </Flex>
-      }
-      slotFooter={
-        <Flex direction="col" gap="1">
-          <Text kind="body/regular/xs" className="text-subtle">
-            Using {storagePercent}% of browser storage quota
-          </Text>
-          <Text kind="body/regular/xs" className="text-subtle">
-            Note: Chat sessions are saved in this browser. Research reports may expire on the
-            server.
-          </Text>
-        </Flex>
-      }
+    <div
+      className="border-base bg-surface-base h-full shrink-0 overflow-hidden border-r"
+      style={{
+        width: collapsed ? '56px' : '300px',
+        minWidth: collapsed ? '56px' : '300px',
+        transition: prefersReducedMotion
+          ? 'none'
+          : 'width 600ms ease-in-out, min-width 600ms ease-in-out',
+      }}
+      aria-label="Sessions"
     >
-      {/* Delete All + New Session */}
-      {!isEmptyState && searchQuery.trim() === '' && (
-        <Flex align="center" justify="between" gap="2" className="mb-4">
-          <Button
-            kind="tertiary"
-            size="small"
-            color="danger"
-            onClick={handleDeleteAllClick}
-            disabled={anySessionBusy}
-            aria-label={anySessionBusy ? 'Delete all sessions (disabled)' : 'Delete all sessions'}
-            title={
-              anySessionBusy
-                ? 'Cannot delete while operations are in progress'
-                : 'Delete all sessions'
-            }
-          >
-            <Flex align="center" gap="1">
-              <Trash className="h-4 w-4" />
-              <Text kind="label/regular/sm">Delete All</Text>
-            </Flex>
-          </Button>
-          <Button
-            kind="tertiary"
-            size="small"
-            onClick={handleNewSession}
-            disabled={isNavigationBlocked}
-            aria-label={
-              isNavigationBlocked
-                ? 'Start new session (disabled during active operations)'
-                : 'Start new session'
-            }
-            title={
-              isNavigationBlocked
-                ? 'Cannot create new session while current session is active'
-                : 'Start new session'
-            }
-          >
-            <Flex align="center" gap="1">
-              <Plus className="h-4 w-4" />
-              <Text kind="label/bold/sm">New Session</Text>
-            </Flex>
-          </Button>
-        </Flex>
-      )}
-      {/* Search */}
-      <div className="relative mb-4">
-        <Search className="text-subtle pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2" />
-        <input
-          type="text"
-          value={searchQuery}
-          onChange={(e) => setSearchQuery(e.target.value)}
-          placeholder="Search sessions..."
-          className="bg-surface-base border-base text-primary placeholder:text-subtle focus:border-accent-primary h-9 w-full rounded-md border pl-8 pr-3 text-sm outline-none"
-          aria-label="Search sessions"
-        />
-      </div>
-
-      {/* Session List */}
-      <Flex direction="col" className="flex-1 overflow-y-auto">
-        {Object.entries(groupedSessions).map(([dateLabel, dateSessions]) => (
-          <Flex key={dateLabel} direction="col" gap="2" className="mb-4">
-            <Text kind="label/semibold/xs" className="text-subtle uppercase">
-              {dateLabel}
-            </Text>
-            {dateSessions.map((session) => (
-              <SessionItem
-                key={session.id}
-                session={session}
-                isSelected={selectedSessionId === session.id}
-                isBusy={isNavigationBlocked}
-                isSessionActive={isSessionBusy(session.id)}
-                onSelect={handleSessionClick}
-                onDelete={handleDeleteClick}
-                onRename={onRenameSession}
-              />
-            ))}
+      <Flex direction="col" className="h-full gap-1 p-2">
+        {/* Header row: title + collapse toggle (or a single expand button when collapsed) */}
+        {collapsed ? (
+          <Flex align="center" justify="center" className="h-10">
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              aria-label="Expand sessions sidebar"
+              title="Expand sessions"
+              className="hover:bg-surface-raised-50 grid h-10 w-10 cursor-pointer place-items-center rounded-lg"
+            >
+              <Menu className="text-secondary h-5 w-5" />
+            </button>
           </Flex>
-        ))}
-
-        {isEmptyState && (
-          <Flex direction="col" align="center" justify="center" className="flex-1 py-8">
-            <Text kind="body/regular/sm" className="text-subtle">
-              {searchQuery.trim() ? 'No matching sessions' : 'No sessions yet'}
+        ) : (
+          <Flex align="center" gap="3" className="h-10 px-3">
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              aria-label="Collapse sessions sidebar"
+              title="Collapse sessions"
+              className="hover:bg-surface-raised-50 grid h-8 w-8 shrink-0 cursor-pointer place-items-center rounded-md"
+            >
+              <Menu className="text-secondary h-5 w-5" />
+            </button>
+            <Text kind="label/semibold/md" className="text-primary flex-1 truncate">
+              Sessions
             </Text>
-            {!searchQuery.trim() && (
-              <Button kind="secondary" size="small" onClick={handleNewSession} className="mt-4">
-                Start a new session
-              </Button>
+          </Flex>
+        )}
+
+        <NavRow
+          icon={<Plus className="h-5 w-5" />}
+          label="New Session"
+          collapsed={collapsed}
+          onClick={handleNewSession}
+          disabled={isNavigationBlocked}
+          ariaLabel={
+            isNavigationBlocked
+              ? 'Start new session (disabled during active operations)'
+              : 'Start new session'
+          }
+          title={
+            isNavigationBlocked
+              ? 'Cannot create new session while current session is active'
+              : 'Start new session'
+          }
+        />
+
+        {hasSessions &&
+          (!collapsed && searchOpen ? (
+            <Flex align="center" gap="3" className="h-10 px-3">
+              <span className="text-secondary grid h-5 w-5 shrink-0 place-items-center">
+                <Search className="h-5 w-5" />
+              </span>
+              <input
+                ref={searchInputRef}
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') closeSearch()
+                }}
+                onBlur={() => {
+                  if (!searchQuery.trim()) closeSearch()
+                }}
+                placeholder="Search sessions..."
+                className="text-primary placeholder:text-subtle h-full min-w-0 flex-1 border-0 bg-transparent text-sm outline-none"
+                aria-label="Search sessions"
+              />
+              {searchQuery && (
+                <button
+                  type="button"
+                  onClick={clearSearch}
+                  aria-label="Clear search"
+                  title="Clear search"
+                  className="text-subtle hover:text-primary grid h-5 w-5 shrink-0 cursor-pointer place-items-center"
+                >
+                  <Close className="h-4 w-4" />
+                </button>
+              )}
+            </Flex>
+          ) : (
+            <NavRow
+              icon={<Search className="h-5 w-5" />}
+              label="Search sessions"
+              collapsed={collapsed}
+              onClick={handleSearchClick}
+              ariaLabel="Search sessions"
+              buttonRef={searchTriggerRef}
+            />
+          ))}
+
+        {collapsed ? (
+          <Flex
+            direction="col"
+            align="center"
+            gap="1"
+            className="scrollbar-hide mt-1 w-full flex-1 overflow-y-auto"
+          >
+            {railSessions.map((session) => {
+              const isSelected = selectedSessionId === session.id
+              return (
+                <button
+                  key={session.id}
+                  type="button"
+                  onClick={() => handleSessionClick(session.id)}
+                  disabled={isNavigationBlocked}
+                  title={session.title}
+                  aria-label={`Session: ${session.title}`}
+                  className={cn(
+                    'focus-visible:ring-brand grid h-10 w-10 shrink-0 place-items-center rounded-lg outline-none focus-visible:ring-2',
+                    isNavigationBlocked ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+                    isSelected ? 'brand-tint' : 'hover:bg-surface-raised-50'
+                  )}
+                >
+                  <SessionStatusIcon
+                    session={session}
+                    isSessionActive={isSessionBusy(session.id)}
+                  />
+                </button>
+              )
+            })}
+          </Flex>
+        ) : (
+          <Flex direction="col" className="scrollbar-hide -mr-1 mt-1 flex-1 overflow-y-auto pr-1">
+            {groupedSessions.map((group) => (
+              <Flex key={group.label} direction="col" gap="1" className="mb-4">
+                <Text
+                  kind="label/semibold/xs"
+                  className="text-subtle mb-1 px-3 font-mono uppercase tracking-[0.08em]"
+                >
+                  {group.label}
+                </Text>
+                {group.sessions.map((session) => (
+                  <SessionItem
+                    key={session.id}
+                    session={session}
+                    isSelected={selectedSessionId === session.id}
+                    isBusy={isNavigationBlocked}
+                    isSessionActive={isSessionBusy(session.id)}
+                    onSelect={handleSessionClick}
+                    onDelete={handleDeleteClick}
+                    onRename={onRenameSession}
+                  />
+                ))}
+              </Flex>
+            ))}
+
+            {isEmptyState && (
+              <Flex
+                direction="col"
+                align="center"
+                justify="center"
+                gap="3"
+                className="flex-1 px-6 py-12 text-center"
+              >
+                <span className="brand-chip grid h-12 w-12 place-items-center rounded-full">
+                  <ChatMessage className="h-6 w-6" />
+                </span>
+                <Flex direction="col" gap="1">
+                  <Text kind="label/semibold/md" className="text-primary">
+                    {searchOpen && searchQuery.trim() ? 'No matching sessions' : 'No sessions yet'}
+                  </Text>
+                  <Text kind="body/regular/sm" className="text-subtle">
+                    {searchOpen && searchQuery.trim()
+                      ? 'Try a different search term.'
+                      : 'Your research sessions will show up here.'}
+                  </Text>
+                </Flex>
+                {!(searchOpen && searchQuery.trim()) && (
+                  <Button kind="secondary" size="small" onClick={handleNewSession} className="mt-1">
+                    <Flex align="center" gap="2">
+                      <Plus className="h-4 w-4" />
+                      <Text kind="label/bold/sm">Start a new session</Text>
+                    </Flex>
+                  </Button>
+                )}
+              </Flex>
             )}
+          </Flex>
+        )}
+
+        {!collapsed && (
+          <Flex direction="col" gap="2" className="border-base mt-2 border-t pt-3">
+            {hasSessions && (
+              <Flex justify="end">
+                <Button
+                  kind="tertiary"
+                  size="tiny"
+                  color="danger"
+                  onClick={handleDeleteAllClick}
+                  disabled={anySessionBusy}
+                  aria-label={
+                    anySessionBusy ? 'Delete all sessions (disabled)' : 'Delete all sessions'
+                  }
+                  title={
+                    anySessionBusy
+                      ? 'Cannot delete while operations are in progress'
+                      : 'Delete all sessions'
+                  }
+                >
+                  <Flex align="center" gap="1">
+                    <Trash className="h-3.5 w-3.5" />
+                    <Text kind="label/regular/xs">Clear all</Text>
+                  </Flex>
+                </Button>
+              </Flex>
+            )}
+            <Flex align="center" gap="2">
+              <div className="bg-surface-raised h-1 flex-1 overflow-hidden rounded-full">
+                <div
+                  className="h-full rounded-full bg-[color:var(--color-brand)] transition-[width] duration-500 ease-[var(--ease-premium)]"
+                  style={{ width: `${Math.min(storagePercent, 100)}%` }}
+                />
+              </div>
+              <Text kind="body/regular/xs" className="text-subtle shrink-0">
+                {storagePercent}% used
+              </Text>
+            </Flex>
+            <Text kind="body/regular/xs" className="text-subtle">
+              Note: Chat sessions are saved in this browser. Research reports may expire on the
+              server.
+            </Text>
           </Flex>
         )}
       </Flex>
@@ -300,14 +482,15 @@ export const SessionsPanel: FC<SessionsPanelProps> = memo(function SessionsPanel
         onOpenChange={setDeleteAllModalOpen}
         onConfirm={handleConfirmDeleteAll}
       />
-    </SidePanel>
+    </div>
   )
 })
 
 /**
  * SessionItem Component
  *
- * Individual session item with hover-reveal edit/delete icons and inline rename.
+ * Single-line session row (title + status icon) with hover-reveal rename/delete
+ * actions and inline rename.
  */
 interface SessionItemProps {
   session: Session
@@ -336,7 +519,6 @@ const SessionItem: FC<SessionItemProps> = ({
   const [editValue, setEditValue] = useState(session.title)
   const inputRef = useRef<HTMLInputElement>(null)
 
-  // Focus input when entering edit mode
   useEffect(() => {
     if (isEditing && inputRef.current) {
       inputRef.current.focus()
@@ -414,17 +596,11 @@ const SessionItem: FC<SessionItemProps> = ({
       onKeyDown={(e) => e.key === 'Enter' && !isEditing && !isBusy && handleClick()}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}
-      className={`
-        focus-visible:ring-brand group flex h-10 w-full items-center gap-2
-        rounded-md border p-2 text-left
-        outline-none transition-colors focus-visible:ring-2 focus-visible:ring-inset
-        ${isBusy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer'}
-        ${
-          isSelected
-            ? 'bg-surface-raised border-accent-primary border'
-            : 'border-base hover:bg-surface-raised-50 bg-transparent'
-        }
-      `}
+      className={cn(
+        'surface-card focus-visible:ring-brand group flex h-9 w-full items-center gap-2 rounded-lg px-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-inset',
+        isBusy ? 'cursor-not-allowed opacity-60' : 'cursor-pointer',
+        isSelected ? 'bg-surface-raised brand-tint' : 'hover:bg-surface-raised-50 bg-transparent'
+      )}
       aria-label={
         isBusy ? `Session: ${session.title} (processing in progress)` : `Session: ${session.title}`
       }
@@ -439,21 +615,24 @@ const SessionItem: FC<SessionItemProps> = ({
           onKeyDown={handleKeyDown}
           onBlur={handleInputBlur}
           onClick={(e) => e.stopPropagation()}
-          className="
-            bg-surface-base border-accent-primary text-primary h-8 min-w-0 flex-1 rounded border
-            px-2 py-1 text-sm outline-none
-          "
+          className="bg-surface-base border-accent-primary text-primary h-7 min-w-0 flex-1 rounded border px-2 py-1 text-sm outline-none"
           aria-label="Edit session title"
         />
       ) : (
         <>
-          <SessionStatusIcon session={session} isSessionActive={isSessionActive} />
+          <span className="grid h-4 w-4 shrink-0 place-items-center">
+            <SessionStatusIcon session={session} isSessionActive={isSessionActive} />
+          </span>
 
-          <Text kind="body/regular/sm" className="text-primary min-w-0 flex-1 truncate">
+          <Text
+            kind="body/regular/sm"
+            title={session.title}
+            className="text-primary min-w-0 flex-1 truncate"
+          >
             {session.title}
           </Text>
 
-          {/* Action icons - shown on hover */}
+          {/* Hover-reveal rename / delete actions */}
           {isHovered && (
             <Flex align="center" gap="1" className="shrink-0">
               <Button
@@ -520,44 +699,49 @@ const SessionStatusIcon: FC<{ session: Session; isSessionActive: boolean }> = ({
   return <Chat className="text-subtle h-4 w-4 shrink-0" aria-label="Chat session" />
 }
 
-/**
- * Groups sessions by relative date labels (Today, Yesterday, or date string)
- */
-const groupSessionsByDate = (sessions: Session[]): Record<string, Session[]> => {
-  const groups: Record<string, Session[]> = {}
-  const today = new Date()
-  const yesterday = new Date(today)
-  yesterday.setDate(yesterday.getDate() - 1)
-
-  for (const session of sessions) {
-    const sessionDate = new Date(session.date)
-    let label: string
-
-    if (isSameDay(sessionDate, today) && session.title.trim()) {
-      label = 'Today'
-    } else if (isSameDay(sessionDate, yesterday)) {
-      label = 'Yesterday'
-    } else {
-      label = sessionDate.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
-      })
-    }
-
-    if (!groups[label]) {
-      groups[label] = []
-    }
-    groups[label].push(session)
-  }
-
-  return groups
+interface SessionGroup {
+  label: string
+  sessions: Session[]
 }
 
-const isSameDay = (d1: Date, d2: Date): boolean => {
-  return (
-    d1.getFullYear() === d2.getFullYear() &&
-    d1.getMonth() === d2.getMonth() &&
-    d1.getDate() === d2.getDate()
-  )
+const DAY_MS = 86_400_000
+
+const startOfDay = (date: Date): number => {
+  const d = new Date(date)
+  d.setHours(0, 0, 0, 0)
+  return d.getTime()
+}
+
+/**
+ * Buckets a session date into a relative label: Today, Yesterday, Previous 7
+ * Days, Previous 30 Days, then by month (with year when not the current one).
+ */
+const bucketLabel = (date: Date, now: Date): string => {
+  const diffDays = Math.round((startOfDay(now) - startOfDay(date)) / DAY_MS)
+  if (diffDays <= 0) return 'Today'
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) return 'Previous 7 Days'
+  if (diffDays < 30) return 'Previous 30 Days'
+  return date.getFullYear() === now.getFullYear()
+    ? date.toLocaleDateString('en-US', { month: 'long' })
+    : date.toLocaleDateString('en-US', { month: 'long', year: 'numeric' })
+}
+
+/**
+ * Groups sessions into ordered relative-date buckets, preserving the caller's
+ * order within and across buckets (the caller sorts by session recency).
+ */
+const groupSessionsByDate = (sessions: Session[]): SessionGroup[] => {
+  const now = new Date()
+  const groups = new Map<string, Session[]>()
+  for (const session of sessions) {
+    const label = bucketLabel(new Date(session.date), now)
+    const bucket = groups.get(label)
+    if (bucket) {
+      bucket.push(session)
+    } else {
+      groups.set(label, [session])
+    }
+  }
+  return Array.from(groups, ([label, items]) => ({ label, sessions: items }))
 }

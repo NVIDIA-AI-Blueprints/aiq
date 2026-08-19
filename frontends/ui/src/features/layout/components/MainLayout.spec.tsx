@@ -15,7 +15,6 @@ const mockDeleteAllConversations = vi.fn()
 const mockUpdateConversationTitle = vi.fn()
 const mockOpenRightPanel = vi.fn()
 
-// Mock the useSessionUrl hook (uses Next.js App Router hooks)
 vi.mock('@/hooks/use-session-url', () => ({
   useSessionUrl: vi.fn(() => ({
     updateSessionUrl: mockUpdateSessionUrl,
@@ -23,7 +22,6 @@ vi.mock('@/hooks/use-session-url', () => ({
   })),
 }))
 
-// Mock the chat store
 vi.mock('@/features/chat', () => ({
   useChatStore: vi.fn((selector?: (s: any) => any) => {
     const state = {
@@ -50,7 +48,6 @@ vi.mock('@/features/chat', () => ({
   NoSourcesBanner: () => <div data-testid="no-sources-banner">No Sources Banner</div>,
 }))
 
-// Mock the layout store
 vi.mock('../store', () => ({
   useLayoutStore: vi.fn((selector?: (s: any) => any) => {
     const state = {
@@ -64,7 +61,6 @@ vi.mock('../store', () => ({
   }),
 }))
 
-// Mock child components
 vi.mock('./AppBar', () => ({
   AppBar: ({
     sessionTitle,
@@ -105,7 +101,6 @@ vi.mock('./DataSourcesPanel', () => ({
 }))
 
 import { useChatStore } from '@/features/chat'
-import { useLayoutStore } from '../store'
 
 describe('MainLayout', () => {
   beforeEach(() => {
@@ -123,11 +118,11 @@ describe('MainLayout', () => {
     expect(screen.getByTestId('data-sources-panel')).toBeInTheDocument()
   })
 
-  test('hides the data sources panel when unauthenticated', () => {
+  test('hides the sessions sidebar and data sources panel when unauthenticated', () => {
     render(<MainLayout />)
 
     expect(screen.getByTestId('app-bar')).toBeInTheDocument()
-    expect(screen.getByTestId('sessions-panel')).toBeInTheDocument()
+    expect(screen.queryByTestId('sessions-panel')).not.toBeInTheDocument()
     expect(screen.getByTestId('chat-area')).toBeInTheDocument()
     expect(screen.getByTestId('input-area')).toBeInTheDocument()
     expect(screen.getByTestId('research-panel')).toBeInTheDocument()
@@ -172,7 +167,6 @@ describe('MainLayout', () => {
       <MainLayout isAuthenticated={true} user={user} onSignIn={onSignIn} onSignOut={onSignOut} />
     )
 
-    // Components render - props are passed to mocked child components
     expect(screen.getByTestId('app-bar')).toBeInTheDocument()
     expect(screen.getByTestId('chat-area')).toBeInTheDocument()
     expect(screen.getByTestId('input-area')).toBeInTheDocument()
@@ -225,38 +219,10 @@ describe('MainLayout', () => {
     expect(screen.getByRole('button', { name: /header new session/i })).toBeDisabled()
   })
 
-  test('adjusts chat width when details panel is open', () => {
-    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
-      const state = {
-        rightPanel: 'research',
-        isSessionsPanelOpen: false,
-        setSessionsPanelOpen: vi.fn(),
-        enabledDataSourceIds: ['source-1', 'source-2'],
-      }
-      return selector ? selector(state) : state
-    })
+  test('chat region flexes to fill the space between the side panels', () => {
+    render(<MainLayout isAuthenticated={true} />)
 
-    const { container } = render(<MainLayout />)
-
-    // The chat container should have 40% width when details panel is open
-    const chatContainer = container.querySelector('[style*="width"]')
-    expect(chatContainer).toHaveStyle({ width: '40%' })
-  })
-
-  test('shows full width when details panel is closed', () => {
-    vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
-      const state = {
-        rightPanel: null,
-        isSessionsPanelOpen: false,
-        setSessionsPanelOpen: vi.fn(),
-        enabledDataSourceIds: ['source-1', 'source-2'],
-      }
-      return selector ? selector(state) : state
-    })
-
-    const { container } = render(<MainLayout />)
-
-    const chatContainer = container.querySelector('[style*="width"]')
-    expect(chatContainer).toHaveStyle({ width: '100%' })
+    const centerColumn = screen.getByTestId('chat-area').parentElement
+    expect(centerColumn).toHaveClass('flex-1')
   })
 })

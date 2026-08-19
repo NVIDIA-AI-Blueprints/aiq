@@ -11,6 +11,8 @@
  * but are not used for UI display in the current ChatThinking component.
  */
 
+import { titleCaseWords, ACRONYMS } from '@/shared/lib/humanize'
+import { getToolLabel } from '@/shared/components/research'
 import type { IntermediateStepCategory } from '../types'
 
 /**
@@ -94,7 +96,14 @@ export const mapFunctionToCategory = (functionName: string): IntermediateStepCat
  * @returns True if this appears to be an LLM model name
  */
 export const isLLMModel = (name: string): boolean => {
-  return name.includes('/') && !name.startsWith('Function') && !name.startsWith('Tool:')
+  const normalized = name.trim()
+  if (/^(?:Function|Tool:)/i.test(normalized)) return false
+  if (normalized.includes('/')) return true
+
+  // Some providers report only the final model segment in intermediate traces.
+  return /^(?:llm(?:[_-]call)?|chat[_-]model|gpt(?:-|$)|claude(?:-|$)|nemotron(?:-|$)|llama(?:-|$)|mistral(?:-|$)|o\d(?:-|$))/i.test(
+    normalized
+  )
 }
 
 /**
@@ -114,6 +123,30 @@ export const hasToolPrefix = (name: string): boolean => {
 export const isFunctionStepName = (rawName: string): boolean => {
   return /^Function (Start|Complete):/i.test(rawName?.trim() ?? '')
 }
+
+export const REASONING_FUNCTION_NAME = '__reasoning__'
+
+export const isReasoningStep = (functionName: string): boolean =>
+  functionName === REASONING_FUNCTION_NAME
+
+export const REFLECTION_FUNCTION_NAME = '__reflection__'
+
+// Each note carries a unique suffix (e.g. `__reflection__:ab12cd`) so the store keeps it as a distinct
+// step instead of merging every note into one anchored at the first occurrence.
+export const isReflectionStep = (functionName: string): boolean =>
+  functionName === REFLECTION_FUNCTION_NAME ||
+  functionName.startsWith(`${REFLECTION_FUNCTION_NAME}:`)
+
+export const EXPLANATION_FUNCTION_NAME = '__explanation__'
+
+export const isExplanationStep = (functionName: string): boolean =>
+  functionName === EXPLANATION_FUNCTION_NAME
+
+/** Steps whose text is folded into a tool phase and remains user-visible after completion. */
+export const isFoldedTextStep = (functionName: string): boolean =>
+  isReasoningStep(functionName) ||
+  isReflectionStep(functionName) ||
+  isExplanationStep(functionName)
 
 /**
  * Display name for the root workflow step (chat_deepresearcher_agent).
@@ -146,21 +179,62 @@ export const getDisplayName = (functionName: string): string => {
   if (isLLMModel(functionName)) {
     const parts = functionName.split('/')
     const modelName = parts[parts.length - 1] // Take last segment
-    // Clean up: convert hyphens to spaces, capitalize
+    // Clean up: convert hyphens to spaces, capitalize (upper-casing known acronyms)
     return modelName
       .split('-')
-      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .map((word) =>
+        ACRONYMS.has(word.toLowerCase())
+          ? word.toUpperCase()
+          : word.charAt(0).toUpperCase() + word.slice(1)
+      )
       .join(' ')
   }
 
   // Handle "Tool:" prefix (strip it off)
   const cleaned = functionName.replace(/^Tool:\s*/i, '')
 
-  // Convert snake_case to Title Case
-  return cleaned
-    .split('_')
-    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-    .join(' ')
+  // Prefer the shared human tool label when one exists; else title-case.
+  const toolLabel = getToolLabel(cleaned)
+  if (toolLabel.label !== titleCaseWords(cleaned)) {
+    return toolLabel.label
+  }
+
+  return titleCaseWords(cleaned)
+}
+
+/**
+ * Split a raw step payload into its input and output halves on the
+ * "**Function Input:**" / "**Function Output:**" markers, BEFORE
+ * {@link formatPayload} strips them. Either half may be empty when the
+ * corresponding marker is absent.
+ *
+ * @param payload - The raw payload string from backend
+ * @returns The input and output sections (trimmed)
+ */
+export const splitPayload = (payload: string): { input: string; output: string } => {
+  if (!payload) return { input: '', output: '' }
+
+  const inputMatch = payload.match(
+    /\*\*Function Input:\*\*([\s\S]*?)(?=\*\*Function Output:\*\*|$)/i
+  )
+  const outputMatch = payload.match(/\*\*Function Output:\*\*([\s\S]*)$/i)
+
+  if (!inputMatch && !outputMatch) {
+    return { input: payload.trim(), output: '' }
+  }
+
+  return {
+    input: (inputMatch?.[1] ?? '').trim(),
+    output: (outputMatch?.[1] ?? '').trim(),
+  }
+}
+
+export const extractFoldedOutput = (content: string): string => {
+  const c = content || ''
+  if (/\*\*Function (Input|Output):\*\*/i.test(c)) {
+    return splitPayload(c).output.trim()
+  }
+  return c.trim()
 }
 
 /**

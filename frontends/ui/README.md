@@ -180,11 +180,18 @@ When you reopen a session after a page refresh:
 
 1. **ChatArea** - Displays immediately (messages, thinking steps loaded from localStorage)
 2. **PlanTab** - Displays immediately (plan messages loaded from localStorage)
-3. **Report/Tasks/Citations tabs** - Shows loading spinner, then fetches data from backend
+3. **Tasks/Thinking/Report tabs** - Shows loading state, then fetches data from the backend
 
 The lazy loading is automatic and seamless - you don't need to do anything special.
 
+### Deep Research Progress
 
+The Tasks tab presents an append-only timeline of workflow phases that actually started.
+Repeated phase attempts share one row, concurrent researchers are aggregated with a
+completed/observed count, and missing phases are never inferred from later activity. The
+Thinking tab retains the detailed execution traces. For inactive legacy jobs without a
+recognized workflow trace, Tasks falls back to the root todo artifact. This projection is
+frontend-only and does not add model calls or change the backend event contract.
 
 ## Docker Deployment
 

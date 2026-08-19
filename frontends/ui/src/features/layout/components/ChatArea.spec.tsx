@@ -6,7 +6,6 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { ChatArea } from './ChatArea'
 
-// Mock the chat store
 const mockRespondToPrompt = vi.fn()
 const mockDismissErrorCard = vi.fn()
 const mockGetThinkingStepsForMessage = vi.fn((_messageId: string) => [] as { id: string; displayName: string }[])
@@ -57,8 +56,16 @@ describe('ChatArea', () => {
   test('renders welcome state when authenticated with no messages', () => {
     render(<ChatArea isAuthenticated={true} />)
 
-    expect(screen.getByText('Welcome to AI-Q')).toBeInTheDocument()
-    expect(screen.getByText(/AI-powered research companion/i)).toBeInTheDocument()
+    expect(screen.getByText('What do you want to know?')).toBeInTheDocument()
+    expect(screen.getByText(/connected data sources/i)).toBeInTheDocument()
+  })
+
+  test('does not render example prompt chips in the welcome state', () => {
+    render(<ChatArea isAuthenticated={true} />)
+
+    expect(
+      screen.queryByRole('button', { name: /which customers are most likely to churn/i })
+    ).not.toBeInTheDocument()
   })
 
   test('calls onSignIn when sign in button clicked', async () => {
@@ -119,7 +126,6 @@ describe('ChatArea', () => {
 
     render(<ChatArea isAuthenticated={true} />)
 
-    // Status messages render inline with the status type
     expect(screen.getByRole('status')).toBeInTheDocument()
   })
 
@@ -206,7 +212,6 @@ describe('ChatArea', () => {
 
     render(<ChatArea isAuthenticated={true} />)
 
-    // File messages render inline with the file name
     expect(screen.getByText(/document\.pdf/)).toBeInTheDocument()
   })
 
@@ -265,14 +270,12 @@ describe('ChatArea', () => {
 
     render(<ChatArea isAuthenticated={true} />)
 
-    // Should show welcome state since assistant messages are filtered out
-    expect(screen.getByText('Welcome to AI-Q')).toBeInTheDocument()
+    expect(screen.getByText('What do you want to know?')).toBeInTheDocument()
   })
 
   test('renders chat messages area with aria-label', () => {
     render(<ChatArea isAuthenticated={true} />)
 
-    // The Flex component renders with aria-label
     expect(screen.getByLabelText(/chat messages/i)).toBeInTheDocument()
   })
 
@@ -290,8 +293,7 @@ describe('ChatArea', () => {
 
     render(<ChatArea isAuthenticated={true} />)
 
-    // Should render welcome state
-    expect(screen.getByText('Welcome to AI-Q')).toBeInTheDocument()
+    expect(screen.getByText('What do you want to know?')).toBeInTheDocument()
   })
 
   test('renders file upload banners', () => {
@@ -336,8 +338,21 @@ describe('ChatArea', () => {
         currentConversation: {
           messages: [
             { id: 'user-1', role: 'user', content: 'First question', messageType: 'user' },
-            { id: 'user-2', role: 'user', content: 'Second question', messageType: 'user' },
-            { id: 'answer-2', role: 'assistant', content: 'Second answer', messageType: 'agent_response' },
+            {
+              id: 'user-2',
+              role: 'user',
+              content: 'Second question',
+              messageType: 'user',
+              selectedModel: 'test-model',
+              timestamp: new Date('2026-06-29T16:00:00.000Z'),
+            },
+            {
+              id: 'answer-2',
+              role: 'assistant',
+              content: 'Second answer',
+              messageType: 'agent_response',
+              timestamp: new Date('2026-06-29T16:01:07.000Z'),
+            },
           ],
         },
         isLoading: false,
@@ -361,15 +376,17 @@ describe('ChatArea', () => {
     const secondCallProps = mockChatThinking.mock.calls[1][0] as {
       isInterrupted?: boolean
       isThinking?: boolean
+      responseStartedAt?: Date
+      responseCompletedAt?: Date
     }
 
-    // First turn has no response before next user message -> interrupted.
     expect(firstCallProps.isInterrupted).toBe(true)
     expect(firstCallProps.isThinking).toBe(false)
 
-    // Second turn has a response -> done (not interrupted).
     expect(secondCallProps.isInterrupted).toBe(false)
     expect(secondCallProps.isThinking).toBe(false)
+    expect(secondCallProps.responseStartedAt).toEqual(new Date('2026-06-29T16:00:00.000Z'))
+    expect(secondCallProps.responseCompletedAt).toEqual(new Date('2026-06-29T16:01:07.000Z'))
   })
 
   test('keeps earlier interrupted thinking state while a new message is actively streaming', () => {
@@ -384,7 +401,13 @@ describe('ChatArea', () => {
         currentConversation: {
           messages: [
             { id: 'user-1', role: 'user', content: 'First question', messageType: 'user' },
-            { id: 'user-2', role: 'user', content: 'Second question', messageType: 'user' },
+            {
+              id: 'user-2',
+              role: 'user',
+              content: 'Second question',
+              messageType: 'user',
+              selectedModel: 'test-model',
+            },
           ],
         },
         isLoading: true,
@@ -411,12 +434,11 @@ describe('ChatArea', () => {
       isThinking?: boolean
     }
 
-    // First turn was interrupted — must keep warning icon even while second turn streams.
     expect(firstCallProps.isInterrupted).toBe(true)
     expect(firstCallProps.isThinking).toBe(false)
 
-    // Second turn is actively streaming — shows spinner, not interrupted.
     expect(secondCallProps.isThinking).toBe(true)
     expect(secondCallProps.isInterrupted).toBe(false)
+    expect((mockChatThinking.mock.calls[1][0] as { model?: string }).model).toBe('test-model')
   })
 })

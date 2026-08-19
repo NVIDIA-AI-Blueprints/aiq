@@ -61,7 +61,6 @@ describe('CitationCard', () => {
     test('shows check icon when cited', () => {
       render(<CitationCard citation={createCitation({ isCited: true })} />)
 
-      // The citation should be styled differently when cited
       const domain = screen.getByText('example.com')
       expect(domain).toBeInTheDocument()
     })
@@ -98,7 +97,6 @@ describe('CitationCard', () => {
     test('handles invalid URLs gracefully', () => {
       render(<CitationCard citation={createCitation({ url: 'not-a-valid-url' })} />)
 
-      // Should show truncated URL as fallback - it appears in both domain and URL spots
       const urlTexts = screen.getAllByText('not-a-valid-url')
       expect(urlTexts.length).toBeGreaterThan(0)
     })
