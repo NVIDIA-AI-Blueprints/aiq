@@ -3,12 +3,15 @@
 
 """Tests for single-classification, code-owned catalog routing."""
 
+import asyncio
 import json
+from time import monotonic
 
 import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from langchain_core.messages import ToolMessage
 from langchain_core.outputs import ChatGeneration
 from langchain_core.outputs import ChatResult
 from langchain_core.tools import tool
@@ -60,6 +63,19 @@ class FakeCatalogTool:
         del config
         self.calls.append(payload)
         return next(self.results)
+
+
+class SlowRetryClassifier:
+    def __init__(self):
+        self.calls = 0
+
+    async def ainvoke(self, inputs, *, config, context):
+        del inputs, config, context
+        self.calls += 1
+        if self.calls == 1:
+            await asyncio.sleep(0.4)
+            raise RuntimeError("[500]")
+        await asyncio.sleep(10)
 
 
 class ScriptedModel(BaseChatModel):
@@ -369,6 +385,47 @@ async def test_catalog_failures_do_not_silently_fall_back(payload, match):
     router = _router(_classification(catalog_action="search", catalog_question="query"), payload)
     with pytest.raises(RoutingProtocolError, match=match):
         await router.run(_state())
+
+
+@pytest.mark.asyncio
+async def test_catalog_tool_message_error_is_rejected():
+    payload = ToolMessage(content="private provider detail", tool_call_id="catalog-1", status="error")
+    router = _router(_classification(catalog_action="search", catalog_question="query"), payload)
+
+    with pytest.raises(RoutingProtocolError, match="failed"):
+        await router.run(_state())
+
+
+@pytest.mark.asyncio
+async def test_catalog_tool_message_artifact_takes_precedence_over_content():
+    payload = ToolMessage(
+        content="not-json",
+        artifact={"request_id": "catalog-1", "coverage": 0.8, "candidates": [CATALOG_CANDIDATE]},
+        tool_call_id="catalog-1",
+    )
+    router = _router(_classification(catalog_action="search", catalog_question="query"), payload)
+
+    result = await router.run(_state())
+
+    assert result["user_intent"].target == "hybrid_research"
+    assert result["catalog_request_id"] == "catalog-1"
+
+
+@pytest.mark.asyncio
+async def test_classifier_timeout_is_shared_across_retries():
+    router = _router(_classification())
+    classifier = SlowRetryClassifier()
+    router.classifier = classifier
+    router.llm_timeout = 0.5
+    router.classifier_retry_delay_seconds = 0
+
+    started = monotonic()
+    with pytest.raises(TimeoutError):
+        await router.run(_state())
+    elapsed = monotonic() - started
+
+    assert elapsed < 0.75
+    assert classifier.calls == 2
 
 
 @pytest.mark.asyncio

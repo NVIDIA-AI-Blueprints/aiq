@@ -84,6 +84,10 @@ def test_gsf_requests_reject_invalid_database_names(database_name: str) -> None:
         CatalogSearchRequest(question="Find revenue metrics", database_name=database_name)
     with pytest.raises(ValidationError):
         TextToSQLRequest(question="Show quarterly revenue", database_name=database_name)
+    with pytest.raises(ValidationError):
+        TextToPQLRequest(question="Predict churn", database_name=database_name)
+    with pytest.raises(ValidationError):
+        QueryContextRequest(question="What revenue data is available?", database_name=database_name)
 
 
 def test_text_to_pql_request_omits_database_selector_by_default() -> None:

@@ -24,6 +24,7 @@ import aiofiles
 from langchain_core.messages import HumanMessage
 from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import ValidationError
 
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
@@ -694,9 +695,21 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 pass
         logger.info("skip_clarifier=%s", skip_clarifier)
 
-        request_context = _extract_query_context(query)
-        if request_context.database_name is None:
-            request_context.database_name = _extract_database_name_from_request_metadata(Context.get().metadata)
+        try:
+            request_context = _extract_query_context(query)
+            if request_context.database_name is None:
+                request_context.database_name = _extract_database_name_from_request_metadata(Context.get().metadata)
+        except ValidationError:
+            logger.warning("Rejected chat request with an invalid database scope")
+            invalid_scope_response = _create_chat_response(
+                "The requested database scope is invalid. Please select a valid database.",
+                response_id="invalid_database_scope",
+                model=workflow_id,
+            )
+            return ChatResearcherResponse(
+                **invalid_scope_response.model_dump(),
+                workflow_outcome=WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            )
         query_text = request_context.query_text
         data_sources = request_context.data_sources
         logger.info("ChatDeepResearcherAgent query_%s", log_content_metadata(query_text))

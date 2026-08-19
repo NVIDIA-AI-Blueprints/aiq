@@ -257,6 +257,24 @@ class TestExtractQueryContext:
         )
         assert _extract_database_name_from_request_metadata(metadata) == "finance_prod"
 
+    def test_extract_database_name_from_object_payload(self):
+        payload = SimpleNamespace(
+            database_name="finance_prod",
+            messages=[SimpleNamespace(role="user", content="Show revenue")],
+            data_sources=None,
+            active_report_job_id=None,
+        )
+
+        assert _extract_query_context(payload).database_name == "finance_prod"
+
+    def test_dynamic_attribute_payload_yields_no_database_scope(self):
+        payload = MagicMock()
+        payload.messages = [SimpleNamespace(role="user", content="Show revenue")]
+        payload.data_sources = None
+        payload.active_report_job_id = None
+
+        assert _extract_query_context(payload).database_name is None
+
     @pytest.mark.parametrize("database_name", ["", "finance bad", "finance/other", "x" * 129])
     def test_invalid_database_name_is_rejected(self, database_name):
         with pytest.raises(ValidationError):

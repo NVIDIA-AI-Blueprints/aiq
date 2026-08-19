@@ -215,26 +215,24 @@ class ContextAwareIntentRouter:
             "user_info": _router_user_info(state.user_info),
         }
         config = {"callbacks": self.callbacks} if self.callbacks else None
-        for attempt in range(1, self.classifier_max_attempts + 1):
-            try:
-                return await asyncio.wait_for(
-                    self.classifier.ainvoke(
+        async with asyncio.timeout(self.llm_timeout):
+            for attempt in range(1, self.classifier_max_attempts + 1):
+                try:
+                    return await self.classifier.ainvoke(
                         {"messages": [HumanMessage(content=query)]},
                         config=config,
                         context=context,
-                    ),
-                    timeout=self.llm_timeout,
-                )
-            except Exception as error:
-                if attempt >= self.classifier_max_attempts or not _is_retryable_classifier_error(error):
-                    raise
-                logger.warning(
-                    "Entry classifier provider call failed transiently; retrying (attempt=%d/%d, error_type=%s)",
-                    attempt,
-                    self.classifier_max_attempts,
-                    type(error).__name__,
-                )
-                await asyncio.sleep(self.classifier_retry_delay_seconds)
+                    )
+                except Exception as error:
+                    if attempt >= self.classifier_max_attempts or not _is_retryable_classifier_error(error):
+                        raise
+                    logger.warning(
+                        "Entry classifier provider call failed transiently; retrying (attempt=%d/%d, error_type=%s)",
+                        attempt,
+                        self.classifier_max_attempts,
+                        type(error).__name__,
+                    )
+                    await asyncio.sleep(self.classifier_retry_delay_seconds)
         raise AssertionError("Classifier retry loop exited without a result")
 
     async def _search_catalog(self, question: str, *, database_name: str | None) -> CatalogRoutingResponse:
