@@ -40,7 +40,7 @@ from aiq_agent.relay.runtime import run_agent
 from aiq_agent.relay.runtime import run_workflow
 
 
-def test_deepagents_integration_and_delegated_agent_scope_are_enabled() -> None:
+def test_deepagents_integration_is_enabled() -> None:
     kwargs = deepagents_kwargs(
         {
             "model": "test",
@@ -49,10 +49,7 @@ def test_deepagents_integration_and_delegated_agent_scope_are_enabled() -> None:
             "subagents": [{"name": "runtime-agent", "description": "test", "model": "test", "tools": []}],
         }
     )
-    assert [type(middleware).__name__ for middleware in kwargs["middleware"][-2:]] == [
-        "NemoRelayDeepAgentsMiddleware",
-        "_DelegatedAgentScopeMiddleware",
-    ]
+    assert [type(middleware).__name__ for middleware in kwargs["middleware"][-1:]] == ["NemoRelayDeepAgentsMiddleware"]
     assert [type(middleware).__name__ for middleware in kwargs["subagents"][0]["middleware"][-1:]] == [
         "NemoRelayDeepAgentsMiddleware"
     ]
@@ -399,53 +396,6 @@ async def test_callback_does_not_duplicate_middleware_managed_llm_and_tool_scope
         "prompt_tokens": 10,
         "total_tokens": 14,
     }
-
-
-@pytest.mark.asyncio
-async def test_deepagents_task_uses_runtime_subagent_name_for_nested_scope(tmp_path: Path) -> None:
-    config = RelayConfig()
-    config.logging = False
-    config.observability.atof.output_directory = str(tmp_path)
-    config.observability.atof.filename = "delegation.jsonl"
-    config.observability.opentelemetry.enabled = False
-    delegation_middleware = deepagents_kwargs({"model": "test", "tools": [], "name": "parent"})["middleware"][-1]
-    request = SimpleNamespace(
-        tool_call={
-            "name": "task",
-            "args": {"subagent_type": "runtime-selected-agent", "description": "research this"},
-        }
-    )
-
-    async def delegated_agent(_: object) -> str:
-        async def model_call(_: nemo_relay.LLMRequest) -> dict[str, str]:
-            return {"response": "done"}
-
-        await nemo_relay.llm.execute(
-            "managed-model",
-            nemo_relay.LLMRequest({}, {"messages": []}),
-            model_call,
-        )
-        return "done"
-
-    async def task_call(_: object) -> str:
-        return await delegation_middleware.awrap_tool_call(request, delegated_agent)
-
-    async def operation() -> None:
-        await nemo_relay.tools.execute("task", request.tool_call["args"], task_call)
-
-    await ensure_started(config)
-    try:
-        await run_agent("deep_research_agent", operation)
-    finally:
-        await shutdown_async()
-
-    events = [json.loads(line) for line in (tmp_path / "delegation.jsonl").read_text().splitlines()]
-    starts = {
-        event["name"]: event for event in events if event["kind"] == "scope" and event["scope_category"] == "start"
-    }
-    assert starts["task"]["parent_uuid"] == starts["deep_research_agent"]["uuid"]
-    assert starts["runtime-selected-agent"]["parent_uuid"] == starts["deep_research_agent"]["uuid"]
-    assert starts["managed-model"]["parent_uuid"] == starts["runtime-selected-agent"]["uuid"]
 
 
 @pytest.mark.asyncio

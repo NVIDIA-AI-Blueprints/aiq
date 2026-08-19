@@ -32,6 +32,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
 from langchain_core.runnables import RunnableLambda
 from langchain_core.tools import tool
+from nemo_relay.integrations.deepagents import NemoRelayDeepAgentsCallbackHandler
 
 from aiq_agent.agents.deep_researcher.custom_middleware import FinalReportCommitTracker
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
@@ -1772,9 +1773,9 @@ class TestDeepResearcherAgent:
 
             await agent.run(state)
 
-            # Callbacks should have been passed to ainvoke
-            call_kwargs = mock_create_deep_agent.ainvoke.call_args
-            assert call_kwargs is not None
+            callbacks = mock_create_deep_agent.ainvoke.call_args.kwargs["config"]["callbacks"]
+            assert callbacks[0] is mock_callback
+            assert isinstance(callbacks[1], NemoRelayDeepAgentsCallbackHandler)
 
     @pytest.mark.asyncio
     async def test_run_handles_error(self, mock_llm_provider, real_tool, caplog):

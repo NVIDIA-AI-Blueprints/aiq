@@ -20,7 +20,6 @@ from typing import TypeVar
 from uuid import uuid4
 
 import nemo_relay
-from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware import ModelRequest
 from langchain.agents.middleware import ModelResponse
 from langchain.agents.middleware import ToolCallRequest
@@ -89,51 +88,12 @@ def _normalize_chat_nvidia_binding(
     return runnable.bound, dict(runnable.kwargs), merge_configs(runnable.config, config)
 
 
-# Work around NVIDIA/NeMo-Relay#805 until DeepAgents emits nested local-subagent Agent scopes.
-class _DelegatedAgentScopeMiddleware(AgentMiddleware):
-    """Create a semantic Agent scope for the subagent selected by DeepAgents."""
-
-    @staticmethod
-    def _agent_name(request: Any) -> str | None:
-        tool_call = getattr(request, "tool_call", None)
-        if not isinstance(tool_call, dict) or tool_call.get("name") != "task":
-            return None
-        arguments = tool_call.get("args")
-        if not isinstance(arguments, dict):
-            return None
-        name = arguments.get("subagent_type")
-        return name if isinstance(name, str) and name else None
-
-    def wrap_tool_call(self, request: Any, handler: Callable[[Any], Any]) -> Any:
-        name = self._agent_name(request)
-        if name is None:
-            return handler(request)
-        with agent_scope(name, input_value=getattr(request, "tool_call", None)) as lifecycle:
-            result = handler(request)
-            lifecycle.output = result
-            return result
-
-    async def awrap_tool_call(self, request: Any, handler: Callable[[Any], Awaitable[Any]]) -> Any:
-        name = self._agent_name(request)
-        if name is None:
-            return await handler(request)
-        with agent_scope(name, input_value=getattr(request, "tool_call", None)) as lifecycle:
-            result = await handler(request)
-            lifecycle.output = result
-            return result
-
-
 def deepagents_kwargs(kwargs: dict[str, Any]) -> dict[str, Any]:
     """Attach Relay's supported DeepAgents middleware."""
 
     from nemo_relay.integrations.deepagents import add_nemo_relay_integration
 
-    observed = add_nemo_relay_integration(kwargs)
-    middleware = list(observed.get("middleware") or ())
-    if not any(isinstance(item, _DelegatedAgentScopeMiddleware) for item in middleware):
-        middleware.append(_DelegatedAgentScopeMiddleware())
-    observed["middleware"] = middleware
-    return observed
+    return add_nemo_relay_integration(kwargs)
 
 
 def merge_langchain_middleware(middleware: Sequence[Any] | None) -> list[Any]:

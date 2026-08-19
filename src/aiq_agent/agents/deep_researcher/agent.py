@@ -26,6 +26,7 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.tools import BaseTool
+from nemo_relay.integrations.deepagents import NemoRelayDeepAgentsCallbackHandler
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
@@ -315,7 +316,8 @@ class DeepResearcherAgent:
                 async with execution_timeout:
 
                     async def _invoke_orchestrator() -> Any:
-                        return await agent.ainvoke(state, config={"callbacks": self.callbacks})
+                        callbacks = [*self.callbacks, NemoRelayDeepAgentsCallbackHandler()]
+                        return await agent.ainvoke(state, config={"callbacks": callbacks})
 
                     result = await run_agent(
                         "deep_research_agent",
