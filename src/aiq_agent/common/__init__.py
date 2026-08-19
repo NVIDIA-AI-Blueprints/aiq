@@ -55,6 +55,7 @@ from .json_utils import extract_json
 from .llm_provider import LLMProvider
 from .llm_provider import LLMRole
 from .message_utils import get_latest_user_query
+from .prompt_utils import SOURCE_DELIMITER
 from .prompt_utils import load_prompt
 from .prompt_utils import render_prompt_template
 from .tool_validation import format_tool_unavailability_error
@@ -92,6 +93,7 @@ __all__ = [
     "parse_data_sources",
     "register_source_parser",
     "render_prompt_template",
+    "SOURCE_DELIMITER",
     "reset_session_registry",
     "sanitize_report",
     "set_session_registry",

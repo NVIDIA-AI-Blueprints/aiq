@@ -219,6 +219,7 @@ dev = [
     "duckduckgo-news-search",
     "polymarket-prediction-market",
     "knowledge-layer[all]",
+    "reranked-search",
     "aiq-api",
     "aiq-research-cli",
     "aiq-debug",
@@ -269,6 +270,7 @@ you-com = { workspace = true }
 duckduckgo-news-search = { workspace = true }
 polymarket-prediction-market = { workspace = true }
 knowledge-layer = { workspace = true }
+reranked-search = { workspace = true }
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }
 aiq-debug = { workspace = true }

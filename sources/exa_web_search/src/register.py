@@ -22,6 +22,7 @@ from typing import Literal
 from pydantic import Field
 from pydantic import SecretStr
 
+from aiq_agent.common import SOURCE_DELIMITER
 from nat.builder.builder import Builder
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
@@ -170,7 +171,7 @@ async def exa_web_search(
                     body = text if text else "\n".join(highlights_list)
                     return f'<Document href="{url}">\n<title>\n{title}\n</title>\n{body}\n</Document>'
 
-                web_search_results = "\n\n---\n\n".join(_render(doc) for doc in results)
+                web_search_results = SOURCE_DELIMITER.join(_render(doc) for doc in results)
                 return web_search_results if web_search_results else "Search returned no results"
 
             except Exception as e:

@@ -25,6 +25,7 @@ members = [
     "knowledge-layer",
     "nimble-web-search",
     "polymarket-prediction-market",
+    "reranked-search",
     "tavily-web-search",
     "you-com",
 ]
@@ -277,6 +278,7 @@ dev = [
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-env" },
+    { name = "reranked-search" },
     { name = "ruff" },
     { name = "tavily-web-search" },
     { name = "yapf" },
@@ -348,6 +350,7 @@ dev = [
     { name = "pytest-asyncio", specifier = ">=0.21.0" },
     { name = "pytest-cov", specifier = ">=4.1.0" },
     { name = "pytest-env", specifier = ">=1.1.0" },
+    { name = "reranked-search", editable = "sources/reranker" },
     { name = "ruff", specifier = "~=0.15.1" },
     { name = "tavily-web-search", editable = "sources/tavily_web_search" },
     { name = "yapf", specifier = ">=0.40.0" },
@@ -6112,6 +6115,25 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/f3/61/d7545dafb7ac2230c70d38d31cbfe4cc64f7144dc41f6e4e4b78ecd9f5bb/requests-toolbelt-1.0.0.tar.gz", hash = "sha256:7681a0a3d047012b5bdc0ee37d7f8f07ebe76ab08caeccfc3921ce23c88d5bc6", size = 206888, upload-time = "2023-05-01T04:11:33.229Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/3f/51/d4db610ef29373b879047326cbf6fa98b6c1969d6f6dc423279de2b1be2c/requests_toolbelt-1.0.0-py2.py3-none-any.whl", hash = "sha256:cccfdd665f0a24fcf4726e690f65639d272bb0637b9b92dfd91a5568ccf6bd06", size = 54481, upload-time = "2023-05-01T04:11:28.427Z" },
+]
+
+[[package]]
+name = "reranked-search"
+version = "1.0.0"
+source = { editable = "sources/reranker" }
+dependencies = [
+    { name = "langchain-core" },
+    { name = "langchain-nvidia-ai-endpoints" },
+    { name = "nvidia-nat" },
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "langchain-core", specifier = ">=1.1.0" },
+    { name = "langchain-nvidia-ai-endpoints", specifier = ">=1.1.0" },
+    { name = "nvidia-nat", specifier = "==1.8.0" },
+    { name = "pydantic", specifier = ">=2.0.0" },
 ]
 
 [[package]]

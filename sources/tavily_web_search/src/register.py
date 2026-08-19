@@ -20,6 +20,7 @@ import os
 from pydantic import Field
 from pydantic import SecretStr
 
+from aiq_agent.common import SOURCE_DELIMITER
 from nat.builder.builder import Builder
 from nat.builder.function_info import FunctionInfo
 from nat.cli.register_workflow import register_function
@@ -37,7 +38,11 @@ class TavilyWebSearchToolConfig(FunctionBaseConfig, name="tavily_web_search"):
     Requires a TAVILY_API_KEY environment variable or api_key config.
     """
 
-    include_answer: str = Field(default="advanced", description="Whether to include answers in the search results")
+    include_answer: str = Field(
+        default="advanced",
+        description="Whether to include answers in the search results. "
+        "Options: 'advanced', 'basic'; any other string disables answer",
+    )
     max_results: int = Field(default=3, description="Maximum number of search results to return")
     api_key: SecretStr | None = Field(default=None, description="The API key for the Tavily service")
     max_retries: int = Field(default=3, description="Maximum number of retries for the search request")
@@ -101,7 +106,9 @@ async def tavily_web_search(tool_config: TavilyWebSearchToolConfig, builder: Bui
         tavily_kwargs = {
             "max_results": tool_config.max_results,
             "search_depth": "advanced" if tool_config.advanced_search else "basic",
-            "include_answer": tool_config.include_answer,
+            "include_answer": (
+                tool_config.include_answer if tool_config.include_answer in ["advanced", "basic"] else None
+            ),
         }
 
         if tool_config.api_base_url:
@@ -137,9 +144,9 @@ async def tavily_web_search(tool_config: TavilyWebSearchToolConfig, builder: Bui
 
                 answer_text = ""
                 if search_docs.get("answer"):
-                    answer_text = f"<Answer>\n{search_docs['answer']}\n</Answer>\n\n---\n\n"
+                    answer_text = f"<Answer>\n{search_docs['answer']}\n</Answer>" + SOURCE_DELIMITER
 
-                web_search_results = "\n\n---\n\n".join(
+                web_search_results = SOURCE_DELIMITER.join(
                     [
                         f'<Document href="{doc.get("url", "")}">\n'
                         f"<title>\n{doc.get('title')}\n</title>\n"
