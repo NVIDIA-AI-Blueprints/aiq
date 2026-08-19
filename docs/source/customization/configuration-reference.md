@@ -579,12 +579,10 @@ workflow:
     redaction:
       enabled: true
       request_privacy_attributes: [data, category_profile]
-    pricing:
-      enabled: true
-      sources: []
 ```
 
-Default configs do not load a pricing catalog. The dedicated
+The default pricing source list is empty, so default configs omit the pricing
+block and do not load a catalog. The dedicated
 `configs/nemo_relay/config_web_default_with_pricing.yml` example loads
 deployment-specific rates from `configs/nemo_relay/relay_pricing_catalog.json`.
 Its zero-dollar Nemotron entries describe the NVIDIA-hosted access path used by

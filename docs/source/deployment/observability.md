@@ -66,9 +66,6 @@ workflow:
         enabled: false
     redaction:
       enabled: true
-    pricing:
-      enabled: true
-      sources: []
 ```
 
 Most users can omit this block and use the defaults. Add only the settings that
@@ -315,17 +312,8 @@ full payloads in a production environment.
 
 ## Pricing and cost analysis
 
-Default AI-Q configs deliberately use an empty Relay pricing source list:
-
-```yaml
-workflow:
-  relay:
-    pricing:
-      enabled: true
-      sources: []
-```
-
-This records token usage without claiming a monetary cost. Pricing depends on
+Default AI-Q configs omit the Relay pricing block. The resulting empty source
+list records token usage without claiming a monetary cost. Pricing depends on
 the provider, deployment, contract, region, cache policy, and date.
 
 Use the dedicated example when you want model cost enrichment:

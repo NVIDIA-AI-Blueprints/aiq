@@ -127,6 +127,3 @@ workflow:
   enable_escalation: true
   use_async_deep_research: false
   checkpoint_db: ${AIQ_CHECKPOINT_DB}
-  relay:
-    pricing:
-      sources: []

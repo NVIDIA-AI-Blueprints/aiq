@@ -198,6 +198,3 @@ workflow:
   enable_clarifier: true
   use_async_deep_research: true
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
-  relay:
-    pricing:
-      sources: []

@@ -56,9 +56,9 @@ general:
 
 **Observability** — configure NeMo Relay under `workflow.relay`. Relay logging,
 ATOF, and redaction are enabled by default. OTEL is opt-in; uncomment the Relay
-OpenInference endpoint in a default config to send traces to Phoenix. Keep
-`workflow.relay.pricing.sources: []` unless the workflow intentionally loads an
-audited catalog. See `docs/source/deployment/observability.md`.
+OpenInference endpoint in a default config to send traces to Phoenix. Omit
+`workflow.relay.pricing` unless the workflow intentionally loads an audited
+catalog. See `docs/source/deployment/observability.md`.
 
 `workflow.relay.logging` controls the console subscriber; agent and workflow
 configs do not have separate verbose switches.

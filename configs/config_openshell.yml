@@ -196,8 +196,3 @@ workflow:
   enable_clarifier: true
   use_async_deep_research: true
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
-  relay:
-    pricing:
-      # Add file or inline catalog sources to emit cost estimates. Token usage
-      # is still captured when no catalog matches the configured model.
-      sources: []

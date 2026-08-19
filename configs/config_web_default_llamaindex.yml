@@ -238,5 +238,3 @@ workflow:
       #       resource_attributes:
       #         openinference.project.name: aiq-relay
       #         deployment.environment: development
-    pricing:
-      sources: []

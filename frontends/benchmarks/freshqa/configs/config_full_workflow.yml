@@ -110,10 +110,6 @@ workflow:
   enable_escalation: true
   tools:
     - web_search_tool
-  relay:
-    pricing:
-      sources: []
-
 eval:
   general:
     workflow_alias: "freshqa_eval_full_workflow_with_intent_classifier_and_depth_router"

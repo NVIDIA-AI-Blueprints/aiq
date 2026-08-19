@@ -91,6 +91,3 @@ workflow:
   enable_escalation: true
   enable_clarifier: false   # set true and add clarifier_agent under functions: to enable
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
-  relay:
-    pricing:
-      sources: []

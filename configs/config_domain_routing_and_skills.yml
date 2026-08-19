@@ -219,6 +219,3 @@ functions:
 workflow:
   _type: deep_research_workflow
   use_async_deep_research: true
-  relay:
-    pricing:
-      sources: []

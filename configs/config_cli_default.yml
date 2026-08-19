@@ -148,17 +148,15 @@ workflow:
   enable_escalation: true
   enable_clarifier: true
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
-  relay:
-    # Uncomment to export Relay traces to a local Phoenix instance.
-    # observability:
-    #   opentelemetry:
-    #     enabled: true
-    #     endpoints:
-    #       - type: openinference
-    #         endpoint: http://localhost:6006/v1/traces
-    #         service_name: aiq-relay
-    #         resource_attributes:
-    #           openinference.project.name: aiq-relay
-    #           deployment.environment: development
-    pricing:
-      sources: []
+  # Uncomment to export Relay traces to a local Phoenix instance.
+  # relay:
+  #   observability:
+  #     opentelemetry:
+  #       enabled: true
+  #       endpoints:
+  #         - type: openinference
+  #           endpoint: http://localhost:6006/v1/traces
+  #           service_name: aiq-relay
+  #           resource_attributes:
+  #             openinference.project.name: aiq-relay
+  #             deployment.environment: development

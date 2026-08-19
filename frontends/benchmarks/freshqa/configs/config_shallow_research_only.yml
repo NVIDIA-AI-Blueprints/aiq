@@ -53,10 +53,6 @@ functions:
 
 workflow:
   _type: shallow_research_workflow
-  relay:
-    pricing:
-      sources: []
-
 eval:
   general:
     workflow_alias: "freshqa_eval_shallow_research_only"
