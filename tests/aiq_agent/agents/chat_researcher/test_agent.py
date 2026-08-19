@@ -492,6 +492,36 @@ class TestChatResearcherAgent:
         assert "private provider detail" not in caplog.text
 
     @pytest.mark.asyncio
+    async def test_unconfigured_hybrid_research_is_bounded(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+        caplog,
+    ):
+        async def hybrid_orchestration(_state):
+            return {"user_intent": IntentResult(intent="research", target="hybrid_research")}
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=hybrid_orchestration,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+        )
+
+        with caplog.at_level(logging.ERROR):
+            result = await agent.run(
+                ChatResearcherState(messages=[HumanMessage(content="Analyze revenue")]),
+                thread_id="test-unconfigured-hybrid-research",
+            )
+
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "try again" in result["messages"][-1].content.lower()
+        assert "not configured" not in result["messages"][-1].content.lower()
+        assert "Hybrid research failed (error_type=RuntimeError)" in caplog.text
+        assert "not configured" not in caplog.text.lower()
+
+    @pytest.mark.asyncio
     async def test_run_report_ask_routes_to_inline_report_answer(
         self,
         mock_shallow_research,

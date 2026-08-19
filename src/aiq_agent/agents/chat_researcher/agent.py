@@ -192,9 +192,9 @@ class ChatResearcherAgent:
                 }
 
         async def hybrid_research_node(state: ChatResearcherState) -> dict[str, Any]:
-            if self.hybrid_research_fn is None:
-                raise RuntimeError("Hybrid research is not configured")
             try:
+                if self.hybrid_research_fn is None:
+                    raise RuntimeError("Hybrid research is not configured")
                 return await self.hybrid_research_fn(state)
             except Exception as error:
                 logger.error("Hybrid research failed (error_type=%s)", type(error).__name__)
