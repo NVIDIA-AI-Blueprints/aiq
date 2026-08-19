@@ -21,6 +21,11 @@ from .profile import RequestProfile
 logger = logging.getLogger(__name__)
 
 
+def _event_uuid(event: dict[str, Any]) -> str | None:
+    value = event.get("uuid")
+    return value if isinstance(value, str) and value else None
+
+
 def _timestamp(value: Any) -> float:
     if isinstance(value, int | float):
         return float(value)
@@ -105,9 +110,10 @@ def _phase_for(event: dict[str, Any], starts: dict[str, dict[str, Any]]) -> str:
 
 
 def _root_uuid(event: dict[str, Any], starts: dict[str, dict[str, Any]]) -> str | None:
-    event_uuid = event.get("uuid")
-    current = event_uuid if event_uuid in starts else event.get("parent_uuid")
-    if not isinstance(current, str):
+    event_uuid = _event_uuid(event)
+    parent_uuid = event.get("parent_uuid")
+    current = event_uuid if event_uuid in starts else parent_uuid
+    if not isinstance(current, str) or not current:
         return None
     visited: set[str] = set()
     while current not in visited:
@@ -162,8 +168,9 @@ def _parse_request(
     pricing: PricingRegistry,
 ) -> RequestProfile:
     ends = {
-        str(event.get("uuid")): event
+        event_uuid: event
         for event in events
+        if (event_uuid := _event_uuid(event)) is not None
         if event.get("kind") == "scope" and event.get("scope_category") == "end"
     }
     root_end = ends.get(str(root.get("uuid")), {})
@@ -252,22 +259,31 @@ def parse_trace(path: str, pricing: PricingRegistry) -> list[RequestProfile]:
     """Parse Relay ATOF JSONL into one profile per workflow root scope."""
     events = _load_events(path)
     starts = {
-        str(event.get("uuid")): event
+        event_uuid: event
         for event in events
-        if event.get("kind") == "scope" and event.get("scope_category") == "start" and event.get("uuid")
+        if (event_uuid := _event_uuid(event)) is not None
+        if event.get("kind") == "scope" and event.get("scope_category") == "start"
     }
     explicit_roots = [
         event for event in starts.values() if _nested(event, "metadata", "aiq.component.type") == "workflow"
     ]
-    roots = explicit_roots or [event for event in starts.values() if event.get("parent_uuid") not in starts]
+    roots = explicit_roots or [
+        event
+        for event in starts.values()
+        if not isinstance(event.get("parent_uuid"), str) or event.get("parent_uuid") not in starts
+    ]
     roots.sort(key=lambda event: _timestamp(event.get("timestamp")))
 
     profiles: list[RequestProfile] = []
-    for root in roots:
-        root_uuid = str(root["uuid"])
+    for request_index, root in enumerate(roots):
+        root_uuid = root["uuid"]
         request_events = [event for event in events if _root_uuid(event, starts) == root_uuid]
         try:
-            profiles.append(_parse_request(len(profiles), root, request_events, starts, pricing))
-        except Exception:
-            logger.exception("Failed to parse Relay request root %s; skipping", root_uuid)
+            profiles.append(_parse_request(request_index, root, request_events, starts, pricing))
+        except Exception as exc:
+            logger.warning(
+                "Failed to parse Relay request; skipping (request_index=%d, error_type=%s)",
+                request_index,
+                type(exc).__name__,
+            )
     return profiles

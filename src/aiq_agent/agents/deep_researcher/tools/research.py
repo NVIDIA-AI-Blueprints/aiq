@@ -131,7 +131,12 @@ async def _run_research_query(
                 )
                 return _exhausted_research_notes(query)
             except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-                raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
+                logger.warning(
+                    "Researcher worker failed (error_type=%s, query_%s)",
+                    type(exc).__name__,
+                    log_content_metadata(query.query),
+                )
+                raise RuntimeError("researcher worker failed") from exc
 
             try:
                 structured = result.get("structured_response") if isinstance(result, dict) else None
@@ -139,9 +144,15 @@ async def _run_research_query(
                     raise ValueError("researcher worker did not return structured ResearchNotes")
                 note = ResearchNotes.model_validate(structured)
             except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-                raise ValueError(
-                    f"researcher worker returned invalid ResearchNotes for query {query.query!r}: {exc}"
-                ) from exc
+                missing_response = "researcher worker did not return structured ResearchNotes"
+                if isinstance(exc, ValueError) and str(exc) == missing_response:
+                    raise
+                logger.warning(
+                    "Researcher worker returned invalid ResearchNotes (error_type=%s, query_%s)",
+                    type(exc).__name__,
+                    log_content_metadata(query.query),
+                )
+                raise ValueError("researcher worker returned invalid ResearchNotes") from exc
 
             lifecycle.output = note
             return note
@@ -226,7 +237,7 @@ async def _run_research_queries(
     for query, raw_result in zip(queries, raw_results, strict=False):
         if isinstance(raw_result, BaseException):
             error = str(raw_result) or raw_result.__class__.__name__
-            errors.append(f"{query.query}: {error}")
+            errors.append(error)
         else:
             successful_queries.append(query)
             notes.append(raw_result)

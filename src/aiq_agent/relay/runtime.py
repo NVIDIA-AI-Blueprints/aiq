@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
+from itertools import islice
 from typing import Any
 from typing import TypeVar
 from uuid import uuid4
@@ -35,6 +36,9 @@ from pydantic import BaseModel
 _T = TypeVar("_T")
 _aiq_scope_active: ContextVar[bool] = ContextVar("aiq_relay_scope_active", default=False)
 logger = logging.getLogger(__name__)
+_SAFE_VALUE_MAX_DEPTH = 12
+_SAFE_VALUE_MAX_ITEMS = 100
+_SAFE_VALUE_MAX_STRING_LENGTH = 16_384
 
 
 @dataclass
@@ -154,7 +158,10 @@ async def ainvoke_with_relay(
         effective_config["callbacks"] = list(configured_callbacks)
     else:
         effective_config.pop("callbacks", None)
-    messages = list(input_value)
+    if isinstance(input_value, str | BaseMessage):
+        messages = [input_value]
+    else:
+        messages = list(input_value)
     system_message = (
         messages.pop(0) if messages and isinstance(messages[0], BaseMessage) and messages[0].type == "system" else None
     )
@@ -171,7 +178,7 @@ async def ainvoke_with_relay(
         model_settings=model_settings,
     )
 
-    async def invoke(next_request: ModelRequest[Any]) -> ModelResponse[Any]:
+    async def invoke_call(next_request: ModelRequest[Any]) -> ModelResponse[Any]:
         next_messages = list(next_request.messages)
         if next_request.system_message is not None:
             next_messages.insert(0, next_request.system_message)
@@ -199,7 +206,28 @@ async def ainvoke_with_relay(
             response = AIMessage(content=content)
         return ModelResponse(result=[response])
 
-    response = await NemoRelayMiddleware().awrap_model_call(request, invoke)
+    invocation_started = False
+    invocation_error: BaseException | None = None
+
+    async def invoke(next_request: ModelRequest[Any]) -> ModelResponse[Any]:
+        nonlocal invocation_error
+        nonlocal invocation_started
+        invocation_started = True
+        try:
+            return await invoke_call(next_request)
+        except BaseException as error:
+            invocation_error = error
+            raise
+
+    try:
+        response = await NemoRelayMiddleware().awrap_model_call(request, invoke)
+    except Exception as error:
+        if invocation_started:
+            if invocation_error is not None:
+                raise invocation_error
+            raise
+        _log_capture_failure("model middleware", error)
+        response = await invoke(request)
     if not response.result:
         raise RuntimeError("Relay-managed LangChain model returned no messages")
     return response.result[-1]
@@ -214,12 +242,33 @@ async def ainvoke_tool_with_relay(tool: Any, args: dict[str, Any]) -> Any:
         runtime=None,
     )
 
-    async def invoke(next_request: ToolCallRequest) -> Any:
+    async def invoke_call(next_request: ToolCallRequest) -> Any:
         if next_request.tool is None:
             raise RuntimeError(f"Relay-managed tool {next_request.tool_call['name']!r} is unavailable")
         return await next_request.tool.ainvoke(next_request.tool_call.get("args") or {})
 
-    return await NemoRelayMiddleware().awrap_tool_call(request, invoke)
+    invocation_started = False
+    invocation_error: BaseException | None = None
+
+    async def invoke(next_request: ToolCallRequest) -> Any:
+        nonlocal invocation_error
+        nonlocal invocation_started
+        invocation_started = True
+        try:
+            return await invoke_call(next_request)
+        except BaseException as error:
+            invocation_error = error
+            raise
+
+    try:
+        return await NemoRelayMiddleware().awrap_tool_call(request, invoke)
+    except Exception as error:
+        if invocation_started:
+            if invocation_error is not None:
+                raise invocation_error
+            raise
+        _log_capture_failure("tool middleware", error)
+        return await invoke(request)
 
 
 @contextmanager
@@ -262,7 +311,7 @@ def _semantic_scope(
             status_metadata = {
                 "error_type": type(error).__name__,
                 "otel.status_code": "ERROR",
-                "otel.status_description": str(error),
+                "otel.status_description": type(error).__name__,
             }
             raise
         else:
@@ -369,16 +418,23 @@ async def run_workflow(
     return await asyncio.create_task(_run_isolated())
 
 
-def _safe_value(value: Any) -> Any:
+def _safe_value(value: Any, *, _depth: int = 0) -> Any:
     """Project framework state to JSON-compatible Relay event values."""
-    if value is None or isinstance(value, str | int | float | bool):
+    if _depth >= _SAFE_VALUE_MAX_DEPTH:
+        return {"type": type(value).__name__, "truncated": True}
+    if isinstance(value, str):
+        return value[:_SAFE_VALUE_MAX_STRING_LENGTH]
+    if value is None or isinstance(value, int | float | bool):
         return value
-    if isinstance(value, dict):
-        return {str(key): _safe_value(item) for key, item in value.items()}
-    if isinstance(value, list | tuple | set):
-        return [_safe_value(item) for item in value]
     if isinstance(value, BaseMessage):
-        return messages_to_dict([value])[0]
+        return _safe_value(messages_to_dict([value])[0], _depth=_depth + 1)
     if isinstance(value, BaseModel):
-        return value.model_dump(mode="json")
+        return _safe_value(value.model_dump(mode="json"), _depth=_depth + 1)
+    if isinstance(value, dict):
+        return {
+            str(key)[:_SAFE_VALUE_MAX_STRING_LENGTH]: _safe_value(item, _depth=_depth + 1)
+            for key, item in islice(value.items(), _SAFE_VALUE_MAX_ITEMS)
+        }
+    if isinstance(value, list | tuple | set):
+        return [_safe_value(item, _depth=_depth + 1) for item in islice(value, _SAFE_VALUE_MAX_ITEMS)]
     return {"type": type(value).__name__}

@@ -183,12 +183,13 @@ workflow:
         enabled: true
         endpoints:
           - type: openinference
-            endpoint: http://localhost:6006/v1/traces
+            endpoint: ${RELAY_OTEL_ENDPOINT:-http://localhost:6006/v1/traces}
             resource_attributes:
               openinference.project.name: aiq-relay
 ```
 
 Then open [http://localhost:6006](http://localhost:6006) to inspect traces, token usage, and latency.
+Set `RELAY_OTEL_ENDPOINT` to use a remote Phoenix or collector endpoint; local Phoenix is the default.
 If the trace is missing, also inspect the project configured in
 `~/.config/nemo-relay/plugins.toml`; Relay can discover an existing user-level
 Phoenix destination.

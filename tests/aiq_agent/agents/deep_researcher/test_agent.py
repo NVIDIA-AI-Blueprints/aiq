@@ -1360,7 +1360,8 @@ class TestDeepResearcherAgent:
             await batch_tool.ainvoke({"queries": query_payloads})
 
         assert "run_research_batch failed for 1 of 3 researcher worker" in str(exc_info.value)
-        assert "search backend exploded" in str(exc_info.value)
+        assert "researcher worker failed" in str(exc_info.value)
+        assert "search backend exploded" not in str(exc_info.value)
         assert "timed out" not in str(exc_info.value)
         assert "2 successful researcher worker(s) were registered and persisted under /shared/" in str(exc_info.value)
         assert "resubmit only the failed queries" in str(exc_info.value)

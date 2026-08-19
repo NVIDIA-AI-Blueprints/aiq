@@ -185,6 +185,17 @@ HEARTBEAT_INTERVAL_SECONDS = 30
 # well under GHOST_JOB_TIMEOUT_SECONDS so a live worker refreshes several times
 # before the reaper's timeout.
 LEASE_REFRESH_INTERVAL_SECONDS = 60
+RELAY_STARTUP_TIMEOUT_SECONDS = 30
+
+
+async def _ensure_relay_started_for_job(relay_config: Any, job_id: str) -> None:
+    """Start Relay without allowing observability initialization to stall a job."""
+    from aiq_agent.relay.bootstrap import ensure_started
+
+    try:
+        await asyncio.wait_for(ensure_started(relay_config), timeout=RELAY_STARTUP_TIMEOUT_SECONDS)
+    except Exception as exc:
+        logger.warning("Relay startup failed for job %s (error_type=%s)", job_id, type(exc).__name__)
 
 
 def _db_now_expr(db_url: str) -> str:
@@ -779,9 +790,7 @@ async def run_agent_job(
             fn_config = builder.get_function_config(agent_config_name)
             relay_config = getattr(fn_config, "relay", None)
             if relay_config is not None:
-                from aiq_agent.relay.bootstrap import ensure_started as ensure_relay_started
-
-                await ensure_relay_started(relay_config)
+                await _ensure_relay_started_for_job(relay_config, job_id)
             if getattr(fn_config, "type", None) == "deep_research_agent":
                 from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
                 from aiq_agent.agents.deep_researcher.register import resolve_deep_research_runtime_config

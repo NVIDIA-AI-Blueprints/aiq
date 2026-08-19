@@ -63,6 +63,7 @@ Test coverage:
         - Error message filtering for CancelledError
 """
 
+import asyncio
 import inspect
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
@@ -90,6 +91,22 @@ def fixture_event_store_cache_guard():
     EventStore.dispose_all_engines()
     yield
     EventStore.dispose_all_engines()
+
+
+@pytest.mark.asyncio
+async def test_relay_startup_timeout_does_not_block_job(monkeypatch, caplog):
+    from aiq_api.jobs import runner
+
+    async def never_starts(_config):
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr("aiq_agent.relay.bootstrap.ensure_started", never_starts)
+    monkeypatch.setattr(runner, "RELAY_STARTUP_TIMEOUT_SECONDS", 0.001)
+
+    await runner._ensure_relay_started_for_job(object(), "job-1")
+
+    assert "job-1" in caplog.text
+    assert "TimeoutError" in caplog.text
 
 
 @pytest.fixture(name="content_encryption_manager_guard")
@@ -824,15 +841,15 @@ class TestRunAgentJobConversationContext:
                     owner_user_id=owner_user_id,
                 )
 
+            worker_trace_id = observed.pop("worker_trace_id")
             assert observed == {
                 "construction_conversation_id": conversation_id,
                 "construction_user_id": owner_user_id,
                 "invocation_conversation_id": conversation_id,
                 "invocation_user_id": owner_user_id,
                 "resolved_collection": expected_collection,
-                "worker_trace_id": observed["worker_trace_id"],
             }
-            assert observed["worker_trace_id"] != "1" * 32
+            assert worker_trace_id != "1" * 32
             assert relay_observed == {
                 "name": "async_shallow_research_job",
                 "session_id": conversation_id,
@@ -845,6 +862,7 @@ class TestRunAgentJobConversationContext:
                     "aiq.submission.span_id": "submission-span",
                 },
             }
+            assert nat_events
             assert all(step.payload.UUID != "submission-span" for step in nat_events)
             assert outer_context.conversation_id.get() == "stale-parent-context"
             assert outer_context.user_id.get() == "jwt:stale-owner"

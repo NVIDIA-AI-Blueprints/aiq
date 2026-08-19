@@ -27,6 +27,7 @@ import os
 import secrets
 import time
 from contextlib import suppress
+from dataclasses import replace
 from functools import partial
 from typing import Any
 
@@ -293,12 +294,7 @@ async def submit_agent_job(
     )
     trace_correlation = _get_job_trace_correlation()
     if conversation_id is not None:
-        trace_correlation = JobTraceCorrelation(
-            session_id=conversation_id,
-            submission_trace_id=trace_correlation.submission_trace_id,
-            submission_span_id=trace_correlation.submission_span_id,
-            request_trace_tags=trace_correlation.request_trace_tags,
-        )
+        trace_correlation = replace(trace_correlation, session_id=conversation_id)
     submission_conversation_id = trace_correlation.session_id
 
     async def _release_submission_reservations() -> None:

@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from aiq_agent.tokenomics import atof_adapter
 from aiq_agent.tokenomics.atof_adapter import parse_trace
 from aiq_agent.tokenomics.pricing import PricingRegistry
 from aiq_agent.tokenomics.profile import PHASE_ORCHESTRATOR
@@ -160,3 +161,48 @@ def test_parse_trace_skips_invalid_json_and_uses_catalog_fallback(tmp_path: Path
     assert profile.total_prompt_tokens == 100
     assert profile.total_completion_tokens == 50
     assert profile.total_cost_usd == pytest.approx(0.0002)
+
+
+def test_parse_trace_ignores_non_string_identifiers(tmp_path: Path) -> None:
+    events = [
+        _scope(
+            "root",
+            "function",
+            "workflow",
+            "start",
+            "2026-01-01T00:00:00Z",
+            metadata={"aiq.component.type": "workflow"},
+        ),
+        _scope("root", "function", "workflow", "end", "2026-01-01T00:00:01Z"),
+        {"kind": "scope", "scope_category": "start", "uuid": ["invalid"], "parent_uuid": {"invalid": True}},
+    ]
+    path = tmp_path / "relay.atof.jsonl"
+    _write(path, events)
+
+    profiles = parse_trace(str(path), _pricing())
+
+    assert len(profiles) == 1
+
+
+def test_parse_trace_failure_log_excludes_exception_content(tmp_path: Path, monkeypatch, caplog) -> None:
+    events = [
+        _scope(
+            "root",
+            "function",
+            "workflow",
+            "start",
+            "2026-01-01T00:00:00Z",
+            metadata={"aiq.component.type": "workflow"},
+        )
+    ]
+    path = tmp_path / "relay.atof.jsonl"
+    _write(path, events)
+
+    def fail(*args, **kwargs):  # noqa: ARG001
+        raise RuntimeError("customer-secret")
+
+    monkeypatch.setattr(atof_adapter, "_parse_request", fail)
+
+    assert parse_trace(str(path), _pricing()) == []
+    assert "RuntimeError" in caplog.text
+    assert "customer-secret" not in caplog.text

@@ -248,6 +248,104 @@ def test_safe_value_projects_pydantic_like_state() -> None:
     assert _safe_value({"state": State()}) == {"state": {"type": "State"}}
 
 
+def test_safe_value_bounds_nested_and_large_values() -> None:
+    nested: object = "leaf"
+    for _ in range(20):
+        nested = {"nested": nested}
+
+    projected = _safe_value({"nested": nested, "items": list(range(101)), "text": "x" * 20_000})
+
+    assert len(projected["items"]) < 101
+    assert len(projected["text"]) < 20_000
+    current = projected["nested"]
+    while "nested" in current:
+        current = current["nested"]
+    assert current["truncated"] is True
+
+
+@pytest.mark.asyncio
+async def test_relay_model_call_accepts_scalar_inputs(monkeypatch) -> None:
+    calls = []
+
+    class Model:
+        model_name = "test-model"
+
+        async def ainvoke(self, messages, config=None):  # noqa: ARG002
+            calls.append(messages)
+            return AIMessage(content="done")
+
+    async def passthrough(_self, request, handler):
+        return await handler(request)
+
+    monkeypatch.setattr("aiq_agent.relay.runtime.NemoRelayMiddleware.awrap_model_call", passthrough)
+    message = HumanMessage(content="question")
+
+    await ainvoke_with_relay(Model(), "question")
+    await ainvoke_with_relay(Model(), message)
+
+    assert calls == [["question"], [message]]
+
+
+@pytest.mark.asyncio
+async def test_relay_model_middleware_fallback_does_not_retry_started_calls(monkeypatch, caplog) -> None:
+    calls = 0
+
+    class Model:
+        model_name = "test-model"
+
+        async def ainvoke(self, messages, config=None):  # noqa: ARG002
+            nonlocal calls
+            calls += 1
+            return AIMessage(content="done")
+
+    async def fail_before(_self, request, handler):  # noqa: ARG001
+        raise RuntimeError("private middleware detail")
+
+    monkeypatch.setattr("aiq_agent.relay.runtime.NemoRelayMiddleware.awrap_model_call", fail_before)
+    assert (await ainvoke_with_relay(Model(), [])).content == "done"
+    assert calls == 1
+    assert "private middleware detail" not in caplog.text
+
+    async def fail_after(_self, request, handler):
+        await handler(request)
+        raise RuntimeError("post-invocation failure")
+
+    monkeypatch.setattr("aiq_agent.relay.runtime.NemoRelayMiddleware.awrap_model_call", fail_after)
+    with pytest.raises(RuntimeError, match="post-invocation failure"):
+        await ainvoke_with_relay(Model(), [])
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_relay_tool_middleware_fallback_does_not_retry_started_calls(monkeypatch, caplog) -> None:
+    calls = 0
+
+    class Tool:
+        name = "test_tool"
+
+        async def ainvoke(self, args):
+            nonlocal calls
+            calls += 1
+            return args["value"]
+
+    async def fail_before(_self, request, handler):  # noqa: ARG001
+        raise RuntimeError("private middleware detail")
+
+    monkeypatch.setattr("aiq_agent.relay.runtime.NemoRelayMiddleware.awrap_tool_call", fail_before)
+    assert await ainvoke_tool_with_relay(Tool(), {"value": "done"}) == "done"
+    assert calls == 1
+    assert "private middleware detail" not in caplog.text
+
+    async def fail_after(_self, request, handler):
+        await handler(request)
+        raise RuntimeError("post-invocation failure")
+
+    monkeypatch.setattr("aiq_agent.relay.runtime.NemoRelayMiddleware.awrap_tool_call", fail_after)
+    with pytest.raises(RuntimeError, match="post-invocation failure"):
+        await ainvoke_tool_with_relay(Tool(), {"value": "done"})
+    assert calls == 2
+
+
 @pytest.mark.asyncio
 async def test_callback_does_not_duplicate_middleware_managed_llm_and_tool_scopes(tmp_path: Path) -> None:
     class TestChatModel(FakeMessagesListChatModel):
@@ -612,10 +710,13 @@ async def test_two_turn_parity_has_two_traces_one_session_no_duplicates_and_bala
             input_value={"question": "question-2"},
         )
     finally:
-        await shutdown_async()
-        server.shutdown()
-        server.server_close()
-        server_thread.join()
+        try:
+            await shutdown_async()
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
+            assert not server_thread.is_alive()
 
     events = [json.loads(line) for line in (tmp_path / "two-turns.jsonl").read_text().splitlines()]
     scope_events = [event for event in events if event["kind"] == "scope"]
@@ -804,11 +905,14 @@ async def test_plugin_managed_otel_exports_protobuf_trace(tmp_path: Path) -> Non
         await ensure_started(config)
         with nemo_relay.scope.scope("otel-test", nemo_relay.ScopeType.Agent):
             pass
-        await shutdown_async()
     finally:
-        server.shutdown()
-        server.server_close()
-        server_thread.join()
+        try:
+            await shutdown_async()
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
+            assert not server_thread.is_alive()
 
     assert len(received) == 3
     assert {path for path, _, _ in received} == {

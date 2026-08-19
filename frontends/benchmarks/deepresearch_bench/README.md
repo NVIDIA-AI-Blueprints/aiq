@@ -75,7 +75,7 @@ workflow:
         enabled: true
         endpoints:
           - type: openinference
-            endpoint: http://localhost:6006/v1/traces
+            endpoint: ${RELAY_OTEL_ENDPOINT:-http://localhost:6006/v1/traces}
             resource_attributes:
               openinference.project.name: aiq-deepresearch-bench
 

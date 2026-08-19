@@ -573,7 +573,7 @@ workflow:
         enabled: false
         endpoints:
           - type: openinference
-            endpoint: "http://localhost:6006/v1/traces"
+            endpoint: "${RELAY_OTEL_ENDPOINT:-http://localhost:6006/v1/traces}"
             service_name: aiq-relay
             resource_attributes: {openinference.project.name: aiq-relay}
     redaction:

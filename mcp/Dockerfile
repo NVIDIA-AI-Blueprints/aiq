@@ -65,7 +65,8 @@ RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 10001 aiq \
-    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/aiq --shell /usr/sbin/nologin aiq
+    && useradd --uid 10001 --gid 10001 --create-home --home-dir /home/aiq --shell /usr/sbin/nologin aiq \
+    && install -d --owner=10001 --group=10001 /app/relay
 
 WORKDIR /app
 
