@@ -17,21 +17,13 @@ import inspect
 import json
 from typing import Any
 
-from gsf.models import DatabaseName
 from langchain_core.messages import BaseMessage
 from langchain_core.messages import trim_messages
-from pydantic import BaseModel
 
 from aiq_agent.common import parse_data_sources
 
-
-class ChatRequestContext(BaseModel):
-    """Normalized chat request context extracted from NAT/OpenAI-style payloads."""
-
-    query_text: str
-    data_sources: list[str] | None = None
-    active_report_job_id: str | None = None
-    database_name: DatabaseName | None = None
+from .request_context import ChatRequestContext
+from .request_context import DatabaseName
 
 
 def trim_message_history(messages: list[BaseMessage], max_tokens: int) -> list[BaseMessage]:

@@ -18,13 +18,13 @@
 from typing import Annotated
 from typing import Any
 
-from gsf.models import DatabaseName
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
 from aiq_agent.knowledge import AvailableDocument
 
+from ..request_context import DatabaseName
 from .catalog import CatalogRoutingResponse
 from .depth import DepthDecision
 from .intent import IntentResult
