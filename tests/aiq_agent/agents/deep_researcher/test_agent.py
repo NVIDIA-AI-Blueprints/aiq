@@ -240,6 +240,7 @@ class TestDeepResearcherAgent:
                 domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
                 enable_source_router=False,
                 max_research_concurrency=2,
+                max_researcher_model_calls=12,
                 max_concurrent_source_tool_calls=3,
                 max_source_tool_batch_size=4,
             )
@@ -247,6 +248,7 @@ class TestDeepResearcherAgent:
             assert agent.verbose is False
             assert agent.callbacks == callbacks
             assert agent.max_research_concurrency == 2
+            assert agent.max_researcher_model_calls == 12
             assert agent.max_concurrent_source_tool_calls == 3
             assert agent.max_source_tool_batch_size == 4
             assert agent.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
@@ -278,6 +280,7 @@ class TestDeepResearcherAgent:
             skills=DeepResearchSkillsConfig(agents={"writer-agent": ("synthesis",)}),
             sandbox=DeepResearchSandboxConfig(app_name="custom-aiq", packages=["matplotlib", "pillow"]),
             max_research_concurrency=2,
+            max_researcher_model_calls=12,
             max_concurrent_source_tool_calls=3,
             max_source_tool_batch_size=4,
             domain_catalog_path="configs/domain_catalogs/deep_research_domain_catalog.yml",
@@ -291,6 +294,7 @@ class TestDeepResearcherAgent:
         assert config.enable_citation_verification is False
         assert config.domain_catalog_path == "configs/domain_catalogs/deep_research_domain_catalog.yml"
         assert config.max_research_concurrency == 2
+        assert config.max_researcher_model_calls == 12
         assert config.max_concurrent_source_tool_calls == 3
         assert config.max_source_tool_batch_size == 4
         assert config.enable_source_router is False

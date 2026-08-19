@@ -47,6 +47,7 @@ from nat.data_models.function import FunctionBaseConfig
 
 from .agent import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
 from .agent import DEFAULT_MAX_RESEARCH_CONCURRENCY
+from .agent import DEFAULT_MAX_RESEARCHER_MODEL_CALLS
 from .agent import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
 from .agent import DeepResearcherAgent
 from .deepagents_runtime import DeepResearchSandboxConfig
@@ -103,6 +104,11 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default=DEFAULT_MAX_RESEARCH_CONCURRENCY,
         ge=1,
         description="Maximum ResearchQuery items accepted and run concurrently per run_research_batch call.",
+    )
+    max_researcher_model_calls: int = Field(
+        default=DEFAULT_MAX_RESEARCHER_MODEL_CALLS,
+        ge=1,
+        description="Maximum normal model turns per researcher worker before one reserved finalization turn.",
     )
     max_concurrent_source_tool_calls: int = Field(
         default=DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
@@ -247,6 +253,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         skills=skills_config,
         sandbox=sandbox_config,
         max_research_concurrency=config.max_research_concurrency,
+        max_researcher_model_calls=config.max_researcher_model_calls,
         max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
         max_source_tool_batch_size=config.max_source_tool_batch_size,
         resource_limits=config.resource_limits,
@@ -285,6 +292,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     sandbox=sandbox_config,
                     job_id=job_id,
                     max_research_concurrency=config.max_research_concurrency,
+                    max_researcher_model_calls=config.max_researcher_model_calls,
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
                     resource_limits=config.resource_limits,

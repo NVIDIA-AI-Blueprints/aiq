@@ -150,6 +150,7 @@ functions:
     orchestrator_llm: nemotron_ultra_llm
     source_router_llm: nemotron_ultra_llm
     researcher_llm: nemotron_ultra_llm
+    max_researcher_model_calls: 100
     planner_llm: nemotron_ultra_llm
     writer_llm: nemotron_ultra_writer_llm
     exclude_tools:

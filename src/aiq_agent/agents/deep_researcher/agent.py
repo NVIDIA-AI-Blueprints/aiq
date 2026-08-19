@@ -58,6 +58,7 @@ from .tools.source_tool_batching import reset_source_tool_budget
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_RESEARCH_CONCURRENCY = 6
+DEFAULT_MAX_RESEARCHER_MODEL_CALLS = 100
 PARENT_REPORT_CONTEXT_PATH = "/shared/parent_report_context.json"
 
 # Path to this agent's directory (for loading prompts)
@@ -85,6 +86,7 @@ class DeepResearcherAgent:
         artifact_db_url: str | None = None,
         artifact_emit: Callable[[dict[str, Any]], None] | None = None,
         max_research_concurrency: int = DEFAULT_MAX_RESEARCH_CONCURRENCY,
+        max_researcher_model_calls: int = DEFAULT_MAX_RESEARCHER_MODEL_CALLS,
         max_concurrent_source_tool_calls: int = DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
         max_source_tool_batch_size: int = DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE,
         resource_limits: DeepResearchResourceLimits | None = None,
@@ -105,6 +107,7 @@ class DeepResearcherAgent:
             job_id: Optional async job identifier used to scope sandbox backends.
             max_research_concurrency: Maximum ResearchQuery items accepted and run concurrently per
                 run_research_batch call.
+            max_researcher_model_calls: Maximum normal model turns per researcher worker before finalization.
             max_concurrent_source_tool_calls: Shared source-tool concurrency limit across researcher workers.
             max_source_tool_batch_size: Maximum concrete inputs per batch-capable source tool call.
             resource_limits: Hard per-job request, state, source-call, and wall-clock limits.
@@ -114,6 +117,7 @@ class DeepResearcherAgent:
         self.verbose = verbose
         self.callbacks = callbacks or []
         self.max_research_concurrency = max_research_concurrency
+        self.max_researcher_model_calls = max_researcher_model_calls
         self.max_concurrent_source_tool_calls = max_concurrent_source_tool_calls
         self.max_source_tool_batch_size = max_source_tool_batch_size
         self.resource_limits = resource_limits or DeepResearchResourceLimits()
@@ -206,6 +210,7 @@ class DeepResearcherAgent:
             domain_catalog_path=self.domain_catalog_path,
             enable_source_router=self.enable_source_router,
             max_research_concurrency=self.max_research_concurrency,
+            max_researcher_model_calls=self.max_researcher_model_calls,
             resource_limits=self.resource_limits,
             final_report_tracker=final_report_tracker,
             state_budget=state_budget,
