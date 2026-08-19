@@ -23,6 +23,6 @@ Refer to each benchmark's README for details. The [Customization guide](../custo
 
 ## Debugging
 
-- **Verbose logging:** `./scripts/start_cli.sh --verbose` or set `verbose: true` in workflow config.
+- **Relay logging:** enabled by `workflow.relay.logging`; inspect the console subscriber and configured ATOF/OTEL destinations.
 - **Phoenix tracing:** Start `uvx --from arize-phoenix phoenix serve`, run the agent with Phoenix tracing enabled in config, then open `http://localhost:6006`.
 - **Common issues:** Import errors -- ensure `uv pip install -e .`; auth -- check env vars; tool not found -- check config; pre-commit cache -- `pre-commit clean`.

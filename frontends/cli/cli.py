@@ -396,14 +396,6 @@ def main() -> None:
         logging.basicConfig(
             level=logging.INFO, format="%(levelname)s - %(name)s - %(message)s", handlers=[logging.StreamHandler()]
         )
-        callbacks_logger = logging.getLogger("aiq_agent.callbacks")
-        callbacks_logger.setLevel(logging.DEBUG)
-
-        cb_handler = logging.StreamHandler()
-        cb_handler.setFormatter(logging.Formatter("%(message)s"))
-        callbacks_logger.handlers.clear()
-        callbacks_logger.addHandler(cb_handler)
-        callbacks_logger.propagate = False
     else:
         logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(name)s - %(message)s")
 

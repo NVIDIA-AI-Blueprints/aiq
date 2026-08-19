@@ -38,6 +38,7 @@ TRACE_ACCESS_CHANNELS = frozenset(
         "unknown",
     }
 )
+TRACE_REDACTION_HEADER = "x-aiq-telemetry-redact"
 
 
 def _load_trace_user_identity_mode() -> str:
@@ -270,6 +271,8 @@ def _build_common_trace_tags(
             allow_explicit_override=trust_access_channel_override,
         ),
     }
+    if (_extract_header_text(headers, TRACE_REDACTION_HEADER) or "").lower() == "true":
+        tags["aiq.telemetry.redact"] = "true"
 
     if client_id_mode == "ip":
         client_ip = _extract_client_ip(headers, scope, client_ip_headers)

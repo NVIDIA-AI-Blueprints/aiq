@@ -537,3 +537,4 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     assert "StructuredResponseTextFallbackMiddleware" in middleware_names
     assert "ToolVisibilityMiddleware" in middleware_names
     assert kwargs["middleware"][-2] is shared_middleware[0]
+    assert middleware_names[0] == "NemoRelayMiddleware"

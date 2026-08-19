@@ -41,6 +41,8 @@ from langgraph.store.memory import InMemoryStore
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import render_prompt_template
+from aiq_agent.relay import deepagents_kwargs
+from aiq_agent.relay import merge_langchain_middleware
 
 from .custom_middleware import RESEARCHER_FINALIZATION_MODEL_CALLS
 from .custom_middleware import ArtifactHarvestMiddleware
@@ -403,6 +405,7 @@ def build_researcher_runnable(
             *(visibility_middleware or []),
         ]
     )
+    middleware = merge_langchain_middleware(middleware)
     return create_agent(
         model=researcher_model,
         tools=researcher_tools,
@@ -647,39 +650,44 @@ def build_deep_research_graph(
 
     orchestrator_tools = [*context.tool_set.helper_tools, research_batch_tool]
     agent = create_deep_agent(
-        model=context.llm_provider.get(LLMRole.ORCHESTRATOR),
-        tools=orchestrator_tools,
-        system_prompt=context.render_prompt(
-            "orchestrator",
-            clarifier_result=context.state.clarifier_result,
-            # Advertise only the tools the orchestrator can actually call. Source
-            # tools (incl. per-user MCP tools like Google Drive) are NOT directly
-            # callable here — the orchestrator delegates all source access through
-            # run_research_batch to the researcher, which holds those tools. Listing
-            # them under "Available Tools" made the orchestrator call them directly
-            # (e.g. per_user_mcp_client__google_drive_read_file), which the runtime
-            # rejects since they aren't bound to this agent.
-            tools=[{"name": t.name, "description": t.description} for t in orchestrator_tools],
-            enable_source_router=context.enable_source_router,
-            max_research_concurrency=context.max_research_concurrency,
-            execution_enabled=context.runtime.execution_enabled,
-            parent_report_context_available=context.parent_report_context_available,
-        ),
-        subagents=build_deep_research_subagents(context),
-        store=InMemoryStore(),
-        middleware=context.middleware(
-            [
-                *context.middleware_set.orchestrator,
-                FinalReportOwnershipGuardMiddleware(),
-                StateMutationGuardMiddleware(
-                    writer=False,
-                    sandbox_enabled=context.runtime.execution_enabled,
+        **deepagents_kwargs(
+            dict(
+                model=context.llm_provider.get(LLMRole.ORCHESTRATOR),
+                name="deep_research_agent",
+                tools=orchestrator_tools,
+                system_prompt=context.render_prompt(
+                    "orchestrator",
+                    clarifier_result=context.state.clarifier_result,
+                    # Advertise only the tools the orchestrator can actually call. Source
+                    # tools (incl. per-user MCP tools like Google Drive) are NOT directly
+                    # callable here — the orchestrator delegates all source access through
+                    # run_research_batch to the researcher, which holds those tools. Listing
+                    # them under "Available Tools" made the orchestrator call them directly
+                    # (e.g. per_user_mcp_client__google_drive_read_file), which the runtime
+                    # rejects since they aren't bound to this agent.
+                    tools=[{"name": t.name, "description": t.description} for t in orchestrator_tools],
+                    enable_source_router=context.enable_source_router,
+                    max_research_concurrency=context.max_research_concurrency,
+                    execution_enabled=context.runtime.execution_enabled,
+                    parent_report_context_available=context.parent_report_context_available,
                 ),
-                TodoQuotaMiddleware(resource_limits=context.resource_limits),
-                RequiredWriterDelegationMiddleware(tracker=context.final_report_tracker),
-            ]
-        ),
-        permissions=context.permissions(ORCHESTRATOR_AGENT),
-        backend=context.backend,
+                subagents=build_deep_research_subagents(context),
+                store=InMemoryStore(),
+                middleware=context.middleware(
+                    [
+                        *context.middleware_set.orchestrator,
+                        FinalReportOwnershipGuardMiddleware(),
+                        StateMutationGuardMiddleware(
+                            writer=False,
+                            sandbox_enabled=context.runtime.execution_enabled,
+                        ),
+                        TodoQuotaMiddleware(resource_limits=context.resource_limits),
+                        RequiredWriterDelegationMiddleware(tracker=context.final_report_tracker),
+                    ]
+                ),
+                permissions=context.permissions(ORCHESTRATOR_AGENT),
+                backend=context.backend,
+            )
+        )
     )
     return agent.with_config({"recursion_limit": 2000})

@@ -104,7 +104,6 @@ Configured through `IntentClassifierConfig` (NeMo Agent Toolkit type name: `inte
 | --------- | ---- | ------- | ----------- |
 | `llm` | `LLMRef` | required | LLM to use for classification |
 | `tools` | `list[FunctionRef \| FunctionGroupRef]` | `[]` | Tool references; their names and descriptions are shown to the LLM so it can assess query complexity |
-| `verbose` | `bool` | `false` | Enable verbose logging using `VerboseTraceCallback` |
 | `llm_timeout` | `float` | `90` | Timeout in seconds for the LLM call |
 
 **Example YAML:**
@@ -116,7 +115,6 @@ functions:
     llm: nemotron_llm
     tools:
       - web_search_tool
-    verbose: true
     llm_timeout: 90
 ```
 

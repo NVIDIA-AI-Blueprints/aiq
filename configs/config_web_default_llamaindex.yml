@@ -10,10 +10,6 @@ general:
       console:
         _type: console
         level: INFO
-    # tracing:
-    #   langsmith: # Optional: LangSmith tracing - requires langsmith API key. Set using `export LANGSMITH_API_KEY=<your-langsmith-api-key>`
-    #     _type: langsmith
-    #     project: nvidia-aiq
 
   front_end:
     _type: aiq_api
@@ -48,7 +44,7 @@ general:
 
 llms:
   nemotron_lightning_intent_llm:
-    _type: nim
+    _type: openai
     model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -57,14 +53,12 @@ llms:
     max_tokens: 1024
     num_retries: 5
     parallel_tool_calls: false
-    chat_template_kwargs:
-      enable_thinking: false
 
   # Known limitation: Build-hosted Lightning can intermittently produce citation-incomplete shallow drafts.
   # AI-Q fails closed; see docs/source/resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog.
   nemotron_lightning_agent_llm:
-    _type: nim
-    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
+    _type: openai
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
@@ -72,11 +66,9 @@ llms:
     max_tokens: 8192
     num_retries: 5
     parallel_tool_calls: false
-    chat_template_kwargs:
-      enable_thinking: true
 
   nemotron_ultra_llm:
-    _type: nim
+    _type: openai
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -84,11 +76,9 @@ llms:
     top_p: 0.7
     max_tokens: 16384
     num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: false
 
   nemotron_ultra_writer_llm:
-    _type: nim
+    _type: openai
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -96,8 +86,6 @@ llms:
     top_p: 0.7
     max_tokens: 32768
     num_retries: 5
-    chat_template_kwargs:
-      enable_thinking: false
 
   # LLM for document summaries (required when generate_summary: true)
   summary_llm:
@@ -197,7 +185,6 @@ functions:
     llm: nemotron_lightning_intent_llm
     # tools: omitted -> inherits all from data_source_registry
     # exclude_tools: []
-    verbose: true
 
   clarifier_agent:
     _type: clarifier_agent
@@ -206,7 +193,6 @@ functions:
     # exclude_tools: []
     max_turns: 3
     log_response_max_chars: 2000
-    verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent
@@ -214,7 +200,6 @@ functions:
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:                     # Remove advanced variant; shallow uses web_search_tool
       - advanced_web_search_tool
-    verbose: true
     max_llm_turns: 10
     max_tool_iterations: 5
 
@@ -229,12 +214,29 @@ functions:
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
       - web_search_tool
-    verbose: true
 
 workflow:
   _type: chat_deepresearcher_agent
-  verbose: true
   enable_escalation: true
   enable_clarifier: true
   use_async_deep_research: true
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
+  relay:
+    observability:
+      atof:
+        enabled: true
+        output_directory: ./relay
+        filename: aiq-relay.atof.jsonl
+        mode: append
+      # Uncomment to export Relay traces to a local Phoenix instance.
+      # opentelemetry:
+      #   enabled: true
+      #   endpoints:
+      #     - type: openinference
+      #       endpoint: http://localhost:6006/v1/traces
+      #       service_name: aiq-relay
+      #       resource_attributes:
+      #         openinference.project.name: aiq-relay
+      #         deployment.environment: development
+    pricing:
+      sources: []

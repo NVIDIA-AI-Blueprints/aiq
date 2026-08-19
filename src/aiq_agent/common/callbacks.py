@@ -14,7 +14,6 @@
 # limitations under the License.
 
 import logging
-import os
 from typing import Any
 
 from langchain_core.callbacks import BaseCallbackHandler
@@ -40,16 +39,12 @@ DIM = "\033[2m"
 RESET_ALL = "\033[0m"
 
 
-def is_verbose_enabled() -> bool:
-    return os.environ.get("AIQ_VERBOSE", "").lower() in ("1", "true", "yes")
-
-
 class ResearchLogger:
     """Colored logging utilities for research agents."""
 
-    def __init__(self, logger_instance: logging.Logger, verbose: bool | None = None):
+    def __init__(self, logger_instance: logging.Logger, verbose: bool = False):
         self.logger = logger_instance
-        self.verbose = verbose if verbose is not None else is_verbose_enabled()
+        self.verbose = verbose
 
     def section(self, label: str, message: str, *args):
         self.logger.info(f"{BOLD}[{label}]{RESET_ALL} {message}", *args)

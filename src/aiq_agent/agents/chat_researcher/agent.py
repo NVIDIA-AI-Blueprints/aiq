@@ -48,6 +48,7 @@ from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.logging_utils import log_content_metadata
 from aiq_agent.common.logging_utils import log_identifier_ref
+from aiq_agent.relay import run_agent
 
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
@@ -175,7 +176,11 @@ class ChatResearcherAgent:
 
         async def intent_classifier_node(state: ChatResearcherState) -> dict[str, Any]:
             try:
-                return await self.intent_classifier_fn(state)
+                return await run_agent(
+                "intent_classifier",
+                lambda: self.intent_classifier_fn(state),
+                input_value=state,
+            )
             except Exception as error:
                 logger.warning("Intent routing failed (error_type=%s)", type(error).__name__)
                 return {
@@ -655,7 +660,17 @@ class ChatResearcherAgent:
         if messages:
             query = messages[-1].content
             logger.info("Query: %s", log_content_metadata(query or ""))
-        result = await self._graph.ainvoke(input_state, config=graph_config)
+
+        async def _invoke_graph() -> dict[str, Any]:
+            effective_config = dict(graph_config or {})
+            return await self._graph.ainvoke(input_state, config=effective_config)
+
+        result = await run_agent(
+            "chat_deepresearcher_agent",
+            _invoke_graph,
+            session_id=thread_id,
+            input_value=input_state,
+        )
 
         logger.info("ChatResearcherAgent: Workflow complete")
 

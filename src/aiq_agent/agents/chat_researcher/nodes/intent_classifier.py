@@ -31,6 +31,7 @@ from aiq_agent.common import extract_json
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay import ainvoke_with_relay
 
 from ..models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from ..models import ChatResearcherState
@@ -150,9 +151,10 @@ class IntentClassifier:
         messages: list[BaseMessage] = [SystemMessage(content=system_content)]
 
         try:
-            config = {"callbacks": self.callbacks} if self.callbacks else {}
+            # This model call crosses the NAT function boundary, so it does not
+            # inherit the parent graph's RunnableConfig automatically.
             response = await asyncio.wait_for(
-                self.llm.ainvoke(messages, config=config),
+                ainvoke_with_relay(self.llm, messages, callbacks=self.callbacks),
                 timeout=self.llm_timeout,
             )
 
@@ -162,7 +164,7 @@ class IntentClassifier:
                 parsed = await self._repair_json_response(
                     system_content=system_content,
                     invalid_response=response_text,
-                    config=config,
+                    callbacks=self.callbacks,
                 )
 
             if not parsed or not isinstance(parsed, dict):
@@ -253,7 +255,7 @@ class IntentClassifier:
         *,
         system_content: str,
         invalid_response: str,
-        config: dict[str, Any],
+        callbacks: list[Any],
     ) -> dict[str, Any] | None:
         repair_prompt = (
             f"{system_content}\n\n"
@@ -264,7 +266,11 @@ class IntentClassifier:
         )
         try:
             response = await asyncio.wait_for(
-                self.llm.ainvoke([SystemMessage(content=repair_prompt)], config=config),
+                ainvoke_with_relay(
+                    self.llm,
+                    [SystemMessage(content=repair_prompt)],
+                    callbacks=callbacks,
+                ),
                 timeout=min(self.llm_timeout, _REPAIR_TIMEOUT_SECONDS),
             )
         except TimeoutError:

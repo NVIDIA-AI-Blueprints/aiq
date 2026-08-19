@@ -401,7 +401,8 @@ class TestIntentClassifier:
         # ainvoke(rendered_prompt, config=config)
         assert call_args[0][0]  # first positional arg is the prompt string
         config = call_args[1].get("config", {})
-        assert config.get("callbacks") == [mock_callback]
+        callbacks = config.get("callbacks")
+        assert callbacks == [mock_callback]
 
     @pytest.mark.asyncio
     async def test_run_does_not_pass_prior_report_content_to_classifier_llm(self, mock_llm):

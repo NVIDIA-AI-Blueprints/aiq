@@ -13,7 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .nat_adapter import parse_trace
+from .atof_adapter import parse_trace
 from .pricing import ModelPrice
 from .pricing import ModelPriceConfig
 from .pricing import PricingRegistry

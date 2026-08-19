@@ -208,7 +208,6 @@ class TestDeepResearcherAgent:
 
             assert agent.llm_provider == mock_llm_provider
             assert len(agent.tools) == 1
-            assert agent.verbose is True
             assert agent.callbacks == []
             assert agent.deepagents_runtime.skill_sources_for("orchestrator") is None
             assert agent.enable_source_router is True
@@ -232,7 +231,6 @@ class TestDeepResearcherAgent:
             agent = DeepResearcherAgent(
                 llm_provider=mock_llm_provider,
                 tools=[real_tool],
-                verbose=False,
                 callbacks=callbacks,
                 enable_citation_verification=False,
                 skills=DeepResearchSkillsConfig(agents={"researcher-agent": ("research",)}),
@@ -245,7 +243,6 @@ class TestDeepResearcherAgent:
                 max_source_tool_batch_size=4,
             )
 
-            assert agent.verbose is False
             assert agent.callbacks == callbacks
             assert agent.max_research_concurrency == 2
             assert agent.max_researcher_model_calls == 12
@@ -373,7 +370,6 @@ class TestDeepResearcherAgent:
         config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
             tools=["web_search_tool"],
-            verbose=False,
             sandbox=DeepResearchSandboxConfig() if owns_active_agent else None,
         )
         state = DeepResearchAgentState(messages=[HumanMessage(content="cancel this request")])
@@ -423,7 +419,6 @@ class TestDeepResearcherAgent:
         config = DeepResearchAgentConfig(
             orchestrator_llm="llm",
             tools=["web_search_tool"],
-            verbose=False,
             sandbox=DeepResearchSandboxConfig(),
         )
         state = DeepResearchAgentState(messages=[HumanMessage(content="bounded request")])
@@ -463,7 +458,7 @@ class TestDeepResearcherAgent:
         builder = MagicMock()
         builder.get_tools = AsyncMock(return_value=[web_search_tool])
         builder.get_llm = AsyncMock(return_value=MagicMock())
-        config = DeepResearchAgentConfig(orchestrator_llm="llm", tools=["web_search_tool"], verbose=False)
+        config = DeepResearchAgentConfig(orchestrator_llm="llm", tools=["web_search_tool"])
         state = DeepResearchAgentState(messages=[HumanMessage(content="research this")], data_sources=data_sources)
         original_description = web_search_tool.description
         web_search_tool.description = tool_description
@@ -490,7 +485,7 @@ class TestDeepResearcherAgent:
         builder = MagicMock()
         builder.get_tools = AsyncMock(return_value=[web_search_tool])
         builder.get_llm = AsyncMock(return_value=MagicMock())
-        config = DeepResearchAgentConfig(orchestrator_llm="llm", tools=["web_search_tool"], verbose=False)
+        config = DeepResearchAgentConfig(orchestrator_llm="llm", tools=["web_search_tool"])
         state = DeepResearchAgentState(messages=[HumanMessage(content="research this")], data_sources=[])
 
         with patch.object(deep_register, "filter_tools_by_sources") as filter_tools:

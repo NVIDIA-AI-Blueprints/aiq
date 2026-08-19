@@ -34,7 +34,6 @@ class TestClarifierConfig:
         assert config.tools == []
         assert config.max_turns == 3
         assert config.log_response_max_chars == 2000
-        assert config.verbose is False
 
     def test_config_with_all_fields(self):
         """Test config with all fields specified."""
@@ -43,14 +42,12 @@ class TestClarifierConfig:
             tools=["tool1", "tool2"],
             max_turns=5,
             log_response_max_chars=1000,
-            verbose=True,
         )
 
         assert config.llm == "test_llm"
         assert config.tools == ["tool1", "tool2"]
         assert config.max_turns == 5
         assert config.log_response_max_chars == 1000
-        assert config.verbose is True
 
     def test_config_tools_default_factory(self):
         """Test tools default to empty list."""

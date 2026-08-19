@@ -41,6 +41,7 @@ dependencies = [
     "nvidia-nat-profiler==1.8.0",
     "nvidia-nat-redis==1.8.0",
     "nvidia-nat-security[guardrails]==1.8.0",
+    "nemo-relay[deepagents,langchain,langgraph]>=0.7.3,<0.8",
     "deepagents>=0.6.5",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",

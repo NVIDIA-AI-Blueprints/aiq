@@ -393,6 +393,28 @@ class TestSubmitDeepResearchJob:
 
     principal = Principal(type="test", sub="user-1", email="test@example.com", name="Test User")
 
+    def test_job_trace_correlation_keeps_session_and_submission_ids(self):
+        from aiq_api.auth.request_trace import request_trace_tag_context
+        from aiq_api.jobs.submit import _get_job_trace_correlation
+        from nat.builder.context import ContextState
+
+        state = ContextState.get()
+        conversation_token = state.conversation_id.set("conversation-1")
+        trace_token = state.workflow_trace_id.set(0x1234)
+        span_token = state.active_span_id_stack.set(["root", "submission-span"])
+        try:
+            with request_trace_tag_context({"tenant": "test"}):
+                correlation = _get_job_trace_correlation()
+        finally:
+            state.active_span_id_stack.reset(span_token)
+            state.workflow_trace_id.reset(trace_token)
+            state.conversation_id.reset(conversation_token)
+
+        assert correlation.session_id == "conversation-1"
+        assert correlation.submission_trace_id == f"{0x1234:032x}"
+        assert correlation.submission_span_id == "submission-span"
+        assert correlation.request_trace_tags == {"tenant": "test"}
+
     @pytest.fixture(autouse=True)
     def _isolate_admission_store(self):
         """Keep legacy submit tests scoped to submission wiring, not admission-store integration."""
@@ -510,7 +532,7 @@ class TestSubmitDeepResearchJob:
         from aiq_api.jobs.runner import run_agent_job
 
         worker_args = inspect.signature(run_agent_job).bind(*job_args).arguments
-        assert worker_args["parent_conversation_id"] == "customer-collection"
+        assert worker_args["trace_correlation"].session_id == "customer-collection"
 
     @pytest.mark.asyncio
     async def test_submit_agent_job_passes_initial_files_and_output_metadata(self):
@@ -691,6 +713,7 @@ class TestRunAgentJobConversationContext:
         from types import SimpleNamespace
 
         from aiq_api.jobs.crypto import ContentEncryptionConfig
+        from aiq_api.jobs.runner import JobTraceCorrelation
         from aiq_api.jobs.runner import run_agent_job
         from nat.builder.context import Context
         from nat.builder.context import ContextState
@@ -703,6 +726,8 @@ class TestRunAgentJobConversationContext:
                 return False
 
         observed: dict[str, str | None] = {}
+        relay_observed: dict[str, object] = {}
+        nat_events = []
 
         class ContextAwareKnowledgeTool:
             def __init__(self, construction_conversation_id):
@@ -724,7 +749,7 @@ class TestRunAgentJobConversationContext:
                 return False
 
             def get_function_config(self, _name):
-                return SimpleNamespace(tools=["knowledge_retrieval"], exclude_tools=[], verbose=False)
+                return SimpleNamespace(tools=["knowledge_retrieval"], exclude_tools=[])
 
             async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
                 async def build_tool():
@@ -738,7 +763,9 @@ class TestRunAgentJobConversationContext:
                 return list(await asyncio.gather(build_tool()))
 
         class FakeExporterManager:
-            def start(self, *, context_state):  # noqa: ARG002 - mirrors NAT API
+            def start(self, *, context_state):
+                observed["worker_trace_id"] = f"{context_state.workflow_trace_id.get():032x}"
+                context_state.event_stream.get().subscribe(nat_events.append)
                 return AsyncContext()
 
         def create_agent(*, tools, **_kwargs):
@@ -747,6 +774,10 @@ class TestRunAgentJobConversationContext:
         async def run_agent(*, agent, **_kwargs):
             observed["resolved_collection"] = await agent.tools[0].ainvoke()
             raise RuntimeError("stop after context assertion")
+
+        async def run_relay_workflow(name, operation, **kwargs):
+            relay_observed.update({"name": name, **kwargs})
+            return await operation()
 
         mock_job_store = MagicMock(update_status=AsyncMock())
         config = SimpleNamespace(functions={}, middleware={})
@@ -771,6 +802,7 @@ class TestRunAgentJobConversationContext:
                 patch("aiq_api.jobs.runner._create_agent_instance", side_effect=create_agent),
                 patch("aiq_api.jobs.runner._run_agent", side_effect=run_agent),
                 patch("aiq_api.jobs.runner._run_lease_refresher"),
+                patch("aiq_agent.relay.run_workflow", side_effect=run_relay_workflow),
                 patch("aiq_api.mcp_auth.runtime_tools.open_per_user_mcp_tools", AsyncMock(return_value=[])),
             ):
                 await run_agent_job(
@@ -783,7 +815,11 @@ class TestRunAgentJobConversationContext:
                     "input",
                     "aiq_agent.agents.shallow_researcher.agent.ShallowResearcherAgent",
                     "shallow_research_agent",
-                    parent_conversation_id=conversation_id,
+                    trace_correlation=JobTraceCorrelation(
+                        session_id=conversation_id,
+                        submission_trace_id="1" * 32,
+                        submission_span_id="submission-span",
+                    ),
                     content_encryption_policy=ContentEncryptionConfig(mode="off").policy_identity,
                     owner_user_id=owner_user_id,
                 )
@@ -794,7 +830,22 @@ class TestRunAgentJobConversationContext:
                 "invocation_conversation_id": conversation_id,
                 "invocation_user_id": owner_user_id,
                 "resolved_collection": expected_collection,
+                "worker_trace_id": observed["worker_trace_id"],
             }
+            assert observed["worker_trace_id"] != "1" * 32
+            assert relay_observed == {
+                "name": "async_shallow_research_job",
+                "session_id": conversation_id,
+                "input_value": "input",
+                "metadata": {
+                    "aiq.execution.mode": "async",
+                    "aiq.job.id": "job-1",
+                    "aiq.agent.type": "shallow_research_agent",
+                    "aiq.submission.trace_id": "1" * 32,
+                    "aiq.submission.span_id": "submission-span",
+                },
+            }
+            assert all(step.payload.UUID != "submission-span" for step in nat_events)
             assert outer_context.conversation_id.get() == "stale-parent-context"
             assert outer_context.user_id.get() == "jwt:stale-owner"
         finally:
@@ -948,7 +999,7 @@ class TestRunAgentJobEncryption:
                 return False
 
             def get_function_config(self, _name):
-                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+                return SimpleNamespace(tools=[], exclude_tools=[])
 
             async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
                 return []
@@ -1064,7 +1115,7 @@ class TestRunAgentJobEncryption:
                 return False
 
             def get_function_config(self, _name):
-                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+                return SimpleNamespace(tools=[], exclude_tools=[])
 
             async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
                 return []
@@ -1191,7 +1242,7 @@ class TestRunAgentJobEncryption:
                 return False
 
             def get_function_config(self, _name):
-                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+                return SimpleNamespace(tools=[], exclude_tools=[])
 
             async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
                 return []
@@ -1512,7 +1563,7 @@ class TestDeepResearchTimeoutLifecycle:
                 return False
 
             def get_function_config(self, _name):
-                return SimpleNamespace(tools=[], exclude_tools=[], verbose=False)
+                return SimpleNamespace(tools=[], exclude_tools=[])
 
             async def get_tools(self, *, tool_names, wrapper_type):  # noqa: ARG002 - mirrors NAT API
                 return []
@@ -2843,7 +2894,6 @@ class TestAsyncJobRunnerAgentFactory:
                 *,
                 llm_provider,
                 tools,
-                verbose,
                 callbacks,
                 domain_catalog_path=None,
                 enable_source_router=True,
@@ -2860,7 +2910,6 @@ class TestAsyncJobRunnerAgentFactory:
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
-                self.verbose = verbose
                 self.callbacks = callbacks
                 self.domain_catalog_path = domain_catalog_path
                 self.enable_source_router = enable_source_router
@@ -2903,7 +2952,6 @@ class TestAsyncJobRunnerAgentFactory:
             llm="llm",
             tools=["tool"],
             fn_config=fn_config,
-            verbose=True,
             callbacks=["callback"],
             job_id="job-123",
         )
@@ -2978,14 +3026,12 @@ class TestAsyncJobRunnerAgentFactory:
                 llm_provider,
                 tools=None,
                 *,
-                verbose=False,
                 callbacks=None,
                 config=None,
                 job_id=None,
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
-                self.verbose = verbose
                 self.callbacks = callbacks
                 self.config = config
                 self.job_id = job_id
@@ -3003,14 +3049,12 @@ class TestAsyncJobRunnerAgentFactory:
             llm="llm",
             tools=["tool"],
             fn_config=fn_config,
-            verbose=True,
             callbacks=["callback"],
             job_id="job-123",
         )
 
         assert agent.llm_provider == "provider"
         assert agent.tools == ["tool"]
-        assert agent.verbose is True
         assert agent.callbacks == ["callback"]
         assert agent.config is fn_config
         assert agent.job_id == "job-123"
@@ -3026,13 +3070,11 @@ class TestAsyncJobRunnerAgentFactory:
                 llm_provider,
                 tools=None,
                 *,
-                verbose=False,
                 callbacks=None,
                 job_id=None,
             ):
                 self.llm_provider = llm_provider
                 self.tools = tools
-                self.verbose = verbose
                 self.callbacks = callbacks
                 self.job_id = job_id
 
@@ -3042,14 +3084,12 @@ class TestAsyncJobRunnerAgentFactory:
             llm="llm",
             tools=["tool"],
             fn_config=DeepResearchAgentConfig(orchestrator_llm="llm"),
-            verbose=True,
             callbacks=["callback"],
             job_id="job-123",
         )
 
         assert agent.llm_provider == "provider"
         assert agent.tools == ["tool"]
-        assert agent.verbose is True
         assert agent.callbacks == ["callback"]
         assert agent.job_id == "job-123"
 
@@ -3082,7 +3122,6 @@ class TestAsyncJobRunnerAgentFactory:
             llm=mock_llm,
             tools=[],
             fn_config=fn_config,
-            verbose=False,
             callbacks=[],
             job_id="async-job-123",
         )
@@ -3127,7 +3166,6 @@ class TestAsyncJobRunnerAgentFactory:
                 orchestrator_llm="llm",
                 enable_citation_verification=False,
             ),
-            verbose=False,
             callbacks=[],
             job_id="async-job-123",
         )
@@ -3303,7 +3341,6 @@ class TestAsyncJobRunnerAgentFactory:
                 llm=mock_llm,
                 tools=[async_test_search],
                 fn_config=fn_config,
-                verbose=False,
                 callbacks=[],
                 job_id="async-job-123",
             )
@@ -3370,7 +3407,6 @@ class TestAsyncJobRunnerAgentFactory:
                 llm=mock_llm,
                 tools=[],
                 fn_config=DeepResearchAgentConfig(orchestrator_llm="llm"),
-                verbose=False,
                 callbacks=[],
                 job_id="async-job-123",
             )
@@ -3400,7 +3436,6 @@ class TestAsyncJobRunnerAgentFactory:
                 *,
                 llm_provider,
                 tools,
-                verbose,
                 callbacks,
                 domain_catalog_path=None,
                 enable_source_router=True,
@@ -3430,7 +3465,6 @@ class TestAsyncJobRunnerAgentFactory:
                 llm="llm",
                 tools=["tool"],
                 fn_config=fn_config,
-                verbose=True,
                 callbacks=["callback"],
                 job_id="job-123",
             )
