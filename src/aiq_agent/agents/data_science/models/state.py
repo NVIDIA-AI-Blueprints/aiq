@@ -13,6 +13,7 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
 InteractionMode = Literal["interactive", "headless"]
+ResponseMode = Literal["standard", "fdabench_choice"]
 
 
 class DataScienceAgentState(BaseModel):

@@ -57,6 +57,39 @@ class DataScienceAgentConfig(FunctionBaseConfig, name="data_science_agent"):
         default="interactive",
         description="Whether the agent may request user clarification or must complete without interaction.",
     )
+    response_mode: Literal["standard", "fdabench_choice"] = Field(
+        default="standard",
+        description="Optional response contract; FDABench choice mode preserves labels when choices are present.",
+    )
+    gsf_catalog_call_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional request-local hard limit for actual GSF catalog calls.",
+    )
+    gsf_text_to_sql_call_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional request-local hard limit for actual GSF text-to-SQL calls.",
+    )
+    gsf_cache_repeated_calls: bool = Field(
+        default=True,
+        description="Reuse exact repeated GSF calls within one request.",
+    )
+    analysis_workspace_call_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional request-local hard limit for bounded analysis-workspace calls.",
+    )
+    python_call_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Optional request-local hard limit for persistent Python analysis calls.",
+    )
+    finalization_model_call_limit: int | None = Field(
+        default=None,
+        ge=1,
+        description="Model-call count at which tools are disabled and a final synthesis turn is forced.",
+    )
     verbose: bool = False
 
 
@@ -85,6 +118,13 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
         recursion_limit=config.recursion_limit,
         callbacks=callbacks,
         interaction_mode=config.interaction_mode,
+        response_mode=config.response_mode,
+        gsf_catalog_call_limit=config.gsf_catalog_call_limit,
+        gsf_text_to_sql_call_limit=config.gsf_text_to_sql_call_limit,
+        gsf_cache_repeated_calls=config.gsf_cache_repeated_calls,
+        analysis_workspace_call_limit=config.analysis_workspace_call_limit,
+        python_call_limit=config.python_call_limit,
+        finalization_model_call_limit=config.finalization_model_call_limit,
     )
 
     async def _run(state: DataScienceAgentState) -> DataScienceAgentState:
@@ -102,6 +142,13 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
                 recursion_limit=config.recursion_limit,
                 callbacks=callbacks,
                 interaction_mode=config.interaction_mode,
+                response_mode=config.response_mode,
+                gsf_catalog_call_limit=config.gsf_catalog_call_limit,
+                gsf_text_to_sql_call_limit=config.gsf_text_to_sql_call_limit,
+                gsf_cache_repeated_calls=config.gsf_cache_repeated_calls,
+                analysis_workspace_call_limit=config.analysis_workspace_call_limit,
+                python_call_limit=config.python_call_limit,
+                finalization_model_call_limit=config.finalization_model_call_limit,
             )
         return await active_agent.run(state)
 

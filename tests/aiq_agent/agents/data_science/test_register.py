@@ -32,10 +32,19 @@ def test_config_inherits_registry_tools_and_rejects_unknown_fields():
     assert config.exclude_tools == []
     assert config.recursion_limit == 64
     assert config.interaction_mode == "interactive"
+    assert config.response_mode == "standard"
+    assert config.gsf_catalog_call_limit is None
+    assert config.gsf_text_to_sql_call_limit is None
+    assert config.gsf_cache_repeated_calls is True
+    assert config.analysis_workspace_call_limit is None
+    assert config.python_call_limit is None
+    assert config.finalization_model_call_limit is None
     with pytest.raises(ValueError, match="models"):
         data_science_register.DataScienceAgentConfig(llm="model", models={"planner": "model"})
     with pytest.raises(ValueError, match="interaction_mode"):
         data_science_register.DataScienceAgentConfig(llm="model", interaction_mode="batch")
+    with pytest.raises(ValueError, match="response_mode"):
+        data_science_register.DataScienceAgentConfig(llm="model", response_mode="brief")
 
 
 @pytest.mark.asyncio
@@ -80,7 +89,16 @@ async def test_registration_passes_headless_mode_to_agent():
     builder = MagicMock()
     builder.get_tools = AsyncMock(return_value=[_dummy_search])
     builder.get_llm = AsyncMock(return_value=MagicMock())
-    config = data_science_register.DataScienceAgentConfig(llm="model", interaction_mode="headless")
+    config = data_science_register.DataScienceAgentConfig(
+        llm="model",
+        interaction_mode="headless",
+        response_mode="fdabench_choice",
+        gsf_catalog_call_limit=2,
+        gsf_text_to_sql_call_limit=6,
+        analysis_workspace_call_limit=8,
+        python_call_limit=7,
+        finalization_model_call_limit=28,
+    )
 
     registration = data_science_register.data_science_agent.__wrapped__(config, builder)
     with (
@@ -91,6 +109,12 @@ async def test_registration_passes_headless_mode_to_agent():
     try:
         assert function_info is not None
         assert agent_cls.call_args.kwargs["interaction_mode"] == "headless"
+        assert agent_cls.call_args.kwargs["response_mode"] == "fdabench_choice"
+        assert agent_cls.call_args.kwargs["gsf_catalog_call_limit"] == 2
+        assert agent_cls.call_args.kwargs["gsf_text_to_sql_call_limit"] == 6
+        assert agent_cls.call_args.kwargs["analysis_workspace_call_limit"] == 8
+        assert agent_cls.call_args.kwargs["python_call_limit"] == 7
+        assert agent_cls.call_args.kwargs["finalization_model_call_limit"] == 28
     finally:
         await registration.aclose()
         reset_registry()

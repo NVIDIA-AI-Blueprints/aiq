@@ -212,6 +212,8 @@ dev = [
     "dask[distributed]>=2024.1.0",
     # Workspace packages for testing
     "aiq-gsf",
+    "aiq-bounded-python",
+    "aiq-stateful-python",
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
@@ -262,6 +264,8 @@ exclude = ["mcp"]
 [tool.uv.sources]
 aiq-agent = { workspace = true }
 aiq-gsf = { workspace = true }
+aiq-bounded-python = { workspace = true }
+aiq-stateful-python = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }

@@ -486,6 +486,11 @@ functions:
     _type: data_science_agent
     llm: data_science_llm
     # tools omitted -> inherit every tool in data_source_registry
+    response_mode: standard
+    gsf_catalog_call_limit: 2
+    gsf_text_to_sql_call_limit: 6
+    python_call_limit: 8
+    finalization_model_call_limit: 18
     recursion_limit: 64
     verbose: true
 ```
@@ -496,6 +501,13 @@ functions:
 | `tools` | `list[str]` | `[]` | Explicit callable tools. An empty list inherits all tool and function-group references in `data_source_registry`. |
 | `exclude_tools` | `list[str]` | `[]` | Exact runtime tool names removed after inherited or explicit tools are resolved. |
 | `interaction_mode` | `interactive` or `headless` | `interactive` | In `headless` mode, never wait for clarification; resolve supported assumptions and perform one bounded synthesis retry if needed. |
+| `response_mode` | `standard` or `fdabench_choice` | `standard` | In `fdabench_choice` mode, preserve explicitly supplied option labels and emit an `Answer:` marker; non-choice requests retain normal report behavior. |
+| `gsf_catalog_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on actual GSF catalog calls. Minimum `1`; exact cache hits do not count. |
+| `gsf_text_to_sql_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on actual GSF text-to-SQL calls. Minimum `1`; exact cache hits do not count. |
+| `gsf_cache_repeated_calls` | `bool` | `true` | Reuse exact repeated GSF tool calls within one agent request. Cache state never crosses requests. |
+| `analysis_workspace_call_limit` | `int` or `None` | `None` | Optional request-local call ceiling for the restricted JSON analysis workspace. |
+| `python_call_limit` | `int` or `None` | `None` | Optional request-local call ceiling for the persistent scientific Python kernel. |
+| `finalization_model_call_limit` | `int` or `None` | derived | Model-call count at which tools are disabled and a no-tool synthesis turn is forced before recursion exhaustion. |
 | `recursion_limit` | `int` | `64` | Hard LangGraph step limit for one adaptive run. Minimum `4`. |
 | `verbose` | `bool` | `false` | Enable verbose tracing. |
 
@@ -768,14 +780,16 @@ workflow:
 
 ## Provided Config Files
 
-The repository includes twelve top-level workflow configurations. They are focused reference profiles, not cumulative
+The repository includes fourteen top-level workflow configurations. They are focused reference profiles, not cumulative
 layers, and no single profile enables every capability. Start from the profile closest to the deployment and merge
 only the additional sections you need.
 
 | File | Mode | Enabled behavior and opt-ins |
 |------|------|------------------------------|
 | `configs/config_cli_default.yml` | CLI | Chat pipeline with Tavily web search and clarification. No knowledge backend. Paper search is present only as a commented opt-in. |
-| `configs/config_cli_data_science.yml` | Direct DS Agent CLI | GSF catalog/text-to-SQL and Tavily web search without the top-level router. Knowledge retrieval is intentionally disabled. |
+| `configs/config_cli_data_science.yml` | Direct DS Agent CLI | GSF catalog/text-to-SQL, Foundational RAG knowledge retrieval, and Tavily web search without the top-level router. |
+| `configs/config_cli_data_science_fdabench_lite.yml` | Direct DS Agent evaluation | Headless FDABench-Lite DS ReAct profile with GSF, Foundational RAG, Tavily, choice-label output, and request-local GSF budgets. |
+| `configs/config_cli_data_science_fdabench_lite_python.yml` | Direct DS Agent evaluation | Same FDABench-Lite profile plus the persistent scientific Python kernel and exact GSF-result bridge. |
 | `configs/config_web_default_llamaindex.yml` | Web API | Default chat pipeline with LlamaIndex/ChromaDB knowledge retrieval and Tavily. Paper search is commented out. |
 | `configs/config_web_azure_ai_search.yml` | Web API | Azure AI Search knowledge retrieval and web search |
 | `configs/config_web_frag.yml` | Web API / Helm base | Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. Paper search is commented out. |

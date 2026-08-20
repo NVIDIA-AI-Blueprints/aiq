@@ -135,6 +135,11 @@ Python rejects a catalog question that is not a verbatim span of that request.
 | `user_info` | `dict` or `None` | Authenticated user context |
 | `tools` | `list[dict]` | Exact configured tools, with `name` and `description` |
 | `interaction_mode` | `str` | `interactive` permits a concise clarification; `headless` requires a terminal answer without user input |
+| `response_mode` | `str` | `standard` for normal reports or `fdabench_choice` for labeled-choice output when options are present |
+| `gsf_catalog_call_limit` | `int` or `None` | Optional request-local catalog-call ceiling rendered into the working rules |
+| `gsf_text_to_sql_call_limit` | `int` or `None` | Optional request-local text-to-SQL-call ceiling rendered into the working rules |
+| `analysis_workspace_call_limit` | `int` or `None` | Optional call ceiling for the restricted JSON analysis workspace |
+| `python_call_limit` | `int` or `None` | Optional call ceiling for the persistent scientific Python kernel |
 
 ### Deep Research Orchestrator
 

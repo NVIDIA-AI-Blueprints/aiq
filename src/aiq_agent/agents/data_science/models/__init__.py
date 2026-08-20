@@ -6,5 +6,6 @@
 from .state import DataScienceAgentContext
 from .state import DataScienceAgentState
 from .state import InteractionMode
+from .state import ResponseMode
 
-__all__ = ["DataScienceAgentContext", "DataScienceAgentState", "InteractionMode"]
+__all__ = ["DataScienceAgentContext", "DataScienceAgentState", "InteractionMode", "ResponseMode"]

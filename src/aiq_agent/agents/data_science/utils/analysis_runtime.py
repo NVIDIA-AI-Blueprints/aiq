@@ -1,0 +1,131 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Request-local analytical artifacts and lifecycle management."""
+
+from __future__ import annotations
+
+import inspect
+import json
+import logging
+import tempfile
+from contextvars import ContextVar
+from contextvars import Token
+from dataclasses import dataclass
+from dataclasses import field
+from pathlib import Path
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class AnalysisRunState:
+    """Mutable resources that belong to exactly one DS Agent request."""
+
+    temporary_directory: tempfile.TemporaryDirectory[str]
+    root: Path
+    manifest_path: Path
+    gsf_results: list[dict[str, Any]] = field(default_factory=list)
+    resources: dict[str, Any] = field(default_factory=dict)
+    model_calls: int = 0
+    force_finalization: bool = False
+    finalization_instruction: str | None = None
+
+
+_CURRENT_ANALYSIS_RUN: ContextVar[AnalysisRunState | None] = ContextVar(
+    "current_data_science_analysis_run",
+    default=None,
+)
+
+
+def _write_manifest(state: AnalysisRunState) -> None:
+    payload = {"version": 1, "results": state.gsf_results}
+    staging = state.manifest_path.with_suffix(".tmp")
+    staging.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    staging.replace(state.manifest_path)
+
+
+def begin_analysis_run() -> Token[AnalysisRunState | None]:
+    """Create and install one isolated analytical runtime for this async request."""
+
+    temporary_directory = tempfile.TemporaryDirectory(prefix="aiq-ds-analysis-", ignore_cleanup_errors=True)
+    root = Path(temporary_directory.name)
+    manifest_path = root / "gsf-results.json"
+    state = AnalysisRunState(
+        temporary_directory=temporary_directory,
+        root=root,
+        manifest_path=manifest_path,
+    )
+    _write_manifest(state)
+    return _CURRENT_ANALYSIS_RUN.set(state)
+
+
+def get_analysis_run() -> AnalysisRunState | None:
+    """Return the current request's analytical runtime, if one is active."""
+
+    return _CURRENT_ANALYSIS_RUN.get()
+
+
+def register_gsf_result(*, question: str, database_name: str | None, payload: dict[str, Any]) -> str | None:
+    """Persist one successful GSF SQL response and return its stable request-local reference."""
+
+    state = get_analysis_run()
+    if state is None or payload.get("status") == "error" or not isinstance(payload.get("rows"), list):
+        return None
+
+    reference = f"gsf_{len(state.gsf_results) + 1}"
+    result_path = state.root / f"{reference}.json"
+    result_path.write_text(json.dumps(payload, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    columns = payload.get("columns")
+    column_names = [
+        str(column.get("name"))
+        for column in columns or []
+        if isinstance(column, dict) and column.get("name") is not None
+    ]
+    if not column_names and payload["rows"] and isinstance(payload["rows"][0], dict):
+        column_names = [str(name) for name in payload["rows"][0]]
+    state.gsf_results.append(
+        {
+            "ref": reference,
+            "question": question,
+            "database_name": database_name,
+            "request_id": payload.get("request_id"),
+            "row_count": len(payload["rows"]),
+            "columns": column_names,
+            "truncated": bool(payload.get("truncated", False)),
+            "path": str(result_path),
+        }
+    )
+    _write_manifest(state)
+    return reference
+
+
+async def end_analysis_run(token: Token[AnalysisRunState | None]) -> None:
+    """Close request-owned resources, remove artifacts, and restore the prior context."""
+
+    state = get_analysis_run()
+    try:
+        if state is not None:
+            for resource in reversed(list(state.resources.values())):
+                closer = getattr(resource, "aclose", None) or getattr(resource, "close", None)
+                if closer is None:
+                    continue
+                try:
+                    result = closer()
+                    if inspect.isawaitable(result):
+                        await result
+                except Exception:  # noqa: BLE001 - cleanup must not replace the agent outcome
+                    logger.exception("Failed to close a request-local analysis resource")
+            state.temporary_directory.cleanup()
+    finally:
+        _CURRENT_ANALYSIS_RUN.reset(token)
+
+
+__all__ = [
+    "AnalysisRunState",
+    "begin_analysis_run",
+    "end_analysis_run",
+    "get_analysis_run",
+    "register_gsf_result",
+]
