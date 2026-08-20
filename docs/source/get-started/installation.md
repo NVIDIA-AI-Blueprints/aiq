@@ -45,7 +45,7 @@ self-hosted Lightning option.
 The setup script handles everything -- virtual environment, Python dependencies, and UI dependencies:
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/NVIDIA-AI-Blueprints/aiq.git
 cd aiq
 
 ./scripts/setup.sh
