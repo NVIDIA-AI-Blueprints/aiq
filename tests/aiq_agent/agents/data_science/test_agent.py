@@ -88,6 +88,9 @@ async def test_run_invokes_one_graph_with_full_history_and_preserves_state(monke
         messages=original,
         data_sources=["structured_data"],
         user_info={"tenant": "acme"},
+        database_name="benchmark_db",
+        catalog_context={"coverage": 1.0, "candidates": []},
+        catalog_request_id="catalog-1",
     )
 
     result = await _agent(graph, monkeypatch).run(state)
@@ -95,7 +98,12 @@ async def test_run_invokes_one_graph_with_full_history_and_preserves_state(monke
     call = graph.ainvoke.await_args
     assert call.args[0] == {"messages": original}
     assert call.kwargs["config"] == {"recursion_limit": 24}
-    assert call.kwargs["context"] == DataScienceAgentContext(user_info={"tenant": "acme"})
+    assert call.kwargs["context"] == DataScienceAgentContext(
+        user_info={"tenant": "acme"},
+        database_name="benchmark_db",
+        catalog_context={"coverage": 1.0, "candidates": []},
+        catalog_request_id="catalog-1",
+    )
     assert result.messages[-1].content.startswith("user_1 used 42 GPU-hours [1].")
     assert "gsf__text_to_sql request gsf-1" in result.messages[-1].content
     assert result.data_sources == ["structured_data"]
@@ -336,6 +344,9 @@ def test_prompt_renders_distinct_interaction_policies():
     common = {
         "tools": [],
         "user_info": None,
+        "database_name": None,
+        "catalog_context": None,
+        "catalog_request_id": None,
         "response_mode": "standard",
         "gsf_catalog_call_limit": None,
         "gsf_text_to_sql_call_limit": None,
@@ -358,6 +369,9 @@ def test_prompt_renders_choice_contract_and_gsf_budget_guidance():
         template,
         tools=[],
         user_info=None,
+        database_name=None,
+        catalog_context=None,
+        catalog_request_id=None,
         interaction_mode="headless",
         response_mode="fdabench_choice",
         gsf_catalog_call_limit=2,
@@ -378,6 +392,9 @@ def test_prompt_renders_persistent_python_and_gsf_receipt_guidance():
         template,
         tools=[{"name": "python", "description": "Persistent Python analysis kernel."}],
         user_info=None,
+        database_name=None,
+        catalog_context=None,
+        catalog_request_id=None,
         interaction_mode="headless",
         response_mode="fdabench_choice",
         gsf_catalog_call_limit=2,
@@ -393,6 +410,53 @@ def test_prompt_renders_persistent_python_and_gsf_receipt_guidance():
     assert "statsmodels (`sm`)" in rendered
     assert "at most 8 Python calls" in rendered
     assert "first non-empty line `Answer: <direct answer>`" in rendered
+
+
+def test_prompt_renders_preloaded_router_catalog_context_only_when_supplied():
+    template = (agent_module.AGENT_DIR / "prompts" / "agent.j2").read_text()
+    common = {
+        "tools": [],
+        "user_info": None,
+        "interaction_mode": "headless",
+        "response_mode": "standard",
+        "gsf_catalog_call_limit": 2,
+        "gsf_text_to_sql_call_limit": 6,
+        "python_call_limit": None,
+        "current_datetime": "2026-08-20T12:00:00-03:00",
+    }
+
+    direct = render_prompt_template(
+        template,
+        database_name=None,
+        catalog_context=None,
+        catalog_request_id=None,
+        **common,
+    )
+    hybrid = render_prompt_template(
+        template,
+        database_name="benchmark_db",
+        catalog_request_id="catalog-1",
+        catalog_context={
+            "coverage": 0.8,
+            "uncovered_entities": ["public benchmark"],
+            "candidates": [
+                {
+                    "term": "Revenue",
+                    "attribute": "recognized_revenue",
+                    "label": "ColumnAttribute",
+                    "id": "attr:revenue",
+                }
+            ],
+        },
+        **common,
+    )
+
+    assert "Preloaded structured-data routing context" not in direct
+    assert "already completed the initial GSF catalog discovery" in hybrid
+    assert "Validated database scope: benchmark_db" in hybrid
+    assert "Catalog request ID: catalog-1" in hybrid
+    assert "Revenue | recognized_revenue | ColumnAttribute | attr:revenue" in hybrid
+    assert "Uncovered entities: public benchmark" in hybrid
 
 
 @pytest.mark.asyncio

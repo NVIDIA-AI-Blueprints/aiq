@@ -12,8 +12,12 @@ final synthesis in one continuous message history.
 
 **Location:** `src/aiq_agent/agents/data_science/`
 
-The initial integration is deliberately exposed as a direct CLI workflow. It is
-not yet connected to the top-level intent router.
+The agent is exposed through two boundaries that share the same ReAct runtime:
+
+- `data_science_workflow` starts it directly for local development and
+  evaluation, without invoking the top-level router.
+- `data_science_hybrid_adapter` accepts the catalog-aware Chat Researcher state
+  when a product workflow selects Hybrid research.
 
 ## Tool integration
 
@@ -109,6 +113,39 @@ only searches an existing collection. TLS verification remains enabled by
 default; trusted test routes using a self-signed chain can set
 `RAG_VERIFY_SSL=false` locally.
 
+## Product Hybrid integration
+
+The context-aware Chat Researcher router performs one bounded GSF catalog probe
+before selecting Hybrid research. Configure the adapter as the workflow's
+optional Hybrid function:
+
+```yaml
+functions:
+  data_science_agent:
+    _type: data_science_agent
+    llm: data_science_llm
+
+  data_science_hybrid_adapter:
+    _type: data_science_hybrid_adapter
+    agent: data_science_agent
+
+workflow:
+  _type: chat_deepresearcher_agent
+  hybrid_research_agent: data_science_hybrid_adapter
+```
+
+The adapter maps the original conversation, selected data sources, user
+context, validated database scope, catalog result, and catalog request ID into
+the DS Agent state. The prompt presents that catalog result as preloaded
+semantic routing context, so the agent does not repeat the same broad discovery
+call. Catalog candidates remain non-evidentiary and are never treated as query
+rows.
+
+Direct evaluation does not use this adapter. FDABench tasks continue to enter
+through `data_science_workflow` with no preloaded catalog context, leaving the
+ReAct agent free to decompose a mixed-source task and formulate focused catalog
+searches itself.
+
 ## Non-interactive evaluation
 
 Set `AIQ_DS_INTERACTION_MODE=headless` for benchmark and batch execution. The
@@ -150,9 +187,12 @@ data, RAG documents, database files, endpoint URLs, or credentials.
 
 ## Current boundaries
 
-- The top-level AI-Q router does not yet select this agent.
-- Predictive/PQL execution is not exposed because the public GSF function group
-  has not registered a validated prediction tool.
+- The context-aware router provides the Hybrid dispatch hook, but shipped
+  profiles must explicitly configure `data_science_hybrid_adapter` to select
+  this agent.
+- The public GSF function group exposes `text_to_pql`, but the current DS Agent
+  profiles intentionally include only catalog search and text-to-SQL;
+  predictive routing remains outside this integration.
 - Atomic-question clarification is planned separately and is not part of the
   direct workflow.
 - The ReAct message/tool trajectory is observable through NAT tracing. Benchmark

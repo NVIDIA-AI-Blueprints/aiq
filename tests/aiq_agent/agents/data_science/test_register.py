@@ -10,8 +10,11 @@ from unittest.mock import patch
 import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
+from aiq_agent.agents.chat_researcher.models import CatalogRoutingResponse
+from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.agents.data_science import register as data_science_register
 from aiq_agent.agents.data_science.models import DataScienceAgentState
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
@@ -133,4 +136,76 @@ async def test_direct_workflow_returns_typed_no_source_response():
     finally:
         await registration.aclose()
 
+    builder.get_function.assert_awaited_once_with("data_science_agent")
     assert response.choices[0].message.content == error.public_response
+
+
+@pytest.mark.asyncio
+async def test_hybrid_adapter_maps_router_context_and_returns_only_final_response():
+    catalog = CatalogRoutingResponse(
+        request_id="catalog-1",
+        coverage=0.75,
+        candidates=[
+            {
+                "label": "ColumnAttribute",
+                "attribute": "recognized_revenue",
+                "term": "Revenue",
+                "id": "attr:revenue",
+            }
+        ],
+        uncovered_entities=["public market comparison"],
+    )
+    input_message = HumanMessage(content="Compare enterprise revenue with the public market")
+    tool_message = ToolMessage(content="rows", tool_call_id="gsf-call-1", name="gsf__text_to_sql")
+    final_message = AIMessage(content="Enterprise revenue increased relative to the public market.")
+    agent_fn = MagicMock()
+    agent_fn.ainvoke = AsyncMock(
+        return_value=DataScienceAgentState(messages=[input_message, tool_message, final_message])
+    )
+    builder = MagicMock()
+    builder.get_function = AsyncMock(return_value=agent_fn)
+    config = data_science_register.DataScienceHybridAdapterConfig(agent="data_science_agent")
+
+    registration = data_science_register.data_science_hybrid_adapter.__wrapped__(config, builder)
+    function_info = await anext(registration)
+    try:
+        result = await function_info.single_fn(
+            ChatResearcherState(
+                messages=[input_message],
+                data_sources=["structured_data", "web_search"],
+                user_info={"tenant": "acme"},
+                database_name="benchmark_db",
+                catalog_context=catalog,
+                catalog_request_id="catalog-1",
+            )
+        )
+    finally:
+        await registration.aclose()
+
+    builder.get_function.assert_awaited_once_with(config.agent)
+    invoked_state = agent_fn.ainvoke.await_args.args[0]
+    assert invoked_state.messages == [input_message]
+    assert invoked_state.data_sources == ["structured_data", "web_search"]
+    assert invoked_state.user_info == {"tenant": "acme"}
+    assert invoked_state.database_name == "benchmark_db"
+    assert invoked_state.catalog_request_id == "catalog-1"
+    assert invoked_state.catalog_context == catalog.model_dump(mode="json")
+    assert result == {"messages": [final_message]}
+
+
+@pytest.mark.asyncio
+async def test_hybrid_adapter_rejects_missing_new_final_response():
+    input_message = HumanMessage(content="Analyze revenue")
+    agent_fn = MagicMock()
+    agent_fn.ainvoke = AsyncMock(return_value=DataScienceAgentState(messages=[input_message]))
+    builder = MagicMock()
+    builder.get_function = AsyncMock(return_value=agent_fn)
+    config = data_science_register.DataScienceHybridAdapterConfig(agent="data_science_agent")
+
+    registration = data_science_register.data_science_hybrid_adapter.__wrapped__(config, builder)
+    function_info = await anext(registration)
+    try:
+        with pytest.raises(RuntimeError, match="no final response"):
+            await function_info.single_fn(ChatResearcherState(messages=[input_message]))
+    finally:
+        await registration.aclose()

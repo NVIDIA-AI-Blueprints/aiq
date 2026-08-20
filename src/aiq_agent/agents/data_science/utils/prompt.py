@@ -38,10 +38,16 @@ def build_prompt_middleware(
     def data_science_prompt(request: ModelRequest[DataScienceAgentContext]) -> str:
         context = request.runtime.context
         user_info: dict[str, Any] | None = context.user_info if context is not None else None
+        database_name = context.database_name if context is not None else None
+        catalog_context = context.catalog_context if context is not None else None
+        catalog_request_id = context.catalog_request_id if context is not None else None
         return render_prompt_template(
             template,
             tools=tool_descriptions,
             user_info=user_info,
+            database_name=database_name,
+            catalog_context=catalog_context,
+            catalog_request_id=catalog_request_id,
             interaction_mode=interaction_mode,
             response_mode=response_mode,
             gsf_catalog_call_limit=gsf_catalog_call_limit,

@@ -201,10 +201,16 @@ class DataScienceAgent:
             invoke_config: dict[str, Any] = {"recursion_limit": self.recursion_limit}
             if self.callbacks:
                 invoke_config["callbacks"] = list(self.callbacks)
+            runtime_context = DataScienceAgentContext(
+                user_info=state.user_info,
+                database_name=state.database_name,
+                catalog_context=state.catalog_context,
+                catalog_request_id=state.catalog_request_id,
+            )
             result = await self.graph.ainvoke(
                 {"messages": state.messages},
                 config=invoke_config,
-                context=DataScienceAgentContext(user_info=state.user_info),
+                context=runtime_context,
             )
             result_messages = list(result["messages"])
             if (
@@ -224,7 +230,7 @@ class DataScienceAgent:
                 retry_result = await self.graph.ainvoke(
                     {"messages": retry_input},
                     config=invoke_config,
-                    context=DataScienceAgentContext(user_info=state.user_info),
+                    context=runtime_context,
                 )
                 result_messages = [
                     message
@@ -258,7 +264,7 @@ class DataScienceAgent:
                 retry_result = await self.graph.ainvoke(
                     {"messages": retry_input},
                     config=invoke_config,
-                    context=DataScienceAgentContext(user_info=state.user_info),
+                    context=runtime_context,
                 )
                 result_messages = [
                     message
@@ -303,7 +309,7 @@ class DataScienceAgent:
                     retry_result = await self.graph.ainvoke(
                         {"messages": retry_input},
                         config=invoke_config,
-                        context=DataScienceAgentContext(user_info=state.user_info),
+                        context=runtime_context,
                     )
                     result_messages = [
                         message

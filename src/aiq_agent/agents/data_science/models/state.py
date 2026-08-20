@@ -22,6 +22,9 @@ class DataScienceAgentState(BaseModel):
     messages: Annotated[list[AnyMessage], add_messages]
     data_sources: list[str] | None = None
     user_info: dict[str, Any] | None = None
+    database_name: str | None = None
+    catalog_context: dict[str, Any] | None = None
+    catalog_request_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -29,3 +32,6 @@ class DataScienceAgentContext:
     """Request context available to dynamic agent middleware."""
 
     user_info: dict[str, Any] | None = None
+    database_name: str | None = None
+    catalog_context: dict[str, Any] | None = None
+    catalog_request_id: str | None = None

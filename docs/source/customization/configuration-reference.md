@@ -510,6 +510,22 @@ functions:
 | `recursion_limit` | `int` | `64` | Hard LangGraph step limit for one adaptive run. Minimum `4`. |
 | `verbose` | `bool` | `false` | Enable verbose tracing. |
 
+### `data_science_hybrid_adapter`
+
+Maps the catalog-aware Chat Researcher state into a configured
+`data_science_agent`. Direct DS Agent workflows do not use this adapter.
+
+```yaml
+functions:
+  data_science_hybrid_adapter:
+    _type: data_science_hybrid_adapter
+    agent: data_science_agent
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `agent` | `str` | **required** | Function reference for the `data_science_agent` instance that handles Hybrid requests. |
+
 ### `deep_research_agent`
 
 Multi-phase research agent with an orchestrator, optional advisory source router, planner, concurrent researcher workers,
@@ -643,6 +659,7 @@ workflow:
 | `enable_escalation` | `bool` | `true` | Allow the intent classifier to route queries to deep research. When `false`, all research queries use shallow research only. |
 | `enable_clarifier` | `bool` | `true` | Run the clarifier agent before deep research to gather user requirements. |
 | `use_async_deep_research` | `bool` | `false` | Submit deep research as an async background job (requires [Dask](https://www.dask.org/) scheduler). |
+| `hybrid_research_agent` | `str` or `None` | `None` | Optional function reference invoked when catalog-aware routing selects Hybrid research. |
 | `max_history` | `int` | `20` | Maximum number of messages to keep in conversation history before trimming. |
 | `verbose` | `bool` | `false` | Enable verbose logging. |
 | `checkpoint_db` | `str` | `./checkpoints.db` | SQLite path or PostgreSQL DSN for persistent conversation checkpoints. |

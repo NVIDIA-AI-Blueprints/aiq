@@ -4,12 +4,15 @@
 """NAT registration and composition for the data-science agent."""
 
 import logging
+from typing import Any
 from typing import Literal
 
+from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from pydantic import ConfigDict
 from pydantic import Field
 
+from aiq_agent.agents.chat_researcher.models import ChatResearcherState
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
@@ -94,6 +97,14 @@ class DataScienceWorkflowConfig(FunctionBaseConfig, name="data_science_workflow"
     model_config = ConfigDict(extra="forbid")
 
 
+class DataScienceHybridAdapterConfig(FunctionBaseConfig, name="data_science_hybrid_adapter"):
+    """Adapt Chat Researcher hybrid state to the autonomous DS Agent contract."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent: FunctionRef = Field(description="Configured data_science_agent function to invoke.")
+
+
 @register_function(config_type=DataScienceAgentConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
     """Resolve configured AI-Q tools and compose one contiguous ReAct loop."""
@@ -148,6 +159,41 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
     yield FunctionInfo.from_fn(
         _run,
         description="Adaptive data-science agent for structured data, document retrieval, web evidence, and synthesis.",
+    )
+
+
+@register_function(config_type=DataScienceHybridAdapterConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
+async def data_science_hybrid_adapter(config: DataScienceHybridAdapterConfig, builder: Builder):
+    """Expose the DS Agent through Chat Researcher's optional Hybrid boundary."""
+    agent_fn = await builder.get_function(config.agent)
+
+    async def _run(state: ChatResearcherState) -> dict[str, Any]:
+        catalog_context = state.catalog_context.model_dump(mode="json") if state.catalog_context is not None else None
+        agent_state = DataScienceAgentState(
+            messages=state.messages,
+            data_sources=state.data_sources,
+            user_info=state.user_info,
+            database_name=state.database_name,
+            catalog_context=catalog_context,
+            catalog_request_id=state.catalog_request_id,
+        )
+        result = await agent_fn.ainvoke(agent_state)
+        new_messages = result.messages[len(agent_state.messages) :]
+        final_message = next(
+            (
+                message
+                for message in reversed(new_messages)
+                if isinstance(message, AIMessage) and not getattr(message, "tool_calls", None)
+            ),
+            None,
+        )
+        if final_message is None:
+            raise RuntimeError("Data Science Agent returned no final response")
+        return {"messages": [final_message]}
+
+    yield FunctionInfo.from_fn(
+        _run,
+        description="Chat Researcher Hybrid adapter for the autonomous Data Science Agent.",
     )
 
 
