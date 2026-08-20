@@ -238,7 +238,7 @@ version = "1.0.0"
 description = "NAT-based custom search tool"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "nvidia-nat==1.5.0",
+    "nvidia-nat-core==1.8.0",
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
 ]
@@ -251,7 +251,7 @@ Key points:
 
 - The `package-dir` maps the package name to `src/` so Python can find your module.
 - The entry point key (`my_search_tool`) maps to the `register` module, which triggers `@register_function` at import time.
-- Pin `nvidia-nat` to the same version used by the main project.
+- Pin `nvidia-nat-core` to the same version used by the main project.
 
 ---
 
@@ -415,8 +415,22 @@ async def _search(query: str) -> str:
 Use the XML `<Document>` format for results that include URLs. This allows the agent's prompt to extract and cite sources:
 
 ```python
-f'<Document href="{url}">\n<title>\n{title}\n</title>\n{content}\n</Document>'
+import html
+
+
+def _render_document(url: str | None, title: str | None, content: str | None) -> str:
+    safe_url = html.escape("" if url is None else url, quote=True)
+    safe_title = html.escape("" if title is None else title)
+    safe_content = html.escape("" if content is None else content)
+    return f'<Document href="{safe_url}">\n<title>\n{safe_title}\n</title>\n{safe_content}\n</Document>'
+
+
+result = _render_document(url, title, content)
 ```
+
+Keep this renderer private to the independently installable plugin and preserve
+the fixed document shape. Escaping provider-controlled values prevents them
+from closing trusted tags or creating additional document elements.
 
 ---
 
