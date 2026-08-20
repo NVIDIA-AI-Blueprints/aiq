@@ -44,7 +44,7 @@ general:
 
 llms:
   nemotron_lightning_intent_llm:
-    _type: openai
+    _type: nim
     model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -53,11 +53,13 @@ llms:
     max_tokens: 1024
     num_retries: 5
     parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: false
 
   # Known limitation: Build-hosted Lightning can intermittently produce citation-incomplete shallow drafts.
   # AI-Q fails closed; see docs/source/resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog.
   nemotron_lightning_agent_llm:
-    _type: openai
+    _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -66,9 +68,11 @@ llms:
     max_tokens: 8192
     num_retries: 5
     parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: true
 
   nemotron_ultra_llm:
-    _type: openai
+    _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -76,9 +80,11 @@ llms:
     top_p: 0.7
     max_tokens: 16384
     num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
 
   nemotron_ultra_writer_llm:
-    _type: openai
+    _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -86,6 +92,8 @@ llms:
     top_p: 0.7
     max_tokens: 32768
     num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
 
   # LLM for document summaries (required when generate_summary: true)
   summary_llm:

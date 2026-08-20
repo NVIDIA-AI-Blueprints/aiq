@@ -23,6 +23,7 @@ import uuid
 import warnings
 from pathlib import Path
 
+import nemo_relay
 import yaml
 from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
@@ -372,13 +373,18 @@ async def interactive_loop(session_manager: SessionManager, verbose: bool = Fals
                     else:
                         result = await runner.result(to_type=str)
 
-                    parse_and_display_response(result, verbose=verbose)
+                # Relay subscriber delivery is asynchronous. Wait until the run context has
+                # closed its outer scopes before displaying the answer and opening the next
+                # prompt, otherwise late lifecycle logs can be painted after ``You:``.
+                await nemo_relay.subscribers.flush_async()
 
-                    # Check if the response indicates a critical error (e.g., missing API key)
-                    # This is a fallback in case validation didn't catch it earlier
-                    if "Missing Required API Keys" in result or "Missing keys:" in result:
-                        console.print("[bold red]Cannot continue without required API keys. Exiting.[/bold red]")
-                        break
+                parse_and_display_response(result, verbose=verbose)
+
+                # Check if the response indicates a critical error (e.g., missing API key)
+                # This is a fallback in case validation didn't catch it earlier
+                if "Missing Required API Keys" in result or "Missing keys:" in result:
+                    console.print("[bold red]Cannot continue without required API keys. Exiting.[/bold red]")
+                    break
 
             except (EOFError, KeyboardInterrupt):
                 console.print("\n\n[bold green]Goodbye! Happy researching![/bold green]")

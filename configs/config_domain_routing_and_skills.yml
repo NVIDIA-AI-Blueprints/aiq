@@ -44,7 +44,7 @@ general:
 
 llms:
   nemotron_ultra_llm:
-    _type: openai
+    _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -52,9 +52,11 @@ llms:
     top_p: 0.7
     max_tokens: 16384
     num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
 
   nemotron_ultra_writer_llm:
-    _type: openai
+    _type: nim
     model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
@@ -62,6 +64,8 @@ llms:
     top_p: 0.7
     max_tokens: 32768
     num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
 
   # LLM for document summaries (required when generate_summary: true)
   summary_llm:

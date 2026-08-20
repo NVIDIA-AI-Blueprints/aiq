@@ -299,7 +299,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.28.1,<2" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.5.0" },
     { name = "myst-parser", marker = "extra == 'docs'", specifier = ">=3.0" },
-    { name = "nemo-relay", extras = ["deepagents", "langchain", "langgraph"], git = "https://github.com/NVIDIA/NeMo-Relay.git?rev=2557abb5ee87d61fe914b9bc9b8442210920f7a0" },
+    { name = "nemo-relay", extras = ["deepagents", "langchain", "langgraph"], git = "https://github.com/NVIDIA/NeMo-Relay.git?rev=ffb24817442bac99212da0971b13bdad5bc4d84d" },
     { name = "nvidia-nat", extras = ["langchain", "async-endpoints", "phoenix", "mcp"], specifier = "==1.8.0" },
     { name = "nvidia-nat-core", specifier = "==1.8.0" },
     { name = "nvidia-nat-eval", specifier = "==1.8.0" },
@@ -4059,7 +4059,7 @@ wheels = [
 [[package]]
 name = "nemo-relay"
 version = "0.8.0"
-source = { git = "https://github.com/NVIDIA/NeMo-Relay.git?rev=2557abb5ee87d61fe914b9bc9b8442210920f7a0#2557abb5ee87d61fe914b9bc9b8442210920f7a0" }
+source = { git = "https://github.com/NVIDIA/NeMo-Relay.git?rev=ffb24817442bac99212da0971b13bdad5bc4d84d#ffb24817442bac99212da0971b13bdad5bc4d84d" }
 
 [package.optional-dependencies]
 deepagents = [
