@@ -17,11 +17,14 @@
 
 import asyncio
 import logging
+from pathlib import Path
 from typing import Any
 
 import aiofiles
 from langchain_core.messages import HumanMessage
+from pydantic import ConfigDict
 from pydantic import Field
+from pydantic import ValidationError
 
 from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
@@ -51,6 +54,7 @@ from .models import ChatResearcherResponse
 from .models import ChatResearcherState
 from .models import WorkflowFailure
 from .models import WorkflowSuccess
+from .utils import _extract_database_name_from_request_metadata
 from .utils import _extract_query_context
 
 logger = logging.getLogger(__name__)
@@ -245,6 +249,53 @@ async def intent_classifier(config: IntentClassifierConfig, builder: Builder):
     )
 
 
+class ContextAwareIntentRouterConfig(FunctionBaseConfig, name="context_aware_intent_router"):
+    """Configuration for catalog-aware entry routing."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    llm: LLMRef = Field(..., description="LLM to use")
+    catalog_tool: FunctionRef
+    catalog_source_id: str = Field(default="gsf", min_length=1)
+    max_catalog_results: int = Field(default=10, ge=1, le=100)
+    catalog_confidence_threshold: float = Field(default=0.6, ge=0, le=1)
+    catalog_max_distance: float = Field(default=0.75, gt=0)
+    verbose: bool = Field(default=False)
+    llm_timeout: float = Field(
+        default=90,
+        gt=0,
+        description="Overall timeout in seconds across the initial routing call and any protocol-correction attempt.",
+    )
+
+
+@register_function(config_type=ContextAwareIntentRouterConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
+async def context_aware_intent_router(config: ContextAwareIntentRouterConfig, builder: Builder):
+    """Route chat requests through catalog discovery when research is required."""
+    from aiq_agent.common import load_prompt
+
+    from .nodes import ContextAwareIntentRouter
+
+    llm = await builder.get_llm(config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+    tools = await builder.get_tools(tool_names=[config.catalog_tool], wrapper_type=LLMFrameworkEnum.LANGCHAIN)
+    if len(tools) != 1:
+        raise ValueError("context_aware_intent_router requires exactly one catalog tool")
+
+    prompt = load_prompt(Path(__file__).parent / "prompts", "context_aware_intent_router.j2")
+    callbacks = [VerboseTraceCallback()] if is_verbose(config.verbose) else []
+    router = ContextAwareIntentRouter(
+        llm,
+        tools[0],
+        prompt,
+        catalog_source_id=config.catalog_source_id,
+        max_catalog_results=config.max_catalog_results,
+        catalog_confidence_threshold=config.catalog_confidence_threshold,
+        catalog_max_distance=config.catalog_max_distance,
+        callbacks=callbacks,
+        llm_timeout=config.llm_timeout,
+    )
+    yield FunctionInfo.from_fn(router.run, description="Catalog-aware intent and research routing.")
+
+
 ########################################################
 # Chat Deep Researcher Agent
 ########################################################
@@ -261,6 +312,7 @@ class ChatDeepResearcherConfig(FunctionBaseConfig, name="chat_deepresearcher_age
         default=False,
         description="Submit deep research as an async job instead of running inline",
     )
+    hybrid_research_agent: FunctionRef | None = Field(default=None, description="Optional hybrid research function")
     checkpoint_db: str = Field(
         default="./checkpoints.db",
         description="SQLite database path or Postgres DSN for persistent checkpoints.",
@@ -277,7 +329,6 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     """
     import os
     import sys
-    from pathlib import Path
 
     # Validate API keys early by checking the config file
     # This works for both nat run and interactive CLI
@@ -339,6 +390,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     shallow_research_fn = await builder.get_function("shallow_research_agent")
     deep_research_fn = await builder.get_function("deep_research_agent")
     clarifier_fn = await builder.get_function("clarifier_agent") if config.enable_clarifier else None
+    hybrid_research_fn = (
+        await builder.get_function(config.hybrid_research_agent) if config.hybrid_research_agent else None
+    )
 
     # Get deep research tools for early validation
     deep_research_config = builder.get_function_config("deep_research_agent")
@@ -568,6 +622,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         report_edit_job_submitter=report_edit_job_submitter,
         report_edit_fn=_inline_report_edit,
         report_seed_files_fn=_build_report_seed_files,
+        hybrid_research_fn=hybrid_research_fn.ainvoke if hybrid_research_fn else None,
         checkpointer=checkpointer,
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
@@ -640,7 +695,21 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 pass
         logger.info("skip_clarifier=%s", skip_clarifier)
 
-        request_context = _extract_query_context(query)
+        try:
+            request_context = _extract_query_context(query)
+            if request_context.database_name is None:
+                request_context.database_name = _extract_database_name_from_request_metadata(Context.get().metadata)
+        except ValidationError:
+            logger.warning("Rejected chat request with an invalid database scope")
+            invalid_scope_response = _create_chat_response(
+                "The requested database scope is invalid. Please select a valid database.",
+                response_id="invalid_database_scope",
+                model=workflow_id,
+            )
+            return ChatResearcherResponse(
+                **invalid_scope_response.model_dump(),
+                workflow_outcome=WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            )
         query_text = request_context.query_text
         data_sources = request_context.data_sources
         logger.info("ChatDeepResearcherAgent query_%s", log_content_metadata(query_text))
@@ -698,6 +767,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 messages=[HumanMessage(content=query_text)],
                 user_info=user_info_dict,
                 data_sources=data_sources,
+                database_name=request_context.database_name,
                 available_documents=available_documents,
                 skip_clarifier=skip_clarifier,
                 active_report_job_id=effective_report_job_id,

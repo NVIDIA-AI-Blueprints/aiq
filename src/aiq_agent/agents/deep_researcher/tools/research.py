@@ -25,11 +25,17 @@ import re
 from typing import Any
 from typing import cast
 
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain.tools import ToolRuntime
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool
 
+from aiq_agent.common.logging_utils import log_content_metadata
+
+from ..custom_middleware import ResearcherBudgetExhaustedError
+from ..models import EvidenceJudgment
+from ..models import ResearchGap
 from ..models import ResearchNotes
 from ..models import ResearchQuery
 from ..resource_limits import DeepResearchResourceLimits
@@ -39,6 +45,31 @@ _NO_TOOL_RUNTIME = cast(ToolRuntime, None)
 logger = logging.getLogger(__name__)
 _NOTE_SLUG_MAX_LENGTH = 64
 RESEARCHER_AGENT_NAME = "researcher-agent"
+
+
+def _exhausted_research_notes(query: ResearchQuery) -> ResearchNotes:
+    """Build the deterministic fallback when the reserved finalization turn fails."""
+    return ResearchNotes(
+        query_topic=query.query[:120],
+        target_components=list(query.target_components),
+        summary="Research for this query was cut short because its model-call budget was exhausted.",
+        findings=[],
+        gaps=[
+            ResearchGap(
+                description=f"No grounded evidence was finalized for: {query.query}",
+                impact="Target components for this query may be unsupported in the final answer.",
+                suggested_follow_up_queries=[query.query],
+            )
+        ],
+        sources=[],
+        narrative_notes="The researcher did not return structured notes during its reserved finalization turn.",
+        language="en",
+        evidence_judgment=EvidenceJudgment(
+            relevance_score=0,
+            confidence="low",
+            rationale="The model-call budget was exhausted before verified findings were finalized.",
+        ),
+    )
 
 
 def format_research_request(query: ResearchQuery) -> str:
@@ -90,6 +121,12 @@ async def _run_research_query(
                 researcher_invoke_state(query, runtime),
                 config=researcher_invoke_config(runtime, callbacks),
             )
+        except (ModelCallLimitExceededError, ResearcherBudgetExhaustedError):
+            logger.warning(
+                "Researcher worker exhausted its model-call budget (query_%s)",
+                log_content_metadata(query.query),
+            )
+            return _exhausted_research_notes(query)
         except Exception as exc:  # noqa: BLE001 - captured as per-item failure
             raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
 

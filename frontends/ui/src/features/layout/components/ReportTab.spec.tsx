@@ -20,8 +20,20 @@ vi.mock('@/features/chat', () => ({
 
 // Mock MarkdownRenderer
 vi.mock('@/shared/components/MarkdownRenderer', () => ({
-  MarkdownRenderer: ({ content, isStreaming }: { content: string; isStreaming?: boolean }) => (
-    <div data-testid="markdown" data-streaming={isStreaming}>
+  MarkdownRenderer: ({
+    content,
+    isStreaming,
+    sources,
+  }: {
+    content: string
+    isStreaming?: boolean
+    sources?: Array<{ index: number; url?: string }>
+  }) => (
+    <div
+      data-testid="markdown"
+      data-streaming={isStreaming}
+      data-sources={JSON.stringify((sources ?? []).map((s) => ({ index: s.index, url: s.url ?? null })))}
+    >
       {content}
       {isStreaming && <span data-testid="streaming-indicator">Generating report...</span>}
     </div>
@@ -33,6 +45,20 @@ vi.mock('./ExportFooter', () => ({
   ExportFooter: () => <div data-testid="export-footer">Export Footer</div>,
 }))
 
+// Mock SourceStrip so the structured-citations path renders hermetically
+vi.mock('@/shared/components/Sources/SourceStrip', () => ({
+  SourceStrip: ({ sources }: { sources: unknown[] }) => (
+    <div data-testid="source-strip">{sources.length} sources</div>
+  ),
+}))
+
+vi.mock('./FileCard', () => ({
+  FileCard: ({ file }: { file: { name: string } }) => (
+    <div data-testid="file-card">{file.name}</div>
+  ),
+}))
+
+import userEvent from '@testing-library/user-event'
 import { useChatStore } from '@/features/chat'
 
 describe('ReportTab', () => {
@@ -106,5 +132,179 @@ describe('ReportTab', () => {
     render(<ReportTab />)
 
     expect(screen.getByTestId('export-footer')).toBeInTheDocument()
+  })
+
+  test('uses the report own parsed references and strips the block even without discovery citations', () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent:
+          'The sky is blue [1].\n\n## Sources\n- [1] Sky facts - https://example.com/sky',
+        isStreaming: false,
+        currentStatus: null,
+        deepResearchCitations: [],
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<ReportTab />)
+
+    const markdown = screen.getByTestId('markdown')
+    expect(markdown).not.toHaveTextContent('example.com')
+    expect(screen.getByTestId('source-strip')).toBeInTheDocument()
+    const sources = JSON.parse(markdown.getAttribute('data-sources') ?? '[]')
+    expect(sources).toEqual([{ index: 1, url: 'https://example.com/sky' }])
+  })
+
+  test('keeps the body intact when the trailing block is unparseable and there are no discovery citations', () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent: 'The sky is blue.\n\n## Sources\nInternal notes without markers',
+        isStreaming: false,
+        currentStatus: null,
+        deepResearchCitations: [],
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<ReportTab />)
+
+    const markdown = screen.getByTestId('markdown')
+    expect(markdown).toHaveTextContent('Internal notes without markers')
+    expect(screen.queryByTestId('source-strip')).not.toBeInTheDocument()
+  })
+
+  test('resolves each [N] marker to the source the report assigned, not discovery order', () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent:
+          'Alpha [1] and Beta [2].\n\n## Sources\n- [1] Beta source - https://beta.example.com\n- [2] Alpha source - https://alpha.example.com',
+        isStreaming: false,
+        currentStatus: null,
+        deepResearchCitations: [
+          { id: 'd1', url: 'https://alpha.example.com', content: 'Alpha source', isCited: true },
+          { id: 'd2', url: 'https://beta.example.com', content: 'Beta source', isCited: true },
+        ],
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<ReportTab />)
+
+    const sources = JSON.parse(screen.getByTestId('markdown').getAttribute('data-sources') ?? '[]')
+    expect(sources).toEqual([
+      { index: 1, url: 'https://beta.example.com' },
+      { index: 2, url: 'https://alpha.example.com' },
+    ])
+  })
+
+  test('renders gracefully across a gap in the report [N] numbering', () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent:
+          'First [1] and third [3].\n\n## Sources\n- [1] First - https://one.example.com\n- [3] Third - https://three.example.com',
+        isStreaming: false,
+        currentStatus: null,
+        deepResearchCitations: [],
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<ReportTab />)
+
+    const sources = JSON.parse(screen.getByTestId('markdown').getAttribute('data-sources') ?? '[]')
+    expect(sources).toEqual([
+      { index: 1, url: 'https://one.example.com' },
+      { index: 3, url: 'https://three.example.com' },
+    ])
+  })
+
+  test('resolves the dense sequential case where report order matches discovery', () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent:
+          'A [1], B [2], C [3].\n\n## Sources\n- [1] First - https://one.example.com\n- [2] Second - https://two.example.com\n- [3] Third - https://three.example.com',
+        isStreaming: false,
+        currentStatus: null,
+        deepResearchCitations: [],
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<ReportTab />)
+
+    const sources = JSON.parse(screen.getByTestId('markdown').getAttribute('data-sources') ?? '[]')
+    expect(sources).toEqual([
+      { index: 1, url: 'https://one.example.com' },
+      { index: 2, url: 'https://two.example.com' },
+      { index: 3, url: 'https://three.example.com' },
+    ])
+  })
+
+  test('falls back to discovery citations keyed by marker number when the report has no structured block', () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent: 'Fact one [1]. Fact two [2].',
+        isStreaming: false,
+        currentStatus: null,
+        deepResearchCitations: [
+          { id: 'd1', url: 'https://one.example.com', content: 'One', isCited: false },
+          { id: 'd2', url: 'https://two.example.com', content: 'Two', isCited: true },
+        ],
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<ReportTab />)
+
+    const sources = JSON.parse(screen.getByTestId('markdown').getAttribute('data-sources') ?? '[]')
+    expect(sources).toEqual([
+      { index: 1, url: 'https://one.example.com' },
+      { index: 2, url: 'https://two.example.com' },
+    ])
+  })
+
+  test('strips the redundant markdown references when structured citations exist', () => {
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent:
+          'The sky is blue [1].\n\n## Sources\n- [1] Sky facts - https://example.com/sky',
+        isStreaming: false,
+        currentStatus: null,
+        deepResearchCitations: [
+          { id: 'c1', url: 'https://example.com/sky', content: 'Sky facts', isCited: true },
+        ],
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<ReportTab />)
+
+    const markdown = screen.getByTestId('markdown')
+    expect(markdown).not.toHaveTextContent('example.com')
+    expect(screen.getByTestId('source-strip')).toBeInTheDocument()
+  })
+
+  test('bounds the expanded generated-files list with a scroll area', async () => {
+    const user = userEvent.setup()
+    vi.mocked(useChatStore).mockImplementation((selector?: (s: any) => any) => {
+      const state = {
+        reportContent: 'Report body',
+        isStreaming: false,
+        currentStatus: null,
+        deepResearchFiles: [
+          { id: 'f1', name: 'a.md' },
+          { id: 'f2', name: 'b.md' },
+        ],
+      }
+      return selector ? selector(state) : state
+    })
+
+    render(<ReportTab />)
+
+    await user.click(screen.getByRole('button', { name: /generated files/i }))
+
+    const list = screen.getAllByTestId('file-card')[0].parentElement?.parentElement
+    expect(list?.className).toMatch(/overflow-y-auto/)
+    expect(list?.className).toMatch(/max-h-/)
   })
 })

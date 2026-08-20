@@ -6,6 +6,7 @@
 import asyncio
 import json
 import logging
+import os
 import random
 import re
 from collections.abc import Mapping
@@ -78,6 +79,12 @@ class GSFClient:
         """Construct a client from the GSF function-group config without importing NAT."""
 
         password_auth = getattr(config, "auth", None)
+        password: SecretStr | None = None
+        if password_auth is not None:
+            password_value = os.environ.get(password_auth.password)
+            if not password_value:
+                raise ValueError(f"GSF password authentication requires {password_auth.password}")
+            password = SecretStr(password_value)
         return cls(
             base_url=str(config.base_url),
             connect_timeout_seconds=config.connect_timeout_seconds,
@@ -86,7 +93,7 @@ class GSFClient:
             max_response_bytes=config.max_response_bytes,
             default_max_rows=config.default_max_rows,
             password_auth_email=password_auth.email if password_auth is not None else None,
-            password_auth_password=password_auth.password if password_auth is not None else None,
+            password_auth_password=password,
         )
 
     async def __aenter__(self) -> "GSFClient":

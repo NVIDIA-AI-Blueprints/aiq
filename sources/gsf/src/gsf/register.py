@@ -4,6 +4,7 @@
 """Register GSF capabilities as one NAT function group."""
 
 import logging
+import os
 from collections.abc import Mapping
 from typing import Literal
 
@@ -11,7 +12,6 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import HttpUrl
-from pydantic import SecretStr
 
 from nat.builder.builder import Builder
 from nat.builder.context import Context
@@ -38,7 +38,7 @@ class GSFPasswordAuthConfig(BaseModel):
 
     mode: Literal["password"]
     email: str = Field(min_length=1)
-    password: SecretStr
+    password: str = Field(default="GSF_PASSWORD", pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class GSFFunctionGroupConfig(FunctionGroupBaseConfig, name="gsf"):
@@ -103,9 +103,74 @@ def _request_trace_headers() -> Mapping[str, str]:
     return {name: value for name, value in incoming.items() if name.lower() in FORWARDED_HEADER_NAMES and value}
 
 
+def _missing_password_environment(config: GSFFunctionGroupConfig) -> str | None:
+    """Return the configured password environment name when it has no value."""
+
+    if config.auth is None or os.environ.get(config.auth.password):
+        return None
+    return config.auth.password
+
+
+def _unavailable_password_group(config: GSFFunctionGroupConfig, environment_name: str) -> FunctionGroup:
+    """Build typed unavailable stubs without constructing a GSF client."""
+
+    error = GSFError(
+        GSFErrorCode.AUTHENTICATION_REQUIRED,
+        "GSF password authentication is unavailable because its configured password is not set.",
+    )
+
+    async def catalog_search(request: CatalogSearchRequest) -> str:
+        """Return a typed authentication error without contacting GSF."""
+
+        del request
+        return _tool_error(error)
+
+    async def text_to_sql(request: TextToSQLRequest) -> str:
+        """Return a typed authentication error without contacting GSF."""
+
+        del request
+        return _tool_error(error)
+
+    async def text_to_pql(request: TextToPQLRequest) -> str:
+        """Return a typed authentication error without contacting GSF."""
+
+        del request
+        return _tool_error(error)
+
+    group = FunctionGroup(config=config)
+    group.add_function(
+        "catalog_search",
+        catalog_search,
+        input_schema=CatalogSearchRequest,
+        description=f"GSF catalog search (unavailable - missing {environment_name}).",
+    )
+    group.add_function(
+        "text_to_sql",
+        text_to_sql,
+        input_schema=TextToSQLRequest,
+        description=f"GSF text-to-SQL (unavailable - missing {environment_name}).",
+    )
+    group.add_function(
+        "text_to_pql",
+        text_to_pql,
+        input_schema=TextToPQLRequest,
+        description=f"GSF text-to-PQL (unavailable - missing {environment_name}).",
+    )
+    return group
+
+
 @register_function_group(config_type=GSFFunctionGroupConfig)
 async def gsf_function_group(config: GSFFunctionGroupConfig, _builder: Builder):
     """Build namespaced GSF tools around one shared HTTP client."""
+
+    missing_password_environment = _missing_password_environment(config)
+    if missing_password_environment is not None:
+        logger.warning(
+            "GSF password environment variable %s is not set. The GSF tools will be registered as unavailable.",
+            missing_password_environment,
+        )
+        yield _unavailable_password_group(config, missing_password_environment)
+        return
 
     async with GSFClient.from_config(config) as client:
 

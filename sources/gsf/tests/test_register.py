@@ -9,8 +9,12 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from gsf.client import GSFClient
+from gsf.models import CatalogSearchRequest
 from gsf.models import CatalogSearchResponse
+from gsf.models import TextToPQLRequest
 from gsf.models import TextToPQLResponse
+from gsf.models import TextToSQLRequest
 from gsf.models import TextToSQLResponse
 from gsf.register import GSFFunctionGroupConfig
 from gsf.register import GSFPasswordAuthConfig
@@ -39,8 +43,8 @@ class FakeClientContext:
         pass
 
 
-def test_password_auth_is_optional_and_keeps_secret_wrapped() -> None:
-    """Keep optional password configuration secret-wrapped."""
+def test_password_auth_is_optional_and_carries_only_environment_name() -> None:
+    """Keep password values out of serializable function-group configuration."""
 
     default_config = GSFFunctionGroupConfig(base_url="https://gsf.example")
     password_config = GSFFunctionGroupConfig(
@@ -48,14 +52,97 @@ def test_password_auth_is_optional_and_keeps_secret_wrapped() -> None:
         auth={
             "mode": "password",
             "email": "developer@example.com",
-            "password": _TEST_PASSWORD,
+            "password": "CUSTOM_GSF_PASSWORD",  # pragma: allowlist secret
         },
     )
 
     assert default_config.auth is None
     assert isinstance(password_config.auth, GSFPasswordAuthConfig)
-    assert password_config.auth.password.get_secret_value() == _TEST_PASSWORD
-    assert _TEST_PASSWORD not in repr(password_config)
+    assert password_config.auth.password == "CUSTOM_GSF_PASSWORD"  # pragma: allowlist secret
+    assert "password=SecretStr" not in repr(password_config)
+
+
+def test_password_auth_reads_environment_after_workflow_interpolation(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Resolve the exact secret after a JSON round trip like NAT's worker boundary."""
+
+    password = "literal ${MUST_NOT_EXPAND} # fragment"  # pragma: allowlist secret
+    monkeypatch.setenv("GSF_PASSWORD", password)
+    monkeypatch.setenv("MUST_NOT_EXPAND", "changed")
+
+    config = GSFFunctionGroupConfig(
+        base_url="https://gsf.example",
+        auth={
+            "mode": "password",
+            "email": "developer@example.com",
+        },
+    )
+    serialized = config.model_dump_json()
+    reconstructed = GSFFunctionGroupConfig.model_validate_json(serialized)
+    client = GSFClient.from_config(reconstructed)
+
+    assert reconstructed.auth is not None
+    assert reconstructed.auth.password == "GSF_PASSWORD"  # pragma: allowlist secret
+    assert client._password_auth_password is not None
+    assert client._password_auth_password.get_secret_value() == password
+    assert password not in serialized
+    assert "**********" not in serialized
+
+
+@pytest.mark.parametrize("password_value", [None, ""])
+@pytest.mark.asyncio
+async def test_missing_password_registers_unavailable_group_without_client_construction(
+    monkeypatch: pytest.MonkeyPatch,
+    password_value: str | None,
+) -> None:
+    """Keep every GSF tool discoverable and safely unavailable when its configured password is absent."""
+
+    environment_name = "CUSTOM_GSF_PASSWORD"  # pragma: allowlist secret
+    if password_value is None:
+        monkeypatch.delenv(environment_name, raising=False)
+    else:
+        monkeypatch.setenv(environment_name, password_value)
+    config = GSFFunctionGroupConfig(
+        base_url="https://gsf.example",
+        auth={
+            "mode": "password",
+            "email": "developer@example.com",
+            "password": environment_name,
+        },
+    )
+
+    with (
+        patch("gsf.register.GSFClient.from_config") as from_config,
+        patch("gsf.client.httpx.AsyncClient") as http_client,
+        patch("gsf.client.GSFClient._sign_in_with_password", new_callable=AsyncMock) as sign_in,
+    ):
+        async with gsf_function_group(config, MagicMock()) as group:
+            tools = await group.get_accessible_functions()
+            expected_tools = {
+                "gsf__catalog_search": (CatalogSearchRequest, {"question": "Find revenue metrics"}),
+                "gsf__text_to_sql": (TextToSQLRequest, {"question": "Show revenue"}),
+                "gsf__text_to_pql": (TextToPQLRequest, {"question": "Forecast revenue"}),
+            }
+
+            assert set(tools) == set(expected_tools)
+            for tool_name, (input_schema, request) in expected_tools.items():
+                tool = tools[tool_name]
+                result = json.loads(await tool.ainvoke(request))
+
+                assert tool.input_schema is input_schema
+                assert tool.description is not None
+                assert f"(unavailable - missing {environment_name})" in tool.description
+                assert "unavailable" in tool.description.lower()
+                assert result == {
+                    "status": "error",
+                    "code": "authentication_required",
+                    "retryable": False,
+                    "message": "GSF password authentication is unavailable because its configured password is not set.",
+                }
+                assert environment_name not in json.dumps(result)
+
+    from_config.assert_not_called()
+    http_client.assert_not_called()
+    sign_in.assert_not_awaited()
 
 
 def test_request_trace_headers_forwards_only_allowlisted_nonempty_values() -> None:
@@ -160,9 +247,13 @@ async def test_text_to_sql_resolves_token_per_invocation(text_to_sql_response: d
 
 
 @pytest.mark.asyncio
-async def test_explicit_password_auth_does_not_resolve_user_token(text_to_sql_response: dict) -> None:
+async def test_explicit_password_auth_does_not_resolve_user_token(
+    text_to_sql_response: dict,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Skip user-token resolution when password mode is explicit."""
 
+    monkeypatch.setenv("GSF_PASSWORD", "configured-password")  # pragma: allowlist secret
     client = MagicMock()
     client.text_to_sql = AsyncMock(return_value=TextToSQLResponse.model_validate(text_to_sql_response))
     config = GSFFunctionGroupConfig(
@@ -171,7 +262,7 @@ async def test_explicit_password_auth_does_not_resolve_user_token(text_to_sql_re
         auth={
             "mode": "password",
             "email": "developer@example.com",
-            "password": _TEST_PASSWORD,
+            "password": "GSF_PASSWORD",  # pragma: allowlist secret
         },
     )
 

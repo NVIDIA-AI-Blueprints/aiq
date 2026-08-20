@@ -27,6 +27,8 @@ from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import _normalize_url
 from aiq_agent.common.citation_verification import _parse_citation_key
 from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
+from aiq_agent.common.citation_verification import clean_extracted_url
+from aiq_agent.common.citation_verification import extract_http_urls
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 from aiq_agent.common.citation_verification import register_source_parser
 from aiq_agent.common.citation_verification import sanitize_report
@@ -395,6 +397,37 @@ class TestSourceRegistry:
 
 class TestGenericUrlExtractor:
     """Tests for the generic URL extractor (works for all tool output formats)."""
+
+    @pytest.mark.parametrize(
+        "candidate",
+        [
+            "https://literal.example/path](not-a-markdown-target)",
+            "https://literal.example/path](https://target.example/incomplete",
+        ],
+    )
+    def test_literal_or_incomplete_markdown_delimiter_is_preserved(self, candidate):
+        assert clean_extracted_url(candidate) == candidate
+
+    def test_complete_http_label_and_target_selects_markdown_target(self):
+        candidate = "https://label.example/path](https://target.example/article)"
+
+        assert clean_extracted_url(candidate) == "https://target.example/article"
+
+    @pytest.mark.parametrize("punctuation", [".", ",", ";"])
+    def test_complete_markdown_link_followed_by_punctuation_selects_target(self, punctuation):
+        content = f"[https://label.example/path](https://target.example/article){punctuation}"
+
+        assert extract_http_urls(content) == ["https://target.example/article"]
+
+    def test_markdown_target_preserves_balanced_parentheses(self):
+        content = "[https://label.example/path](https://en.wikipedia.org/wiki/Function_(mathematics))."
+
+        assert extract_http_urls(content) == ["https://en.wikipedia.org/wiki/Function_(mathematics)"]
+
+    def test_extract_http_urls_ignores_non_http_schemes(self):
+        content = "ftp://files.example/archive mailto:user@example.com https://secure.example http://plain.example"
+
+        assert extract_http_urls(content) == ["https://secure.example", "http://plain.example"]
 
     def test_tavily_xml_format(self):
         content = (
@@ -994,6 +1027,19 @@ class TestVerifyCitations:
         report = "Finding [1].\n\n**References:**\n- [1] Article 1 - https://valid.com/article1"
         result = verify_citations(report, registry)
         assert len(result.valid_citations) == 1
+
+    def test_references_with_markdown_link_urls(self, registry):
+        report = (
+            "Finding [1][2].\n\n"
+            "**References:**\n"
+            "- [1] Article 1 - [https://valid.com/article1](https://valid.com/article1)\n"
+            "- [2] Article 2 - [https://valid.com/article2](https://valid.com/article2)"
+        )
+
+        result = verify_citations(report, registry)
+
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
 
     def test_references_bold_without_colon(self, registry):
         """Model sometimes outputs **References** without the colon."""

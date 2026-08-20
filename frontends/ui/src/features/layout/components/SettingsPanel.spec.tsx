@@ -6,7 +6,6 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { SettingsPanel } from './SettingsPanel'
 
-// Mock the layout store
 const mockCloseRightPanel = vi.fn()
 const mockOpenRightPanel = vi.fn()
 const mockSetTheme = vi.fn()
@@ -29,7 +28,6 @@ import { useLayoutStore } from '../store'
 describe('SettingsPanel', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // Reset mock to default open state
     vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
       const state = {
         rightPanel: 'settings',
@@ -98,9 +96,6 @@ describe('SettingsPanel', () => {
 
     render(<SettingsPanel />)
 
-    // Panel should not be visible (SidePanel handles this)
-    // The heading won't be rendered in closed state
-    // This tests the isOpen logic
     expect(screen.queryByText('Settings')).not.toBeInTheDocument()
   })
 

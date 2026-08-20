@@ -476,6 +476,7 @@ functions:
     # skills: deep_research_skills
     # sandbox: deep_research_sandbox
     max_research_concurrency: 6
+    max_researcher_model_calls: 100
     max_concurrent_source_tool_calls: 5
     max_source_tool_batch_size: 4
     resource_limits:
@@ -512,6 +513,7 @@ functions:
 | `skills` | object or function ref | `None` | Inline `deep_research_skills` config or a reference to a config-only function of that type. Skill assignments are keyed by `researcher-agent` and `writer-agent`. |
 | `sandbox` | object or function ref | `None` | Inline `deep_research_sandbox` config or a reference to a config-only function of that type. Enables the DeepAgents execution backend. |
 | `max_research_concurrency` | `int` | `6` | Maximum `ResearchQuery` objects accepted and run concurrently by one `run_research_batch` call. |
+| `max_researcher_model_calls` | `int` | `100` | Maximum normal model turns per researcher worker before one tools-disabled finalization turn. |
 | `max_concurrent_source_tool_calls` | `int` | `5` | Shared cap on concurrent source-tool calls across all researcher workers in the run. |
 | `max_source_tool_batch_size` | `int` | `4` | Maximum concrete inputs accepted by a batch-capable source-tool wrapper in one call. |
 | `resource_limits` | object | See below | Non-disableable per-job request, graph, state, and provider-call ceilings. Values may be reduced but cannot exceed the defaults. |

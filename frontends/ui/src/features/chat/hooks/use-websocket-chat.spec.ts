@@ -3,7 +3,7 @@
 
 import { renderHook, act, waitFor } from '@testing-library/react'
 import { vi, describe, test, expect, beforeEach, afterEach } from 'vitest'
-import { useWebSocketChat } from './use-websocket-chat'
+import { useWebSocketChat, deriveStepContent, deriveArgSummary } from './use-websocket-chat'
 import { useAuth } from '@/adapters/auth'
 import { createNATWebSocketClient } from '@/adapters/api/websocket-client'
 
@@ -2305,5 +2305,78 @@ describe('useWebSocketChat -- token rotation', () => {
     )
     expect(mockWsClient.sendMessage).not.toHaveBeenCalled()
     expect(mockSetLoading).toHaveBeenCalledWith(true)
+  })
+})
+
+describe('deriveStepContent -- trace steps store output, not the prompt input', () => {
+  const PRIOR_ASSISTANT_ANSWER =
+    'A gene is a segment of DNA that codes for a protein, while a genome is the ' +
+    'complete set of genetic material in an organism.'
+
+  test('intent-classifier (non-folded) drops the prior-answer input, keeps the output', () => {
+    const payload =
+      `**Function Input:** ${PRIOR_ASSISTANT_ANSWER}\n` +
+      '**Function Output:** intent=visualization'
+
+    const derived = deriveStepContent(payload)
+
+    expect(derived).toContain('intent=visualization')
+    expect(derived).not.toContain('Gene')
+    expect(derived).not.toContain('genome')
+    expect(derived).not.toContain(PRIOR_ASSISTANT_ANSWER)
+  })
+
+  test('shallow research agent (non-folded) drops the prior-answer input, keeps the output', () => {
+    const payload =
+      `**Function Input:** ${PRIOR_ASSISTANT_ANSWER}\n` +
+      '**Function Output:** NVDA rose from 12 to 118 over five years.'
+
+    const derived = deriveStepContent(payload)
+
+    expect(derived).toContain('NVDA rose from 12 to 118 over five years.')
+    expect(derived).not.toContain('Gene')
+    expect(derived).not.toContain('genome')
+    expect(derived).not.toContain(PRIOR_ASSISTANT_ANSWER)
+  })
+
+  test('folded reasoning step still keeps only its output half', () => {
+    const payload = '**Function Input:**\nq\n**Function Output:**\nthe note'
+
+    expect(deriveStepContent(payload)).toBe('the note')
+  })
+
+  test('marker-less payload passes through unchanged', () => {
+    expect(deriveStepContent('a plain note')).toBe('a plain note')
+  })
+})
+
+describe('deriveArgSummary -- only real tools keep an arg summary, agents leak no history', () => {
+  const PRIOR_ASSISTANT_ANSWER =
+    'A gene is a segment of DNA that codes for a protein, while a genome is the ' +
+    'complete set of genetic material in an organism.'
+
+  test('an intent-classifier step gets no arg summary, so its prior-answer input never leaks', () => {
+    const payload = `**Function Input:** ${PRIOR_ASSISTANT_ANSWER}\n**Function Output:** shallow`
+
+    expect(deriveArgSummary('intent_classifier', payload)).toBeUndefined()
+  })
+
+  test('a shallow-research-agent step gets no arg summary either', () => {
+    const payload = `**Function Input:** ${PRIOR_ASSISTANT_ANSWER}\n**Function Output:** NVDA rose from 12 to 118.`
+
+    expect(deriveArgSummary('shallow_research_agent', payload)).toBeUndefined()
+  })
+
+  test('a real web-search tool keeps its query and carries no prior-answer text', () => {
+    const query = 'NVDA stock price 5 year historical data'
+    const payload = `**Function Input:** ${query}\n**Function Output:** Prices ranged from 12 to 118.`
+
+    const summary = deriveArgSummary('web_search_tool', payload)
+
+    expect(summary).toBeDefined()
+    expect(summary).toContain(query)
+    expect(summary).not.toContain('Gene')
+    expect(summary).not.toContain('genome')
+    expect(summary).not.toContain(PRIOR_ASSISTANT_ANSWER)
   })
 })

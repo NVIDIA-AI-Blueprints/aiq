@@ -160,6 +160,18 @@ def _remove_source_sections(report_text: str, spans: Sequence[tuple[int, int]]) 
     return "".join(pieces)
 
 
+_TRAILING_REFERENCE_HEADING_RE = re.compile(
+    r"\n{1,2}(?:#{1,3}\s+)?(?:References|Sources):?\s*$|\n{1,2}\*\*(?:References|Sources):?\*\*\s*$",
+    re.IGNORECASE,
+)
+_SOURCE_HEADING_RE = re.compile(r"^## Sources\s*$", re.IGNORECASE | re.MULTILINE)
+
+
+def _format_chat_references(report_text: str) -> str:
+    content = _TRAILING_REFERENCE_HEADING_RE.sub("", report_text.rstrip()).rstrip()
+    return _SOURCE_HEADING_RE.sub("**References:**", content, count=1)
+
+
 def _append_minimal_citation(report_text: str, source: SourceEntry) -> str:
     """Append one verified citation when the model omitted references."""
     citation_target = source.url or source.citation_key
@@ -630,7 +642,7 @@ class ShallowResearcherAgent:
                         len(final_verification.valid_citations),
                     )
                     raise CitationIntegrityError()
-                content = final_verification.verified_report
+                content = _format_chat_references(final_verification.verified_report)
                 final_cited_urls = list(
                     dict.fromkeys(
                         citation["url"] for citation in final_verification.valid_citations if citation.get("url")

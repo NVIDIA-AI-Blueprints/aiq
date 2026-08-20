@@ -78,6 +78,18 @@ def test_text_to_sql_request_supports_optional_database_name() -> None:
     assert request.max_rows == 1_000
 
 
+@pytest.mark.parametrize("database_name", ["", "finance prod", "finance/other", "x" * 129])
+def test_gsf_requests_reject_invalid_database_names(database_name: str) -> None:
+    with pytest.raises(ValidationError):
+        CatalogSearchRequest(question="Find revenue metrics", database_name=database_name)
+    with pytest.raises(ValidationError):
+        TextToSQLRequest(question="Show quarterly revenue", database_name=database_name)
+    with pytest.raises(ValidationError):
+        TextToPQLRequest(question="Predict churn", database_name=database_name)
+    with pytest.raises(ValidationError):
+        QueryContextRequest(question="What revenue data is available?", database_name=database_name)
+
+
 def test_text_to_pql_request_omits_database_selector_by_default() -> None:
     """Leave prediction routing unscoped for normal AI-Q calls."""
 

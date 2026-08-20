@@ -16,7 +16,7 @@ import { formatTime } from '@/shared/utils/format-time'
 
 export interface UserMessageProps {
   content: string
-  /** Timestamp of the message (Date or ISO string from persisted state) */
+  /** Timestamp rendered below the bubble, right-aligned. */
   timestamp?: Date | string
 }
 
@@ -26,12 +26,12 @@ export interface UserMessageProps {
 export const UserMessage: FC<UserMessageProps> = ({ content, timestamp }) => {
   return (
     <Flex justify="end" className="w-full">
-      <Flex direction="col" align="end" className="max-w-[80%]">
-        <Flex className="bg-surface-sunken-opaque border border-base rounded-bl-xl rounded-tl-xl rounded-tr-xl p-4">
+      <Flex direction="col" align="end" className="max-w-[74%]">
+        <div className="user-message-bubble break-words rounded-[var(--radius-card)] rounded-br-[2px] border px-4 py-3">
           <MarkdownRenderer content={content} />
-        </Flex>
+        </div>
         {timestamp && (
-          <Text kind="body/regular/xs" className="text-subtle mt-1 ml-3 self-start">
+          <Text kind="body/regular/xs" className="mono-meta text-subtle mr-1 mt-1">
             {formatTime(timestamp)}
           </Text>
         )}

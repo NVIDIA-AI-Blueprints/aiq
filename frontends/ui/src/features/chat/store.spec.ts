@@ -11,6 +11,7 @@ const mockLayoutState = vi.hoisted(() => ({
   enabledDataSourceIds: ['web_search'],
   availableDataSources: [{ id: 'web_search' }, { id: 'knowledge_base', requires_auth: true }],
   setEnabledDataSources: vi.fn(),
+  resetComposerState: vi.fn(),
 }))
 const mockDeepResearchApi = vi.hoisted(() => ({
   getJobStatus: vi.fn(),
@@ -41,6 +42,7 @@ describe('useChatStore', () => {
     localStorage.removeItem(STORAGE_KEY)
     mockLayoutState.closeRightPanel.mockClear()
     mockLayoutState.setEnabledDataSources.mockClear()
+    mockLayoutState.resetComposerState.mockClear()
     mockLayoutState.enabledDataSourceIds = ['web_search']
     mockLayoutState.availableDataSources = [
       { id: 'web_search' },
@@ -178,6 +180,30 @@ describe('useChatStore', () => {
       useChatStore.getState().setCurrentUser(null)
 
       expect(useChatStore.getState().currentConversation).toBeNull()
+    })
+
+    test('clears layout composer state on account switch', () => {
+      useChatStore.setState({ currentUserId: 'user-1' })
+
+      useChatStore.getState().setCurrentUser('user-2')
+
+      expect(mockLayoutState.resetComposerState).toHaveBeenCalledTimes(1)
+    })
+
+    test('clears layout composer state on logout', () => {
+      useChatStore.setState({ currentUserId: 'user-1' })
+
+      useChatStore.getState().setCurrentUser(null)
+
+      expect(mockLayoutState.resetComposerState).toHaveBeenCalledTimes(1)
+    })
+
+    test('does not clear composer state when the user is unchanged', () => {
+      useChatStore.setState({ currentUserId: 'user-1' })
+
+      useChatStore.getState().setCurrentUser('user-1')
+
+      expect(mockLayoutState.resetComposerState).not.toHaveBeenCalled()
     })
   })
 
@@ -581,6 +607,26 @@ describe('useChatStore', () => {
       expect(msg.role).toBe('user')
       expect(msg.content).toBe('Hello')
       expect(useChatStore.getState().currentConversation?.messages).toHaveLength(1)
+    })
+
+    test('captures selectedModel from metadata onto the message', () => {
+      const conv: Conversation = {
+        id: 'conv-1',
+        userId: 'user-1',
+        title: '',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      useChatStore.setState({
+        currentUserId: 'user-1',
+        currentConversation: conv,
+        conversations: [conv],
+      })
+
+      const msg = useChatStore.getState().addUserMessage('Hello', { selectedModel: 'gpt-5.4' })
+
+      expect(msg.selectedModel).toBe('gpt-5.4')
     })
 
     test('updates title on first message', () => {
@@ -1256,6 +1302,83 @@ describe('useChatStore', () => {
       expect(useChatStore.getState().activeThinkingStepId).toBeNull()
     })
 
+    test('completeThinkingStep sets status success and completedAt', () => {
+      setupUserMessageContext()
+
+      const stepId = useChatStore.getState().addThinkingStep({
+        category: 'tools',
+        functionName: 'web_search_tool',
+        displayName: 'Searching the web',
+        content: '',
+        isComplete: false,
+        status: 'running',
+      })
+
+      useChatStore.getState().completeThinkingStep(stepId)
+
+      const step = useChatStore.getState().thinkingSteps[0]
+      expect(step.status).toBe('success')
+      expect(step.completedAt).toBeInstanceOf(Date)
+    })
+
+    test('completeThinkingStep preserves an existing error status', () => {
+      setupUserMessageContext()
+
+      const stepId = useChatStore.getState().addThinkingStep({
+        category: 'tools',
+        functionName: 'web_search_tool',
+        displayName: 'Searching the web',
+        content: '',
+        isComplete: false,
+        status: 'error',
+      })
+
+      useChatStore.getState().completeThinkingStep(stepId)
+
+      expect(useChatStore.getState().thinkingSteps[0].status).toBe('error')
+    })
+
+    test('failThinkingStep marks step failed with error status and completedAt', () => {
+      setupUserMessageContext()
+
+      const stepId = useChatStore.getState().addThinkingStep({
+        category: 'tools',
+        functionName: 'web_search_tool',
+        displayName: 'Searching the web',
+        content: '',
+        isComplete: false,
+        status: 'running',
+      })
+
+      useChatStore.getState().failThinkingStep(stepId)
+
+      const step = useChatStore.getState().thinkingSteps[0]
+      expect(step.isComplete).toBe(true)
+      expect(step.status).toBe('error')
+      expect(step.completedAt).toBeInstanceOf(Date)
+      expect(useChatStore.getState().activeThinkingStepId).toBeNull()
+    })
+
+    test('failThinkingStep persists error status to the owning message', () => {
+      const userMessageId = setupUserMessageContext()
+
+      const stepId = useChatStore.getState().addThinkingStep({
+        category: 'tools',
+        functionName: 'web_search_tool',
+        displayName: 'Searching the web',
+        content: '',
+        isComplete: false,
+        status: 'running',
+      })
+
+      useChatStore.getState().failThinkingStep(stepId)
+
+      const message = useChatStore
+        .getState()
+        .currentConversation?.messages.find((m) => m.id === userMessageId)
+      expect(message?.thinkingSteps?.[0].status).toBe('error')
+    })
+
     test('clearThinkingSteps clears all steps', () => {
       setupUserMessageContext()
 
@@ -1360,13 +1483,11 @@ describe('useChatStore', () => {
       expect(stepsForMessage2[0].functionName).toBe('tool1')
     })
 
-    test('getThinkingStepsForMessage filters out deep research steps', () => {
+    test('getThinkingStepsForMessage includes deep research steps so the inline trace mirrors the live run', () => {
       useChatStore.getState().setCurrentUser('test-user')
 
-      // Add user message
       const message = useChatStore.getState().addUserMessage('Test message')
 
-      // Add WebSocket thinking step (should be included)
       useChatStore.getState().addThinkingStep({
         category: 'agents',
         functionName: 'websocket_agent',
@@ -1376,7 +1497,6 @@ describe('useChatStore', () => {
         isDeepResearch: false,
       })
 
-      // Add deep research thinking step (should be filtered out)
       useChatStore.getState().addThinkingStep({
         category: 'agents',
         functionName: 'deep_research_agent',
@@ -1386,13 +1506,14 @@ describe('useChatStore', () => {
         isDeepResearch: true,
       })
 
-      // Get steps for the message
-      const steps = useChatStore.getState().getThinkingStepsForMessage(message.id)
+      const ephemeral = useChatStore.getState().getThinkingStepsForMessage(message.id)
+      const persisted =
+        useChatStore
+          .getState()
+          .currentConversation?.messages.find((m) => m.id === message.id)?.thinkingSteps ?? []
 
-      // Should only include the WebSocket step, not the deep research step
-      expect(steps).toHaveLength(1)
-      expect(steps[0].functionName).toBe('websocket_agent')
-      expect(steps[0].isDeepResearch).toBe(false)
+      expect(ephemeral.map((s) => s.functionName)).toEqual(['websocket_agent', 'deep_research_agent'])
+      expect(persisted.map((s) => s.functionName)).toEqual(['websocket_agent', 'deep_research_agent'])
     })
   })
 
@@ -1946,6 +2067,27 @@ describe('useChatStore', () => {
       ])
     })
 
+    test('does not fabricate workflow completion from a successful job status', () => {
+      useChatStore.setState({
+        deepResearchTodos: [
+          { id: 'todo-1', content: 'Legacy task', status: 'in_progress' },
+        ],
+        deepResearchAgents: [
+          {
+            id: 'agent-start-only',
+            name: 'researcher-agent',
+            status: 'running',
+            startedAt: new Date(),
+          },
+        ],
+      })
+
+      useChatStore.getState().stopAllDeepResearchSpinners(true)
+
+      expect(useChatStore.getState().deepResearchTodos[0]?.status).toBe('completed')
+      expect(useChatStore.getState().deepResearchAgents[0]?.status).toBe('error')
+    })
+
     test('does NOT add error card when user message has no thinking steps', () => {
       const conv = createConversation([{ role: 'user', messageType: 'user', content: 'Hello' }])
 
@@ -2185,4 +2327,5 @@ describe('useChatStore', () => {
       expect(failureBanner).toBeTruthy()
     })
   })
+
 })

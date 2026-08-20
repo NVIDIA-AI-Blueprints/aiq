@@ -56,12 +56,20 @@ function_groups:
     auth:
       mode: password
       email: ${GSF_EMAIL}
-      password: ${GSF_PASSWORD}
+      password: GSF_PASSWORD
+    include:
+      - catalog_search
+      - text_to_sql
 ```
 
-Password mode creates one GSF session when the function group starts, reuses its cookie for all tool calls, and signs
-out when the function group closes. The client does not fall back between authentication methods. Do not put
-credentials directly in the configuration file.
+When `auth` is omitted, the existing request-scoped AI-Q user-token flow is
+used. Password mode carries only the `password` variable name through NAT
+configuration and distributed-worker serialization. The worker reads that
+variable directly from its process environment immediately before creating the
+GSF client. It creates one GSF session, reuses its cookie for local development
+or evaluation calls, and signs out when the group closes. Every worker must
+receive the named environment variable. The client does not fall back between
+authentication methods.
 
 ## API mapping
 
