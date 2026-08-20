@@ -258,12 +258,22 @@ The server starts at `http://localhost:8000`. The API docs are at `http://localh
 
 ### Docker Compose
 
+The FRAG workflow requires separately deployed RAG query and ingestion services.
+Set both endpoints to addresses that are reachable from the `aiq-agent`
+container. Container-local `localhost` points back to the AI-Q backend and is not
+a valid cross-service address.
+
+From the repository root:
+
 ```bash
-cd deploy
-cp .env.example .env
-# Edit .env with your API keys and set:
+cp deploy/.env.example deploy/.env
+# Edit deploy/.env with your API keys and these container-reachable values:
 # BACKEND_CONFIG=/app/configs/config_web_frag.yml
-docker compose up
+# RAG_SERVER_URL=http://rag-server:8081/v1
+# RAG_INGEST_URL=http://ingestor-server:8082/v1
+docker compose --env-file deploy/.env \
+  -f deploy/compose/docker-compose.yaml \
+  up -d --build --wait
 ```
 
 ### Test the Pipeline

@@ -109,13 +109,25 @@ instrument LangChain directly can present a different tree.
 
 ## Weights & Biases Weave
 
-[Weave](https://wandb.ai/site/weave) provides experiment tracking and trace logging integrated with the Weights & Biases platform. NAT includes Weave support via the `weave` extra (`nvidia-nat[weave]`), which is already installed in this project.
+[Weave](https://wandb.ai/site/weave) provides experiment tracking and trace
+logging integrated with the Weights & Biases platform. Weave support is an
+optional NAT extra and is not installed by default.
 
 ### Setup
 
-1. Create a [Weights & Biases](https://wandb.ai/) account if you do not have one.
+1. Install the exporter into your local environment:
 
-2. Set the API key in `deploy/.env`:
+   ```bash
+   uv pip install "nvidia-nat[weave]==1.8.0"
+   ```
+
+   For production or container deployments, add this exact pinned dependency
+   to the image build and rebuild the image. Installing it into a running
+   container is not a durable deployment.
+
+2. Create a [Weights & Biases](https://wandb.ai/) account if you do not have one.
+
+3. Set the API key in `deploy/.env`:
 
    ```bash
    WANDB_API_KEY=your-wandb-api-key
@@ -127,7 +139,7 @@ instrument LangChain directly can present a different tree.
    wandb login
    ```
 
-3. Enable Weave tracing in your YAML config:
+4. Enable Weave tracing in your YAML config:
 
    ```yaml
    general:
