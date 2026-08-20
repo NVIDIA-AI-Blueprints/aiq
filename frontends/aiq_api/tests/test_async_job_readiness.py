@@ -146,7 +146,10 @@ async def test_bootstrap_does_not_alter_incomplete_nat_schema(tmp_path):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("table", ["job_info", "job_access", "job_events", "artifacts"])
+@pytest.mark.parametrize(
+    "table",
+    ["job_info", "job_access", "job_events", "artifacts", "deep_research_admission"],
+)
 async def test_probe_reports_dropped_required_table_as_schema_unavailable(tmp_path, table):
     import aiq_api.routes.jobs as jobs_routes
     from aiq_api.jobs.event_store import EventStore
@@ -159,6 +162,41 @@ async def test_probe_reports_dropped_required_table_as_schema_unavailable(tmp_pa
     engine = EventStore._get_or_create_async_engine(db_url)
     async with engine.begin() as conn:
         await conn.execute(text(f"DROP TABLE {table}"))
+
+    assert await jobs_routes._probe_async_job_readiness(
+        dask_available=True,
+        job_store=store,
+        scheduler_address="tcp://scheduler.invalid:8786",
+        db_url=db_url,
+        config_path=str(config_path),
+        submit_route_registered=True,
+    ) == {"reason": "async_jobs_unavailable", "db": "schema_unavailable"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "column",
+    [
+        "job_id",
+        "reservation_token",
+        "owner_auth_type",
+        "owner_subject",
+        "admitted_at",
+        "reservation_expires_at",
+    ],
+)
+async def test_probe_reports_incomplete_admission_schema_as_unavailable(tmp_path, column):
+    import aiq_api.routes.jobs as jobs_routes
+    from aiq_api.jobs.event_store import EventStore
+
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    config_path = tmp_path / "config.yml"
+    config_path.write_text("functions: {}\n", encoding="utf-8")
+    store = _job_store(db_url)
+    await jobs_routes._bootstrap_async_job_storage(db_url, store)
+    engine = EventStore._get_or_create_async_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.execute(text(f"ALTER TABLE deep_research_admission RENAME COLUMN {column} TO missing_{column}"))
 
     assert await jobs_routes._probe_async_job_readiness(
         dask_available=True,
@@ -200,6 +238,10 @@ async def test_probe_reports_scheduler_failure_and_timeout(monkeypatch, tmp_path
         jobs_routes,
         "_table_names",
         AsyncMock(return_value=set(jobs_routes._REQUIRED_ASYNC_JOB_TABLES)),
+    )
+    monkeypatch.setattr(
+        "aiq_api.jobs.admission.validate_deep_research_admission_table",
+        MagicMock(),
     )
 
     store.dask_client.sync.side_effect = OSError("scheduler unavailable")
@@ -295,33 +337,50 @@ async def test_missing_config_health_and_submit_are_deterministic(route_dependen
 
 
 @pytest.mark.asyncio
-async def test_bootstrap_schema_failure_is_exposed_by_health(route_dependencies, monkeypatch, tmp_path):
-    jobs_routes, _submit_job, _encryption_submit = route_dependencies
+async def test_bootstrap_failure_aborts_startup_and_recovery_registers_full_routes(
+    route_dependencies,
+    monkeypatch,
+    tmp_path,
+):
+    jobs_routes, submit_job, encryption_submit = route_dependencies
     config_path = tmp_path / "config.yml"
     config_path.write_text("functions: {}\n", encoding="utf-8")
-    store = MagicMock()
-    store.get_job = AsyncMock(side_effect=RuntimeError("missing mapped column"))
-    store.dask_client.scheduler_info.return_value = {"workers": {}}
-    monkeypatch.setattr(jobs_routes, "_bootstrap_async_job_storage", AsyncMock(side_effect=RuntimeError("schema")))
-    monkeypatch.setattr(
-        jobs_routes,
-        "_table_names",
-        AsyncMock(return_value=set(jobs_routes._REQUIRED_ASYNC_JOB_TABLES)),
-    )
-    app = FastAPI()
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    store = _job_store(db_url)
+    bootstrap = AsyncMock(side_effect=[RuntimeError("schema"), None])
+    readiness = AsyncMock(return_value=None)
+    monkeypatch.setattr(jobs_routes, "_bootstrap_async_job_storage", bootstrap)
+    monkeypatch.setattr(jobs_routes, "_probe_async_job_readiness", readiness)
+    worker = _worker(job_store=store, config_path=str(config_path), db_url=db_url)
+
+    with pytest.raises(RuntimeError, match="schema"):
+        await jobs_routes.register_job_routes(FastAPI(), _builder(), worker)
+
+    recovered_app = FastAPI()
     await jobs_routes.register_job_routes(
-        app,
+        recovered_app,
         _builder(),
-        _worker(job_store=store, config_path=str(config_path), db_url="sqlite+aiosqlite:///unused.db"),
+        worker,
     )
 
-    with TestClient(app) as client:
-        response = client.get("/health")
+    route_paths = {route.path for route in recovered_app.routes if isinstance(route, APIRoute)}
+    assert "/v1/jobs/async/job/{job_id}" in route_paths
+    assert "/v1/jobs/async/job/{job_id}/report" in route_paths
+    assert len(_submit_routes(recovered_app)) == 1
 
-    assert response.status_code == 503
-    assert response.json()["reason"] == "async_jobs_unavailable"
-    assert response.json()["db"] == "schema_unavailable"
-    assert len(_submit_routes(app)) == 1
+    with TestClient(recovered_app) as client:
+        health = client.get("/health")
+        submit = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "deep_researcher", "input": "question"},
+        )
+
+    assert health.status_code == 200
+    assert submit.status_code == 200
+    assert bootstrap.await_count == 2
+    assert readiness.await_count == 2
+    submit_job.assert_awaited_once()
+    encryption_submit.assert_awaited_once()
 
 
 @pytest.mark.asyncio

@@ -67,7 +67,7 @@ logger = logging.getLogger(__name__)
 
 _ASYNC_JOB_READINESS_TIMEOUT_SECONDS = 3.0
 _READINESS_JOB_ID = "__aiq_readiness_probe__"
-_REQUIRED_ASYNC_JOB_TABLES = frozenset({"job_info", "job_access", "job_events", "artifacts"})
+_REQUIRED_ASYNC_JOB_TABLES = frozenset({"job_info", "job_access", "job_events", "artifacts", "deep_research_admission"})
 
 
 def _is_readable_regular_file(path: str) -> bool:
@@ -161,6 +161,14 @@ async def _probe_async_job_readiness(
         missing_tables = _REQUIRED_ASYNC_JOB_TABLES - tables
         if missing_tables:
             logger.warning("Async-job readiness is missing required database tables: %s", sorted(missing_tables))
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        try:
+            from ..jobs.admission import validate_deep_research_admission_table
+
+            await asyncio.to_thread(validate_deep_research_admission_table, db_url)
+        except Exception as exc:
+            logger.warning("Async-job readiness admission schema read failed error_type=%s", type(exc).__name__)
             return {"reason": "async_jobs_unavailable", "db": db_status}
 
         try:
@@ -787,11 +795,7 @@ async def register_job_routes(app: FastAPI, builder: WorkflowBuilder, worker: Fa
         logger.error("Config file path is missing, unreadable, or not a regular file")
         static_failure = "configuration_missing"
     else:
-        try:
-            await _bootstrap_async_job_storage(db_url, job_store)
-        except Exception as exc:
-            logger.error("Async-job storage bootstrap failed error_type=%s", type(exc).__name__)
-            static_failure = "async_jobs_unavailable"
+        await _bootstrap_async_job_storage(db_url, job_store)
 
     if static_failure is not None:
 

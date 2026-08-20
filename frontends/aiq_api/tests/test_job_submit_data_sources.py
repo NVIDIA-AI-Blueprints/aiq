@@ -89,6 +89,7 @@ async def submit_app(monkeypatch, tmp_path):
 
     monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())
     monkeypatch.setattr(admission, "ensure_deep_research_admission_table", MagicMock())
+    monkeypatch.setattr(admission, "validate_deep_research_admission_table", MagicMock())
     monkeypatch.setattr(
         jobs_routes,
         "require_verified_principal",
