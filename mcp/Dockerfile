@@ -18,6 +18,7 @@ RUN rm -f /etc/apt/apt.conf.d/docker-clean \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         build-essential \
         ca-certificates \
+        git \
     && rm -rf /var/lib/apt/lists/*
 
 RUN python -m pip install --no-cache-dir "uv==${UV_VERSION}"
