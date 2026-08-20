@@ -96,6 +96,17 @@ def _job_escalation_message(kind: str, job_id: str) -> str:
     return json.dumps({"type": "job_escalation", "kind": kind, "job_id": job_id})
 
 
+def _is_blank_message_content(content: Any) -> bool:
+    """Return True when a model message has no user-visible text."""
+    if content is None:
+        return True
+    if isinstance(content, str):
+        return not content.strip()
+    if isinstance(content, list):
+        return not any(str(item).strip() for item in content)
+    return not str(content).strip()
+
+
 class ChatResearcherAgent:
     """
     Orchestrates the full chat research workflow.
@@ -329,6 +340,16 @@ class ChatResearcherAgent:
                 None,
             )
             if final_ai_message:
+                if _is_blank_message_content(final_ai_message.content):
+                    logger.warning("Shallow research returned an empty final response; escalating to deep research")
+                    return {
+                        "shallow_result": ShallowResult(
+                            answer="",
+                            confidence="low",
+                            escalate_to_deep=True,
+                            escalation_reason="Shallow research returned an empty final response",
+                        )
+                    }
                 return {"messages": [final_ai_message], "shallow_result": None}
             if new_messages:
                 return {"messages": [new_messages[-1]], "shallow_result": None}
@@ -555,13 +576,13 @@ class ChatResearcherAgent:
                 if isinstance(m, AIMessage):
                     last_ai_content = m.content if hasattr(m, "content") else str(m)
                     break
-            if not last_ai_content:
+            if last_ai_content is None:
                 return END
 
-            last_content = last_ai_content if isinstance(last_ai_content, str) else str(last_ai_content)
-            if not last_content.strip():
+            if _is_blank_message_content(last_ai_content):
                 return "deep_research"
 
+            last_content = last_ai_content if isinstance(last_ai_content, str) else str(last_ai_content)
             tail = last_content[-800:].lower() if len(last_content) > 800 else last_content.lower()
             escalation_keywords = ["i don't have enough information", "unable to find", "need more research"]
             if any(kw in tail for kw in escalation_keywords):

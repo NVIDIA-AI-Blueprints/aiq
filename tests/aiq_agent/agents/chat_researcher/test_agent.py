@@ -249,6 +249,37 @@ class TestChatResearcherAgent:
         assert result.get("workflow_outcome") is None
 
     @pytest.mark.asyncio
+    async def test_empty_shallow_response_escalates_to_deep_research(
+        self,
+        mock_intent_classifier,
+        mock_deep_research,
+        mock_clarifier,
+    ):
+        """A blank shallow final answer should not terminate the chat turn."""
+
+        async def empty_shallow(state_input):
+            result = MagicMock()
+            result.messages = list(state_input.messages) + [AIMessage(content="")]
+            return result
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=mock_intent_classifier,
+            shallow_research_fn=empty_shallow,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+            enable_clarifier=False,
+            enable_escalation=True,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="What is CUDA?")]),
+            thread_id="test-empty-shallow-escalates",
+        )
+
+        assert result["messages"][-1].content == "Here's a comprehensive report."
+        assert result.get("workflow_outcome") is None
+
+    @pytest.mark.asyncio
     async def test_run_logs_query_metadata_without_customer_content(
         self,
         mock_intent_classifier,
