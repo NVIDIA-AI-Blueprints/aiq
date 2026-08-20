@@ -958,6 +958,126 @@ class TestShallowResearcherSourceRegistryGating:
         )
 
     @pytest.mark.asyncio
+    async def test_default_emergency_synthesis_citation_integrity_failure_returns_draft(
+        self, mock_llm_provider, mock_llm
+    ):
+        """Emergency synthesis still returns the draft when citation enforcement is disabled."""
+        populate_from_config(
+            [
+                {
+                    "id": "mcp_time",
+                    "name": "MCP Time",
+                    "description": "Get current time and timezone information through MCP.",
+                    "tools": ["mcp_time"],
+                },
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "description": "Search the web for real-time information.",
+                    "tools": ["web_search_with_urls"],
+                },
+            ],
+            group_names={"mcp_time"},
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"},
+                {"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "2"},
+            ],
+        )
+        blank_forced_synthesis = AIMessage(
+            content="",
+            additional_kwargs={"reasoning_content": "The model spent its budget on hidden reasoning."},
+            response_metadata={"finish_reason": "length"},
+        )
+        source_only_draft = AIMessage(
+            content=(
+                "CUDA is a parallel computing platform.\n\n"
+                "**References:**\n- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, blank_forced_synthesis, source_only_draft])
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[mcp_time__get_current_time, web_search_with_urls],
+            max_tool_iterations=1,
+            callbacks=[callback],
+        )
+
+        result = await agent.run(
+            ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA? Also note the time.")])
+        )
+
+        assert "CUDA is a parallel computing platform." in result.messages[-1].content
+        assert mock_llm.ainvoke.await_count == 3
+        callback.emit_final_report.assert_called_once_with(
+            result.messages[-1].content,
+            cited_urls=["https://docs.nvidia.com/cuda/"],
+        )
+
+    @pytest.mark.asyncio
+    async def test_enforced_emergency_synthesis_citation_integrity_failure_raises(self, mock_llm_provider, mock_llm):
+        """Strict citation mode fails closed when the emergency fallback cannot restore integrity."""
+        populate_from_config(
+            [
+                {
+                    "id": "mcp_time",
+                    "name": "MCP Time",
+                    "description": "Get current time and timezone information through MCP.",
+                    "tools": ["mcp_time"],
+                },
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "description": "Search the web for real-time information.",
+                    "tools": ["web_search_with_urls"],
+                },
+            ],
+            group_names={"mcp_time"},
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"},
+                {"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "2"},
+            ],
+        )
+        blank_forced_synthesis = AIMessage(
+            content="",
+            additional_kwargs={"reasoning_content": "The model spent its budget on hidden reasoning."},
+            response_metadata={"finish_reason": "length"},
+        )
+        source_only_draft = AIMessage(
+            content=(
+                "CUDA is a parallel computing platform.\n\n"
+                "**References:**\n- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[tool_call_response, blank_forced_synthesis, source_only_draft, source_only_draft]
+        )
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[mcp_time__get_current_time, web_search_with_urls],
+            max_tool_iterations=1,
+            enforce_citations=True,
+            callbacks=[callback],
+        )
+
+        with pytest.raises(CitationIntegrityError, match="citation_integrity_lost"):
+            await agent.run(
+                ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA? Also note the time.")])
+            )
+
+        assert mock_llm.ainvoke.await_count == 4
+        for invocation in mock_llm.ainvoke.await_args_list[1:]:
+            assert invocation.kwargs["config"]["tags"] == [SUPPRESS_OUTPUT_ARTIFACT_TAG]
+        callback.emit_final_report.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_failed_multi_source_repair_is_not_published(self, mock_llm_provider, mock_llm):
         """A single unsuccessful repair fails closed without emitting an uncited report."""
         populate_from_config(
