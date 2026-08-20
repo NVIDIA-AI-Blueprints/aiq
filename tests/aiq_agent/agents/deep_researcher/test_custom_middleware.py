@@ -50,6 +50,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import StructuredRespons
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoQuotaMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
+from aiq_agent.agents.deep_researcher.custom_middleware import ToolRetryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
 from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
 from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
@@ -58,6 +59,7 @@ from aiq_agent.agents.deep_researcher.tools.source_registry import build_get_ver
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.data_source_registry import populate_from_config
 from aiq_agent.common.data_source_registry import reset_registry
+from aiq_agent.common.logging_utils import log_content_metadata
 
 
 class _ToolBindingFakeChatModel(FakeMessagesListChatModel):
@@ -1057,6 +1059,30 @@ class TestToolNameSanitizationMiddleware:
         assert not result.result[0].tool_calls
 
 
+class TestToolRetryMiddleware:
+    """Tests for metadata-safe tool retry diagnostics."""
+
+    @pytest.mark.asyncio
+    async def test_retry_log_redacts_model_tool_name_and_error_detail(self, caplog):
+        tool_name = "tool_VDR_MODEL_SECRET_7e91"  # pragma: allowlist secret
+        error_detail = "backend VDR_TOOL_ERROR_SECRET_91ad"  # pragma: allowlist secret
+        request = SimpleNamespace(tool_call={"name": tool_name})
+        handler = AsyncMock(side_effect=[RuntimeError(error_detail), "ok"])
+        middleware = ToolRetryMiddleware(max_retries=1, initial_delay=0)
+
+        with caplog.at_level(logging.WARNING, logger="aiq_agent.agents.deep_researcher.custom_middleware"):
+            result = await middleware.awrap_tool_call(request, handler)
+
+        assert result == "ok"
+        assert handler.await_count == 2
+        assert tool_name not in caplog.text
+        assert error_detail not in caplog.text
+        assert log_content_metadata(tool_name) in caplog.text
+        assert log_content_metadata(error_detail) in caplog.text
+        assert "attempt 1/2" in caplog.text
+        assert "error_type=RuntimeError" in caplog.text
+
+
 class TestToolVisibilityMiddleware:
     """Tests for hiding tools from model requests."""
 
@@ -1361,6 +1387,21 @@ class TestSourceRegistryMiddleware:
 
         urls = {s.url for s in middleware.registry.all_sources()}
         assert urls == {"https://a.com/page", "https://b.com/page"}
+
+    @pytest.mark.asyncio
+    async def test_captured_source_log_does_not_expose_tool_result(self, middleware, caplog):
+        secret = "nvapi-vdr-fake-secret-do-not-log"  # pragma: allowlist secret
+        content = f"Found result at https://example.com/page?token={secret}"
+        handler = AsyncMock(return_value=self._make_tool_result(content))
+        request = self._make_request("advanced_web_search_tool")
+        caplog.set_level(logging.INFO, logger="aiq_agent.agents.deep_researcher.custom_middleware")
+
+        await middleware.awrap_tool_call(request, handler)
+
+        assert middleware.registry.all_sources()
+        assert secret not in caplog.text
+        assert "https://example.com/page" not in caplog.text
+        assert "Captured 1 source(s)" in caplog.text
 
     @pytest.mark.asyncio
     async def test_typed_error_result_is_not_captured(self, middleware):
@@ -1723,20 +1764,25 @@ class TestSourceRoutingPersistenceMiddleware:
         assert path == "/shared/source_routing.json"
         assert json.loads(content) == self._routing()
 
-    def test_rolls_back_budget_when_backend_rejects_route(self) -> None:
+    def test_rolls_back_budget_when_backend_rejects_route(self, caplog) -> None:
         limits = DeepResearchResourceLimits(max_state_file_count=1)
         ledger = StateBudgetLedger(limits=limits, files={}, sandbox_enabled=True)
         backend = MagicMock()
-        backend.upload_files.return_value = [SimpleNamespace(path="/shared/source_routing.json", error="private")]
+        error_detail = "nvapi-vdr-fake-secret-do-not-log"
+        backend.upload_files.return_value = [SimpleNamespace(path="/shared/source_routing.json", error=error_detail)]
         middleware = SourceRoutingPersistenceMiddleware(
             backend=backend,
             state_budget=ledger,
             resource_limits=limits,
         )
 
-        with pytest.raises(RuntimeError, match="Failed to persist source routing"):
-            middleware.after_agent({"structured_response": self._routing()}, None)
+        with caplog.at_level(logging.ERROR, logger="aiq_agent.agents.deep_researcher.custom_middleware"):
+            with pytest.raises(RuntimeError, match="Failed to persist source routing") as exc:
+                middleware.after_agent({"structured_response": self._routing()}, None)
 
+        assert error_detail not in str(exc.value)
+        assert error_detail not in caplog.text
+        assert log_content_metadata(f"/shared/source_routing.json: {error_detail}") in caplog.text
         ledger.reserve([("/shared/plan.json", b"ok")])
 
     def test_serialized_byte_boundary_uses_dedicated_source_routing_limit(self) -> None:
@@ -1899,11 +1945,13 @@ class TestPlanPersistenceMiddleware:
 
     @pytest.mark.asyncio
     async def test_upload_error_response_propagates(self, caplog):
-        """Non-empty upload errors abort the task; backend detail stays in logs only."""
+        """Non-empty upload errors abort the task without exposing backend detail."""
+
+        error_detail = "nvapi-vdr-fake-secret-do-not-log"
 
         class _ErrorBackend:
             def upload_files(self, files):
-                return [SimpleNamespace(path="/shared/plan.json", error="disk full")]
+                return [SimpleNamespace(path="/shared/plan.json", error=error_detail)]
 
         mw = PlanPersistenceMiddleware(backend=_ErrorBackend())
 
@@ -1911,5 +1959,6 @@ class TestPlanPersistenceMiddleware:
             with pytest.raises(RuntimeError, match="Failed to persist the research plan") as exc:
                 await mw.aafter_agent({"structured_response": {"title": "Plan"}}, runtime=None)
 
-        assert "disk full" not in str(exc.value)  # sanitized out of the raised error
-        assert "disk full" in caplog.text  # but preserved in logs
+        assert error_detail not in str(exc.value)
+        assert error_detail not in caplog.text
+        assert log_content_metadata(f"/shared/plan.json: {error_detail}") in caplog.text

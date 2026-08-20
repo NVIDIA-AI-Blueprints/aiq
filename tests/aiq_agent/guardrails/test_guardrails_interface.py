@@ -15,6 +15,7 @@
 
 """Tests for shared Guardrails middleware dynamic field selection."""
 
+import logging
 from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Annotated
@@ -23,7 +24,9 @@ import pytest
 from pydantic import BaseModel
 
 from aiq_agent.guardrails.dynamic_field_selection import FunctionFieldSelection
+from aiq_agent.guardrails.interface.middleware import _NEMO_GUARDRAILS_RUNTIME_LOGGER
 from aiq_agent.guardrails.interface.middleware import GuardrailsMixin
+from nat.plugins.security.middleware.guardrails.nemo_guardrails_middleware import GuardrailsMiddleware
 
 _TEST_FUNCTION = "test_guarded_function"
 
@@ -96,6 +99,37 @@ def guardrails() -> GuardrailsMixin:
         workflow_functions={_TEST_FUNCTION: FunctionFieldSelection.model_validate({"messages": ["content"]})}
     )
     return guardrails
+
+
+def test_initialization_suppresses_nemo_runtime_context_info_logs(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+):
+    """Guardrails initialization prevents dependency INFO logs from exposing context."""
+
+    def skip_base_initialization(
+        _middleware: GuardrailsMiddleware,
+        config: object,
+        builder: object,
+    ) -> None:
+        del config, builder
+
+    caplog.set_level(logging.INFO, logger=_NEMO_GUARDRAILS_RUNTIME_LOGGER)
+    monkeypatch.setattr(GuardrailsMiddleware, "__init__", skip_base_initialization)
+
+    GuardrailsMixin(config=SimpleNamespace(), builder=SimpleNamespace())
+
+    runtime_logger = logging.getLogger(_NEMO_GUARDRAILS_RUNTIME_LOGGER)
+    runtime_logger.info("event context includes api_key=fake-secret-value")
+    runtime_logger.warning("runtime warning without request context")
+
+    assert runtime_logger.level == logging.WARNING
+    assert "fake-secret-value" not in caplog.text
+    assert "runtime warning without request context" in caplog.text
+
+    runtime_logger.setLevel(logging.ERROR)
+    GuardrailsMixin(config=SimpleNamespace(), builder=SimpleNamespace())
+    assert runtime_logger.level == logging.ERROR
 
 
 def _discovered_function(input_schema: type[BaseModel]) -> SimpleNamespace:

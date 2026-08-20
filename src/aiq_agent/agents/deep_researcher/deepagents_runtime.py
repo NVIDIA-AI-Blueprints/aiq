@@ -46,6 +46,7 @@ BUILTIN_SKILLS_DIR = Path(__file__).with_name("skills")
 BUILTIN_SKILL_SOURCE = "/skills/"
 SHARED_ROUTE = "/shared/"
 SKILL_AGENT_NAMES = frozenset({"researcher-agent", "writer-agent"})
+CHART_SKILL_NAME = "chart-generation"
 DEFAULT_WORKDIR = "/workspace"
 
 
@@ -266,6 +267,18 @@ class DeepAgentsRuntime:
         """Return DeepAgents source paths for an agent/subagent name."""
         sources = self._skill_sources_by_agent.get(agent_name)
         return list(sources) if sources else None
+
+    def agent_has_chart_skill(self, agent_name: str) -> bool:
+        """Return true when the agent's assigned collections provide the chart skill on disk."""
+        sources = self._skill_sources_by_agent.get(agent_name)
+        if not sources:
+            return False
+        collection_for_source = {source: name for name, source in discover_skill_collections().items()}
+        return any(
+            (BUILTIN_SKILLS_DIR / collection_for_source[source] / CHART_SKILL_NAME / "SKILL.md").exists()
+            for source in sources
+            if source in collection_for_source
+        )
 
     @property
     def workdir(self) -> str:

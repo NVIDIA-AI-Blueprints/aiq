@@ -52,7 +52,7 @@ limitations under the License.
 
 ## Overview
 
-The NVIDIA AI-Q Blueprint is an enterprise-grade research agent built on the [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and uses [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview). It gives you both **quick, cited answers** and **in-depth, report-style research** in one system, with benchmarks and evaluation harnesses so you can measure quality and improve over time.
+The NVIDIA AI-Q Blueprint is a deployable research backend built on the [NVIDIA NeMo Agent Toolkit](https://docs.nvidia.com/nemo/agent-toolkit/latest/) and [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview). Teams can self-host the application boundary and connect deployment-owned models, data sources, authentication, policy controls, storage, and observability. It provides both **quick, cited answers** and **in-depth, report-style research**, plus benchmarks and evaluation harnesses for measuring quality. AI-Q is focused on governed research workflows; it is not a general-purpose coding-agent harness.
 
 <p align="center">
 <img src="./docs/assets/AIQ-arch-light.png" alt="AI-Q Architecture" width="800">
@@ -98,6 +98,12 @@ Recent changes include:
   chart honors the selected release namespace, and the UI improves concurrent-research activity,
   session recovery, and WebSocket reliability.
 
+AI-Q v2.2.0 is published on NVIDIA NGC as the
+[`aiq-agent` backend container](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/containers/aiq-agent/2.2.0),
+[`aiq-frontend` web container](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/containers/aiq-frontend/2.2.0),
+and [`aiq2-web` Helm chart](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/helm-charts/aiq2-web/2.2.0).
+Each artifact uses version `2.2.0`.
+
 See the [changelog](CHANGELOG.md) for detailed release history; the linked feature docs describe
 configuration and current limitations.
 
@@ -108,17 +114,26 @@ The checked-in default CLI and web profiles use these core components:
 
 - [NVIDIA NeMo Agent Toolkit 1.8.0](https://docs.nvidia.com/nemo/agent-toolkit/latest/)
 - [LangChain Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) 0.6.5 or newer
-- [NVIDIA Nemotron 3 Super](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) for intent classification and shallow research in the default profiles
-- [NVIDIA Nemotron 3 Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) for clarification and every deep-research role in the default profiles
+- NVIDIA Nemotron 3.5 Lightning for intent classification and shallow research in the default profiles
+- [NVIDIA Nemotron 3 Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) for clarification and every deep-research role
 - [Google Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) (document summary, if used)
 - [NVIDIA Nemotron 3 Embed 1B](https://build.nvidia.com/nvidia/nemotron-3-embed-1b) (embedding model for the knowledge layer, if used)
 - [NVIDIA Nemotron 3 Nano Omni 30B A3B Reasoning](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) (vision-language model for the LlamaIndex knowledge layer, if used)
 - [Tavily Search API](https://tavily.com/) for web search
 - Serper, SerpAPI, or SearchAPI for Google Scholar paper search
 
-Focused profiles can instead use GPT-5.2 or other supported frontier models for selected
-deep-research roles. Refer to [Configuration Files](#configuration-files); there is no single
-all-features profile.
+> **Known hosted-serving limitation:** Nemotron 3.5 Lightning can intermittently produce citation-incomplete or
+> malformed shallow drafts when served through NVIDIA API Catalog. AI-Q fails closed instead of publishing those
+> drafts. The Brev getting-started launchable uses Nemotron Ultra for shallow research; the general-purpose shipped
+> profiles retain Lightning. See [Troubleshooting](docs/source/resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog)
+> for details and the self-hosted Lightning option.
+
+The shipped frontier profile, `configs/config_frontier_models.yml`, uses GPT-5.6 Luna for intent classification,
+shallow research, source routing, and deep-research execution, with GPT-5.6 Sol for clarification, orchestration,
+planning, and writing. Treat any bring-your-own model or modified profile as an experimental customization until the
+complete workflow is evaluated with that exact model, prompt, hyperparameter, tool-calling, and structured-output
+configuration. Refer to
+[Configuration Files](#configuration-files); there is no single all-features profile.
 
 ## Target Audience
 
@@ -150,7 +165,7 @@ When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), infere
 
 | Component | Default Model | Self-Hosted Hardware Reference |
 |-----------|---------------|-------------------------------|
-| LLM (intent classifier, shallow researcher) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) |
+| LLM (intent classifier, shallow researcher) | `nvidia/nemotron-3.5-lightning-30b-a3b` | [Nemotron 3.5 Lightning](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
 | LLM (clarifier and all deep-research roles) | `nvidia/nemotron-3-ultra-550b-a55b` | [Nemotron 3 Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) |
 | Document summary (optional) | `google/gemma-4-31b-it` | [Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) |
 | Text embedding | `nvidia/nemotron-3-embed-1b` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
@@ -287,17 +302,17 @@ The `configs/` directory holds YAML workflow configs that define agents, tools, 
 
 | Config | Models | Description |
 |--------|--------|-------------|
-| `config_cli_default.yml` | Nemotron 3 Super/Ultra | CLI chat pipeline with Tavily and clarification; no knowledge backend. Paper search is a commented opt-in. |
-| `config_web_default_llamaindex.yml` | Nemotron 3 Super/Ultra; Gemma 4 summary | Default web/API chat pipeline with LlamaIndex/ChromaDB and Tavily. Paper search is commented out. |
-| `config_web_frag.yml` | Nemotron 3 Super/Ultra | Web/API and Helm base with Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. |
-| `config_web_opensearch.yml` | Nemotron 3 Super/Ultra; Nemotron 3 Embed | Web/API with built-in OpenSearch knowledge retrieval plus Tavily; supports self-hosted, `es`, and `aoss` authentication modes. |
-| `config_web_azure_ai_search.yml` | Nemotron 3 Super/Ultra; Nemotron 3 Embed | Web/API with Azure AI Search knowledge retrieval plus Tavily; supports API-key and Azure identity authentication. |
-| `config_frontier_models.yml` | GPT Sol/Luna; Nemotron 3 Super/Ultra; Gemma 4 summary | LlamaIndex profile using GPT Sol/Luna for deep research and Super for intent/shallow. Requires `OPENAI_API_KEY` and `NVIDIA_API_KEY`. |
-| `config_web_default_guardrails.yml` | Nemotron 3 Super/Ultra; Gemma 4 summary | LlamaIndex profile with workflow Guardrails explicitly attached, shallow-agent Guardrails dynamically attached through `workflow_functions`, and async deep-agent Guardrails applied by the AI-Q runner from the same target configuration. |
-| `config_web_frag_mcp_auth.yml` | Nemotron 3 Super/Ultra | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
+| `config_cli_default.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra | CLI chat pipeline with Tavily and clarification; no knowledge backend. Paper search is a commented opt-in. |
+| `config_web_default_llamaindex.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Gemma 4 summary | Default web/API chat pipeline with LlamaIndex/ChromaDB and Tavily. Paper search is commented out. |
+| `config_web_frag.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra | Web/API and Helm base with Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. |
+| `config_web_opensearch.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Nemotron 3 Embed | Web/API with built-in OpenSearch knowledge retrieval plus Tavily; supports self-hosted, `es`, and `aoss` authentication modes. |
+| `config_web_azure_ai_search.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Nemotron 3 Embed | Web/API with Azure AI Search knowledge retrieval plus Tavily; supports API-key and Azure identity authentication. |
+| `config_frontier_models.yml` | GPT Sol/Luna; Gemma 4 summary | LlamaIndex frontier profile using GPT Luna for intent, shallow research, source routing, and research, with GPT Sol for clarification, orchestration, planning, and writing. Requires `OPENAI_API_KEY`, `NVIDIA_API_KEY`, and `TAVILY_API_KEY` for the enabled Tavily tools. |
+| `config_web_default_guardrails.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Gemma 4 summary | LlamaIndex profile with workflow Guardrails explicitly attached, shallow-agent Guardrails dynamically attached through `workflow_functions`, and async deep-agent Guardrails applied by the AI-Q runner from the same target configuration. |
+| `config_web_frag_mcp_auth.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra | Foundational RAG plus an opt-in protected per-user OAuth MCP source example. Requires a real MCP endpoint and shared token store. |
 | `config_domain_routing_and_skills.yml` | Nemotron 3 Ultra; Gemma 4 summary | Direct deep-research profile with domain routing, DuckDuckGo news, Polymarket, enabled Serper paper search, LlamaIndex, built-in skills, and a fresh per-job Modal sandbox. |
-| `config_openshell.yml` | Nemotron 3 Super/Ultra; Gemma 4 summary | Experimental web/API skills profile with artifact capture, fail-closed policy attestation, and one OpenShell sandbox per deep-research job. |
-| `config_mcp.yml` | Nemotron 3 Super/Ultra | Standalone MCP server. Public NIM + Tavily research with PostgreSQL-backed stateless submit/poll/report. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
+| `config_openshell.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra; Gemma 4 summary | Experimental web/API skills profile with artifact capture, fail-closed policy attestation, and one OpenShell sandbox per deep-research job. |
+| `config_mcp.yml` | Nemotron 3.5 Lightning; Nemotron 3 Ultra | Standalone MCP server. Public NIM + Tavily research with PostgreSQL-backed stateless submit/poll/report. Requires `NVIDIA_API_KEY`, `TAVILY_API_KEY`, and `AIQ_CHECKPOINT_DB`. |
 
 ## Ways to Run the Agents
 
@@ -445,8 +460,7 @@ If your config enables Phoenix tracing, start the Phoenix server before running 
 Start server (separate terminal):
 
 ```bash
-source .venv/bin/activate
-phoenix serve
+uvx --from arize-phoenix phoenix serve
 ```
 
 For detailed benchmark documentation, refer to:
@@ -498,7 +512,7 @@ indicate availability in a published release.
 - End users are responsible for ensuring the availability of their deployment.
 - End users are responsible for building, and patching, the container images to keep them up to date.
 - The end users are responsible for ensuring that OSS packages used by the developer blueprint are current.
-- The logs from middleware, backend, and demo app are printed to standard out. They can include input prompts and output completions for development purposes. The end users are advised to handle logging securely and avoid information leakage for production use cases.
+- The built-in workflow and agent logger paths redact raw prompts, tool payloads, and model completions. Enabled source adapters, external middleware, model and tool providers, tracing exporters, and reverse proxies can have separate request-logging and retention behavior; audit and configure every enabled component independently, and keep production logs access-controlled.
 
 
 ## License

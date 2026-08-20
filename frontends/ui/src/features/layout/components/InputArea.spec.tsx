@@ -444,6 +444,25 @@ describe('InputArea', () => {
     ).toBeInTheDocument()
   })
 
+  test('does not show Stop while a DIFFERENT session runs deep research', () => {
+    // Session B is current; a deep research job streams but is owned by session A.
+    // The ownership-scoped useIsCurrentSessionBusy returns false here, so this
+    // session shows the normal Send button, never a Stop that would disconnect
+    // its own socket, and no research-in-progress popover (B does not own it).
+    vi.mocked(useIsCurrentSessionBusy).mockReturnValue(false)
+    mockIsDeepResearchStreaming = true
+    mockDeepResearchStatus = 'running'
+    mockDeepResearchOwnerConversationId = 'session-A'
+
+    render(<InputArea isAuthenticated={true} connectionMode="websocket" />)
+
+    expect(screen.queryByRole('button', { name: /stop generating/i })).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole('button', { name: /research in progress/i })
+    ).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /send message/i })).toBeInTheDocument()
+  })
+
   test('does not allow sending when session is busy', () => {
     vi.mocked(useIsCurrentSessionBusy).mockReturnValue(true)
 

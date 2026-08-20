@@ -25,12 +25,20 @@ When using [NVIDIA API Catalog](https://build.nvidia.com/) (the default), infere
 
 | Component | Default Model | Self-Hosted Hardware Reference |
 |-----------|---------------|-------------------------------|
-| LLM (intent classifier, shallow researcher) | `nvidia/nemotron-3-super-120b-a12b` | [Nemotron 3 Super](https://build.nvidia.com/nvidia/nemotron-3-super-120b-a12b) |
+| LLM (intent classifier, shallow researcher) | `nvidia/nemotron-3.5-lightning-30b-a3b` | [Nemotron 3.5 Lightning](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b/modelcard) |
 | LLM (clarifier and all deep-research roles) | `nvidia/nemotron-3-ultra-550b-a55b` | [Nemotron 3 Ultra](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b) |
 | Document summary (optional) | `google/gemma-4-31b-it` | [Gemma 4 31B IT](https://build.nvidia.com/google/gemma-4-31b-it) |
 | Text embedding | `nvidia/nemotron-3-embed-1b` | [NeMo Retriever embedding support matrix](https://docs.nvidia.com/nim/nemo-retriever/text-embedding/latest/support-matrix.html) |
 | VLM (image/chart extraction, optional) | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | [Nemotron 3 Nano Omni](https://build.nvidia.com/nvidia/nemotron-3-nano-omni-30b-a3b-reasoning) |
 | Knowledge layer (Foundational RAG, optional) | -- | [RAG Blueprint support matrix](https://docs.nvidia.com/rag/latest/support-matrix.html) |
+
+```{warning}
+The NVIDIA API Catalog serving profile for Nemotron 3.5 Lightning has a known shallow citation-output limitation.
+AI-Q fails closed rather than publishing a citation-incomplete draft. The Brev getting-started launchable therefore
+uses Nemotron Ultra for shallow research while retaining Lightning for intent classification. See
+[Troubleshooting](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog) for details and the
+self-hosted Lightning option.
+```
 
 ## Automated Setup (Recommended)
 

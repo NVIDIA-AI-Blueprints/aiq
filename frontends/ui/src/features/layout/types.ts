@@ -25,6 +25,13 @@ export type DataSourcesPanelTab = 'connections' | 'files'
 export interface LayoutState {
   /** Whether the sessions panel is open (left side) */
   isSessionsPanelOpen: boolean
+  /**
+   * Whether the sessions sidebar is collapsed (newer collapse model). Added
+   * alongside {@link isSessionsPanelOpen}; a later PR migrates components to it.
+   */
+  sessionsCollapsed: boolean
+  /** True when the sidebar was auto-collapsed by opening a right panel (so it can auto-restore) */
+  sessionsAutoCollapsed: boolean
   /** Currently open right panel (null = closed) */
   rightPanel: RightPanelType
   /** Active tab in the research panel */
@@ -43,6 +50,10 @@ export interface LayoutState {
   dataSourcesLoading: boolean
   /** Error message if data sources fetch failed */
   dataSourcesError: string | null
+  /** In-progress composer text, preserved across panel/route changes (null = none) */
+  promptDraft: string | null
+  /** Final-response model the user selected (undefined = use the backend default) */
+  selectedModel?: string
   /**
    * @deprecated Use researchPanelTab instead
    */
@@ -59,6 +70,10 @@ export interface LayoutActions {
   toggleSessionsPanel: () => void
   /** Set sessions panel state */
   setSessionsPanelOpen: (open: boolean) => void
+  /** Toggle the sessions sidebar collapsed state (collapse model, clears auto-collapse) */
+  toggleSessionsSidebar: () => void
+  /** Set the sessions sidebar collapsed state (collapse model, clears auto-collapse) */
+  setSessionsCollapsed: (collapsed: boolean) => void
   /** Open a specific right panel (closes any existing) */
   openRightPanel: (panel: RightPanelType) => void
   /** Close the right panel */
@@ -73,6 +88,12 @@ export interface LayoutActions {
   setEnabledDataSources: (ids: string[]) => void
   /** Set the theme mode */
   setTheme: (theme: ThemeMode) => void
+  /** Set the in-progress composer draft (null clears it) */
+  setPromptDraft: (value: string | null) => void
+  /** Set the final-response model for subsequent turns (undefined restores the backend default) */
+  setSelectedModel: (model: string | undefined) => void
+  /** Clear composer state (draft and selected model) on logout or account switch */
+  resetComposerState: () => void
   /** Fetch data sources from API. Only web_search is enabled by default */
   fetchDataSources: (authToken?: string) => Promise<void>
   /**

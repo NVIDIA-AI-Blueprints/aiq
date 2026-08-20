@@ -62,8 +62,7 @@ If your config enables Phoenix tracing, start the Phoenix server before running 
 Start server (separate terminal):
 
 ```bash
-source .venv/bin/activate
-phoenix serve
+uvx --from arize-phoenix phoenix serve
 ```
 
 ## W&B Tracking

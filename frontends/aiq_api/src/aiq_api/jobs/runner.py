@@ -37,6 +37,7 @@ from typing import Any
 
 from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchExecutionTimeout
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
 
 from .callbacks import AgentEventCallback
 from .callbacks import build_final_report_event
@@ -47,9 +48,6 @@ if TYPE_CHECKING:
     from .crypto import ContentEncryptionPolicyIdentity
 
 logger = logging.getLogger(__name__)
-
-_DEEP_RESEARCH_FUNCTION_TYPE = "deep_research_agent"
-
 
 _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
     {
@@ -425,22 +423,6 @@ def _load_agent_class(agent_class_path: str) -> type:
     return getattr(module, class_name)
 
 
-def _get_worker_function_type(config: Any) -> str | None:
-    """Return the NAT function type represented by this worker execution path.
-
-    The async worker executes an agent instance directly, but the workflow
-    config still describes that work as a NAT function. This helper maps the
-    enabled async workflow mode back to the function type whose middleware
-    boundary should be preserved in the worker.
-    """
-    if config.workflow is None:
-        return None
-
-    if getattr(config.workflow, "use_async_deep_research", False):
-        return _DEEP_RESEARCH_FUNCTION_TYPE
-    return None
-
-
 def _get_middleware_for_listed_function(config: Any, function_name: str) -> list[str]:
     """Return middleware directly assigned to a configured NAT function.
 
@@ -519,15 +501,13 @@ async def _register_middleware(builder: Any, config: Any, middleware_names: list
 
 
 async def _attach_middleware_to_function(builder: Any, config: Any, agent_config_name: str) -> None:
-    """Register middleware needed by the async function this worker represents.
+    """Register middleware needed by the configured function this worker represents.
 
-    This prepares middleware for the configured async NAT function, such as
-    ``deep_research_agent``. Actual invocation wrapping happens later, when the
-    worker adapts the direct ``agent.run`` call into a NAT middleware chain.
+    Actual invocation wrapping happens later, when the worker adapts the direct
+    ``agent.run`` call into a NAT middleware chain.
     """
-    function_type = _get_worker_function_type(config)
     function_config = config.functions.get(agent_config_name)
-    if function_type is None or function_config is None or function_config.type != function_type:
+    if function_config is None:
         return
 
     middleware_names = _get_middleware_for_worker_function(config, agent_config_name)
@@ -550,9 +530,7 @@ async def _run_with_configured_function_middleware(
     boundary by wrapping the worker callable with the middleware configured for
     that function name.
     """
-    worker_function_type = _get_worker_function_type(config)
-    function_type = getattr(function_config, "type", None)
-    if worker_function_type is None or function_type != worker_function_type:
+    if config.functions.get(function_name) is None:
         return await call_next(input_value)
 
     middleware_names = _get_middleware_for_worker_function(config, function_name)
@@ -683,6 +661,9 @@ async def run_agent_job(
     # can retrieve it via get_auth_token(). Uses a ContextVar so concurrent
     # jobs in the same Dask worker process don't leak tokens across tasks.
     _auth_token_reset = None
+    _conversation_id_reset = None
+    _user_id_reset = None
+    context_state = None
     if auth_token:
         from ._auth_context import job_auth_token
 
@@ -799,6 +780,18 @@ async def run_agent_job(
         # Dynamically load the agent class
         agent_cls = _load_agent_class(agent_class_path)
 
+        # Bind the submitted conversation before entering the builder context.
+        # NAT function providers may run in child contexts created while tools
+        # are built, so setting this later leaves knowledge tools on their
+        # configured fallback collection for the entire async job.
+        from nat.builder.context import ContextState
+
+        context_state = ContextState.get()
+        _conversation_id_reset = context_state.conversation_id.set(parent_conversation_id)
+        # Always shadow the inherited identity, including for ownerless jobs,
+        # so a reused worker context cannot expose a prior owner's MCP tokens.
+        _user_id_reset = context_state.user_id.set(owner_user_id)
+
         async with WorkflowBuilder.from_config(config=config) as builder:
             await _attach_middleware_to_function(builder, config, agent_config_name)
 
@@ -812,14 +805,6 @@ async def run_agent_job(
                     fn_config = fn_config.model_copy(update={"skills": skills_config, "sandbox": sandbox_config})
 
             provider, llm = await _create_llm_provider(builder, fn_config)
-
-            # Bind the job owner's identity on the NAT context before tools are built,
-            # so per_user_mcp_client resolves the token this user connected via
-            # /v1/auth/mcp/{id}/connect (keyed by principal_user_id).
-            if owner_user_id:
-                from nat.builder.context import ContextState
-
-                ContextState.get().user_id.set(owner_user_id)
 
             # Resolve tools: use explicit list or auto-inherit from data_source_registry
             tool_refs = fn_config.tools
@@ -842,7 +827,6 @@ async def run_agent_job(
 
             # Set up telemetry/observability for Phoenix and OpenTelemetry
             from nat.builder.context import Context
-            from nat.builder.context import ContextState
             from nat.data_models.intermediate_step import IntermediateStepPayload
             from nat.data_models.intermediate_step import IntermediateStepType
             from nat.data_models.intermediate_step import StreamEventData
@@ -860,10 +844,7 @@ async def run_agent_job(
             exporter_manager = ExporterManager.from_exporters(telemetry_exporters)
 
             # Initialize context state with trace propagation from parent
-            context_state = ContextState.get()
             context_state.workflow_run_id.set(job_id)
-            if parent_conversation_id:
-                context_state.conversation_id.set(parent_conversation_id)
 
             workflow_trace_id = _normalize_trace_id(parent_workflow_trace_id) or uuid.uuid4().int
             context_state.workflow_trace_id.set(workflow_trace_id)
@@ -1115,7 +1096,15 @@ async def run_agent_job(
             # failure so external execution cannot outlive the job deadline.
             interrupted = True
             await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=True)
-        logger.exception("Job %s failed: %s", job_id, type(e).__name__)
+        # Tracebacks include ``str(e)`` and can therefore expose provider
+        # request content, credentials, or internal endpoints. Keep the error
+        # type and a stable content fingerprint without emitting raw details.
+        logger.error(
+            "Job %s failed (error_type=%s detail_%s)",
+            job_id,
+            type(e).__name__,
+            log_content_metadata(e),
+        )
         if event_store is None:
             event_store = BatchingEventStore(EventStore(db_url, job_id))
 
@@ -1150,7 +1139,11 @@ async def run_agent_job(
         # Idempotent fallback for failures before a terminal branch finalized the runtime.
         await asyncio.to_thread(_teardown_sandbox, sandbox_runtime, job_id=job_id, interrupted=interrupted)
         await _flush_event_store(event_store, job_id=job_id)
-        # Clean up job-scoped auth token
+        # Restore job-scoped ContextVars for worker task reuse.
+        if _user_id_reset is not None and context_state is not None:
+            context_state.user_id.reset(_user_id_reset)
+        if _conversation_id_reset is not None and context_state is not None:
+            context_state.conversation_id.reset(_conversation_id_reset)
         if _auth_token_reset is not None:
             from ._auth_context import job_auth_token
 

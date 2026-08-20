@@ -6,18 +6,46 @@ SPDX-License-Identifier: Apache-2.0
 
 LLMs are defined in the `llms` section and referenced by agents and tools. You can swap NIM models, change parameters, or add alternative providers.
 
+## Shipped Profiles and Validation Boundary
+
+AI-Q 2.2 ships these exact model assignments and parameters:
+
+| Configuration | Intent and shallow roles | Clarification and deep-research roles | Optional summary role |
+| --- | --- | --- | --- |
+| `configs/config_cli_default.yml`, `configs/config_web_default_llamaindex.yml` | `nvidia/nemotron-3.5-lightning-30b-a3b` | `nvidia/nemotron-3-ultra-550b-a55b` for clarification, orchestration, source routing, research, planning, and writing | `google/gemma-4-31b-it` in the web profile |
+| `configs/config_frontier_models.yml` | `gpt-5.6-luna` | `gpt-5.6-sol` for clarification, orchestration, planning, and writing; `gpt-5.6-luna` for source routing and research | `google/gemma-4-31b-it` |
+
+The checked-in files define the documented compatibility boundary; they are not a substitute for an end-to-end run
+against your provider endpoints and credentials. Changing a model, endpoint, role assignment, prompt, or inference
+parameter creates a custom profile outside that boundary. OpenAI-compatible transport alone does not establish
+workflow compatibility. Other bring-your-own models can require provider-specific prompt, hyperparameter,
+tool-calling, and structured-output tuning, and should be treated as experimental until the complete workflow is
+evaluated in that exact configuration.
+
+```{warning}
+Nemotron 3.5 Lightning can intermittently produce citation-incomplete or malformed shallow drafts when served through
+the NVIDIA API Catalog endpoint. AI-Q fails closed rather than publishing those drafts. See
+[Nemotron 3.5 Lightning on NVIDIA API Catalog](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog)
+for the validated mitigation choices. Model weights alone do not define the compatibility boundary; the serving
+profile is part of the deployment contract.
+```
+
 **Example: NIM model (default)**
 
 ```yaml
 llms:
-  nemotron_super_llm:
+  nemotron_lightning_agent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     top_p: 0.7
     max_tokens: 8192
     num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: true
 ```
 
 **Example: NIM with thinking (for example, for deep research)**
@@ -36,7 +64,7 @@ llms:
       enable_thinking: true
 ```
 
-**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_ultra_llm`, `llm: nemotron_super_llm`). Use different keys in `llms` and point agents at them to swap models per role.
+**Model roles:** The workflow maps LLMs to roles (orchestrator, researcher, planner, etc.) through the `LLMProvider`. In YAML you assign which named LLM each agent uses (for example, `orchestrator_llm: nemotron_ultra_llm`, `llm: nemotron_lightning_agent_llm`). Use different keys in `llms` and point agents at them to swap models per role.
 
 ## Using Downloadable NIMs (Self-Hosted)
 
@@ -72,7 +100,7 @@ llms:
 ```
 
 ```{note}
-**Hosted Endpoint Availability:** The default profiles retain Nemotron 3 Super for intent and shallow research, and use Nemotron 3 Ultra for clarification and every deep-research role. Shared hosted endpoints can have limited availability during high demand (HTTP 429 or 503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
+**Hosted Endpoint Availability:** The default profiles use Nemotron 3.5 Lightning for intent and shallow research, and Nemotron 3 Ultra for clarification and every deep-research role. Shared hosted endpoints can have limited availability during high demand (HTTP 429 or 503 responses), and the API Catalog Lightning serving profile has a separate [shallow citation-output limitation](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
 ```
 
 You can mix hosted and local NIMs in the same config -- for example, use a hosted endpoint for shallow research and a local downloadable Ultra NIM for deep research:
@@ -81,11 +109,15 @@ You can mix hosted and local NIMs in the same config -- for example, use a hoste
 llms:
   hosted_shallow_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
     api_key: ${NVIDIA_API_KEY}
-    temperature: 0.7
-    max_tokens: 65536
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 8192
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: true
 
   local_ultra_llm:
     _type: nim

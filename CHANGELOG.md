@@ -1,15 +1,19 @@
 # Change Log
 
-Unreleased changes targeting AI-Q v2.2.0
+Release v2.2.0 (2026-08-17)
 
-These entries track candidate work on `release/2.2`. AI-Q `v2.1.0` remains the latest stable
-release; the candidate will be stabilized before the final `v2.2.0` release.
+Published NVIDIA NGC artifacts:
+
+- Backend container: [`nvcr.io/nvidia/blueprint/aiq-agent:2.2.0`](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/containers/aiq-agent/2.2.0)
+- Frontend container: [`nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0`](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/containers/aiq-frontend/2.2.0)
+- Helm chart: [`nvidia/blueprint/aiq2-web:2.2.0`](https://catalog.ngc.nvidia.com/orgs/nvidia/blueprint/helm-charts/aiq2-web/2.2.0)
 
 **Research and reports**
 
 - Routed deep research now uses explicit source-router, structured planner, concurrent researcher, and writer roles, with bounded source-tool batching and no research-plan approval step
 - Report follow-up supports answers over a completed report, child-job cosmetic rewrites, and delta research that carries the parent report forward as context
 - Clarification is more targeted: it can search for context before asking the user to narrow scope or choose an output shape
+- The writer produces figures through an on-demand `chart-generation` skill in the new `visualization` skill collection, rendering a sandbox PNG artifact when a sandbox is available and an inline chart spec otherwise; the skill ships enabled only in the skills and sandbox example configs (`config_domain_routing_and_skills`, `config_openshell`), while every other config presents chart-worthy data as a Markdown table, and a writer that wants inline charts must be assigned the `visualization` collection (charts are not sandbox-gated)
 
 **Sources and integrations**
 
@@ -32,7 +36,7 @@ release; the candidate will be stabilized before the final `v2.2.0` release.
 
 **Deployment and observability**
 
-- The repository source Helm chart honors `helm install -n <namespace>` for every namespaced resource, including GitOps-rendered deployments; chart metadata advances to `aiq2-web` 2.1.1 with the `aiq` 0.0.5 dependency
+- The repository source Helm chart honors `helm install -n <namespace>` for every namespaced resource, including GitOps-rendered deployments; chart metadata advances to `aiq2-web` 2.2.0 with the `aiq` 0.0.5 dependency
 - NAT-exported async-job traces preserve configured workflow, task/batch, named-agent, and model/tool hierarchy across concurrent researchers without copying graph-state content into structural agent spans
 - Deep-research intake uses atomic per-principal, deployment-wide, and per-minute admission controls before Dask enqueue; each job also enforces hard input, runtime, plan, report, shared-state, query, note, todo, and source-tool budgets
 - Document ingestion enforces server-side file-count, per-file, aggregate-size, declared-type, and content validation using the same upload settings as the UI

@@ -18,6 +18,15 @@ Classifier combines all routing decisions into a single LLM invocation. This
 minimizes latency for the common case (meta queries get an instant response)
 and avoids an extra round-trip for research queries.
 
+GSF-enabled profiles use the context-aware variant in
+`nodes/context_aware_intent_router.py`. In addition to interaction and depth
+routing, that variant performs one bounded catalog coverage probe. For a mixed
+enterprise-and-public request, the probe is the smallest contiguous span that
+contains the complete enterprise-data question, copied verbatim from the user
+request. It is not a second research decomposition: no public subquery or plan
+is generated, and the complete original request continues to the selected
+research workflow.
+
 The classifier outputs structured JSON with:
 
 - **Intent** -- `meta` or `research`

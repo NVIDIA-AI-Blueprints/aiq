@@ -92,7 +92,6 @@ describe('SourceCard', () => {
         />
       )
 
-      // Only domain/title and URL should be present
       expect(screen.getByText('example.com')).toBeInTheDocument()
     })
 
@@ -125,7 +124,6 @@ describe('SourceCard', () => {
     test('does not display snippet when not provided', () => {
       render(<SourceCard source={createSource({ snippet: undefined })} />)
 
-      // Component should render without snippet section
       expect(screen.getByRole('link')).toBeInTheDocument()
     })
   })
@@ -167,7 +165,6 @@ describe('SourceCard', () => {
         />
       )
 
-      // Should show the raw URL as fallback - it appears in both domain and URL spots
       const urlTexts = screen.getAllByText('not-a-url')
       expect(urlTexts.length).toBeGreaterThan(0)
     })

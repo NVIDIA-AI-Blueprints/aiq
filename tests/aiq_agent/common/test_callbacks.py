@@ -25,6 +25,7 @@ import pytest
 from aiq_agent.common.callbacks import ResearchLogger
 from aiq_agent.common.callbacks import VerboseTraceCallback
 from aiq_agent.common.callbacks import is_verbose_enabled
+from aiq_agent.common.logging_utils import log_content_metadata
 
 
 class TestIsVerboseEnabled:
@@ -198,6 +199,23 @@ class TestResearchLogger:
         logger.banner("DeepResearcher", "What is quantum computing?", depth="deep")
         assert mock_logger.info.call_count >= 4
 
+    def test_content_specific_methods_never_log_raw_values(self, caplog):
+        """Verbose research logs retain correlation metadata, never customer content."""
+        secret = "nvapi-vdr-fake-secret-do-not-log"  # pragma: allowlist secret
+        test_logger = logging.getLogger("tests.safe_research_logger")
+        caplog.set_level(logging.DEBUG, logger=test_logger.name)
+        research_logger = ResearchLogger(test_logger, verbose=True)
+
+        research_logger.query(secret, secret)
+        research_logger.tool_call("web_search", secret)
+        research_logger.tool_result("web_search", secret, chars=len(secret))
+        research_logger.relevancy(1, 1, secret)
+        research_logger.relevant_item(secret, secret)
+        research_logger.banner("DeepResearcher", secret, detail=secret)
+
+        assert secret not in caplog.text
+        assert log_content_metadata(secret) in caplog.text
+
 
 class TestVerboseTraceCallback:
     """Tests for the VerboseTraceCallback class."""
@@ -256,7 +274,7 @@ class TestVerboseTraceCallback:
             run_id="run-123",
         )
 
-        assert callback.current_input == "User query content"
+        assert callback.current_input == log_content_metadata("User query content")
 
     def test_on_chain_end_decrements_depth(self):
         """Test on_chain_end decrements depth for tracked chains."""
@@ -575,3 +593,43 @@ class TestVerboseTraceCallback:
 
         # Should not raise
         callback._log_message_details(mock_message)
+
+    def test_verbose_callback_never_logs_prompt_model_or_tool_content(self, caplog):
+        """Verbose traces expose only safe metadata across every content-bearing hook."""
+        secret = "nvapi-vdr-fake-secret-do-not-log"  # pragma: allowlist secret
+        caplog.set_level(logging.DEBUG, logger="aiq_agent.common.callbacks")
+        callback = VerboseTraceCallback(log_reasoning=True)
+
+        input_message = MagicMock()
+        input_message.content = secret
+        callback.on_chain_start(
+            serialized={"name": "TestAgent"},
+            inputs={"messages": [input_message]},
+            run_id="run-secret-test",
+        )
+        callback.on_llm_start(serialized={"name": "test-model"}, prompts=[secret])
+
+        response_message = MagicMock()
+        response_message.content = secret
+        response_message.additional_kwargs = {"reasoning_content": secret}
+        response_message.tool_calls = [{"name": "web_search", "args": {"query": secret}}]
+        response_message.response_metadata = {}
+        generation = MagicMock()
+        generation.message = response_message
+        result = MagicMock()
+        result.generations = [[generation]]
+        callback.on_llm_end(result)
+
+        callback.on_tool_start({"name": "web_search"}, secret)
+        callback.on_tool_end(secret)
+        callback.on_tool_error(RuntimeError(secret))
+        action = MagicMock()
+        action.tool = "researcher"
+        action.tool_input = {"messages": [input_message]}
+        callback.on_agent_action(action)
+        finish = MagicMock()
+        finish.return_values = {"output": secret}
+        callback.on_agent_finish(finish)
+
+        assert secret not in caplog.text
+        assert log_content_metadata(secret) in caplog.text

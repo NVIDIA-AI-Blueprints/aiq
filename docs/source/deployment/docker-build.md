@@ -11,12 +11,12 @@ The AI-Q blueprint uses a multi-stage Dockerfile (`deploy/Dockerfile`) that prod
 
 ```mermaid
 graph TD
-    A["nvcr.io/nvidia/base/ubuntu:jammy-20251013"] -->|Stage 1| B["builder"]
+    A["nvcr.io/nvidia/base/ubuntu:noble-20260217"] -->|Stage 1| B["builder"]
     B -->|Install CLI + debug UI| C["dev-builder"]
     C -->|Copy /app| D["dev"]
     B -->|Copy /app| E["release"]
 
-    F["nvcr.io/nvidia/distroless/python:3.12-v3.5.3"] -->|Runtime base| D
+    F["nvcr.io/nvidia/distroless/python:3.13-v4.0.8"] -->|Runtime base| D
     F -->|Runtime base| E
 
     style A fill:#e0e0e0,stroke:#666
@@ -31,18 +31,18 @@ The build consists of four stages:
 
 | Stage | Base image | Purpose |
 |-------|-----------|---------|
-| `builder` | `nvcr.io/nvidia/base/ubuntu:jammy-20251013` | Installs Python 3.12, system dependencies, and all application packages. |
+| `builder` | `nvcr.io/nvidia/base/ubuntu:noble-20260217` | Installs Python 3.13.14, system dependencies, and all application packages. |
 | `dev-builder` | `builder` | Extends builder with the CLI and debug UI packages. |
-| `dev` | `nvcr.io/nvidia/distroless/python:3.12-v3.5.3` | Development runtime -- copies from `dev-builder`. |
-| `release` | `nvcr.io/nvidia/distroless/python:3.12-v3.5.3` | Production runtime -- copies from `builder` (no CLI). |
+| `dev` | `nvcr.io/nvidia/distroless/python:3.13-v4.0.8` | Development runtime -- copies from `dev-builder`. |
+| `release` | `nvcr.io/nvidia/distroless/python:3.13-v4.0.8` | Production runtime -- copies from `builder` (no CLI). |
 
 ## Builder Stage
 
 The builder stage handles all compilation and package installation:
 
-1. **System dependencies** -- Installs build tools, curl, git, and Python 3.12 from the `deadsnakes` PPA.
-2. **Virtual environment** -- Creates a venv at `/app/.venv` using `uv`.
-3. **Dependency installation** -- Runs `uv sync --frozen --extra s3` against the root `uv.lock` to install locked runtime and default-group dependencies. The independent `mcp/` project is excluded from the root workspace, so the standalone MCP package and `mcp/uv.lock` are not part of this image.
+1. **System dependencies** -- Installs build tools, curl, git, and the system Python used to bootstrap `uv`; `uv` then installs the pinned Python 3.13.14 runtime.
+2. **Virtual environment** -- Creates a venv at `/app/.venv` using `uv` and Python 3.13.14.
+3. **Dependency installation** -- Runs `uv sync --frozen --extra pii --extra s3` against the root workspace's `uv.lock`, installing locked runtime dependencies, the `pii` and `s3` extras, and the default `dev` dependency group. The independent `mcp/` project is excluded from the root workspace, so the standalone MCP package and `mcp/uv.lock` are not part of this image.
 4. **Workspace packages** -- Installs application packages with `uv pip install -e` (the root package uses `--no-deps`):
    - Root workspace package (`aiq-agent`) using `uv pip install --no-sources --no-deps -e .`; `--no-sources` keeps workspace source overrides from coupling this image to packages that are intentionally absent from its build context.
    - `sources/google_scholar_paper_search` -- Google Scholar search
@@ -94,7 +94,7 @@ docker build --target dev -t aiq:dev -f deploy/Dockerfile .
 ### What Is Included
 
 - All application packages plus CLI and debug UI.
-- Python 3.12 runtime from the NVIDIA distroless base image.
+- Python 3.13.14 application runtime on the NVIDIA distroless base image.
 - Startup scripts (`entrypoint.py`, `start_web.py`).
 - Runs as non-root user (UID 1000).
 
@@ -136,8 +136,8 @@ BUILD_TARGET=release docker compose --env-file ../.env -f docker-compose.yaml up
 
 | Image | Used in | Purpose |
 |-------|---------|---------|
-| `nvcr.io/nvidia/base/ubuntu:jammy-20251013` | Builder stages | Full Ubuntu with package managers for compilation. |
-| `nvcr.io/nvidia/distroless/python:3.12-v3.5.3` | Runtime stages (`dev`, `release`) | Minimal NVIDIA distroless image with Python 3.12. No shell, no package manager -- reduces attack surface. |
+| `nvcr.io/nvidia/base/ubuntu:noble-20260217` | Builder stages | Full Ubuntu with package managers for compilation. |
+| `nvcr.io/nvidia/distroless/python:3.13-v4.0.8` | Runtime stages (`dev`, `release`) | Minimal NVIDIA distroless image with Python 3.13.14. No shell, no package manager -- reduces attack surface. |
 
 ## Startup Scripts
 

@@ -87,7 +87,8 @@ class _WorkflowGuardrails(GuardrailsMixin):
                 )
 
                 if self._rail_blocked(response):
-                    context.output = self._handle_blocked_rail_response(response)
+                    block_message = self._handle_blocked_rail_response(response)
+                    context.output = self._on_pre_invoke_blocked(context, block_message)
                     return context
 
                 modified_query_text = self._handle_modified_rail_response(response, fallback=query_text)
@@ -111,6 +112,22 @@ class _WorkflowGuardrails(GuardrailsMixin):
     async def post_invoke(self, context: InvocationContext) -> InvocationContext | None:
         """Run output rails for the configured workflow result fields."""
         return await super().post_invoke(context)
+
+    def _on_pre_invoke_blocked(
+        self,
+        context: InvocationContext,
+        block_message: str,
+    ) -> ChatResearcherResponse:
+        """Return a workflow-schema refusal when input rails block execution."""
+        response = _create_chat_response(
+            block_message,
+            response_id="guardrails_refusal",
+            model=context.function_context.name,
+        )
+        return ChatResearcherResponse(
+            **response.model_dump(),
+            workflow_outcome=WorkflowSuccess(result=block_message),
+        )
 
     def _build_emergency_output_refusal(self, context: InvocationContext, original_output: object) -> object:
         """Return a fresh refusal preserving the workflow response schema."""
@@ -212,14 +229,18 @@ class _WorkflowGuardrails(GuardrailsMixin):
         if targets:
             return targets
 
-        input_message = getattr(raw_input, "input_message", None)
-        if isinstance(input_message, str) and input_message.strip():
-            return [
-                self._target_from_text(
-                    input_message,
-                    lambda new_text: self._set_attr_value(raw_input, raw_input, "input_message", new_text),
-                )
-            ]
+        # NAT synthesizes Pydantic ``InputArgsSchema`` objects for function
+        # invocations. Keep the object contract aligned with the dictionary
+        # contract so /generate's ``query`` field cannot bypass input rails.
+        for field in ("input_message", "query", "message", "text"):
+            item = getattr(raw_input, field, None)
+            if isinstance(item, str) and item.strip():
+                return [
+                    self._target_from_text(
+                        item,
+                        lambda new_text, field=field: self._set_attr_value(raw_input, raw_input, field, new_text),
+                    )
+                ]
         return []
 
     def _extract_messages_targets(

@@ -28,6 +28,8 @@ import threading
 import time
 from typing import Any
 
+from aiq_agent.common.logging_utils import log_content_metadata
+
 from .crypto import ContentEncryptionError
 
 logger = logging.getLogger(__name__)
@@ -201,6 +203,7 @@ class EventStore:
                 max_overflow=10,
                 pool_recycle=1800,
                 connect_args=connect_args,
+                hide_parameters=True,
             )
             cls._sync_engine_cache[db_url] = (engine, time.monotonic())
             logger.debug("Created sync engine for %s", db_url[:50])
@@ -227,6 +230,7 @@ class EventStore:
                 pool_size=5,
                 max_overflow=10,
                 pool_recycle=1800,
+                hide_parameters=True,
             )
             cls._async_engine_cache[db_url] = (engine, time.monotonic())
             logger.debug("Created async engine for %s", db_url[:50])
@@ -441,7 +445,13 @@ class EventStore:
                 conn.commit()
                 logger.debug("Stored event %s for job %s", event_type, self.job_id)
         except Exception as e:
-            logger.warning("Failed to store event %s for job %s: %s", event_type, self.job_id, e)
+            logger.warning(
+                "Failed to store event %s for job %s (error_type=%s error_%s)",
+                event_type,
+                self.job_id,
+                e.__class__.__name__,
+                log_content_metadata(e),
+            )
             if self._fail_closed:
                 raise
 
@@ -500,7 +510,13 @@ class EventStore:
                 conn.commit()
                 logger.debug("Stored batch of %d events for job %s", len(events), self.job_id)
         except Exception as e:
-            logger.warning("Failed to store batch of %d events for job %s: %s", len(events), self.job_id, e)
+            logger.warning(
+                "Failed to store batch of %d events for job %s (error_type=%s error_%s)",
+                len(events),
+                self.job_id,
+                e.__class__.__name__,
+                log_content_metadata(e),
+            )
             if self._fail_closed:
                 raise
 

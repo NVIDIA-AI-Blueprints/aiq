@@ -28,8 +28,8 @@ import { hasActiveDeepResearchJob } from '../lib/session-activity'
  *
  * Ephemeral state (fast path — covers normal operation):
  * 1. WebSocket is streaming (shallow thinking)
- * 2. Deep research SSE is actively streaming
- * 3. Deep research job is in non-terminal ephemeral state
+ * 2. Deep research SSE is actively streaming AND owned by the current session
+ * 3. Deep research job is in a non-terminal ephemeral state AND owned by the current session
  *
  * Persisted state (safety net — covers page refresh gap):
  * 4. Message history has an in-progress deep research job
@@ -42,6 +42,15 @@ export const useIsCurrentSessionBusy = (): boolean => {
   const isStreaming = useChatStore((state) => state.isStreaming)
   const isDeepResearchStreaming = useChatStore((state) => state.isDeepResearchStreaming)
   const deepResearchStatus = useChatStore((state) => state.deepResearchStatus)
+
+  // Deep research streams in the background owned by the session that started
+  // it, and its streaming flag / status are global store values, so scope them
+  // to the owning session before counting them as current-session activity.
+  const ownsDeepResearch = useChatStore(
+    (state) =>
+      state.deepResearchOwnerConversationId !== null &&
+      state.deepResearchOwnerConversationId === state.currentConversation?.id
+  )
 
   // --- Persisted state (safety net, covers page refresh) ---
 
@@ -58,10 +67,12 @@ export const useIsCurrentSessionBusy = (): boolean => {
   return (
     // Ephemeral: WebSocket streaming (shallow thinking)
     isStreaming ||
-    // Ephemeral: Deep research SSE is actively streaming
-    isDeepResearchStreaming ||
-    // Ephemeral: Deep research job in non-terminal state
-    (deepResearchStatus !== null && ['submitted', 'running'].includes(deepResearchStatus)) ||
+    // Ephemeral: this session's own deep research SSE is actively streaming
+    (ownsDeepResearch && isDeepResearchStreaming) ||
+    // Ephemeral: this session's own deep research job in a non-terminal state
+    (ownsDeepResearch &&
+      deepResearchStatus !== null &&
+      ['submitted', 'running'].includes(deepResearchStatus)) ||
     // Persisted: Deep research job detected in message history (covers refresh gap)
     hasActiveJobInHistory ||
     // Persisted: HITL prompt waiting for user response

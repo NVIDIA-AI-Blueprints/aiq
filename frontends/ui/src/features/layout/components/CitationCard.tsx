@@ -59,9 +59,9 @@ export const CitationCard: FC<CitationCardProps> = ({ citation }) => {
         direction="col"
         className="rounded-lg border overflow-hidden bg-surface-sunken border-base hover:bg-surface-raised-50 transition-colors"
       >
-        {/* Header */}
+        {}
         <Flex align="center" gap="2" className="w-full px-3 py-2">
-          {/* Status Icon - Cited vs Referenced */}
+          {}
           <span
             className="shrink-0"
             style={{
@@ -78,7 +78,7 @@ export const CitationCard: FC<CitationCardProps> = ({ citation }) => {
             )}
           </span>
 
-          {/* Citation Title */}
+          {}
           <Text
             kind="label/semibold/sm"
             className="flex-1 min-w-0 truncate"
@@ -91,13 +91,13 @@ export const CitationCard: FC<CitationCardProps> = ({ citation }) => {
             {getDomain(citation.url)}
           </Text>
 
-          {/* Timestamp */}
+          {}
           <Text kind="body/regular/xs" className="text-subtle shrink-0">
             {formatTime(citation.timestamp)}
           </Text>
         </Flex>
 
-        {/* Full URL */}
+        {}
         <Flex className="px-3 pb-2 border-t border-base">
           <Text kind="body/regular/sm" className="text-subtle truncate mt-1 break-all">
             {citation.url}

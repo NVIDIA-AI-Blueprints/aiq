@@ -40,15 +40,121 @@ Refer to `deploy/compose/init-db.sql` for the full schema.
 
 Back up the following databases regularly:
 
-- **`aiq_jobs`** -- Contains the `job_info` table (job metadata) and `job_events` table (event stream). This is the critical operational data store.
-- **`aiq_checkpoints`** -- Contains [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agent state checkpoints. These allow resumption of interrupted research workflows.
+- **`aiq_jobs`** -- Contains the `job_info` table (job metadata) and `job_events` table (event stream). This is the critical operational data store. The shipped Helm profile also points `AIQ_CHECKPOINT_DB` here.
+- **`aiq_checkpoints`** -- Contains [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) agent state checkpoints in the shipped Compose profile and the managed-database example above. These allow resumption of interrupted research workflows.
 
-For managed databases, enable automated daily backups with at least 7 days of retention. For self-managed PostgreSQL, use `pg_dump` on a schedule:
+Back up both databases for either deployment profile. Do not change `AIQ_CHECKPOINT_DB` on an existing deployment
+without migrating its checkpoint tables; doing so makes existing resumable workflow state unavailable to the
+application.
+
+The two dumps are separate PostgreSQL snapshots. Before running the commands below, pause the API, workers, and any
+other writers to either database. Resume them only after both final archives have been published; this defines the
+shared recovery point for the backup set.
+
+For managed databases, enable automated daily backups with at least 7 days of retention. For self-managed PostgreSQL,
+install PostgreSQL client tools on the backup host and run `pg_dump` on a schedule.
+
+The shipped Compose stack already includes the matching PostgreSQL client tools in its `aiq-postgres` container. Set
+`AIQ_BACKUP_DIR` to an absolute path outside the repository, and create portable custom-format archives there without
+requiring `pg_dump` on the host:
 
 ```bash
-pg_dump -U aiq -d aiq_jobs > aiq_jobs_$(date +%Y%m%d).sql
-pg_dump -U aiq -d aiq_checkpoints > aiq_checkpoints_$(date +%Y%m%d).sql
+set -euo pipefail
+: "${AIQ_BACKUP_DIR:?Set AIQ_BACKUP_DIR to an absolute path outside the repository}"
+: "${AIQ_POSTGRES_CONTAINER:=aiq-postgres}"
+umask 077
+install -d -m 0700 "$AIQ_BACKUP_DIR"
+backup_id="$(date -u +%Y%m%dT%H%M%SZ)-$$-${RANDOM}"
+jobs_archive="$AIQ_BACKUP_DIR/aiq_jobs_${backup_id}.dump"
+checkpoints_archive="$AIQ_BACKUP_DIR/aiq_checkpoints_${backup_id}.dump"
+if [[ -e "$jobs_archive" || -e "$checkpoints_archive" ]]; then
+  echo "Refusing to replace an existing backup set: $backup_id" >&2
+  exit 1
+fi
+backup_complete=0
+jobs_tmp=
+checkpoints_tmp=
+cleanup() {
+  local exit_status=$?
+  if [[ -n "$jobs_tmp" ]]; then
+    rm -f -- "$jobs_tmp" || true
+  fi
+  if [[ -n "$checkpoints_tmp" ]]; then
+    rm -f -- "$checkpoints_tmp" || true
+  fi
+  if (( ! backup_complete )); then
+    rm -f -- "$jobs_archive" "$checkpoints_archive" || true
+  fi
+  return "$exit_status"
+}
+trap cleanup EXIT
+jobs_tmp=$(mktemp "$AIQ_BACKUP_DIR/.aiq_jobs_${backup_id}.XXXXXXXX.dump.tmp")
+checkpoints_tmp=$(mktemp "$AIQ_BACKUP_DIR/.aiq_checkpoints_${backup_id}.XXXXXXXX.dump.tmp")
+
+docker exec "$AIQ_POSTGRES_CONTAINER" \
+  pg_dump --format=custom --no-owner --no-privileges -U aiq -d aiq_jobs \
+  > "$jobs_tmp"
+docker exec "$AIQ_POSTGRES_CONTAINER" \
+  pg_dump --format=custom --no-owner --no-privileges -U aiq -d aiq_checkpoints \
+  > "$checkpoints_tmp"
+
+mv "$jobs_tmp" "$jobs_archive"
+mv "$checkpoints_tmp" "$checkpoints_archive"
+backup_complete=1
+trap - EXIT
 ```
+
+If the block exits unsuccessfully, its cleanup trap removes temporary files and any partially published backup set.
+Confirm that no archives with that backup ID remain, resume the paused writers, investigate the failure, and use a new
+backup ID on the next scheduled run or retry.
+
+If the Compose container name was customized, set `AIQ_POSTGRES_CONTAINER` to that container name.
+
+Treat these archives as sensitive data. Before copying them to backup storage, encrypt them with an
+organization-approved backup system, protect transfers in transit, keep encryption keys separate from the archives,
+and restrict read and restore access to the required operators and service identities.
+
+Do not wait for an incident to test restoration. On an isolated restore environment, retrieve and decrypt the archives
+into a restricted directory, set `AIQ_BACKUP_DIR` to that directory, create disposable databases, restore both archives
+with `--exit-on-error`, and inspect their tables. The following example verifies the local Compose archives; replace
+`YYYYMMDDTHHMMSSZ-PID-RANDOM` with the shared backup ID in the two archive names:
+
+```bash
+set -euo pipefail
+: "${AIQ_BACKUP_DIR:?Set AIQ_BACKUP_DIR to the restricted archive directory}"
+: "${AIQ_POSTGRES_CONTAINER:=aiq-postgres}"
+
+restore_cleanup() {
+  local exit_status=$?
+  docker exec "$AIQ_POSTGRES_CONTAINER" psql -U aiq -d postgres \
+    -c 'DROP DATABASE IF EXISTS aiq_jobs_restore_check' || true
+  docker exec "$AIQ_POSTGRES_CONTAINER" psql -U aiq -d postgres \
+    -c 'DROP DATABASE IF EXISTS aiq_checkpoints_restore_check' || true
+  return "$exit_status"
+}
+trap restore_cleanup EXIT
+
+docker exec "$AIQ_POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'DROP DATABASE IF EXISTS aiq_jobs_restore_check'
+docker exec "$AIQ_POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'CREATE DATABASE aiq_jobs_restore_check'
+docker exec -i "$AIQ_POSTGRES_CONTAINER" \
+  pg_restore --exit-on-error -U aiq -d aiq_jobs_restore_check \
+  < "$AIQ_BACKUP_DIR/aiq_jobs_YYYYMMDDTHHMMSSZ-PID-RANDOM.dump"
+docker exec "$AIQ_POSTGRES_CONTAINER" psql -U aiq -d aiq_jobs_restore_check -c '\dt'
+
+docker exec "$AIQ_POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'DROP DATABASE IF EXISTS aiq_checkpoints_restore_check'
+docker exec "$AIQ_POSTGRES_CONTAINER" psql -v ON_ERROR_STOP=1 -U aiq -d postgres \
+  -c 'CREATE DATABASE aiq_checkpoints_restore_check'
+docker exec -i "$AIQ_POSTGRES_CONTAINER" \
+  pg_restore --exit-on-error -U aiq -d aiq_checkpoints_restore_check \
+  < "$AIQ_BACKUP_DIR/aiq_checkpoints_YYYYMMDDTHHMMSSZ-PID-RANDOM.dump"
+docker exec "$AIQ_POSTGRES_CONTAINER" psql -U aiq -d aiq_checkpoints_restore_check -c '\dt'
+```
+
+Keep restore testing isolated from a live deployment so the application cannot write to the databases during the
+check.
 
 ## Artifact Storage
 

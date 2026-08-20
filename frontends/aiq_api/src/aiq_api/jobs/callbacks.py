@@ -30,6 +30,7 @@ import re
 import threading
 import time
 import uuid
+from collections.abc import Sequence
 from datetime import UTC
 from datetime import datetime
 from enum import StrEnum
@@ -41,6 +42,8 @@ from pydantic import BaseModel
 from pydantic import ConfigDict
 from pydantic import Field
 
+from aiq_agent.common.callbacks import SUPPRESS_OUTPUT_ARTIFACT_TAG
+from aiq_agent.common.citation_verification import extract_http_urls
 from aiq_agent.common.citation_verification import get_session_registry
 
 if TYPE_CHECKING:
@@ -126,12 +129,19 @@ class IntermediateStepEvent(BaseModel):
         return {k: v for k, v in result.items() if v is not None}
 
 
-def build_final_report_event(content: str) -> IntermediateStepEvent:
+def build_final_report_event(content: str, *, cited_urls: Sequence[str] | None = None) -> IntermediateStepEvent:
     """Build the canonical final-report artifact event."""
+    data: dict[str, Any] = {
+        "type": ArtifactType.OUTPUT.value,
+        "content": content,
+        "output_category": "final_report",
+    }
+    if cited_urls is not None:
+        data["cited_urls"] = list(cited_urls)
     return IntermediateStepEvent(
         category=EventCategory.ARTIFACT,
         state=EventState.UPDATE,
-        data=EventData(type=ArtifactType.OUTPUT.value, content=content, output_category="final_report"),
+        data=EventData(**data),
     )
 
 
@@ -215,7 +225,6 @@ class AgentEventCallback(BaseCallbackHandler):
     """
 
     OUTPUT_MIN_LENGTH = 200
-    URL_PATTERN = re.compile(r'https?://[^\s<>"\')\]}>]+', re.IGNORECASE)
     SEARCH_TOOL_PATTERNS = {"search", "tavily", "web_search", "google", "bing"}
     TOOL_CALL_PATTERN = re.compile(r'\b[a-z][a-z0-9_]*\s*\(\s*(?:["\'{]|[a-z_]+\s*=)', re.IGNORECASE)
     SANDBOX_EXEC_TOOLS = frozenset({"execute"})
@@ -383,14 +392,27 @@ class AgentEventCallback(BaseCallbackHandler):
         """Return the session-scoped SourceRegistry if set, otherwise None."""
         return get_session_registry()
 
-    def emit_final_report(self, content: str) -> None:
+    def emit_final_report(self, content: str, *, cited_urls: Sequence[str] | None = None) -> None:
         """Emit the post-processed final report as an OUTPUT artifact.
 
         Call this after citation verification and sanitisation so the
         frontend receives the verified content (overwrites the earlier
-        auto-emitted version).
+        auto-emitted version). ``cited_urls`` must come from citation
+        verification; when supplied, it is the authoritative citation set for
+        the published report.
         """
-        self._emit(build_final_report_event(content))
+        verified_visible_urls = self._verified_visible_urls(content, cited_urls) if cited_urls is not None else None
+        self._emit(build_final_report_event(content, cited_urls=verified_visible_urls))
+        if verified_visible_urls is not None:
+            for url in verified_visible_urls:
+                self._cited_urls.add(self._normalize_url(url))
+                self._emit_artifact(
+                    ArtifactType.CITATION_USE,
+                    url,
+                    name=url,
+                    url=url,
+                    final_report=True,
+                )
 
     def _is_search_tool(self, tool_name: str) -> bool:
         """Check if tool is a search-related tool that returns URLs."""
@@ -441,15 +463,19 @@ class AgentEventCallback(BaseCallbackHandler):
 
     def _extract_urls(self, text: str) -> list[str]:
         """Extract unique URLs from text content."""
-        if not text:
-            return []
-        urls = self.URL_PATTERN.findall(str(text))
-        cleaned = []
-        for url in urls:
-            url = url.rstrip(".,;:!?)'\"]}>)")
-            if len(url) > 10 and "." in url:
-                cleaned.append(url)
-        return list(dict.fromkeys(cleaned))
+        return [url for url in extract_http_urls(text) if len(url) > 10 and "." in url]
+
+    def _verified_visible_urls(self, content: str, cited_urls: Sequence[str]) -> list[str]:
+        """Keep only verified citation URLs that remain visible in the final report."""
+        visible_urls = {self._normalize_url(url) for url in self._extract_urls(content)}
+        result: list[str] = []
+        seen: set[str] = set()
+        for url in cited_urls:
+            normalized = self._normalize_url(url)
+            if normalized in visible_urls and normalized not in seen:
+                seen.add(normalized)
+                result.append(url)
+        return result
 
     def _get_output_category(self, agent_info: tuple[str, str] | None = None) -> str:
         """
@@ -715,7 +741,7 @@ class AgentEventCallback(BaseCallbackHandler):
 
     def on_llm_new_token(self, token: str, **kwargs) -> None:
         """Emit a streaming llm.chunk event for each non-empty token."""
-        if token:
+        if token and SUPPRESS_OUTPUT_ARTIFACT_TAG not in (kwargs.get("tags") or []):
             self._emit(
                 IntermediateStepEvent(
                     category=EventCategory.LLM,
@@ -759,6 +785,7 @@ class AgentEventCallback(BaseCallbackHandler):
             and len(content) >= self.OUTPUT_MIN_LENGTH
             and not has_tool_calls
             and not self._contains_tool_call_syntax(content)
+            and SUPPRESS_OUTPUT_ARTIFACT_TAG not in (kwargs.get("tags") or [])
         ):
             output_category = self._get_output_category(agent_info)
             self._emit_artifact(

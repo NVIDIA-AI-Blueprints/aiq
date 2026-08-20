@@ -15,7 +15,11 @@ An NVIDIA blueprint for AI-powered deep research built on the NeMo Agent Toolkit
 
 **What models does it use?**
 
-By default, it uses NVIDIA NIM models (for example, Nemotron) through the `integrate.api.nvidia.com` API. You can swap to any NIM-compatible model, self-hosted NIMs, or other LLM providers. Refer to [Swapping Models](../customization/swapping-models.md).
+The default profiles use NVIDIA Nemotron models through the `integrate.api.nvidia.com` API. The shipped frontier
+profile uses the exact GPT Sol/Luna role assignment in `configs/config_frontier_models.yml`. AI-Q is configurable with
+self-hosted NIMs and other providers, but a bring-your-own model is not automatically compatible and can require
+provider-specific prompt, hyperparameter, tool-calling, and structured-output tuning. Run the complete workflow against
+the exact provider configuration before deployment. Refer to [Swapping Models](../customization/swapping-models.md).
 
 **Do I need a GPU?**
 
@@ -26,7 +30,7 @@ Not for running the blueprint itself — it calls cloud-hosted LLM APIs. You onl
 **What's the difference between shallow and deep research?**
 
 - **Shallow research** is fast (30-60s), uses a single agent with bounded tool calls, and produces concise answers with citations. Best for simple factual queries.
-- **Deep research** is thorough (2-10min). An orchestrator coordinates an optional advisory source router, a planner, concurrent researcher workers, and a writer that performs final synthesis. Best for complex multi-faceted topics and output shapes that need evidence from several focused queries.
+- **Deep research** is thorough and commonly takes several minutes; complex jobs can exceed ten minutes. An orchestrator coordinates an optional advisory source router, a planner, concurrent researcher workers, and a writer that performs final synthesis. Best for complex multi-faceted topics and output shapes that need evidence from several focused queries.
 
 The [Intent Classifier](../architecture/agents/intent-classifier.md) automatically routes queries to the appropriate depth.
 

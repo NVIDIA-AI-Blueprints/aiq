@@ -5,7 +5,11 @@ SPDX-License-Identifier: Apache-2.0
 
 # NVIDIA AI-Q Blueprint
 
-An NVIDIA blueprint for AI-powered deep research, built on the NeMo Agent Toolkit. AI-Q combines intelligent query routing, multi-agent research pipelines, and pluggable knowledge retrieval to deliver comprehensive, citation-backed answers.
+An NVIDIA blueprint for AI-powered deep research, built on the NeMo Agent Toolkit. AI-Q is a deployable research
+backend that teams can self-host and connect to deployment-owned models, data, authentication, policy controls,
+storage, and observability. It combines intelligent query routing, multi-agent research pipelines, and pluggable
+knowledge retrieval to deliver citation-backed answers. It is focused on governed research workflows rather than
+general-purpose coding-agent execution.
 
 ## Where to Start
 

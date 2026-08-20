@@ -34,6 +34,7 @@ from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -46,6 +47,7 @@ from nat.data_models.function import FunctionBaseConfig
 
 from .agent import DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS
 from .agent import DEFAULT_MAX_RESEARCH_CONCURRENCY
+from .agent import DEFAULT_MAX_RESEARCHER_MODEL_CALLS
 from .agent import DEFAULT_MAX_SOURCE_TOOL_BATCH_SIZE
 from .agent import DeepResearcherAgent
 from .deepagents_runtime import DeepResearchSandboxConfig
@@ -102,6 +104,11 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default=DEFAULT_MAX_RESEARCH_CONCURRENCY,
         ge=1,
         description="Maximum ResearchQuery items accepted and run concurrently per run_research_batch call.",
+    )
+    max_researcher_model_calls: int = Field(
+        default=DEFAULT_MAX_RESEARCHER_MODEL_CALLS,
+        ge=1,
+        description="Maximum normal model turns per researcher worker before one reserved finalization turn.",
     )
     max_concurrent_source_tool_calls: int = Field(
         default=DEFAULT_MAX_CONCURRENT_SOURCE_TOOL_CALLS,
@@ -246,6 +253,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         skills=skills_config,
         sandbox=sandbox_config,
         max_research_concurrency=config.max_research_concurrency,
+        max_researcher_model_calls=config.max_researcher_model_calls,
         max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
         max_source_tool_batch_size=config.max_source_tool_batch_size,
         resource_limits=config.resource_limits,
@@ -284,6 +292,7 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                     sandbox=sandbox_config,
                     job_id=job_id,
                     max_research_concurrency=config.max_research_concurrency,
+                    max_researcher_model_calls=config.max_researcher_model_calls,
                     max_concurrent_source_tool_calls=config.max_concurrent_source_tool_calls,
                     max_source_tool_batch_size=config.max_source_tool_batch_size,
                     resource_limits=config.resource_limits,
@@ -298,8 +307,12 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         except (asyncio.CancelledError, DeepResearchExecutionTimeout):
             interrupted = True
             raise
-        except Exception:
-            logger.exception("Error in deep research execution")
+        except Exception as exc:
+            logger.error(
+                "Error in deep research execution (error_type=%s detail_%s)",
+                type(exc).__name__,
+                log_content_metadata(exc),
+            )
             raise
         finally:
             if owns_active_agent:

@@ -52,6 +52,11 @@ class TestIntentResult:
         assert result.report_action == "edit"
         assert result.use_parent_report_context is False
 
+    def test_intent_result_hybrid_route(self):
+        result = IntentResult(intent="research", target="hybrid_research")
+
+        assert result.target == "hybrid_research"
+
     def test_intent_result_invalid_report_action(self):
         """Test invalid report actions are rejected."""
         with pytest.raises(ValidationError):

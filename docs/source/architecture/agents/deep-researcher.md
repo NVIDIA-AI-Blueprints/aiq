@@ -137,10 +137,11 @@ runtime dependencies, not additional agents:
 | Inference and source tools | LLM calls, source-tool calls, credentials, orchestration state, and `/shared/` remain in the AI-Q process. Only generated code and job-workspace files cross the sandbox boundary. |
 
 The shipped `config_domain_routing_and_skills.yml` profile assigns the
-`research` collection to researcher workers and the `synthesis` collection to
-the writer. The research collection currently includes chart generation,
-table analysis, forecast analysis, and lightweight calculations. The synthesis
-collection includes long-form and prediction report writers. A skill provides
+`research` collection to researcher workers and the `synthesis` and
+`visualization` collections to the writer. The research collection currently
+includes table analysis, forecast analysis, and lightweight calculations. The
+synthesis collection includes long-form and prediction report writers, and the
+visualization collection provides chart generation. A skill provides
 instructions; only skills that invoke `execute` require the optional sandbox.
 Modal and OpenShell implement the same provider-neutral job-scoped contract.
 

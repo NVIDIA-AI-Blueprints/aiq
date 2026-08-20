@@ -50,6 +50,18 @@ def test_frontier_profile_uses_validated_gpt_role_split() -> None:
     config = yaml.safe_load(Path("configs/config_frontier_models.yml").read_text(encoding="utf-8"))
     llms = config["llms"]
 
+    assert llms["gpt_luna_intent_llm"] == {
+        "_type": "openai",
+        "model_name": "gpt-5.6-luna",
+        "api_key": "${OPENAI_API_KEY}",
+        "max_tokens": 1024,
+        "num_retries": 2,
+        "parallel_tool_calls": False,
+    }
+    assert llms["gpt_luna_shallow_llm"] == {
+        **llms["gpt_luna_intent_llm"],
+        "max_tokens": 8192,
+    }
     assert llms["gpt_sol_agent_llm"] == {
         "_type": "openai",
         "model_name": "gpt-5.6-sol",
@@ -66,6 +78,8 @@ def test_frontier_profile_uses_validated_gpt_role_split() -> None:
         **llms["gpt_sol_agent_llm"],
         "model_name": "gpt-5.6-luna",
     }
+    assert config["functions"]["intent_classifier"]["llm"] == "gpt_luna_intent_llm"
+    assert config["functions"]["shallow_research_agent"]["llm"] == "gpt_luna_shallow_llm"
     deep_research = config["functions"]["deep_research_agent"]
     assert {
         role: deep_research[f"{role}_llm"]
@@ -79,8 +93,17 @@ def test_frontier_profile_uses_validated_gpt_role_split() -> None:
     }
 
 
-def test_openshell_workflow_only_diverges_for_sandbox_wiring() -> None:
-    """Keep the OpenShell workflow aligned with the standard web config."""
+def test_openshell_workflow_only_diverges_for_skills_and_sandbox_wiring() -> None:
+    """Keep the OpenShell workflow aligned with the standard web config.
+
+    The visualization chart skill now ships only in the skills and sandbox
+    example configs, so the standard web config wires no deep_research_skills
+    at all and renders chart-worthy data as Markdown tables. OpenShell layers
+    the sandbox-gated research and synthesis collections plus the on-demand
+    visualization skill on top of a sandbox, so the skills function, the
+    sandbox function, and their two agent refs are the only divergence from
+    the standard config.
+    """
 
     def load(path: str) -> dict[str, Any]:
         text = Path(path).read_text(encoding="utf-8")
@@ -89,16 +112,29 @@ def test_openshell_workflow_only_diverges_for_sandbox_wiring() -> None:
 
     standard = load("configs/config_web_default_llamaindex.yml")
     openshell = load("configs/config_openshell.yml")
+
+    standard_functions = standard["functions"].copy()
     openshell_functions = openshell["functions"].copy()
-    openshell_functions.pop("deep_research_skills")
+
+    assert "deep_research_skills" not in standard_functions
+    assert "deep_research_sandbox" not in standard_functions
+    assert "skills" not in standard_functions["deep_research_agent"]
+    assert "sandbox" not in standard_functions["deep_research_agent"]
+
+    openshell_skills = openshell_functions.pop("deep_research_skills")
+    assert openshell_skills["_type"] == "deep_research_skills"
+    assert openshell_skills["agents"]["researcher-agent"] == ["research"]
+    assert "visualization" in openshell_skills["agents"]["writer-agent"]
+    assert "research" in openshell_skills["require_sandbox"]
     openshell_functions.pop("deep_research_sandbox")
-    openshell_functions["deep_research_agent"] = openshell_functions["deep_research_agent"].copy()
-    openshell_functions["deep_research_agent"].pop("skills")
-    openshell_functions["deep_research_agent"].pop("sandbox")
+
+    openshell_agent = openshell_functions["deep_research_agent"] = openshell_functions["deep_research_agent"].copy()
+    assert openshell_agent.pop("skills") == "deep_research_skills"
+    assert openshell_agent.pop("sandbox") == "deep_research_sandbox"
 
     assert openshell["general"] == standard["general"]
     assert openshell["llms"] == standard["llms"]
-    assert openshell_functions == standard["functions"]
+    assert openshell_functions == standard_functions
     assert openshell["workflow"] == standard["workflow"]
 
 
@@ -134,6 +170,7 @@ class TestSkillCollections:
 
         assert collections["research"] == "/skills/research/"
         assert collections["synthesis"] == "/skills/synthesis/"
+        assert collections["visualization"] == "/skills/visualization/"
 
     def test_nested_skill_collections_are_discovered(self, tmp_path) -> None:
         skill_dir = tmp_path / "finance" / "earnings" / "quarterly-summary"
@@ -175,6 +212,17 @@ class TestDeepAgentsRuntimeRouting:
         assert set(backend.routes) == {BUILTIN_SKILL_SOURCE}
         assert isinstance(backend.routes[BUILTIN_SKILL_SOURCE], FilesystemBackend)
         assert runtime.skill_sources_for("writer-agent") == [SYNTHESIS_SKILL_SOURCE]
+
+    def test_agent_has_chart_skill_tracks_visualization_collection(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=DeepResearchSkillsConfig(
+                agents={"writer-agent": ("visualization",), "researcher-agent": ("synthesis",)},
+            ),
+        )
+
+        assert runtime.agent_has_chart_skill("writer-agent") is True
+        assert runtime.agent_has_chart_skill("researcher-agent") is False
+        assert runtime.agent_has_chart_skill("planner-agent") is False
 
     def test_sandbox_only_adds_shared_route(self) -> None:
         fake_sandbox = MagicMock()

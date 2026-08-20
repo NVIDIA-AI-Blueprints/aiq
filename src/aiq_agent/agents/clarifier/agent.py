@@ -63,6 +63,7 @@ from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_latest_user_query
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.logging_utils import log_content_metadata
 
 from .models import ClarificationResponse
 from .models import ClarifierAgentState
@@ -258,7 +259,7 @@ class ClarifierAgent:
             except (json.JSONDecodeError, Exception):
                 pass
 
-        logger.warning("Failed to parse clarification response as JSON: %s...", text[:200])
+        logger.warning("Failed to parse clarification response as JSON (response_%s)", log_content_metadata(text))
         return None
 
     def _is_needed(self, text: str) -> bool:
@@ -664,7 +665,7 @@ class ClarifierAgent:
         """
         logger.info("Clarifier: Starting (max %d turns)", self.max_turns)
         query = get_latest_user_query(state.messages)
-        logger.info("User's query: %s...", str(query)[:100] if query else "")
+        logger.info("User query: %s", log_content_metadata(query or ""))
         result = await self._graph.ainvoke(state, config={"callbacks": self.callbacks})
         final_state = ClarifierAgentState.model_validate(result)
         return ClarifierResult(clarifier_log=final_state.clarifier_log)

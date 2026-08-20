@@ -179,7 +179,7 @@ functions:
     _type: deep_research_skills
     agents:
       researcher-agent: [research]
-      writer-agent: [synthesis]
+      writer-agent: [synthesis, visualization]
     require_sandbox:
       - research
 

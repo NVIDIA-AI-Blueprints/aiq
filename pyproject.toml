@@ -210,6 +210,7 @@ dev = [
     "mypy>=1.5.0",
     "dask[distributed]>=2024.1.0",
     # Workspace packages for testing
+    "aiq-gsf",
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
@@ -240,6 +241,7 @@ override-dependencies = [
     "defusedxml>=0.7.1,<0.8",
     "nltk>=3.10.0,<4",
     "pyasn1>=0.6.4,<0.7",
+    "aiohttp>=3.14.3,<4",
 ]
 
 [tool.uv.pip]
@@ -258,6 +260,7 @@ exclude = ["mcp"]
 
 [tool.uv.sources]
 aiq-agent = { workspace = true }
+aiq-gsf = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }

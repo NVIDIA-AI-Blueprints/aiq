@@ -23,7 +23,7 @@
 #   docker compose --env-file ../.env -f docker-compose.yaml up -d
 #
 # Frontend image:
-#   The frontend is built from frontends/ui/Dockerfile.
+#   The frontend is built from frontends/ui/deploy/Dockerfile.
 #
 # =============================================================================
 

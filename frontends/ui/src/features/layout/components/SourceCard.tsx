@@ -78,21 +78,21 @@ export const SourceCard: FC<SourceCardProps> = ({ source }) => {
           ${source.isCited ? 'border-l-2 border-l-success' : ''}
         `}
       >
-        {/* Header row */}
+        {}
         <Flex align="center" gap="2">
-          {/* Cited indicator */}
+          {}
           {source.isCited && (
             <span className="text-sm" aria-hidden="true">
               ✅
             </span>
           )}
 
-          {/* Title or domain */}
+          {}
           <Text kind="label/semibold/sm" className="flex-1 truncate">
             {source.title || getDomain(source.url)}
           </Text>
 
-          {/* Timestamp */}
+          {}
           {source.discoveredAt && (
             <Text kind="body/regular/xs" className="text-subtle shrink-0">
               {formatTime(source.discoveredAt)}
@@ -100,12 +100,12 @@ export const SourceCard: FC<SourceCardProps> = ({ source }) => {
           )}
         </Flex>
 
-        {/* URL */}
+        {}
         <Text kind="body/regular/xs" className="text-subtle truncate">
           {source.url}
         </Text>
 
-        {/* Snippet */}
+        {}
         {source.snippet && (
           <Text kind="body/regular/xs" className="text-subtle line-clamp-2 mt-1">
             {source.snippet}

@@ -83,6 +83,17 @@ def _post_process_revised_report(revised_report: str, parent_sources: Sequence[S
     return sanitize_report(revised_report).sanitized_report
 
 
+def _verified_cited_urls(report: str, sources: Sequence[SourceEntry]) -> list[str]:
+    """Return the verified URL citations still present in a finalized rewrite."""
+    if not sources:
+        return []
+    registry = SourceRegistry()
+    for source in sources:
+        registry.add(source)
+    verification = verify_citations(report, registry)
+    return list(dict.fromkeys(citation["url"] for citation in verification.valid_citations if citation.get("url")))
+
+
 async def rewrite_report(
     *,
     llm: Any,
@@ -183,10 +194,15 @@ class ReportRewriterAgent:
             parent_context=parent_context,
             system_prompt=self.system_prompt,
         )
+        cited_urls = _verified_cited_urls(
+            revised_report,
+            _effective_parent_sources(original_report, parent_context),
+        )
 
         for callback in self.callbacks:
             if hasattr(callback, "emit_final_report"):
-                callback.emit_final_report(revised_report)
+                callback.emit_final_report(revised_report, cited_urls=cited_urls)
+                break
 
         files = dict(state.files)
         files[OUTPUT_REPORT_PATH] = revised_report

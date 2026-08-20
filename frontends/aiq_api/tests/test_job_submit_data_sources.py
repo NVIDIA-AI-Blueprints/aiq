@@ -188,6 +188,22 @@ async def test_submit_job_accepts_source_when_empty_tools_inherit_and_partial_ex
     ]
 
 
+@pytest.mark.asyncio
+async def test_submit_job_forwards_conversation_id_header(submit_app):
+    """The custom submit route must explicitly propagate NAT's routing header."""
+    app, submitted_job, _builder = submit_app
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "deep_researcher", "input": "query"},
+            headers={"conversation-id": "customer-collection"},
+        )
+
+    assert response.status_code == 200
+    assert submitted_job.await_args.kwargs["conversation_id"] == "customer-collection"
+
+
 @pytest.mark.parametrize(
     ("error", "expected_status", "expected_detail", "expected_retry_after"),
     [

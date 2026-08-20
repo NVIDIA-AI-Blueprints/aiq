@@ -33,8 +33,9 @@ The built-in collections currently expose these role-oriented skills:
 
 | Collection | Default assignment | Skills |
 | ---------- | ------------------ | ------ |
-| `research` | `researcher-agent` | `chart-generation`, `data-table-analysis`, `forecast-analysis`, `lightweight-calculation` |
+| `research` | `researcher-agent` | `data-table-analysis`, `forecast-analysis`, `lightweight-calculation` |
 | `synthesis` | `writer-agent` | `long-form-report-writer`, `prediction-report-writer` |
+| `visualization` | `writer-agent` | `chart-generation` |
 
 The assignment is configurable. Skill definitions stay host-side and read-only;
 only workflows that invoke `execute` require a sandbox.
@@ -78,6 +79,7 @@ functions:
         - research
       writer-agent:
         - synthesis
+        - visualization
     require_sandbox:
       - research
 
@@ -104,7 +106,7 @@ functions:
     sandbox: deep_research_sandbox
 ```
 
-AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run in the configured provider. Modal creates a fresh sandbox named for the job.
+AI-Q validates the public skill collection names (`research`, `synthesis`, `visualization`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run in the configured provider. Modal creates a fresh sandbox named for the job.
 
 In the reference async API flow, artifact capture uses the job database configured by
 `general.front_end.db_url` (`NAT_JOB_STORE_DB_URL`) for metadata. Artifact bytes use SQL BLOB storage in the job database
