@@ -259,6 +259,7 @@ class ShallowResearcherAgent:
         max_llm_turns: int = 10,
         max_tool_iterations: int = 5,
         citation_repair_timeout: float = 60.0,
+        enforce_citations: bool = False,
         callbacks: list[Any] | None = None,
     ) -> None:
         """
@@ -274,6 +275,9 @@ class ShallowResearcherAgent:
                                 synthesis (default 5).
             citation_repair_timeout: Maximum seconds for the one-shot citation
                                      repair call (default 60).
+            enforce_citations: Whether missing or invalid citation integrity
+                               should fail the run instead of returning the
+                               generated answer (default False).
             callbacks: Optional list of LangGraph callbacks.
         """
         self.llm_provider = llm_provider
@@ -281,6 +285,7 @@ class ShallowResearcherAgent:
         self.max_llm_turns = max_llm_turns
         self.max_tool_iterations = max_tool_iterations
         self.citation_repair_timeout = citation_repair_timeout
+        self.enforce_citations = enforce_citations
         self.callbacks = callbacks or []
 
         # Load prompts
@@ -586,13 +591,33 @@ class ShallowResearcherAgent:
                 enable_logging=False,
             )
             generated_answer = sanitize_report(content).sanitized_report if content is not None else None
-            raise EmptySourceRegistryError(
-                "shallow research",
-                unavailable_tools=unavailable,
-                available_count=available_count,
-                reason=classify_empty_source_registry_reason(state.data_sources, available_count, unavailable),
-                generated_answer=generated_answer,
+            if self.enforce_citations or generated_answer is None:
+                raise EmptySourceRegistryError(
+                    "shallow research",
+                    unavailable_tools=unavailable,
+                    available_count=available_count,
+                    reason=classify_empty_source_registry_reason(state.data_sources, available_count, unavailable),
+                    generated_answer=generated_answer,
+                )
+
+            logger.info(
+                "Shallow research completed without captured sources; returning generated answer because "
+                "enforce_citations is false (available_tools=%d unavailable_tools=%d)",
+                available_count,
+                len(unavailable),
             )
+            content = generated_answer
+            if last_msg is not None:
+                for cb in self.callbacks:
+                    if hasattr(cb, "emit_final_report"):
+                        cb.emit_final_report(content, cited_urls=[])
+                        break
+
+                if hasattr(last_msg, "model_copy"):
+                    validated_result["messages"][-1] = last_msg.model_copy(update={"content": content})
+                else:
+                    validated_result["messages"][-1] = type(last_msg)(content=content)
+            return ShallowResearchAgentState.model_validate(validated_result)
 
         if validated_result.get("messages"):
             if content is not None:
@@ -611,7 +636,7 @@ class ShallowResearcherAgent:
                     citation_integrity = _has_citation_integrity(content, verification.valid_citations)
                     if not citation_integrity and len(sources) == 1:
                         content = _append_minimal_citation(content, sources[0])
-                    elif not citation_integrity:
+                    elif not citation_integrity and self.enforce_citations:
                         logger.info(
                             "Shallow report is missing citation integrity; attempting one bounded repair "
                             "(registered_sources=%d)",
@@ -627,6 +652,12 @@ class ShallowResearcherAgent:
                                 len(sources),
                                 len(repair_verification.valid_citations),
                             )
+                    elif not citation_integrity:
+                        logger.info(
+                            "Shallow report is missing citation integrity; returning generated answer because "
+                            "enforce_citations is false (registered_sources=%d)",
+                            len(sources),
+                        )
                 # Step 2: sanitize report (strip body URLs, shortened URLs, unsafe URLs)
                 sanitization = sanitize_report(content)
                 content = sanitization.sanitized_report
@@ -641,7 +672,8 @@ class ShallowResearcherAgent:
                         len(registry.all_sources()),
                         len(final_verification.valid_citations),
                     )
-                    raise CitationIntegrityError()
+                    if self.enforce_citations:
+                        raise CitationIntegrityError()
                 content = _format_chat_references(final_verification.verified_report)
                 final_cited_urls = list(
                     dict.fromkeys(

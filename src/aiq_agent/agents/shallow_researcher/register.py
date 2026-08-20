@@ -59,6 +59,10 @@ class ShallowResearchAgentConfig(FunctionBaseConfig, name="shallow_research_agen
     )
     max_llm_turns: int = Field(default=10, description="Maximum number of LLM turns")
     max_tool_iterations: int = Field(default=5, description="Maximum tool-calling iterations before forcing synthesis")
+    enforce_citations: bool = Field(
+        default=False,
+        description="Fail instead of returning a generated answer when citation integrity cannot be preserved.",
+    )
     verbose: bool = Field(default=False, description="Whether to enable verbose logging")
 
 
@@ -178,6 +182,7 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                     tools=selected_tools,
                     max_llm_turns=config.max_llm_turns,
                     max_tool_iterations=config.max_tool_iterations,
+                    enforce_citations=config.enforce_citations,
                     callbacks=callbacks,
                 )
 
