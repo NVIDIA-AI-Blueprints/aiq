@@ -15,7 +15,6 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import distribution
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 _DIRECT_RUNTIME_DEPENDENCIES = {
     "aiq-agent",
@@ -103,14 +102,6 @@ _NOTICE_REVIEW_PATTERNS = {
 
 def _canonicalize(name: str) -> str:
     return re.sub(r"[-_.]+", "-", name).lower()
-
-
-def _expected_component_purl(name: str, version: str) -> str:
-    purl = f"pkg:pypi/{name}@{version}"
-    git_source = _APPROVED_GIT_SOURCES.get((name, version))
-    if git_source is not None:
-        return f"{purl}?vcs_url={quote(git_source, safe=':/')}"
-    return purl
 
 
 def _license_files(dist: Any) -> list[dict[str, str]]:
@@ -220,8 +211,8 @@ def validate_sbom(sbom: dict[str, Any]) -> None:
             observed_local.add(record)
             continue
 
-        if component.get("purl") != _expected_component_purl(name, version):
-            raise ValueError(f"dependency is not from the approved source contract: {name}=={version}")
+        if component.get("purl") != f"pkg:pypi/{name}@{version}":
+            raise ValueError(f"dependency is not from the public PyPI source contract: {name}=={version}")
 
     if observed_local != set(_LOCAL_SOURCE_COMPONENTS):
         raise ValueError("SBOM local component set differs from the approved public source contract")
