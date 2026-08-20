@@ -26,6 +26,7 @@ import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
 
 from aiq_agent.agents.shallow_researcher.agent import ShallowResearcherAgent
@@ -529,6 +530,64 @@ class TestShallowResearcherAgent:
         )
         assert synthesis_instruction_found
         assert captured_configs == [{"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}]
+
+    @pytest.mark.asyncio
+    async def test_forced_synthesis_retries_empty_length_response(self, mock_llm_provider, mock_llm, real_tool):
+        """Blank forced synthesis responses get one compact retry before returning."""
+        empty_length_response = AIMessage(
+            content="",
+            additional_kwargs={"reasoning_content": "thinking until the output budget is exhausted"},
+            response_metadata={"finish_reason": "length"},
+        )
+        retry_response = AIMessage(
+            content=(
+                "The actual growth exceeded the expected growth by 1.5 percentage points [1].\n\n"
+                "## References\n[1] JOHNSON_JOHNSON_2023Q2_EARNINGS.pdf, p.5"
+            )
+        )
+        captured_messages = []
+
+        async def capture_messages(messages, *, config):
+            assert config == {"tags": [SUPPRESS_OUTPUT_ARTIFACT_TAG]}
+            captured_messages.append(messages)
+            return empty_length_response if len(captured_messages) == 1 else retry_response
+
+        mock_llm.ainvoke = AsyncMock(side_effect=capture_messages)
+
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[real_tool],
+            max_tool_iterations=1,
+        )
+        state = ShallowResearchAgentState(
+            messages=[
+                HumanMessage(content="By how many percentage points did EPS growth differ?"),
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "web_search_tool", "args": {"query": "JNJ EPS"}, "id": "call-1"}],
+                ),
+                ToolMessage(
+                    content="Adjusted EPS growth midpoint was 5.0%; prior guidance expected 3.5%.",
+                    name="web_search_tool",
+                    tool_call_id="call-1",
+                ),
+            ],
+            tool_iterations=1,
+        )
+
+        result = await agent.run(state)
+
+        assert result.messages[-1].content == retry_response.content
+        assert mock_llm.ainvoke.await_count == 2
+
+        retry_messages = captured_messages[1]
+        assert len(retry_messages) == 2
+        assert isinstance(retry_messages[0], SystemMessage)
+        assert isinstance(retry_messages[1], HumanMessage)
+        assert all(not isinstance(message, ToolMessage) for message in retry_messages)
+        assert "Return final answer only" in retry_messages[1].content
+        assert "By how many percentage points did EPS growth differ?" in retry_messages[1].content
+        assert "Adjusted EPS growth midpoint was 5.0%" in retry_messages[1].content
 
 
 # ---------------------------------------------------------------------------

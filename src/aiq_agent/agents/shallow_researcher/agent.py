@@ -74,6 +74,98 @@ _REFERENCE_TARGET_RE = re.compile(
     r"(?:https?://\S+|[^\s,]+\.\w{2,5}(?:,[^\n]+)?|[A-Za-z0-9]+(?:_+[A-Za-z0-9]+)+)$",
     re.IGNORECASE,
 )
+_EMERGENCY_SYNTHESIS_MAX_TOOL_RESULTS = 5
+_EMERGENCY_SYNTHESIS_TOOL_CHARS = 1200
+
+
+def _content_to_text(content: Any) -> str:
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and isinstance(item.get("text"), str):
+                parts.append(item["text"])
+            else:
+                parts.append(str(item))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _is_blank_response(response: Any) -> bool:
+    return not _content_to_text(getattr(response, "content", None)).strip()
+
+
+def _response_finish_reason(response: Any) -> str | None:
+    metadata = getattr(response, "response_metadata", None) or {}
+    if not isinstance(metadata, dict):
+        return None
+    finish_reason = metadata.get("finish_reason") or metadata.get("stop_reason")
+    return str(finish_reason) if finish_reason is not None else None
+
+
+def _response_reasoning_chars(response: Any) -> int:
+    additional_kwargs = getattr(response, "additional_kwargs", None) or {}
+    if not isinstance(additional_kwargs, dict):
+        return 0
+    return len(_content_to_text(additional_kwargs.get("reasoning_content")))
+
+
+def _truncate_evidence(text: str) -> str:
+    text = text.strip()
+    if len(text) <= _EMERGENCY_SYNTHESIS_TOOL_CHARS:
+        return text
+    return text[:_EMERGENCY_SYNTHESIS_TOOL_CHARS].rstrip() + "\n[truncated]"
+
+
+def _latest_human_question(messages: Sequence[Any]) -> str:
+    for message in reversed(messages):
+        if isinstance(message, HumanMessage):
+            question = _content_to_text(message.content).strip()
+            if question:
+                return question
+    return "No explicit user question was found in the conversation history."
+
+
+def _compact_tool_evidence(messages: Sequence[Any]) -> str:
+    evidence_blocks: list[str] = []
+    for index, message in enumerate(messages, start=1):
+        if not isinstance(message, ToolMessage):
+            continue
+        content = _content_to_text(message.content).strip()
+        if not content:
+            continue
+        tool_name = getattr(message, "name", None) or "tool"
+        evidence_blocks.append(f"Tool result {index} ({tool_name}):\n{_truncate_evidence(content)}")
+
+    if not evidence_blocks:
+        return "No non-empty tool evidence was returned."
+    return "\n\n".join(evidence_blocks[-_EMERGENCY_SYNTHESIS_MAX_TOOL_RESULTS:])
+
+
+def _build_emergency_synthesis_messages(messages: Sequence[Any]) -> list[Any]:
+    question = _latest_human_question(messages)
+    evidence = _compact_tool_evidence(messages)
+    system_message = SystemMessage(
+        content=(
+            "You are a final-answer synthesis pass. Return only the final answer in visible content. "
+            "Do not include reasoning. Do not call tools. Use only the provided question and compact evidence. "
+            "If the evidence is insufficient, say so directly."
+        )
+    )
+    user_message = HumanMessage(
+        content=(
+            f"Question:\n{question}\n\n"
+            f"Compact evidence from prior tool results:\n{evidence}\n\n"
+            "Return final answer only. Do not include reasoning. "
+            "When evidence is available, include inline [N] citations and a ## References section."
+        )
+    )
+    return [system_message, user_message]
 
 
 def _reference_entry_number(line: str, previous_number: int | None) -> int | None:
@@ -435,7 +527,19 @@ class ShallowResearcherAgent:
                     )
 
                     full_messages = [system_message] + processed_history + [synthesis_anchor]
-                    response = await self._get_llm().ainvoke(full_messages, config=draft_config)
+                    llm = self._get_llm()
+                    response = await llm.ainvoke(full_messages, config=draft_config)
+                    if _is_blank_response(response):
+                        logger.warning(
+                            "Forced synthesis returned empty content; retrying once with compact emergency synthesis "
+                            "(finish_reason=%s reasoning_chars=%d)",
+                            _response_finish_reason(response),
+                            _response_reasoning_chars(response),
+                        )
+                        response = await llm.ainvoke(
+                            _build_emergency_synthesis_messages(processed_history),
+                            config=draft_config,
+                        )
                     return {"messages": [response], "tool_iterations": iterations}
 
                 llm = self._get_llm()
