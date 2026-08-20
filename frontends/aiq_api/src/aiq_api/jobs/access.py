@@ -48,6 +48,10 @@ _JOB_ACCESS_SELECT_SQL = text(
     "SELECT job_id, owner_auth_type, owner_subject, owner_email, conversation_id, created_at "
     "FROM job_access WHERE job_id = :job_id"
 )
+_VALIDATE_JOB_ACCESS_SCHEMA_SQL = text(
+    "SELECT job_id, owner_auth_type, owner_subject, owner_email, conversation_id, agent_type, "
+    "submission_token, submission_expires_at, created_at FROM job_access WHERE 1 = 0"
+)
 # Most recent completed, non-expired report job for a conversation. The owner predicate is
 # applied only when REQUIRE_AUTH=true, mirroring authorize_job_access (which skips ownership
 # under REQUIRE_AUTH=false). This keeps the fallback consistent with the auth gate and avoids
@@ -102,6 +106,13 @@ def ensure_job_access_table(db_url: str) -> None:
     with _job_access_connection(db_url) as conn:
         _ensure_job_access_schema(conn, db_url)
         conn.commit()
+    validate_job_access_table(db_url)
+
+
+def validate_job_access_table(db_url: str) -> None:
+    """Raise unless the access table exposes its full storage contract."""
+    with _job_access_connection(db_url) as conn:
+        conn.execute(_VALIDATE_JOB_ACCESS_SCHEMA_SQL)
 
 
 def create_job_access(

@@ -209,6 +209,52 @@ async def test_probe_reports_incomplete_admission_schema_as_unavailable(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_job_access_schema_drift_degrades_health_and_blocks_submit(route_dependencies, tmp_path):
+    from aiq_api.jobs.access import create_job_access
+    from aiq_api.jobs.event_store import EventStore
+
+    jobs_routes, submit_job, encryption_submit = route_dependencies
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    config_path = tmp_path / "config.yml"
+    config_path.write_text("functions: {}\n", encoding="utf-8")
+    store = _job_store(db_url)
+    app = FastAPI()
+    await jobs_routes.register_job_routes(
+        app,
+        _builder(),
+        _worker(job_store=store, config_path=str(config_path), db_url=db_url),
+    )
+
+    async def _persist_job_access(**kwargs):
+        await asyncio.to_thread(create_job_access, "job-1", kwargs["principal"], db_url)
+        return "job-1"
+
+    submit_job.side_effect = _persist_job_access
+    engine = EventStore._get_or_create_async_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.execute(text("ALTER TABLE job_access RENAME COLUMN owner_subject TO missing_owner_subject"))
+
+    with TestClient(app) as client:
+        health = client.get("/health")
+        submit = client.post(
+            "/v1/jobs/async/submit",
+            json={"agent_type": "shallow_researcher", "input": "question"},
+        )
+
+    assert health.status_code == 503
+    assert health.json() == {
+        "status": "degraded",
+        "dask_available": True,
+        "db": "schema_unavailable",
+        "reason": "async_jobs_unavailable",
+    }
+    assert submit.status_code == 503
+    assert submit.json() == {"detail": "Async job submission is currently unavailable"}
+    submit_job.assert_not_awaited()
+    encryption_submit.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_probe_reports_unreachable_database(monkeypatch, tmp_path):
     import aiq_api.routes.jobs as jobs_routes
 
@@ -238,6 +284,10 @@ async def test_probe_reports_scheduler_failure_and_timeout(monkeypatch, tmp_path
         jobs_routes,
         "_table_names",
         AsyncMock(return_value=set(jobs_routes._REQUIRED_ASYNC_JOB_TABLES)),
+    )
+    monkeypatch.setattr(
+        "aiq_api.jobs.access.validate_job_access_table",
+        MagicMock(),
     )
     monkeypatch.setattr(
         "aiq_api.jobs.admission.validate_deep_research_admission_table",

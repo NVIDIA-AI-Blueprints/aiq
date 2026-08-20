@@ -164,6 +164,14 @@ async def _probe_async_job_readiness(
             return {"reason": "async_jobs_unavailable", "db": db_status}
 
         try:
+            from ..jobs.access import validate_job_access_table
+
+            await asyncio.to_thread(validate_job_access_table, db_url)
+        except Exception as exc:
+            logger.warning("Async-job readiness access schema read failed error_type=%s", type(exc).__name__)
+            return {"reason": "async_jobs_unavailable", "db": db_status}
+
+        try:
             from ..jobs.admission import validate_deep_research_admission_table
 
             await asyncio.to_thread(validate_deep_research_admission_table, db_url)

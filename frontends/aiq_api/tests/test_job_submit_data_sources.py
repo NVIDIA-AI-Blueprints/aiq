@@ -88,6 +88,7 @@ async def submit_app(monkeypatch, tmp_path):
     from aiq_api.jobs import submit
 
     monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())
+    monkeypatch.setattr(access, "validate_job_access_table", MagicMock())
     monkeypatch.setattr(admission, "ensure_deep_research_admission_table", MagicMock())
     monkeypatch.setattr(admission, "validate_deep_research_admission_table", MagicMock())
     monkeypatch.setattr(
