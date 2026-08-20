@@ -276,6 +276,15 @@ docker compose --env-file deploy/.env \
   up -d --build --wait
 ```
 
+With the service-name endpoints shown above and both stacks running, connect
+the AI-Q backend to the RAG network:
+
+```bash
+docker network connect nvidia-rag aiq-agent
+```
+
+Repeat this command whenever the `aiq-agent` container is recreated.
+
 ### Test the Pipeline
 
 ```bash
