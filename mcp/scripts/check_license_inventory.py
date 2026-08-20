@@ -34,6 +34,13 @@ _LOCAL_SOURCE_COMPONENTS = {
     ("knowledge-layer", "1.0.0"): "../sources/knowledge_layer",
     ("tavily-web-search", "1.0.0"): "../sources/tavily_web_search",
 }
+_APPROVED_GIT_SOURCES = {
+    ("nemo-relay", "0.8.0"): (
+        "https://github.com/NVIDIA/NeMo-Relay.git"
+        "?rev=ffb24817442bac99212da0971b13bdad5bc4d84d"
+        "#ffb24817442bac99212da0971b13bdad5bc4d84d"
+    )
+}
 _MCP_LOCK_PATH = Path(__file__).resolve().parents[1] / "uv.lock"
 
 # These distributions omit license metadata but bundle a license file. A version
@@ -227,6 +234,9 @@ def validate_lock_sources(lock_path: Path = _MCP_LOCK_PATH) -> None:
             if source != {"registry": "https://pypi.org/simple"}:
                 raise ValueError(f"dependency uses an unapproved registry source: {name}=={version}")
             continue
+        if source.get("git") is not None:
+            if source == {"git": _APPROVED_GIT_SOURCES.get((name, version))}:
+                continue
         editable = source.get("editable")
         if not isinstance(editable, str):
             raise ValueError(f"dependency uses an unapproved lock source: {name}=={version}")

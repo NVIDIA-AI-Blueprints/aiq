@@ -41,8 +41,9 @@ class TestResearchLogger:
         logger_non_verbose = ResearchLogger(mock_logger, verbose=False)
         assert logger_non_verbose.verbose is False
 
-    def test_research_logger_defaults_to_non_verbose(self, mock_logger):
+    def test_research_logger_defaults_to_non_verbose(self, mock_logger, monkeypatch):
         """Research logging does not consult a process-global verbosity switch."""
+        monkeypatch.setenv("AIQ_VERBOSE", "true")
         assert ResearchLogger(mock_logger).verbose is False
 
     def test_section_logs_info(self, mock_logger):

@@ -248,4 +248,4 @@ workflow:
     pricing:
       sources:
         - type: file
-          path: configs/nemo_relay/relay_pricing_catalog.json
+          path: ${AIQ_RELAY_PRICING_CATALOG:-/app/configs/nemo_relay/relay_pricing_catalog.json}

@@ -322,7 +322,11 @@ class DeepResearcherAgent:
                     result = await run_agent(
                         "deep_research_agent",
                         _invoke_orchestrator,
-                        input_value=state,
+                        input_value={
+                            "message_count": len(messages),
+                            "query_character_count": len(query),
+                            "file_count": len(state.files),
+                        },
                     )
             except TimeoutError as exc:
                 # An inner provider/tool may raise TimeoutError for its own operation.

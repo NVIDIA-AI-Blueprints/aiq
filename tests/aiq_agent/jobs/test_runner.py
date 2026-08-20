@@ -109,6 +109,20 @@ async def test_relay_startup_timeout_does_not_block_job(monkeypatch, caplog):
     assert "TimeoutError" in caplog.text
 
 
+def test_async_job_uses_workflow_relay_config() -> None:
+    """Async agents inherit the outer workflow's effective Relay settings."""
+    from types import SimpleNamespace
+
+    from aiq_api.jobs.runner import _resolve_job_relay_config
+
+    workflow_relay = object()
+    agent_relay = object()
+    config = SimpleNamespace(workflow=SimpleNamespace(relay=workflow_relay))
+
+    assert _resolve_job_relay_config(config, SimpleNamespace(relay=agent_relay)) is workflow_relay
+    assert _resolve_job_relay_config(SimpleNamespace(), SimpleNamespace(relay=agent_relay)) is agent_relay
+
+
 @pytest.fixture(name="content_encryption_manager_guard")
 def fixture_content_encryption_manager_guard():
     """Reset content-encryption globals even when a test assertion fails."""

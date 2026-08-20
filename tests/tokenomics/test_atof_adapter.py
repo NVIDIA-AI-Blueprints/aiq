@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Tests for Relay ATOF tokenomics post-processing."""
 
@@ -182,6 +194,30 @@ def test_parse_trace_ignores_non_string_identifiers(tmp_path: Path) -> None:
     profiles = parse_trace(str(path), _pricing())
 
     assert len(profiles) == 1
+
+
+def test_parse_trace_tolerates_non_mapping_category_profile(tmp_path: Path) -> None:
+    events = [
+        _scope(
+            "root",
+            "function",
+            "workflow",
+            "start",
+            "2026-01-01T00:00:00Z",
+            metadata={"aiq.component.type": "workflow"},
+        ),
+        _scope("llm", "llm", "test-model", "start", "2026-01-01T00:00:01Z", parent_uuid="root"),
+        _scope("llm", "llm", "test-model", "end", "2026-01-01T00:00:02Z", parent_uuid="root"),
+        _scope("root", "function", "workflow", "end", "2026-01-01T00:00:03Z"),
+    ]
+    events[2]["category_profile"] = ["malformed"]
+    path = tmp_path / "relay.atof.jsonl"
+    _write(path, events)
+
+    profiles = parse_trace(str(path), _pricing())
+
+    assert len(profiles) == 1
+    assert profiles[0].total_llm_calls == 1
 
 
 def test_parse_trace_failure_log_excludes_exception_content(tmp_path: Path, monkeypatch, caplog) -> None:

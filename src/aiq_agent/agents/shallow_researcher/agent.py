@@ -35,7 +35,6 @@ from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 from langgraph.prebuilt import tools_condition
-from nemo_relay.integrations.langchain import NemoRelayMiddleware
 
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
@@ -52,6 +51,7 @@ from aiq_agent.common.citation_verification import verify_citations
 from aiq_agent.common.logging_utils import log_content_metadata
 from aiq_agent.relay import ainvoke_with_relay
 from aiq_agent.relay import run_agent
+from aiq_agent.relay.runtime import awrap_tool_call_with_relay
 
 from ...common import LLMProvider
 from ...common import LLMRole
@@ -500,8 +500,7 @@ class ShallowResearcherAgent:
 
         builder.set_entry_point("agent")
 
-        relay_middleware = NemoRelayMiddleware()
-        tool_node = ToolNode(self.tools, awrap_tool_call=relay_middleware.awrap_tool_call)
+        tool_node = ToolNode(self.tools, awrap_tool_call=awrap_tool_call_with_relay)
 
         # Per-agent allowlist mirrors the deep researcher: only tools this
         # agent was loaded with are candidates for source capture. The

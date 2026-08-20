@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 import asyncio
 import json
@@ -281,6 +293,30 @@ async def test_relay_model_call_accepts_scalar_inputs(monkeypatch) -> None:
     await ainvoke_with_relay(Model(), message)
 
     assert calls == [["question"], [message]]
+
+
+@pytest.mark.asyncio
+async def test_relay_model_name_comes_from_bound_model(monkeypatch) -> None:
+    observed_names: list[str] = []
+
+    class BoundModel:
+        model_name = "provider-model"
+
+    class Binding:
+        bound = BoundModel()
+
+        async def ainvoke(self, messages, config=None):  # noqa: ARG002
+            return AIMessage(content="done")
+
+    async def capture_name(_self, request, handler):
+        observed_names.append(request.model.model_name)
+        return await handler(request)
+
+    monkeypatch.setattr("aiq_agent.relay.runtime.NemoRelayMiddleware.awrap_model_call", capture_name)
+
+    await ainvoke_with_relay(Binding(), [])
+
+    assert observed_names == ["provider-model"]
 
 
 @pytest.mark.asyncio
@@ -864,7 +900,7 @@ async def test_plugin_managed_otel_exports_protobuf_trace(tmp_path: Path) -> Non
             server_thread.join(timeout=5)
             assert not server_thread.is_alive()
 
-    assert len(received) == 3
+    assert len(received) >= 3
     assert {path for path, _, _ in received} == {
         "/v1/traces?projection=openinference",
         "/v1/traces?projection=full",

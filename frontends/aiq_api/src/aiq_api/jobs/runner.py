@@ -198,6 +198,12 @@ async def _ensure_relay_started_for_job(relay_config: Any, job_id: str) -> None:
         logger.warning("Relay startup failed for job %s (error_type=%s)", job_id, type(exc).__name__)
 
 
+def _resolve_job_relay_config(config: Any, function_config: Any) -> Any:
+    """Prefer workflow Relay settings for a separately executed async agent."""
+    workflow_config = getattr(config, "workflow", None)
+    return getattr(workflow_config, "relay", None) or getattr(function_config, "relay", None)
+
+
 def _db_now_expr(db_url: str) -> str:
     """Return the DB current-time SQL expression for this backend.
 
@@ -788,7 +794,7 @@ async def run_agent_job(
             await _attach_middleware_to_function(builder, config, agent_config_name)
 
             fn_config = builder.get_function_config(agent_config_name)
-            relay_config = getattr(fn_config, "relay", None)
+            relay_config = _resolve_job_relay_config(config, fn_config)
             if relay_config is not None:
                 await _ensure_relay_started_for_job(relay_config, job_id)
             if getattr(fn_config, "type", None) == "deep_research_agent":

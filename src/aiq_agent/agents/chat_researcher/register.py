@@ -26,6 +26,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 from pydantic import ValidationError
 
+from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_checkpointer
@@ -284,7 +285,7 @@ async def context_aware_intent_router(config: ContextAwareIntentRouterConfig, bu
         raise ValueError("context_aware_intent_router requires exactly one catalog tool")
 
     prompt = load_prompt(Path(__file__).parent / "prompts", "context_aware_intent_router.j2")
-    callbacks = [VerboseTraceCallback()] if is_verbose(config.verbose) else []
+    callbacks = [VerboseTraceCallback()] if config.verbose else []
     router = ContextAwareIntentRouter(
         llm,
         tools[0],

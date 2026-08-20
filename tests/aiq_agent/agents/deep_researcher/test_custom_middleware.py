@@ -1031,6 +1031,8 @@ class TestToolNameSanitizationMiddleware:
 
         response_metadata = {"model_name": "nvidia/nemotron-3-ultra-550b-a55b", "finish_reason": "tool_calls"}
         usage_metadata = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+        expected_response_metadata = dict(response_metadata)
+        expected_usage_metadata = dict(usage_metadata)
         ai_msg = AIMessage(
             content="",
             additional_kwargs={
@@ -1062,8 +1064,8 @@ class TestToolNameSanitizationMiddleware:
         assert message.tool_calls[0]["name"] == "advanced_web_search_tool"
         assert message.additional_kwargs["tool_calls"][0]["function"]["name"] == "advanced_web_search_tool"
         assert message.additional_kwargs["provider_field"] == "preserve-me"
-        assert message.response_metadata == response_metadata
-        assert message.usage_metadata == usage_metadata
+        assert message.response_metadata == expected_response_metadata
+        assert message.usage_metadata == expected_usage_metadata
 
     @pytest.mark.asyncio
     async def test_awrap_model_call_no_tool_calls_passthrough(self, middleware):

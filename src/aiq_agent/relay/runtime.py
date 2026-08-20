@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """NeMo Relay framework integration helpers."""
 
@@ -126,11 +138,20 @@ async def ainvoke_with_relay(
         messages.pop(0) if messages and isinstance(messages[0], BaseMessage) and messages[0].type == "system" else None
     )
     model, model_settings, effective_config = _normalize_chat_nvidia_binding(runnable, effective_config)
+    named_source = getattr(model, "bound", model)
+    resolved_name = next(
+        (
+            value
+            for attribute in ("model", "model_name", "model_id", "deployment_name")
+            if isinstance(value := getattr(named_source, attribute, None), str) and value
+        ),
+        None,
+    )
     if not any(
         isinstance(getattr(model, attribute, None), str) and getattr(model, attribute)
         for attribute in ("model", "model_name", "model_id", "deployment_name")
     ):
-        model = _NamedModelAdapter(model, type(model).__name__)
+        model = _NamedModelAdapter(model, resolved_name or type(model).__name__)
     request = ModelRequest(
         model=model,
         messages=messages,
@@ -193,6 +214,34 @@ async def ainvoke_with_relay(
     return response.result[-1]
 
 
+async def awrap_tool_call_with_relay(
+    request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[_T]]
+) -> _T:
+    """Capture a LangChain tool call while preserving execution if Relay setup fails."""
+    invocation_started = False
+    invocation_error: BaseException | None = None
+
+    async def invoke(next_request: ToolCallRequest) -> _T:
+        nonlocal invocation_error
+        nonlocal invocation_started
+        invocation_started = True
+        try:
+            return await handler(next_request)
+        except BaseException as error:
+            invocation_error = error
+            raise
+
+    try:
+        return await NemoRelayMiddleware().awrap_tool_call(request, invoke)
+    except Exception as error:
+        if invocation_started:
+            if invocation_error is not None:
+                raise invocation_error
+            raise
+        _log_capture_failure("tool middleware", error)
+        return await invoke(request)
+
+
 async def ainvoke_tool_with_relay(tool: Any, args: dict[str, Any]) -> Any:
     """Run a direct LangChain tool call through Relay's maintained middleware."""
     request = ToolCallRequest(
@@ -207,28 +256,7 @@ async def ainvoke_tool_with_relay(tool: Any, args: dict[str, Any]) -> Any:
             raise RuntimeError(f"Relay-managed tool {next_request.tool_call['name']!r} is unavailable")
         return await next_request.tool.ainvoke(next_request.tool_call.get("args") or {})
 
-    invocation_started = False
-    invocation_error: BaseException | None = None
-
-    async def invoke(next_request: ToolCallRequest) -> Any:
-        nonlocal invocation_error
-        nonlocal invocation_started
-        invocation_started = True
-        try:
-            return await invoke_call(next_request)
-        except BaseException as error:
-            invocation_error = error
-            raise
-
-    try:
-        return await NemoRelayMiddleware().awrap_tool_call(request, invoke)
-    except Exception as error:
-        if invocation_started:
-            if invocation_error is not None:
-                raise invocation_error
-            raise
-        _log_capture_failure("tool middleware", error)
-        return await invoke(request)
+    return await awrap_tool_call_with_relay(request, invoke_call)
 
 
 @contextmanager
@@ -337,14 +365,7 @@ async def run_agent(
             lifecycle.output = result
             return result
 
-    if _aiq_scope_active.get():
-        return await _run()
-
-    async def _run_isolated() -> _T:
-        with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
-            return await _run()
-
-    return await asyncio.create_task(_run_isolated())
+    return await _run_at_request_boundary(_run)
 
 
 async def run_workflow(
@@ -368,12 +389,17 @@ async def run_workflow(
             lifecycle.output = result
             return result
 
+    return await _run_at_request_boundary(_run)
+
+
+async def _run_at_request_boundary(operation: Callable[[], Awaitable[_T]]) -> _T:
+    """Reuse a nested scope or isolate a new request on its own task and stack."""
     if _aiq_scope_active.get():
-        return await _run()
+        return await operation()
 
     async def _run_isolated() -> _T:
         with nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
-            return await _run()
+            return await operation()
 
     return await asyncio.create_task(_run_isolated())
 

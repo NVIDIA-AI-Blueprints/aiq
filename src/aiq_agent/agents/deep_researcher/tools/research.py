@@ -45,6 +45,12 @@ from ..resource_limits import StateBudgetLedger
 
 _NO_TOOL_RUNTIME = cast(ToolRuntime, None)
 logger = logging.getLogger(__name__)
+
+
+class _MissingStructuredResponseError(ValueError):
+    """Raised when a researcher worker returns no structured response."""
+
+
 _NOTE_SLUG_MAX_LENGTH = 64
 RESEARCHER_AGENT_NAME = "researcher-agent"
 
@@ -141,12 +147,11 @@ async def _run_research_query(
             try:
                 structured = result.get("structured_response") if isinstance(result, dict) else None
                 if structured is None:
-                    raise ValueError("researcher worker did not return structured ResearchNotes")
+                    raise _MissingStructuredResponseError("researcher worker did not return structured ResearchNotes")
                 note = ResearchNotes.model_validate(structured)
+            except _MissingStructuredResponseError:
+                raise
             except Exception as exc:  # noqa: BLE001 - captured as per-item failure
-                missing_response = "researcher worker did not return structured ResearchNotes"
-                if isinstance(exc, ValueError) and str(exc) == missing_response:
-                    raise
                 logger.warning(
                     "Researcher worker returned invalid ResearchNotes (error_type=%s, query_%s)",
                     type(exc).__name__,

@@ -376,7 +376,10 @@ async def interactive_loop(session_manager: SessionManager, verbose: bool = Fals
                 # Relay subscriber delivery is asynchronous. Wait until the run context has
                 # closed its outer scopes before displaying the answer and opening the next
                 # prompt, otherwise late lifecycle logs can be painted after ``You:``.
-                await nemo_relay.subscribers.flush_async()
+                try:
+                    await nemo_relay.subscribers.flush_async()
+                except Exception as error:  # noqa: BLE001 - telemetry must not suppress the answer
+                    logger.warning("NeMo Relay flush failed (error_type=%s)", type(error).__name__)
 
                 parse_and_display_response(result, verbose=verbose)
 

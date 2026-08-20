@@ -1,6 +1,20 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
+import logging
+import sys
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
@@ -8,8 +22,32 @@ import pytest
 from aiq_research_cli import cli
 
 
+@pytest.mark.parametrize(
+    ("arguments", "expected_level"),
+    [([], logging.WARNING), (["--verbose"], logging.INFO)],
+)
+def test_main_sets_log_level_from_verbose_flag(monkeypatch, arguments: list[str], expected_level: int) -> None:
+    observed: dict[str, int] = {}
+
+    class LoggingConfigured(Exception):
+        pass
+
+    def configure_logging(**kwargs) -> None:
+        observed["level"] = kwargs["level"]
+        raise LoggingConfigured
+
+    monkeypatch.setattr(sys, "argv", ["aiq-research", *arguments])
+    monkeypatch.setattr(cli.logging, "basicConfig", configure_logging)
+
+    with pytest.raises(LoggingConfigured):
+        cli.main()
+
+    assert observed == {"level": expected_level}
+
+
+@pytest.mark.parametrize("flush_fails", [False, True])
 @pytest.mark.asyncio
-async def test_interactive_loop_flushes_relay_before_display_and_next_prompt(monkeypatch) -> None:
+async def test_interactive_loop_flushes_relay_before_display_and_next_prompt(monkeypatch, flush_fails: bool) -> None:
     events: list[str] = []
     responses = iter(["research this", "q"])
 
@@ -19,6 +57,8 @@ async def test_interactive_loop_flushes_relay_before_display_and_next_prompt(mon
 
     async def flush_async() -> None:
         events.append("flush")
+        if flush_fails:
+            raise RuntimeError("private relay failure")
 
     class Runner:
         async def result(self, *, to_type):  # noqa: ARG002

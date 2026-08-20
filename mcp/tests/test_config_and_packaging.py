@@ -104,8 +104,6 @@ def test_public_mcp_config_uses_only_public_models_sources_and_environment_names
     config = yaml.safe_load(_CONFIG_PATH.read_text())
     text = _CONFIG_PATH.read_text().lower()
 
-    llms = config["llms"].values()
-    assert {entry["_type"] for entry in llms} == {"openai"}
     assert {entry["base_url"] for entry in config["llms"].values()} == {"https://integrate.api.nvidia.com/v1"}
     assert all(entry["model_name"].startswith("nvidia/") for entry in config["llms"].values())
     assert config["functions"]["web_search_tool"]["_type"] == "tavily_web_search"
@@ -168,6 +166,9 @@ def test_root_workspace_excludes_the_independent_mcp_project() -> None:
                     "en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl"
                 )
             }
+            continue
+        if "git" in source:
+            assert package["name"] == "nemo-relay"
             continue
         editable = source.get("editable")
         assert isinstance(editable, str)

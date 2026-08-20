@@ -1,5 +1,17 @@
 # SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 
 """Convert NeMo Relay ATOF JSONL events into tokenomics request profiles."""
 
@@ -126,8 +138,9 @@ def _root_uuid(event: dict[str, Any], starts: dict[str, dict[str, Any]]) -> str 
 
 
 def _usage(event: dict[str, Any]) -> tuple[int, int, int, int, float | None]:
-    profile = event.get("category_profile") or {}
-    annotated = profile.get("annotated_response") if isinstance(profile, dict) else {}
+    profile = event.get("category_profile")
+    profile = profile if isinstance(profile, dict) else {}
+    annotated = profile.get("annotated_response")
     annotated = annotated if isinstance(annotated, dict) else {}
     usage = annotated.get("usage") or profile.get("usage") or {}
     usage = usage if isinstance(usage, dict) else {}
@@ -274,10 +287,15 @@ def parse_trace(path: str, pricing: PricingRegistry) -> list[RequestProfile]:
     ]
     roots.sort(key=lambda event: _timestamp(event.get("timestamp")))
 
+    events_by_root: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        if (root_uuid := _root_uuid(event, starts)) is not None:
+            events_by_root.setdefault(root_uuid, []).append(event)
+
     profiles: list[RequestProfile] = []
     for request_index, root in enumerate(roots):
         root_uuid = root["uuid"]
-        request_events = [event for event in events if _root_uuid(event, starts) == root_uuid]
+        request_events = events_by_root.get(root_uuid, [])
         try:
             profiles.append(_parse_request(request_index, root, request_events, starts, pricing))
         except Exception as exc:
