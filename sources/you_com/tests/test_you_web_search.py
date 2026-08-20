@@ -27,9 +27,12 @@ from you_com.register import FreshnessMode
 from you_com.register import YouWebSearchToolConfig
 from you_com.register import you_web_search
 
-ADVERSARIAL_URL = 'https://example.com/search?q="quoted"&next=<unsafe>&close=</Document>'
-ADVERSARIAL_TITLE = 'Research & "Roadmap" <2026> </title>'
-ADVERSARIAL_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
+ADVERSARIAL_URL = 'https://example.com/pa\x00th?q="quoted"&next=<unsafe>&close=</Document>'
+ADVERSARIAL_TITLE = 'Research\x00 & "Roadmap" <2026> </title>'
+ADVERSARIAL_CONTENT = 'Evidence\x00 & "claims" <external> </Document> </title>'
+SANITIZED_URL = 'https://example.com/path?q="quoted"&next=<unsafe>&close=</Document>'
+SANITIZED_TITLE = 'Research & "Roadmap" <2026> </title>'
+SANITIZED_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
 
 
 def _parse_document(output: str) -> tuple[ET.Element, ET.Element]:
@@ -110,9 +113,9 @@ class TestYouWebSearchLive:
             output = await info.single_fn("query")
 
         document, title = _parse_document(output)
-        assert document.attrib["href"] == ADVERSARIAL_URL
-        assert (title.text or "").strip("\n") == ADVERSARIAL_TITLE
-        assert (title.tail or "").strip("\n") == ADVERSARIAL_CONTENT
+        assert document.attrib["href"] == SANITIZED_URL
+        assert (title.text or "").strip("\n") == SANITIZED_TITLE
+        assert (title.tail or "").strip("\n") == SANITIZED_CONTENT
 
     async def test_config_api_key_used(self, mock_search, monkeypatch):
         config = YouWebSearchToolConfig(api_key=SecretStr("key-from-config"))
@@ -169,7 +172,7 @@ class TestYouWebSearchLive:
 
         _, title = _parse_document(output)
         assert (title.tail or "").strip("\n") == "Description & <summary>"
-        assert ADVERSARIAL_CONTENT not in output
+        assert SANITIZED_CONTENT not in output
 
     async def test_none_content_limit_retains_unbounded_livecrawl(self, mock_search, monkeypatch):
         monkeypatch.setenv("YDC_API_KEY", "test-key")
@@ -180,7 +183,7 @@ class TestYouWebSearchLive:
             output = await info.single_fn("query")
 
         _, title = _parse_document(output)
-        assert (title.tail or "").strip() == ADVERSARIAL_CONTENT
+        assert (title.tail or "").strip() == SANITIZED_CONTENT
 
     async def test_default_bounds_oversized_livecrawl_content(self, mock_search, monkeypatch):
         monkeypatch.setenv("YDC_API_KEY", "test-key")

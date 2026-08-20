@@ -16,9 +16,12 @@ from pydantic import SecretStr
 from tavily_web_search.register import TavilyWebSearchToolConfig
 from tavily_web_search.register import tavily_web_search
 
-ADVERSARIAL_URL = 'https://example.com/search?q="quoted"&next=<unsafe>&close=</Document>'
-ADVERSARIAL_TITLE = 'Research & "Roadmap" <2026> </title>'
-ADVERSARIAL_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
+ADVERSARIAL_URL = 'https://example.com/pa\x00th?q="quoted"&next=<unsafe>&close=</Document>'
+ADVERSARIAL_TITLE = 'Research\x00 & "Roadmap" <2026> </title>'
+ADVERSARIAL_CONTENT = 'Evidence\x00 & "claims" <external> </Document> </title>'
+SANITIZED_URL = 'https://example.com/path?q="quoted"&next=<unsafe>&close=</Document>'
+SANITIZED_TITLE = 'Research & "Roadmap" <2026> </title>'
+SANITIZED_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
 
 
 def _assert_document(output: str, *, url: str, title: str, content: str) -> None:
@@ -93,16 +96,17 @@ class TestTavilyWebSearchLive:
 
         _assert_document(
             output,
-            url=ADVERSARIAL_URL,
-            title=ADVERSARIAL_TITLE,
-            content=ADVERSARIAL_CONTENT,
+            url=SANITIZED_URL,
+            title=SANITIZED_TITLE,
+            content=SANITIZED_CONTENT,
         )
         factory.assert_called_once_with(max_results=3, search_depth="basic", include_answer="advanced")
         instance.ainvoke.assert_awaited_once_with({"query": "question"})
 
     async def test_answer_payload_is_escaped(self, fake_langchain_tavily):
         factory, instance = fake_langchain_tavily
-        answer = 'Answer & "claim" <external> </Answer>'
+        answer = 'Answer\x00 & "claim" <external> </Answer>'
+        sanitized_answer = 'Answer & "claim" <external> </Answer>'
         instance.ainvoke.return_value = {
             "answer": answer,
             "results": [{"url": "https://example.com", "title": "Title", "content": "Content"}],
@@ -115,7 +119,7 @@ class TestTavilyWebSearchLive:
         assert output.count("</Answer>") == 1
         match = re.search(r"<Answer>\n(.*?)\n</Answer>", output, re.DOTALL)
         assert match is not None
-        assert unescape(match.group(1)) == answer
+        assert unescape(match.group(1)) == sanitized_answer
         factory.assert_called_once()
 
     async def test_truncates_raw_content_before_escaping(self, fake_langchain_tavily, monkeypatch):

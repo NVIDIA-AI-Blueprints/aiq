@@ -27,9 +27,12 @@ from exa_web_search.register import ExaWebSearchToolConfig
 from exa_web_search.register import exa_web_search
 from pydantic import SecretStr
 
-ADVERSARIAL_URL = 'https://example.com/search?q="quoted"&next=<unsafe>&close=</Document>'
-ADVERSARIAL_TITLE = 'Research & "Roadmap" <2026> </title>'
-ADVERSARIAL_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
+ADVERSARIAL_URL = 'https://example.com/pa\x00th?q="quoted"&next=<unsafe>&close=</Document>'
+ADVERSARIAL_TITLE = 'Research\x00 & "Roadmap" <2026> </title>'
+ADVERSARIAL_CONTENT = 'Evidence\x00 & "claims" <external> </Document> </title>'
+SANITIZED_URL = 'https://example.com/path?q="quoted"&next=<unsafe>&close=</Document>'
+SANITIZED_TITLE = 'Research & "Roadmap" <2026> </title>'
+SANITIZED_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
 
 
 def _parse_document(output: str) -> tuple[ET.Element, ET.Element]:
@@ -144,9 +147,9 @@ class TestExaWebSearchLive:
             output = await info.single_fn("query")
 
         document, title = _parse_document(output)
-        assert document.attrib["href"] == ADVERSARIAL_URL
-        assert (title.text or "").strip("\n") == ADVERSARIAL_TITLE
-        assert (title.tail or "").strip("\n") == ADVERSARIAL_CONTENT
+        assert document.attrib["href"] == SANITIZED_URL
+        assert (title.text or "").strip("\n") == SANITIZED_TITLE
+        assert (title.tail or "").strip("\n") == SANITIZED_CONTENT
 
     async def test_api_key_from_config_sets_env(self, fake_langchain_exa):
         fake_langchain_exa.ainvoke.return_value = _FakeResponse([_FakeResult("https://a.example", "A", "body a")])

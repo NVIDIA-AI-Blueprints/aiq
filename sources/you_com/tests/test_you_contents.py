@@ -27,9 +27,12 @@ from you_com.register import ContentsFormat
 from you_com.register import YouContentsToolConfig
 from you_com.register import you_contents
 
-ADVERSARIAL_URL = 'https://example.com/search?q="quoted"&next=<unsafe>&close=</Document>'
-ADVERSARIAL_TITLE = 'Research & "Roadmap" <2026> </title>'
-ADVERSARIAL_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
+ADVERSARIAL_URL = 'https://example.com/pa\x00th?q="quoted"&next=<unsafe>&close=</Document>'
+ADVERSARIAL_TITLE = 'Research\x00 & "Roadmap" <2026> </title>'
+ADVERSARIAL_CONTENT = 'Evidence\x00 & "claims" <external> </Document> </title>'
+SANITIZED_URL = 'https://example.com/path?q="quoted"&next=<unsafe>&close=</Document>'
+SANITIZED_TITLE = 'Research & "Roadmap" <2026> </title>'
+SANITIZED_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
 
 
 def _parse_document(output: str) -> tuple[ET.Element, ET.Element]:
@@ -114,9 +117,9 @@ class TestYouContentsLive:
             output = await info.single_fn([ADVERSARIAL_URL])
 
         document, title = _parse_document(output)
-        assert document.attrib["href"] == ADVERSARIAL_URL
-        assert (title.text or "").strip("\n") == ADVERSARIAL_TITLE
-        assert (title.tail or "").strip("\n") == ADVERSARIAL_CONTENT
+        assert document.attrib["href"] == SANITIZED_URL
+        assert (title.text or "").strip("\n") == SANITIZED_TITLE
+        assert (title.tail or "").strip("\n") == SANITIZED_CONTENT
 
     async def test_config_api_key_used(self, mock_contents, monkeypatch):
         config = YouContentsToolConfig(api_key=SecretStr("key-from-config"))

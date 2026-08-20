@@ -17,6 +17,7 @@ import asyncio
 import html
 import logging
 import os
+import re
 from collections.abc import AsyncGenerator
 from typing import Literal
 
@@ -31,13 +32,19 @@ from nat.data_models.function import FunctionBaseConfig
 logger = logging.getLogger(__name__)
 
 _missing_key_warned = False
+_INVALID_XML_CHARACTERS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\uD800-\uDFFF\uFFFE\uFFFF]")
+
+
+def _xml_text(value: object) -> str:
+    """Normalize provider text and remove characters forbidden by XML 1.0."""
+    return _INVALID_XML_CHARACTERS.sub("", "" if value is None else str(value))
 
 
 def _render_document(url: object, title: object, content: object) -> str:
     """Render provider-controlled fields inside the trusted document structure."""
-    url_text = "" if url is None else str(url)
-    title_text = "" if title is None else str(title)
-    content_text = "" if content is None else str(content)
+    url_text = _xml_text(url)
+    title_text = _xml_text(title)
+    content_text = _xml_text(content)
     return (
         f'<Document href="{html.escape(url_text, quote=True)}">\n'
         f"<title>\n{html.escape(title_text, quote=True)}\n</title>\n"
