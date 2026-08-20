@@ -2923,6 +2923,50 @@ class TestAsyncJobRunnerAgentFactory:
         assert agent.resource_limits is fn_config.resource_limits
         assert agent.resource_limits.max_source_tool_calls == 8
 
+    def test_create_agent_instance_passes_shallow_research_config(self):
+        """Async workers pass shallow citation enforcement through the constructor."""
+        from aiq_agent.agents.shallow_researcher.register import ShallowResearchAgentConfig
+        from aiq_api.jobs.runner import _create_agent_instance
+
+        class FakeShallowResearcherAgent:
+            def __init__(
+                self,
+                *,
+                llm_provider,
+                tools,
+                max_tool_iterations=5,
+                enforce_citations=False,
+                callbacks=None,
+            ):
+                self.llm_provider = llm_provider
+                self.tools = tools
+                self.max_tool_iterations = max_tool_iterations
+                self.enforce_citations = enforce_citations
+                self.callbacks = callbacks
+
+        assert ShallowResearchAgentConfig(llm="llm").enforce_citations is False
+        fn_config = ShallowResearchAgentConfig(
+            llm="llm",
+            max_tool_iterations=2,
+            enforce_citations=True,
+        )
+
+        agent = _create_agent_instance(
+            agent_cls=FakeShallowResearcherAgent,
+            llm_provider="provider",
+            llm="llm",
+            tools=["tool"],
+            fn_config=fn_config,
+            verbose=False,
+            callbacks=["callback"],
+        )
+
+        assert agent.llm_provider == "provider"
+        assert agent.tools == ["tool"]
+        assert agent.max_tool_iterations == 2
+        assert agent.enforce_citations is True
+        assert agent.callbacks == ["callback"]
+
     def test_create_agent_instance_allows_non_deep_agent_to_reuse_deep_config(self):
         """Async workers should not treat shared DeepResearchAgentConfig as a constructor contract."""
         from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
