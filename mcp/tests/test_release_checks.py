@@ -175,7 +175,7 @@ def test_license_inventory_requires_every_direct_runtime_dependency(monkeypatch:
         validate_inventory(inventory)
 
 
-def test_sbom_contract_accepts_the_exact_approved_local_component_set() -> None:
+def test_sbom_contract_accepts_approved_sources() -> None:
     sbom = {
         "bomFormat": "CycloneDX",
         "specVersion": "1.5",
@@ -188,6 +188,12 @@ def test_sbom_contract_accepts_the_exact_approved_local_component_set() -> None:
                 "name": "asyncpg",
                 "version": "0.31.0",
                 "purl": "pkg:pypi/asyncpg@0.31.0",
+            },
+            {
+                "name": "nemo-relay",
+                "version": "0.8.0",
+                "purl": "pkg:pypi/nemo-relay@0.8.0?vcs_url=https://github.com/NVIDIA/NeMo-Relay.git%3Frev%3D"
+                "ffb24817442bac99212da0971b13bdad5bc4d84d%23ffb24817442bac99212da0971b13bdad5bc4d84d",
             },
         ],
     }
