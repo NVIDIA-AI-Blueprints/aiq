@@ -60,7 +60,10 @@ def _redact_event_fields(
             sanitized[attribute] = None
     metadata = sanitized.get("metadata")
     if isinstance(metadata, dict):
-        sanitized["metadata"] = {**metadata, "aiq.telemetry.redacted": True}
+        metadata = {**metadata, "aiq.telemetry.redacted": True}
+        if "otel.status_description" in metadata:
+            metadata["otel.status_description"] = "[REDACTED]"
+        sanitized["metadata"] = metadata
     return nemo_relay.EventSanitizeFields(**sanitized)
 
 

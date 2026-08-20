@@ -30,6 +30,7 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from nemo_relay import plugin
+from nemo_relay.integrations.deepagents import NemoRelayDeepAgentsCallbackHandler
 from nemo_relay.integrations.langchain._serialization import payload_to_model_request
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from pydantic import ValidationError
@@ -609,6 +610,43 @@ async def test_request_privacy_sanitizes_relay_without_changing_execution(tmp_pa
         "tool-result:private-tool-input",
     ):
         assert private_value not in exported
+
+
+@pytest.mark.asyncio
+async def test_request_privacy_redacts_deepagents_error_description(tmp_path: Path) -> None:
+    config = RelayConfig()
+    config.logging = False
+    config.observability.atof.output_directory = str(tmp_path)
+    config.observability.atof.filename = "private-error.jsonl"
+    config.observability.opentelemetry.enabled = False
+    private_error = "proprietary-error-canary"
+
+    await ensure_started(config)
+    try:
+        run_id = uuid4()
+        with request_privacy_context(True), nemo_relay.use_scope_stack(nemo_relay.create_scope_stack()):
+            callback = NemoRelayDeepAgentsCallbackHandler()
+            callback.on_chain_start(
+                {},
+                {},
+                run_id=run_id,
+                name="DeepAgent",
+                metadata={"lc_versions": {"deepagents": "test"}, "ls_integration": "deepagents"},
+            )
+            callback.on_chain_error(RuntimeError(private_error), run_id=run_id)
+    finally:
+        await shutdown_async()
+
+    exported = (tmp_path / "private-error.jsonl").read_text()
+    assert private_error not in exported
+    events = [json.loads(line) for line in exported.splitlines()]
+    assert [(event["name"], event["scope_category"]) for event in events] == [
+        ("DeepAgent", "start"),
+        ("DeepAgent", "end"),
+    ]
+    assert len({event["uuid"] for event in events}) == 1
+    assert events[-1]["metadata"]["otel.status_code"] == "ERROR"
+    assert events[-1]["metadata"]["otel.status_description"] == "[REDACTED]"
 
 
 @pytest.mark.asyncio
