@@ -586,6 +586,7 @@ class TestShallowResearcherAgent:
         assert isinstance(retry_messages[1], HumanMessage)
         assert all(not isinstance(message, ToolMessage) for message in retry_messages)
         assert "Return final answer only" in retry_messages[1].content
+        assert "Every reference line must start exactly with '- [N]'" in retry_messages[1].content
         assert "By how many percentage points did EPS growth differ?" in retry_messages[1].content
         assert "Adjusted EPS growth midpoint was 5.0%" in retry_messages[1].content
 

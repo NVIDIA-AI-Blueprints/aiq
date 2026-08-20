@@ -79,6 +79,7 @@ _EMERGENCY_SYNTHESIS_TOOL_CHARS = 1200
 
 
 def _content_to_text(content: Any) -> str:
+    """Normalize LangChain message content variants into plain text."""
     if content is None:
         return ""
     if isinstance(content, str):
@@ -97,10 +98,12 @@ def _content_to_text(content: Any) -> str:
 
 
 def _is_blank_response(response: Any) -> bool:
+    """Return whether a model response has no visible answer content."""
     return not _content_to_text(getattr(response, "content", None)).strip()
 
 
 def _response_finish_reason(response: Any) -> str | None:
+    """Extract a provider finish reason for diagnostic logging."""
     metadata = getattr(response, "response_metadata", None) or {}
     if not isinstance(metadata, dict):
         return None
@@ -109,6 +112,7 @@ def _response_finish_reason(response: Any) -> str | None:
 
 
 def _response_reasoning_chars(response: Any) -> int:
+    """Return the hidden reasoning character count when the provider exposes it."""
     additional_kwargs = getattr(response, "additional_kwargs", None) or {}
     if not isinstance(additional_kwargs, dict):
         return 0
@@ -116,6 +120,7 @@ def _response_reasoning_chars(response: Any) -> int:
 
 
 def _truncate_evidence(text: str) -> str:
+    """Bound one tool result so the emergency retry stays small."""
     text = text.strip()
     if len(text) <= _EMERGENCY_SYNTHESIS_TOOL_CHARS:
         return text
@@ -123,6 +128,7 @@ def _truncate_evidence(text: str) -> str:
 
 
 def _latest_human_question(messages: Sequence[Any]) -> str:
+    """Recover the latest user question from the prior conversation history."""
     for message in reversed(messages):
         if isinstance(message, HumanMessage):
             question = _content_to_text(message.content).strip()
@@ -132,6 +138,7 @@ def _latest_human_question(messages: Sequence[Any]) -> str:
 
 
 def _compact_tool_evidence(messages: Sequence[Any]) -> str:
+    """Render the last few non-empty tool results as compact retry evidence."""
     evidence_blocks: list[str] = []
     for index, message in enumerate(messages, start=1):
         if not isinstance(message, ToolMessage):
@@ -148,8 +155,12 @@ def _compact_tool_evidence(messages: Sequence[Any]) -> str:
 
 
 def _build_emergency_synthesis_messages(messages: Sequence[Any]) -> list[Any]:
+    """Build a short, no-tools retry prompt for blank forced synthesis outputs."""
     question = _latest_human_question(messages)
     evidence = _compact_tool_evidence(messages)
+    # Keep only the original question and bounded evidence. Replaying the full
+    # history caused some reasoning models to spend the whole output budget on
+    # hidden reasoning and return empty visible content.
     system_message = SystemMessage(
         content=(
             "You are a final-answer synthesis pass. Return only the final answer in visible content. "
@@ -162,7 +173,9 @@ def _build_emergency_synthesis_messages(messages: Sequence[Any]) -> list[Any]:
             f"Question:\n{question}\n\n"
             f"Compact evidence from prior tool results:\n{evidence}\n\n"
             "Return final answer only. Do not include reasoning. "
-            "When evidence is available, include inline [N] citations and a ## References section."
+            "When evidence is available, include inline [N] citations and a final ## References section. "
+            "Every reference line must start exactly with '- [N]', for example '- [1] SOURCE.pdf, p.5'. "
+            "Do not use unnumbered reference bullets."
         )
     )
     return [system_message, user_message]
@@ -530,6 +543,8 @@ class ShallowResearcherAgent:
                     llm = self._get_llm()
                     response = await llm.ainvoke(full_messages, config=draft_config)
                     if _is_blank_response(response):
+                        # Retry once with a tiny prompt before returning a blank
+                        # response to the chat layer or standalone runner.
                         logger.warning(
                             "Forced synthesis returned empty content; retrying once with compact emergency synthesis "
                             "(finish_reason=%s reasoning_chars=%d)",
