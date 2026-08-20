@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import asyncio
+import html
 import logging
 import os
 from collections.abc import AsyncGenerator
@@ -30,6 +31,18 @@ from nat.data_models.function import FunctionBaseConfig
 logger = logging.getLogger(__name__)
 
 _missing_key_warned = False
+
+
+def _render_document(url: object, title: object, content: object) -> str:
+    """Render provider-controlled fields inside the trusted document structure."""
+    url_text = "" if url is None else str(url)
+    title_text = "" if title is None else str(title)
+    content_text = "" if content is None else str(content)
+    return (
+        f'<Document href="{html.escape(url_text, quote=True)}">\n'
+        f"<title>\n{html.escape(title_text, quote=True)}\n</title>\n"
+        f"{html.escape(content_text, quote=True)}\n</Document>"
+    )
 
 
 class ExaWebSearchToolConfig(FunctionBaseConfig, name="exa_web_search"):
@@ -135,7 +148,8 @@ async def exa_web_search(
         if len(question) > 400:
             question = question[:397] + "..."
 
-        def _truncate_content(content: str) -> str:
+        def _truncate_content(content: object) -> str:
+            content = "" if content is None else str(content)
             if tool_config.max_content_length and len(content) > tool_config.max_content_length:
                 return content[: tool_config.max_content_length - 3] + "..."
             return content
@@ -163,12 +177,12 @@ async def exa_web_search(
                     raise ValueError("Search returned no results")
 
                 def _render(doc) -> str:
-                    url = getattr(doc, "url", "") or ""
-                    title = getattr(doc, "title", "") or ""
-                    text = _truncate_content(getattr(doc, "text", "") or "")
+                    url = getattr(doc, "url", None)
+                    title = getattr(doc, "title", None)
+                    text = _truncate_content(getattr(doc, "text", None))
                     highlights_list = getattr(doc, "highlights", None) or []
                     body = text if text else "\n".join(highlights_list)
-                    return f'<Document href="{url}">\n<title>\n{title}\n</title>\n{body}\n</Document>'
+                    return _render_document(url, title, body)
 
                 web_search_results = "\n\n---\n\n".join(_render(doc) for doc in results)
                 return web_search_results if web_search_results else "Search returned no results"

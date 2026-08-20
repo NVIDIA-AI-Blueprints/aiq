@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import asyncio
+import html
 import logging
 import os
 
@@ -29,6 +30,24 @@ logger = logging.getLogger(__name__)
 
 # Track if we've already warned about missing API key to avoid duplicate warnings
 _missing_key_warned = False
+
+
+def _render_document(url: object, title: object, content: object) -> str:
+    """Render provider-controlled fields inside the trusted document structure."""
+    url_text = "" if url is None else str(url)
+    title_text = "" if title is None else str(title)
+    content_text = "" if content is None else str(content)
+    return (
+        f'<Document href="{html.escape(url_text, quote=True)}">\n'
+        f"<title>\n{html.escape(title_text, quote=True)}\n</title>\n"
+        f"{html.escape(content_text, quote=True)}\n</Document>"
+    )
+
+
+def _render_answer(answer: object) -> str:
+    """Render a provider-controlled answer inside the trusted answer structure."""
+    answer_text = "" if answer is None else str(answer)
+    return f"<Answer>\n{html.escape(answer_text, quote=True)}\n</Answer>"
 
 
 class TavilyWebSearchToolConfig(FunctionBaseConfig, name="tavily_web_search"):
@@ -108,8 +127,9 @@ async def tavily_web_search(tool_config: TavilyWebSearchToolConfig, builder: Bui
             tavily_kwargs["api_base_url"] = tool_config.api_base_url
         tavily_search = TavilySearch(**tavily_kwargs)
 
-        def _truncate_content(content: str) -> str:
+        def _truncate_content(content: object) -> str:
             """Truncate content if max_content_length is set."""
+            content = "" if content is None else str(content)
             if tool_config.max_content_length and len(content) > tool_config.max_content_length:
                 return content[: tool_config.max_content_length - 3] + "..."
             return content
@@ -137,15 +157,11 @@ async def tavily_web_search(tool_config: TavilyWebSearchToolConfig, builder: Bui
 
                 answer_text = ""
                 if search_docs.get("answer"):
-                    answer_text = f"<Answer>\n{search_docs['answer']}\n</Answer>\n\n---\n\n"
+                    answer_text = f"{_render_answer(search_docs['answer'])}\n\n---\n\n"
 
                 web_search_results = "\n\n---\n\n".join(
-                    [
-                        f'<Document href="{doc.get("url", "")}">\n'
-                        f"<title>\n{doc.get('title')}\n</title>\n"
-                        f"{_truncate_content(doc.get('content') or '')}\n</Document>"
-                        for doc in results
-                    ]
+                    _render_document(doc.get("url"), doc.get("title"), _truncate_content(doc.get("content")))
+                    for doc in results
                 )
                 combined = answer_text + web_search_results
                 return combined if combined else "Search returned no results"

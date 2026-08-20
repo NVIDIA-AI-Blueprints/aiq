@@ -18,6 +18,7 @@
 import os
 import sys
 import types
+import xml.etree.ElementTree as ET
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -25,6 +26,21 @@ import pytest
 from exa_web_search.register import ExaWebSearchToolConfig
 from exa_web_search.register import exa_web_search
 from pydantic import SecretStr
+
+ADVERSARIAL_URL = 'https://example.com/search?q="quoted"&next=<unsafe>&close=</Document>'
+ADVERSARIAL_TITLE = 'Research & "Roadmap" <2026> </title>'
+ADVERSARIAL_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
+
+
+def _parse_document(output: str) -> tuple[ET.Element, ET.Element]:
+    assert output.count("<Document ") == 1
+    assert output.count("</Document>") == 1
+    assert output.count("<title>") == 1
+    assert output.count("</title>") == 1
+    root = ET.fromstring(output)
+    title = root.find("title")
+    assert title is not None
+    return root, title
 
 
 class _FakeResult:
@@ -118,6 +134,20 @@ class TestExaWebSearchStub:
 
 
 class TestExaWebSearchLive:
+    async def test_structurally_escapes_provider_fields(self, fake_langchain_exa, monkeypatch):
+        monkeypatch.setenv("EXA_API_KEY", "sk-env")
+        fake_langchain_exa.ainvoke.return_value = _FakeResponse(
+            [_FakeResult(ADVERSARIAL_URL, ADVERSARIAL_TITLE, ADVERSARIAL_CONTENT)]
+        )
+
+        async with exa_web_search(ExaWebSearchToolConfig(full_text=True), MagicMock()) as info:
+            output = await info.single_fn("query")
+
+        document, title = _parse_document(output)
+        assert document.attrib["href"] == ADVERSARIAL_URL
+        assert (title.text or "").strip("\n") == ADVERSARIAL_TITLE
+        assert (title.tail or "").strip("\n") == ADVERSARIAL_CONTENT
+
     async def test_api_key_from_config_sets_env(self, fake_langchain_exa):
         fake_langchain_exa.ainvoke.return_value = _FakeResponse([_FakeResult("https://a.example", "A", "body a")])
         config = ExaWebSearchToolConfig(api_key=SecretStr("sk-from-config"))
@@ -159,7 +189,9 @@ class TestExaWebSearchLive:
 
     async def test_full_text_true_passes_text_contents_options_true(self, fake_langchain_exa, monkeypatch):
         monkeypatch.setenv("EXA_API_KEY", "sk-env")
-        fake_langchain_exa.ainvoke.return_value = _FakeResponse([_FakeResult("https://a.example", "A", "full body")])
+        fake_langchain_exa.ainvoke.return_value = _FakeResponse(
+            [_FakeResult("https://a.example", "A", "full body", highlights=["unused highlight"])]
+        )
 
         config = ExaWebSearchToolConfig(full_text=True)
         builder = MagicMock()
@@ -170,6 +202,7 @@ class TestExaWebSearchLive:
         assert payload["text_contents_options"] is True
         assert payload["highlights"] is True
         assert "full body" in out
+        assert "unused highlight" not in out
 
     async def test_highlights_rendered_when_text_absent(self, fake_langchain_exa, monkeypatch):
         monkeypatch.setenv("EXA_API_KEY", "sk-env")
@@ -212,6 +245,8 @@ class TestExaWebSearchLive:
 
         assert "abcde..." in out
         assert "abcdefghi" not in out
+        _, title = _parse_document(out)
+        assert (title.tail or "").strip("\n") == "abcde..."
 
     async def test_empty_results_returns_error(self, fake_langchain_exa, monkeypatch):
         monkeypatch.setenv("EXA_API_KEY", "sk-env")
