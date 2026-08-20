@@ -14,7 +14,6 @@ prerelease-mode = "allow"
 members = [
     "aiq-agent",
     "aiq-api",
-    "aiq-bounded-python",
     "aiq-debug",
     "aiq-gsf",
     "aiq-research-cli",
@@ -263,7 +262,6 @@ viz = [
 [package.dev-dependencies]
 dev = [
     { name = "aiq-api" },
-    { name = "aiq-bounded-python" },
     { name = "aiq-debug" },
     { name = "aiq-gsf" },
     { name = "aiq-research-cli" },
@@ -336,7 +334,6 @@ provides-extras = ["pii", "s3", "dev", "docs", "viz"]
 [package.metadata.requires-dev]
 dev = [
     { name = "aiq-api", editable = "frontends/aiq_api" },
-    { name = "aiq-bounded-python", editable = "sources/bounded_python" },
     { name = "aiq-debug", editable = "frontends/debug" },
     { name = "aiq-gsf", editable = "sources/gsf" },
     { name = "aiq-research-cli", editable = "frontends/cli" },
@@ -405,21 +402,6 @@ requires-dist = [
     { name = "sqlalchemy", specifier = ">=2.0.0" },
 ]
 provides-extras = ["postgres", "dev"]
-
-[[package]]
-name = "aiq-bounded-python"
-version = "0.1.0"
-source = { editable = "sources/bounded_python" }
-dependencies = [
-    { name = "nvidia-nat-core" },
-    { name = "pydantic" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "nvidia-nat-core", specifier = "==1.8.0" },
-    { name = "pydantic", specifier = ">=2.0.0" },
-]
 
 [[package]]
 name = "aiq-debug"

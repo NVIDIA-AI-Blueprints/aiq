@@ -25,9 +25,6 @@ The agent receives tools through NeMo Agent Toolkit references and the
 - `gsf__text_to_sql` generates validated SQL and returns bounded rows from GSF.
 - `knowledge_search` uses the configured AI-Q knowledge backend.
 - `web_search_tool` uses the configured AI-Q web-search provider.
-- `analysis_workspace`, when explicitly configured, performs bounded,
-  deterministic calculations over JSON-compatible evidence. It is a utility,
-  not a citable data source.
 - `python`, when configured through `stateful_python`, provides one persistent
   scientific Python kernel per request. It is also a non-citable utility.
 
@@ -64,14 +61,6 @@ compact evidence diagnostics (coverage/candidate counts or row counts and
 truncation). The agent prompt complements that boundary with an evidence ledger,
 one broad catalog-discovery pass, consolidated analytical requests, and bounded
 repair rules. Limits are opt-in so the general direct profile remains tunable.
-
-The optional `bounded_python` NAT function uses an explicit workspace protocol:
-the agent starts one random workspace per user task, reuses its ID for
-calculations, and closes it afterward. JSON-compatible variables persist across
-calls, while each execution occurs in a fresh subprocess with CPU, wall-time,
-memory, payload, and output limits. Imports, attribute access, filesystem and
-network APIs, and normal Python builtins are unavailable. This is intentionally
-smaller than the provider-backed Deep Research sandbox.
 
 For analyses that require pandas, NumPy, SciPy, scikit-learn, or statsmodels,
 the `stateful_python` NAT function keeps a real Python subprocess alive for the

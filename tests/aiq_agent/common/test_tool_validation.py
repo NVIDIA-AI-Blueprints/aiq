@@ -27,8 +27,8 @@ def test_capability_description_can_say_access_is_unavailable() -> None:
     """Do not mistake a sandbox restriction for an unavailable tool."""
 
     tool = SimpleNamespace(
-        name="analysis_workspace",
-        description="Filesystem and network access are unavailable inside this bounded workspace.",
+        name="python",
+        description="Filesystem and network access are unavailable inside this analysis kernel.",
     )
 
     is_valid, available_count, unavailable = validate_tool_availability([tool], enable_logging=False)

@@ -116,7 +116,6 @@ class DataScienceAgent:
         gsf_catalog_call_limit: int | None = None,
         gsf_text_to_sql_call_limit: int | None = None,
         gsf_cache_repeated_calls: bool = True,
-        analysis_workspace_call_limit: int | None = None,
         python_call_limit: int | None = None,
         finalization_model_call_limit: int | None = None,
     ) -> None:
@@ -148,20 +147,11 @@ class DataScienceAgent:
             response_mode=response_mode,
             gsf_catalog_call_limit=gsf_catalog_call_limit,
             gsf_text_to_sql_call_limit=gsf_text_to_sql_call_limit,
-            analysis_workspace_call_limit=analysis_workspace_call_limit,
             python_call_limit=python_call_limit,
         )
         agent_middleware = [prompt_middleware]
         if gsf_catalog_call_limit is not None or gsf_text_to_sql_call_limit is not None or gsf_cache_repeated_calls:
             agent_middleware.append(GSFCallGuardMiddleware(gsf_budget))
-        if analysis_workspace_call_limit is not None and "analysis_workspace" in tool_name_counts:
-            agent_middleware.append(
-                ToolCallLimitMiddleware(
-                    tool_name="analysis_workspace",
-                    run_limit=analysis_workspace_call_limit,
-                    exit_behavior="continue",
-                )
-            )
         if python_call_limit is not None and "python" in tool_name_counts:
             agent_middleware.append(
                 ToolCallLimitMiddleware(
@@ -186,7 +176,6 @@ class DataScienceAgent:
         self.interaction_mode = interaction_mode
         self.response_mode = response_mode
         self.gsf_budget = gsf_budget
-        self.analysis_workspace_call_limit = analysis_workspace_call_limit
         self.python_call_limit = python_call_limit
         self.finalization_model_call_limit = effective_finalization_limit
 

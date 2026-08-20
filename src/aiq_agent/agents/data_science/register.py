@@ -75,11 +75,6 @@ class DataScienceAgentConfig(FunctionBaseConfig, name="data_science_agent"):
         default=True,
         description="Reuse exact repeated GSF calls within one request.",
     )
-    analysis_workspace_call_limit: int | None = Field(
-        default=None,
-        ge=1,
-        description="Optional request-local hard limit for bounded analysis-workspace calls.",
-    )
     python_call_limit: int | None = Field(
         default=None,
         ge=1,
@@ -122,7 +117,6 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
         gsf_catalog_call_limit=config.gsf_catalog_call_limit,
         gsf_text_to_sql_call_limit=config.gsf_text_to_sql_call_limit,
         gsf_cache_repeated_calls=config.gsf_cache_repeated_calls,
-        analysis_workspace_call_limit=config.analysis_workspace_call_limit,
         python_call_limit=config.python_call_limit,
         finalization_model_call_limit=config.finalization_model_call_limit,
     )
@@ -146,7 +140,6 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
                 gsf_catalog_call_limit=config.gsf_catalog_call_limit,
                 gsf_text_to_sql_call_limit=config.gsf_text_to_sql_call_limit,
                 gsf_cache_repeated_calls=config.gsf_cache_repeated_calls,
-                analysis_workspace_call_limit=config.analysis_workspace_call_limit,
                 python_call_limit=config.python_call_limit,
                 finalization_model_call_limit=config.finalization_model_call_limit,
             )

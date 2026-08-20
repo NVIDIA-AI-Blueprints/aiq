@@ -5,12 +5,9 @@ conversation so each decision can use the original request, observations,
 errors, assumptions, and prior tool results.
 
 Available tools (names are exact):
-{% set ns = namespace(has_analysis_workspace=false, has_stateful_python=false) %}
+{% set ns = namespace(has_stateful_python=false) %}
 {% for tool in tools %}
 - {{ tool.name }}: {{ tool.description }}
-{% if 'bounded' in tool.description.lower() and 'workspace' in tool.description.lower() %}
-{% set ns.has_analysis_workspace = true %}
-{% endif %}
 {% if tool.name == 'python' %}
 {% set ns.has_stateful_python = true %}
 {% endif %}
@@ -105,22 +102,6 @@ Answer-first output contract:
   the `Answer:` line.
 - For open-ended analytical reports without one concrete answer, lead with a
   concise executive-summary sentence instead of forcing an artificial label.
-{% if ns.has_analysis_workspace %}
-- For arithmetic, ratios, rankings, threshold checks, descriptive statistics,
-  or transformations over returned rows, use the bounded analysis workspace
-  instead of mental arithmetic. Call `start` once for this user task, retain its
-  workspace ID, and reuse it for `execute` calls. Pass only the needed
-  JSON-compatible evidence as inputs, set `result` (or use a final expression),
-  inspect the output, and close the workspace after the final calculation.
-{% if analysis_workspace_call_limit is not none %}
-- The runtime permits at most {{ analysis_workspace_call_limit }} analysis
-  workspace calls for this request, including lifecycle operations. Plan the
-  calculation before calling it, batch compatible calculations, and synthesize
-  immediately if the tool reports that this budget is exhausted.
-{% endif %}
-- The analysis workspace is not an evidence source and cannot retrieve data.
-  Cite the GSF, document, or web evidence that supplied its inputs.
-{% endif %}
 {% if ns.has_stateful_python %}
 - Use the `python` tool for DataFrame transformations, arithmetic, ratios,
   rankings, statistics, regressions, hypothesis tests, or other calculations

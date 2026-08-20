@@ -505,7 +505,6 @@ functions:
 | `gsf_catalog_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on actual GSF catalog calls. Minimum `1`; exact cache hits do not count. |
 | `gsf_text_to_sql_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on actual GSF text-to-SQL calls. Minimum `1`; exact cache hits do not count. |
 | `gsf_cache_repeated_calls` | `bool` | `true` | Reuse exact repeated GSF tool calls within one agent request. Cache state never crosses requests. |
-| `analysis_workspace_call_limit` | `int` or `None` | `None` | Optional request-local call ceiling for the restricted JSON analysis workspace. |
 | `python_call_limit` | `int` or `None` | `None` | Optional request-local call ceiling for the persistent scientific Python kernel. |
 | `finalization_model_call_limit` | `int` or `None` | derived | Model-call count at which tools are disabled and a no-tool synthesis turn is forced before recursion exhaustion. |
 | `recursion_limit` | `int` | `64` | Hard LangGraph step limit for one adaptive run. Minimum `4`. |

@@ -36,7 +36,6 @@ def test_config_inherits_registry_tools_and_rejects_unknown_fields():
     assert config.gsf_catalog_call_limit is None
     assert config.gsf_text_to_sql_call_limit is None
     assert config.gsf_cache_repeated_calls is True
-    assert config.analysis_workspace_call_limit is None
     assert config.python_call_limit is None
     assert config.finalization_model_call_limit is None
     with pytest.raises(ValueError, match="models"):
@@ -95,7 +94,6 @@ async def test_registration_passes_headless_mode_to_agent():
         response_mode="fdabench_choice",
         gsf_catalog_call_limit=2,
         gsf_text_to_sql_call_limit=6,
-        analysis_workspace_call_limit=8,
         python_call_limit=7,
         finalization_model_call_limit=28,
     )
@@ -112,7 +110,6 @@ async def test_registration_passes_headless_mode_to_agent():
         assert agent_cls.call_args.kwargs["response_mode"] == "fdabench_choice"
         assert agent_cls.call_args.kwargs["gsf_catalog_call_limit"] == 2
         assert agent_cls.call_args.kwargs["gsf_text_to_sql_call_limit"] == 6
-        assert agent_cls.call_args.kwargs["analysis_workspace_call_limit"] == 8
         assert agent_cls.call_args.kwargs["python_call_limit"] == 7
         assert agent_cls.call_args.kwargs["finalization_model_call_limit"] == 28
     finally:

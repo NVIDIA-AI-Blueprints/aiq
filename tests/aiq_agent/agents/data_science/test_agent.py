@@ -339,7 +339,6 @@ def test_prompt_renders_distinct_interaction_policies():
         "response_mode": "standard",
         "gsf_catalog_call_limit": None,
         "gsf_text_to_sql_call_limit": None,
-        "analysis_workspace_call_limit": None,
         "python_call_limit": None,
         "current_datetime": "2026-08-11T12:00:00-03:00",
     }
@@ -353,27 +352,24 @@ def test_prompt_renders_distinct_interaction_policies():
     assert "ask one concise clarification question" not in headless
 
 
-def test_prompt_renders_choice_contract_and_python_workspace_guidance():
+def test_prompt_renders_choice_contract_and_gsf_budget_guidance():
     template = (agent_module.AGENT_DIR / "prompts" / "agent.j2").read_text()
     rendered = render_prompt_template(
         template,
-        tools=[{"name": "analysis_workspace", "description": "Bounded stateful Python analysis workspace."}],
+        tools=[],
         user_info=None,
         interaction_mode="headless",
         response_mode="fdabench_choice",
         gsf_catalog_call_limit=2,
         gsf_text_to_sql_call_limit=6,
-        analysis_workspace_call_limit=8,
         python_call_limit=None,
         current_datetime="2026-08-18T12:00:00-03:00",
     )
 
     assert "Choice-answer contract" in rendered
     assert "Answer: <label>" in rendered
-    assert "Call `start` once" in rendered
     assert "at most 2 actual GSF catalog" in rendered
     assert "at most 6 actual GSF" in rendered
-    assert "at most 8 analysis" in rendered
 
 
 def test_prompt_renders_persistent_python_and_gsf_receipt_guidance():
@@ -386,7 +382,6 @@ def test_prompt_renders_persistent_python_and_gsf_receipt_guidance():
         response_mode="fdabench_choice",
         gsf_catalog_call_limit=2,
         gsf_text_to_sql_call_limit=6,
-        analysis_workspace_call_limit=None,
         python_call_limit=8,
         current_datetime="2026-08-19T12:00:00-03:00",
     )
