@@ -80,6 +80,12 @@ def _enable_vault(monkeypatch) -> None:
     crypto.reset_content_encryption_manager_for_tests()
 
 
+async def _ready_unless_async_jobs_are_static_missing(**kwargs):
+    if not kwargs["dask_available"] or kwargs["job_store"] is None or not kwargs["scheduler_address"]:
+        return {"reason": "async_jobs_unavailable", "db": "unchecked"}
+    return None
+
+
 async def _build_jobs_app(
     monkeypatch,
     tmp_path,
@@ -95,6 +101,13 @@ async def _build_jobs_app(
     from aiq_api.jobs import submit
 
     monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
+    monkeypatch.setattr(jobs_routes, "_is_readable_regular_file", MagicMock(return_value=True))
+    monkeypatch.setattr(jobs_routes, "_bootstrap_async_job_storage", AsyncMock())
+    monkeypatch.setattr(
+        jobs_routes,
+        "_probe_async_job_readiness",
+        AsyncMock(side_effect=_ready_unless_async_jobs_are_static_missing),
+    )
 
     async def _no_op_reaper(*_args, **_kwargs):
         return None
@@ -167,6 +180,13 @@ def _build_assembled_worker_app(
     monkeypatch.setattr(plugin, "_load_validators_from_entry_points", lambda: [])
     monkeypatch.setattr(plugin.AIQAPIWorker, "_install_signal_handlers", lambda _self: None)
     monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
+    monkeypatch.setattr(jobs_routes, "_is_readable_regular_file", MagicMock(return_value=True))
+    monkeypatch.setattr(jobs_routes, "_bootstrap_async_job_storage", AsyncMock())
+    monkeypatch.setattr(
+        jobs_routes,
+        "_probe_async_job_readiness",
+        AsyncMock(side_effect=_ready_unless_async_jobs_are_static_missing),
+    )
     monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())
     monkeypatch.setattr(
         worker_module.FastApiFrontEndPluginWorker,
@@ -340,19 +360,21 @@ def test_assembled_worker_health_returns_503_when_db_unreachable_on_fresh_proces
     """
     from sqlalchemy.exc import OperationalError
 
+    import aiq_api.routes.jobs as jobs_routes
     from aiq_api.jobs.event_store import EventStore
 
+    real_readiness_probe = jobs_routes._probe_async_job_readiness
     app = _build_assembled_worker_app(monkeypatch, tmp_path)
 
     with TestClient(app) as client:
-        # The process started cleanly, but by the time the readiness probe runs
-        # no async engine has been cached (fresh process) and the database has
-        # become unavailable.
+        # The process started cleanly, but by the time the uncached readiness
+        # probe runs the database is unavailable.
         EventStore._async_engine_cache.clear()
 
         def _unreachable(_db_url):
             raise OperationalError("SELECT 1", {}, Exception("database is unavailable"))
 
+        monkeypatch.setattr(jobs_routes, "_probe_async_job_readiness", real_readiness_probe)
         monkeypatch.setattr(EventStore, "_get_or_create_async_engine", _unreachable)
 
         response = client.get("/health")

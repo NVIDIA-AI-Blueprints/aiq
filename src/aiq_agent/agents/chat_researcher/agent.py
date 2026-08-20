@@ -61,6 +61,7 @@ except ImportError:
 
 from .models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from .models import ChatResearcherState
+from .models import IntentResult
 from .models import ShallowResult
 from .models import WorkflowFailure
 from .utils import trim_message_history
@@ -171,7 +172,22 @@ class ChatResearcherAgent:
         """Build the LangGraph workflow."""
 
         async def intent_classifier_node(state: ChatResearcherState) -> dict[str, Any]:
-            return await self.intent_classifier_fn(state)
+            try:
+                return await self.intent_classifier_fn(state)
+            except Exception as error:
+                logger.warning("Intent routing failed (error_type=%s)", type(error).__name__)
+                return {
+                    "user_intent": IntentResult(intent="meta", target="meta"),
+                    "messages": [
+                        AIMessage(
+                            content=(
+                                "There was an error routing your request. Please try again. "
+                                "If the problem persists, please contact support."
+                            )
+                        )
+                    ],
+                    "workflow_outcome": _research_workflow_failure(),
+                }
 
         async def clarifier_node(state: ChatResearcherState) -> dict[str, Any]:
             original_query = get_latest_user_query(state.messages)
