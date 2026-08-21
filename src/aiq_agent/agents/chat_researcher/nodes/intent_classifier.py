@@ -32,9 +32,11 @@ from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.logging_utils import log_content_metadata
 
+from ..models import RESEARCH_WORKFLOW_FAILURE_ERROR
 from ..models import ChatResearcherState
 from ..models import DepthDecision
 from ..models import IntentResult
+from ..models import WorkflowFailure
 from ..preclassification import get_preclassified_depth
 
 logger = logging.getLogger(__name__)
@@ -45,12 +47,22 @@ _LLM_UNAVAILABLE_MESSAGE = (
     "Please check your LLM API key and that the configured model is available for your account."
 )
 _LLM_TIMEOUT_MESSAGE = "The model service took too long to respond and the request timed out. "
+_LLM_ERROR_MESSAGE = "We couldn't process your request due to a temporary error. Please try again."
 _REPAIR_TIMEOUT_SECONDS = 15
 _ROUTE_REPORT_ASK = "report_ask"
 _ROUTE_REPORT_COSMETIC_EDIT = "report_cosmetic_edit"
 _ROUTE_REPORT_DELTA_RESEARCH = "report_delta_research"
 _ROUTE_STANDALONE_RESEARCH = "standalone_research"
 _ROUTE_META = "meta"
+
+
+def _failure_update(message: str) -> dict[str, Any]:
+    """Return the existing terminal meta route with an explicit failed outcome."""
+    return {
+        "user_intent": IntentResult(intent="meta", target="meta", raw=None),
+        "messages": [AIMessage(content=message)],
+        "workflow_outcome": WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+    }
 
 
 def _is_llm_api_unavailable(err: BaseException) -> bool:
@@ -154,10 +166,7 @@ class IntentClassifier:
                 )
 
             if not parsed or not isinstance(parsed, dict):
-                return {
-                    "user_intent": IntentResult(intent="research", raw=None),
-                    "depth_decision": DepthDecision(decision="deep", raw_reasoning="Parse failed"),
-                }
+                return _failure_update(_LLM_ERROR_MESSAGE)
 
             raw_intent = (parsed.get("intent") or "research").strip().lower()
             route = _normalize_route(parsed.get("route"))
@@ -216,10 +225,7 @@ class IntentClassifier:
                 "LLM call timed out after %s seconds.",
                 self.llm_timeout,
             )
-            return {
-                "user_intent": IntentResult(intent="meta", raw=None),
-                "messages": [AIMessage(content=_LLM_TIMEOUT_MESSAGE)],
-            }
+            return _failure_update(_LLM_TIMEOUT_MESSAGE)
         except Exception as e:
             if _is_llm_api_unavailable(e):
                 logger.error(
@@ -227,30 +233,20 @@ class IntentClassifier:
                     type(e).__name__,
                     log_content_metadata(e),
                 )
-                return {
-                    "user_intent": IntentResult(intent="meta", raw=None),
-                    "messages": [AIMessage(content=_LLM_UNAVAILABLE_MESSAGE)],
-                }
+                return _failure_update(_LLM_UNAVAILABLE_MESSAGE)
             if _is_timeout_error(e):
                 logger.error(
                     "LLM call failed with timeout (e.g. 504 Gateway Time-out) (error_type=%s detail_%s)",
                     type(e).__name__,
                     log_content_metadata(e),
                 )
-                return {
-                    "user_intent": IntentResult(intent="meta", raw=None),
-                    "messages": [AIMessage(content=_LLM_TIMEOUT_MESSAGE)],
-                }
+                return _failure_update(_LLM_TIMEOUT_MESSAGE)
             logger.error(
                 "Error in orchestration (error_type=%s detail_%s)",
                 type(e).__name__,
                 log_content_metadata(e),
             )
-            err_msg = "We couldn't process your request due to a temporary error. Please try again."
-            return {
-                "user_intent": IntentResult(intent="meta", raw=None),
-                "messages": [AIMessage(content=err_msg)],
-            }
+            return _failure_update(_LLM_ERROR_MESSAGE)
 
     async def _repair_json_response(
         self,

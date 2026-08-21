@@ -99,10 +99,32 @@ The tool function is what the LLM invokes. It must have clear type annotations a
 ```python
 # sources/my_search_tool/src/my_client.py
 
-import httpx
+import html
 import logging
+import re
+
+import httpx
 
 logger = logging.getLogger(__name__)
+
+_INVALID_XML_CHARACTERS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\uD800-\uDFFF\uFFFE\uFFFF]")
+
+
+def _xml_text(value: object) -> str:
+    """Normalize provider text and remove characters forbidden by XML 1.0."""
+    return _INVALID_XML_CHARACTERS.sub("", "" if value is None else str(value))
+
+
+def _render_document(url: object, title: object, content: object) -> str:
+    """Render provider-controlled fields inside the trusted document structure."""
+    url_text = _xml_text(url)
+    title_text = _xml_text(title)
+    content_text = _xml_text(content)
+    return (
+        f'<Document href="{html.escape(url_text, quote=True)}">\n'
+        f"<title>\n{html.escape(title_text, quote=True)}\n</title>\n"
+        f"{html.escape(content_text, quote=True)}\n</Document>"
+    )
 
 
 class MySearchClient:
@@ -130,13 +152,12 @@ class MySearchClient:
 
         formatted = []
         for doc in results:
-            url = doc.get("url", "")
-            title = doc.get("title", "")
-            content = doc.get("content", "")
             formatted.append(
-                f'<Document href="{url}">\n'
-                f"<title>\n{title}\n</title>\n"
-                f"{content}\n</Document>"
+                _render_document(
+                    doc.get("url"),
+                    doc.get("title"),
+                    doc.get("content"),
+                )
             )
 
         return "\n\n---\n\n".join(formatted)
@@ -238,7 +259,7 @@ version = "1.0.0"
 description = "NAT-based custom search tool"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "nvidia-nat==1.5.0",
+    "nvidia-nat-core==1.8.0",
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
 ]
@@ -251,7 +272,7 @@ Key points:
 
 - The `package-dir` maps the package name to `src/` so Python can find your module.
 - The entry point key (`my_search_tool`) maps to the `register` module, which triggers `@register_function` at import time.
-- Pin `nvidia-nat` to the same version used by the main project.
+- Pin `nvidia-nat-core` to the same version used by the main project.
 
 ---
 
@@ -320,8 +341,11 @@ dotenv -f deploy/.env run .venv/bin/nat run \
 ```python
 # sources/my_search_tool/tests/test_my_tool.py
 
+import xml.etree.ElementTree as ET
+from unittest.mock import AsyncMock
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import AsyncMock, patch
 
 from my_search_tool.my_client import MySearchClient
 
@@ -329,9 +353,12 @@ from my_search_tool.my_client import MySearchClient
 @pytest.mark.asyncio
 async def test_search_returns_results():
     """Test that the search client returns formatted results."""
+    url = 'https://example.com/pa\x00th?q="quoted"&close=</Document>'
+    title = 'Example\x00 & "title" </title>'
+    content = "Example\x00 result & </Document>"
     mock_response = {
         "results": [
-            {"url": "https://example.com", "content": "Example result"},
+            {"url": url, "title": title, "content": content},
         ]
     }
 
@@ -345,8 +372,14 @@ async def test_search_returns_results():
         )
         result = await client.search("test query")
 
-    assert "Example result" in result
-    assert "example.com" in result
+    assert result.count("<Document ") == 1
+    assert result.count("</Document>") == 1
+    document = ET.fromstring(result)
+    title_element = document.find("title")
+    assert title_element is not None
+    assert document.attrib["href"] == url.replace("\x00", "")
+    assert (title_element.text or "").strip("\n") == title.replace("\x00", "")
+    assert (title_element.tail or "").strip("\n") == content.replace("\x00", "")
 
 
 @pytest.mark.asyncio
@@ -412,11 +445,17 @@ async def _search(query: str) -> str:
 
 ### Output Formatting
 
-Use the XML `<Document>` format for results that include URLs. This allows the agent's prompt to extract and cite sources:
+Use the XML `<Document>` format for results that include URLs. This allows the agent's prompt to extract and cite sources.
+Reuse the private `_render_document()` helper from Step 3:
 
 ```python
-f'<Document href="{url}">\n<title>\n{title}\n</title>\n{content}\n</Document>'
+result = _render_document(url, title, content)
 ```
+
+Keep this renderer private to the independently installable plugin and preserve
+the fixed document shape. Removing XML 1.0-invalid code points and escaping
+provider-controlled values prevents them from breaking the fragment, closing
+trusted tags, or creating additional document elements.
 
 ---
 

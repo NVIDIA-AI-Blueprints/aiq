@@ -196,6 +196,68 @@ class TestChatResearcherAgent:
         assert "messages" in result
 
     @pytest.mark.asyncio
+    async def test_intent_routing_failure_is_bounded(
+        self,
+        mock_shallow_research,
+        mock_deep_research,
+        mock_clarifier,
+        caplog,
+    ):
+        async def failing_router(_state):
+            raise RuntimeError("private provider detail")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=failing_router,
+            shallow_research_fn=mock_shallow_research,
+            deep_research_fn=mock_deep_research,
+            clarifier_fn=mock_clarifier,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            result = await agent.run(
+                ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+                thread_id="test-routing-failure",
+            )
+
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+        assert "private provider detail" not in result["messages"][-1].content
+        assert "Intent routing failed (error_type=RuntimeError)" in caplog.text
+        assert "private provider detail" not in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_typed_intent_failure_terminates_without_downstream_nodes(self):
+        calls: list[str] = []
+
+        async def failed_classifier(_state):
+            return {
+                "user_intent": IntentResult(intent="meta", target="meta", raw=None),
+                "messages": [AIMessage(content="Please try again.")],
+                "workflow_outcome": WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            }
+
+        async def unexpected_downstream(*_args, **_kwargs):
+            calls.append("downstream")
+            raise AssertionError("terminal intent failure must not invoke downstream nodes")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=failed_classifier,
+            shallow_research_fn=unexpected_downstream,
+            deep_research_fn=unexpected_downstream,
+            clarifier_fn=unexpected_downstream,
+            report_ask_fn=unexpected_downstream,
+            report_edit_fn=unexpected_downstream,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+            thread_id="test-typed-intent-failure",
+        )
+
+        assert calls == []
+        assert result["messages"][-1].content == "Please try again."
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    @pytest.mark.asyncio
     async def test_run_shallow_research_flow(
         self,
         mock_intent_classifier,

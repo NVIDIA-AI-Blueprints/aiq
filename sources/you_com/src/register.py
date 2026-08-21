@@ -15,8 +15,10 @@
 
 import asyncio
 import enum
+import html
 import logging
 import os
+import re
 from collections.abc import Callable
 from collections.abc import Coroutine
 from typing import Any
@@ -39,6 +41,8 @@ logger = logging.getLogger(__name__)
 _missing_key_warned = False
 
 _CACHE_MAX_SIZE = 500
+_STATUS_MESSAGE_SCAN_LIMIT = 512
+_INVALID_XML_CHARACTERS = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\uD800-\uDFFF\uFFFE\uFFFF]")
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -127,6 +131,73 @@ def _make_stub(label: str) -> FunctionInfo:
     return FunctionInfo.from_fn(_stub, description=_stub.__doc__)
 
 
+def _xml_text(value: object) -> str:
+    """Normalize provider text and remove characters forbidden by XML 1.0."""
+    return _INVALID_XML_CHARACTERS.sub("", "" if value is None else str(value))
+
+
+def _render_document(url: object, title: object, content: object) -> str:
+    """Render provider-controlled fields inside the trusted document structure."""
+    url_text = _xml_text(url)
+    title_text = _xml_text(title)
+    content_text = _xml_text(content)
+    return (
+        f'<Document href="{html.escape(url_text, quote=True)}">\n'
+        f"<title>\n{html.escape(title_text, quote=True)}\n</title>\n"
+        f"{html.escape(content_text, quote=True)}\n</Document>"
+    )
+
+
+def _coerce_http_status(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        status = int(value)
+    except (TypeError, ValueError):
+        return None
+    return status if 100 <= status <= 599 else None
+
+
+def _exception_http_status(error: Exception) -> int | None:
+    """Resolve an HTTP status without depending on a provider exception type."""
+    if status := _coerce_http_status(getattr(error, "status_code", None)):
+        return status
+    response = getattr(error, "response", None)
+    if status := _coerce_http_status(getattr(response, "status_code", None)):
+        return status
+    message = str(error)[:_STATUS_MESSAGE_SCAN_LIMIT]
+    # Ignore status-like URL path/query/port values before applying the bounded
+    # text fallback. Direct and response-attached status codes above remain
+    # authoritative.
+    message_without_urls = re.sub(r"https?://\S+", "", message, flags=re.IGNORECASE)
+    normalized_message = message_without_urls.lower()
+    if "unauthorized" in normalized_message:
+        return 401
+    if "forbidden" in normalized_message:
+        return 403
+    if match := re.search(
+        r"(?:\b(?:http(?:\s*error|\s+status)?|status(?:[_\s-]+code)?|response(?:\s+status)?|"
+        r"error(?:\s+code)?)\s*[:=]?\s*|\[)(401|403)(?:\]|\b)",
+        normalized_message,
+    ):
+        return int(match.group(1))
+    if match := re.fullmatch(r"\s*\[?(401|403)\]?\s*", normalized_message):
+        return int(match.group(1))
+    return None
+
+
+def _authentication_error(label: str, status: int) -> str:
+    if status == 401:
+        return (
+            f"Error: {label} failed due to invalid API key (401 Unauthorized).\n"
+            "Please check your YDC_API_KEY and ensure it is valid.\n"
+        )
+    return (
+        f"Error: {label} failed because access was denied (403 Forbidden).\n"
+        "Please check your YDC_API_KEY and account permissions.\n"
+    )
+
+
 async def _run_with_retries(
     label: str,
     coro_factory: Callable[[str], Coroutine[Any, Any, str]],
@@ -157,15 +228,13 @@ async def _run_with_retries(
             return result
 
         except Exception as e:
+            status = _exception_http_status(e)
+            if status in {401, 403}:
+                return _authentication_error(label, status)
             if attempt == max_retries - 1:
                 error_msg = str(e)
                 if isinstance(e, ValueError):
                     return f"Error: {error_msg}"
-                if "401" in error_msg or "Unauthorized" in error_msg:
-                    return (
-                        f"Error: {label} failed due to invalid API key (401 Unauthorized).\n"
-                        "Please check your YDC_API_KEY and ensure it is valid.\n"
-                    )
                 return f"Error: {label} failed after {max_retries} attempts: {error_msg}"
             await asyncio.sleep(2**attempt)
 
@@ -325,20 +394,15 @@ async def you_web_search(tool_config: YouWebSearchToolConfig, builder: Builder):
         for doc in search_docs:
             if not tool_config.include_news_results and doc.metadata.get("source") == "news":
                 continue
-            title = doc.metadata.get("title", "")
-            url = doc.metadata.get("url", "")
-            description = doc.metadata.get("description", "")
-            content = doc.page_content
-            if content:
-                if tool_config.max_content_length:
-                    content = content[: tool_config.max_content_length]
-                formatted_results.append(
-                    f'<Document href="{url}">\n<title>\n{title}\n</title>\n{description}\n{content}\n</Document>'
-                )
-            else:
-                formatted_results.append(
-                    f'<Document href="{url}">\n<title>\n{title}\n</title>\n{description}\n</Document>'
-                )
+            title = doc.metadata.get("title")
+            url = doc.metadata.get("url")
+            description = doc.metadata.get("description")
+            description_text = "" if description is None else str(description)
+            content = "" if doc.page_content is None else str(doc.page_content)
+            if tool_config.max_content_length is not None:
+                content = content[: tool_config.max_content_length]
+            body = f"{description_text}\n{content}" if content else description_text
+            formatted_results.append(_render_document(url, title, body))
         return formatted_results
 
     async def _fetch(question: str) -> str:
@@ -495,9 +559,7 @@ async def you_contents(tool_config: YouContentsToolConfig, builder: Builder):
 
             parts = []
             for doc in docs:
-                url = doc.metadata.get("url", "")
-                title = doc.metadata.get("title", "")
-                parts.append(f'<Document href="{url}">\n<title>\n{title}\n</title>\n{doc.page_content}\n</Document>')
+                parts.append(_render_document(doc.metadata.get("url"), doc.metadata.get("title"), doc.page_content))
             return "\n\n---\n\n".join(parts)
 
         return await _run_with_retries(

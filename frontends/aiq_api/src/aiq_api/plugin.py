@@ -38,7 +38,6 @@ import logging
 import os
 import signal
 from collections.abc import Callable
-from typing import override
 
 from fastapi import APIRouter
 from fastapi import FastAPI
@@ -52,6 +51,7 @@ from nat.front_ends.fastapi.fastapi_front_end_config import FastApiFrontEndConfi
 from nat.front_ends.fastapi.fastapi_front_end_plugin import FastApiFrontEndPlugin
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorker
 from nat.front_ends.fastapi.fastapi_front_end_plugin_worker import FastApiFrontEndPluginWorkerBase
+from nat.utils.type_utils import override
 
 from .jobs.connection_manager import get_connection_manager
 from .jobs.event_store import EventStore

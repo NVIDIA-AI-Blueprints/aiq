@@ -104,7 +104,7 @@ After the skills are installed, users can ask their coding harness for AI-Q acti
 
 ## Prerequisites
 
-- Python 3.10 or newer.
+- Python 3.11, 3.12, or 3.13.
 - For `aiq-deploy`: access to this repository or permission to clone `https://github.com/NVIDIA-AI-Blueprints/aiq`, plus the selected runtime such as Docker Compose, Node/npm for local web mode, or kubectl/Helm for Kubernetes mode.
 - For `aiq-research`: a local or self-hosted AI-Q Blueprint server, usually at `http://localhost:8000`. Set `AIQ_SERVER_URL` only when using a different local or self-hosted server URL.
 

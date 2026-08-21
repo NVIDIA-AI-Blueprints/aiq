@@ -199,15 +199,15 @@ production artifact storage.
 
 ### Horizontal Backend Scaling
 
-The backend is stateless apart from database connections, so it can be horizontally scaled behind a load balancer.
+The shipped Docker Compose topology supports one backend instance. Do not use
+Compose service scaling for production because the stack does not provide the
+required backend load balancer or shared scheduler topology.
 
-**Docker Compose:** Run multiple backend containers by scaling the service and using a reverse proxy (such as Traefik or NGINX) in front:
+For production horizontal scaling, deploy with Helm and set
+`aiq.apps.backend.replicas` or the `aiq.apps.backend.autoscaling` values. Refer
+to [Kubernetes and Helm](./kubernetes.md) for the supported deployment path.
 
-```bash
-docker compose --env-file ../.env -f docker-compose.yaml up -d --scale aiq-agent=3
-```
-
-Note that each scaled instance starts its own embedded Dask scheduler and worker.
+Each backend replica starts its own embedded Dask scheduler and worker.
 The shipped container entrypoint always creates that embedded cluster. A deployment
 that uses a shared Dask cluster must provide a custom entrypoint (for example,
 starting `/app/deploy/start_web.py` directly), set
