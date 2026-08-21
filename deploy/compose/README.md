@@ -112,16 +112,16 @@ cd deploy/compose
 docker login nvcr.io
 
 # Run with pre-built images
-BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.0 \
-FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0 \
+BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.1 \
+FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.1 \
 docker compose --env-file ../.env -f docker-compose.yaml up -d
 ```
 
 You can also add these to your `deploy/.env` file:
 
 ```bash
-BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.0
-FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0
+BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.1
+FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.1
 ```
 
 Then run without specifying them on the command line:

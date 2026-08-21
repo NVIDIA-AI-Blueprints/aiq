@@ -25,7 +25,7 @@ DOCS_VERSIONS_PATH = REPO_ROOT / "docs" / "source" / "versions1.json"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 PER_USER_AUTH_COMPOSE_PATH = REPO_ROOT / "deploy" / "compose" / "docker-compose.per-user-auth.yaml"
 MCP_CONFIG_PATH = REPO_ROOT / "configs" / "config_web_frag_mcp_auth.yml"
-EXPECTED_RELEASE_VERSION = "2.2.0"
+EXPECTED_RELEASE_VERSION = "2.2.1"
 
 
 def load_compose() -> dict[str, Any]:
