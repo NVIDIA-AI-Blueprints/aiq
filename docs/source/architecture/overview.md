@@ -89,10 +89,11 @@ graph LR
    it checks `state.depth_decision.decision` to choose `shallow_research` or
    `clarifier`.
 
-2. **Report follow-up** -- When the intent targets an *existing* report,
-   the graph routes to `report_edit` if `report_action` is `edit`, and to
-   `report_ask` otherwise. With no report available yet, a report-targeted
-   intent falls through to the normal shallow or deep research path.
+2. **Report follow-up** -- When `user_intent.target` is `report` and an
+   *existing* report is available, the graph routes to `report_edit` if
+   `report_action` is `edit`, and to `report_ask` otherwise. With no report
+   available yet, a `target=report` request falls through to the normal shallow
+   or deep research path.
 
 3. **`should_escalate`** -- After shallow research completes, the graph
    evaluates whether the response warrants escalation to deep research. It
