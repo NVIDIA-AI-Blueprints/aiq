@@ -1,5 +1,17 @@
 # Change Log
 
+Release v2.2.1 (2026-08-21)
+
+**Research and reports**
+
+- Adds configurable strict citation enforcement for shallow research while preserving backward-compatible default behavior
+- Raises the default Lightning model output limit to 32,768 tokens while retaining benchmark-specific limits
+
+**Dependencies and documentation**
+
+- Updates the MCP production dependency lock to address the latest pip security advisory
+- Corrects stale documentation references and aligns report-routing documentation with the runtime intent contract
+
 Release v2.2.0 (2026-08-17)
 
 Published NVIDIA NGC artifacts:
