@@ -402,6 +402,59 @@ Omit `auth` in an authenticated AI-Q deployment to forward the current user's
 bearer token. Password mode is intended for local development and evaluation.
 Refer to `sources/gsf/README.md` for the complete contract and limits.
 
+### `stateful_python`
+
+Persistent scientific analysis inside one fresh OpenShell sandbox per Data
+Science Agent request. The tool is an unmapped utility rather than a data
+source; add its function key directly to the agent's explicit `tools` list.
+
+```yaml
+functions:
+  ds_python_sandbox:
+    _type: deep_research_sandbox
+    provider: openshell
+    openshell_image: ${AIQ_DS_OPENSHELL_IMAGE:-aiq-openshell-demo:latest}
+    policy: ${AIQ_DS_OPENSHELL_POLICY_FILE}
+    workdir: /sandbox
+    network: blocked
+    delete_on_exit: true
+    attest: true
+
+  python:
+    _type: stateful_python
+    sandbox: ds_python_sandbox
+    wall_timeout_seconds: 60
+    max_code_chars: 50000
+    max_output_chars: 50000
+    max_evidence_bytes: 20000000
+    max_memory_mb: 8192
+    max_cpu_seconds: 600
+    max_processes: 256
+    max_open_files: 256
+    max_file_bytes: 100000000
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `sandbox` | function ref | **required** | A `deep_research_sandbox` function configured for a fresh OpenShell sandbox with `network: blocked`. Shared-sandbox attachment and other providers are rejected. |
+| `wall_timeout_seconds` | `float` | `30` | Maximum wall time for one Python cell. A timeout terminates the complete request sandbox and loses its Python variables. |
+| `max_code_chars` | `int` | `50000` | Maximum characters accepted in one Python cell. |
+| `max_output_chars` | `int` | `50000` | Maximum captured cell output and displayed-result characters. |
+| `max_evidence_bytes` | `int` | `20000000` | Maximum total bytes of request-owned GSF receipts and manifest synchronized into the sandbox. |
+| `max_memory_mb` | `int` | `8192` | Hard address-space limit for the persistent worker process. |
+| `max_cpu_seconds` | `int` | `600` | Hard cumulative CPU-time limit for the persistent worker process. |
+| `max_processes` | `int` | `256` | Hard per-user process/thread limit inside the fresh sandbox. |
+| `max_open_files` | `int` | `256` | Hard open-file-descriptor limit for the worker. |
+| `max_file_bytes` | `int` | `100000000` | Hard maximum size of a file created by the worker process. |
+
+The kernel preloads pandas, NumPy, SciPy, scikit-learn, and statsmodels. It has
+no GSF client, SQL connection, host-process fallback, or network access. AI-Q
+uploads only version-matched kernel transport files and validated request-local
+GSF receipt JSON; application environment variables and credentials are not
+included in the OpenShell sandbox specification. OpenShell owns the physical
+sandbox boundary, while the worker additionally applies hard Unix resource
+limits before model-authored code starts.
+
 ### `intent_classifier`
 
 Classifies user queries as meta (conversational) or research, and determines research depth (shallow vs. deep).
@@ -805,7 +858,7 @@ only the additional sections you need.
 | `configs/config_cli_default.yml` | CLI | Chat pipeline with Tavily web search and clarification. No knowledge backend. Paper search is present only as a commented opt-in. |
 | `configs/config_cli_data_science.yml` | Direct DS Agent CLI | GSF catalog/text-to-SQL, Foundational RAG knowledge retrieval, and Tavily web search without the top-level router. |
 | `configs/config_cli_data_science_fdabench_lite.yml` | Direct DS Agent evaluation | Headless FDABench-Lite DS ReAct profile with GSF, Foundational RAG, Tavily, choice-label output, and request-local GSF budgets. |
-| `configs/config_cli_data_science_fdabench_lite_python.yml` | Direct DS Agent evaluation | Same FDABench-Lite profile plus the persistent scientific Python kernel and exact GSF-result bridge. |
+| `configs/config_cli_data_science_fdabench_lite_python.yml` | Direct DS Agent evaluation | Same FDABench-Lite profile plus a blocked-network, per-request OpenShell scientific Python kernel and exact GSF-result bridge. |
 | `configs/config_web_default_llamaindex.yml` | Web API | Default chat pipeline with LlamaIndex/ChromaDB knowledge retrieval and Tavily. Paper search is commented out. |
 | `configs/config_web_azure_ai_search.yml` | Web API | Azure AI Search knowledge retrieval and web search |
 | `configs/config_web_frag.yml` | Web API / Helm base | Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. Paper search is commented out. |

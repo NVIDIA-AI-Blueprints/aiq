@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import logging
@@ -15,6 +16,7 @@ from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ logger = logging.getLogger(__name__)
 class AnalysisRunState:
     """Mutable resources that belong to exactly one DS Agent request."""
 
+    run_id: str
     temporary_directory: tempfile.TemporaryDirectory[str]
     root: Path
     manifest_path: Path
@@ -53,6 +56,7 @@ def begin_analysis_run() -> Token[AnalysisRunState | None]:
     root = Path(temporary_directory.name)
     manifest_path = root / "gsf-results.json"
     state = AnalysisRunState(
+        run_id=str(uuid4()),
         temporary_directory=temporary_directory,
         root=root,
         manifest_path=manifest_path,
@@ -76,7 +80,16 @@ def register_gsf_result(*, question: str, database_name: str | None, payload: di
 
     reference = f"gsf_{len(state.gsf_results) + 1}"
     result_path = state.root / f"{reference}.json"
-    result_path.write_text(json.dumps(payload, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    try:
+        serialized = json.dumps(payload, ensure_ascii=False, allow_nan=False)
+        result_path.write_text(serialized, encoding="utf-8")
+    except (OSError, TypeError, ValueError):
+        logger.exception("Failed to persist a request-local GSF result")
+        try:
+            result_path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Failed to remove an incomplete request-local GSF result")
+        return None
     columns = payload.get("columns")
     column_names = [
         str(column.get("name"))
@@ -107,17 +120,29 @@ async def end_analysis_run(token: Token[AnalysisRunState | None]) -> None:
     state = get_analysis_run()
     try:
         if state is not None:
-            for resource in reversed(list(state.resources.values())):
-                closer = getattr(resource, "aclose", None) or getattr(resource, "close", None)
-                if closer is None:
-                    continue
+            cancellation: BaseException | None = None
+            try:
+                for resource in reversed(list(state.resources.values())):
+                    closer = getattr(resource, "aclose", None) or getattr(resource, "close", None)
+                    if closer is None:
+                        continue
+                    try:
+                        result = closer()
+                        if inspect.isawaitable(result):
+                            await result
+                    except BaseException as exc:  # cleanup must continue through cancellation
+                        logger.exception("Failed to close a request-local analysis resource")
+                        if isinstance(exc, asyncio.CancelledError):
+                            cancellation = cancellation or exc
+            finally:
                 try:
-                    result = closer()
-                    if inspect.isawaitable(result):
-                        await result
-                except Exception:  # noqa: BLE001 - cleanup must not replace the agent outcome
-                    logger.exception("Failed to close a request-local analysis resource")
-            state.temporary_directory.cleanup()
+                    await asyncio.to_thread(state.temporary_directory.cleanup)
+                except BaseException as exc:  # cleanup must not replace the agent outcome
+                    logger.exception("Failed to remove request-local analysis artifacts")
+                    if isinstance(exc, asyncio.CancelledError):
+                        cancellation = cancellation or exc
+            if cancellation is not None:
+                raise cancellation
     finally:
         _CURRENT_ANALYSIS_RUN.reset(token)
 

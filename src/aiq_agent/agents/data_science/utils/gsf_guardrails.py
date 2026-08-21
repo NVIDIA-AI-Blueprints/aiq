@@ -161,9 +161,11 @@ def _register_sql_evidence(tool_call: dict[str, Any], message: ToolMessage) -> T
     payload["analysis_hint"] = (
         f"Use gsf_rows('{reference}') in the Python tool to load these exact rows; do not copy them manually."
     )
-    return message.model_copy(
-        update={"content": json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))}
-    )
+    try:
+        content = json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    except (TypeError, ValueError):
+        return message
+    return message.model_copy(update={"content": content})
 
 
 class GSFCallGuardMiddleware(AgentMiddleware):
@@ -196,7 +198,7 @@ class GSFCallGuardMiddleware(AgentMiddleware):
             limit = _limit_for(tool_name, run_state.budget)
             used = run_state.counts[tool_name]
             if limit is not None and used >= limit:
-                return ToolMessage(
+                blocked = ToolMessage(
                     content=json.dumps(
                         {
                             "status": "error",
@@ -213,6 +215,14 @@ class GSFCallGuardMiddleware(AgentMiddleware):
                     name=tool_name,
                     status="error",
                 )
+                run_state.records.append(
+                    GSFCallRecord(
+                        tool_name=tool_name,
+                        status="budget_exhausted",
+                        cached=False,
+                    )
+                )
+                return blocked
 
             run_state.counts[tool_name] += 1
             result = await handler(request)

@@ -12,6 +12,7 @@ import itertools
 import json
 import math
 import re
+import socket
 import statistics
 import sys
 import traceback
@@ -30,6 +31,39 @@ import scipy
 import sklearn
 import statsmodels.api as sm
 from scipy import stats
+
+
+class _CappedStringIO(io.StringIO):
+    """Capture text without retaining more than one configured output budget."""
+
+    def __init__(self, max_chars: int) -> None:
+        super().__init__()
+        self.max_chars = max_chars
+        self.captured_chars = 0
+        self.truncated = False
+
+    def write(self, value: str) -> int:
+        """Retain only the remaining prefix while reporting the full write length."""
+
+        text = str(value)
+        remaining = max(0, self.max_chars - self.captured_chars)
+        if len(text) > remaining:
+            self.truncated = True
+        if remaining:
+            super().write(text[:remaining])
+            self.captured_chars += min(len(text), remaining)
+        return len(text)
+
+
+def _combined_output(stdout: _CappedStringIO, stderr: _CappedStringIO, max_output_chars: int) -> str:
+    printed = stdout.getvalue()
+    warnings = stderr.getvalue()
+    combined = printed + (("\n" if printed and warnings else "") + warnings if warnings else "")
+    truncated = stdout.truncated or stderr.truncated or len(combined) > max_output_chars
+    combined = combined[:max_output_chars]
+    if truncated:
+        combined += "\n... output truncated ..."
+    return combined
 
 
 def _read_manifest() -> dict[str, Any]:
@@ -138,22 +172,17 @@ def _visible_variables(namespace: dict[str, Any]) -> list[str]:
 
 
 def _execute(namespace: dict[str, Any], code: str, max_output_chars: int) -> dict[str, Any]:
-    stdout = io.StringIO()
-    stderr = io.StringIO()
+    stdout = _CappedStringIO(max_output_chars)
+    stderr = _CappedStringIO(max_output_chars)
     try:
         statements, expression = _compile_cell(code)
         with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
             if statements is not None:
                 exec(statements, namespace)
             value = eval(expression, namespace) if expression is not None else None
-        printed = stdout.getvalue()
-        warnings = stderr.getvalue()
-        combined = printed + (("\n" if printed and warnings else "") + warnings if warnings else "")
-        if len(combined) > max_output_chars:
-            combined = combined[:max_output_chars] + "\n... output truncated ..."
         return {
             "status": "ok",
-            "output": combined,
+            "output": _combined_output(stdout, stderr, max_output_chars),
             "result": _display(value, max_output_chars),
             "result_type": type(value).__name__ if value is not None else None,
             "variables": _visible_variables(namespace),
@@ -164,14 +193,13 @@ def _execute(namespace: dict[str, Any], code: str, max_output_chars: int) -> dic
             "error": type(exc).__name__,
             "detail": str(exc)[:2_000],
             "traceback": "".join(traceback.format_exception(exc))[-4_000:],
-            "output": stdout.getvalue()[:max_output_chars],
+            "output": _combined_output(stdout, stderr, max_output_chars),
             "variables": _visible_variables(namespace),
         }
 
 
-def main() -> None:
-    max_output_chars = int(sys.argv[2])
-    namespace: dict[str, Any] = {
+def _new_namespace() -> dict[str, Any]:
+    return {
         "__name__": "__aiq_analysis__",
         "Counter": Counter,
         "Path": Path,
@@ -197,19 +225,46 @@ def main() -> None:
         "timedelta": timedelta,
         "timezone": timezone,
     }
-    for line in sys.stdin:
-        try:
-            request = json.loads(line)
-            if request.get("operation") == "close":
-                response = {"status": "ok", "operation": "close"}
-                sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
-                sys.stdout.flush()
+
+
+def _handle_request(namespace: dict[str, Any], line: str, max_output_chars: int) -> tuple[dict[str, Any], bool]:
+    try:
+        request = json.loads(line)
+        if not isinstance(request, dict):
+            raise TypeError("kernel request must be an object")
+        if request.get("operation") == "close":
+            return {"status": "ok", "operation": "close"}, True
+        return _execute(namespace, str(request.get("code") or ""), max_output_chars), False
+    except Exception as exc:  # noqa: BLE001 - protocol errors must remain recoverable
+        return {"status": "error", "error": type(exc).__name__, "detail": str(exc)[:2_000]}, False
+
+
+def _serve_socket(socket_path: Path, max_output_chars: int) -> None:
+    namespace = _new_namespace()
+    socket_path.unlink(missing_ok=True)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+        server.bind(str(socket_path))
+        socket_path.chmod(0o600)
+        server.listen(1)
+        while True:
+            connection, _ = server.accept()
+            with connection, connection.makefile("r", encoding="utf-8", newline="\n") as reader:
+                response, should_close = _handle_request(namespace, reader.readline(), max_output_chars)
+                encoded = json.dumps(response, ensure_ascii=False, allow_nan=False, separators=(",", ":")) + "\n"
+                connection.sendall(encoded.encode("utf-8"))
+            if should_close:
                 return
-            response = _execute(namespace, str(request.get("code") or ""), max_output_chars)
-        except Exception as exc:  # noqa: BLE001 - protocol errors must remain recoverable
-            response = {"status": "error", "error": type(exc).__name__, "detail": str(exc)[:2_000]}
-        sys.stdout.write(json.dumps(response, ensure_ascii=False, allow_nan=False) + "\n")
-        sys.stdout.flush()
+
+
+def main() -> None:
+    max_output_chars = int(sys.argv[2])
+    if len(sys.argv) != 5 or sys.argv[3] != "--socket":
+        raise ValueError("kernel worker requires --socket <path>")
+    socket_path = Path(sys.argv[4])
+    try:
+        _serve_socket(socket_path, max_output_chars)
+    finally:
+        socket_path.unlink(missing_ok=True)
 
 
 if __name__ == "__main__":

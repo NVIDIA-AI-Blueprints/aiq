@@ -49,3 +49,25 @@ def test_direct_data_science_workflow_requires_agent_function(tmp_path, capsys):
 
     assert _VALIDATOR.validate(str(path)) == 1
     assert "workflow requires function 'data_science_agent'" in capsys.readouterr().out
+
+
+def test_chat_workflow_requires_declared_hybrid_adapter(tmp_path, capsys):
+    path = _write_config(
+        tmp_path,
+        {
+            "functions": {
+                "intent_classifier": {"_type": "intent_classifier"},
+                "shallow_research_agent": {"_type": "shallow_research_agent"},
+                "deep_research_agent": {"_type": "deep_research_agent"},
+            },
+            "workflow": {
+                "_type": "chat_deepresearcher_agent",
+                "hybrid_research_agent": "misspelled_hybrid_adapter",
+            },
+        },
+    )
+
+    assert _VALIDATOR.validate(str(path)) == 1
+    output = capsys.readouterr().out
+    assert "workflow.hybrid_research_agent references function 'misspelled_hybrid_adapter'" in output
+    assert "configure a data_science_hybrid_adapter function" in output

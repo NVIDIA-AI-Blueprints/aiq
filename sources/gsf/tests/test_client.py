@@ -307,6 +307,33 @@ async def test_text_to_sql_enforces_completion_wall_timeout() -> None:
 
 
 @pytest.mark.asyncio
+async def test_text_to_sql_retries_completion_wall_timeout(chat_sql_answer: dict) -> None:
+    """Apply the completion retry budget after an initial wall timeout."""
+
+    attempts = 0
+
+    async def handler(_request: httpx.Request) -> httpx.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            await asyncio.sleep(0.05)
+        return _sse_response(chat_sql_answer)
+
+    client = GSFClient(
+        base_url="https://gsf.example",
+        completion_wall_timeout_seconds=0.01,
+        max_completion_retries=1,
+        transport=httpx.MockTransport(handler),
+    )
+    with patch.object(GSFClient, "_retry_delay", return_value=0):
+        async with client:
+            result = await client.text_to_sql(TextToSQLRequest(question="Show revenue"), token="user-token")
+
+    assert attempts == 2
+    assert result.sql == "SELECT revenue FROM quarterly_results"
+
+
+@pytest.mark.asyncio
 async def test_text_to_pql_uses_prediction_routing_without_database_scope(chat_pql_answer: dict) -> None:
     """Route predictions without selecting a database in the AI-Q tool call."""
 

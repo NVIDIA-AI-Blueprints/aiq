@@ -232,11 +232,19 @@ class GSFClient:
                     )
                 return self._parse_chat_answer(body, content_type=content_type, request_id=request_id), request_id
             except TimeoutError as exc:
-                raise GSFError(
+                error = GSFError(
                     GSFErrorCode.TIMEOUT,
                     "GSF chat completions exceeded its wall-clock limit.",
                     retryable=True,
-                ) from exc
+                )
+                if attempt + 1 >= attempts:
+                    raise error from exc
+                logger.warning(
+                    "Retrying a timed-out GSF completion (%s/%s)",
+                    attempt + 1,
+                    self._max_completion_retries,
+                )
+                await asyncio.sleep(self._retry_delay(attempt, None))
             except GSFError as error:
                 if not error.retryable or attempt + 1 >= attempts:
                     raise

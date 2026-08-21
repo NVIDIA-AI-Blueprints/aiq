@@ -49,6 +49,7 @@ Canonical references:
 | Variable | When needed |
 |----------|-------------|
 | `AIQ_OPENSHELL_GATEWAY_NAME`, `AIQ_OPENSHELL_IMAGE`, `AIQ_OPENSHELL_POLICY_FILE` | OpenShell sandbox profile. |
+| `AIQ_DS_OPENSHELL_IMAGE`, `AIQ_DS_OPENSHELL_POLICY_FILE`, `AIQ_DS_PYTHON_MAX_MEMORY_MB`, `AIQ_DS_PYTHON_MAX_CPU_SECONDS` | OpenShell-only `stateful_python` image, offline policy, and optional hard worker-limit overrides. |
 | `AIQ_ARTIFACT_BLOB_PROVIDER`, `AIQ_ARTIFACT_S3_BUCKET`, `AIQ_ARTIFACT_S3_ENDPOINT_URL`, `AIQ_ARTIFACT_S3_REGION`, `AIQ_ARTIFACT_S3_PREFIX` | Optional object storage for sandbox artifacts. |
 
 ## Validate without leaking

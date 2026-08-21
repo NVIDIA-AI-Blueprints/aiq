@@ -21,6 +21,7 @@ from aiq_agent.common import get_all_tool_refs
 from aiq_agent.common import is_verbose
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -118,29 +119,50 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
 
     llm = await builder.get_llm(config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
     callbacks = (VerboseTraceCallback(),) if is_verbose(config.verbose) else ()
-    shared_agent = DataScienceAgent(
-        llm=llm,
-        tools=tools,
-        recursion_limit=config.recursion_limit,
-        callbacks=callbacks,
-        interaction_mode=config.interaction_mode,
-        response_mode=config.response_mode,
-        gsf_catalog_call_limit=config.gsf_catalog_call_limit,
-        gsf_text_to_sql_call_limit=config.gsf_text_to_sql_call_limit,
-        gsf_cache_repeated_calls=config.gsf_cache_repeated_calls,
-        python_call_limit=config.python_call_limit,
-        finalization_model_call_limit=config.finalization_model_call_limit,
-    )
 
     async def _run(state: DataScienceAgentState) -> DataScienceAgentState:
+        from contextlib import AsyncExitStack
+
         validate_research_source_configuration(state.data_sources, "data science")
         selected_tools = filter_tools_by_sources(tools, state.data_sources)
         if all_mapped_tools_filtered_out(tools, selected_tools, state.data_sources):
             logger.warning("Data-science request selected data sources with no matching tools")
-        validate_research_source_configuration(state.data_sources, "data science", selected_tools)
 
-        active_agent = shared_agent
-        if selected_tools != tools:
+        async with AsyncExitStack() as mcp_stack:
+            try:
+                from aiq_api.mcp_auth.runtime_tools import PerUserMcpSourceUnavailableError
+            except ImportError:
+                PerUserMcpSourceUnavailableError = None
+
+            try:
+                from aiq_api.jobs.access import require_verified_principal
+                from aiq_api.mcp_auth.provider import principal_user_id
+                from aiq_api.mcp_auth.runtime_tools import open_per_user_mcp_tools
+                from nat.builder.context import ContextState
+
+                ContextState.get().user_id.set(principal_user_id(require_verified_principal()))
+                mcp_tools = await open_per_user_mcp_tools(
+                    builder=builder,
+                    data_sources=state.data_sources,
+                    exit_stack=mcp_stack,
+                )
+                if mcp_tools:
+                    selected_tools = [*selected_tools, *mcp_tools]
+            except ImportError:
+                logger.debug("aiq_api unavailable; skipping per-user MCP tools for data science")
+            except Exception as exc:
+                if PerUserMcpSourceUnavailableError is not None and isinstance(
+                    exc,
+                    PerUserMcpSourceUnavailableError,
+                ):
+                    return state.model_copy(update={"messages": [*state.messages, AIMessage(content=str(exc))]})
+                logger.error(
+                    "Failed to resolve per-user MCP tools for data science; continuing (error_type=%s detail_%s)",
+                    type(exc).__name__,
+                    log_content_metadata(exc),
+                )
+
+            validate_research_source_configuration(state.data_sources, "data science", selected_tools)
             active_agent = DataScienceAgent(
                 llm=llm,
                 tools=selected_tools,
@@ -154,7 +176,7 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
                 python_call_limit=config.python_call_limit,
                 finalization_model_call_limit=config.finalization_model_call_limit,
             )
-        return await active_agent.run(state)
+            return await active_agent.run(state)
 
     yield FunctionInfo.from_fn(
         _run,
@@ -168,13 +190,12 @@ async def data_science_hybrid_adapter(config: DataScienceHybridAdapterConfig, bu
     agent_fn = await builder.get_function(config.agent)
 
     async def _run(state: ChatResearcherState) -> dict[str, Any]:
-        catalog_context = state.catalog_context.model_dump(mode="json") if state.catalog_context is not None else None
         agent_state = DataScienceAgentState(
             messages=state.messages,
             data_sources=state.data_sources,
             user_info=state.user_info,
             database_name=state.database_name,
-            catalog_context=catalog_context,
+            catalog_context=state.catalog_context,
             catalog_request_id=state.catalog_request_id,
         )
         result = await agent_fn.ainvoke(agent_state)

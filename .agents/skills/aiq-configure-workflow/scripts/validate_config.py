@@ -269,6 +269,13 @@ def validate(path: str) -> int:
         for function_name in REQUIRED_WORKFLOW_FUNCTIONS.get(wf_type, ()):
             if function_name not in declared_functions:
                 errors.append(f"workflow requires function '{function_name}' under functions: (missing).")
+        hybrid_research_agent = workflow.get("hybrid_research_agent")
+        if hybrid_research_agent is not None and hybrid_research_agent not in declared_functions:
+            errors.append(
+                "workflow.hybrid_research_agent references function "
+                f"'{hybrid_research_agent}' but it is missing under functions: "
+                "(configure a data_science_hybrid_adapter function)."
+            )
         if (
             wf_type == CHAT_WORKFLOW_TYPE
             and workflow.get("enable_clarifier") is True

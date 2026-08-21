@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from collections import Counter
@@ -19,6 +20,7 @@ from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph.state import CompiledStateGraph
 
@@ -71,6 +73,63 @@ _EMPTY_RESPONSE_TERMINAL = (
     "I could not produce a supported answer because the final synthesis model returned no visible content after "
     "one bounded retry."
 )
+_PRELOADED_CATALOG_TOOL = "aiq__preloaded_catalog_context"
+_PRELOADED_CATALOG_MESSAGE_NAME = "aiq_preloaded_catalog_context"
+_MAX_CATALOG_ITEMS = 50
+_MAX_CATALOG_TEXT_CHARS = 512
+
+
+def _bounded_catalog_text(value: str) -> str:
+    return value[:_MAX_CATALOG_TEXT_CHARS]
+
+
+def _preloaded_catalog_messages(context: DataScienceAgentContext) -> list[Any]:
+    """Represent validated router context as untrusted tool data, never instructions."""
+
+    catalog = context.catalog_context
+    if catalog is None:
+        return []
+    call_id = f"preloaded-catalog-{uuid4()}"
+    payload = {
+        "type": "preloaded_catalog_context",
+        "database_name": context.database_name,
+        "coverage": catalog.coverage,
+        "truncated": catalog.truncated,
+        "uncovered_entities": [
+            _bounded_catalog_text(value) for value in (catalog.uncovered_entities or [])[:_MAX_CATALOG_ITEMS]
+        ],
+        "candidates": [
+            {
+                "term": _bounded_catalog_text(candidate.term),
+                "attribute": _bounded_catalog_text(candidate.attribute),
+                "label": _bounded_catalog_text(candidate.label),
+                "id": _bounded_catalog_text(candidate.id),
+            }
+            for candidate in catalog.candidates[:_MAX_CATALOG_ITEMS]
+        ],
+    }
+    return [
+        AIMessage(
+            content="",
+            id=f"{call_id}-request",
+            name=_PRELOADED_CATALOG_MESSAGE_NAME,
+            tool_calls=[{"name": _PRELOADED_CATALOG_TOOL, "args": {}, "id": call_id, "type": "tool_call"}],
+        ),
+        ToolMessage(
+            content=json.dumps(payload, ensure_ascii=False, allow_nan=False, separators=(",", ":")),
+            id=f"{call_id}-result",
+            name=_PRELOADED_CATALOG_TOOL,
+            tool_call_id=call_id,
+        ),
+    ]
+
+
+def _without_preloaded_catalog_messages(messages: Sequence[Any]) -> list[Any]:
+    return [
+        message
+        for message in messages
+        if getattr(message, "name", None) not in {_PRELOADED_CATALOG_MESSAGE_NAME, _PRELOADED_CATALOG_TOOL}
+    ]
 
 
 def _choice_contract(messages: Sequence[Any]) -> tuple[list[str], bool] | None:
@@ -207,8 +266,9 @@ class DataScienceAgent:
                 catalog_context=state.catalog_context,
                 catalog_request_id=state.catalog_request_id,
             )
+            input_messages = [*state.messages, *_preloaded_catalog_messages(runtime_context)]
             result = await self.graph.ainvoke(
-                {"messages": state.messages},
+                {"messages": input_messages},
                 config=invoke_config,
                 context=runtime_context,
             )
@@ -317,6 +377,7 @@ class DataScienceAgent:
                         if getattr(message, "id", None) != retry_id
                         and getattr(message, "name", None) != _CHOICE_REPAIR_MESSAGE_NAME
                     ]
+            result_messages = _without_preloaded_catalog_messages(result_messages)
             capture_data_sources(
                 result_messages,
                 registry=registry,
@@ -335,12 +396,14 @@ class DataScienceAgent:
                     available_tools=list(self.source_tool_names),
                 )
         finally:
-            summary = summarize_gsf_run()
-            if summary and (summary["catalog_calls"] or summary["text_to_sql_calls"] or summary["cache_hits"]):
-                logger.info("Data-science GSF call summary: %s", summary)
-            end_gsf_run(gsf_run_token)
-            await end_analysis_run(analysis_run_token)
-            if registry_token is not None:
-                reset_session_registry(registry_token)
+            try:
+                summary = summarize_gsf_run()
+                if summary and (summary["catalog_calls"] or summary["text_to_sql_calls"] or summary["cache_hits"]):
+                    logger.info("Data-science GSF call summary: %s", summary)
+                end_gsf_run(gsf_run_token)
+                await end_analysis_run(analysis_run_token)
+            finally:
+                if registry_token is not None:
+                    reset_session_registry(registry_token)
 
         return state.model_copy(update={"messages": messages})

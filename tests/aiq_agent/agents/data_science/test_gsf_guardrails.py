@@ -76,12 +76,48 @@ async def test_distinct_calls_hit_hard_budget_without_invoking_handler() -> None
             _request("gsf__catalog_search", "call-2", {"question": "Customers", "database_name": "db"}),
             handler,
         )
+        summary = summarize_gsf_run()
     finally:
         end_gsf_run(token)
 
     assert handler.await_count == 1
     assert blocked.status == "error"
     assert json.loads(str(blocked.content))["code"] == "aiq_gsf_call_budget_exhausted"
+    assert summary["records"][-1] == {
+        "tool_name": "gsf__catalog_search",
+        "status": "budget_exhausted",
+        "cached": False,
+        "row_count": None,
+        "candidate_count": None,
+        "coverage": None,
+        "truncated": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_non_finite_sql_payload_is_not_registered_for_python() -> None:
+    middleware = GSFCallGuardMiddleware(GSFCallBudget(text_to_sql_calls=1))
+    original = ToolMessage(
+        content='{"request_id":"r1","rows":[{"value":NaN}]}',
+        tool_call_id="call-1",
+        name="gsf__text_to_sql",
+    )
+    handler = AsyncMock(return_value=original)
+    analysis_token = begin_analysis_run()
+    gsf_token = begin_gsf_run(middleware.budget)
+    try:
+        result = await middleware.awrap_tool_call(
+            _request("gsf__text_to_sql", "call-1", {"question": "Value", "database_name": "db"}),
+            handler,
+        )
+        analysis_state = get_analysis_run()
+        assert analysis_state is not None
+    finally:
+        end_gsf_run(gsf_token)
+        await end_analysis_run(analysis_token)
+
+    assert result is original
+    assert analysis_state.gsf_results == []
 
 
 @pytest.mark.asyncio

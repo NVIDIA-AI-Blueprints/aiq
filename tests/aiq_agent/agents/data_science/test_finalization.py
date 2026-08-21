@@ -3,10 +3,11 @@
 
 """Tests for the reserved no-tool finalization turn."""
 
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
+from langchain.agents.middleware.types import ModelRequest
 from langchain_core.messages import SystemMessage
 
 from aiq_agent.agents.data_science.utils.analysis_runtime import begin_analysis_run
@@ -14,18 +15,15 @@ from aiq_agent.agents.data_science.utils.analysis_runtime import end_analysis_ru
 from aiq_agent.agents.data_science.utils.finalization import FinalizationReserveMiddleware
 
 
-class _Request(SimpleNamespace):
-    def override(self, **updates):
-        values = vars(self) | updates
-        return _Request(**values)
-
-
 @pytest.mark.asyncio
 async def test_finalization_removes_tools_at_configured_model_call() -> None:
     middleware = FinalizationReserveMiddleware(max_model_calls=2)
-    request = _Request(
+    configured_tools = [{"name": "gsf__text_to_sql"}]
+    request = ModelRequest(
+        model=MagicMock(),
+        messages=[],
         system_message=SystemMessage(content="Base prompt"),
-        tools=[{"name": "gsf__text_to_sql"}],
+        tools=configured_tools,
         tool_choice="auto",
     )
     handler = AsyncMock(side_effect=lambda value: value)
@@ -36,7 +34,9 @@ async def test_finalization_removes_tools_at_configured_model_call() -> None:
     finally:
         await end_analysis_run(token)
 
-    assert first.tools == request.tools
+    assert first.tools == configured_tools
+    assert first.tool_choice == "auto"
+    assert first.system_message == SystemMessage(content="Base prompt")
     assert second.tools == []
     assert second.tool_choice is None
     assert "FINALIZATION TURN" in second.system_message.text

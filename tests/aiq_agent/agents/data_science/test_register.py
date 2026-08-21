@@ -28,6 +28,12 @@ def _dummy_search(query: str) -> str:
     return query
 
 
+@tool("protected__read")
+def _protected_search(query: str) -> str:
+    """Return one protected test result."""
+    return query
+
+
 def test_config_inherits_registry_tools_and_rejects_unknown_fields():
     config = data_science_register.DataScienceAgentConfig(llm="model")
 
@@ -102,19 +108,133 @@ async def test_registration_passes_headless_mode_to_agent():
     )
 
     registration = data_science_register.data_science_agent.__wrapped__(config, builder)
-    with (
-        patch.object(data_science_register, "get_all_tool_refs", return_value=["gsf"]),
-        patch.object(data_science_register, "DataScienceAgent") as agent_cls,
-    ):
+    with patch.object(data_science_register, "get_all_tool_refs", return_value=["gsf"]):
         function_info = await anext(registration)
     try:
-        assert function_info is not None
+        sentinel = DataScienceAgentState(messages=[HumanMessage(content="grounded")])
+        with patch.object(data_science_register, "DataScienceAgent") as agent_cls:
+            agent_cls.return_value.run = AsyncMock(return_value=sentinel)
+            result = await function_info.single_fn(DataScienceAgentState(messages=[HumanMessage(content="query")]))
+
+        assert result is sentinel
         assert agent_cls.call_args.kwargs["interaction_mode"] == "headless"
         assert agent_cls.call_args.kwargs["response_mode"] == "fdabench_choice"
         assert agent_cls.call_args.kwargs["gsf_catalog_call_limit"] == 2
         assert agent_cls.call_args.kwargs["gsf_text_to_sql_call_limit"] == 6
         assert agent_cls.call_args.kwargs["python_call_limit"] == 7
         assert agent_cls.call_args.kwargs["finalization_model_call_limit"] == 28
+    finally:
+        await registration.aclose()
+        reset_registry()
+
+
+@pytest.mark.asyncio
+async def test_registration_resolves_selected_protected_tools_per_request():
+    pytest.importorskip("aiq_api")
+    reset_registry()
+    populate_from_config(
+        [
+            {"id": "web", "name": "Web", "tools": ["_dummy_search"]},
+            {
+                "id": "protected",
+                "name": "Protected",
+                "requires_auth": True,
+                "per_user_auth": {
+                    "required": True,
+                    "type": "mcp_oauth2",
+                    "provider": "test",
+                    "mcp_server_id": "test",
+                },
+                "tools": ["protected"],
+            },
+        ],
+        group_names={"protected"},
+    )
+    builder = MagicMock()
+    builder.get_tools = AsyncMock(return_value=[_dummy_search])
+    builder.get_llm = AsyncMock(return_value=MagicMock())
+    config = data_science_register.DataScienceAgentConfig(llm="model", tools=["_dummy_search"])
+    registration = data_science_register.data_science_agent.__wrapped__(config, builder)
+    function_info = await anext(registration)
+    sentinel = DataScienceAgentState(messages=[HumanMessage(content="protected result")])
+    try:
+        with (
+            patch("aiq_api.jobs.access.require_verified_principal", return_value=MagicMock()) as principal,
+            patch("aiq_api.mcp_auth.provider.principal_user_id", return_value="user-1") as user_id,
+            patch(
+                "aiq_api.mcp_auth.runtime_tools.open_per_user_mcp_tools",
+                AsyncMock(return_value=[_protected_search]),
+            ) as open_tools,
+            patch.object(data_science_register, "DataScienceAgent") as agent_cls,
+        ):
+            agent_cls.return_value.run = AsyncMock(return_value=sentinel)
+            result = await function_info.single_fn(
+                DataScienceAgentState(
+                    messages=[HumanMessage(content="Read my protected source")],
+                    data_sources=["protected"],
+                )
+            )
+
+        assert result is sentinel
+        principal.assert_called_once_with()
+        user_id.assert_called_once()
+        open_tools.assert_awaited_once()
+        assert agent_cls.call_args.kwargs["tools"] == [_protected_search]
+    finally:
+        await registration.aclose()
+        reset_registry()
+
+
+@pytest.mark.asyncio
+async def test_registration_surfaces_reconnect_for_unavailable_protected_source():
+    pytest.importorskip("aiq_api")
+    from aiq_api.mcp_auth.runtime_tools import PerUserMcpSourceUnavailableError
+
+    reset_registry()
+    populate_from_config(
+        [
+            {"id": "web", "name": "Web", "tools": ["_dummy_search"]},
+            {
+                "id": "protected",
+                "name": "Protected",
+                "requires_auth": True,
+                "per_user_auth": {
+                    "required": True,
+                    "type": "mcp_oauth2",
+                    "provider": "test",
+                    "mcp_server_id": "test",
+                },
+                "tools": ["protected"],
+            },
+        ],
+        group_names={"protected"},
+    )
+    builder = MagicMock()
+    builder.get_tools = AsyncMock(return_value=[_dummy_search])
+    builder.get_llm = AsyncMock(return_value=MagicMock())
+    config = data_science_register.DataScienceAgentConfig(llm="model", tools=["_dummy_search"])
+    registration = data_science_register.data_science_agent.__wrapped__(config, builder)
+    function_info = await anext(registration)
+    try:
+        with (
+            patch("aiq_api.jobs.access.require_verified_principal", return_value=MagicMock()),
+            patch("aiq_api.mcp_auth.provider.principal_user_id", return_value="user-1"),
+            patch(
+                "aiq_api.mcp_auth.runtime_tools.open_per_user_mcp_tools",
+                AsyncMock(side_effect=PerUserMcpSourceUnavailableError(["protected"])),
+            ),
+            patch.object(data_science_register, "DataScienceAgent") as agent_cls,
+        ):
+            result = await function_info.single_fn(
+                DataScienceAgentState(
+                    messages=[HumanMessage(content="Read my protected source")],
+                    data_sources=["protected"],
+                )
+            )
+
+        assert "protected" in str(result.messages[-1].content)
+        assert "Reconnect them in the data sources panel" in str(result.messages[-1].content)
+        agent_cls.assert_not_called()
     finally:
         await registration.aclose()
         reset_registry()
@@ -189,7 +309,7 @@ async def test_hybrid_adapter_maps_router_context_and_returns_only_final_respons
     assert invoked_state.user_info == {"tenant": "acme"}
     assert invoked_state.database_name == "benchmark_db"
     assert invoked_state.catalog_request_id == "catalog-1"
-    assert invoked_state.catalog_context == catalog.model_dump(mode="json")
+    assert invoked_state.catalog_context == catalog
     assert result == {"messages": [final_message]}
 
 

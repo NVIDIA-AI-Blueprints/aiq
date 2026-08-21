@@ -194,6 +194,36 @@ The gateway launcher, AI-Q runtime, and live suite use these non-secret settings
 | `AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK` | `true` | Set `false` only for an explicit local `best_effort` demo |
 | `AIQ_OPENSHELL_LIVE_ALLOW_BEST_EFFORT` | unset | Explicit non-production macOS/demo opt-in |
 
+## Data Science Python Sandbox
+
+The opt-in `stateful_python` tool uses the same attested OpenShell provider but
+requires an offline policy: GSF, knowledge retrieval, web search, model calls,
+and credentials remain host-side. Generate a separate policy file so enabling
+the Python tool never reuses the network-enabled deep-research policy:
+
+```bash
+./scripts/openshell/setup_openshell.sh \
+  --policy offline \
+  --policy-file configs/openshell/generated/aiq-ds-python-policy.yaml \
+  --image-name aiq-openshell-demo:latest
+```
+
+Then select the generated policy for the Data Science profile:
+
+```bash
+export AIQ_DS_OPENSHELL_IMAGE=aiq-openshell-demo:latest
+export AIQ_DS_OPENSHELL_POLICY_FILE="$PWD/configs/openshell/generated/aiq-ds-python-policy.yaml"
+```
+
+`stateful_python` accepts no host-process backend and rejects OpenShell configs
+that enable network access or attach to a shared sandbox. It uploads only its
+version-matched kernel transport and bounded request-local GSF receipt JSON.
+The worker applies hard Unix limits for memory, cumulative CPU time, process
+count, open files, and output-file size before model-authored code runs. The
+request's terminal cleanup deletes the whole sandbox and its process tree.
+The macOS `best_effort` setup remains a functional demo only; production
+acceptance still requires Linux with hard Landlock.
+
 ## Linux Production Acceptance
 
 First install and register an authenticated packaged gateway, or arrange an

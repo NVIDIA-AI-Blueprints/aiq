@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# FDABench-Lite DS ReAct profile with a request-scoped persistent Python kernel.
+# FDABench-Lite DS ReAct profile with a request-scoped OpenShell Python kernel.
 # GSF remains the only structured-data access path; Python receives exact GSF
-# rows through request-local receipt helpers and performs derived analysis.
+# rows through request-local receipt helpers and performs derived analysis in a
+# fresh, blocked-network sandbox that is deleted after each task.
 
 general:
   telemetry:
@@ -78,11 +79,33 @@ functions:
     advanced_search: true
     max_content_length: 2000
 
+  ds_python_sandbox:
+    _type: deep_research_sandbox
+    provider: openshell
+    openshell_image: ${AIQ_DS_OPENSHELL_IMAGE:-aiq-openshell-demo:latest}
+    workspace: ${AIQ_OPENSHELL_WORKSPACE:-default}
+    policy: ${AIQ_DS_OPENSHELL_POLICY_FILE:-configs/openshell/generated/aiq-ds-python-policy.yaml}
+    workdir: /sandbox
+    network: blocked
+    timeout: 1200
+    idle_timeout: 1800
+    policy_load_timeout_seconds: 30
+    delete_on_exit: true
+    attest: true
+    require_hard_landlock: ${AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK:-true}
+
   python:
     _type: stateful_python
+    sandbox: ds_python_sandbox
     wall_timeout_seconds: ${AIQ_DS_PYTHON_TIMEOUT_SECONDS:-60}
     max_code_chars: 50000
     max_output_chars: 50000
+    max_evidence_bytes: ${AIQ_DS_PYTHON_MAX_EVIDENCE_BYTES:-20000000}
+    max_memory_mb: ${AIQ_DS_PYTHON_MAX_MEMORY_MB:-8192}
+    max_cpu_seconds: ${AIQ_DS_PYTHON_MAX_CPU_SECONDS:-600}
+    max_processes: 256
+    max_open_files: 256
+    max_file_bytes: 100000000
 
   data_science_agent:
     _type: data_science_agent
