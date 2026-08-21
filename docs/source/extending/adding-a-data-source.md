@@ -257,7 +257,7 @@ version = "1.0.0"
 description = "NAT-based patent search data source"
 requires-python = ">=3.11,<3.14"
 dependencies = [
-    "nvidia-nat==1.5.0",
+    "nvidia-nat-core==1.8.0",
     "httpx>=0.24.0",
     "pydantic>=2.0.0",
 ]
@@ -405,11 +405,14 @@ The LLM will use the parameter descriptions to decide which filters to apply.
 
 Format results so the agent can extract citations. Use a consistent pattern:
 
-```python
-# XML Document format (matches Tavily pattern)
-f'<Document href="{url}">\n<title>\n{title}\n</title>\n{content}\n</Document>'
+For pseudo-XML output, use the
+[fixed-shape renderer pattern](./adding-a-tool.md#output-formatting), which
+escapes every provider-controlled field before interpolation. Do not insert raw
+provider output into markup.
 
-# Or structured text format
+For a plain structured-text alternative:
+
+```python
 f"**{title}** ({id})\nAbstract: {abstract}\nLink: {url}"
 ```
 

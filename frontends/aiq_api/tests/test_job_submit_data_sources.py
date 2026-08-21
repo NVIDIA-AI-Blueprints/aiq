@@ -60,7 +60,7 @@ def data_source_registry():
 
 
 @pytest.fixture
-async def submit_app(monkeypatch):
+async def submit_app(monkeypatch, tmp_path):
     """Build a minimal app with async submit routes and patched side effects."""
     import aiq_agent.auth
     import aiq_api.routes.jobs as jobs_routes
@@ -88,7 +88,9 @@ async def submit_app(monkeypatch):
     from aiq_api.jobs import submit
 
     monkeypatch.setattr(access, "ensure_job_access_table", MagicMock())
+    monkeypatch.setattr(access, "validate_job_access_table", MagicMock())
     monkeypatch.setattr(admission, "ensure_deep_research_admission_table", MagicMock())
+    monkeypatch.setattr(admission, "validate_deep_research_admission_table", MagicMock())
     monkeypatch.setattr(
         jobs_routes,
         "require_verified_principal",
@@ -97,12 +99,24 @@ async def submit_app(monkeypatch):
     monkeypatch.setattr(event_store.EventStore, "_ensure_table_exists", MagicMock())
     monkeypatch.setattr(submit, "submit_agent_job", submitted_job)
 
+    config_path = tmp_path / "config.yml"
+    config_path.write_text("functions: {}\n", encoding="utf-8")
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    job_store = MagicMock()
+    job_store.get_job = AsyncMock(return_value=None)
+    job_store.dask_client.scheduler_info.return_value = {"workers": {}}
+    monkeypatch.setattr(
+        jobs_routes,
+        "_table_names",
+        AsyncMock(return_value=set(jobs_routes._REQUIRED_ASYNC_JOB_TABLES)),
+    )
+
     worker = SimpleNamespace(
         _dask_available=True,
-        _job_store=MagicMock(),
+        _job_store=job_store,
         _scheduler_address="tcp://localhost:8786",
-        _db_url="sqlite:///./test.db",
-        _config_file_path="config.yml",
+        _db_url=db_url,
+        _config_file_path=str(config_path),
         _log_level=20,
         _use_dask_threads=False,
         _front_end_config=SimpleNamespace(expiry_seconds=86400),
@@ -136,21 +150,23 @@ async def submit_app(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_route_registration_validates_artifact_store(submit_app):
+async def test_route_registration_validates_artifact_store(submit_app, tmp_path):
     import aiq_api.routes.jobs as jobs_routes
 
     _app, _submitted_job, _builder = submit_app
 
-    jobs_routes._validate_artifact_store.assert_called_once_with("sqlite:///./test.db")
+    jobs_routes._validate_artifact_store.assert_called_once_with(f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}")
 
 
 @pytest.mark.asyncio
-async def test_route_registration_initializes_admission_schema(submit_app):
+async def test_route_registration_initializes_admission_schema(submit_app, tmp_path):
     from aiq_api.jobs import admission
 
     _app, _submitted_job, _builder = submit_app
 
-    admission.ensure_deep_research_admission_table.assert_called_once_with("sqlite:///./test.db")
+    admission.ensure_deep_research_admission_table.assert_called_once_with(
+        f"sqlite+aiosqlite:///{tmp_path / 'jobs.db'}"
+    )
 
 
 def test_artifact_store_validation_propagates_failure(monkeypatch):

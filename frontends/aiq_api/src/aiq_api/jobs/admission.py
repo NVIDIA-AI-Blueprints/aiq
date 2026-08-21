@@ -72,6 +72,10 @@ _INSERT_RESERVATION_SQL = text(
     ":job_id, :reservation_token, :owner_auth_type, :owner_subject, :admitted_at, :reservation_expires_at"
     ")"
 )
+_VALIDATE_ADMISSION_SCHEMA_SQL = text(
+    "SELECT job_id, reservation_token, owner_auth_type, owner_subject, admitted_at, reservation_expires_at "
+    "FROM deep_research_admission WHERE 1 = 0"
+)
 _CLEANUP_RESERVATIONS_SQL = text(
     "DELETE FROM deep_research_admission "
     "WHERE admitted_at < :rate_cutoff "
@@ -328,6 +332,14 @@ async def release_deep_research_job_reservation(
 def ensure_deep_research_admission_table(db_url: str) -> None:
     """Create admission state eagerly so startup fails before reporting ready."""
     _ensure_admission_schema(db_url)
+    validate_deep_research_admission_table(db_url)
+
+
+def validate_deep_research_admission_table(db_url: str) -> None:
+    """Raise unless the admission table exposes every column used by submission."""
+    engine = EventStore._get_or_create_sync_engine(db_url)
+    with engine.connect() as conn:
+        conn.execute(_VALIDATE_ADMISSION_SCHEMA_SQL)
 
 
 def is_deep_research_reservation_current(db_url: str, job_id: str, reservation_token: str) -> bool:

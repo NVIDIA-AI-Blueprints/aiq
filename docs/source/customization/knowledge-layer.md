@@ -281,8 +281,6 @@ Persisted vector stores are tied to both the embedding model and its output dime
 - **Azure AI Search:** model and dimension are part of the physical index identity; changing either creates an isolated
   index that must be populated by re-ingestion.
 
-See the detailed [knowledge-layer setup migration procedure](../../../sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md#migrating-an-embedding-model).
-
 OpenSearch ingestion is text-only: it extracts text from PDF, DOCX, PPTX, and supported plain-text formats, but does not
 perform LlamaIndex table/image/chart extraction. Distributed Dask ingestion also disables document-summary generation
 because the configured summary LLM is not serialized to workers; use local ingestion when summaries are required.

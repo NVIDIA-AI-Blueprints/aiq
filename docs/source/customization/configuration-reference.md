@@ -428,7 +428,7 @@ functions:
 
 ### `shallow_research_agent`
 
-Fast, single-pass research agent that produces citation-backed answers in one tool-calling loop.
+Fast, single-pass research agent that attempts to produce citation-backed answers in one tool-calling loop.
 
 ```yaml
 functions:
@@ -440,6 +440,7 @@ functions:
       - knowledge_search
     max_llm_turns: 10
     max_tool_iterations: 5
+    enforce_citations: false
     verbose: true
 ```
 
@@ -449,6 +450,7 @@ functions:
 | `tools` | `list[str]` | `[]` | Search tools available to the agent. |
 | `max_llm_turns` | `int` | `10` | Maximum number of LLM turns (includes both reasoning and tool-calling steps). |
 | `max_tool_iterations` | `int` | `5` | Maximum tool-calling iterations before forcing synthesis. |
+| `enforce_citations` | `bool` | `false` | Fail the run when citation integrity cannot be preserved. When `false`, AI-Q returns the generated answer after sanitization instead of failing solely on the citation contract. |
 | `verbose` | `bool` | `false` | Enable verbose logging. |
 
 ### `deep_research_agent`

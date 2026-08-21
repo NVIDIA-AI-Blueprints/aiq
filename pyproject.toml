@@ -21,7 +21,11 @@ requires = ["setuptools >= 83", "setuptools-scm>=8"]
 package-dir = {"" = "src"}
 
 [tool.setuptools.package-data]
-"aiq_agent.agents.deep_researcher" = ["skills/**/*"]
+"aiq_agent.agents.chat_researcher" = ["prompts/*.j2"]
+"aiq_agent.agents.clarifier" = ["prompts/*.j2"]
+"aiq_agent.agents.deep_researcher" = ["prompts/*.j2", "skills/**/*"]
+"aiq_agent.agents.report_rewriter" = ["prompts/*.j2"]
+"aiq_agent.agents.shallow_researcher" = ["prompts/*.j2"]
 
 [project]
 name = "aiq-agent"

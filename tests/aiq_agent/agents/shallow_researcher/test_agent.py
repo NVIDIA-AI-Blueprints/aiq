@@ -110,6 +110,7 @@ class TestShallowResearcherAgent:
         assert agent.max_llm_turns == 10
         assert agent.max_tool_iterations == 5
         assert agent.citation_repair_timeout == 60.0
+        assert agent.enforce_citations is False
         assert agent.callbacks == []
         assert agent.system_prompt is not None
 
@@ -130,10 +131,12 @@ class TestShallowResearcherAgent:
             tools=[real_tool],
             max_llm_turns=5,
             max_tool_iterations=3,
+            enforce_citations=True,
         )
 
         assert agent.max_llm_turns == 5
         assert agent.max_tool_iterations == 3
+        assert agent.enforce_citations is True
 
     def test_init_with_callbacks(self, mock_llm_provider, real_tool):
         """Test ShallowResearcherAgent initialization with callbacks."""
@@ -611,6 +614,7 @@ class TestShallowResearcherSourceRegistryGating:
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[mcp_time__get_current_time],
+            enforce_citations=True,
         )
 
         state = ShallowResearchAgentState(messages=[HumanMessage(content="What time is it in Tokyo?")])
@@ -718,6 +722,7 @@ class TestShallowResearcherSourceRegistryGating:
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[knowledge_search],
+            enforce_citations=True,
             callbacks=[callback],
         )
 
@@ -816,6 +821,7 @@ class TestShallowResearcherSourceRegistryGating:
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[mcp_time__get_current_time, web_search_with_urls],
+            enforce_citations=True,
             callbacks=[callback],
         )
 
@@ -838,6 +844,58 @@ class TestShallowResearcherSourceRegistryGating:
         repair_call = mock_llm.ainvoke.await_args
         assert repair_call.kwargs["config"]["tags"] == [SUPPRESS_OUTPUT_ARTIFACT_TAG]
         assert isinstance(repair_call.args[0][0], SystemMessage)
+
+    @pytest.mark.asyncio
+    async def test_default_multi_source_citation_integrity_failure_returns_draft(self, mock_llm_provider, mock_llm):
+        """Default citation mode returns the answer without running the strict repair pass."""
+        populate_from_config(
+            [
+                {
+                    "id": "mcp_time",
+                    "name": "MCP Time",
+                    "description": "Get current time and timezone information through MCP.",
+                    "tools": ["mcp_time"],
+                },
+                {
+                    "id": "web_search",
+                    "name": "Web Search",
+                    "description": "Search the web for real-time information.",
+                    "tools": ["web_search_with_urls"],
+                },
+            ],
+            group_names={"mcp_time"},
+        )
+        tool_call_response = AIMessage(
+            content="",
+            tool_calls=[
+                {"name": "mcp_time__get_current_time", "args": {"timezone": "Asia/Tokyo"}, "id": "1"},
+                {"name": "web_search_with_urls", "args": {"query": "CUDA"}, "id": "2"},
+            ],
+        )
+        source_only_draft = AIMessage(
+            content=(
+                "CUDA is a parallel computing platform.\n\n"
+                "**References:**\n- [1] CUDA Toolkit Documentation - https://docs.nvidia.com/cuda/"
+            )
+        )
+        mock_llm.ainvoke = AsyncMock(side_effect=[tool_call_response, source_only_draft])
+        callback = MagicMock()
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[mcp_time__get_current_time, web_search_with_urls],
+            callbacks=[callback],
+        )
+
+        result = await agent.run(
+            ShallowResearchAgentState(messages=[HumanMessage(content="What is CUDA? Also note the time.")])
+        )
+
+        assert "CUDA is a parallel computing platform." in result.messages[-1].content
+        assert mock_llm.ainvoke.await_count == 2
+        callback.emit_final_report.assert_called_once_with(
+            result.messages[-1].content,
+            cited_urls=["https://docs.nvidia.com/cuda/"],
+        )
 
     @pytest.mark.asyncio
     async def test_failed_multi_source_repair_is_not_published(self, mock_llm_provider, mock_llm):
@@ -877,6 +935,7 @@ class TestShallowResearcherSourceRegistryGating:
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[mcp_time__get_current_time, web_search_with_urls],
+            enforce_citations=True,
             callbacks=[callback],
         )
 
@@ -1052,6 +1111,7 @@ class TestShallowResearcherSourceCaptureIntegration:
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[web_search_with_urls],
+            enforce_citations=True,
             callbacks=[callback],
         )
 
@@ -1173,6 +1233,7 @@ class TestShallowResearcherSessionRegistry:
         agent = ShallowResearcherAgent(
             llm_provider=mock_llm_provider,
             tools=[],
+            enforce_citations=True,
         )
         # Pre-populate the instance registry (simulating stale data)
         agent.source_registry.add(SourceEntry(url="https://stale.example.com"))
@@ -1181,6 +1242,20 @@ class TestShallowResearcherSessionRegistry:
 
         with pytest.raises(EmptySourceRegistryError):
             await agent.run(state)
+
+    @pytest.mark.asyncio
+    async def test_default_empty_registry_returns_sanitized_answer(self, mock_llm_provider, mock_llm):
+        """By default, citation-source failures return the generated answer instead of raising."""
+        from aiq_agent.common.citation_verification import set_session_registry
+
+        set_session_registry(None)
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Draft answer with https://private.example/path"))
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[])
+        state = ShallowResearchAgentState(messages=[HumanMessage(content="Test")])
+
+        result = await agent.run(state)
+
+        assert result.messages[-1].content == "Draft answer with "
 
     @pytest.mark.parametrize(
         ("data_sources", "expected_reason"),
@@ -1199,7 +1274,7 @@ class TestShallowResearcherSessionRegistry:
         expected_reason,
     ):
         mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="Draft answer with https://private.example/path"))
-        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[])
+        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[], enforce_citations=True)
         state = ShallowResearchAgentState(
             messages=[HumanMessage(content="Test")],
             data_sources=data_sources,
@@ -1235,7 +1310,11 @@ class TestShallowResearcherSessionRegistry:
         )
         generated_answer = "No supporting sources were found, so I cannot provide a sourced answer."
         mock_llm.ainvoke = AsyncMock(side_effect=[tool_call, AIMessage(content=generated_answer)])
-        agent = ShallowResearcherAgent(llm_provider=mock_llm_provider, tools=[empty_web_search_tool])
+        agent = ShallowResearcherAgent(
+            llm_provider=mock_llm_provider,
+            tools=[empty_web_search_tool],
+            enforce_citations=True,
+        )
         state = ShallowResearchAgentState(
             messages=[HumanMessage(content="Summarize quantum computing.")],
             data_sources=["web"],

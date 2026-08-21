@@ -164,7 +164,7 @@ See [Production Considerations](./production.md#s3-security-responsibility).
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `backend_url` | `http://aiq-agent:8000` | Backend API URL as seen from the frontend container. |
+| `BACKEND_URL` | `http://aiq-agent:8000` | Backend API URL as seen from the frontend container. |
 
 ### Dask Worker Settings
 

@@ -227,6 +227,11 @@ jobs:
           chmod +x ci/scripts/test_scripts.sh
           ci/scripts/test_scripts.sh --skip-setup
 
+      - name: Validate VCS-less AI-Q release artifact on Python 3.11
+        env:
+          UV_PYTHON: "3.11"
+        run: ci/scripts/test_release_artifact.sh
+
       - name: Create MCP production environment
         run: |
           set -euo pipefail
