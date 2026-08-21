@@ -62,12 +62,12 @@ six nodes and conditional edges:
 ```mermaid
 graph LR
     IC[intent_classifier] -->|meta| END_NODE[END]
-    IC -->|"research/deep"| CL[clarifier]
-    IC -->|"research/shallow"| SR[shallow_research]
+    IC -->|"new research or no report; depth=deep"| CL[clarifier]
+    IC -->|"new research or no report; depth=shallow"| SR[shallow_research]
     SR -->|"escalate"| CL
     SR -->|"done"| END_NODE
-    IC -->|"report/ask"| RA[report_ask]
-    IC -->|"report/edit"| RE[report_edit]
+    IC -->|"target=report; report available; action=ask"| RA[report_ask]
+    IC -->|"target=report; report available; action=edit"| RE[report_edit]
     CL --> DR[deep_research]
     DR --> END_NODE
     RA --> END_NODE
@@ -113,7 +113,7 @@ The central state model carries data through the entire workflow:
 | `messages` | `list[AnyMessage]` | Conversation history (LangGraph message reducer) |
 | `user_info` | `dict` or `None` | Authenticated user information for personalization |
 | `data_sources` | `list[str]` or `None` | Hard per-request filter for registry-mapped source tools. Unmapped configured or utility tools remain active. |
-| `user_intent` | `IntentResult` or `None` | Classification result: `meta`, `research`, or `report` (report targets also carry a `report_action`) |
+| `user_intent` | `IntentResult` or `None` | Classification result: `intent` is `meta` or `research`; `target` is `meta`, `new_research`, or `report`; report targets carry `report_action` (`ask` or `edit`). |
 | `depth_decision` | `DepthDecision` or `None` | Routing decision: `shallow` or `deep` |
 | `final_report` | `str` or `None` | Final report output from deep research |
 | `shallow_result` | `ShallowResult` or `None` | Result from shallow research path |
