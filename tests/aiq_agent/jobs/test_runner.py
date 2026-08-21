@@ -3037,7 +3037,6 @@ class TestAsyncJobRunnerAgentFactory:
             llm="llm",
             tools=["tool"],
             fn_config=fn_config,
-            verbose=False,
             callbacks=["callback"],
         )
 

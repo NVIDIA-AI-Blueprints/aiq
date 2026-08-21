@@ -67,6 +67,7 @@ _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
 )
 _CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
 _JOB_SCOPED_AGENT_KWARGS = frozenset({"job_id"})
+_SHALLOW_RESEARCH_AGENT_KWARGS = frozenset({"max_tool_iterations", "enforce_citations"})
 
 
 @dataclass(frozen=True)
@@ -1218,10 +1219,12 @@ def _create_agent_instance(
     1. DeepResearcherAgent explicit config pattern
     2. llm_provider + tools + config/job_id pattern
     3. llm_provider + tools + job_id pattern
-    4. llm_provider + tools pattern
-    5. llm + tools pattern (simpler agents)
+    4. ShallowResearcherAgent config pattern
+    5. llm_provider + tools pattern
+    6. llm + tools pattern (simpler agents)
     """
     from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+    from aiq_agent.agents.shallow_researcher.register import ShallowResearchAgentConfig
 
     if isinstance(fn_config, DeepResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
         agent_cls, _DEEP_RESEARCH_AGENT_KWARGS
@@ -1267,23 +1270,22 @@ def _create_agent_instance(
         except TypeError:
             pass
 
+    if isinstance(fn_config, ShallowResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
+        agent_cls, _SHALLOW_RESEARCH_AGENT_KWARGS
+    ):
+        return agent_cls(
+            llm_provider=llm_provider,
+            tools=tools,
+            max_tool_iterations=fn_config.max_tool_iterations,
+            enforce_citations=fn_config.enforce_citations,
+            callbacks=callbacks,
+        )
+
     # Try the common llm_provider + tools pattern.
     try:
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            callbacks=callbacks,
-        )
-    except TypeError:
-        pass
-
-    # Try llm_provider + tools pattern (ShallowResearcherAgent style)
-    try:
-        return agent_cls(
-            llm_provider=llm_provider,
-            tools=tools,
-            max_tool_iterations=getattr(fn_config, "max_tool_iterations", 5),
-            enforce_citations=getattr(fn_config, "enforce_citations", False),
             callbacks=callbacks,
         )
     except TypeError:
