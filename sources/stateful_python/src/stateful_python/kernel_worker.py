@@ -187,7 +187,7 @@ def _execute(namespace: dict[str, Any], code: str, max_output_chars: int) -> dic
             "result_type": type(value).__name__ if value is not None else None,
             "variables": _visible_variables(namespace),
         }
-    except Exception as exc:  # noqa: BLE001 - kernel errors are serialized to the agent
+    except (Exception, SystemExit, KeyboardInterrupt) as exc:  # kernel errors are serialized to the agent
         return {
             "status": "error",
             "error": type(exc).__name__,
@@ -257,9 +257,9 @@ def _serve_socket(socket_path: Path, max_output_chars: int) -> None:
 
 
 def main() -> None:
-    max_output_chars = int(sys.argv[2])
     if len(sys.argv) != 5 or sys.argv[3] != "--socket":
         raise ValueError("kernel worker requires --socket <path>")
+    max_output_chars = int(sys.argv[2])
     socket_path = Path(sys.argv[4])
     try:
         _serve_socket(socket_path, max_output_chars)

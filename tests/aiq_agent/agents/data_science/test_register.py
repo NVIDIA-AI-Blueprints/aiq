@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import ToolMessage
@@ -180,6 +181,56 @@ async def test_registration_resolves_selected_protected_tools_per_request():
         user_id.assert_called_once()
         open_tools.assert_awaited_once()
         assert agent_cls.call_args.kwargs["tools"] == [_protected_search]
+    finally:
+        await registration.aclose()
+        reset_registry()
+
+
+@pytest.mark.asyncio
+async def test_registration_reraises_rejected_principal():
+    pytest.importorskip("aiq_api")
+    reset_registry()
+    populate_from_config(
+        [
+            {
+                "id": "protected",
+                "name": "Protected",
+                "requires_auth": True,
+                "per_user_auth": {
+                    "required": True,
+                    "type": "mcp_oauth2",
+                    "provider": "test",
+                    "mcp_server_id": "test",
+                },
+                "tools": ["protected"],
+            },
+        ],
+        group_names={"protected"},
+    )
+    builder = MagicMock()
+    builder.get_tools = AsyncMock(return_value=[_dummy_search])
+    builder.get_llm = AsyncMock(return_value=MagicMock())
+    config = data_science_register.DataScienceAgentConfig(llm="model")
+    registration = data_science_register.data_science_agent.__wrapped__(config, builder)
+    function_info = await anext(registration)
+    try:
+        with (
+            patch(
+                "aiq_api.jobs.access.require_verified_principal",
+                side_effect=HTTPException(status_code=403, detail="forbidden"),
+            ),
+            patch.object(data_science_register, "DataScienceAgent") as agent_cls,
+            pytest.raises(HTTPException) as raised,
+        ):
+            await function_info.single_fn(
+                DataScienceAgentState(
+                    messages=[HumanMessage(content="Read my protected source")],
+                    data_sources=["protected"],
+                )
+            )
+
+        assert raised.value.status_code == 403
+        agent_cls.assert_not_called()
     finally:
         await registration.aclose()
         reset_registry()

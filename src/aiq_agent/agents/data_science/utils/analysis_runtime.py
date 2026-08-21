@@ -42,11 +42,20 @@ _CURRENT_ANALYSIS_RUN: ContextVar[AnalysisRunState | None] = ContextVar(
 )
 
 
-def _write_manifest(state: AnalysisRunState) -> None:
+def _write_manifest(state: AnalysisRunState) -> bool:
     payload = {"version": 1, "results": state.gsf_results}
     staging = state.manifest_path.with_suffix(".tmp")
-    staging.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    staging.replace(state.manifest_path)
+    try:
+        staging.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        staging.replace(state.manifest_path)
+    except OSError:
+        logger.exception("Failed to persist the request-local GSF manifest")
+        try:
+            staging.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Failed to remove an incomplete request-local GSF manifest")
+        return False
+    return True
 
 
 def begin_analysis_run() -> Token[AnalysisRunState | None]:

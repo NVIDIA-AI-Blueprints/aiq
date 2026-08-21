@@ -7,6 +7,7 @@ import logging
 from typing import Any
 from typing import Literal
 
+from fastapi import HTTPException
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from pydantic import ConfigDict
@@ -151,6 +152,8 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
             except ImportError:
                 logger.debug("aiq_api unavailable; skipping per-user MCP tools for data science")
             except Exception as exc:
+                if isinstance(exc, HTTPException) and exc.status_code == 403:
+                    raise
                 if PerUserMcpSourceUnavailableError is not None and isinstance(
                     exc,
                     PerUserMcpSourceUnavailableError,

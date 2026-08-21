@@ -3,6 +3,7 @@
 
 """Tests for the OpenShell persistent-kernel transport and evidence bridge."""
 
+import ast
 import json
 import sys
 from pathlib import Path
@@ -87,14 +88,14 @@ def test_worker_namespace_persists_dataframes_across_cells() -> None:
     )
     second, _ = kernel_worker._handle_request(
         namespace,
-        json.dumps({"operation": "execute", "code": "frame['value'].sum()"}),
+        json.dumps({"operation": "execute", "code": "int(frame['value'].sum())"}),
         50_000,
     )
 
     assert first["status"] == "ok"
     assert "frame" in first["variables"]
     assert second["status"] == "ok"
-    assert second["result"] == "np.int64(6)"
+    assert second["result"] == "6"
 
 
 def test_worker_helpers_reload_the_sandbox_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -105,15 +106,41 @@ def test_worker_helpers_reload_the_sandbox_manifest(tmp_path: Path, monkeypatch:
         json.dumps(
             {
                 "operation": "execute",
-                "code": "df = gsf_rows('gsf_1')\n(df['value'].sum(), gsf_sql('gsf_1'))",
+                "code": "df = gsf_rows('gsf_1')\n(int(df['value'].sum()), gsf_sql('gsf_1'))",
             }
         ),
         50_000,
     )
 
     assert response["status"] == "ok"
-    assert "7" in response["result"]
-    assert "SELECT value" in response["result"]
+    assert ast.literal_eval(response["result"]) == (7, "SELECT value")
+
+
+def test_worker_serializes_system_exit_and_keeps_namespace_usable() -> None:
+    namespace = kernel_worker._new_namespace()
+    failed, _ = kernel_worker._handle_request(
+        namespace,
+        json.dumps({"operation": "execute", "code": "value = 7\nexit()"}),
+        50_000,
+    )
+    recovered, _ = kernel_worker._handle_request(
+        namespace,
+        json.dumps({"operation": "execute", "code": "value + 1"}),
+        50_000,
+    )
+
+    assert failed["status"] == "error"
+    assert failed["error"] == "SystemExit"
+    assert "value" in failed["variables"]
+    assert recovered["status"] == "ok"
+    assert recovered["result"] == "8"
+
+
+def test_worker_main_rejects_incomplete_arguments(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(sys, "argv", ["kernel_worker.py"])
+
+    with pytest.raises(ValueError, match="kernel worker requires --socket <path>"):
+        kernel_worker.main()
 
 
 def test_worker_output_is_capped_while_written() -> None:

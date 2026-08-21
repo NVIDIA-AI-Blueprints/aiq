@@ -16,7 +16,7 @@ from aiq_agent.agents.data_science.utils.analysis_runtime import end_analysis_ru
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
 
 
-def _builder_with(sandbox: DeepResearchSandboxConfig) -> MagicMock:
+def _builder_with(sandbox: object) -> MagicMock:
     builder = MagicMock()
     builder.get_function_config.return_value = sandbox
     return builder
@@ -85,6 +85,15 @@ async def test_registration_rejects_nonisolated_sandbox_configuration(
     registration = register_module.stateful_python.__wrapped__(config, _builder_with(sandbox))
 
     with pytest.raises(ValueError, match=message):
+        await anext(registration)
+
+
+@pytest.mark.asyncio
+async def test_registration_rejects_non_sandbox_configuration() -> None:
+    config = register_module.StatefulPythonConfig(sandbox="ds_python_sandbox")
+    registration = register_module.stateful_python.__wrapped__(config, _builder_with(object()))
+
+    with pytest.raises(TypeError, match="DeepResearchSandboxConfig"):
         await anext(registration)
 
 

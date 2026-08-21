@@ -15,6 +15,36 @@ from aiq_agent.agents.data_science.utils.analysis_runtime import register_gsf_re
 
 
 @pytest.mark.asyncio
+async def test_manifest_write_failure_is_nonfatal_and_keeps_in_memory_results(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_replace = Path.replace
+
+    def _replace(path: Path, target: str | Path) -> Path:
+        if path.name == "gsf-results.tmp":
+            raise OSError("manifest unavailable")
+        return original_replace(path, target)
+
+    monkeypatch.setattr(Path, "replace", _replace)
+    token = begin_analysis_run()
+    state = get_analysis_run()
+    assert state is not None
+    try:
+        reference = register_gsf_result(
+            question="Persist rows",
+            database_name="example",
+            payload={"rows": [{"value": 7}]},
+        )
+
+        assert reference == "gsf_1"
+        assert state.gsf_results[0]["ref"] == "gsf_1"
+        assert (state.root / "gsf_1.json").is_file()
+        assert not state.manifest_path.exists()
+    finally:
+        await end_analysis_run(token)
+
+
+@pytest.mark.asyncio
 async def test_non_finite_gsf_payload_does_not_create_analysis_reference() -> None:
     token = begin_analysis_run()
     state = get_analysis_run()

@@ -68,6 +68,23 @@ def test_password_auth_requires_both_email_and_password(email: str | None, passw
         )
 
 
+@pytest.mark.parametrize("timeout", [0, -1])
+def test_completion_wall_timeout_must_be_positive(timeout: float) -> None:
+    with pytest.raises(ValueError, match="completion wall timeout must be positive"):
+        GSFClient(
+            base_url="https://gsf.example",
+            completion_wall_timeout_seconds=timeout,
+        )
+
+
+def test_completion_retry_count_cannot_be_negative() -> None:
+    with pytest.raises(ValueError, match="completion retries cannot be negative"):
+        GSFClient(
+            base_url="https://gsf.example",
+            max_completion_retries=-1,
+        )
+
+
 @pytest.mark.asyncio
 async def test_catalog_search_uses_entity_coverage_path_maps_scope_and_bounds_candidates(
     catalog_search_api_response: dict,

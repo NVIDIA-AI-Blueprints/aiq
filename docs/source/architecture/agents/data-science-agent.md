@@ -185,8 +185,9 @@ Required benchmark variables are `INFERENCE_NVIDIA_API_KEY`,
 `AIQ_DS_GSF_CATALOG_CALL_LIMIT` and `AIQ_DS_GSF_TEXT_TO_SQL_CALL_LIMIT`
 override the profile defaults of two and six actual calls, respectively. Exact
 request-local cache hits do not consume those budgets.
-`AIQ_DS_PYTHON_CALL_LIMIT`, `AIQ_DS_PYTHON_TIMEOUT_SECONDS`, and
-`AIQ_DS_PYTHON_MAX_EVIDENCE_BYTES` tune the persistent analysis runtime;
+`AIQ_DS_PYTHON_CALL_LIMIT`, `AIQ_DS_PYTHON_TIMEOUT_SECONDS`,
+`AIQ_DS_PYTHON_MAX_EVIDENCE_BYTES`, `AIQ_DS_PYTHON_MAX_MEMORY_MB`, and
+`AIQ_DS_PYTHON_MAX_CPU_SECONDS` tune the persistent analysis runtime;
 `AIQ_DS_FINALIZATION_MODEL_CALL_LIMIT` tunes the reserved finalization turn. The
 Python profile additionally requires a configured OpenShell gateway, the
 scientific Python image, and an offline policy selected through

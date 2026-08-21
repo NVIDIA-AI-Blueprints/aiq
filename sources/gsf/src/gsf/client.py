@@ -64,6 +64,10 @@ class GSFClient:
 
         if (password_auth_email is None) != (password_auth_password is None):
             raise ValueError("GSF password authentication requires both email and password")
+        if completion_wall_timeout_seconds is not None and completion_wall_timeout_seconds <= 0:
+            raise ValueError("GSF completion wall timeout must be positive when configured")
+        if max_completion_retries < 0:
+            raise ValueError("GSF completion retries cannot be negative")
         self._base_url = base_url.rstrip("/")
         self._api_base_url = f"{self._base_url}/api"
         self._max_retries = max_retries

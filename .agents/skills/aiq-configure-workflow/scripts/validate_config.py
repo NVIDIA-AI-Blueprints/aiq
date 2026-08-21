@@ -270,7 +270,9 @@ def validate(path: str) -> int:
             if function_name not in declared_functions:
                 errors.append(f"workflow requires function '{function_name}' under functions: (missing).")
         hybrid_research_agent = workflow.get("hybrid_research_agent")
-        if hybrid_research_agent is not None and hybrid_research_agent not in declared_functions:
+        if hybrid_research_agent is not None and not isinstance(hybrid_research_agent, str):
+            errors.append("workflow.hybrid_research_agent must be a string function name when configured.")
+        elif hybrid_research_agent is not None and hybrid_research_agent not in declared_functions:
             errors.append(
                 "workflow.hybrid_research_agent references function "
                 f"'{hybrid_research_agent}' but it is missing under functions: "
