@@ -13,6 +13,8 @@ from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 from pydantic import Field
 
+from aiq_agent.common.citation_verification import CitationVerificationOutcomeState
+
 
 def _merge_dict_state(left: dict[str, Any] | None, right: dict[str, Any] | None) -> dict[str, Any]:
     if not left:
@@ -29,4 +31,4 @@ class ReportRewriterAgentState(BaseModel):
 
     messages: Annotated[list[AnyMessage], add_messages]
     files: Annotated[dict[str, Any], _merge_dict_state] = Field(default_factory=dict)
-    citation_verification_status: dict[str, str] | None = None
+    citation_verification_status: CitationVerificationOutcomeState | None = None

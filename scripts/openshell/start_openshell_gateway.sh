@@ -11,6 +11,8 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 VENV_DIR="$REPO_ROOT/.venv"
 
 GATEWAY_NAME="${AIQ_OPENSHELL_GATEWAY_NAME:-openshell}"
+WORKSPACE_NAME="${AIQ_OPENSHELL_WORKSPACE:-default}"
+export OPENSHELL_WORKSPACE="$WORKSPACE_NAME"
 IMAGE_NAME="${AIQ_OPENSHELL_IMAGE:-aiq-openshell-demo:latest}"
 POLICY_FILE="${AIQ_OPENSHELL_POLICY_FILE:-$REPO_ROOT/configs/openshell/generated/aiq-openshell-policy.yaml}"
 SANDBOX_NAME="${AIQ_OPENSHELL_SANDBOX_NAME:-aiq-openshell-demo}"
@@ -39,6 +41,7 @@ Canonical operator guide: docs/source/deployment/openshell.md
 
 Options:
   --gateway-name NAME           Registered gateway name (default: openshell).
+  --workspace NAME              OpenShell workspace (default: default).
   --image-name NAME             Image used for the readiness probe.
   --policy-file PATH            Policy used for the readiness probe.
   --reuse-existing, --no-start  Do not start a local packaged service.
@@ -57,6 +60,11 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --gateway-name)
             GATEWAY_NAME="$2"
+            shift 2
+            ;;
+        --workspace)
+            WORKSPACE_NAME="$2"
+            export OPENSHELL_WORKSPACE="$WORKSPACE_NAME"
             shift 2
             ;;
         --image-name)
@@ -226,6 +234,7 @@ sandbox_is_ready() {
 run_strict_readiness_check() {
     if ! "$PYTHON_BIN" "$READINESS_CHECKER" \
         --gateway-name "$GATEWAY_NAME" \
+        --workspace "$WORKSPACE_NAME" \
         --image-name "$IMAGE_NAME" \
         --policy-file "$POLICY_FILE" \
         --openshell-bin "$OPENSHELL_BIN" \

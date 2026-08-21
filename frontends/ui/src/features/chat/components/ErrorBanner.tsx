@@ -45,7 +45,6 @@ export const ErrorBanner: FC<ErrorBannerProps> = ({
   const [isExpanded, setIsExpanded] = useState(false)
   const errorMeta = getErrorMeta(code)
 
-  // Use custom message if provided, otherwise use default from registry
   const displayMessage = message || errorMeta.defaultMessage
 
   const subheading = (

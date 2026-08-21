@@ -27,7 +27,7 @@ from aiq_mcp.workflow_runner import WorkflowRunner
 from nat.builder.workflow_builder import WorkflowBuilder
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_INTENT_LLM_NAME = "nemotron_llm_intent"
+_INTENT_LLM_NAME = "nemotron_lightning_intent_llm"
 
 
 class _CountingIntentLLM:

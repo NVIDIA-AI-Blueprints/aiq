@@ -340,6 +340,7 @@ async def test_job_report_response_includes_report_interaction_metadata(report_e
         "job_id": "child-job-1",
         "has_report": True,
         "report": "# Revised",
+        "citation_verification_status": None,
         "parent_job_id": "parent-job-1",
         "interaction_action": "edit",
         "result_kind": "report",

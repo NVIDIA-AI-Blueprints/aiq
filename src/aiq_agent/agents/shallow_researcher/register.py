@@ -26,6 +26,9 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import is_verbose
+from aiq_agent.common import validate_research_source_configuration
+from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.logging_utils import log_content_metadata
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -104,6 +107,8 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
 
         try:
             data_sources = state.data_sources
+            validate_research_source_configuration(data_sources, "shallow research")
+
             selected_tools = filter_tools_by_sources(tools, data_sources)
 
             if all_mapped_tools_filtered_out(tools, selected_tools, data_sources):
@@ -160,7 +165,12 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                         from langchain_core.messages import AIMessage
 
                         return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=str(exc))])
-                    logger.exception("Failed to resolve per-user MCP tools for shallow research; continuing")
+                    logger.error(
+                        "Failed to resolve per-user MCP tools for shallow research; continuing "
+                        "(error_type=%s detail_%s)",
+                        type(exc).__name__,
+                        log_content_metadata(exc),
+                    )
 
                 # Build the agent with this turn's tool set.
                 active_agent = ShallowResearcherAgent(
@@ -171,23 +181,15 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                     callbacks=callbacks,
                 )
 
-                # Require at least one available tool, else the agent would reason about
-                # tools it can't call. selected_tools already reflects filtering + MCP.
-                from aiq_agent.common import format_user_facing_tool_error
-                from aiq_agent.common import validate_tool_availability
-
-                is_valid, _, unavailable_tools = validate_tool_availability(
-                    selected_tools, research_type="shallow research"
-                )
-                if not is_valid:
-                    error_msg = format_user_facing_tool_error("shallow research", unavailable_tools)
-                    from langchain_core.messages import AIMessage
-
-                    return ShallowResearchAgentState(messages=state.messages + [AIMessage(content=error_msg)])
+                validate_research_source_configuration(data_sources, "shallow research", selected_tools)
 
                 return await active_agent.run(state)
-        except Exception:
-            logger.exception("Error in shallow research execution.")
+        except Exception as exc:
+            logger.error(
+                "Error in shallow research execution (error_type=%s detail_%s)",
+                type(exc).__name__,
+                log_content_metadata(exc),
+            )
             raise
 
     yield FunctionInfo.from_fn(_run, description="Shallow research agent for fast, bounded research.")
@@ -214,10 +216,13 @@ async def shallow_research_workflow(config: ShallowResearchWorkflowConfig, build
 
     async def _run(query: str) -> ChatResponse:
         """Run shallow research on a query string."""
-        result = await shallow_research_agent_fn.ainvoke(
-            ShallowResearchAgentState(messages=[HumanMessage(content=query)])
-        )
-        response_content = result.messages[-1].content
+        try:
+            result = await shallow_research_agent_fn.ainvoke(
+                ShallowResearchAgentState(messages=[HumanMessage(content=query)])
+            )
+            response_content = result.messages[-1].content
+        except EmptySourceRegistryError as exc:
+            response_content = exc.public_response
         return _create_chat_response(response_content, response_id="research_response", model=workflow_id)
 
     yield FunctionInfo.from_fn(_run, description="Shallow research workflow for evaluation (accepts string query).")

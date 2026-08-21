@@ -745,6 +745,10 @@ def main() -> None:
         sys.exit(EXIT_FAILURE)
 
     cmd = sys.argv[COMMAND_NAME_POSITION]
+    if cmd in {"-h", "--help"}:
+        _print_usage()
+        return
+
     commands = {
         "health": _command_health,
         "chat": _command_chat,

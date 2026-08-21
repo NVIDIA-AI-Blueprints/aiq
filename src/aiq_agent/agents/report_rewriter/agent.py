@@ -16,10 +16,12 @@ from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 
+from aiq_agent.agents.deep_researcher.models import prepend_citation_verification_warning
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
+from aiq_agent.common.citation_verification import UNVERIFIED_CITATION_STATUS
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import citation_verification_outcome_dict
@@ -66,9 +68,13 @@ class ReportRewriteResult:
 
 def _effective_parent_sources(original_report: str, parent_context: str) -> list[SourceEntry]:
     """Build the rewrite allowlist from the canonical report and durable context."""
-    report_sources = extract_source_entries_from_report(original_report)
+    parent_status = _parent_citation_verification_status(parent_context)
+    parent_is_unverified = bool(parent_status and parent_status.get("status") == UNVERIFIED_CITATION_STATUS)
+    # A report explicitly marked unverified cannot bootstrap trust from its own
+    # source section. Only durable source metadata may verify a derived report.
+    report_sources = [] if parent_is_unverified else extract_source_entries_from_report(original_report)
     context_sources = source_entries_from_parent_context(parent_context)
-    if report_has_citations(original_report) and not (report_sources or context_sources):
+    if report_has_citations(original_report) and not (report_sources or context_sources) and not parent_is_unverified:
         raise ValueError("Cannot rewrite a cited parent report because it cannot reconstruct its source registry")
 
     registry = SourceRegistry()
@@ -98,24 +104,46 @@ def _post_process_revised_report(
         for source in parent_sources:
             registry.add(source)
         verification = verify_citations(revised_report, registry, reference_sources=parent_sources)
-        child_citation_verification_status = citation_verification_outcome_dict(verification.outcome)
         if verification.removed_citations:
             logger.info(
                 "Report rewrite citation verification removed %d invalid citation(s)",
                 len(verification.removed_citations),
             )
         revised_report = verification.verified_report
-    elif report_has_citations(revised_report):
+        revised_report = sanitize_report(revised_report).sanitized_report
+        # Sanitization may remove a shortened or unsafe source URL. Re-verify
+        # the exact published Markdown so its disposition cannot remain verified
+        # after the final citation disappears.
+        final_verification = verify_citations(revised_report, registry)
+        revised_report = sanitize_report(final_verification.verified_report).sanitized_report
+        child_citation_verification_status = citation_verification_outcome_dict(final_verification.outcome)
+    elif report_has_citations(revised_report) and not (
+        parent_citation_verification_status
+        and parent_citation_verification_status.get("status") == UNVERIFIED_CITATION_STATUS
+    ):
         raise ValueError("Cannot publish a rewritten report with citations without a verified parent source registry")
+    else:
+        revised_report = sanitize_report(revised_report).sanitized_report
 
     citation_verification_status = combine_citation_verification_outcomes(
         parent_citation_verification_status,
         child_citation_verification_status,
     )
     return ReportRewriteResult(
-        report=sanitize_report(revised_report).sanitized_report,
+        report=revised_report,
         citation_verification_status=citation_verification_status,
     )
+
+
+def _verified_cited_urls(report: str, sources: Sequence[SourceEntry]) -> list[str]:
+    """Return the verified URL citations still present in a finalized rewrite."""
+    if not sources:
+        return []
+    registry = SourceRegistry()
+    for source in sources:
+        registry.add(source)
+    verification = verify_citations(report, registry)
+    return list(dict.fromkeys(citation["url"] for citation in verification.valid_citations if citation.get("url")))
 
 
 async def rewrite_report(
@@ -241,10 +269,19 @@ class ReportRewriterAgent:
             system_prompt=self.system_prompt,
         )
         revised_report = rewrite_result.report
+        cited_urls = _verified_cited_urls(
+            revised_report,
+            _effective_parent_sources(original_report, parent_context),
+        )
 
         for callback in self.callbacks:
             if hasattr(callback, "emit_final_report"):
-                callback.emit_final_report(revised_report)
+                visible_revised_report = prepend_citation_verification_warning(
+                    revised_report,
+                    rewrite_result.citation_verification_status,
+                )
+                callback.emit_final_report(visible_revised_report, cited_urls=cited_urls)
+                break
 
         files = dict(state.files)
         files[OUTPUT_REPORT_PATH] = revised_report

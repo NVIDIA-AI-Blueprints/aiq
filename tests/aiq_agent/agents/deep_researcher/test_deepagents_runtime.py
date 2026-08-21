@@ -45,8 +45,65 @@ from aiq_agent.agents.deep_researcher.deepagents_runtime import resolve_skill_co
 SYNTHESIS_SKILL_SOURCE = f"{BUILTIN_SKILL_SOURCE}synthesis/"
 
 
-def test_openshell_workflow_only_diverges_for_sandbox_wiring() -> None:
-    """Keep the OpenShell workflow aligned with the standard web config."""
+def test_frontier_profile_uses_validated_gpt_role_split() -> None:
+    """Keep the shipped GPT profile aligned with the validated Sol/Luna topology."""
+    config = yaml.safe_load(Path("configs/config_frontier_models.yml").read_text(encoding="utf-8"))
+    llms = config["llms"]
+
+    assert llms["gpt_luna_intent_llm"] == {
+        "_type": "openai",
+        "model_name": "gpt-5.6-luna",
+        "api_key": "${OPENAI_API_KEY}",
+        "max_tokens": 1024,
+        "num_retries": 2,
+        "parallel_tool_calls": False,
+    }
+    assert llms["gpt_luna_shallow_llm"] == {
+        **llms["gpt_luna_intent_llm"],
+        "max_tokens": 8192,
+    }
+    assert llms["gpt_sol_agent_llm"] == {
+        "_type": "openai",
+        "model_name": "gpt-5.6-sol",
+        "api_key": "${OPENAI_API_KEY}",
+        "max_tokens": 16384,
+        "num_retries": 2,
+        "parallel_tool_calls": False,
+    }
+    assert llms["gpt_sol_writer_llm"] == {
+        **llms["gpt_sol_agent_llm"],
+        "max_tokens": 32768,
+    }
+    assert llms["gpt_luna_agent_llm"] == {
+        **llms["gpt_sol_agent_llm"],
+        "model_name": "gpt-5.6-luna",
+    }
+    assert config["functions"]["intent_classifier"]["llm"] == "gpt_luna_intent_llm"
+    assert config["functions"]["shallow_research_agent"]["llm"] == "gpt_luna_shallow_llm"
+    deep_research = config["functions"]["deep_research_agent"]
+    assert {
+        role: deep_research[f"{role}_llm"]
+        for role in ("orchestrator", "source_router", "researcher", "planner", "writer")
+    } == {
+        "orchestrator": "gpt_sol_agent_llm",
+        "source_router": "gpt_luna_agent_llm",
+        "researcher": "gpt_luna_agent_llm",
+        "planner": "gpt_sol_agent_llm",
+        "writer": "gpt_sol_writer_llm",
+    }
+
+
+def test_openshell_workflow_only_diverges_for_skills_and_sandbox_wiring() -> None:
+    """Keep the OpenShell workflow aligned with the standard web config.
+
+    The visualization chart skill now ships only in the skills and sandbox
+    example configs, so the standard web config wires no deep_research_skills
+    at all and renders chart-worthy data as Markdown tables. OpenShell layers
+    the sandbox-gated research and synthesis collections plus the on-demand
+    visualization skill on top of a sandbox, so the skills function, the
+    sandbox function, and their two agent refs are the only divergence from
+    the standard config.
+    """
 
     def load(path: str) -> dict[str, Any]:
         text = Path(path).read_text(encoding="utf-8")
@@ -55,17 +112,54 @@ def test_openshell_workflow_only_diverges_for_sandbox_wiring() -> None:
 
     standard = load("configs/config_web_default_llamaindex.yml")
     openshell = load("configs/config_openshell.yml")
+
+    standard_functions = standard["functions"].copy()
     openshell_functions = openshell["functions"].copy()
-    openshell_functions.pop("deep_research_skills")
+
+    assert "deep_research_skills" not in standard_functions
+    assert "deep_research_sandbox" not in standard_functions
+    assert "skills" not in standard_functions["deep_research_agent"]
+    assert "sandbox" not in standard_functions["deep_research_agent"]
+
+    openshell_skills = openshell_functions.pop("deep_research_skills")
+    assert openshell_skills["_type"] == "deep_research_skills"
+    assert openshell_skills["agents"]["researcher-agent"] == ["research"]
+    assert "visualization" in openshell_skills["agents"]["writer-agent"]
+    assert "research" in openshell_skills["require_sandbox"]
     openshell_functions.pop("deep_research_sandbox")
-    openshell_functions["deep_research_agent"] = openshell_functions["deep_research_agent"].copy()
-    openshell_functions["deep_research_agent"].pop("skills")
-    openshell_functions["deep_research_agent"].pop("sandbox")
+
+    openshell_agent = openshell_functions["deep_research_agent"] = openshell_functions["deep_research_agent"].copy()
+    assert openshell_agent.pop("skills") == "deep_research_skills"
+    assert openshell_agent.pop("sandbox") == "deep_research_sandbox"
 
     assert openshell["general"] == standard["general"]
     assert openshell["llms"] == standard["llms"]
-    assert openshell_functions == standard["functions"]
+    assert openshell_functions == standard_functions
     assert openshell["workflow"] == standard["workflow"]
+
+
+def test_modal_reference_profile_enables_bounded_artifact_capture() -> None:
+    """Keep the shipped Modal profile's capture policy validated."""
+    config = yaml.safe_load(Path("configs/config_domain_routing_and_skills.yml").read_text(encoding="utf-8"))
+    sandbox_data = config["functions"]["deep_research_sandbox"].copy()
+
+    assert sandbox_data.pop("_type") == "deep_research_sandbox"
+    sandbox = DeepResearchSandboxConfig.model_validate(sandbox_data)
+
+    assert sandbox.provider == "modal"
+    assert sandbox.artifact_capture.enabled is True
+    assert sandbox.artifact_capture.max_file_bytes == 50_000_000
+    assert sandbox.artifact_capture.allow_extensions == (
+        ".png",
+        ".jpg",
+        ".jpeg",
+        ".webp",
+        ".csv",
+        ".json",
+        ".md",
+        ".ipynb",
+        ".pdf",
+    )
 
 
 class TestSkillCollections:
@@ -76,6 +170,7 @@ class TestSkillCollections:
 
         assert collections["research"] == "/skills/research/"
         assert collections["synthesis"] == "/skills/synthesis/"
+        assert collections["visualization"] == "/skills/visualization/"
 
     def test_nested_skill_collections_are_discovered(self, tmp_path) -> None:
         skill_dir = tmp_path / "finance" / "earnings" / "quarterly-summary"
@@ -117,6 +212,17 @@ class TestDeepAgentsRuntimeRouting:
         assert set(backend.routes) == {BUILTIN_SKILL_SOURCE}
         assert isinstance(backend.routes[BUILTIN_SKILL_SOURCE], FilesystemBackend)
         assert runtime.skill_sources_for("writer-agent") == [SYNTHESIS_SKILL_SOURCE]
+
+    def test_agent_has_chart_skill_tracks_visualization_collection(self) -> None:
+        runtime = DeepAgentsRuntime(
+            skills=DeepResearchSkillsConfig(
+                agents={"writer-agent": ("visualization",), "researcher-agent": ("synthesis",)},
+            ),
+        )
+
+        assert runtime.agent_has_chart_skill("writer-agent") is True
+        assert runtime.agent_has_chart_skill("researcher-agent") is False
+        assert runtime.agent_has_chart_skill("planner-agent") is False
 
     def test_sandbox_only_adds_shared_route(self) -> None:
         fake_sandbox = MagicMock()
@@ -336,6 +442,7 @@ class TestDeepAgentsRuntimeJobId:
         public = DeepResearchSandboxConfig(
             policy="policy.yaml",
             openshell_image="aiq:test",
+            workspace="research",
             attest=True,
             expected_policy_version=3,
             policy_load_timeout_seconds=17,
@@ -353,6 +460,7 @@ class TestDeepAgentsRuntimeJobId:
         assert resolved.network.mode == "allowlist"
         assert resolved.network.allow == ("api.github.com",)
         assert resolved.providers.openshell.image == "aiq:test"
+        assert resolved.providers.openshell.workspace == "research"
         assert resolved.providers.openshell.attest is True
         assert resolved.providers.openshell.expected_policy_version == 3
         assert resolved.providers.openshell.policy_load_timeout_seconds == 17

@@ -51,21 +51,16 @@ instrument LangChain directly can present a different tree.
 
 ### Setup
 
-1. Install Phoenix:
+1. Start Phoenix in an isolated `uvx` environment. This installs `arize-phoenix` outside the AI-Q project environment
+   on the first run:
 
    ```bash
-   uv pip install arize-phoenix
-   ```
-
-2. Start the Phoenix server:
-
-   ```bash
-   python -m phoenix.server.main serve
+   uvx --from arize-phoenix phoenix serve
    ```
 
    This launches the Phoenix UI at [http://localhost:6006](http://localhost:6006).
 
-3. Enable Phoenix tracing in your YAML config:
+2. Enable Phoenix tracing in your YAML config:
 
    ```yaml
    general:
@@ -287,7 +282,11 @@ general:
 
 ## Verbose Logging
 
-For quick debugging without any external services, enable the built-in verbose callback logger. This prints detailed agent execution information directly to the console.
+For quick debugging without any external services, enable the built-in `VerboseTraceCallback` logger. This callback
+records execution metadata directly to the console without printing raw prompts, tool arguments, tool results, or
+model responses. This metadata-only guarantee applies only to `VerboseTraceCallback`. Phoenix and other exporters,
+enabled source adapters, and external providers can still receive or retain raw prompts, tool arguments, tool results,
+and model responses; configure and audit their redaction, retention, and access controls independently.
 
 ### Enable via CLI
 
@@ -306,6 +305,6 @@ workflow:
 ### What Gets Logged
 
 - Chain starts and completions (orchestrator routing, agent handoffs)
-- LLM invocations with model name and token counts
-- Tool calls with arguments and return values
-- Reasoning content for frontier models that support it
+- LLM invocation metadata, such as model and message counts when available
+- Tool names and execution metadata
+- Content lengths and redaction markers instead of raw request or response content

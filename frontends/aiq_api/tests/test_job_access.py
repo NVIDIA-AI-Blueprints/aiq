@@ -20,17 +20,22 @@ from datetime import UTC
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy import text
 
 from aiq_agent.auth import Principal
 from aiq_api.jobs import access as job_access
+from aiq_api.jobs.access import JobAccessConflictError
 from aiq_api.jobs.access import authorize_job_access
 from aiq_api.jobs.access import cleanup_job_access
 from aiq_api.jobs.access import create_job_access
 from aiq_api.jobs.access import ensure_job_access_table
 from aiq_api.jobs.access import get_job_access
+from aiq_api.jobs.access import release_job_access_reservation
+from aiq_api.jobs.access import renew_job_access_reservation
 from aiq_api.jobs.event_store import EventStore
 
 
@@ -56,8 +61,6 @@ def _insert_job_info(
     status: str = "running",
     created_at: datetime | None = None,
 ) -> None:
-    from sqlalchemy import text
-
     engine = EventStore._get_or_create_sync_engine(db_url)
     with engine.connect() as conn:
         conn.execute(
@@ -89,6 +92,40 @@ def _insert_job_info(
 
 
 class TestJobAccessStorage:
+    def test_schema_initialization_commits_before_caching(self, monkeypatch):
+        db_url = "postgresql://test"
+        conn = MagicMock()
+        conn.in_transaction.return_value = False
+        monkeypatch.setattr(job_access, "_ensure_extra_columns", MagicMock())
+
+        job_access._ensure_job_access_schema(conn, db_url)
+
+        conn.commit.assert_called_once_with()
+        assert db_url in job_access._job_access_schema_initialized
+
+    def test_schema_initialization_in_caller_transaction_is_not_cached(self, monkeypatch):
+        db_url = "postgresql://test"
+        conn = MagicMock()
+        conn.in_transaction.return_value = True
+        monkeypatch.setattr(job_access, "_ensure_extra_columns", MagicMock())
+
+        job_access._ensure_job_access_schema(conn, db_url)
+
+        conn.commit.assert_not_called()
+        assert db_url not in job_access._job_access_schema_initialized
+
+    def test_schema_initialization_commit_failure_is_not_cached(self, monkeypatch):
+        db_url = "postgresql://test"
+        conn = MagicMock()
+        conn.in_transaction.return_value = False
+        conn.commit.side_effect = RuntimeError("commit failed")
+        monkeypatch.setattr(job_access, "_ensure_extra_columns", MagicMock())
+
+        with pytest.raises(RuntimeError, match="commit failed"):
+            job_access._ensure_job_access_schema(conn, db_url)
+
+        assert db_url not in job_access._job_access_schema_initialized
+
     def test_create_and_get_job_access(self, db_url):
         principal = Principal(type="jwt", sub="user-1", email="alice@example.com")
 
@@ -108,6 +145,45 @@ class TestJobAccessStorage:
         access = get_job_access("job-1", db_url)
         assert access is not None
         assert access["conversation_id"] == "conv-A"
+
+    def test_pre_enqueue_access_reservation_is_insert_only_and_token_guarded(self, db_url):
+        _insert_job_info(db_url, "schema-bootstrap")
+        engine = EventStore._get_or_create_sync_engine(db_url)
+        with engine.connect() as conn:
+            conn.execute(text("DELETE FROM job_info WHERE job_id = 'schema-bootstrap'"))
+            conn.commit()
+
+        principal = Principal(type="jwt", sub="user-1")
+        create_job_access(
+            "job-1",
+            principal,
+            db_url,
+            submission_token="current-token",
+            submission_expires_at=10_000_000_000,
+        )
+
+        assert renew_job_access_reservation("job-1", "stale-token", db_url, 10_000_000_001) is False
+        assert release_job_access_reservation("job-1", "stale-token", db_url) is False
+        assert get_job_access("job-1", db_url) is not None
+        assert renew_job_access_reservation("job-1", "current-token", db_url, 10_000_000_001) is True
+        assert release_job_access_reservation("job-1", "current-token", db_url) is True
+        assert get_job_access("job-1", db_url) is None
+
+    def test_pre_enqueue_access_reservation_never_overwrites_existing_job(self, db_url):
+        victim = Principal(type="jwt", sub="victim")
+        _insert_job_info(db_url, "victim-job")
+        create_job_access("victim-job", victim, db_url)
+
+        with pytest.raises(JobAccessConflictError):
+            create_job_access(
+                "victim-job",
+                Principal(type="jwt", sub="attacker"),
+                db_url,
+                submission_token="attacker-token",
+                submission_expires_at=10_000_000_000,
+            )
+
+        assert get_job_access("victim-job", db_url)["owner_subject"] == "victim"
 
 
 class TestLatestReportJobForConversation:

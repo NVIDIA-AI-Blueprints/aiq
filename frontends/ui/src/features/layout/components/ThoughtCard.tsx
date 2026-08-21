@@ -19,6 +19,7 @@ import { type FC, useState } from 'react'
 import { Flex, Text, Button } from '@/adapters/ui'
 import { Chat, ChevronDown, LoadingSpinner } from '@/adapters/ui/icons'
 import { MarkdownRenderer } from '@/shared/components/MarkdownRenderer'
+import { formatModelName } from '@/shared/components/research'
 
 /** Thought trace information from SSE events */
 export interface ThoughtInfo {
@@ -74,26 +75,25 @@ export const ThoughtCard: FC<ThoughtCardProps> = ({ thought }) => {
   const previewText = getPreviewText(thought)
   const hasPreview = previewText.length > 0
 
-  // Disable expansion while streaming (no content to show yet)
   const canExpand = !thought.isStreaming
 
   return (
     <Flex
       direction="col"
-      className="rounded-lg border overflow-hidden bg-surface-sunken border-base"
+      className="bg-surface-sunken border-base overflow-hidden rounded-lg border"
     >
-      {/* Header - always visible */}
+      {}
       <Button
         kind="tertiary"
         size="small"
         onClick={() => canExpand && setIsExpanded(!isExpanded)}
         aria-expanded={isExpanded}
         aria-controls={`thought-content-${thought.id}`}
-        className="w-full justify-start text-left p-0"
+        className="w-full justify-start p-0 text-left"
         disabled={!canExpand}
       >
         <Flex align="center" gap="2" className="w-full px-3 py-2">
-          {/* Status Icon - spinner when streaming */}
+          {}
           {thought.isStreaming ? (
             <LoadingSpinner size="small" className="h-4 w-4 shrink-0" aria-label="Generating" />
           ) : (
@@ -106,8 +106,8 @@ export const ThoughtCard: FC<ThoughtCardProps> = ({ thought }) => {
             </span>
           )}
 
-          {/* Model Info */}
-          <Flex align="center" gap="1" className="flex-1 min-w-0">
+          {}
+          <Flex align="center" gap="1" className="min-w-0 flex-1">
             <Text
               kind="label/semibold/sm"
               style={{
@@ -116,7 +116,7 @@ export const ThoughtCard: FC<ThoughtCardProps> = ({ thought }) => {
                   : 'var(--text-color-subtle)',
               }}
             >
-              {thought.modelName}
+              {formatModelName(thought.modelName)}
             </Text>
             {thought.workflow && (
               <Text kind="label/regular/sm" className="text-subtle truncate">
@@ -125,21 +125,21 @@ export const ThoughtCard: FC<ThoughtCardProps> = ({ thought }) => {
             )}
           </Flex>
 
-          {/* Token usage (when not streaming) */}
+          {}
           {!thought.isStreaming && thought.usage && (
             <Text kind="body/regular/xs" className="text-subtle shrink-0">
               Tokens: {thought.usage.prompt_tokens} in / {thought.usage.completion_tokens} out
             </Text>
           )}
 
-          {/* Timestamp - only shown when not streaming */}
+          {}
           {!thought.isStreaming && thought.timestamp && (
             <Text kind="body/regular/xs" className="text-subtle shrink-0">
               {formatTime(thought.timestamp)}
             </Text>
           )}
 
-          {/* Expand/collapse icon - hidden when streaming */}
+          {}
           {canExpand && (
             <span
               className={`
@@ -154,34 +154,37 @@ export const ThoughtCard: FC<ThoughtCardProps> = ({ thought }) => {
         </Flex>
       </Button>
 
-      {/* Collapsed preview - show thinking content preview */}
+      {}
       {!isExpanded && hasPreview && (
-        <Flex className="px-3 pb-2 border-t border-base">
-          <Text kind="body/regular/sm" className="text-subtle truncate mt-1">
+        <Flex className="border-base border-t px-3 pb-2">
+          <Text kind="body/regular/sm" className="text-subtle mt-1 truncate">
             {previewText}
           </Text>
         </Flex>
       )}
 
-      {/* Expanded content - show thinking and output together */}
+      {}
       {isExpanded && (
         <Flex
           id={`thought-content-${thought.id}`}
           direction="col"
           gap="3"
-          className="px-3 pb-3 border-t border-base"
+          className="border-base border-t px-3 pb-3"
         >
-          {/* Thinking content (if available) */}
+          {}
           {thought.thinking && (
-            <div className="bg-surface-raised text-primary p-2 rounded text-sm italic mt-2">
+            <div className="bg-surface-raised text-primary mt-2 rounded p-2 text-sm italic">
               <MarkdownRenderer content={thought.thinking} compact />
             </div>
           )}
 
-          {/* Output content */}
+          {}
           {thought.content && (
             <Flex direction="col" gap="1" className={thought.thinking ? '' : 'mt-2'}>
-              <Text kind="label/semibold/xs" className="text-subtle uppercase">
+              <Text
+                kind="label/semibold/xs"
+                className="text-subtle font-mono uppercase tracking-widest"
+              >
                 Output
               </Text>
               <MarkdownRenderer content={thought.content} compact />

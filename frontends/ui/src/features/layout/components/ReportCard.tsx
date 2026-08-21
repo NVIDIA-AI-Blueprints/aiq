@@ -47,16 +47,13 @@ export const ReportCard: FC<ReportCardProps> = ({
   content,
   title,
   isDraft = false,
-  isStreaming: _isStreaming = false, // Deprecated - kept for backward compatibility but not used
+  isStreaming: _isStreaming = false,
 }) => {
   const { downloadPdf, isLoading: isPdfLoading } = useDownloadPdfRoute()
 
   const hasContent = content.trim().length > 0
   const wordCount = hasContent ? getWordCount(content) : 0
 
-  // Uses centralized hook that checks BOTH ephemeral AND persisted state.
-  // This survives page refresh: even if SSE ephemeral flags are lost,
-  // the hook derives busy state from persisted message history.
   const isDeepResearchInProgress = useIsCurrentSessionBusy()
 
   const isExportDisabled = !hasContent || isDeepResearchInProgress
@@ -98,7 +95,7 @@ export const ReportCard: FC<ReportCardProps> = ({
 
   return (
     <Flex direction="col" className="h-full">
-      {/* Header */}
+      {}
       <Flex align="center" justify="between" className="mb-4 shrink-0">
         <Flex align="center" gap="2">
           {title && <Text kind="label/semibold/md">{title}</Text>}
@@ -113,12 +110,12 @@ export const ReportCard: FC<ReportCardProps> = ({
         </Text>
       </Flex>
 
-      {/* Content */}
+      {}
       <div className="flex-1 overflow-y-auto pr-2">
         <MarkdownRenderer content={content} />
       </div>
 
-      {/* Export Footer */}
+      {}
       <Flex align="center" justify="end" gap="2" className="border-base shrink-0 border-t pt-3 mt-4">
         <Button
           kind="tertiary"

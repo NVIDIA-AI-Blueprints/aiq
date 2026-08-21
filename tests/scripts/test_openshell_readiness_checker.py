@@ -62,6 +62,7 @@ class _Stub:
         self.config = SimpleNamespace(version=1, policy_source=1, policy=policy, policy_hash="hash")
 
     def GetSandboxPolicyStatus(self, _request: object, *, timeout: float) -> object:  # noqa: N802
+        assert getattr(_request, "workspace") == "research"
         del timeout
         return self.status
 
@@ -111,23 +112,27 @@ class _Client:
     def health(self) -> object:
         return SimpleNamespace(version=self.version)
 
-    def create(self, *, spec: object, name: str, labels: dict[str, str]) -> object:
+    def create(self, *, workspace: str, spec: object, name: str, labels: dict[str, str]) -> object:
+        assert workspace == "research"
         del spec
         self.sandbox.name = name
         if self.persist_request_labels:
             self.sandbox.labels = labels
         return self.sandbox
 
-    def wait_ready(self, name: str, *, timeout_seconds: float) -> object:
+    def wait_ready(self, name: str, *, workspace: str, timeout_seconds: float) -> object:
+        assert workspace == "research"
         del timeout_seconds
         assert name == self.sandbox.name
         return self.sandbox
 
-    def list(self, *, label_selector: str) -> list[object]:
+    def list(self, *, workspace: str, label_selector: str) -> list[object]:
+        assert workspace == "research"
         assert label_selector == "aiq=readiness-probe"
         return [] if self.deleted else [self.sandbox]
 
-    def get(self, name: str) -> object:
+    def get(self, name: str, *, workspace: str) -> object:
+        assert workspace == "research"
         assert name == self.sandbox.name
         if self.deleted:
             raise _RpcError(_Grpc.StatusCode.NOT_FOUND)
@@ -138,18 +143,21 @@ class _Client:
         assert command
         return SimpleNamespace(exit_code=0, stdout="aiq-openshell-ready")
 
-    def delete(self, name: str) -> bool:
+    def delete(self, name: str, *, workspace: str) -> bool:
+        assert workspace == "research"
         assert name == self.sandbox.name
         self.delete_calls += 1
         self.deleted = True
         return True
 
-    def wait_deleted(self, name: str) -> None:
+    def wait_deleted(self, name: str, *, workspace: str) -> None:
+        assert workspace == "research"
         assert name == self.sandbox.name
 
 
 class _NoLabelClient(_Client):
-    def create(self, *, spec: object) -> object:
+    def create(self, *, workspace: str, spec: object) -> object:
+        assert workspace == "research"
         del spec
         return self.sandbox
 
@@ -158,7 +166,8 @@ class _NoLabelClient(_Client):
 
 
 class _DeleteFailureClient(_Client):
-    def delete(self, name: str) -> bool:
+    def delete(self, name: str, *, workspace: str) -> bool:
+        assert workspace == "research"
         assert name == self.sandbox.name
         self.delete_calls += 1
         return False
@@ -169,15 +178,17 @@ class _MismatchedNameClient(_Client):
         super().__init__()
         self.deleted_name: str | None = None
 
-    def create(self, *, spec: object, name: str, labels: dict[str, str]) -> object:
+    def create(self, *, workspace: str, spec: object, name: str, labels: dict[str, str]) -> object:
+        assert workspace == "research"
         del spec, name
         self.sandbox.name = "gateway-returned-name"
         self.sandbox.labels = labels
         return self.sandbox
 
-    def delete(self, name: str) -> bool:
+    def delete(self, name: str, *, workspace: str) -> bool:
+        assert workspace == "research"
         self.deleted_name = name
-        return super().delete(name)
+        return super().delete(name, workspace=workspace)
 
 
 @contextmanager
@@ -215,6 +226,7 @@ def _fake_runtime(client: _Client):
 def _config(checker: ModuleType, tmp_path: Path, **overrides: Any) -> object:
     values = {
         "gateway": "enterprise",
+        "workspace": "research",
         "image": "aiq:test",
         "policy": tmp_path / "policy.yaml",
         "openshell_bin": tmp_path / "openshell",
@@ -330,6 +342,37 @@ def test_probe_rejects_sdk_without_request_label_support(checker: ModuleType, tm
         checker.run_check(_config(checker, tmp_path))
 
     assert client.delete_calls == 0
+
+
+@pytest.mark.parametrize("method_name", ["create", "list", "wait_ready", "get", "delete", "wait_deleted"])
+def test_probe_rejects_sdk_without_workspace_support(
+    checker: ModuleType,
+    tmp_path: Path,
+    method_name: str,
+) -> None:
+    client = _Client()
+    setattr(client, method_name, lambda: None)
+    with (
+        _provider_helpers(client),
+        _fake_runtime(client),
+        patch.object(checker.importlib.metadata, "version", return_value="1.2.3"),
+        patch.object(checker, "_version_from_cli", return_value="1.2.3"),
+        pytest.raises(checker.ReadinessError, match="request_labels_unsupported"),
+    ):
+        checker.run_check(_config(checker, tmp_path))
+
+    assert client.delete_calls == 0
+
+
+def test_parser_treats_empty_workspace_as_default(
+    checker: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AIQ_OPENSHELL_WORKSPACE", "")
+
+    args = checker._parser().parse_args(["--policy-file", "policy.yaml", "--openshell-bin", "openshell"])
+
+    assert args.workspace == "default"
 
 
 def test_probe_classifies_effective_policy_that_remains_pending(checker: ModuleType, tmp_path: Path) -> None:

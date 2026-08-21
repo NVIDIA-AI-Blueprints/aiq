@@ -46,6 +46,7 @@ BUILTIN_SKILLS_DIR = Path(__file__).with_name("skills")
 BUILTIN_SKILL_SOURCE = "/skills/"
 SHARED_ROUTE = "/shared/"
 SKILL_AGENT_NAMES = frozenset({"researcher-agent", "writer-agent"})
+CHART_SKILL_NAME = "chart-generation"
 DEFAULT_WORKDIR = "/workspace"
 
 
@@ -109,6 +110,11 @@ class DeepResearchSandboxConfig(FunctionBaseConfig, name="deep_research_sandbox"
     gateway: str | None = Field(
         default=None,
         description="OpenShell gateway endpoint/name (null uses the locally selected gateway).",
+    )
+    workspace: str = Field(
+        default="default",
+        min_length=1,
+        description="OpenShell workspace that scopes sandbox lifecycle operations.",
     )
     policy: str | None = Field(default=None, description="OpenShell policy YAML applied at per-job creation.")
     ready_timeout_seconds: float = Field(
@@ -261,6 +267,18 @@ class DeepAgentsRuntime:
         """Return DeepAgents source paths for an agent/subagent name."""
         sources = self._skill_sources_by_agent.get(agent_name)
         return list(sources) if sources else None
+
+    def agent_has_chart_skill(self, agent_name: str) -> bool:
+        """Return true when the agent's assigned collections provide the chart skill on disk."""
+        sources = self._skill_sources_by_agent.get(agent_name)
+        if not sources:
+            return False
+        collection_for_source = {source: name for name, source in discover_skill_collections().items()}
+        return any(
+            (BUILTIN_SKILLS_DIR / collection_for_source[source] / CHART_SKILL_NAME / "SKILL.md").exists()
+            for source in sources
+            if source in collection_for_source
+        )
 
     @property
     def workdir(self) -> str:
@@ -573,6 +591,7 @@ def _create_sandbox_backend(config: DeepResearchSandboxConfig, job_id: str) -> A
         providers = {
             "openshell": {
                 "gateway": config.gateway,
+                "workspace": config.workspace,
                 "existing_sandbox_name": config.existing_sandbox_name,
                 "sandbox_name": config.sandbox_name,
                 "allow_shared_sandbox": config.allow_shared_sandbox,

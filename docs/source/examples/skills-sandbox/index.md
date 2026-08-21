@@ -6,9 +6,13 @@ SPDX-License-Identifier: Apache-2.0
 # Example: Deep Research Skills and Sandbox
 
 This example shows how to run AI-Q deep research with DeepAgents skills and a provider-backed sandbox. The reference
-profile uses Modal; AI-Q also includes an experimental OpenShell profile for a trusted, single-operator environment.
+profile uses Modal; AI-Q also includes an experimental, policy-bound OpenShell profile.
 
-Skills let a research agent discover task-specific instructions only when they are relevant. A skill can teach the agent a repeatable workflow, such as extracting numeric facts, normalizing a table, running calculations, and producing reusable text artifacts. The sandbox runs code-based work outside the AI-Q process. Isolation depends on the provider: Modal creates a fresh sandbox for each job, while the experimental OpenShell profile attaches jobs to one pre-provisioned shared sandbox.
+Skills let a research agent discover task-specific instructions only when they are relevant. AI-Q mounts the assigned
+skill definitions read-only from the host. A skill can teach the agent a repeatable workflow, such as extracting numeric
+facts, normalizing a table, running calculations, and producing reusable text artifacts. When a skill invokes
+`execute`, the generated code runs outside the AI-Q process in one provider sandbox per deep-research job. Modal and
+OpenShell implement this job-scoped contract.
 
 For more background, refer to the LangChain DeepAgents docs:
 
@@ -23,8 +27,18 @@ The example config enables:
 - a fresh per-job Modal sandbox for Python execution
 - Python packages useful for analysis, including `pandas`, `numpy`, `matplotlib`, and `pillow`
 - virtual `/shared/` files for text artifacts that the orchestrator and subagents can read during the report workflow
+- durable capture of supported charts and data files for async API jobs
 
-The current built-in example skill is `data-table-analysis`. It is intended for quantitative research tasks where the agent must normalize researched facts and compute tabular outputs such as growth rates, rankings, summary statistics, CSV, JSON, or markdown tables.
+The built-in collections currently expose these role-oriented skills:
+
+| Collection | Default assignment | Skills |
+| ---------- | ------------------ | ------ |
+| `research` | `researcher-agent` | `data-table-analysis`, `forecast-analysis`, `lightweight-calculation` |
+| `synthesis` | `writer-agent` | `long-form-report-writer`, `prediction-report-writer` |
+| `visualization` | `writer-agent` | `chart-generation` |
+
+The assignment is configurable. Skill definitions stay host-side and read-only;
+only workflows that invoke `execute` require a sandbox.
 
 **Models and report quality:** For clearer tables, stronger reasoning over numbers, and more reliable use of the data-table-analysis skill end-to-end, prefer **frontier-class models** for the orchestrator, planner, and researcher in your config ([Swapping models](../../customization/swapping-models.md)). Smaller or faster models may complete runs but often produce weaker structured outputs and more formatting mistakes in long reports.
 
@@ -65,6 +79,7 @@ functions:
         - research
       writer-agent:
         - synthesis
+        - visualization
     require_sandbox:
       - research
 
@@ -79,6 +94,10 @@ functions:
       - pandas
       - pillow
     network: blocked
+    artifact_capture:
+      enabled: true
+      max_file_bytes: 50000000
+      allow_extensions: [.png, .jpg, .jpeg, .webp, .csv, .json, .md, .ipynb, .pdf]
 
   deep_research_agent:
     _type: deep_research_agent
@@ -87,14 +106,29 @@ functions:
     sandbox: deep_research_sandbox
 ```
 
-AI-Q validates the public skill collection names (`research`, `synthesis`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run in the configured provider. Modal creates a fresh sandbox named for the job.
+AI-Q validates the public skill collection names (`research`, `synthesis`, `visualization`) and resolves them to DeepAgents source paths internally. When skills are configured, AI-Q mounts the configured built-in skill collections into the DeepAgents virtual filesystem. When the sandbox ref is present, DeepAgents `execute` calls run in the configured provider. Modal creates a fresh sandbox named for the job.
 
-To evaluate OpenShell instead, use `configs/config_openshell.yml` after running `scripts/setup_openshell.sh`. That profile
-is experimental: it attaches every job to one named, pre-provisioned sandbox. Per-job working directories avoid ordinary
-filename collisions but are not an access-control or multi-tenant isolation boundary. Do not run mutually untrusted jobs
-concurrently in that profile.
+In the reference async API flow, artifact capture uses the job database configured by
+`general.front_end.db_url` (`NAT_JOB_STORE_DB_URL`) for metadata. Artifact bytes use SQL BLOB storage in the job database
+by default. For production, use S3-compatible object storage by setting `AIQ_ARTIFACT_BLOB_PROVIDER=s3`,
+`AIQ_ARTIFACT_S3_BUCKET`, and the standard AWS credentials; set `AIQ_ARTIFACT_S3_ENDPOINT_URL` for MinIO or another
+compatible service. See [Production Artifact Storage](../../deployment/production.md#artifact-storage) for all options.
 
-## Run AI-Q
+To evaluate OpenShell instead, use `configs/config_openshell.yml` after running
+`scripts/openshell/setup_openshell.sh`. That profile creates one policy-bound
+sandbox per job, verifies the effective policy and revision before use, and
+deletes the sandbox at terminal cleanup. Attaching to an existing shared
+sandbox is available only through explicit debug settings and is not
+job-isolated.
+
+## Run Synchronously with `nat run` (Non-Persistent)
+
+```{warning}
+`nat run` is a synchronous, single-run command. It does not create an async job record or connect the workflow to the
+job-scoped artifact store. The final report is returned normally, and `/shared/` files can contribute to that report
+during the run, but run state, `/shared/` content, and sandbox-generated files cannot be retrieved through the job or
+artifact APIs after the command finishes.
+```
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat run \
@@ -102,7 +136,17 @@ dotenv -f deploy/.env run .venv/bin/nat run \
   --input "Compare the top 10 publicly traded semiconductor companies by 2024 revenue. Build a markdown table with revenue, YoY growth, market cap, and gross margin. Then rank them and compute summary statistics. Use the data analysis tool for all calculations."
 ```
 
-For API or UI testing:
+Use this mode to try the workflow when you only need its returned report. Do not use it when you need durable job state
+or separately retrievable charts, CSVs, notebooks, or other generated files.
+
+## Run with `nat serve` for Persistent Jobs and Artifacts
+
+To retain job information and retrieve supported generated files after a run, start the async API with `nat serve`.
+The configured `NAT_JOB_STORE_DB_URL` supplies the required job-scoped store. The reference config defaults to a local
+SQLite database; production deployments should configure PostgreSQL and appropriate artifact blob storage.
+For trusted local development, set `REQUIRE_AUTH=false` in `deploy/.env`; the commands below omit credentials on that
+basis. When `REQUIRE_AUTH=true`, these job routes require authentication, so configure authentication and add the same
+`Authorization: Bearer $AIQ_TOKEN` header to every `curl` command below.
 
 ```bash
 dotenv -f deploy/.env run .venv/bin/nat serve \
@@ -111,7 +155,37 @@ dotenv -f deploy/.env run .venv/bin/nat serve \
   --port 8000
 ```
 
-Then submit a deep research request through the AI-Q API or UI.
+In another terminal, submit a deep research request with a known job ID. Custom job IDs must be unique, so change this
+value before repeating the example against the same job store:
+
+```bash
+curl -X POST http://localhost:8000/v1/jobs/async/submit \
+  -H "Content-Type: application/json" \
+  -d '{
+    "job_id": "skills-sandbox-example",
+    "agent_type": "deep_researcher",
+    "input": "Compare the top 10 publicly traded semiconductor companies by 2024 revenue. Build a markdown table and a CSV with revenue, YoY growth, market cap, and gross margin. Then rank them and compute summary statistics. Use the data analysis tool for all calculations."
+  }'
+```
+
+Check the job until its status is either `success` or `failure`. If it reaches `failure`, inspect the response's `error`
+field for the actionable failure message:
+
+```bash
+curl http://localhost:8000/v1/jobs/async/job/skills-sandbox-example
+```
+
+List its captured artifacts, then use an `artifact_id` from the response to download one:
+
+```bash
+curl http://localhost:8000/v1/jobs/async/job/skills-sandbox-example/artifacts
+curl -OJ http://localhost:8000/v1/jobs/async/job/skills-sandbox-example/artifacts/{artifact_id}/content
+```
+
+Artifact capture is best-effort and limited to the configured file types and size. Stored artifacts are retrievable
+rather than permanent: server-wide retention cleanup can remove an artifact independently of the job's expiry. For the
+complete API contract, authentication guidance, and retention behavior, see
+[Durable Sandbox Artifacts](../../integration/rest-api.md#durable-sandbox-artifacts).
 
 ## Example Queries
 
@@ -199,12 +273,12 @@ No config change is required for additional built-in skills inside an enabled co
 
 ## Notes and Limitations
 
-- The reference config uses a fresh Modal sandbox for code execution. The experimental OpenShell config uses one shared,
-  pre-provisioned sandbox and is suitable only for trusted single-operator use, not multi-tenant isolation.
+- The reference config uses a fresh Modal sandbox for code execution. The experimental OpenShell config also creates one
+  physical sandbox per job and requires policy attestation plus terminal deletion. Shared attachment is debug-only.
 - Text artifacts that need to survive for the report should be written through DeepAgents filesystem tools to `/shared/...`.
 - `/shared/` is a virtual DeepAgents filesystem path. Use `ls`, `read_file`, `write_file`, and `edit_file` for `/shared/`; do not inspect `/shared/` with shell commands through `execute`.
 - The sandbox is configured with `network: blocked`, so research should happen through AI-Q search tools, not from sandbox code.
-- Durable sandbox artifact capture is opt-in (`artifact_capture.enabled: true`) and also requires an artifact store.
-  Successful `execute` calls checkpoint manifest-declared files, and success/failure terminal paths perform one final
-  best-effort scan. A busy cancellation skips that scan and preserves earlier checkpoints. Adding a sandbox alone does
-  not guarantee that every generated file is persisted or embedded in the report.
+- The reference profile enables durable sandbox artifact capture for async API jobs. Successful `execute` calls
+  checkpoint manifest-declared files, and success/failure terminal paths perform one final best-effort scan. A busy
+  cancellation skips that scan and preserves earlier checkpoints. Adding a sandbox alone does not guarantee that every
+  generated file is persisted or embedded in the report.

@@ -15,8 +15,10 @@
 
 """Tests for DeepResearchAgentState model."""
 
+import pytest
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
+from pydantic import ValidationError
 
 from aiq_agent.agents.deep_researcher.models import DeepResearchAgentState
 
@@ -117,3 +119,16 @@ class TestDeepResearchAgentState:
         state = DeepResearchAgentState.model_validate(data)
 
         assert state.user_info == {"name": "Test User"}
+
+    def test_citation_verification_status_is_a_closed_state_domain(self):
+        status = {"status": "unverified", "reason": "no_sources"}
+
+        state = DeepResearchAgentState(messages=[], citation_verification_status=status)
+
+        assert state.citation_verification_status == status
+        assert state.model_dump()["citation_verification_status"] == status
+        with pytest.raises(ValidationError, match="Invalid citation-verification outcome"):
+            DeepResearchAgentState(
+                messages=[],
+                citation_verification_status={"status": "verified", "reason": "no_sources"},
+            )

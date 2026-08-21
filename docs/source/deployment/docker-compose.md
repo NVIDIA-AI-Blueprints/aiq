@@ -153,6 +153,13 @@ optional; leave the endpoint unset for AWS S3, and the prefix defaults to
 the standard AWS credential chain. When the provider is `s3`, artifact bytes are stored
 in the configured bucket and SQL stores artifact metadata only.
 
+The access-key example above is for local MinIO development only. For production,
+use workload identity or a short-lived role, restrict bucket access to the AI-Q worker
+identity and configured prefix, enable Block Public Access and TLS-only access, and
+enable storage-layer encryption such as SSE-KMS. AI-Q API ownership checks do not
+protect direct bucket access, and AI-Q does not application-encrypt artifact blob bytes.
+See [Production Considerations](./production.md#s3-security-responsibility).
+
 ### Frontend Runtime Settings
 
 | Variable | Default | Description |
@@ -198,16 +205,16 @@ docker login nvcr.io
 
 # Run with pre-built images (no --build flag)
 cd deploy/compose
-BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.0.0 \
-FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.0.0 \
+BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.0 \
+FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0 \
 docker compose --env-file ../.env -f docker-compose.yaml up -d
 ```
 
 You can also add the image variables to `deploy/.env` instead of passing them on the command line:
 
 ```bash
-BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.0.0
-FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.0.0
+BACKEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-agent:2.2.0
+FRONTEND_IMAGE=nvcr.io/nvidia/blueprint/aiq-frontend:2.2.0
 ```
 
 ### Release Build

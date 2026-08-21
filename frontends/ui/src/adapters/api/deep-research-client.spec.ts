@@ -55,6 +55,34 @@ describe('deep research REST client', () => {
     ).toBe(`${warning}\n\nReport body`)
   })
 
+  test('ignores warning text on verified or disabled dispositions', () => {
+    expect(
+      reportWithCitationVerificationWarning('Report body', {
+        status: 'verified',
+        reason: 'valid_citations',
+        warning: null,
+      })
+    ).toBe('Report body')
+    expect(
+      reportWithCitationVerificationWarning('Report body', {
+        status: 'disabled',
+        reason: 'verification_disabled',
+        warning: null,
+      })
+    ).toBe('Report body')
+  })
+
+  test('fails safe when an unverified runtime payload omits its warning', () => {
+    const malformedStatus = {
+      status: 'unverified',
+      reason: 'no_sources',
+    } as Parameters<typeof reportWithCitationVerificationWarning>[1]
+
+    expect(reportWithCitationVerificationWarning('Report body', malformedStatus)).toBe(
+      'Warning: This report could not be citation-verified. Review the findings before relying on them.\n\nReport body'
+    )
+  })
+
   test('includes proxy error details when job status lookup fails', async () => {
     vi.stubGlobal(
       'fetch',

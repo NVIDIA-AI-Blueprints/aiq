@@ -26,27 +26,57 @@ general:
         level: INFO
 
 llms:
-  nemotron_llm_intent:
+  nemotron_lightning_intent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
     top_p: 0.9
-    max_tokens: 4096
+    max_tokens: 1024
     num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: false
+
+  # Known limitation: Build-hosted Lightning can intermittently produce citation-incomplete shallow drafts.
+  # AI-Q fails closed; see docs/source/resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog.
+  nemotron_lightning_agent_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 8192
+    num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_super_llm:
+  nemotron_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.7
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
     top_p: 0.7
-    max_tokens: 65536
+    max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
+
+  nemotron_ultra_writer_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
 
 functions:
   data_sources:
@@ -71,19 +101,19 @@ functions:
 
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: nemotron_lightning_intent_llm
 
   # Defined for workflow compatibility but disabled at the workflow boundary.
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
+    llm: nemotron_ultra_llm
     max_turns: 3
     log_response_max_chars: 2000
     verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: nemotron_lightning_agent_llm
     exclude_tools:
       - advanced_web_search_tool
     max_llm_turns: 10
@@ -92,11 +122,11 @@ functions:
   deep_research_agent:
     _type: deep_research_agent
     enable_citation_verification: true
-    orchestrator_llm: nemotron_super_llm
-    source_router_llm: nemotron_super_llm
-    researcher_llm: nemotron_super_llm
-    planner_llm: nemotron_super_llm
-    writer_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     exclude_tools:
       - web_search_tool
 

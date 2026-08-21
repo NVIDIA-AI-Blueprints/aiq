@@ -25,18 +25,51 @@ import re
 from typing import Any
 from typing import cast
 
+from langchain.agents.middleware.model_call_limit import ModelCallLimitExceededError
 from langchain.tools import ToolRuntime
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import BaseTool
 from langchain_core.tools import tool
 
+from aiq_agent.common.logging_utils import log_content_metadata
+
+from ..custom_middleware import ResearcherBudgetExhaustedError
+from ..models import EvidenceJudgment
+from ..models import ResearchGap
 from ..models import ResearchNotes
 from ..models import ResearchQuery
+from ..resource_limits import DeepResearchResourceLimits
+from ..resource_limits import StateBudgetLedger
 
 _NO_TOOL_RUNTIME = cast(ToolRuntime, None)
 logger = logging.getLogger(__name__)
 _NOTE_SLUG_MAX_LENGTH = 64
 RESEARCHER_AGENT_NAME = "researcher-agent"
+
+
+def _exhausted_research_notes(query: ResearchQuery) -> ResearchNotes:
+    """Build the deterministic fallback when the reserved finalization turn fails."""
+    return ResearchNotes(
+        query_topic=query.query[:120],
+        target_components=list(query.target_components),
+        summary="Research for this query was cut short because its model-call budget was exhausted.",
+        findings=[],
+        gaps=[
+            ResearchGap(
+                description=f"No grounded evidence was finalized for: {query.query}",
+                impact="Target components for this query may be unsupported in the final answer.",
+                suggested_follow_up_queries=[query.query],
+            )
+        ],
+        sources=[],
+        narrative_notes="The researcher did not return structured notes during its reserved finalization turn.",
+        language="en",
+        evidence_judgment=EvidenceJudgment(
+            relevance_score=0,
+            confidence="low",
+            rationale="The model-call budget was exhausted before verified findings were finalized.",
+        ),
+    )
 
 
 def format_research_request(query: ResearchQuery) -> str:
@@ -88,6 +121,12 @@ async def _run_research_query(
                 researcher_invoke_state(query, runtime),
                 config=researcher_invoke_config(runtime, callbacks),
             )
+        except (ModelCallLimitExceededError, ResearcherBudgetExhaustedError):
+            logger.warning(
+                "Researcher worker exhausted its model-call budget (query_%s)",
+                log_content_metadata(query.query),
+            )
+            return _exhausted_research_notes(query)
         except Exception as exc:  # noqa: BLE001 - captured as per-item failure
             raise RuntimeError(f"researcher worker failed for query {query.query!r}: {exc}") from exc
 
@@ -133,16 +172,22 @@ def _research_note_files(queries: list[ResearchQuery], notes: list[ResearchNotes
 def _persist_research_notes(
     *,
     backend: Any | None,
-    queries: list[ResearchQuery],
-    notes: list[ResearchNotes],
+    note_files: list[tuple[str, bytes]],
+    state_budget: StateBudgetLedger,
 ) -> None:
     """Persist returned ResearchNotes into parent /shared state."""
-    if backend is None or not notes:
+    if backend is None or not note_files:
         return
 
-    responses = backend.upload_files(_research_note_files(queries, notes))
+    reservation = state_budget.reserve(note_files)
+    try:
+        responses = backend.upload_files(note_files)
+    except Exception:
+        state_budget.rollback(reservation)
+        raise
     errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
     if errors:
+        state_budget.rollback(reservation)
         raise RuntimeError(f"failed to persist research note file(s): {'; '.join(errors)}")
 
 
@@ -188,10 +233,19 @@ def build_research_batch_tool(
     researcher_runnable: Any,
     callbacks: list[Any],
     max_research_concurrency: int,
+    resource_limits: DeepResearchResourceLimits | None = None,
     backend: Any | None = None,
+    state_budget: StateBudgetLedger | None = None,
     source_registry_middleware: Any | None = None,
 ) -> BaseTool:
     """Build an orchestrator-only tool that runs researcher tasks concurrently."""
+    limits = resource_limits or DeepResearchResourceLimits()
+    state_budget = state_budget or StateBudgetLedger(limits=limits, files={}, sandbox_enabled=True)
+    ledger_lock = asyncio.Lock()
+    consumed_queries = 0
+    consumed_query_chars = 0
+    persisted_note_count = 0
+    persisted_note_bytes = 0
 
     @tool
     async def run_research_batch(
@@ -199,6 +253,11 @@ def build_research_batch_tool(
         runtime: ToolRuntime = _NO_TOOL_RUNTIME,
     ) -> str:
         """Run planned research queries in parallel and return ResearchNotes JSON."""
+        nonlocal consumed_queries
+        nonlocal consumed_query_chars
+        nonlocal persisted_note_bytes
+        nonlocal persisted_note_count
+
         if not queries:
             return "[]"
 
@@ -207,6 +266,19 @@ def build_research_batch_tool(
                 f"run_research_batch accepts at most {max_research_concurrency} curated queries. "
                 f"Received {len(queries)}. Rank, merge, or drop lower-priority queries and call again."
             )
+        batch_query_chars = sum(
+            len(query.query) + sum(len(subquery) for subquery in query.subqueries) for query in queries
+        )
+        async with ledger_lock:
+            if consumed_queries + len(queries) > limits.max_research_queries:
+                raise ValueError(f"run_research_batch exceeds the {limits.max_research_queries}-query per-job limit")
+            if consumed_query_chars + batch_query_chars > limits.max_total_query_chars:
+                raise ValueError(
+                    f"run_research_batch exceeds the {limits.max_total_query_chars}-character aggregate query limit"
+                )
+            consumed_queries += len(queries)
+            consumed_query_chars += batch_query_chars
+
         successful_queries, notes, errors = await _run_research_queries(
             queries=queries,
             researcher_runnable=researcher_runnable,
@@ -214,9 +286,33 @@ def build_research_batch_tool(
             callbacks=callbacks,
             max_concurrency=max_research_concurrency,
         )
+        note_files = _research_note_files(successful_queries, notes)
+        batch_note_bytes = sum(len(content) for _, content in note_files)
+        oversized_notes = [path for path, content in note_files if len(content) > limits.max_research_note_bytes]
+        if oversized_notes:
+            raise ValueError(f"ResearchNotes exceeds the {limits.max_research_note_bytes}-byte per-note limit")
+        async with ledger_lock:
+            # Each accepted ResearchQuery can yield at most one ResearchNotes file.
+            # Reusing the consumed-query ceiling therefore enforces a job-wide note
+            # count no greater than max_research_queries (20 at the security cap).
+            if persisted_note_count + len(note_files) > limits.max_research_queries:
+                raise ValueError(f"ResearchNotes exceeds the {limits.max_research_queries}-note per-job limit")
+            if persisted_note_bytes + batch_note_bytes > limits.max_total_research_note_bytes:
+                raise ValueError(
+                    f"ResearchNotes exceeds the {limits.max_total_research_note_bytes}-byte aggregate per-job limit"
+                )
+            persisted_note_count += len(note_files)
+            persisted_note_bytes += batch_note_bytes
+
+        try:
+            _persist_research_notes(backend=backend, note_files=note_files, state_budget=state_budget)
+        except Exception:
+            async with ledger_lock:
+                persisted_note_count -= len(note_files)
+                persisted_note_bytes -= batch_note_bytes
+            raise
         if source_registry_middleware is not None:
             source_registry_middleware.register_research_note_sources(notes)
-        _persist_research_notes(backend=backend, queries=successful_queries, notes=notes)
 
         if errors:
             retained_detail = ""

@@ -16,19 +16,25 @@
 """Custom middleware for the deep research agent."""
 
 import asyncio
+import hashlib
 import json
 import logging
+import posixpath
 import re
+import threading
 from pathlib import Path
 from pathlib import PurePosixPath
 
 from langchain.agents.middleware import AgentMiddleware
 from langchain.agents.middleware import hook_config
 from langchain.agents.middleware.types import ModelResponse
+from langchain.agents.structured_output import ToolStrategy
 from langchain_core.messages import AIMessage
 from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
+from pydantic import BaseModel
+from pydantic import ValidationError
 
 from aiq_agent.common import get_source_id_for_tool
 from aiq_agent.common import load_prompt
@@ -36,6 +42,12 @@ from aiq_agent.common import render_prompt_template
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
+from aiq_agent.common.citation_verification import is_non_citable_status_output
+from aiq_agent.common.logging_utils import log_content_metadata
+
+from .models import ResearchNotes
+from .resource_limits import DeepResearchResourceLimits
+from .resource_limits import StateBudgetLedger
 
 logger = logging.getLogger(__name__)
 
@@ -47,9 +59,257 @@ _SOURCE_ROUTING_PATH = "/shared/source_routing.json"
 # route-local key. The guard reads raw state, so it must accept both forms or it
 # blocks the orchestrator forever on sandboxed runs.
 _SOURCE_ROUTING_STATE_KEYS = (_SOURCE_ROUTING_PATH, "/source_routing.json")
+FINAL_REPORT_PATH = "/shared/output.md"
+FINAL_REPORT_STATE_PATHS = (FINAL_REPORT_PATH, "/output.md")
+_GENERATED_RETRY_MARKER = "aiq_generated_retry"
+_RESEARCHER_FINALIZATION_MARKER = "aiq_researcher_finalization"
+RESEARCHER_FINALIZATION_MODEL_CALLS = 1
+_RESEARCHER_FINALIZATION_PROMPT = (
+    "Your research model-call budget is exhausted. Do not call tools or continue researching. "
+    "Return your ResearchNotes now using only the existing conversation and tool-result history. "
+    "Preserve useful findings and sources gathered so far, identify unresolved gaps, and lower the "
+    "evidence confidence when support is incomplete."
+)
 _UNRESOLVED_SANDBOX_PATH_PATTERN = re.compile(
     r"<\s*sandbox_(?:artifact_dir|workdir)\s*>|\{\{\s*sandbox_(?:artifact_dir|workdir)\s*\}\}"
 )
+
+
+def _normalized_virtual_path(path: object) -> str | None:
+    """Return a canonical virtual path without weakening backend validation."""
+    if not isinstance(path, str) or not path:
+        return None
+    normalized = posixpath.normpath(path.replace("\\", "/"))
+    return normalized if normalized.startswith("/") else f"/{normalized}"
+
+
+def _tool_file_path(tool_call: object) -> str | None:
+    """Read and normalize a filesystem tool's target path."""
+    if not isinstance(tool_call, dict):
+        return None
+    args = tool_call.get("args")
+    if not isinstance(args, dict):
+        return None
+    return _normalized_virtual_path(args.get("file_path", args.get("path")))
+
+
+def _entry_text(entry: object) -> str | None:
+    """Read exact text from a DeepAgents state-file entry."""
+    if isinstance(entry, dict):
+        entry = entry.get("content")
+    if isinstance(entry, bytes):
+        try:
+            return entry.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+    if isinstance(entry, str):
+        return entry
+    return None
+
+
+def _tool_result_failed(result: object) -> bool:
+    """Return whether a filesystem tool result reports an error."""
+    status = result.get("status") if isinstance(result, dict) else getattr(result, "status", None)
+    return status == "error"
+
+
+class StructuredResponseTextFallbackMiddleware(AgentMiddleware):
+    """Recover one exact JSON response when a provider skips the output tool."""
+
+    def __init__(self, schema: type[BaseModel]) -> None:
+        self.schema = schema
+        schema_json = json.dumps(schema.model_json_schema(), separators=(",", ":"), ensure_ascii=False)
+        self._correction = (
+            "The previous response did not produce the required structured result. Do not call tools. "
+            "Return exactly one JSON object matching this JSON Schema, with no Markdown fences or prose:\n"
+            f"{schema_json}"
+        )
+
+    def _promote(self, response: ModelResponse) -> ModelResponse:
+        if response.structured_response is not None or len(response.result) != 1:
+            return response
+        message = response.result[0]
+        if not isinstance(message, AIMessage) or message.tool_calls or not isinstance(message.content, str):
+            return response
+        try:
+            structured = self.schema.model_validate_json(message.content)
+        except ValidationError:
+            return response
+        logger.info("Recovered %s from schema-valid JSON message content", self.schema.__name__)
+        return ModelResponse(result=response.result, structured_response=structured)
+
+    @staticmethod
+    def _needs_correction(response: ModelResponse) -> bool:
+        if response.structured_response is not None or len(response.result) != 1:
+            return False
+        message = response.result[0]
+        return isinstance(message, AIMessage) and not message.tool_calls and isinstance(message.content, str)
+
+    def _correction_request(self, request):
+        return request.override(
+            messages=[*request.messages, HumanMessage(content=self._correction)],
+            tools=[],
+            tool_choice=None,
+            response_format=None,
+        )
+
+    def wrap_model_call(self, request, handler):
+        """Promote JSON text, with one tools-disabled corrective call when needed."""
+        response = self._promote(handler(request))
+        if not self._needs_correction(response) or _is_researcher_finalization_request(request):
+            return response
+        logger.warning("Retrying %s as a tools-disabled JSON response", self.schema.__name__)
+        return self._promote(handler(self._correction_request(request)))
+
+    async def awrap_model_call(self, request, handler):
+        """Promote JSON text, with one tools-disabled corrective call when needed."""
+        response = self._promote(await handler(request))
+        if not self._needs_correction(response) or _is_researcher_finalization_request(request):
+            return response
+        logger.warning("Retrying %s as a tools-disabled JSON response", self.schema.__name__)
+        return self._promote(await handler(self._correction_request(request)))
+
+
+def _is_researcher_finalization_request(request) -> bool:
+    """Return whether this request is the researcher's single reserved finalization turn."""
+    return bool(
+        request.messages
+        and isinstance(request.messages[-1], HumanMessage)
+        and request.messages[-1].additional_kwargs.get(_RESEARCHER_FINALIZATION_MARKER)
+    )
+
+
+class ResearcherBudgetExhaustedError(Exception):
+    """Raised when the reserved researcher finalization turn does not produce notes."""
+
+    def __init__(self, model_calls: int, max_model_calls: int) -> None:
+        self.model_calls = model_calls
+        self.max_model_calls = max_model_calls
+        super().__init__(f"Researcher exhausted its {max_model_calls}-model-call budget after {model_calls} calls")
+
+
+class ResearcherFinalizationMiddleware(AgentMiddleware):
+    """Reserve one tools-disabled model turn for finalizing partial research.
+
+    ``ModelCallLimitMiddleware`` owns ``run_model_call_count``; the two middleware
+    must be installed as a pair.
+    """
+
+    def __init__(self, *, max_model_calls: int) -> None:
+        self.max_model_calls = max_model_calls
+
+    def _request(self, request):
+        """Return the original request until the budget binds, then force finalization."""
+        calls_made = request.state.get("run_model_call_count", 0)
+        if calls_made < self.max_model_calls:
+            return request
+        logger.warning(
+            "Researcher exhausted its %d-model-call budget after %d calls; entering finalization",
+            self.max_model_calls,
+            calls_made,
+        )
+        finalization_message = HumanMessage(
+            content=_RESEARCHER_FINALIZATION_PROMPT,
+            additional_kwargs={_RESEARCHER_FINALIZATION_MARKER: True},
+        )
+        return request.override(
+            messages=[*request.messages, finalization_message],
+            tools=[],
+            tool_choice=None,
+            response_format=ToolStrategy(ResearchNotes),
+        )
+
+    @staticmethod
+    def _finalized(response: ModelResponse) -> bool:
+        """Return whether the model produced schema-valid research notes."""
+        return response.structured_response is not None
+
+    @staticmethod
+    def _has_tool_calls(response: ModelResponse) -> bool:
+        """Return whether finalization attempted a tool call instead of returning notes."""
+        return any(isinstance(message, AIMessage) and message.tool_calls for message in response.result)
+
+    def _result(self, request, response: ModelResponse) -> ModelResponse:
+        """Accept notes or tool calls, and type prose-only exhaustion for fallback handling."""
+        if not _is_researcher_finalization_request(request) or self._finalized(response):
+            return response
+        if self._has_tool_calls(response):
+            return response
+        calls_made = request.state.get("run_model_call_count", 0)
+        raise ResearcherBudgetExhaustedError(calls_made + RESEARCHER_FINALIZATION_MODEL_CALLS, self.max_model_calls)
+
+    @staticmethod
+    def _refused(request) -> ToolMessage:
+        """Build the shared result for a tool call refused after finalization."""
+        return ToolMessage(
+            content="Researcher model-call budget exhausted; this tool was not executed.",
+            tool_call_id=request.tool_call["id"],
+            name=request.tool_call.get("name"),
+            status="error",
+        )
+
+    def wrap_model_call(self, request, handler):
+        """Force one synchronous finalization call after the normal-turn budget."""
+        finalization_request = self._request(request)
+        return self._result(finalization_request, handler(finalization_request))
+
+    async def awrap_model_call(self, request, handler):
+        """Force one asynchronous finalization call after the normal-turn budget."""
+        finalization_request = self._request(request)
+        return self._result(finalization_request, await handler(finalization_request))
+
+    def wrap_tool_call(self, request, handler):
+        """Prevent a hallucinated tool call from executing after finalization."""
+        if request.state.get("run_model_call_count", 0) <= self.max_model_calls:
+            return handler(request)
+        return self._refused(request)
+
+    async def awrap_tool_call(self, request, handler):
+        """Prevent a hallucinated tool call from executing after async finalization."""
+        if request.state.get("run_model_call_count", 0) <= self.max_model_calls:
+            return await handler(request)
+        return self._refused(request)
+
+
+class FinalReportCommitTracker:
+    """Run-local proof of the writer's most recent successful report mutation."""
+
+    def __init__(self) -> None:
+        self._digest: str | None = None
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _digest_text(content: str) -> str:
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+    def record(self, content: str) -> str:
+        """Record the exact UTF-8 digest after a successful writer mutation."""
+        digest = self._digest_text(content)
+        with self._lock:
+            self._digest = digest
+        return digest
+
+    @property
+    def digest(self) -> str | None:
+        """Return the most recently committed digest for this run."""
+        with self._lock:
+            return self._digest
+
+    def committed_text(
+        self,
+        files: object,
+        *,
+        paths: tuple[str, ...] = FINAL_REPORT_STATE_PATHS,
+    ) -> str | None:
+        """Return the non-empty state file matching the writer's exact digest."""
+        digest = self.digest
+        if digest is None or not isinstance(files, dict):
+            return None
+        for path in paths:
+            content = _entry_text(files.get(path))
+            if content is not None and content.strip() and self._digest_text(content) == digest:
+                return content
+        return None
 
 
 class SourceRoutingGuardMiddleware(AgentMiddleware):
@@ -199,6 +459,191 @@ class FilesystemToolCallGuardMiddleware(AgentMiddleware):
         return await handler(request)
 
 
+class FinalReportOwnershipGuardMiddleware(AgentMiddleware):
+    """Reserve final-report mutation for the writer role."""
+
+    async def awrap_tool_call(self, request, handler):
+        """Reject non-writer mutations of either final-report state path."""
+        tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
+        if tool_call.get("name") not in {"write_file", "edit_file"}:
+            return await handler(request)
+        if _tool_file_path(tool_call) not in FINAL_REPORT_STATE_PATHS:
+            return await handler(request)
+        return ToolMessage(
+            content=(
+                "final_report_writer_only: only writer-agent may write or edit "
+                f"{FINAL_REPORT_PATH}; hand off evidence through the normal research workflow."
+            ),
+            tool_call_id=tool_call.get("id", "final-report-ownership"),
+            name=tool_call.get("name"),
+            status="error",
+        )
+
+
+class StateMutationGuardMiddleware(AgentMiddleware):
+    """Restrict model-issued mutations of the StateBackend filesystem by role."""
+
+    def __init__(self, *, writer: bool, sandbox_enabled: bool) -> None:
+        self.writer = writer
+        self.sandbox_enabled = sandbox_enabled
+
+    def _is_state_backed(self, path: str | None) -> bool:
+        if path is None:
+            return False
+        return not self.sandbox_enabled or path == "/shared" or path.startswith("/shared/")
+
+    @staticmethod
+    def _tool_error(tool_call: dict[str, object], reason: str, guidance: str) -> ToolMessage:
+        return ToolMessage(
+            content=f"{reason}: {guidance}",
+            tool_call_id=tool_call.get("id", "state-mutation-guard"),
+            name=tool_call.get("name"),
+            status="error",
+        )
+
+    def _rejection(self, request: object) -> ToolMessage | None:
+        """Return a denial for a guarded mutation, otherwise allow delegation."""
+        tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
+        tool_name = tool_call.get("name")
+        if tool_name not in {"write_file", "edit_file"}:
+            return None
+
+        target = _tool_file_path(tool_call)
+        if not self._is_state_backed(target):
+            return None
+        if not self.writer:
+            return self._tool_error(
+                tool_call,
+                "state_mutation_role_denied",
+                "this agent has read-only access to shared research state; return structured output instead",
+            )
+        if target != FINAL_REPORT_PATH:
+            return self._tool_error(
+                tool_call,
+                "writer_state_path_denied",
+                f"writer-agent may mutate only {FINAL_REPORT_PATH}",
+            )
+        if tool_name == "edit_file":
+            return self._tool_error(
+                tool_call,
+                "writer_output_edit_not_supported",
+                f"use write_file with file_path={FINAL_REPORT_PATH} and the complete bounded report",
+            )
+        return None
+
+    def wrap_tool_call(self, request, handler):
+        """Reject unauthorized state writes before a synchronous backend call."""
+        rejection = self._rejection(request)
+        if rejection is not None:
+            return rejection
+        return handler(request)
+
+    async def awrap_tool_call(self, request, handler):
+        """Reject unauthorized state writes before an asynchronous backend call."""
+        rejection = self._rejection(request)
+        if rejection is not None:
+            return rejection
+        return await handler(request)
+
+
+class FinalReportCommitMiddleware(AgentMiddleware):
+    """Commit writer-owned output with overwrite and exact-digest verification."""
+
+    def __init__(
+        self,
+        *,
+        backend: object,
+        tracker: FinalReportCommitTracker,
+        state_budget: StateBudgetLedger | None = None,
+        resource_limits: DeepResearchResourceLimits | None = None,
+    ) -> None:
+        self.backend = backend
+        self.tracker = tracker
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
+        self.state_budget = state_budget or StateBudgetLedger(
+            limits=self.resource_limits,
+            files={},
+            sandbox_enabled=True,
+        )
+        self._mutation_lock = asyncio.Lock()
+
+    @staticmethod
+    def _tool_error(tool_call: dict[str, object], reason: str, guidance: str) -> ToolMessage:
+        return ToolMessage(
+            content=f"{reason}: {guidance}",
+            tool_call_id=tool_call.get("id", "final-report-commit"),
+            name=tool_call.get("name"),
+            status="error",
+        )
+
+    @staticmethod
+    def _response_error(response: object) -> object:
+        return response.get("error") if isinstance(response, dict) else getattr(response, "error", None)
+
+    async def _commit_write(self, tool_call: dict[str, object]) -> ToolMessage:
+        args = tool_call.get("args")
+        content = args.get("content") if isinstance(args, dict) else None
+        if not isinstance(content, str):
+            return self._tool_error(tool_call, "writer_output_commit_failed", "report content must be text")
+        encoded = content.encode("utf-8")
+        if len(encoded) > self.resource_limits.max_final_report_bytes:
+            return self._tool_error(
+                tool_call,
+                "writer_output_limit_exceeded",
+                f"report exceeds the {self.resource_limits.max_final_report_bytes}-byte UTF-8 limit",
+            )
+        try:
+            reservation = self.state_budget.reserve([(FINAL_REPORT_PATH, encoded)])
+        except ValueError:
+            return self._tool_error(
+                tool_call,
+                "writer_output_limit_exceeded",
+                "report would exceed the shared-state resource limit",
+            )
+        try:
+            responses = await self.backend.aupload_files([(FINAL_REPORT_PATH, encoded)])
+        except Exception as exc:  # noqa: BLE001 - return a stable, sanitized tool error
+            self.state_budget.rollback(reservation)
+            logger.warning("Writer final-report commit failed (%s)", type(exc).__name__)
+            return self._tool_error(tool_call, "writer_output_commit_failed", "the backend rejected the write")
+        if not isinstance(responses, list) or len(responses) != 1 or self._response_error(responses[0]):
+            self.state_budget.rollback(reservation)
+            logger.warning("Writer final-report commit returned an unsuccessful upload response")
+            return self._tool_error(tool_call, "writer_output_commit_failed", "the backend rejected the write")
+        self.tracker.record(content)
+        return ToolMessage(
+            content=f"Updated file {FINAL_REPORT_PATH}",
+            tool_call_id=tool_call.get("id", "final-report-commit"),
+            name="write_file",
+            status="success",
+        )
+
+    async def awrap_tool_call(self, request, handler):
+        """Upsert bounded writer output; edits are rejected before mutation."""
+        tool_call = request.tool_call if isinstance(getattr(request, "tool_call", None), dict) else {}
+        tool_name = tool_call.get("name")
+        if tool_name not in {"write_file", "edit_file"}:
+            return await handler(request)
+        target = _tool_file_path(tool_call)
+        if target not in FINAL_REPORT_STATE_PATHS:
+            return await handler(request)
+        if target != FINAL_REPORT_PATH:
+            return self._tool_error(
+                tool_call,
+                "writer_output_path_invalid",
+                f"write the final report to {FINAL_REPORT_PATH}",
+            )
+
+        async with self._mutation_lock:
+            if tool_name == "write_file":
+                return await self._commit_write(tool_call)
+            return self._tool_error(
+                tool_call,
+                "writer_output_edit_not_supported",
+                f"use write_file with file_path={FINAL_REPORT_PATH} and the complete bounded report",
+            )
+
+
 class RequiredOutputFileMiddleware(AgentMiddleware):
     """Verify a model's file-backed completion marker before ending its run.
 
@@ -210,22 +655,25 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
     def __init__(
         self,
         *,
-        paths: tuple[str, ...] = ("/shared/output.md", "/output.md"),
+        tracker: FinalReportCommitTracker,
+        paths: tuple[str, ...] = FINAL_REPORT_STATE_PATHS,
         completion_marker: str = "Wrote /shared/output.md",
         max_retries: int = 1,
-        reason_code: str = "writer_output_missing",
+        reason_code: str = "writer_output_not_committed",
     ) -> None:
         """Configure the accepted state paths and bounded corrective turns."""
         if not paths:
             raise ValueError("paths must not be empty")
         if max_retries < 0:
             raise ValueError("max_retries must be non-negative")
+        self.tracker = tracker
         self.paths = paths
         self.completion_marker = completion_marker
         self.max_retries = max_retries
         self.reason_code = reason_code
         self._retry_message = (
-            "The required final output file is missing or empty. Do not repeat research or regenerate artifacts. "
+            "The final report is missing, empty, or was not committed by this writer run. "
+            "Do not repeat research or regenerate artifacts. "
             f"Call write_file with file_path={paths[0]} and the complete final Markdown, confirm the tool "
             f"succeeds, and only then return `{completion_marker}`."
         )
@@ -234,24 +682,16 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
     def _files_from_state(state: object) -> object:
         return state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
 
-    @staticmethod
-    def _entry_has_content(entry: object) -> bool:
-        if isinstance(entry, dict):
-            entry = entry.get("content")
-        if isinstance(entry, bytes):
-            return bool(entry.strip())
-        if isinstance(entry, str):
-            return bool(entry.strip())
-        if isinstance(entry, list):
-            return any(isinstance(line, str) and line.strip() for line in entry)
-        return False
-
-    def _required_output_exists(self, state: object) -> bool:
+    def _required_output_is_committed(self, state: object) -> bool:
         files = self._files_from_state(state)
-        return isinstance(files, dict) and any(self._entry_has_content(files.get(path)) for path in self.paths)
+        return self.tracker.committed_text(files, paths=self.paths) is not None
 
     def _retry_count(self, messages: list[object]) -> int:
-        return sum(isinstance(message, HumanMessage) and message.content == self._retry_message for message in messages)
+        return sum(
+            isinstance(message, HumanMessage)
+            and message.additional_kwargs.get(_GENERATED_RETRY_MARKER) == "required_output_file"
+            for message in messages
+        )
 
     def _check_after_model(self, state: object) -> dict[str, object] | None:
         messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
@@ -262,18 +702,21 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
             return None
         if last_message.text.strip() != self.completion_marker:
             return None
-        if self._required_output_exists(state):
+        if self._required_output_is_committed(state):
             return None
 
         retry_count = self._retry_count(messages)
         if retry_count >= self.max_retries:
             raise RuntimeError(self.reason_code)
 
-        logger.warning(
-            "Agent reported file-backed completion before the required output existed; requesting corrective turn"
-        )
+        logger.warning("Agent reported completion before committing the required output; requesting corrective turn")
         return {
-            "messages": [HumanMessage(content=self._retry_message)],
+            "messages": [
+                HumanMessage(
+                    content=self._retry_message,
+                    additional_kwargs={_GENERATED_RETRY_MARKER: "required_output_file"},
+                )
+            ],
             "jump_to": "model",
         }
 
@@ -285,6 +728,77 @@ class RequiredOutputFileMiddleware(AgentMiddleware):
     @hook_config(can_jump_to=["model"])
     async def aafter_model(self, state, runtime):
         """Verify asynchronous writer completion and request one local repair when needed."""
+        return self._check_after_model(state)
+
+
+class RequiredWriterDelegationMiddleware(AgentMiddleware):
+    """Prevent the orchestrator from terminating before writer-owned publication.
+
+    Source failures can make an orchestrator conclude that no further research
+    is useful and return ordinary assistant text without ever delegating to the
+    writer. Give it one bounded corrective turn that forbids more research and
+    requires writer delegation. The writer's existing commit middleware remains
+    the only component allowed to publish the final report.
+    """
+
+    def __init__(
+        self,
+        *,
+        tracker: FinalReportCommitTracker,
+        max_retries: int = 1,
+        reason_code: str = "writer_output_not_committed",
+    ) -> None:
+        if max_retries < 0:
+            raise ValueError("max_retries must be non-negative")
+        self.tracker = tracker
+        self.max_retries = max_retries
+        self.reason_code = reason_code
+        self._retry_message = (
+            "The run cannot finish because writer-agent has not committed /shared/output.md. "
+            "Do not perform or retry source research. Delegate to writer-agent now using the Writer Delegation "
+            "Template and the plan, research notes, verified sources, and explicit evidence gaps already available. "
+            "After writer-agent returns, return only its completion marker."
+        )
+
+    def _retry_count(self, messages: list[object]) -> int:
+        return sum(
+            isinstance(message, HumanMessage)
+            and message.additional_kwargs.get(_GENERATED_RETRY_MARKER) == "required_writer_delegation"
+            for message in messages
+        )
+
+    def _check_after_model(self, state: object) -> dict[str, object] | None:
+        messages = state.get("messages", []) if isinstance(state, dict) else getattr(state, "messages", [])
+        files = state.get("files", {}) if isinstance(state, dict) else getattr(state, "files", {})
+        if not isinstance(messages, list) or not messages:
+            return None
+        last_message = messages[-1]
+        if not isinstance(last_message, AIMessage) or last_message.tool_calls:
+            return None
+        if self.tracker.committed_text(files, paths=FINAL_REPORT_STATE_PATHS) is not None:
+            return None
+        if self._retry_count(messages) >= self.max_retries:
+            raise RuntimeError(self.reason_code)
+
+        logger.warning("Orchestrator ended before writer delegation; requesting one corrective turn")
+        return {
+            "messages": [
+                HumanMessage(
+                    content=self._retry_message,
+                    additional_kwargs={_GENERATED_RETRY_MARKER: "required_writer_delegation"},
+                )
+            ],
+            "jump_to": "model",
+        }
+
+    @hook_config(can_jump_to=["model"])
+    def after_model(self, state, runtime):
+        """Require a synchronous orchestrator to delegate writer publication."""
+        return self._check_after_model(state)
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime):
+        """Require an asynchronous orchestrator to delegate writer publication."""
         return self._check_after_model(state)
 
 
@@ -320,21 +834,21 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
         if "<|channel|>" in name:
             candidate = name.split("<|channel|>", maxsplit=1)[0]
             if candidate in self.valid_tool_names:
-                logger.info("Sanitized tool name: '%s' -> '%s'", name, candidate)
+                logger.info("Sanitized tool name (original_%s) -> '%s'", log_content_metadata(name), candidate)
                 return candidate
 
         # 2. Strip dot suffix if base name is valid
         if "." in name:
             candidate = name.split(".", maxsplit=1)[0]
             if candidate in self.valid_tool_names:
-                logger.info("Sanitized tool name: '%s' -> '%s'", name, candidate)
+                logger.info("Sanitized tool name (original_%s) -> '%s'", log_content_metadata(name), candidate)
                 return candidate
 
         # 3. Map common hallucinated names
         if name in _TOOL_NAME_ALIASES:
             mapped = _TOOL_NAME_ALIASES[name]
             if mapped in self.valid_tool_names:
-                logger.info("Mapped tool name: '%s' -> '%s'", name, mapped)
+                logger.info("Mapped tool name (original_%s) -> '%s'", log_content_metadata(name), mapped)
                 return mapped
 
         return name
@@ -455,6 +969,72 @@ class TodoSuppressionMiddleware(AgentMiddleware):
         return await handler(self._clean_request(request))
 
 
+class TodoQuotaMiddleware(AgentMiddleware):
+    """Reject oversized top-level todo replacements before they mutate graph state."""
+
+    _TODO_TOOL = "write_todos"
+
+    def __init__(self, *, resource_limits: DeepResearchResourceLimits | None = None) -> None:
+        """Configure the hard job-local todo count and content ceilings."""
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
+
+    def _validate(self, request: object) -> None:
+        """Validate raw write_todos arguments before delegating to the framework tool."""
+        tool_call = getattr(request, "tool_call", {})
+        if not isinstance(tool_call, dict) or tool_call.get("name") != self._TODO_TOOL:
+            return
+        args = tool_call.get("args", {})
+        todos = args.get("todos") if isinstance(args, dict) else None
+        if not isinstance(todos, list):
+            raise ValueError("write_todos requires a todos list")
+        if len(todos) > self.resource_limits.max_todo_items:
+            raise ValueError(f"write_todos exceeds the {self.resource_limits.max_todo_items}-item limit")
+
+        total_chars = 0
+        for todo in todos:
+            content = todo.get("content") if isinstance(todo, dict) else None
+            if not isinstance(content, str):
+                raise ValueError("write_todos item content must be a string")
+            if len(content) > self.resource_limits.max_todo_item_chars:
+                raise ValueError(
+                    f"write_todos item exceeds the {self.resource_limits.max_todo_item_chars}-character limit"
+                )
+            total_chars += len(content)
+        if total_chars > self.resource_limits.max_total_todo_chars:
+            raise ValueError(
+                f"write_todos exceeds the {self.resource_limits.max_total_todo_chars}-character aggregate content limit"
+            )
+
+    @staticmethod
+    def _tool_error(request: object, error: ValueError) -> ToolMessage:
+        """Return a recoverable tool error for a rejected todo replacement."""
+        tool_call = getattr(request, "tool_call", {})
+        if not isinstance(tool_call, dict):
+            tool_call = {}
+        return ToolMessage(
+            content=f"write_todos_quota_rejected: {error}",
+            tool_call_id=tool_call.get("id", "todo-quota"),
+            name=tool_call.get("name", TodoQuotaMiddleware._TODO_TOOL),
+            status="error",
+        )
+
+    def wrap_tool_call(self, request, handler):
+        """Validate a synchronous todo update before graph-state mutation."""
+        try:
+            self._validate(request)
+        except ValueError as exc:
+            return self._tool_error(request, exc)
+        return handler(request)
+
+    async def awrap_tool_call(self, request, handler):
+        """Validate an asynchronous todo update before graph-state mutation."""
+        try:
+            self._validate(request)
+        except ValueError as exc:
+            return self._tool_error(request, exc)
+        return await handler(request)
+
+
 class ToolRetryMiddleware(AgentMiddleware):
     """Retries failed tool calls with exponential backoff.
 
@@ -486,11 +1066,12 @@ class ToolRetryMiddleware(AgentMiddleware):
                 if attempt < self.max_retries:
                     tool_name = request.tool_call.get("name", "?") if hasattr(request, "tool_call") else "?"
                     logger.warning(
-                        "Tool %s failed (attempt %d/%d): %s",
-                        tool_name,
+                        "Tool call failed (tool_%s, attempt %d/%d, error_type=%s, detail_%s)",
+                        log_content_metadata(tool_name),
                         attempt + 1,
                         self.max_retries + 1,
-                        e,
+                        type(e).__name__,
+                        log_content_metadata(e),
                     )
                     await asyncio.sleep(delay)
                     delay *= self.backoff_factor
@@ -598,18 +1179,25 @@ class SourceRegistryMiddleware(AgentMiddleware):
                 tool_name = request.tool_call.get("name", "")
             if tool_name not in self._source_tool_names:
                 return result
+            content = str(result.content)
+            if is_non_citable_status_output(content):
+                return result
             source_id = get_source_id_for_tool(tool_name)
-            sources = extract_sources_from_tool_result(tool_name, str(result.content), source_id=source_id)
+            sources = extract_sources_from_tool_result(
+                tool_name,
+                content,
+                source_id=source_id,
+                result_status=getattr(result, "status", None),
+            )
             async with self._lock:
                 active_registry = self.active_registry()
                 for source in sources:
                     active_registry.add(source)
             if sources:
                 logger.info(
-                    "[CitationRegistry] Captured %d source(s) from %s: %s",
+                    "[CitationRegistry] Captured %d source(s) from %s",
                     len(sources),
                     tool_name,
-                    [s.url or s.citation_key for s in sources],
                 )
         return result
 
@@ -724,6 +1312,73 @@ class ArtifactHarvestMiddleware(AgentMiddleware):
         return result.model_copy(update={"content": content})
 
 
+class SourceRoutingPersistenceMiddleware(AgentMiddleware):
+    """Persist the source router's schema-validated response to shared state."""
+
+    def __init__(
+        self,
+        backend: object,
+        *,
+        state_budget: StateBudgetLedger | None = None,
+        resource_limits: DeepResearchResourceLimits | None = None,
+        path: str = _SOURCE_ROUTING_PATH,
+    ) -> None:
+        self.backend = backend
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
+        self.state_budget = state_budget or StateBudgetLedger(
+            limits=self.resource_limits,
+            files={},
+            sandbox_enabled=True,
+        )
+        self.path = path
+
+    @staticmethod
+    def _routing_from_state(state: object) -> object:
+        if isinstance(state, dict):
+            return state.get("structured_response")
+        return getattr(state, "structured_response", None)
+
+    def _persist_routing(self, routing: object) -> None:
+        if routing is None:
+            return
+        if hasattr(routing, "model_dump"):
+            payload = routing.model_dump(mode="json", exclude_none=True)
+        elif isinstance(routing, dict):
+            payload = routing
+        else:
+            return
+
+        content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
+        if len(content) > self.resource_limits.max_source_routing_bytes:
+            raise ValueError(
+                f"Source routing exceeds the {self.resource_limits.max_source_routing_bytes}-byte serialized size limit"
+            )
+        reservation = self.state_budget.reserve([(self.path, content)])
+        try:
+            responses = self.backend.upload_files([(self.path, content)])
+        except Exception:
+            self.state_budget.rollback(reservation)
+            raise
+        errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
+        if errors:
+            self.state_budget.rollback(reservation)
+            logger.error(
+                "Failed to persist source routing to %s (error_count=%d detail_%s)",
+                self.path,
+                len(errors),
+                log_content_metadata("; ".join(errors)),
+            )
+            raise RuntimeError(f"Failed to persist source routing to {self.path}")
+
+    def after_agent(self, state, runtime):
+        """Persist source routing after a synchronous source-router run."""
+        self._persist_routing(self._routing_from_state(state))
+
+    async def aafter_agent(self, state, runtime):
+        """Persist source routing after an asynchronous source-router run."""
+        await asyncio.to_thread(self._persist_routing, self._routing_from_state(state))
+
+
 class PlanPersistenceMiddleware(AgentMiddleware):
     """Persists the planner's structured ResearchPlan to the shared filesystem.
 
@@ -740,14 +1395,28 @@ class PlanPersistenceMiddleware(AgentMiddleware):
     orchestrator reads a missing or stale ``/shared/plan.json``.
     """
 
-    def __init__(self, backend: object, *, path: str = "/shared/plan.json") -> None:
+    def __init__(
+        self,
+        backend: object,
+        *,
+        state_budget: StateBudgetLedger | None = None,
+        resource_limits: DeepResearchResourceLimits | None = None,
+        path: str = "/shared/plan.json",
+    ) -> None:
         """Initialize the middleware.
 
         Args:
             backend: Shared filesystem backend exposing ``upload_files``.
+            resource_limits: Hard plan/query limits enforced before state mutation.
             path: Shared path the serialized plan is written to.
         """
         self.backend = backend
+        self.resource_limits = resource_limits or DeepResearchResourceLimits()
+        self.state_budget = state_budget or StateBudgetLedger(
+            limits=self.resource_limits,
+            files={},
+            sandbox_enabled=True,
+        )
         self.path = path
 
     @staticmethod
@@ -767,13 +1436,52 @@ class PlanPersistenceMiddleware(AgentMiddleware):
             payload = plan
         else:
             return
+
+        queries = payload.get("queries", [])
+        if not isinstance(queries, list):
+            raise ValueError("Research plan queries must be a list")
+        if len(queries) > self.resource_limits.max_research_queries:
+            raise ValueError(f"Research plan exceeds the {self.resource_limits.max_research_queries}-query job limit")
+        query_chars = 0
+        for query in queries:
+            if not isinstance(query, dict):
+                raise ValueError("Research plan contains an invalid query")
+            query_text = query.get("query")
+            if not isinstance(query_text, str) or not query_text:
+                raise ValueError("Research plan contains an invalid query")
+            query_chars += len(query_text)
+            subqueries = query.get("subqueries", [])
+            if not isinstance(subqueries, list) or any(
+                not isinstance(subquery, str) or not subquery for subquery in subqueries
+            ):
+                raise ValueError("Research plan contains invalid subqueries")
+            query_chars += sum(len(subquery) for subquery in subqueries)
+        if query_chars > self.resource_limits.max_total_query_chars:
+            raise ValueError(
+                "Research plan exceeds the "
+                f"{self.resource_limits.max_total_query_chars}-character aggregate query limit"
+            )
+
         content = json.dumps(payload, indent=2, ensure_ascii=False).encode("utf-8")
-        responses = self.backend.upload_files([(self.path, content)])
+        if len(content) > self.resource_limits.max_plan_bytes:
+            raise ValueError(
+                f"Research plan exceeds the {self.resource_limits.max_plan_bytes}-byte serialized size limit"
+            )
+        reservation = self.state_budget.reserve([(self.path, content)])
+        try:
+            responses = self.backend.upload_files([(self.path, content)])
+        except Exception:
+            self.state_budget.rollback(reservation)
+            raise
         errors = [f"{response.path}: {response.error}" for response in responses if getattr(response, "error", None)]
         if errors:
-            # Raw backend detail stays in logs; the raised error reaches the job status /
-            # caller, so it must not echo backend-internal strings (hostnames, paths, etc.).
-            logger.error("Failed to persist plan to %s: %s", self.path, "; ".join(errors))
+            self.state_budget.rollback(reservation)
+            logger.error(
+                "Failed to persist plan to %s (error_count=%d detail_%s)",
+                self.path,
+                len(errors),
+                log_content_metadata("; ".join(errors)),
+            )
             raise RuntimeError(f"Failed to persist the research plan to {self.path}")
 
     def after_agent(self, state, runtime):

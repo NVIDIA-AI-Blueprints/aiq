@@ -212,6 +212,44 @@ async def test_resolve_report_context_carries_citation_status_and_strips_warning
 
 
 @pytest.mark.asyncio
+async def test_event_fallback_strips_warning_and_does_not_trust_unverified_report_sources(monkeypatch):
+    from aiq_agent.agents.deep_researcher.models import citation_verification_warning
+    from aiq_api.jobs import report_context
+
+    status = {"status": "unverified", "reason": "no_valid_citations"}
+    warning = citation_verification_warning("no_valid_citations")
+
+    async def _events(_db_url: str, _job_id: str, _after_id: int, _limit: int):
+        return [
+            {
+                "type": "artifact.update",
+                "data": {
+                    "type": "output",
+                    "output_category": "final_report",
+                    "content": (
+                        f"{warning}\n\n# Report\n\nClaim [1].\n\n## Sources\n[1] https://fabricated.example/source"
+                    ),
+                },
+            },
+            {
+                "type": "artifact.update",
+                "name": "Captured source",
+                "data": {"type": "citation_source", "url": "https://trusted.example/source"},
+            },
+        ]
+
+    monkeypatch.setattr(report_context.EventStore, "get_events_async", _events)
+    job = type("Job", (), {"output": {"citation_verification_status": status}})()
+
+    ctx = await report_context.resolve_report_context(job, "sqlite:///unused.db", "job-1")
+
+    assert ctx.report_markdown.startswith("# Report")
+    assert warning not in ctx.report_markdown
+    assert [source.url for source in ctx.sources] == ["https://trusted.example/source"]
+    assert ctx.citation_verification_status == status
+
+
+@pytest.mark.asyncio
 async def test_resolve_report_context_decrypts_encrypted_parent_output(monkeypatch):
     """Report follow-up reads the encrypted parent output instead of relying on event fallback."""
     import base64
@@ -332,6 +370,18 @@ def test_report_context_from_markdown_no_sources_section():
     from aiq_api.jobs.report_context import report_context_from_markdown
 
     ctx = report_context_from_markdown("# Findings\n\nNo sources here.")
+    assert ctx.sources == []
+    assert "No durable source metadata" in ctx.source_summary_markdown
+
+
+def test_report_context_from_unverified_markdown_does_not_trust_claimed_sources():
+    from aiq_api.jobs.report_context import report_context_from_markdown
+
+    ctx = report_context_from_markdown(
+        "# Findings\n\nClaim [1].\n\n## Sources\n[1] https://fabricated.example/source",
+        citation_verification_status={"status": "unverified", "reason": "no_sources"},
+    )
+
     assert ctx.sources == []
     assert "No durable source metadata" in ctx.source_summary_markdown
 

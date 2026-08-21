@@ -7,6 +7,8 @@ version: 1
 
 filesystem_policy:
   include_workdir: true
+  # Declare the proxy baseline up front so OpenShell does not create an enriched
+  # revision whose content/hash differs from the policy AI-Q submitted.
   read_only:
     - /usr
     - /lib
@@ -20,10 +22,8 @@ filesystem_policy:
     - /tmp
     - /dev/null
 
-# Fail closed when the host cannot enforce Landlock filesystem confinement. Local demo
-# environments that intentionally accept weaker isolation must generate a separate policy
-# with `scripts/openshell/setup_openshell.sh --landlock-compatibility best_effort` and configure
-# `require_hard_landlock: false` explicitly.
+# hard_requirement is the production default: a missing Landlock LSM fails closed. Set
+# best_effort only for an explicit local demo that accepts loss of filesystem confinement.
 landlock:
   compatibility: hard_requirement
 

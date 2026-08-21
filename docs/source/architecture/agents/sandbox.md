@@ -9,7 +9,8 @@ Deep research can optionally run DeepAgents `execute` calls through a sandbox pr
 (Modal, OpenShell, or any registered provider). Modal and OpenShell create a fresh physical
 sandbox per job. OpenShell binds the configured policy at creation and attests the authoritative
 effective policy source, content, hash, and active revision before exposing the execution backend.
-On the supported OpenShell `0.0.80` stack, current, active, revision, and effective-config versions
+OpenShell lifecycle calls are explicitly scoped to the configured workspace (default: `default`).
+On the supported OpenShell `0.0.88` stack, current, active, revision, and effective-config versions
 must all be positive and agree with the exact submitted policy/hash; missing capabilities or any
 version disagreement fails closed.
 

@@ -1,0 +1,25 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+[build-system]
+build-backend = "setuptools.build_meta"
+requires = ["setuptools >= 83"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project]
+name = "aiq-gsf"
+version = "0.1.0"
+description = "NAT function group for NVIDIA GSF structured-data capabilities"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+license = {text = "Apache-2.0"}
+dependencies = [
+    "httpx>=0.27.0,<1",
+    "nvidia-nat-core==1.8.0",
+    "pydantic>=2.0.0",
+]
+
+[project.entry-points."nat.plugins"]
+gsf = "gsf.register"

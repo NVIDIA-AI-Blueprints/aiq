@@ -24,6 +24,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
+import time
+from contextlib import suppress
+from functools import partial
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
@@ -34,9 +38,19 @@ from aiq_api.auth import get_current_trace_tags
 from aiq_api.mcp_auth.provider import principal_user_id
 
 from ..registry import get_agent_config
+from .access import JobAccessConflictError
 from .access import _make_no_auth_principal
 from .access import create_job_access
-from .access import rollback_job_submission
+from .access import release_job_access_reservation
+from .access import renew_job_access_reservation
+from .admission import DEFAULT_RESERVATION_TTL_SECONDS
+from .admission import DeepResearchAdmissionLimits
+from .admission import JobAdmissionConflictError
+from .admission import JobAdmissionUnavailableError
+from .admission import release_deep_research_job_reservation
+from .admission import renew_deep_research_job_reservation
+from .admission import reserve_deep_research_job
+from .admission import validate_deep_research_input
 from .runner import run_agent_job
 
 logger = logging.getLogger(__name__)
@@ -77,14 +91,18 @@ def _resolve_submission_principal(owner: str) -> Principal | None:
     return _make_no_auth_principal(owner)
 
 
-def _current_conversation_id() -> str | None:
-    """Best-effort read of the originating conversation id from the NAT context."""
-    try:
-        from nat.builder.context import ContextState
+def _resolve_admission_principal(principal: Principal) -> Principal:
+    """Return the trusted identity used for deep-research quotas.
 
-        return ContextState.get().conversation_id.get()
-    except Exception:
-        return None
+    In no-auth mode a programmatic caller controls ``owner`` and therefore the
+    compatibility principal's subject.  Never use that value as a quota key.
+    Every caller shares one anonymous trust-domain budget until authentication
+    is required for the deployment.
+    """
+    if os.environ.get("REQUIRE_AUTH", "false").lower() == "true":
+        return principal
+
+    return Principal(type="anonymous", sub="anonymous")
 
 
 def _get_parent_trace_context() -> tuple[
@@ -152,6 +170,7 @@ async def submit_agent_job(
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
+    conversation_id: str | None = None,
     skip_encryption_readiness_check: bool = False,
     initial_files: dict[str, Any] | None = None,
     output_metadata: dict[str, Any] | None = None,
@@ -174,6 +193,9 @@ async def submit_agent_job(
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token to propagate to the Dask worker for
             data sources that require authentication.
+        conversation_id: Optional originating conversation ID. REST callers
+            pass the ``conversation-id`` header explicitly because custom
+            FastAPI routes do not run inside NAT's execution context.
         skip_encryption_readiness_check: Skip the internal readiness check when
             the caller already performed it off the event loop.
         initial_files: Optional DeepAgents virtual filesystem files to seed into worker state.
@@ -207,6 +229,10 @@ async def submit_agent_job(
     # internal-only agents may only be launched by trusted callers that opt in.
     if not agent_config.public and not allow_internal:
         raise InternalAgentError(f"Agent type is internal-only and cannot be submitted directly: {agent_type}")
+
+    admission_limits: DeepResearchAdmissionLimits | None = None
+    if agent_type == "deep_researcher":
+        admission_limits = validate_deep_research_input(input_text)
 
     # @environment_variable NAT_DASK_SCHEDULER_ADDRESS
     # @category Server
@@ -263,6 +289,7 @@ async def submit_agent_job(
         principal = _resolve_submission_principal(owner)
     if principal is None:
         raise RuntimeError("Verified current principal required for async job submission")
+    admission_principal = _resolve_admission_principal(principal)
 
     # Preflight protected MCP sources before enqueue. The REST submit route also
     # does this (returning 409), but programmatic submitters — notably the chat
@@ -282,25 +309,143 @@ async def submit_agent_job(
     job_store = JobStore(scheduler_address=scheduler_address, db_url=db_url)
     resolved_job_id = job_store.ensure_job_id(job_id)
     loop = asyncio.get_running_loop()
+    admission_token: str | None = None
 
-    async def _rollback_partial_submission() -> None:
-        """Best-effort cleanup of a job_info row we created before submission failed."""
+    if admission_limits is not None:
         try:
-            await loop.run_in_executor(None, rollback_job_submission, resolved_job_id, db_url)
-            logger.warning(
-                "Rolled back partial async job submission for %s. "
-                "The Dask worker may still be running and should be investigated if it continues writing state.",
-                resolved_job_id,
+            admission_token = await reserve_deep_research_job(
+                db_url=db_url,
+                job_id=resolved_job_id,
+                principal=admission_principal,
+                limits=admission_limits,
             )
-        except Exception as cleanup_error:
-            logger.warning(
-                "Failed to roll back partial async job submission for %s: %s",
+        except JobAdmissionConflictError as exc:
+            raise JobIdConflictError(f"Job already exists: {resolved_job_id}") from exc
+
+    submission_token = admission_token or secrets.token_urlsafe(24)
+    reservation_ttl_seconds = (
+        admission_limits.reservation_ttl_seconds if admission_limits is not None else DEFAULT_RESERVATION_TTL_SECONDS
+    )
+    parent_trace_context = _get_parent_trace_context()
+    if conversation_id is not None:
+        parent_trace_context = (
+            *parent_trace_context[:5],
+            conversation_id,
+            parent_trace_context[6],
+        )
+    submission_conversation_id = parent_trace_context[5]
+
+    async def _release_submission_reservations() -> None:
+        """Conditionally release only reservations owned by this submitter."""
+        try:
+            await loop.run_in_executor(
+                None,
+                release_job_access_reservation,
                 resolved_job_id,
-                cleanup_error,
+                submission_token,
+                db_url,
+            )
+        except Exception as cleanup_error:  # noqa: BLE001 - expiry is the fail-safe
+            logger.warning(
+                "Could not release failed job-access reservation for %s (error_type=%s)",
+                resolved_job_id,
+                type(cleanup_error).__name__,
+            )
+        if admission_token is not None:
+            await release_deep_research_job_reservation(
+                db_url=db_url,
+                job_id=resolved_job_id,
+                reservation_token=admission_token,
             )
 
+    # Ownership is durable before Dask can run the task. This removes the
+    # ownerless-worker window that existed when job_access was written after
+    # JobStore.submit_job returned.
     try:
-        await job_store.submit_job(
+        await loop.run_in_executor(
+            None,
+            partial(
+                create_job_access,
+                resolved_job_id,
+                principal,
+                db_url,
+                submission_conversation_id,
+                agent_type,
+                submission_token=submission_token,
+                submission_expires_at=time.time() + reservation_ttl_seconds,
+            ),
+        )
+    except JobAccessConflictError as exc:
+        if admission_token is not None:
+            await release_deep_research_job_reservation(
+                db_url=db_url,
+                job_id=resolved_job_id,
+                reservation_token=admission_token,
+            )
+        raise JobIdConflictError(f"Job already exists: {resolved_job_id}") from exc
+    except asyncio.CancelledError:
+        await asyncio.shield(_release_submission_reservations())
+        raise
+    except Exception:
+        await _release_submission_reservations()
+        raise
+
+    lease_lost = asyncio.Event()
+
+    async def _maintain_submission_lease() -> None:
+        """Keep pre-enqueue rows live until NAT has made job_info durable."""
+        renewal_interval = max(0.05, reservation_ttl_seconds / 3)
+        try:
+            while True:
+                await asyncio.sleep(renewal_interval)
+                expires_at = time.time() + reservation_ttl_seconds
+                access_ok = await loop.run_in_executor(
+                    None,
+                    renew_job_access_reservation,
+                    resolved_job_id,
+                    submission_token,
+                    db_url,
+                    expires_at,
+                )
+                admission_ok = True
+                if admission_token is not None:
+                    admission_ok = await renew_deep_research_job_reservation(
+                        db_url=db_url,
+                        job_id=resolved_job_id,
+                        reservation_token=admission_token,
+                        ttl_seconds=reservation_ttl_seconds,
+                    )
+                if not access_ok or not admission_ok:
+                    lease_lost.set()
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - lease renewal must fail closed
+            logger.warning(
+                "Submission lease renewal failed for %s (error_type=%s)",
+                resolved_job_id,
+                type(exc).__name__,
+            )
+            lease_lost.set()
+
+    lease_task = asyncio.create_task(
+        _maintain_submission_lease(),
+        name=f"submission-lease-{resolved_job_id}",
+    )
+    lease_lost_waiter = asyncio.create_task(
+        lease_lost.wait(),
+        name=f"submission-lease-loss-{resolved_job_id}",
+    )
+
+    async def _stop_submission_lease() -> None:
+        for task in (lease_task, lease_lost_waiter):
+            task.cancel()
+        for task in (lease_task, lease_lost_waiter):
+            with suppress(asyncio.CancelledError):
+                await task
+
+    submit_task = asyncio.create_task(
+        job_store.submit_job(
             job_id=resolved_job_id,
             expiry_seconds=expiry_seconds,
             job_fn=run_agent_job,
@@ -314,7 +459,7 @@ async def submit_agent_job(
                 input_text,
                 agent_config.class_path,
                 agent_config.config_name,
-                *_get_parent_trace_context(),
+                *parent_trace_context,
                 available_documents,
                 data_sources,
                 auth_token,
@@ -322,36 +467,56 @@ async def submit_agent_job(
                 initial_files,
                 output_metadata,
                 principal_user_id(principal),
+                admission_token,
             ],
+        ),
+        name=f"submit-job-{resolved_job_id}",
+    )
+
+    try:
+        completed, _ = await asyncio.wait(
+            {submit_task, lease_lost_waiter},
+            return_when=asyncio.FIRST_COMPLETED,
         )
+        if lease_lost_waiter in completed:
+            submit_task.cancel()
+            await asyncio.gather(submit_task, return_exceptions=True)
+            raise JobAdmissionUnavailableError("Submission lease was lost before the job became durable")
+        await submit_task
     except IntegrityError as e:
         # A caller-supplied job_id collided with an existing job. NAT's _create_job
         # inserts job_info first, so the collision fails before any state of OURS is
         # created. The colliding job belongs to someone else — we must NOT run the
         # rollback path, which unconditionally deletes that job's info/events/access
         # rows. Surface a conflict so the route can return HTTP 409.
+        await _stop_submission_lease()
+        await _release_submission_reservations()
         logger.info("Rejected colliding job_id %s on async submit", resolved_job_id)
         raise JobIdConflictError(f"Job already exists: {resolved_job_id}") from e
-    except Exception:
-        # NAT's submit_job commits the job_info row before it hands the task to Dask,
-        # so a post-commit failure (scheduler unreachable, serialization error,
-        # Variable.set timeout) leaves an ownerless job_info row. Roll it back.
-        await _rollback_partial_submission()
-        raise
-
-    # Conversation that originated this job (from the request's conversation-id), recorded so
-    # report follow-up can default to "the last report in this conversation". None when the
-    # client sent no conversation-id (e.g. a CLI that doesn't thread one) — then no linkage.
-    submission_conversation_id = _current_conversation_id()
-    try:
-        await loop.run_in_executor(
-            None, create_job_access, resolved_job_id, principal, db_url, submission_conversation_id, agent_type
+    except asyncio.CancelledError:
+        submit_task.cancel()
+        await asyncio.shield(asyncio.gather(submit_task, return_exceptions=True))
+        await asyncio.shield(_stop_submission_lease())
+        logger.warning(
+            "Submission of %s was cancelled; retaining its expiring ownership reservation because Dask enqueue "
+            "may already have occurred",
+            resolved_job_id,
         )
-    except Exception:
-        # We successfully created this job above, then ownership persistence failed;
-        # roll back our own partial state. (Safe: this id was newly created by us.)
-        await _rollback_partial_submission()
         raise
+    except Exception:
+        await _stop_submission_lease()
+        # NAT may have enqueued a Dask Future before Variable.set (or another
+        # later step) failed. Ownership already exists; retaining both rows is
+        # safer than deleting metadata/releasing capacity under a running task.
+        # If NAT never created job_info, the expiring reservations are reclaimed.
+        logger.warning(
+            "Async submission failed for %s; retaining expiring ownership/admission state because Dask enqueue "
+            "may already have occurred",
+            resolved_job_id,
+        )
+        raise
+    else:
+        await _stop_submission_lease()
 
     logger.info(
         "Submitted %s job %s for owner %s (%s:%s)",

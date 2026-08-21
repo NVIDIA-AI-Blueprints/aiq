@@ -12,6 +12,7 @@ import {
   hasExpiredDeepResearchReport,
   getPersistedActivityFlags,
   hasNoUserChatMessages,
+  lastUserMessageTime,
 } from './session-activity'
 import type { ChatMessage } from '../types'
 
@@ -41,6 +42,30 @@ describe('hasNoUserChatMessages', () => {
 
   it('returns false when a user message exists', () => {
     expect(hasNoUserChatMessages([makeMessage({ messageType: 'user', content: 'hi' })])).toBe(false)
+  })
+})
+
+describe('lastUserMessageTime', () => {
+  it('honors a role-only user message with no messageType', () => {
+    const when = new Date('2026-05-01T12:00:00Z')
+    expect(
+      lastUserMessageTime([makeMessage({ role: 'user', content: 'hi', timestamp: when })])
+    ).toBe(when.getTime())
+  })
+
+  it('returns the most recent user message time, skipping non-user messages', () => {
+    const when = new Date('2026-05-02T09:00:00Z')
+    expect(
+      lastUserMessageTime([
+        makeMessage({ role: 'user', content: 'earlier', timestamp: new Date('2026-05-01T00:00:00Z') }),
+        makeMessage({ role: 'user', content: 'latest', timestamp: when }),
+        makeMessage({ messageType: 'agent_response', timestamp: new Date('2026-05-03T00:00:00Z') }),
+      ])
+    ).toBe(when.getTime())
+  })
+
+  it('returns null when only assistant/system messages exist', () => {
+    expect(lastUserMessageTime([makeMessage({ role: 'assistant' })])).toBeNull()
   })
 })
 

@@ -9,6 +9,13 @@ The simplest possible configuration: a single shallow research agent with web se
 
 This is a good starting point for understanding the config structure before adding complexity.
 
+```{warning}
+This example preserves the shipped Lightning shallow profile. The NVIDIA API Catalog serving profile has a known
+[shallow citation-output limitation](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog).
+AI-Q fails closed rather than publishing citation-incomplete drafts. Use Nemotron Ultra for the shallow role or a
+validated self-hosted Lightning profile when reliability is the priority.
+```
+
 ## Configuration
 
 ```yaml
@@ -25,20 +32,21 @@ general:
 # ---------------------------------------------------------------------------
 # LLMs
 # ---------------------------------------------------------------------------
-# A single LLM is sufficient for shallow research. The NIM type connects to
-# NVIDIA's hosted inference endpoint. Adjust temperature for creativity vs
-# factuality trade-off.
+# A single role-specific Lightning LLM is sufficient for shallow research. The NIM type connects
+# to NVIDIA API Catalog.
 llms:
   research_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.1       # Low temperature for factual research
-    top_p: 0.3
-    max_tokens: 16384      # Max output length per LLM call
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 8192       # Max output length per LLM call
     num_retries: 5         # Retry on transient API failures
+    parallel_tool_calls: false
     chat_template_kwargs:
-      enable_thinking: true  # Enable chain-of-thought reasoning
+      enable_thinking: true
 
 # ---------------------------------------------------------------------------
 # Tools

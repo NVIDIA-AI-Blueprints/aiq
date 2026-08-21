@@ -56,14 +56,15 @@ the reusable image. `openshell/install_gateway.sh` is the explicit Apple Silicon
 entry point for installing the official packaged gateway. `openshell/start_openshell_gateway.sh`
 validates an authenticated registered
 gateway and performs a disposable version/policy/selector/execution/cleanup probe. AI-Q
-then owns one attested physical sandbox per job. OpenShell `0.0.80` is the supported
-version because it contains the required policy-revision and request-label fixes.
+then owns one attested physical sandbox per job. OpenShell `0.0.88` is the supported
+version because it adds the Linux hard-Landlock file-path fix while retaining the required
+policy-revision and request-label capabilities.
 The quick start below is the Linux production pairing; activate the repository virtual
 environment first. macOS requires the explicit local-demo pairing in the canonical guide.
 
 ```bash
 source .venv/bin/activate
-./scripts/openshell/setup_openshell.sh --openshell-version 0.0.80 --policy offline
+./scripts/openshell/setup_openshell.sh --openshell-version 0.0.88 --policy offline
 ./scripts/openshell/start_openshell_gateway.sh --gateway-name openshell
 ./scripts/start_e2e.sh --config_file configs/config_openshell.yml
 ```

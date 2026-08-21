@@ -40,12 +40,10 @@ graph TD
     I --> J[Concurrent reusable researcher workers<br/>one worker per ResearchQuery]
     J --> K[Return structured ResearchNotes<br/>and persist /shared/research_note_*.json]
     K --> L[Normative task: writer-agent]
-    L --> M[Writer reads plan, notes, and captured sources<br/>then writes /shared/output.md]
-    M --> O[Runtime loads writer output]
-    K -.->|Defensive path if writer delegation is missed| S[Orchestrator emits inline Markdown]
-    S --> U{Passes substantive report gate?}
-    U -->|yes| O
-    U -->|no| V[Error: no final Markdown]
+    L --> M[Writer commits /shared/output.md<br/>through the shared-state backend]
+    M --> N{Current bytes match<br/>this run's writer digest?}
+    N -->|yes| O[Runtime loads writer output]
+    N -->|no| V[Error: writer_output_not_committed]
     O --> T{Citation verification enabled?}
     T -->|yes| P[Verify citations against captured sources]
     T -->|no| Q[Skip citation verification]
@@ -90,16 +88,25 @@ sequenceDiagram
     end
     B-->>O: Notes plus /shared/research_note_*.json
     O->>W: task(plan, notes, captured sources)
-    W-->>O: Write /shared/output.md
+    W-->>O: Commit /shared/output.md
     O-->>X: Writer completion marker
+    X->>X: Verify current bytes against the run-local writer digest
     X->>X: Load, optionally verify citations, and sanitize
 ```
 
 The orchestrator serializes dependent stages and tracks progress. It does not
-call source tools directly. The normative flow delegates final synthesis to
-the writer; source access is delegated to the planner and researcher workers.
-If the writer output file is missing, the runtime has a defensive fallback for
-a substantive report emitted inline by the orchestrator.
+call source tools directly. Final synthesis is delegated exclusively to the
+writer; source access is delegated to the planner and researcher workers. A
+non-empty file is not sufficient proof of completion: the runtime accepts the
+report only when its exact UTF-8 bytes match the digest recorded after a
+successful writer mutation in the current run. Missing, stale, or modified
+output fails closed with ``writer_output_not_committed``.
+
+The commit proof is intentionally run-local and is not restored from a
+checkpoint after a process restart. The guarantee is one overwrite-capable
+shared-state backend update followed by byte-exact digest verification; it does
+not claim cross-provider filesystem atomicity. A resumed run without its proof
+therefore fails closed rather than trusting pre-existing output.
 
 ## Runtime Roles
 
@@ -116,6 +123,27 @@ DeepAgents root graph. Researcher workers are different: they are invocations
 of one reusable, structured-output runnable behind the orchestrator-only
 `run_research_batch` tool. They do not appear as `task()` subagents and do
 not manage top-level workflow todos.
+
+## Shared State, Skills, and Execution Boundary
+
+The shared-state and skills boxes in the architecture diagram represent
+runtime dependencies, not additional agents:
+
+| Boundary | Current implementation |
+| -------- | ---------------------- |
+| Shared research state | The host-side `StateBackend` mounted at `/shared/` stores the source-routing plan, research plan, structured notes, and `/shared/output.md`. DeepAgents graph state separately carries progress todos and file metadata. |
+| Skill definitions | Built-in skill collections are mounted from the host at `/skills/`. Filesystem permissions expose only the collections assigned to a role and deny writes to the skill tree. |
+| Sandbox workdir | When a sandbox is configured, the default filesystem route and `execute` tool use one provider sandbox per deep-research job. Agents within that job share the provider runtime; separate jobs receive separate sandboxes. |
+| Inference and source tools | LLM calls, source-tool calls, credentials, orchestration state, and `/shared/` remain in the AI-Q process. Only generated code and job-workspace files cross the sandbox boundary. |
+
+The shipped `config_domain_routing_and_skills.yml` profile assigns the
+`research` collection to researcher workers and the `synthesis` and
+`visualization` collections to the writer. The research collection currently
+includes table analysis, forecast analysis, and lightweight calculations. The
+synthesis collection includes long-form and prediction report writers, and the
+visualization collection provides chart generation. A skill provides
+instructions; only skills that invoke `execute` require the optional sandbox.
+Modal and OpenShell implement the same provider-neutral job-scoped contract.
 
 ## Data Source Boundary
 
@@ -147,11 +175,11 @@ The roles use middleware appropriate to their contracts:
 
 | Role | Relevant behavior |
 | ---- | ----------------- |
-| Orchestrator | DeepAgents task, todo, and filesystem support; source-routing guard; tool-name validation restricted to helpers and `run_research_batch`; tool and model retry handling |
-| Source router | Minimal filesystem and retry middleware; catalog lookup and `write_file` only |
-| Planner | Source capture, retries, filesystem access, todo suppression, structured `ResearchPlan` validation, and automatic plan persistence |
-| Researcher worker | Filesystem context, optional skills, summarization, source capture, retries, and structured `ResearchNotes` validation |
-| Writer | Filesystem context, optional synthesis skills, source-registry access, retries, and todo suppression; no source-search tools |
+| Orchestrator | DeepAgents task, todo, and filesystem support; source-routing and final-report ownership guards; tool-name validation restricted to helpers and `run_research_batch`; tool and model retry handling |
+| Source router | Minimal filesystem and retry middleware; catalog lookup and `write_file` only; final-report mutation denied |
+| Planner | Source capture, retries, filesystem access, todo suppression, structured `ResearchPlan` validation, automatic plan persistence, and final-report mutation denial |
+| Researcher worker | Filesystem context, optional skills, summarization, source capture, retries, structured `ResearchNotes` validation, and final-report mutation denial |
+| Writer | Filesystem context, optional synthesis skills, source-registry access, retries, todo suppression, overwrite-safe `/shared/output.md` commit, and run-local digest verification; no source-search tools |
 
 The root graph is constructed with `create_deep_agent`. The reusable
 researcher runnable is constructed separately with `create_agent`, which is
@@ -200,6 +228,7 @@ for configuration details.
 | `skills` | `FunctionRef`, inline `deep_research_skills`, or `None` | `None` | Optional built-in skill assignments by agent name |
 | `sandbox` | `FunctionRef`, inline `deep_research_sandbox`, or `None` | `None` | Optional sandbox profile for DeepAgents `execute` support |
 | `enable_citation_verification` | `bool` | `true` | Verify generated citations against captured sources after final report extraction |
+| `resource_limits` | `DeepResearchResourceLimits` | hard ceilings | Per-job request, graph-time, plan, report, shared-state, note, todo, query, and source-call budgets; configurable downward only |
 | `verbose` | `bool` | `true` | Enable detailed logging |
 
 **Example YAML:**
@@ -208,21 +237,32 @@ for configuration details.
 functions:
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_llm
-    source_router_llm: nemotron_super_llm
-    planner_llm: nemotron_llm
-    researcher_llm: nemotron_llm
-    writer_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     enable_source_router: true
     enable_citation_verification: true
     max_research_concurrency: 6
+    resource_limits:
+      max_research_queries: 20
+      max_source_tool_calls: 100
     verbose: true
     tools:
       - web_search_tool
 ```
 
+The researcher filesystem view treats `/shared/**` as read-only. Researchers
+return one schema-validated `ResearchNotes` object per accepted `ResearchQuery`;
+the parent `run_research_batch` tool alone applies note count/byte quotas and
+persists the note. Planner persistence and top-level todo replacement are
+similarly centralized and validated before shared-state mutation. See the
+[Configuration Reference](../../customization/configuration-reference.md#deep_research_agent)
+for all enforced ceilings.
+
 ```{note}
-**Nemotron Super — Build Endpoint Availability:** Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but Build API endpoints have limited availability due to high demand (HTTP 429/503 responses). The default configs use Nemotron Super for the `researcher_llm` role. For production deployments requiring consistent throughput, self-hosting via a [Brev Launchable](https://brev.nvidia.com/launchable/deploy?launchableID=nvidia-official-nemotron-super-49b-v1) is recommended. Refer to [Troubleshooting](../../resources/troubleshooting.md#nemotron-super--build-endpoint-availability) for details.
+**Hosted Endpoint Availability:** The default deep researcher uses Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) for every role, including `writer_llm`. Shared hosted endpoints can have limited availability during high demand (HTTP 429/503 responses). For production deployments requiring consistent throughput, refer to the [self-hosting guidance](../../resources/troubleshooting.md#nemotron-hosted-endpoint-availability).
 ```
 
 ## Prompt Templates
@@ -288,11 +328,18 @@ edit. The writer performs no new research, writes the complete final answer to
 `/shared/output.md`, and returns a short completion marker. The runtime loads
 the Markdown from that file.
 
-This is the normative synthesis contract. As a defensive compatibility path,
-`_salvage_inline_report()` accepts the orchestrator's final message when the
-output file is missing, but only if the message is substantive Markdown: at
-least 400 characters with a Markdown heading and not merely the writer
-completion marker. Otherwise, missing writer output remains an error.
+This is the only synthesis contract. The runtime accepts only non-empty writer
+output whose exact UTF-8 bytes match the digest recorded after a successful
+writer mutation in the current run. After one bounded corrective turn, missing,
+stale, or mismatched output fails closed with
+``writer_output_not_committed``; inline orchestrator messages are not salvaged
+as final reports.
+
+``/shared/output.md`` is the sole writer-facing path. When
+``CompositeBackend`` routes ``/shared/`` through ``StateBackend``, raw graph
+state may represent that file under the internal route-stripped key
+``/output.md``. Ownership and digest checks recognize that internal alias, but
+agents must not target it directly.
 
 ### Phase 5: Citation Verification (Post-Processing)
 

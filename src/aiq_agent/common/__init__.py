@@ -36,9 +36,11 @@ from nat.data_models.api_server import UserMessageContentRoleType
 
 from .callbacks import VerboseTraceCallback
 from .citation_verification import CitationVerificationOutcome
+from .citation_verification import CitationVerificationOutcomeState
 from .citation_verification import CitationVerificationReason
 from .citation_verification import CitationVerificationResult
 from .citation_verification import CitationVerificationStatus
+from .citation_verification import SerializedCitationVerificationOutcome
 from .citation_verification import SourceRegistry
 from .citation_verification import citation_verification_outcome_dict
 from .citation_verification import coerce_citation_verification_outcome
@@ -66,6 +68,7 @@ from .prompt_utils import load_prompt
 from .prompt_utils import render_prompt_template
 from .tool_validation import format_tool_unavailability_error
 from .tool_validation import format_user_facing_tool_error
+from .tool_validation import validate_research_source_configuration
 from .tool_validation import validate_tool_availability
 
 logger = logging.getLogger(__name__)
@@ -79,9 +82,11 @@ __all__ = [
     "LLMProvider",
     "LLMRole",
     "CitationVerificationOutcome",
+    "CitationVerificationOutcomeState",
     "CitationVerificationReason",
     "CitationVerificationResult",
     "CitationVerificationStatus",
+    "SerializedCitationVerificationOutcome",
     "SourceRegistry",
     "VerboseTraceCallback",
     "all_mapped_tools_filtered_out",
@@ -108,6 +113,7 @@ __all__ = [
     "reset_session_registry",
     "sanitize_report",
     "set_session_registry",
+    "validate_research_source_configuration",
     "validate_tool_availability",
     "verify_citations",
 ]

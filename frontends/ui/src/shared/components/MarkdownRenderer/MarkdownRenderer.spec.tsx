@@ -4,6 +4,7 @@
 import { render, screen, fireEvent } from '@/test-utils'
 import { describe, test, expect, vi } from 'vitest'
 import { MarkdownRenderer } from './MarkdownRenderer'
+import type { SourceRef } from '@/shared/components/Sources/types'
 
 describe('MarkdownRenderer', () => {
   describe('basic rendering', () => {
@@ -346,5 +347,84 @@ Visit [our site](https://example.com) for more.
       // Should render without errors
       expect(screen.getByText(/Bold with/)).toBeInTheDocument()
     })
+  })
+})
+
+const answerSources: SourceRef[] = [
+  {
+    id: 's1',
+    index: 1,
+    title: 'NVIDIA shipped record volume.',
+    kind: 'web',
+    label: 'nvidia.com',
+    url: 'https://www.nvidia.com/news',
+    snippet: 'Record shipments across the fleet.',
+  },
+]
+
+describe('MarkdownRenderer answer variant', () => {
+  test('applies the answer-prose scale on the wrapper', () => {
+    const { container } = render(<MarkdownRenderer content="An answer." variant="answer" />)
+    expect(container.querySelector('.answer-prose')).toBeInTheDocument()
+  })
+
+  test('default variant does not apply the answer-prose scale', () => {
+    const { container } = render(<MarkdownRenderer content="An answer." />)
+    expect(container.querySelector('.answer-prose')).not.toBeInTheDocument()
+  })
+
+  test('renders an inline [n] marker as a citation chip resolving to the source', () => {
+    render(
+      <MarkdownRenderer
+        content="NVIDIA shipped record volume [1]."
+        variant="answer"
+        sources={answerSources}
+      />
+    )
+    const chip = screen.getByLabelText('Source 1: nvidia.com')
+    expect(chip.querySelector('sup')).toHaveTextContent('1')
+    expect(chip).toHaveAttribute('href', 'https://www.nvidia.com/news')
+  })
+
+  test('does not turn [n] markers into chips without sources (default variant)', () => {
+    render(<MarkdownRenderer content="A fact [1] with no chip." />)
+    expect(screen.queryByLabelText(/^Source 1/)).not.toBeInTheDocument()
+    expect(screen.getByText(/A fact/)).toBeInTheDocument()
+  })
+
+  test('a chip focus reveals a popover with the source snippet', () => {
+    render(
+      <MarkdownRenderer
+        content="Record volume [1]."
+        variant="answer"
+        sources={answerSources}
+      />
+    )
+    fireEvent.focus(screen.getByLabelText('Source 1: nvidia.com'))
+    expect(screen.getByRole('tooltip')).toHaveTextContent('Record shipments across the fleet.')
+  })
+})
+
+describe('MarkdownRenderer math (KaTeX)', () => {
+  test('renders display math from a $$...$$ block', () => {
+    const { container } = render(<MarkdownRenderer content={'$$a^2 + b^2 = c^2$$'} />)
+    expect(container.querySelector('.katex')).toBeInTheDocument()
+  })
+
+  test('leaves a single-dollar amount as plain text (no math parsing)', () => {
+    const { container } = render(<MarkdownRenderer content={'It costs $5 and $10 today.'} />)
+    expect(container.querySelector('.katex')).not.toBeInTheDocument()
+    expect(container.textContent).toContain('$5')
+  })
+})
+
+describe('MarkdownRenderer chart fences fall through to code', () => {
+  test('a ```chart block renders as a code block, not a chart', () => {
+    const spec = '{ "type": "bar", "data": [] }'
+    const { container } = render(
+      <MarkdownRenderer content={'```chart\n' + spec + '\n```'} variant="answer" />
+    )
+    expect(container.querySelector('.result-chart')).toBeFalsy()
+    expect(container.textContent).toContain('"type": "bar"')
   })
 })

@@ -10,6 +10,17 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 
+def _builder_with_configs(*config_names: str) -> SimpleNamespace:
+    configured = set(config_names)
+
+    def _get_function_config(config_name: str):
+        if config_name not in configured:
+            raise ValueError(f"Function `{config_name}` not found")
+        return SimpleNamespace()
+
+    return SimpleNamespace(get_function_config=_get_function_config)
+
+
 def test_agent_config_defaults_to_public():
     from aiq_api.registry import AgentConfig
 
@@ -47,7 +58,7 @@ def test_default_registry_contains_internal_report_rewriter():
 
 
 @pytest.mark.asyncio
-async def test_list_agents_excludes_internal_agents(monkeypatch):
+async def test_list_agents_includes_only_configured_public_agents(monkeypatch):
     import aiq_api.routes.jobs as jobs_routes
     from aiq_api.registry import AgentConfig
 
@@ -59,6 +70,11 @@ async def test_list_agents_excludes_internal_agents(monkeypatch):
                 class_path="aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
                 config_name="deep_research_agent",
                 description="Deep",
+            ),
+            "shallow_researcher": AgentConfig(
+                class_path="aiq_agent.agents.shallow_researcher.agent.ShallowResearcherAgent",
+                config_name="shallow_research_agent",
+                description="Shallow",
             ),
             "report_rewriter": AgentConfig(
                 class_path="aiq_agent.agents.report_rewriter.agent.ReportRewriterAgent",
@@ -72,7 +88,7 @@ async def test_list_agents_excludes_internal_agents(monkeypatch):
     app = FastAPI()
     await jobs_routes.register_job_routes(
         app,
-        builder=SimpleNamespace(),
+        builder=_builder_with_configs("deep_research_agent"),
         worker=SimpleNamespace(_dask_available=False, _job_store=None),
     )
 
@@ -86,5 +102,58 @@ async def test_list_agents_excludes_internal_agents(monkeypatch):
                 "agent_type": "deep_researcher",
                 "description": "Deep",
             }
+        ]
+    }
+
+
+@pytest.mark.asyncio
+async def test_list_agents_includes_configured_shallow_researcher(monkeypatch):
+    import aiq_api.routes.jobs as jobs_routes
+    from aiq_api.registry import AgentConfig
+
+    monkeypatch.setattr(
+        jobs_routes,
+        "AGENT_REGISTRY",
+        {
+            "deep_researcher": AgentConfig(
+                class_path="aiq_agent.agents.deep_researcher.agent.DeepResearcherAgent",
+                config_name="deep_research_agent",
+                description="Deep",
+            ),
+            "shallow_researcher": AgentConfig(
+                class_path="aiq_agent.agents.shallow_researcher.agent.ShallowResearcherAgent",
+                config_name="shallow_research_agent",
+                description="Shallow",
+            ),
+            "report_rewriter": AgentConfig(
+                class_path="aiq_agent.agents.report_rewriter.agent.ReportRewriterAgent",
+                config_name="deep_research_agent",
+                description="Internal",
+                public=False,
+            ),
+        },
+    )
+
+    app = FastAPI()
+    await jobs_routes.register_job_routes(
+        app,
+        builder=_builder_with_configs("deep_research_agent", "shallow_research_agent"),
+        worker=SimpleNamespace(_dask_available=False, _job_store=None),
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/v1/jobs/async/agents")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "agents": [
+            {
+                "agent_type": "deep_researcher",
+                "description": "Deep",
+            },
+            {
+                "agent_type": "shallow_researcher",
+                "description": "Shallow",
+            },
         ]
     }

@@ -30,6 +30,11 @@ def _args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Registered OpenShell gateway name; default uses the active gateway",
     )
     parser.add_argument(
+        "--workspace",
+        default=os.getenv("AIQ_OPENSHELL_WORKSPACE") or "default",
+        help="OpenShell workspace that scopes live-test sandbox operations",
+    )
+    parser.add_argument(
         "--policy",
         default=os.getenv(
             "AIQ_OPENSHELL_POLICY_FILE",
@@ -62,6 +67,7 @@ def _environment(args: argparse.Namespace, source: Mapping[str, str] | None = No
         env["AIQ_OPENSHELL_GATEWAY_NAME"] = args.gateway
     else:
         env.pop("AIQ_OPENSHELL_GATEWAY_NAME", None)
+    env["AIQ_OPENSHELL_WORKSPACE"] = args.workspace
     env["AIQ_OPENSHELL_POLICY_FILE"] = args.policy
     env["AIQ_OPENSHELL_IMAGE"] = args.image
     if args.expected_gateway_version:

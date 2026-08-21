@@ -45,8 +45,8 @@ def inspector() -> ModuleType:
 def test_release_contract_is_pinned_to_certified_installer(contract_module: ModuleType) -> None:
     contract = contract_module.load_contract()
 
-    assert contract.version == "0.0.80"
-    assert contract.release_tag == "v0.0.80"
+    assert contract.version == "0.0.88"
+    assert contract.release_tag == "v0.0.88"
     assert (
         contract.installer_sha256
         == "c15d6cb8090e1c7c8d79a320b5bcbdaf1c15c2363942d81e84b56e03b836249e"  # pragma: allowlist secret
@@ -59,10 +59,10 @@ def _patch_common(
     monkeypatch: pytest.MonkeyPatch,
     *,
     gateway_type: str = "local",
-    gateway_version: str | None = "0.0.80",
+    gateway_version: str | None = "0.0.88",
 ) -> None:
-    monkeypatch.setattr(inspector.importlib.metadata, "version", lambda _name: "0.0.80")
-    monkeypatch.setattr(inspector, "_cli_version", lambda _path: "0.0.80")
+    monkeypatch.setattr(inspector.importlib.metadata, "version", lambda _name: "0.0.88")
+    monkeypatch.setattr(inspector, "_cli_version", lambda _path: "0.0.88")
     monkeypatch.setattr(inspector, "_gateway_type", lambda _path, _name: gateway_type)
     monkeypatch.setattr(inspector, "_live_gateway_version", lambda _name: gateway_version)
 
@@ -72,13 +72,13 @@ def test_matching_local_components_are_accepted(inspector: ModuleType, monkeypat
     monkeypatch.setattr(
         inspector,
         "_homebrew_components",
-        lambda: (["nvidia/openshell/openshell"], "nvidia/openshell/openshell", "0.0.80", "0.0.80"),
+        lambda: (["nvidia/openshell/openshell"], "nvidia/openshell/openshell", "0.0.88", "0.0.88"),
     )
 
     report = inspector.inspect_components(gateway_name="openshell", system="Darwin")
 
     assert report.reason_code is None
-    assert report.live_gateway_version == "0.0.80"
+    assert report.live_gateway_version == "0.0.88"
 
 
 def test_missing_local_package_prints_exact_installer(inspector: ModuleType, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -99,7 +99,7 @@ def test_matching_but_stopped_local_gateway_recommends_launcher(
     monkeypatch.setattr(
         inspector,
         "_homebrew_components",
-        lambda: (["nvidia/openshell/openshell"], "nvidia/openshell/openshell", "0.0.80", "0.0.80"),
+        lambda: (["nvidia/openshell/openshell"], "nvidia/openshell/openshell", "0.0.88", "0.0.88"),
     )
 
     report = inspector.inspect_components(gateway_name="openshell", system="Darwin")
@@ -110,7 +110,7 @@ def test_matching_but_stopped_local_gateway_recommends_launcher(
 
 @pytest.mark.parametrize(
     ("formula_version", "packaged_version"),
-    [("0.0.72", "0.0.72"), ("0.0.80", "0.0.72")],
+    [("0.0.72", "0.0.72"), ("0.0.88", "0.0.72")],
 )
 def test_stale_local_package_is_classified(
     inspector: ModuleType,
@@ -154,20 +154,20 @@ def test_bare_formula_is_preserved_as_ambiguous(inspector: ModuleType, monkeypat
         if args == ["services", "list", "--json"]:
             return "[]"
         if args == ["list", "--versions", "openshell"]:
-            return "openshell 0.0.80"
+            return "openshell 0.0.88"
         if args == ["--prefix", "openshell"]:
             return "/opt/homebrew/opt/openshell"
         return None
 
     monkeypatch.setattr(inspector, "_run", fake_run)
-    monkeypatch.setattr(inspector, "_cli_version", lambda _path: "0.0.80")
+    monkeypatch.setattr(inspector, "_cli_version", lambda _path: "0.0.88")
 
     formulas, formula, formula_version, packaged_version = inspector._homebrew_components()
 
     assert formulas == ["openshell"]
     assert formula == "openshell"
-    assert formula_version == "0.0.80"
-    assert packaged_version == "0.0.80"
+    assert formula_version == "0.0.88"
+    assert packaged_version == "0.0.88"
 
     report = inspector.inspect_components(gateway_name="openshell", system="Darwin")
 
@@ -194,7 +194,7 @@ def test_sdk_mismatch_recommends_aiq_environment_repair(
     report = inspector.inspect_components(gateway_name="enterprise", system="Linux")
 
     assert report.reason_code == "component_version_mismatch"
-    assert "setup_openshell.sh --openshell-version 0.0.80" in str(report.remediation)
+    assert "setup_openshell.sh --openshell-version 0.0.88" in str(report.remediation)
 
 
 def test_json_output_contains_only_allowlisted_fields(
@@ -203,13 +203,13 @@ def test_json_output_contains_only_allowlisted_fields(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     report = inspector.ComponentReport(
-        certified_version="0.0.80",
-        sdk_version="0.0.80",
-        virtualenv_cli_version="0.0.80",
+        certified_version="0.0.88",
+        sdk_version="0.0.88",
+        virtualenv_cli_version="0.0.88",
         homebrew_formula=None,
         homebrew_formula_version=None,
         packaged_cli_version=None,
-        live_gateway_version="0.0.80",
+        live_gateway_version="0.0.88",
         gateway_type="remote",
         reason_code=None,
         remediation=None,

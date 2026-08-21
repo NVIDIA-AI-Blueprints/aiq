@@ -15,14 +15,20 @@
 
 """Tests for citation verification module."""
 
+import logging
+
 import pytest
 
 from aiq_agent.common.citation_verification import _PARSER_REGISTRY
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
+from aiq_agent.common.citation_verification import EmptySourceRegistryReason
 from aiq_agent.common.citation_verification import SourceEntry
 from aiq_agent.common.citation_verification import SourceRegistry
 from aiq_agent.common.citation_verification import _normalize_url
 from aiq_agent.common.citation_verification import _parse_citation_key
+from aiq_agent.common.citation_verification import classify_empty_source_registry_reason
+from aiq_agent.common.citation_verification import clean_extracted_url
+from aiq_agent.common.citation_verification import extract_http_urls
 from aiq_agent.common.citation_verification import extract_sources_from_tool_result
 from aiq_agent.common.citation_verification import register_source_parser
 from aiq_agent.common.citation_verification import sanitize_report
@@ -36,6 +42,78 @@ def fixture_restore_parser_registry():
     yield
     _PARSER_REGISTRY.clear()
     _PARSER_REGISTRY.extend(original)
+
+
+class TestEmptySourceRegistryContract:
+    """Tests for the public empty-source failure contract."""
+
+    @pytest.mark.parametrize(
+        ("reason", "expected_message"),
+        [
+            (
+                EmptySourceRegistryReason.NO_SOURCES_SELECTED,
+                "No data sources are selected. Select at least one data source and run the research again.",
+            ),
+            (
+                EmptySourceRegistryReason.NO_SOURCE_RESULTS,
+                "The selected data sources returned no results. "
+                "Try rephrasing the question or selecting different data sources.",
+            ),
+            (
+                EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE,
+                "The selected data source tools are currently unavailable. "
+                "Check their configuration or select different data sources and run the research again.",
+            ),
+        ],
+    )
+    def test_reason_has_safe_actionable_public_message(self, reason, expected_message):
+        error = EmptySourceRegistryError(reason=reason)
+
+        assert error.reason is reason
+        assert error.public_message == expected_message
+        assert "Please try again" not in error.public_message
+
+    def test_reason_values_are_stable(self):
+        assert [reason.value for reason in EmptySourceRegistryReason] == [
+            "no_sources_selected",
+            "no_source_results",
+            "source_tools_unavailable",
+        ]
+
+    @pytest.mark.parametrize(
+        ("data_sources", "available_count", "unavailable_tools", "expected"),
+        [
+            ([], 0, ["web_search (missing key)"], EmptySourceRegistryReason.NO_SOURCES_SELECTED),
+            (["web"], 0, ["web_search (missing key)"], EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE),
+            (None, 0, ["web_search (missing key)"], EmptySourceRegistryReason.SOURCE_TOOLS_UNAVAILABLE),
+            (["web"], 1, ["scholar_search (missing key)"], EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+            (["web"], 1, [], EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+            (None, 0, [], EmptySourceRegistryReason.NO_SOURCE_RESULTS),
+        ],
+    )
+    def test_classification_distinguishes_selection_availability_and_empty_results(
+        self, data_sources, available_count, unavailable_tools, expected
+    ):
+        assert classify_empty_source_registry_reason(data_sources, available_count, unavailable_tools) is expected
+
+    def test_preserves_compatibility_fields_and_optional_generated_answer(self):
+        error = EmptySourceRegistryError(
+            "deep research",
+            unavailable_tools=["web_search"],
+            available_count=2,
+            generated_answer="Sanitized draft",
+        )
+
+        assert error.agent_type == "deep research"
+        assert error.unavailable_tools == ["web_search"]
+        assert error.available_count == 2
+        assert error.generated_answer == "Sanitized draft"
+        assert error.reason is EmptySourceRegistryReason.NO_SOURCE_RESULTS
+        assert error.public_response == (
+            "Sanitized draft\n\n"
+            "The selected data sources returned no results. "
+            "Try rephrasing the question or selecting different data sources."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -320,6 +398,37 @@ class TestSourceRegistry:
 class TestGenericUrlExtractor:
     """Tests for the generic URL extractor (works for all tool output formats)."""
 
+    @pytest.mark.parametrize(
+        "candidate",
+        [
+            "https://literal.example/path](not-a-markdown-target)",
+            "https://literal.example/path](https://target.example/incomplete",
+        ],
+    )
+    def test_literal_or_incomplete_markdown_delimiter_is_preserved(self, candidate):
+        assert clean_extracted_url(candidate) == candidate
+
+    def test_complete_http_label_and_target_selects_markdown_target(self):
+        candidate = "https://label.example/path](https://target.example/article)"
+
+        assert clean_extracted_url(candidate) == "https://target.example/article"
+
+    @pytest.mark.parametrize("punctuation", [".", ",", ";"])
+    def test_complete_markdown_link_followed_by_punctuation_selects_target(self, punctuation):
+        content = f"[https://label.example/path](https://target.example/article){punctuation}"
+
+        assert extract_http_urls(content) == ["https://target.example/article"]
+
+    def test_markdown_target_preserves_balanced_parentheses(self):
+        content = "[https://label.example/path](https://en.wikipedia.org/wiki/Function_(mathematics))."
+
+        assert extract_http_urls(content) == ["https://en.wikipedia.org/wiki/Function_(mathematics)"]
+
+    def test_extract_http_urls_ignores_non_http_schemes(self):
+        content = "ftp://files.example/archive mailto:user@example.com https://secure.example http://plain.example"
+
+        assert extract_http_urls(content) == ["https://secure.example", "http://plain.example"]
+
     def test_tavily_xml_format(self):
         content = (
             '<Document href="https://example.com/article">\n'
@@ -385,6 +494,45 @@ class TestGenericUrlExtractor:
             source_id="news_search",
         )
         assert entries == []
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "Error 432: search request rejected",
+            "Search Error 432",
+            "Search failed with status 429",
+            '{"status_code": 429, "error": "rate limited"}',
+        ],
+    )
+    def test_provider_failure_statuses_are_not_citable(self, content):
+        entries = extract_sources_from_tool_result("web_search_tool", content, source_id="web_search")
+
+        assert entries == []
+
+    def test_error_payload_urls_are_not_citable(self):
+        content = '{"status": 432, "error": "see https://provider.example/errors/432"}'
+
+        entries = extract_sources_from_tool_result("web_search_tool", content, source_id="web_search")
+
+        assert entries == []
+
+    def test_typed_error_result_urls_are_not_citable(self):
+        entries = extract_sources_from_tool_result(
+            "web_search_tool",
+            "See https://provider.example/errors/unknown",
+            source_id="web_search",
+            result_status="error",
+        )
+
+        assert entries == []
+
+    def test_valid_http_status_explanation_remains_citable(self):
+        content = "An HTTP 404 status code means not found. See https://developer.mozilla.org/en-US/docs/Web/HTTP/404"
+
+        entries = extract_sources_from_tool_result("web_search_tool", content, source_id="web_search")
+
+        assert len(entries) == 1
+        assert entries[0].url == "https://developer.mozilla.org/en-US/docs/Web/HTTP/404"
 
     def test_duplicate_urls_deduplicated(self):
         content = "See https://example.com/page and also https://example.com/page for reference."
@@ -541,6 +689,31 @@ class TestVerifyCitations:
         reg.add(SourceEntry(url="https://valid.com/article2", title="Article 2", source_type="tavily"))
         reg.add(SourceEntry(citation_key="report.pdf, p.15", title="report.pdf", source_type="knowledge_layer"))
         return reg
+
+    def test_verification_and_sanitization_logs_do_not_expose_source_locators(self, caplog):
+        registry = SourceRegistry()
+        private_url = "https://private.example/document?access_token=secret-value"
+        rejected_url = "https://fabricated.example/private-path"
+        citation_key = "confidential-plan.pdf, p.7"
+        shortened_url = "https://bit.ly/private-report"
+        registry.add(SourceEntry(url=private_url, title="Private", source_type="web"))
+        registry.add(SourceEntry(citation_key=citation_key, source_type="knowledge_layer"))
+        report = (
+            "Supported [1] [2], unsupported [3].\n\n"
+            "## Sources\n"
+            f"[1] Private: {private_url}\n"
+            f"[2] {citation_key}\n"
+            f"[3] Fabricated: {rejected_url}"
+        )
+
+        with caplog.at_level(logging.DEBUG, logger="aiq_agent.common.citation_verification"):
+            verify_citations(report, registry)
+            sanitize_report(f"Short link [1].\n\n## Sources\n[1] Short: {shortened_url}")
+
+        assert private_url not in caplog.text
+        assert rejected_url not in caplog.text
+        assert citation_key not in caplog.text
+        assert shortened_url not in caplog.text
 
     def test_empty_registry_returns_unchanged(self):
         registry = SourceRegistry()
@@ -863,6 +1036,19 @@ class TestVerifyCitations:
         result = verify_citations(report, registry)
         assert len(result.valid_citations) == 1
 
+    def test_references_with_markdown_link_urls(self, registry):
+        report = (
+            "Finding [1][2].\n\n"
+            "**References:**\n"
+            "- [1] Article 1 - [https://valid.com/article1](https://valid.com/article1)\n"
+            "- [2] Article 2 - [https://valid.com/article2](https://valid.com/article2)"
+        )
+
+        result = verify_citations(report, registry)
+
+        assert len(result.valid_citations) == 2
+        assert not result.removed_citations
+
     def test_references_bold_without_colon(self, registry):
         """Model sometimes outputs **References** without the colon."""
         report = "Finding [1].\n\n**References**\n- [1] Article 1 - https://valid.com/article1"
@@ -1121,6 +1307,37 @@ def test_combine_citation_verification_outcomes_preserves_unverified_parent():
         parent,
         {"status": "verified", "reason": "valid_citations"},
     ) == {"status": "verified", "reason": "valid_citations"}
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        ("verified", "no_sources"),
+        ("verified", "no_valid_citations"),
+        ("verified", "verification_disabled"),
+        ("verified", "no_tools_available"),
+        ("unverified", "valid_citations"),
+        ("unverified", "verification_disabled"),
+        ("disabled", "valid_citations"),
+        ("disabled", "no_sources"),
+        ("disabled", "no_valid_citations"),
+        ("disabled", "no_tools_available"),
+    ],
+)
+def test_citation_verification_outcome_rejects_contradictory_pairs(status, reason):
+    from aiq_agent.common.citation_verification import CitationVerificationOutcome
+    from aiq_agent.common.citation_verification import coerce_citation_verification_outcome
+
+    assert coerce_citation_verification_outcome({"status": status, "reason": reason}) is None
+    with pytest.raises(ValueError, match="Invalid citation-verification outcome"):
+        CitationVerificationOutcome(status=status, reason=reason)
+
+
+def test_citation_verification_result_requires_explicit_outcome():
+    from aiq_agent.common.citation_verification import CitationVerificationResult
+
+    with pytest.raises(TypeError):
+        CitationVerificationResult(verified_report="# Report")
 
 
 # ---------------------------------------------------------------------------

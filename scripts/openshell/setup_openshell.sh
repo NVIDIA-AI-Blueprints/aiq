@@ -80,7 +80,7 @@ remains owned by the AI-Q runtime.
 Canonical operator guide: docs/source/deployment/openshell.md
 
 Options:
-  --openshell-version VERSION   Certified exact OpenShell version only (0.0.80).
+  --openshell-version VERSION   Certified exact OpenShell version only (0.0.88).
   --policy CHOICE               Sandbox network policy.
                                 Choices: $SUPPORTED_POLICIES
                                 Default: asks in an interactive shell, offline otherwise.
@@ -108,7 +108,7 @@ Examples:
   scripts/openshell/setup_openshell.sh
   scripts/openshell/setup_openshell.sh --policy python-packages
   scripts/openshell/setup_openshell.sh --policy custom --allow github,pypi,nvidia,tavily
-  scripts/openshell/setup_openshell.sh --openshell-version 0.0.80 --policy offline
+  scripts/openshell/setup_openshell.sh --openshell-version 0.0.88 --policy offline
   scripts/openshell/setup_openshell.sh --local-demo --policy offline
 EOF
 }
@@ -790,6 +790,7 @@ wired into the launcher, config, and live suite. These are optional overrides
 for custom shells or remote gateways:
 
   export AIQ_OPENSHELL_GATEWAY_NAME="openshell"
+  export AIQ_OPENSHELL_WORKSPACE="${AIQ_OPENSHELL_WORKSPACE:-default}"
   export AIQ_OPENSHELL_IMAGE="$IMAGE_NAME"
   export AIQ_OPENSHELL_POLICY_FILE="$POLICY_FILE"
   export AIQ_OPENSHELL_EXPECTED_GATEWAY_VERSION="$OPENSHELL_VERSION"

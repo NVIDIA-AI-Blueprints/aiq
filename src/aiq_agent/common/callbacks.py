@@ -20,7 +20,13 @@ from typing import Any
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
 
+from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.common.logging_utils import log_identifier_ref
+
 logger = logging.getLogger(__name__)
+
+
+SUPPRESS_OUTPUT_ARTIFACT_TAG = "aiq:suppress-output-artifact"
 
 
 YELLOW = "\033[33m"
@@ -74,38 +80,38 @@ class ResearchLogger:
         self.logger.info(f"{DIM}[{label}]{RESET_ALL} {message}", *args)
 
     def query(self, query_id: str, query_text: str):
-        self.logger.info(f"{MAGENTA}[Query]{RESET} {query_id}")
+        self.logger.info(f"{MAGENTA}[Query]{RESET} query_ref={log_identifier_ref(query_id)}")
         if self.verbose:
-            self.logger.info(f"{YELLOW}  Query: {query_text}{RESET}")
+            self.logger.info(f"{YELLOW}  Query: {log_content_metadata(query_text)}{RESET}")
 
     def tool_call(self, tool_name: str, input_preview: str | None = None):
         self.logger.info(f"{GREEN}[Tool Call]{RESET} {tool_name}")
         if self.verbose and input_preview:
-            self.logger.info(f"{DIM}  Input: {input_preview[:200]}{RESET_ALL}")
+            self.logger.info(f"{DIM}  Input: {log_content_metadata(input_preview)}{RESET_ALL}")
 
     def tool_result(self, tool_name: str, result_preview: str | None = None, chars: int | None = None):
         msg = f"{tool_name}: {chars} chars" if chars is not None else tool_name
         self.logger.info(f"{GREEN}[Tool Result]{RESET} {msg}")
         if self.verbose and result_preview:
-            self.logger.debug(f"{DIM}  Result: {result_preview[:300]}{RESET_ALL}")
+            self.logger.debug(f"{DIM}  Result: {log_content_metadata(result_preview)}{RESET_ALL}")
 
     def relevancy(self, relevant: int, total: int, reasoning: str | None = None):
         self.logger.info(f"{CYAN}[Relevancy]{RESET} {relevant}/{total} relevant")
         if self.verbose and reasoning:
-            self.logger.info(f"{DIM}  Reasoning: {reasoning}{RESET_ALL}")
+            self.logger.info(f"{DIM}  Reasoning: {log_content_metadata(reasoning)}{RESET_ALL}")
 
     def relevant_item(self, title: str, url: str | None = None):
         if self.verbose:
-            self.logger.info(f"{GREEN}    [Relevant]{RESET} {title}")
+            self.logger.info(f"{GREEN}    [Relevant]{RESET} title_{log_content_metadata(title)}")
             if url:
-                self.logger.info(f"{DIM}      URL: {url}{RESET_ALL}")
+                self.logger.info(f"{DIM}      URL: {log_content_metadata(url)}{RESET_ALL}")
 
     def banner(self, agent_name: str, query: str, **kwargs):
         self.logger.info("=" * 80)
         self.logger.info(f"{BOLD}[{agent_name}]{RESET_ALL} Starting research")
-        self.logger.info(f"{YELLOW}Query:{RESET} {query[:100]}...")
+        self.logger.info(f"{YELLOW}Query:{RESET} {log_content_metadata(query)}")
         for key, value in kwargs.items():
-            self.logger.info(f"{DIM}{key}: {value}{RESET_ALL}")
+            self.logger.info(f"{DIM}{key}: {log_content_metadata(value)}{RESET_ALL}")
         self.logger.info("=" * 80)
 
 
@@ -139,7 +145,7 @@ class VerboseTraceCallback(BaseCallbackHandler):
         if inputs and "messages" in inputs:
             messages = inputs["messages"]
             if messages and hasattr(messages[-1], "content"):
-                self.current_input = messages[-1].content
+                self.current_input = log_content_metadata(messages[-1].content)
 
         if "subagent" in chain_name.lower() or "agent" in chain_name.lower():
             logger.info("%s%s[Chain Start] %s%s", self._get_indent(), CYAN, chain_name, RESET)
@@ -164,8 +170,7 @@ class VerboseTraceCallback(BaseCallbackHandler):
         logger.info("-" * 30)
         logger.info("%s[AGENT]%s %s", BOLD, RESET_ALL, model_name)
         if self.current_input:
-            preview = self.current_input[:200] + "..." if len(self.current_input) > 200 else self.current_input
-            logger.info("%sAgent input: %s%s", YELLOW, preview, RESET)
+            logger.info("%sAgent input: %s%s", YELLOW, self.current_input, RESET)
 
     def on_llm_end(self, response: LLMResult, **kwargs) -> None:
         if not response.generations:
@@ -178,7 +183,7 @@ class VerboseTraceCallback(BaseCallbackHandler):
             self._log_message_details(message)
         else:
             text = generation.text if hasattr(generation, "text") else str(generation)
-            logger.info("%sAgent response: %s%s", CYAN, text[: self.max_chars], RESET)
+            logger.info("%sAgent response: %s%s", CYAN, log_content_metadata(text), RESET)
 
         logger.info("-" * 30)
         print(flush=True)
@@ -189,19 +194,11 @@ class VerboseTraceCallback(BaseCallbackHandler):
             reasoning_content = message.additional_kwargs.get("reasoning_content")
 
         if reasoning_content and self.log_reasoning:
-            logger.info("%s[Reasoning]%s", MAGENTA, RESET_ALL)
-            display = reasoning_content[: self.max_chars]
-            if len(reasoning_content) > self.max_chars:
-                display += f"... [truncated, {len(reasoning_content)} total chars]"
-            logger.info("%s%s%s", DIM, display, RESET_ALL)
+            logger.info("%s[Reasoning] %s%s", MAGENTA, log_content_metadata(reasoning_content), RESET_ALL)
 
         content = getattr(message, "content", "")
         if content:
-            logger.info("%s[Agent Response]%s", CYAN, RESET)
-            display = content[: self.max_chars]
-            if len(content) > self.max_chars:
-                display += f"... [truncated, {len(content)} total chars]"
-            logger.info("%s%s%s", CYAN, display, RESET)
+            logger.info("%s[Agent Response] %s%s", CYAN, log_content_metadata(content), RESET)
 
         tool_calls = getattr(message, "tool_calls", None)
         if tool_calls:
@@ -209,9 +206,8 @@ class VerboseTraceCallback(BaseCallbackHandler):
             for tc in tool_calls:
                 tool_name = tc.get("name", "unknown")
                 tool_args = tc.get("args", {})
-                args_preview = str(tool_args)[:300]
                 logger.info("%s  → %s%s", GREEN, tool_name, RESET)
-                logger.info("%s    Args: %s%s", DIM, args_preview, RESET_ALL)
+                logger.info("%s    Args: %s%s", DIM, log_content_metadata(tool_args), RESET_ALL)
 
         if hasattr(message, "response_metadata"):
             metadata = message.response_metadata
@@ -230,16 +226,19 @@ class VerboseTraceCallback(BaseCallbackHandler):
     def on_tool_start(self, serialized: dict | None, input_str: str, **kwargs) -> None:
         tool_name = serialized.get("name", "unknown") if serialized else kwargs.get("name", "unknown")
         logger.info("%s[Tool Start] %s%s", GREEN, tool_name, RESET)
-        preview = input_str[:500] + "..." if len(input_str) > 500 else input_str
-        logger.info("%s  Input: %s%s", DIM, preview, RESET_ALL)
+        logger.info("%s  Input: %s%s", DIM, log_content_metadata(input_str), RESET_ALL)
 
     def on_tool_end(self, output: str, **kwargs) -> None:
-        output_str = str(output)
-        preview = output_str[:1000] + f"... [{len(output_str)} chars total]" if len(output_str) > 1000 else output_str
-        logger.info("%s[Tool Result] %s%s", GREEN, preview, RESET)
+        logger.info("%s[Tool Result] %s%s", GREEN, log_content_metadata(output), RESET)
 
     def on_tool_error(self, error: Exception, **kwargs) -> None:
-        logger.error("%s[Tool Error] %s%s", RED, error, RESET)
+        logger.error(
+            "%s[Tool Error] error_type=%s detail_%s%s",
+            RED,
+            type(error).__name__,
+            log_content_metadata(error),
+            RESET,
+        )
 
     def on_agent_action(self, action: Any, **kwargs) -> None:
         tool_name = getattr(action, "tool", "unknown")
@@ -247,11 +246,9 @@ class VerboseTraceCallback(BaseCallbackHandler):
         logger.info("%s[Agent Action] Delegating to: %s%s", MAGENTA, tool_name, RESET)
         if isinstance(tool_input, dict) and "messages" in tool_input:
             msg_content = tool_input["messages"][-1].content if tool_input["messages"] else ""
-            preview = msg_content[:200] + "..." if len(msg_content) > 200 else msg_content
-            logger.info("%s  Task: %s%s", DIM, preview, RESET_ALL)
+            logger.info("%s  Task: %s%s", DIM, log_content_metadata(msg_content), RESET_ALL)
 
     def on_agent_finish(self, finish: Any, **kwargs) -> None:
         output = getattr(finish, "return_values", {})
         if output:
-            output_str = str(output)[:500]
-            logger.info("%s[Agent Finish] %s%s", GREEN, output_str, RESET)
+            logger.info("%s[Agent Finish] %s%s", GREEN, log_content_metadata(output), RESET)

@@ -9,6 +9,12 @@ The complete AI-Q blueprint configuration with all features enabled: intent clas
 
 This is based on `configs/config_web_frag.yml`, which is the default for Helm deployments.
 
+```{note}
+This example preserves the shipped Lightning shallow profile. The NVIDIA API Catalog serving profile has a known
+[shallow citation-output limitation](../resources/troubleshooting.md#nemotron-35-lightning-on-nvidia-api-catalog).
+AI-Q fails closed rather than publishing citation-incomplete drafts.
+```
+
 ## Configuration
 
 ```yaml
@@ -60,32 +66,59 @@ general:
 # ===========================================================================
 # LLMs
 # ===========================================================================
-# Three LLM configurations for different roles:
-# - Intent classification (moderate creativity for routing decisions)
-# - Research (low temperature for factual output)
-# - Deep research orchestrator (high temperature for diverse planning)
+# Role-specific LLM configurations:
+# - Nemotron 3.5 Lightning for intent classification and shallow research
+# - Ultra for clarification and every deep-research role
 llms:
-  nemotron_llm_intent:
+  nemotron_lightning_intent_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.5    # Moderate: needs to reason about intent
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.1
     top_p: 0.9
-    max_tokens: 4096
+    max_tokens: 1024
     num_retries: 5
+    parallel_tool_calls: false
+    chat_template_kwargs:
+      enable_thinking: false
+
+  nemotron_lightning_agent_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3.5-lightning-30b-a3b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 8192
+    num_retries: 5
+    parallel_tool_calls: false
     chat_template_kwargs:
       enable_thinking: true
 
-  nemotron_super_llm:
+  nemotron_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
     base_url: "https://integrate.api.nvidia.com/v1"
-    temperature: 0.1    # Low: factual research output
-    top_p: 0.3
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
     max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
+
+  nemotron_ultra_writer_llm:
+    _type: nim
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://integrate.api.nvidia.com/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 32768
+    num_retries: 5
+    chat_template_kwargs:
+      enable_thinking: false
 
 # ===========================================================================
 # Functions (tools and agents)
@@ -130,7 +163,7 @@ functions:
   # Has access to tools for context-aware routing decisions.
   intent_classifier:
     _type: intent_classifier
-    llm: nemotron_llm_intent
+    llm: nemotron_lightning_intent_llm
     tools:
       - web_search_tool
       - paper_search_tool
@@ -143,7 +176,7 @@ functions:
   # deep_research_agent.
   clarifier_agent:
     _type: clarifier_agent
-    llm: nemotron_super_llm
+    llm: nemotron_ultra_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -157,7 +190,7 @@ functions:
   # Single-turn ReAct agent for quick queries.
   shallow_research_agent:
     _type: shallow_research_agent
-    llm: nemotron_super_llm
+    llm: nemotron_lightning_agent_llm
     tools:
       - web_search_tool
       - knowledge_search
@@ -171,7 +204,11 @@ functions:
   # and synthesizes comprehensive reports.
   deep_research_agent:
     _type: deep_research_agent
-    orchestrator_llm: nemotron_super_llm
+    orchestrator_llm: nemotron_ultra_llm
+    source_router_llm: nemotron_ultra_llm
+    planner_llm: nemotron_ultra_llm
+    researcher_llm: nemotron_ultra_llm
+    writer_llm: nemotron_ultra_writer_llm
     tools:
       - paper_search_tool
       - advanced_web_search_tool

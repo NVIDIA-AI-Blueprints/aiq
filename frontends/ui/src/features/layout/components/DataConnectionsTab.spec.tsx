@@ -6,7 +6,6 @@ import userEvent from '@testing-library/user-event'
 import { vi, describe, test, expect, beforeEach } from 'vitest'
 import { DataConnectionsTab } from './DataConnectionsTab'
 
-// Mock the layout store
 const mockFetchDataSources = vi.fn()
 
 vi.mock('../store', () => ({
@@ -25,7 +24,6 @@ vi.mock('../store', () => ({
   }),
 }))
 
-// Mock DataConnectionCard
 vi.mock('./DataConnectionCard', () => ({
   DataConnectionCard: ({
     source,
@@ -33,12 +31,17 @@ vi.mock('./DataConnectionCard', () => ({
     isAvailable,
     onToggle,
   }: {
-    source: { id: string; name: string }
+    source: { id: string; name: string; perUserAuth?: { required: boolean; status?: string } }
     isEnabled: boolean
     isAvailable: boolean
     onToggle: (id: string, enabled: boolean) => void
   }) => (
-    <div data-testid="data-connection-card" data-available={isAvailable}>
+    <div
+      data-testid="data-connection-card"
+      data-available={isAvailable}
+      data-peruser-required={source.perUserAuth?.required ? 'yes' : 'no'}
+      data-peruser-status={source.perUserAuth?.status ?? ''}
+    >
       <span>{source.name}</span>
       <span data-testid={`enabled-${source.id}`}>{isEnabled ? 'enabled' : 'disabled'}</span>
       <button
@@ -59,7 +62,6 @@ describe('DataConnectionsTab', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
-    // Reset to default state with data sources
     vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
       const state = {
         availableDataSources: [
@@ -208,6 +210,34 @@ describe('DataConnectionsTab', () => {
       expect(screen.getByTestId('enabled-web_search')).toHaveTextContent('disabled')
       expect(screen.getByTestId('enabled-knowledge_base')).toHaveTextContent('disabled')
       expect(screen.getByTestId('enabled-document_store')).toHaveTextContent('disabled')
+    })
+  })
+
+  describe('per-user OAuth metadata', () => {
+    test('preserves per-user auth for a protected disconnected source', () => {
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          availableDataSources: [
+            {
+              id: 'gdrive',
+              name: 'Google Drive',
+              description: 'Drive',
+              requires_auth: true,
+              per_user_auth: { required: true, status: 'not_connected', provider: 'google' },
+            },
+          ],
+          dataSourcesLoading: false,
+          dataSourcesError: null,
+          fetchDataSources: mockFetchDataSources,
+        }
+        return selector ? selector(state) : state
+      })
+
+      render(<DataConnectionsTab enabledSourceIds={new Set()} onToggle={mockOnToggle} />)
+
+      const card = screen.getByTestId('data-connection-card')
+      expect(card).toHaveAttribute('data-peruser-required', 'yes')
+      expect(card).toHaveAttribute('data-peruser-status', 'not_connected')
     })
   })
 

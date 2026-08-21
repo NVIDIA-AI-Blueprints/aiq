@@ -35,50 +35,80 @@ Common issues and solutions for the AI-Q blueprint.
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
-| HTTP 429 or 503 on deep research | Nemotron Super Build API has limited availability due to high demand | Retry after a short delay, reduce concurrency, or self-host via [Brev Launchable](#nemotron-super--build-endpoint-availability) for consistent throughput |
+| HTTP 429 or 503 on deep research | Nemotron hosted endpoint availability | Retry after a short delay, reduce concurrency, or follow the [self-hosting guidance](#nemotron-hosted-endpoint-availability) for consistent throughput |
+| Intermittent shallow-research failure with Nemotron 3.5 Lightning on NVIDIA API Catalog | The hosted serving profile can produce citation-incomplete or malformed final drafts | Use Nemotron Ultra for the shallow role, or use a validated self-hosted Lightning serving profile; see [Nemotron 3.5 Lightning on NVIDIA API Catalog](#nemotron-35-lightning-on-nvidia-api-catalog) |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
 | Clarifier keeps asking questions | Too many clarification turns | Reduce `max_turns`, or set `enable_clarifier: false` in the workflow to disable clarification |
 | SSE stream disconnects | Network timeout | Client auto-reconnects using `last_event_id`; refer to [Data Flow](../architecture/data-flow.md) |
 | Job status stuck on RUNNING | Dask worker crashed | Check Dask logs; the ghost job reaper will eventually mark it FAILURE |
 | OpenShell setup, attestation, readiness, or deletion fails | Gateway, version, policy/config, image, or service-owner mismatch | Follow the canonical [OpenShell inspection and troubleshooting guide](../deployment/openshell.md#inspection-and-troubleshooting) |
 
-## Nemotron Super — Build Endpoint Availability
+## Nemotron Hosted Endpoint Availability
 
-Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`) is compatible and tested with AIQ, but the NVIDIA Build API endpoints have limited availability due to high demand. During peak periods you may observe:
+Nemotron 3.5 Lightning (`nvidia/nemotron-3.5-lightning-30b-a3b`) and Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their NVIDIA-hosted endpoints can have limited availability during high demand. During peak periods you may observe:
 
 - Elevated latency or timeouts on LLM inference calls
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
 - Degraded agent workflow performance due to upstream model availability
 
-**Default Configuration:** The default configs use Nemotron Super (`nvidia/nemotron-3-super-120b-a12b`). If hosted endpoints are saturated, retry after a short delay, reduce concurrency, or self-host for consistent throughput.
+**Default Configuration:** The default configs use Nemotron 3.5 Lightning for intent classification and shallow research, and Nemotron 3 Ultra for clarification and all deep-research roles. If a hosted endpoint is saturated, retry after a short delay, reduce concurrency, or self-host a downloadable model for consistent throughput.
 
-### Recommended Mitigation: Self-Host via Brev Launchable
+### Recommended Mitigation: Self-Host the Affected Model
 
-For production and staging deployments that require consistent throughput and low-latency inference, the recommended approach is to self-host the Nemotron Super model using a [Brev Launchable](https://brev.nvidia.com/placeholder_url) rather than relying on shared Build API endpoints.
+For production and staging deployments that require consistent throughput and low-latency inference, self-host a downloadable NVIDIA NIM rather than relying on shared endpoints. Preview endpoint availability and downloadable NIM availability do not necessarily move in lockstep; verify the current model card before choosing an image.
 
-Once your self-hosted endpoint is running, uncomment and update `base_url` in your config to point at it:
+- [Self-host Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b?nim=self-hosted) for the default intent and shallow-research roles
+- [Self-host Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b?nim=self-hosted) for the default clarification and deep-research roles
+
+Once your self-hosted endpoint is running, update the corresponding `base_url` in your config to point at it. AIQ's configuration validator currently requires `NVIDIA_API_KEY` for every `_type: nim` profile, even when a local NIM does not enforce client authentication. Set a non-secret placeholder for the local deployment before starting AIQ:
+
+```bash
+export NVIDIA_API_KEY=local-nim
+```
+
+Then reference that variable in the local profile:
 
 ```yaml
 llms:
-  nemotron_super_llm:
+  local_ultra_llm:
     _type: nim
-    model_name: nvidia/nemotron-3-super-120b-a12b
-    base_url: "https://<your-brev-endpoint>/v1"
-    api_key: ""
-    temperature: 1.0
-    top_p: 1.0
-    max_tokens: 128000
+    # Use the identifier returned by the local NIM's /v1/models endpoint.
+    model_name: nvidia/nemotron-3-ultra-550b-a55b
+    base_url: "https://<your-ultra-endpoint>/v1"
+    api_key: ${NVIDIA_API_KEY}
+    temperature: 0.2
+    top_p: 0.7
+    max_tokens: 16384
     num_retries: 5
     chat_template_kwargs:
-      enable_thinking: true
+      enable_thinking: false
 ```
+
+### Nemotron 3.5 Lightning on NVIDIA API Catalog
+
+The default profiles retain Nemotron 3.5 Lightning for intent classification and shallow research. When the shallow
+role uses Lightning through the NVIDIA API Catalog endpoint (`integrate.api.nvidia.com`), the hosted serving profile
+can intermittently return citation-incomplete or malformed final drafts. AI-Q verifies the draft against the captured
+source registry and fails closed instead of publishing an unsupported answer, so an affected request ends with a
+failed workflow outcome even when its search completed successfully.
+
+This behavior depends on the serving profile, not only the model weights. It did not reproduce at the same rate in
+validation with the tested self-hosted NVFP4 vLLM profile. For a deployment that prioritizes shallow-answer
+reliability, use one of these configurations:
+
+- Assign Nemotron Ultra to `shallow_research_agent.llm`, while keeping Lightning for intent classification.
+- Serve Lightning through a self-hosted profile that you validate end to end with AI-Q's citation and tool-calling
+  workflow.
+
+The Brev getting-started launchable uses the first option. This keeps the launchable reliable without changing the
+model assignment in the general-purpose shipped profiles.
 
 ## Knowledge Layer Issues
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
 | `Unknown backend` | Adapter module not imported | Ensure backend package is installed: `uv pip install -e "sources/knowledge_layer[llamaindex]"` |
-| Empty retrieval results | Collection is empty or wrong name | Run ingestion first; verify `collection_name` matches |
+| Empty retrieval results | Ingestion and retrieval resolved different collections | Verify the upload-path collection and active `conversation-id`; without session context, verify the configured `collection_name` fallback |
 | Foundational RAG connection refused | RAG Blueprint not running | Start the RAG Blueprint server; verify `rag_url` and `ingest_url` |
 | `milvus-lite` required | Missing dependency | `uv pip install "pymilvus[milvus_lite]"` |
 

@@ -15,6 +15,8 @@ from pydantic import BaseModel
 from pydantic import Field
 
 from aiq_agent.auth import Principal
+from aiq_agent.common.citation_verification import CitationVerificationOutcomeState
+from aiq_agent.common.citation_verification import SerializedCitationVerificationOutcome
 from aiq_agent.common.citation_verification import citation_verification_outcome_dict
 
 from .access import authorize_job_access
@@ -46,7 +48,7 @@ class ReportContext(BaseModel):
     report_markdown: str
     source_summary_markdown: str
     sources: list[ReportContextSource] = Field(default_factory=list)
-    citation_verification_status: dict[str, str] | None = None
+    citation_verification_status: CitationVerificationOutcomeState | None = None
 
 
 def _decode_job_output(output: Any) -> dict[str, Any]:
@@ -194,10 +196,6 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
     output = await read_job_output_async(parent_job_id, getattr(job, "output", None))
     citation_verification_status = _extract_citation_verification_status_from_output(output)
     report = _extract_report_from_output(output)
-    if report and citation_verification_status:
-        from aiq_agent.agents.deep_researcher.models import strip_citation_verification_warning
-
-        report = strip_citation_verification_warning(report, citation_verification_status)
     # Durable events are only needed when the report isn't already in job output,
     # or to reconstruct sources. Fetch the (potentially large) event log at most once.
     events: list[dict[str, Any]] | None = None
@@ -206,8 +204,15 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
         report = _report_from_events(events)
     if not report:
         raise HTTPException(409, f"Parent job has no durable report: {parent_job_id}")
+    if citation_verification_status:
+        from aiq_agent.agents.deep_researcher.models import strip_citation_verification_warning
 
-    report_sources = _extract_sources_from_report_markdown(report)
+        report = strip_citation_verification_warning(report, citation_verification_status)
+
+    # An explicitly unverified report cannot make its own source claims trusted.
+    # Prefer durable citation-source events for derived-report verification.
+    parent_is_unverified = citation_verification_status and citation_verification_status.get("status") == "unverified"
+    report_sources = [] if parent_is_unverified else _extract_sources_from_report_markdown(report)
 
     if events is None:
         # The report came from job output. Its own ## Sources section is authoritative for
@@ -237,7 +242,7 @@ async def resolve_report_context(job: Any, db_url: str, parent_job_id: str) -> R
 def report_context_from_markdown(
     report_markdown: str,
     parent_job_id: str = "in-session",
-    citation_verification_status: dict[str, str] | None = None,
+    citation_verification_status: SerializedCitationVerificationOutcome | None = None,
 ) -> ReportContext:
     """Build report context directly from report markdown — no job store, auth, or scheduler.
 
@@ -250,7 +255,8 @@ def report_context_from_markdown(
         from aiq_agent.agents.deep_researcher.models import strip_citation_verification_warning
 
         report_markdown = strip_citation_verification_warning(report_markdown, citation_verification_status)
-    sources = _dedupe_sources(_extract_sources_from_report_markdown(report_markdown))
+    parent_is_unverified = citation_verification_status and citation_verification_status.get("status") == "unverified"
+    sources = [] if parent_is_unverified else _dedupe_sources(_extract_sources_from_report_markdown(report_markdown))
     return ReportContext(
         parent_job_id=parent_job_id,
         report_markdown=report_markdown,
@@ -314,7 +320,7 @@ def to_initial_files(context: ReportContext, instruction: str | None = None) -> 
 def report_output_metadata(
     parent_job_id: str,
     action: str,
-    citation_verification_status: dict[str, str] | None = None,
+    citation_verification_status: SerializedCitationVerificationOutcome | None = None,
 ) -> dict[str, Any]:
     """Durable output metadata persisted with a report follow-up child job."""
     metadata: dict[str, Any] = {

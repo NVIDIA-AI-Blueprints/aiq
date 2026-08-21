@@ -22,8 +22,12 @@ from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 from pydantic import BaseModel
 
+from aiq_agent.common.citation_verification import CitationVerificationOutcomeState
+from aiq_agent.common.citation_verification import SerializedCitationVerificationOutcome
 from aiq_agent.knowledge import AvailableDocument
 
+from ..request_context import DatabaseName
+from .catalog import CatalogRoutingResponse
 from .depth import DepthDecision
 from .intent import IntentResult
 from .result import ShallowResult
@@ -40,7 +44,10 @@ def _keep_if_set(old: str | None, new: str | None) -> str | None:
     return new if new else old
 
 
-def _keep_dict_if_set(old: dict[str, str] | None, new: dict[str, str] | None) -> dict[str, str] | None:
+def _keep_dict_if_set(
+    old: SerializedCitationVerificationOutcome | None,
+    new: SerializedCitationVerificationOutcome | None,
+) -> SerializedCitationVerificationOutcome | None:
     """Reducer that keeps the prior dict unless a new non-empty dict is provided."""
     return new if new else old
 
@@ -51,9 +58,9 @@ class ChatResearcherState(BaseModel):
 
     Attributes:
         messages: Conversation history with LangGraph message reducer.
-        tools_info: Information about available tools.
         user_info: Optional user information for personalization.
         data_sources: Optional list of user-selected data source IDs.
+        database_name: Optional validated GSF database scope for this request.
         user_intent: Result of intent classification.
         depth_decision: Result of depth routing.
         final_report: The final research report.
@@ -64,6 +71,14 @@ class ChatResearcherState(BaseModel):
         skip_clarifier: When True the clarifier node is bypassed regardless of
             ``enable_clarifier``.  Set automatically for API-key and anonymous
             callers so headless workflows do not stall waiting for user input.
+        active_report_job_id: Identifier of the active asynchronous report used
+            for report follow-up turns.
+        catalog_context: Validated catalog routing result supplied to hybrid
+            research; reset at each turn boundary.
+        catalog_request_id: Request identifier associated with
+            ``catalog_context``; reset at each turn boundary.
+        last_report_markdown: Most recent report produced inline, retained
+            across turns for report follow-up when no report job is available.
         workflow_outcome: Explicit terminal workflow failure when a node
             degrades an exception to fallback text; reset at each turn boundary.
     """
@@ -71,6 +86,7 @@ class ChatResearcherState(BaseModel):
     messages: Annotated[list[AnyMessage], add_messages]
     user_info: dict[str, Any] | None = None
     data_sources: list[str] | None = None
+    database_name: DatabaseName | None = None
     user_intent: IntentResult | None = None
     depth_decision: DepthDecision | None = None
     final_report: str | None = None
@@ -80,8 +96,13 @@ class ChatResearcherState(BaseModel):
     available_documents: list[AvailableDocument] | None = None
     skip_clarifier: bool = False
     active_report_job_id: str | None = None
+    catalog_context: CatalogRoutingResponse | None = None
+    catalog_request_id: str | None = None
     # The most recent report produced inline in this session (synchronous CLI mode), carried
     # across turns by the keep-if-set reducer so report follow-up works without an async job.
     last_report_markdown: Annotated[str | None, _keep_if_set] = None
-    last_report_citation_verification_status: Annotated[dict[str, str] | None, _keep_dict_if_set] = None
+    last_report_citation_verification_status: Annotated[
+        CitationVerificationOutcomeState | None,
+        _keep_dict_if_set,
+    ] = None
     workflow_outcome: WorkflowOutcome | None = None

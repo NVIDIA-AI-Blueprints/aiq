@@ -22,6 +22,24 @@ lookup (shallow), or initiate a comprehensive multi-agent investigation (deep).
 :align: center
 ```
 
+### Reading the Diagram
+
+- The deep-research path is dynamic rather than a fixed linear chain. The
+  optional source router informs planning, and the orchestrator dispatches
+  independent research queries to reusable researcher workers concurrently
+  before delegating final synthesis to the writer.
+- **Shared Research State** represents the DeepAgents state and virtual
+  `/shared/` filesystem used for the plan, research notes, progress, and final
+  output. It is distinct from external data sources and the durable generated
+  artifact store.
+- **Skill Definitions** are host-side, read-only instructions assigned to
+  specific roles. Research skills are exposed to researcher workers and
+  synthesis skills to the writer by the shipped skills profile.
+- **Job-Scoped Sandbox** is optional. When configured, agent-generated code
+  runs through one provider sandbox per deep-research job; Modal and OpenShell
+  are alternative providers. Inference, source-tool calls, credentials, and
+  shared research state remain in the AI-Q process.
+
 ## Core Components
 
 | Component | Role | Location |
@@ -31,6 +49,10 @@ lookup (shallow), or initiate a comprehensive multi-agent investigation (deep).
 | [Shallow Researcher](agents/shallow-researcher.md) | Fast, bounded tool-augmented research | `agents/shallow_researcher/agent.py` |
 | [Deep Researcher](agents/deep-researcher.md) | Orchestrates optional source routing, structured planning, concurrent research workers, and writer-first synthesis | `agents/deep_researcher/agent.py` |
 | Chat Researcher Orchestrator | [LangGraph](https://docs.langchain.com/oss/python/langgraph/overview) state machine coordinating all agents | `agents/chat_researcher/agent.py` |
+| [Data Source Registry](../customization/tools-and-sources.md) | Applies per-request source selection and exposes the active source-tool set to research agents | `common/data_source_registry.py` |
+| [Knowledge Layer](../customization/knowledge-layer.md) | Pluggable document ingestion and retrieval through LlamaIndex, Foundational RAG, Azure AI Search, or OpenSearch | `sources/knowledge_layer/` |
+| Shared Research State | Host-side DeepAgents state and `/shared/` virtual filesystem for plans, research notes, progress, and final output | `agents/deep_researcher/deepagents_runtime.py` |
+| [Skills and Execution Runtime](agents/sandbox.md) | Exposes role-assigned, read-only skill definitions and optionally routes generated code to a job-scoped sandbox | `agents/deep_researcher/skills/`, `agents/deep_researcher/sandbox/` |
 
 ## Orchestrator State Machine
 

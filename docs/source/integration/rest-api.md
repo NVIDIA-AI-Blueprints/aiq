@@ -26,7 +26,7 @@ Base path: `/v1/jobs/async`
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/v1/jobs/async/agents` | List registered agent types |
+| `GET` | `/v1/jobs/async/agents` | List public agents configured in the active workflow |
 | `POST` | `/v1/jobs/async/submit` | Submit a new research job |
 | `GET` | `/v1/jobs/async/job/{job_id}` | Get job status |
 | `GET` | `/v1/jobs/async/job/{job_id}/stream` | SSE event stream from beginning |
@@ -43,11 +43,15 @@ Base path: `/v1/jobs/async`
 
 ### List Available Agents
 
-Returns all **public** registered agent types that can be used with the submit endpoint.
+Returns all **public** registered agent types configured in the active workflow. The
+`deep_researcher` and `shallow_researcher` entries are part of the default catalog, but
+each is returned only when its corresponding function config is present in the loaded
+workflow. Discovery reflects configuration availability, not credentials, tool health,
+source connectivity, Dask readiness, or other runtime health checks.
+
 Internal-only agents (registered with `public=False`, for example the `report_rewriter`
 used by report follow-up) are intentionally omitted from this list and are rejected by
-`POST /v1/jobs/async/submit` with `400` and a `detail` of `Agent type is internal-only: <agent_type>`
-(the requested agent type is interpolated into the message).
+`POST /v1/jobs/async/submit` with `400`.
 
 ```bash
 curl http://localhost:8000/v1/jobs/async/agents
@@ -85,7 +89,7 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 | `input` | `string` | Yes | Research query. Must be non-blank after trimming (whitespace-only is rejected with 422) |
 | `job_id` | `string` | No | Custom job ID. Auto-generated UUID if omitted. Pattern: `[a-zA-Z0-9_-]`, max 64 chars |
 | `expiry_seconds` | `integer` | No | Job expiry in seconds. Range: 600--604800 (10 min to 7 days). Default from config |
-| `data_sources` | `list[string]` | No | Optional data source IDs (from `/v1/data_sources`) to scope the job. Omit or `null` for all data-source tools; `[]` for no data-source tools. Unmapped utility tools remain available. Unknown IDs return 422 |
+| `data_sources` | `list[string]` | No | Optional data source IDs (from `/v1/data_sources`) to scope the job. Omit or `null` for all data-source tools; `[]` for no data-source tools. Unmapped utility tools remain available. Unknown IDs or sources unavailable to the selected agent return 422 |
 
 **Response (`JobStatusResponse`):**
 
@@ -101,10 +105,33 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 
 | Status | Reason |
 |--------|--------|
-| `400` | Unknown agent type, **internal-only agent type**, or invalid request |
-| `409` | A custom `job_id` was supplied that collides with an existing job |
-| `422` | Validation error: blank/whitespace-only `input`, invalid request fields, or one or more unknown data source IDs. Data source errors include `message`, `invalid_ids`, and `known_ids` for client-side recovery UX |
-| `503` | Dask scheduler not available |
+| `400` | Unknown, **internal-only**, or registered-but-unconfigured agent type, or invalid request |
+| `413` | Deep-research `input` exceeds `AIQ_MAX_DEEP_RESEARCH_INPUT_CHARS` |
+| `409` | A custom `job_id` collides with an existing job, or a selected protected source requires per-user authentication |
+| `429` | The caller reached the active deep-research job limit or rolling per-minute submission limit. The response includes `Retry-After` |
+| `422` | Validation error: blank/whitespace-only `input`, invalid request fields, unknown data source IDs, or sources unavailable to the selected agent. Data source errors include `message`, `invalid_ids`, `unavailable_for_agent`, and `known_ids` |
+| `500` | Content encryption configuration is invalid, authorization persistence fails, or agent/tool configuration fails unexpectedly |
+| `503` | Content encryption, Dask, the admission database, or deployment-wide job capacity is unavailable. Capacity responses include `Retry-After` |
+
+Deep-research admission is enforced before enqueue for both REST submissions and
+deep-research jobs launched from chat. Limits are serialized in the configured
+`NAT_JOB_STORE_DB_URL`, so backend replicas sharing PostgreSQL cannot race past
+the configured capacity. See [Production Considerations](../deployment/production.md#deep-research-admission-control)
+for defaults and identity behavior.
+
+A public catalog entry that is not configured in the active workflow is rejected before
+source validation or job creation:
+
+```json
+{
+  "detail": {
+    "code": "agent_not_configured",
+    "message": "Agent 'shallow_researcher' is not configured in the active workflow",
+    "agent_type": "shallow_researcher",
+    "config_name": "shallow_research_agent"
+  }
+}
+```
 
 ### Edit a Report (Report Follow-up)
 
@@ -184,6 +211,13 @@ curl http://localhost:8000/v1/jobs/async/job/{job_id}
 ```
 
 Job statuses: `SUBMITTED`, `RUNNING`, `SUCCESS`, `FAILURE`, `INTERRUPTED`.
+
+Typed source-condition failures, such as running with no selected sources or receiving no
+results from the selected sources, remain in `FAILURE`. Their `error` is an actionable
+message describing how to correct the source selection or query. If the agent produced a
+sanitized answer before detecting the source condition, that report remains available from
+`GET /v1/jobs/async/job/{job_id}/report`. Unexpected failures continue to return a sanitized
+error and do not expose internal exception details or plaintext output.
 
 ### Stream Events (SSE)
 
@@ -454,11 +488,22 @@ register_agent(
 | `config_name` | Must match a function name in the NeMo Agent Toolkit YAML config (for example, `deep_research_agent`) |
 | `description` | Human-readable description shown in the agent list |
 
-The default agents (`deep_researcher` and `shallow_researcher`) are registered automatically when the `aiq_api` plugin loads.
+The default agents (`deep_researcher` and `shallow_researcher`) are registered automatically when the `aiq_api` plugin loads. Registration adds them to the catalog; each agent must also have its `config_name` defined in the active workflow to appear in `GET /v1/jobs/async/agents` or be accepted by `POST /v1/jobs/async/submit`.
 
 ## Knowledge API
 
 The Knowledge API endpoints are **conditionally registered** -- they appear only when a `knowledge_retrieval` function is configured in the workflow. The backend (LlamaIndex, Foundational RAG, etc.) is determined by the knowledge config.
+
+### Collection Routing
+
+Knowledge ingestion and retrieval select collections independently. Collection and document endpoints use the
+collection named in the request path, while retrieval uses the `conversation-id` header when present and otherwise
+falls back to the configured `collection_name`. To query a collection after ingesting into it, reuse the exact
+collection name as the `conversation-id` header. A `conversation_id` field in the `/v1/chat/completions` JSON body is
+not used for collection routing.
+
+For UI behavior, environment-variable usage, and an end-to-end request example, see
+[Collection Routing](../customization/knowledge-layer.md#collection-routing).
 
 ### Collection Endpoints
 
@@ -501,6 +546,11 @@ curl http://localhost:8000/v1/collections
 
 Document upload is asynchronous. The endpoint returns a job ID that you poll for ingestion status.
 
+The API streams uploads to private temporary files and enforces the deployment's
+`FILE_UPLOAD_ACCEPTED_TYPES`, `FILE_UPLOAD_MAX_SIZE_MB`, and `FILE_UPLOAD_MAX_FILE_COUNT` settings.
+It rejects requests that exceed the size or count limits with `413 Payload Too Large`, and rejects unsupported,
+malformed, or content-mismatched files with `415 Unsupported Media Type`.
+
 ```bash
 curl -X POST http://localhost:8000/v1/collections/research-papers/documents \
   -F "files=@paper1.pdf" \
@@ -516,6 +566,13 @@ curl -X POST http://localhost:8000/v1/collections/research-papers/documents \
   "message": "Ingestion job submitted for 2 file(s)"
 }
 ```
+
+The application does not provide per-client upload rate limiting. Production operators must put the endpoint behind
+an authenticated API gateway or ingress and configure a per-identity rate limit appropriate for their deployment.
+As a starting point, use 10 upload requests per minute with a burst of 20, then tune against expected document sizes,
+ingestion capacity, and tenant isolation requirements. Do not rely only on source IP when requests pass through shared
+proxies or NAT. Configure the gateway's maximum request-body size slightly above `FILE_UPLOAD_MAX_SIZE_MB` as well, so
+grossly oversized multipart requests are rejected before application-level parsing.
 
 #### Delete Documents
 

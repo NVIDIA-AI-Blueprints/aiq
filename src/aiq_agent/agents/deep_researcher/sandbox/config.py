@@ -91,6 +91,11 @@ class OpenShellProviderConfig(BaseModel):
     """OpenShell-specific sandbox settings (enterprise/on-prem example provider)."""
 
     gateway: str | None = Field(default=None, description="OpenShell gateway/cluster endpoint or name")
+    workspace: str = Field(
+        default="default",
+        min_length=1,
+        description="OpenShell workspace that scopes sandbox lifecycle operations.",
+    )
     existing_sandbox_name: str | None = Field(
         default=None,
         description="Debug-only existing OpenShell sandbox to attach to; requires allow_shared_sandbox=true.",

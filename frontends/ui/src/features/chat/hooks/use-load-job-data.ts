@@ -41,6 +41,7 @@ import { useAuth } from '@/adapters/auth'
 import { useLayoutStore } from '@/features/layout/store'
 import type { ResearchPanelTab } from '@/features/layout/types'
 import { normalizeDeepResearchTodos } from '../lib/deep-research-todos'
+import { createResearchCorrelator } from '../lib/deep-research-correlation'
 
 const EXPIRED_REPORT_MESSAGE = 'This research report is no longer available.'
 const BACKEND_UNREACHABLE_MESSAGE = 'The backend is not reachable. Start the backend and try again.'
@@ -186,6 +187,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
   const setCurrentStatus = useChatStore((s) => s.setCurrentStatus)
   const setLoadedJobId = useChatStore((s) => s.setLoadedJobId)
   const setStreamLoaded = useChatStore((s) => s.setStreamLoaded)
+  const updateDeepResearchStatus = useChatStore((s) => s.updateDeepResearchStatus)
   const stopAllDeepResearchSpinners = useChatStore((s) => s.stopAllDeepResearchSpinners)
   const addErrorCard = useChatStore((s) => s.addErrorCard)
   const completeDeepResearch = useChatStore((s) => s.completeDeepResearch)
@@ -289,7 +291,12 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           const { tools, outputs } = stateResponse.artifacts
 
           tools?.forEach(
-            (tool: { name: string; input?: Record<string, unknown>; output?: string; is_sandbox?: boolean }) => {
+            (tool: {
+              name: string
+              input?: Record<string, unknown>
+              output?: string
+              is_sandbox?: boolean
+            }) => {
               const toolCallId = addDeepResearchToolCall({
                 name: tool.name,
                 input: tool.input,
@@ -302,11 +309,13 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             }
           )
 
-          outputs?.forEach((output: { type: string; content: string; output_category?: string }) => {
-            if (output.type === 'report' || output.output_category === 'final_report') {
-              setReportContent(output.content, 'final_report')
+          outputs?.forEach(
+            (output: { type: string; content: string; output_category?: string }) => {
+              if (output.type === 'report' || output.output_category === 'final_report') {
+                setReportContent(output.content, 'final_report')
+              }
             }
-          })
+          )
         }
       } catch (stateError) {
         console.warn('Failed to load job state:', stateError)
@@ -354,14 +363,14 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
   const streamFullJob = useCallback(
     (jobId: string, scope: JobLoadScope): Promise<void> => {
       return new Promise((resolve, reject) => {
-        // Stacks to track active items per name (for matching start/end when events interleave)
-        const activeLLMStack: string[] = []
-        const activeToolStacks = new Map<string, string[]>()
         let idCounter = 0
 
         // Accumulation buffer — everything stays here until the stream ends
         const buffer = {
-          agents: new Map<string, { name: string; input?: string; output?: string }>(),
+          agents: new Map<
+            string,
+            { name: string; input?: string; output?: string; ended: boolean }
+          >(),
           llmSteps: new Map<
             string,
             {
@@ -389,6 +398,61 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
           reportContent: null as string | null,
         }
 
+        const correlator = createResearchCorrelator({
+          hasUserMessage: () => false,
+          addThinkingStep: () => '',
+          appendToThinkingStep: () => undefined,
+          completeThinkingStep: () => undefined,
+          addAgent: (agentId, agent) => {
+            if (!buffer.agents.has(agentId)) {
+              buffer.agents.set(agentId, { name: agent.name, input: agent.input, ended: false })
+            }
+            return agentId
+          },
+          completeAgent: (agentId, output) => {
+            const agent = buffer.agents.get(agentId)
+            if (agent) {
+              agent.output = output
+              agent.ended = true
+            }
+          },
+          addToolCall: (toolCall) => {
+            const id = `tool-${idCounter++}`
+            buffer.toolCalls.set(id, {
+              name: toolCall.name,
+              input: toolCall.input,
+              workflow: toolCall.workflow,
+              agentId: toolCall.agentId,
+              isSandbox: toolCall.isSandbox,
+            })
+            return id
+          },
+          completeToolCall: (toolCallId, output) => {
+            const toolCall = buffer.toolCalls.get(toolCallId)
+            if (toolCall) toolCall.output = output ? JSON.stringify(output) : undefined
+          },
+          addLLMStep: (step) => {
+            const id = `llm-${idCounter++}`
+            buffer.llmSteps.set(id, {
+              name: step.name,
+              workflow: step.workflow,
+              content: step.content,
+            })
+            return id
+          },
+          appendLLMStep: (stepId, chunk) => {
+            const step = buffer.llmSteps.get(stepId)
+            if (step) step.content += chunk
+          },
+          completeLLMStep: (stepId, thinking, usage) => {
+            const step = buffer.llmSteps.get(stepId)
+            if (step) {
+              step.thinking = thinking
+              step.usage = usage
+            }
+          },
+        })
+
         /**
          * Convert buffer to store-compatible arrays and write everything
          * in a single useChatStore.setState() call.
@@ -405,9 +469,9 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
             name: a.name,
             input: a.input,
             output: a.output,
-            status: 'complete' as const,
+            status: a.ended ? ('complete' as const) : ('running' as const),
             startedAt: now,
-            completedAt: now,
+            ...(a.ended && { completedAt: now }),
           }))
 
           const llmSteps = Array.from(buffer.llmSteps.entries()).map(([id, s]) => ({
@@ -503,79 +567,34 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
 
             onWorkflowStart: (name, input, _eventId, agentId) => {
               if (!agentId) return
-              if (!buffer.agents.has(agentId)) {
-                buffer.agents.set(agentId, {
-                  name,
-                  input: input
-                    ? typeof input === 'string'
-                      ? input
-                      : JSON.stringify(input)
-                    : undefined,
-                })
-              }
+              correlator.onWorkflowStart(agentId, name, input)
             },
 
-            onWorkflowEnd: (_name, output, _eventId, agentId) => {
+            onWorkflowEnd: (name, output, _eventId, agentId) => {
               if (!agentId) return
-              const agent = buffer.agents.get(agentId)
-              if (agent) {
-                agent.output = output
-                  ? typeof output === 'string'
-                    ? output
-                    : JSON.stringify(output)
-                  : undefined
-              }
+              correlator.onWorkflowEnd(agentId, name, output)
             },
 
-            onLLMStart: (name, workflow) => {
-              const uniqueId = `llm-${idCounter++}`
-              activeLLMStack.push(uniqueId)
-              buffer.llmSteps.set(uniqueId, { name, workflow, content: '' })
+            onLLMStart: (name, workflow, agentId) => {
+              correlator.onLLMStart(agentId, name, workflow)
             },
 
             onLLMChunk: (chunk) => {
-              const currentId = activeLLMStack[activeLLMStack.length - 1]
-              if (currentId) {
-                const step = buffer.llmSteps.get(currentId)
-                if (step) {
-                  step.content += chunk
-                }
-              }
+              correlator.onLLMChunk(chunk)
             },
 
-            onLLMEnd: (_output, thinking, usage) => {
-              const currentId = activeLLMStack.pop()
-              if (currentId) {
-                const step = buffer.llmSteps.get(currentId)
-                if (step) {
-                  step.thinking = thinking
-                  step.usage = usage
-                }
-              }
+            onLLMEnd: (_output, thinking, usage, name, agentId) => {
+              correlator.onLLMEnd(agentId, name, thinking, usage)
             },
 
             onToolStart: (name, input, workflow, _eventId, agentId, isSandbox) => {
               if (name === 'task') return
-              const uniqueId = `tool-${idCounter++}`
-              buffer.toolCalls.set(uniqueId, { name, input, workflow, agentId, isSandbox })
-              let stack = activeToolStacks.get(name)
-              if (!stack) {
-                stack = []
-                activeToolStacks.set(name, stack)
-              }
-              stack.push(uniqueId)
+              correlator.onToolStart(agentId, name, input, workflow, isSandbox)
             },
 
-            onToolEnd: (name, output, _eventId, _agentId) => {
+            onToolEnd: (name, output, _eventId, agentId) => {
               if (name === 'task') return
-              const stack = activeToolStacks.get(name)
-              const uniqueId = stack?.pop()
-              if (uniqueId) {
-                const tool = buffer.toolCalls.get(uniqueId)
-                if (tool) {
-                  tool.output = output ? JSON.stringify(output) : undefined
-                }
-              }
+              correlator.onToolEnd(agentId, name, output)
             },
 
             onTodoUpdate: (todos: TodoItem[], workflow?: string) => {
@@ -666,6 +685,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         }
 
         clearDeepResearch()
+        updateDeepResearchStatus(jobStatus)
 
         if (shouldStreamFull) {
           await streamFullJob(jobId, scope)
@@ -726,6 +746,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       streamFullJob,
       setLoadedJobId,
       setStreamLoaded,
+      updateDeepResearchStatus,
       stopAllDeepResearchSpinners,
       setResearchPanelTab,
       openRightPanel,
@@ -790,6 +811,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
         }
 
         clearDeepResearch()
+        updateDeepResearchStatus(jobStatus)
         await streamFullJob(jobId, scope)
         if (!isJobLoadScopeCurrent(scope)) return
         // Defensive cleanup: loaded data may have stale 'running' items.
@@ -837,6 +859,7 @@ export const useLoadJobData = (): UseLoadJobDataReturn => {
       stopAllDeepResearchSpinners,
       setStreamLoaded,
       setLoadedJobId,
+      updateDeepResearchStatus,
       syncMissingJobToFailureState,
       addErrorCard,
       completeDeepResearch,

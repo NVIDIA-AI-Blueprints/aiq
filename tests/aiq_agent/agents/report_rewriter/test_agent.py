@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import logging
+from unittest.mock import MagicMock
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -33,7 +34,9 @@ async def test_report_rewriter_uses_parent_report_context_and_emits_output_file(
     writer_llm = FakeWriterLLM()
     provider = LLMProvider()
     provider.configure(LLMRole.REPORT_WRITER, writer_llm)
-    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+    callback = MagicMock()
+    duplicate_callback = MagicMock()
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[], callbacks=[callback, duplicate_callback])
 
     state = ReportRewriterAgentState(
         messages=[HumanMessage(content="Remove the appendix.")],
@@ -52,6 +55,8 @@ async def test_report_rewriter_uses_parent_report_context_and_emits_output_file(
     assert "# Parent Report" in rendered_prompt
     assert "Remove the appendix." in rendered_prompt
     assert "complete standalone Markdown report" in rendered_prompt
+    callback.emit_final_report.assert_called_once_with("# Revised Report\n\nUpdated body.", cited_urls=[])
+    duplicate_callback.emit_final_report.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -89,7 +94,8 @@ async def test_report_rewriter_verifies_and_sanitizes_revised_report_against_par
     )
     provider = LLMProvider()
     provider.configure(LLMRole.REPORT_WRITER, writer_llm)
-    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+    callback = MagicMock()
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[], callbacks=[callback])
 
     parent_context = {
         "parent_job_id": "parent-job",
@@ -123,6 +129,10 @@ async def test_report_rewriter_verifies_and_sanitizes_revised_report_against_par
         "status": "verified",
         "reason": "valid_citations",
     }
+    callback.emit_final_report.assert_called_once_with(
+        revised_report,
+        cited_urls=["https://valid.example/source"],
+    )
 
 
 @pytest.mark.asyncio
@@ -143,6 +153,64 @@ async def test_rewrite_report_preserves_unverified_parent_status_without_reverif
 
     assert result.report == "# Revised Report\n\nUpdated body without citations."
     assert result.citation_verification_status == {"status": "unverified", "reason": "no_sources"}
+
+
+@pytest.mark.asyncio
+async def test_report_rewriter_does_not_self_verify_unverified_parent_citations():
+    from aiq_agent.agents.deep_researcher.models import citation_verification_warning
+    from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
+    from aiq_agent.agents.report_rewriter.models import ReportRewriterAgentState
+
+    report = "# Revised Report\n\nClaim [1].\n\n## Sources\n[1] Fabricated Source: https://fabricated.example/source"
+    provider = LLMProvider()
+    provider.configure(LLMRole.REPORT_WRITER, FakeWriterLLM(content=report))
+    callback = MagicMock()
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[], callbacks=[callback])
+    state = ReportRewriterAgentState(
+        messages=[HumanMessage(content="Make it clearer.")],
+        files={
+            "/shared/original_report.md": report.replace("Revised", "Parent"),
+            "/shared/parent_report_context.json": json.dumps(
+                {
+                    "parent_job_id": "parent-job",
+                    "citation_verification_status": {"status": "unverified", "reason": "no_sources"},
+                }
+            ),
+        },
+    )
+
+    result = await agent.run(state)
+
+    assert result.citation_verification_status == {"status": "unverified", "reason": "no_sources"}
+    clean_report = result.files["/shared/output.md"]
+    assert clean_report.rstrip() == report
+    warning = citation_verification_warning("no_sources")
+    callback.emit_final_report.assert_called_once_with(f"{warning}\n\n{clean_report}", cited_urls=[])
+
+
+@pytest.mark.asyncio
+async def test_rewrite_report_reverifies_after_sanitizing_last_source():
+    from aiq_agent.agents.report_rewriter.agent import rewrite_report_with_status
+
+    report = "# Report\n\nClaim [1].\n\n## Sources\n[1] Short URL: https://bit.ly/example"
+    result = await rewrite_report_with_status(
+        llm=FakeWriterLLM(content=report),
+        original_report=report,
+        edit_instruction="Make it clearer.",
+        parent_context=json.dumps(
+            {
+                "parent_job_id": "parent-job",
+                "sources": [{"url": "https://bit.ly/example", "title": "Short URL"}],
+                "citation_verification_status": {"status": "verified", "reason": "valid_citations"},
+            }
+        ),
+    )
+
+    assert "bit.ly" not in result.report
+    assert result.citation_verification_status == {
+        "status": "unverified",
+        "reason": "no_valid_citations",
+    }
 
 
 @pytest.mark.asyncio

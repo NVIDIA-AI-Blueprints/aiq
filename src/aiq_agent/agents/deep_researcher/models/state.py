@@ -27,6 +27,7 @@ from aiq_agent.common.citation_verification import NO_SOURCES_REASON
 from aiq_agent.common.citation_verification import NO_TOOLS_AVAILABLE_REASON
 from aiq_agent.common.citation_verification import NO_VALID_CITATIONS_REASON
 from aiq_agent.common.citation_verification import UNVERIFIED_CITATION_STATUS
+from aiq_agent.common.citation_verification import CitationVerificationOutcomeState
 from aiq_agent.common.citation_verification import citation_verification_outcome_dict
 from aiq_agent.common.citation_verification import coerce_citation_verification_outcome
 from aiq_agent.knowledge import AvailableDocument
@@ -144,4 +145,4 @@ class DeepResearchAgentState(BaseModel):
     rubric: str | None = None
     clarifier_result: str | None = None
     available_documents: list[AvailableDocument] | None = None
-    citation_verification_status: dict[str, str] | None = None
+    citation_verification_status: CitationVerificationOutcomeState | None = None

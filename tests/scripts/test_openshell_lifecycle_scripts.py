@@ -134,6 +134,7 @@ def test_authenticated_gateway_runs_mandatory_strict_readiness_check(tmp_path: P
             "auth": "oidc",
             "active": False,
         },
+        extra_env={"AIQ_OPENSHELL_WORKSPACE": "research"},
     )
 
     assert result.returncode == 0, result.stderr
@@ -142,6 +143,7 @@ def test_authenticated_gateway_runs_mandatory_strict_readiness_check(tmp_path: P
     assert calls.count("version-inspector") == 2
     assert "readiness-checker" in calls
     assert "--gateway-name enterprise" in calls
+    assert "--workspace research" in calls
     assert "gateway add" not in calls
 
 
@@ -226,6 +228,8 @@ def test_setup_is_provisioning_only_and_migrates_old_lifecycle_flags() -> None:
     assert "--reinstall-package" not in source
     assert "uv sync --dev --inexact" in source
     assert 'uv pip install "deepagents' not in source
+    assert 'export AIQ_OPENSHELL_WORKSPACE="${AIQ_OPENSHELL_WORKSPACE:-default}"' in source
+    assert 'export AIQ_OPENSHELL_WORKSPACE="default"' not in source
 
     result = subprocess.run(
         [str(_SETUP_SCRIPT), "--gateway-name", "old"],
@@ -258,7 +262,7 @@ def test_setup_rejects_uncertified_openshell_versions(version: str) -> None:
 
     assert result.returncode != 0
     assert "not certified" in result.stderr
-    assert "0.0.80" in result.stderr
+    assert "0.0.88" in result.stderr
 
 
 def test_setup_resolves_docker_desktop_cli_and_credential_helper_together() -> None:

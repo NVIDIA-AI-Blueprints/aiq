@@ -15,7 +15,8 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 - **Collection Management** - create/delete/list collections per session or use case
 - **File Management** - upload/delete/list files with status tracking (UPLOADING -> INGESTING -> SUCCESS/FAILED)
 - **Content Typing** - TEXT, TABLE, CHART, IMAGE enums for frontend rendering
-- **Backend Agnostic** - Swap among local LlamaIndex, hosted RAG Blueprint, and OpenSearch without core agent code changes
+- **Backend Agnostic** - Swap among LlamaIndex, hosted RAG Blueprint, Azure AI Search, and OpenSearch without core
+  agent code changes
 
 ---
 
@@ -25,6 +26,7 @@ A pluggable abstraction for document ingestion and retrieval. Swap backends with
 - [Quick Start](#quick-start)
 - [Usage](#usage)
   - [With YAML Config](#with-nemo-agent-toolkit-yaml-config---recommended)
+  - [Collection Routing](#collection-routing)
   - [Multimodal Extraction](#multimodal-extraction-llamaindex-only)
   - [Document Summaries](#document-summaries)
   - [Supported File Types](#supported-file-types)
@@ -105,12 +107,12 @@ functions:
   knowledge_search:
     _type: knowledge_retrieval      # NeMo Agent Toolkit function type
     backend: llamaindex             # Required: which adapter to use
-    collection_name: my_docs        # Required: target collection
+    collection_name: my_docs        # Retrieval fallback when no session context is present
     top_k: 5                        # Results to return
 
     # Summarization options (optional, all backends):
     # generate_summary: true                  # Generate one-sentence summary per document
-    # summary_model: nemotron_super_llm             # LLM reference from llms: section (required if generate_summary is true)
+    # summary_model: summary_llm                    # LLM reference from llms: section (required if generate_summary is true)
     # summary_db: sqlite+aiosqlite:///./summaries.db  # Summary storage (SQLite or PostgreSQL)
 
     # Backend-specific options (each backend uses different fields):
@@ -124,10 +126,10 @@ functions:
     # opensearch_auth_type: none              # none, basic, or sigv4
     # opensearch_index_prefix: aiq
     # opensearch_ingestion_mode: local        # local, dask, or auto
-    # embed_model: nvidia/llama-nemotron-embed-vl-1b-v2
+    # embed_model: nvidia/nemotron-3-embed-1b
 ```
 
-You can also use environment variable substitution in YAML for sensitive values:
+You can also use environment variable substitution in YAML for deployment-specific values:
 
 ```yaml
 functions:
@@ -139,6 +141,39 @@ functions:
 ```
 
 > **Note:** Each backend has different config options. Only the options matching your `backend` value are used - others are ignored (a warning will be logged). To add new config fields, edit `KnowledgeRetrievalConfig` in `sources/knowledge_layer/src/register.py`.
+
+### Collection Routing
+
+AI-Q selects ingestion and retrieval collections independently. This routing policy applies consistently to all
+shipped knowledge backends: LlamaIndex, Foundational RAG, Azure AI Search, and OpenSearch.
+
+The storage mapping is backend-specific: LlamaIndex and Foundational RAG use named collections, OpenSearch maps each
+collection to a physical index, and Azure AI Search isolates logical collections with `collection_id` filters inside
+one AI-Q-owned physical index.
+
+| Usage | Ingestion target | Retrieval target |
+|-------|------------------|------------------|
+| Web UI | UI-created session collection (`s_<uuid>`) | Active UI session collection |
+| API with a `conversation-id` header | Collection named in `/v1/collections/{collection_name}/documents` | `conversation-id` header value |
+| API without conversation context | Collection named explicitly by the ingestion operation | Configured `collection_name` fallback |
+
+`collection_name` controls only the retrieval fallback. It does not choose an API ingestion destination, and it does
+not override an active UI session. Shipped profiles commonly populate it with
+`${COLLECTION_NAME:-test_collection}`; the environment value is resolved when the workflow configuration is loaded.
+
+Use `COLLECTION_NAME` for a deployment-wide retrieval default when API or CLI requests do not carry conversation
+context. To select a collection for an individual HTTP request, pass that collection name in the `conversation-id`
+header:
+
+```bash
+curl -X POST http://localhost:8000/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "conversation-id: research-papers" \
+  -d '{"messages": [{"role": "user", "content": "Summarize the uploaded documents."}], "stream": false}'
+```
+
+For `/v1/chat/completions`, a `conversation_id` field in the JSON body is not used for collection routing. Use the
+`conversation-id` header instead.
 
 ### Switching Backends
 
@@ -215,7 +250,7 @@ functions:
     opensearch_embedding_dim: ${OPENSEARCH_EMBEDDING_DIM:-2048}
     opensearch_ingestion_mode: ${OPENSEARCH_INGESTION_MODE:-auto}
     opensearch_dask_scheduler_address: ${NAT_DASK_SCHEDULER_ADDRESS:-}
-    embed_model: ${AIQ_EMBED_MODEL:-nvidia/llama-nemotron-embed-vl-1b-v2}
+    embed_model: ${AIQ_EMBED_MODEL:-nvidia/nemotron-3-embed-1b}
     embed_base_url: ${AIQ_EMBED_BASE_URL:-https://integrate.api.nvidia.com/v1}
 ```
 
@@ -232,6 +267,22 @@ collection/index after changing dimensions because an existing `knn_vector` mapp
 The full shipped profile is
 [`configs/config_web_opensearch.yml`](../../../configs/config_web_opensearch.yml).
 
+#### Changing the embedding model
+
+Persisted vector stores are tied to both the embedding model and its output dimension. Changing only
+`AIQ_EMBED_MODEL` is not a compatible in-place update:
+
+- **Chroma:** delete only the affected logical collection through the Knowledge API or UI, then re-ingest its
+  documents. Configuring a new `AIQ_CHROMA_DIR` also creates an isolated store. Deleting the existing shared
+  `AIQ_CHROMA_DIR` removes every named collection in that store and can destroy unrelated data.
+- **OpenSearch:** set `OPENSEARCH_EMBEDDING_DIM` to the new model's exact output length, delete the existing AI-Q
+  collection/index, and re-ingest every document. AI-Q rejects unmarked or incompatible indexes before ingestion or
+  retrieval.
+- **Azure AI Search:** model and dimension are part of the physical index identity; changing either creates an isolated
+  index that must be populated by re-ingestion.
+
+See the detailed [knowledge-layer setup migration procedure](../../../sources/knowledge_layer/KNOWLEDGE-LAYER-SETUP.md#migrating-an-embedding-model).
+
 OpenSearch ingestion is text-only: it extracts text from PDF, DOCX, PPTX, and supported plain-text formats, but does not
 perform LlamaIndex table/image/chart extraction. Distributed Dask ingestion also disables document-summary generation
 because the configured summary LLM is not serialized to workers; use local ingestion when summaries are required.
@@ -245,7 +296,7 @@ All options below can be overridden via environment variables:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | **Embedding** | | |
-| `AIQ_EMBED_MODEL` | `nvidia/llama-nemotron-embed-vl-1b-v2` | NVIDIA embedding model |
+| `AIQ_EMBED_MODEL` | `nvidia/nemotron-3-embed-1b` | NVIDIA embedding model |
 | `AIQ_EMBED_BASE_URL` | `https://integrate.api.nvidia.com/v1` | Embedding API base URL — override for local NIM |
 | `OPENSEARCH_EMBEDDING_DIM` | `2048` | OpenSearch vector dimension; must equal the selected embedding model's output length before index creation |
 | **Extraction Flags** | | |
@@ -253,7 +304,7 @@ All options below can be overridden via environment variables:
 | `AIQ_EXTRACT_IMAGES` | `false` | Extract and caption images with VLM |
 | `AIQ_EXTRACT_CHARTS` | `false` | Classify images as charts and extract structured data |
 | **Vision Model** | | |
-| `AIQ_VLM_MODEL` | `nvidia/nemotron-nano-12b-v2-vl` | VLM for image captioning |
+| `AIQ_VLM_MODEL` | `nvidia/nemotron-3-nano-omni-30b-a3b-reasoning` | VLM for image captioning |
 | `AIQ_VLM_BASE_URL` | `https://integrate.api.nvidia.com/v1` | VLM API base URL — override for local NIM |
 
 When enabled, the startup log shows the active mode:
@@ -272,7 +323,7 @@ Document summaries help research agents understand what files are available befo
 llms:
   summary_llm:
     _type: nim
-    model_name: nvidia/nemotron-mini-4b-instruct
+    model_name: google/gemma-4-31b-it
     base_url: "https://integrate.api.nvidia.com/v1"
     temperature: 0.3
     max_tokens: 150
@@ -302,17 +353,25 @@ File type support depends on the configured backend:
 
 For custom backends, supported types are determined by the backend implementation.
 
-> **Note:** The backends support more types than the frontend currently allows. The frontend only supports uploading
+> **Note:** The backends support more types than the default upload allowlist. The frontend and backend API default to
 > `.pdf,.docx,.txt,.md` (the common subset across all backends). Types like HTML, JSON, CSV, and images are supported by
-> some backends but the frontend upload flow does not handle them yet -- this is a separate task.
+> some backends but must be explicitly enabled and supported by the selected backend.
 
-To change the accepted types in the frontend, set `FILE_UPLOAD_ACCEPTED_TYPES` for your deployment method:
+The frontend and backend API use the same upload controls:
+
+| Variable | Effect |
+|----------|--------|
+| `FILE_UPLOAD_ACCEPTED_TYPES` | Comma-separated extension allowlist; the API also validates declared and actual content |
+| `FILE_UPLOAD_MAX_SIZE_MB` | Maximum size of each file and of all files combined in one request |
+| `FILE_UPLOAD_MAX_FILE_COUNT` | Maximum number of files in one request |
+
+Set identical values for both application components:
 
 | Deployment | Where to set |
 |-----------|-------------|
-| **CLI** (`start_e2e.sh`) | `deploy/.env`: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md` |
-| **Docker Compose** | `deploy/.env` (passed to frontend container automatically) |
-| **Helm** | `deploy/helm/deployment-k8s/values.yaml` under the frontend app's `env` section |
+| **CLI** (`start_e2e.sh`) | `deploy/.env` |
+| **Docker Compose** | `deploy/.env` (passed to the frontend and backend containers) |
+| **Helm** | `deploy/helm/deployment-k8s/values.yaml` under both the backend and frontend apps' `env` sections |
 
 For Foundational RAG, add `.pptx` to include PowerPoint support: `FILE_UPLOAD_ACCEPTED_TYPES=.pdf,.docx,.pptx,.txt,.md`
 
@@ -381,7 +440,12 @@ Open `http://localhost:3000` in your browser.
 
 ### Session Collections
 
-LlamaIndex, Foundational RAG, and OpenSearch support session-based collections (`s_<uuid>`) created by the UI. Each browser session gets its own logical collection; OpenSearch stores each one in a separate prefixed index.
+All four shipped knowledge backends support session-based collections (`s_<uuid>`) created by the UI. Each UI
+conversation gets its own isolated logical collection; the physical storage mapping differs by backend as described in
+[Collection Routing](#collection-routing).
+
+The active session collection is used for both UI ingestion and retrieval and takes precedence over the configured
+`collection_name` fallback.
 
 ### TTL Cleanup
 
@@ -496,8 +560,8 @@ Configuration values are resolved in the following order (highest to lowest prio
 | `OPENSEARCH_INDEX_PREFIX` | opensearch | Prefix for AI-Q-managed indexes |
 | `OPENSEARCH_INGESTION_MODE` | opensearch | `local`, `dask`, or `auto` |
 | `OPENSEARCH_DASK_SCHEDULER_ADDRESS` | opensearch | Optional Dask scheduler for distributed ingestion |
-| `AIQ_EMBED_MODEL`, `AIQ_EMBED_BASE_URL` | llamaindex, opensearch | Embedding model and endpoint |
-| `COLLECTION_NAME` | All | Default collection name |
+| `AIQ_EMBED_MODEL`, `AIQ_EMBED_BASE_URL` | llamaindex, opensearch, azure_ai_search | Embedding model and endpoint |
+| `COLLECTION_NAME` | All | Default retrieval collection when no conversation or session context is present |
 
 ---
 

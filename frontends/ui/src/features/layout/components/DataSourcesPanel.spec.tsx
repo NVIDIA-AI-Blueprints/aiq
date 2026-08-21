@@ -230,10 +230,11 @@ describe('DataSourcesPanel', () => {
       return selector ? selector(state) : state
     })
 
-    render(<DataSourcesPanel />)
+    const { container } = render(<DataSourcesPanel />)
 
-    // SidePanel handles visibility, so content should not be visible
-    expect(screen.queryByText('Individual Connections (3)')).not.toBeInTheDocument()
+    // Push panel keeps content mounted but collapses to zero width and marks
+    // its wrapper div aria-hidden when closed.
+    expect(container.querySelector('div[aria-hidden="true"]')).toBeInTheDocument()
   })
 
   test('renders all sources toggle', () => {
@@ -242,13 +243,12 @@ describe('DataSourcesPanel', () => {
     expect(screen.getByText('All Connections')).toBeInTheDocument()
   })
 
-  test('calls setEnabledDataSources when enable all is clicked', async () => {
+  test('calls setEnabledDataSources when the all-connections switch is toggled', async () => {
     const user = userEvent.setup()
     render(<DataSourcesPanel />)
 
-    // Find and click the "Enable All" button
-    const enableAllButton = screen.getByRole('button', { name: /all available connections/i })
-    await user.click(enableAllButton)
+    // The switch is the sole control for the bulk toggle.
+    await user.click(screen.getByRole('switch'))
 
     expect(mockSetEnabledDataSources).toHaveBeenCalled()
   })
@@ -284,7 +284,7 @@ describe('DataSourcesPanel', () => {
     })
 
     render(<DataSourcesPanel />)
-    await user.click(screen.getByRole('button', { name: /all available connections/i }))
+    await user.click(screen.getByRole('switch'))
 
     // gdrive is protected + not connected, so it must be excluded from bulk enable.
     expect(mockSetEnabledDataSources).toHaveBeenCalledWith(['web_search'])
@@ -350,6 +350,61 @@ describe('DataSourcesPanel', () => {
       render(<DataSourcesPanel />)
 
       expect(screen.getByRole('button', { name: /retry/i })).toBeInTheDocument()
+    })
+
+    test('retry re-fetches data sources with the auth token', async () => {
+      const user = userEvent.setup()
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          rightPanel: 'data-sources',
+          closeRightPanel: mockCloseRightPanel,
+          openRightPanel: mockOpenRightPanel,
+          dataSourcesPanelTab: 'connections',
+          setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+          enabledDataSourceIds: [],
+          toggleDataSource: mockToggleDataSource,
+          setEnabledDataSources: mockSetEnabledDataSources,
+          availableDataSources: null,
+          dataSourcesLoading: false,
+          dataSourcesError: 'Network error',
+          fetchDataSources: mockFetchDataSources,
+          refreshDataSourceStatus: mockRefreshDataSourceStatus,
+        }
+        return selector ? selector(state) : state
+      })
+
+      render(<DataSourcesPanel />)
+
+      await user.click(screen.getByRole('button', { name: /retry loading data sources/i }))
+
+      expect(mockFetchDataSources).toHaveBeenCalledWith('valid-token')
+    })
+  })
+
+  describe('closed-panel accessibility', () => {
+    test('marks the closed panel inert so its descendants leave the tab order', () => {
+      vi.mocked(useLayoutStore).mockImplementation((selector?: (s: any) => any) => {
+        const state = {
+          rightPanel: null,
+          closeRightPanel: mockCloseRightPanel,
+          openRightPanel: mockOpenRightPanel,
+          dataSourcesPanelTab: 'connections',
+          setDataSourcesPanelTab: mockSetDataSourcesPanelTab,
+          enabledDataSourceIds: ['web_search', 'knowledge_base'],
+          toggleDataSource: mockToggleDataSource,
+          setEnabledDataSources: mockSetEnabledDataSources,
+          availableDataSources: mockDataSources,
+          dataSourcesLoading: false,
+          dataSourcesError: null,
+          fetchDataSources: mockFetchDataSources,
+          refreshDataSourceStatus: mockRefreshDataSourceStatus,
+        }
+        return selector ? selector(state) : state
+      })
+
+      const { container } = render(<DataSourcesPanel />)
+
+      expect(container.querySelector('div[inert]')).toBeInTheDocument()
     })
   })
 

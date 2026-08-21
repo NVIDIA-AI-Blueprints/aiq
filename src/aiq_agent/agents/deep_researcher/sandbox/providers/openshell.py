@@ -108,7 +108,7 @@ def _classify_fs_error(text: str) -> str:
 
 
 _OPENSHELL_IMPORT_HINT = (
-    "The OpenShell sandbox provider requires the `openshell>=0.0.80,<0.1` SDK and the "
+    "The OpenShell sandbox provider requires the `openshell>=0.0.88,<0.1` SDK and the "
     "`langchain-nvidia-openshell` adapter (published on PyPI). They are optional, separately installed "
     "dependencies. Install them with `./scripts/openshell/setup_openshell.sh` (which installs "
     "`langchain-nvidia-openshell` from PyPI; override the source via `LANGCHAIN_NVIDIA_REPO`), "
@@ -436,6 +436,7 @@ class OpenShellSandboxProvider(SandboxProvider):
 
         sandbox_kwargs: dict[str, object] = {
             "cluster": oscfg.gateway,
+            "workspace": oscfg.workspace,
             "ready_timeout_seconds": oscfg.ready_timeout_seconds,
         }
         shared_name = oscfg.shared_sandbox_name
@@ -582,7 +583,11 @@ class OpenShellSandboxProvider(SandboxProvider):
                 reason_code="rpc_unavailable",
             )
 
-        status_request = openshell_pb2.GetSandboxPolicyStatusRequest(name=sandbox_ref.name, version=0)
+        status_request = openshell_pb2.GetSandboxPolicyStatusRequest(
+            name=sandbox_ref.name,
+            version=0,
+            workspace=oscfg.workspace,
+        )
         sandbox_id = getattr(sandbox_ref, "id", None) or sandbox_ref.name
         config_request = sandbox_pb2.GetSandboxConfigRequest(sandbox_id=sandbox_id)
         deadline = time.monotonic() + oscfg.policy_load_timeout_seconds
@@ -600,7 +605,7 @@ class OpenShellSandboxProvider(SandboxProvider):
                 )
 
             try:
-                refreshed = client.get(sandbox_ref.name)
+                refreshed = client.get(sandbox_ref.name, workspace=oscfg.workspace)
                 phase = getattr(refreshed, "phase", None)
                 current_policy_version = getattr(refreshed, "current_policy_version", 0)
                 status_response = stub.GetSandboxPolicyStatus(status_request, timeout=min(5.0, remaining))

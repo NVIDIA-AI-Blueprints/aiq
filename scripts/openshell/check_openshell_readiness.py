@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.metadata
+import os
 import re
 import subprocess
 import sys
@@ -42,6 +43,7 @@ class ReadinessConfig:
     """Non-secret inputs for one disposable readiness probe."""
 
     gateway: str | None
+    workspace: str
     image: str
     policy: Path
     openshell_bin: Path
@@ -86,16 +88,16 @@ def _is_not_found(exc: BaseException, grpc: Any) -> bool:
     return isinstance(exc, grpc.Call) and exc.code() == grpc.StatusCode.NOT_FOUND
 
 
-def _verify_absent(client: Any, name: str, selector: str, grpc: Any) -> None:
+def _verify_absent(client: Any, name: str, selector: str, grpc: Any, *, workspace: str) -> None:
     try:
-        client.get(name)
+        client.get(name, workspace=workspace)
     except grpc.RpcError as exc:
         if not _is_not_found(exc, grpc):
             raise ReadinessError("cleanup_failed") from exc
     else:
         raise ReadinessError("cleanup_failed")
     try:
-        selected = client.list(label_selector=selector)
+        selected = client.list(workspace=workspace, label_selector=selector)
     except Exception as exc:  # noqa: BLE001 - never expose SDK response details
         raise ReadinessError("cleanup_failed") from exc
     if any(getattr(item, "name", None) == name for item in selected):
@@ -106,6 +108,7 @@ def _verify_policy(
     *,
     client: Any,
     sandbox: Any,
+    workspace: str,
     expected_policy: Any,
     timeout_seconds: float,
     openshell_pb2: Any,
@@ -114,7 +117,11 @@ def _verify_policy(
     stub = getattr(client, "_stub", None)
     if stub is None or not hasattr(stub, "GetSandboxPolicyStatus") or not hasattr(stub, "GetSandboxConfig"):
         raise ReadinessError("sdk_capability_missing")
-    status_request = openshell_pb2.GetSandboxPolicyStatusRequest(name=sandbox.name, version=0)
+    status_request = openshell_pb2.GetSandboxPolicyStatusRequest(
+        name=sandbox.name,
+        version=0,
+        workspace=workspace,
+    )
     config_request = sandbox_pb2.GetSandboxConfigRequest(sandbox_id=sandbox.id or sandbox.name)
     deadline = time.monotonic() + timeout_seconds
     pending_effective = False
@@ -123,7 +130,7 @@ def _verify_policy(
         if remaining <= 0:
             raise ReadinessError("policy_status_inconsistent" if pending_effective else "attestation_timeout")
         try:
-            refreshed = client.get(sandbox.name)
+            refreshed = client.get(sandbox.name, workspace=workspace)
             status = stub.GetSandboxPolicyStatus(status_request, timeout=min(5.0, remaining))
             config = stub.GetSandboxConfig(config_request, timeout=min(5.0, remaining))
         except Exception as exc:  # noqa: BLE001 - never expose SDK response details
@@ -214,29 +221,37 @@ def run_check(config: ReadinessConfig) -> tuple[str, str]:
         }
         if None in version_identities or len(version_identities) != 1:
             raise ReadinessError("version_mismatch")
+        workspace_methods = ("create", "list", "wait_ready", "get", "delete", "wait_deleted")
         if (
-            not _accepts_keyword(client.create, "name")
+            any(
+                not _accepts_keyword(getattr(client, method_name, None), "workspace")
+                for method_name in workspace_methods
+            )
+            or not _accepts_keyword(client.create, "name")
             or not _accepts_keyword(client.create, "labels")
             or not _accepts_keyword(client.list, "label_selector")
         ):
             raise ReadinessError("request_labels_unsupported")
 
-        sandbox_name = f"aiq-readiness-{uuid4().hex[:12]}"
+        sandbox_name = f"aiqr-{uuid4().hex[:12]}"
         cleanup_name = sandbox_name
         primary_error: ReadinessError | None = None
         try:
-            sandbox = client.create(spec=spec, name=sandbox_name, labels=labels)
+            sandbox = client.create(workspace=config.workspace, spec=spec, name=sandbox_name, labels=labels)
             cleanup_name = getattr(sandbox, "name", None) or sandbox_name
             if sandbox.name != sandbox_name:
                 raise ReadinessError("probe_failed")
-            sandbox = client.wait_ready(sandbox_name, timeout_seconds=config.ready_timeout_seconds)
-            selected = client.list(label_selector=selector)
+            sandbox = client.wait_ready(
+                sandbox_name, workspace=config.workspace, timeout_seconds=config.ready_timeout_seconds
+            )
+            selected = client.list(workspace=config.workspace, label_selector=selector)
             matches = [item for item in selected if getattr(item, "name", None) == sandbox_name]
             if len(selected) != 1 or len(matches) != 1 or dict(getattr(matches[0], "labels", {})) != labels:
                 raise ReadinessError("selector_mismatch")
             _verify_policy(
                 client=client,
                 sandbox=sandbox,
+                workspace=config.workspace,
                 expected_policy=expected_policy,
                 timeout_seconds=config.policy_load_timeout_seconds,
                 openshell_pb2=openshell_pb2,
@@ -253,15 +268,15 @@ def run_check(config: ReadinessConfig) -> tuple[str, str]:
         finally:
             try:
                 try:
-                    client.get(cleanup_name)
+                    client.get(cleanup_name, workspace=config.workspace)
                 except grpc.RpcError as exc:
                     if not _is_not_found(exc, grpc):
                         raise
                 else:
-                    if not client.delete(cleanup_name):
+                    if not client.delete(cleanup_name, workspace=config.workspace):
                         raise ReadinessError("cleanup_failed")
-                    client.wait_deleted(cleanup_name)
-                _verify_absent(client, cleanup_name, selector, grpc)
+                    client.wait_deleted(cleanup_name, workspace=config.workspace)
+                _verify_absent(client, cleanup_name, selector, grpc, workspace=config.workspace)
             except Exception as exc:  # noqa: BLE001 - cleanup failure overrides probe failure
                 raise ReadinessError("cleanup_failed") from exc
         if primary_error is not None:
@@ -272,6 +287,7 @@ def run_check(config: ReadinessConfig) -> tuple[str, str]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gateway-name", default=None)
+    parser.add_argument("--workspace", default=os.getenv("AIQ_OPENSHELL_WORKSPACE") or "default")
     parser.add_argument("--image-name", default="aiq-openshell-demo:latest")
     parser.add_argument("--policy-file", type=Path, required=True)
     parser.add_argument("--openshell-bin", type=Path, required=True)
@@ -284,6 +300,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     config = ReadinessConfig(
         gateway=args.gateway_name,
+        workspace=args.workspace,
         image=args.image_name,
         policy=args.policy_file,
         openshell_bin=args.openshell_bin,
