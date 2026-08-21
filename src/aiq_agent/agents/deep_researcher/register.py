@@ -27,14 +27,14 @@ from pydantic import model_validator
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
-from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
-from aiq_agent.common import is_verbose
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay.bootstrap import ensure_started as _ensure_relay_started
+from aiq_agent.relay.config import RelayConfig
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -79,7 +79,6 @@ class DeepResearchAgentConfig(FunctionBaseConfig, name="deep_research_agent"):
         default_factory=list,
         description="Tool names to exclude when inheriting from registry.",
     )
-    verbose: bool = Field(default=True)
     domain_catalog_path: str | None = Field(
         default=None,
         description="Optional YAML/JSON domain catalog path for source-router-agent.",
@@ -239,13 +238,11 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
         writer_llm = await builder.get_llm(config.writer_llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
         provider.configure(LLMRole.REPORT_WRITER, writer_llm)
 
-    verbose = is_verbose(config.verbose)
-    callbacks = [VerboseTraceCallback()] if verbose else []
+    callbacks: list = []
 
     agent = DeepResearcherAgent(
         llm_provider=provider,
         tools=tools,
-        verbose=verbose,
         callbacks=callbacks,
         domain_catalog_path=config.domain_catalog_path,
         enable_source_router=config.enable_source_router,
@@ -283,7 +280,6 @@ async def deep_research_agent(config: DeepResearchAgentConfig, builder: Builder)
                 active_agent = DeepResearcherAgent(
                     llm_provider=provider,
                     tools=selected_tools,
-                    verbose=verbose,
                     callbacks=callbacks,
                     domain_catalog_path=config.domain_catalog_path,
                     enable_source_router=config.enable_source_router,
@@ -335,11 +331,13 @@ class DeepResearchWorkflowConfig(FunctionBaseConfig, name="deep_research_workflo
         default=False,
         description="Submit deep research as an async job instead of running inline",
     )
+    relay: RelayConfig = Field(default_factory=RelayConfig, description="NeMo Relay plugins and export destinations")
 
 
 @register_function(config_type=DeepResearchWorkflowConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def deep_research_workflow(config: DeepResearchWorkflowConfig, builder: Builder):
     """Wrapper workflow that accepts string queries for evaluation."""
+    await _ensure_relay_started(config.relay)
     deep_research_agent_fn = await builder.get_function("deep_research_agent")
     workflow_id = config.name or config.type
 

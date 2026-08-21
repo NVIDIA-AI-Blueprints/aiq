@@ -28,7 +28,6 @@ Configuration example in YAML:
         tools:
           - web_search_tool
         max_turns: 3
-        verbose: true
 """
 
 import logging
@@ -36,10 +35,8 @@ import logging
 from pydantic import Field
 
 from aiq_agent.common import LLMProvider
-from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
-from aiq_agent.common import is_verbose
 from nat.builder.builder import Builder
 from nat.builder.context import Context
 from nat.builder.framework_enum import LLMFrameworkEnum
@@ -68,7 +65,6 @@ class ClarifierConfig(FunctionBaseConfig, name="clarifier_agent"):
         tools: List of tool references for context gathering (e.g., web search).
         max_turns: Maximum number of clarification Q&A turns before auto-completing.
         log_response_max_chars: Maximum characters to log from LLM responses.
-        verbose: Whether to enable verbose logging with VerboseTraceCallback.
     """
 
     llm: LLMRef = Field(..., description="LLM to use for generating questions")
@@ -87,10 +83,6 @@ class ClarifierConfig(FunctionBaseConfig, name="clarifier_agent"):
     log_response_max_chars: int = Field(
         default=2000,
         description="Max characters to log from LLM responses",
-    )
-    verbose: bool = Field(
-        default=False,
-        description="Whether to enable verbose logging",
     )
 
 
@@ -141,8 +133,7 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
     provider = LLMProvider()
     provider.set_default(llm)
 
-    verbose = is_verbose(config.verbose)
-    callbacks = [VerboseTraceCallback(log_reasoning=True, max_chars=config.log_response_max_chars)] if verbose else []
+    callbacks: list = []
 
     async def user_prompt_callback(question: str) -> str:
         """
@@ -174,7 +165,6 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
         user_prompt_callback=user_prompt_callback,
         max_turns=config.max_turns,
         log_response_max_chars=config.log_response_max_chars,
-        verbose=verbose,
         callbacks=callbacks,
     )
 
@@ -197,7 +187,6 @@ async def clarifier_agent(config: ClarifierConfig, builder: Builder):
                 user_prompt_callback=user_prompt_callback,
                 max_turns=config.max_turns,
                 log_response_max_chars=config.log_response_max_chars,
-                verbose=verbose,
                 callbacks=callbacks,
             )
 

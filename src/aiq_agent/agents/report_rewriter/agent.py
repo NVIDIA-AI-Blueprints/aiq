@@ -26,6 +26,8 @@ from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
 from aiq_agent.common.logging_utils import log_identifier_ref
+from aiq_agent.relay import ainvoke_with_relay
+from aiq_agent.relay import run_agent
 
 from .models import ReportRewriterAgentState
 
@@ -102,6 +104,7 @@ async def rewrite_report(
     source_summary: str = _DEFAULT_SOURCE_SUMMARY,
     parent_context: str = "{}",
     system_prompt: str | None = None,
+    callbacks: list[Any] | None = None,
 ) -> str:
     """Rewrite a report per an edit instruction with one bounded LLM call.
 
@@ -120,12 +123,11 @@ async def rewrite_report(
         parent_context=parent_context,
         edit_instruction=instruction,
     )
-    response = await llm.ainvoke(
-        [
-            SystemMessage(content=rendered_prompt),
-            HumanMessage(content=instruction),
-        ]
-    )
+    messages = [
+        SystemMessage(content=rendered_prompt),
+        HumanMessage(content=instruction),
+    ]
+    response = await ainvoke_with_relay(llm, messages, callbacks=callbacks)
     revised_report = response.content if hasattr(response, "content") else str(response)
     revised_report = revised_report if isinstance(revised_report, str) else str(revised_report)
     revised_report = revised_report.strip()
@@ -145,12 +147,10 @@ class ReportRewriterAgent:
         llm_provider: LLMProvider,
         tools: Sequence[Any] | None = None,
         *,
-        verbose: bool = False,
         callbacks: list[Any] | None = None,
         job_id: str | None = None,
     ) -> None:
         self.llm_provider = llm_provider
-        self.verbose = verbose
         self.callbacks = callbacks or []
         self.job_id = job_id
         self.system_prompt = load_prompt(AGENT_DIR / "prompts", "edit")
@@ -186,14 +186,18 @@ class ReportRewriterAgent:
         source_summary = self._read_text_file(state.files, SOURCE_SUMMARY_PATH) or _DEFAULT_SOURCE_SUMMARY
         parent_context = self._read_text_file(state.files, PARENT_CONTEXT_PATH) or "{}"
 
-        revised_report = await rewrite_report(
-            llm=self.llm_provider.get(LLMRole.REPORT_WRITER),
-            original_report=original_report,
-            edit_instruction=instruction,
-            source_summary=source_summary,
-            parent_context=parent_context,
-            system_prompt=self.system_prompt,
-        )
+        async def _rewrite() -> str:
+            return await rewrite_report(
+                llm=self.llm_provider.get(LLMRole.REPORT_WRITER),
+                original_report=original_report,
+                edit_instruction=instruction,
+                source_summary=source_summary,
+                parent_context=parent_context,
+                system_prompt=self.system_prompt,
+                callbacks=self.callbacks,
+            )
+
+        revised_report = await run_agent("report_rewriter_agent", _rewrite, input_value=state)
         cited_urls = _verified_cited_urls(
             revised_report,
             _effective_parent_sources(original_report, parent_context),

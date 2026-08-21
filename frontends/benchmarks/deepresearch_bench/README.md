@@ -55,9 +55,11 @@ python frontends/benchmarks/deepresearch_bench/scripts/export_drb_jsonl.py --inp
 Follow instructions in the [Deep Research Bench Github Repository](https://github.com/Ayanami0730/deep_research_bench/tree/main) to run evaluation and obtain scores.
 
 
-## Optional: Phoenix Tracing
+## Optional: Relay and Phoenix Tracing
 
-If your config enables Phoenix tracing, start the Phoenix server before running `nat eval`.
+ATOF tracing is enabled through NeMo Relay by default. To visualize an
+evaluation in Phoenix, start Phoenix and enable the Relay OpenInference OTEL
+endpoint in the evaluated workflow.
 
 Start server (separate terminal):
 
@@ -65,26 +67,25 @@ Start server (separate terminal):
 uvx --from arize-phoenix phoenix serve
 ```
 
-## W&B Tracking
-
-Evaluation runs are tracked using [Weights & Biases Weave](https://wandb.ai/site/weave/) for experiment tracking and observability.
-
-### Configuration
-
-Enable W&B tracking in your config file under `general.telemetry.tracing`:
-
 ```yaml
-general:
-  telemetry:
-    tracing:
-      weave:
-        _type: weave
-        project: "deep-researcher-v2"
+workflow:
+  relay:
+    observability:
+      opentelemetry:
+        enabled: true
+        endpoints:
+          - type: openinference
+            endpoint: ${RELAY_OTEL_ENDPOINT:-http://localhost:6006/v1/traces}
+            resource_attributes:
+              openinference.project.name: aiq-deepresearch-bench
 
 eval:
   general:
     workflow_alias: "aiq-deepresearch-v2-baseline"
 ```
+
+See the main [observability guide](../../../docs/source/deployment/observability.md)
+for ATOF inspection, trace reading, project selection, and cost reporting.
 
 ### workflow_alias
 

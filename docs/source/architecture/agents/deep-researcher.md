@@ -229,7 +229,6 @@ for configuration details.
 | `sandbox` | `FunctionRef`, inline `deep_research_sandbox`, or `None` | `None` | Optional sandbox profile for DeepAgents `execute` support |
 | `enable_citation_verification` | `bool` | `true` | Verify generated citations against captured sources after final report extraction |
 | `resource_limits` | `DeepResearchResourceLimits` | hard ceilings | Per-job request, graph-time, plan, report, shared-state, note, todo, query, and source-call budgets; configurable downward only |
-| `verbose` | `bool` | `true` | Enable detailed logging |
 
 **Example YAML:**
 
@@ -248,7 +247,6 @@ functions:
     resource_limits:
       max_research_queries: 20
       max_source_tool_calls: 100
-    verbose: true
     tools:
       - web_search_tool
 ```

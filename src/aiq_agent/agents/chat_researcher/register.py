@@ -30,7 +30,6 @@ from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import format_data_source_tools
 from aiq_agent.common import get_checkpointer
-from aiq_agent.common import is_verbose
 from aiq_agent.common.citation_verification import get_or_create_session_registry
 from aiq_agent.common.citation_verification import reset_session_registry
 from aiq_agent.common.citation_verification import set_session_registry
@@ -39,6 +38,10 @@ from aiq_agent.common.logging_utils import log_identifier_ref
 from aiq_agent.observability.otel_header_redaction_exporter import (
     ensure_registered as _ensure_otel_redaction_registered,
 )
+from aiq_agent.relay.bootstrap import ensure_started as _ensure_relay_started
+from aiq_agent.relay.config import RelayConfig
+from aiq_agent.relay.runtime import ainvoke_with_relay
+from aiq_agent.relay.runtime import run_workflow
 from nat.builder.builder import Builder
 from nat.builder.context import Context
 from nat.builder.framework_enum import LLMFrameworkEnum
@@ -138,7 +141,10 @@ async def _answer_from_report_context(
         source_summary_markdown=source_summary_markdown,
     )
     try:
-        response = await asyncio.wait_for(llm.ainvoke([HumanMessage(content=prompt)]), timeout=_REPORT_ASK_TIMEOUT_S)
+        response = await asyncio.wait_for(
+            ainvoke_with_relay(llm, [HumanMessage(content=prompt)]),
+            timeout=_REPORT_ASK_TIMEOUT_S,
+        )
     except TimeoutError:
         logger.warning("Report ask LLM call timed out after %ss", _REPORT_ASK_TIMEOUT_S)
         raise
@@ -200,7 +206,6 @@ class IntentClassifierConfig(FunctionBaseConfig, name="intent_classifier"):
         default_factory=list,
         description="Tool names to exclude when inheriting from registry.",
     )
-    verbose: bool = Field(default=False)
     llm_timeout: float = Field(
         default=90,
         description="Timeout in seconds for the intent-classification LLM call. Default 90 if not set.",
@@ -227,8 +232,7 @@ async def intent_classifier(config: IntentClassifierConfig, builder: Builder):
         excluded = set(config.exclude_tools)
         tools = [t for t in tools if getattr(t, "name", "") not in excluded]
 
-    verbose = is_verbose(config.verbose)
-    callbacks = [VerboseTraceCallback()] if verbose else []
+    callbacks: list[Any] = []
 
     tools_info = [{"name": getattr(t, "name", str(t)), "description": getattr(t, "description", "")} for t in tools]
     classifier = IntentClassifier(
@@ -281,7 +285,7 @@ async def context_aware_intent_router(config: ContextAwareIntentRouterConfig, bu
         raise ValueError("context_aware_intent_router requires exactly one catalog tool")
 
     prompt = load_prompt(Path(__file__).parent / "prompts", "context_aware_intent_router.j2")
-    callbacks = [VerboseTraceCallback()] if is_verbose(config.verbose) else []
+    callbacks = [VerboseTraceCallback()] if config.verbose else []
     router = ContextAwareIntentRouter(
         llm,
         tools[0],
@@ -306,7 +310,6 @@ class ChatDeepResearcherConfig(FunctionBaseConfig, name="chat_deepresearcher_age
     max_history: int = Field(
         default=20, description="Maximum number of messages to keep in history before invoking the agent"
     )
-    verbose: bool = Field(default=False, description="Enable verbose logging")
     enable_clarifier: bool = Field(default=False, description="Enable clarification of research queries")
     use_async_deep_research: bool = Field(
         default=False,
@@ -317,6 +320,7 @@ class ChatDeepResearcherConfig(FunctionBaseConfig, name="chat_deepresearcher_age
         default="./checkpoints.db",
         description="SQLite database path or Postgres DSN for persistent checkpoints.",
     )
+    relay: RelayConfig = Field(default_factory=RelayConfig, description="NeMo Relay plugins and export destinations")
 
 
 @register_function(config_type=ChatDeepResearcherConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
@@ -327,6 +331,8 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
     Coordinates intent classification, depth routing, and research agents
     to produce research results based on user queries.
     """
+    await _ensure_relay_started(config.relay)
+
     import os
     import sys
 
@@ -446,8 +452,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
 
         return True, ""
 
-    verbose = is_verbose(config.verbose)
-    callbacks = [VerboseTraceCallback()] if verbose else []
+    callbacks: list[Any] = []
 
     # LLM for inline report Q&A: prefer the report writer model, fall back to the
     # deep researcher's orchestrator LLM (always configured). Report ask is a single
@@ -531,6 +536,7 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             edit_instruction=instruction,
             source_summary=report_context.source_summary_markdown,
             parent_context=report_context.model_dump_json(indent=2, exclude={"report_markdown"}),
+            callbacks=callbacks,
         )
 
     async def _build_report_seed_files(state: ChatResearcherState) -> dict[str, str]:
@@ -627,10 +633,9 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
         validate_deep_research_tools_fn=validate_deep_research_tools,
     )
 
-    async def _run(query: object) -> ChatResearcherResponse:
+    async def _run_impl(query: object, nat_context_conversation_id: str) -> ChatResearcherResponse:
         import os
         import sys
-        import uuid
 
         # Check if API keys are missing and return graceful error response
         if api_key_error_response:
@@ -650,24 +655,18 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
                 workflow_outcome=WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
             )
 
-        # For --input mode, use a fresh conversation_id to avoid loading old checkpoint state
-        # This ensures each run starts with a clean conversation history
         if "--input" in sys.argv:
-            nat_context_conversation_id = str(uuid.uuid4())
             _log_conversation_reference(
                 "Using fresh conversation reference for --input mode: %s",
                 nat_context_conversation_id,
             )
+        elif Context.get().conversation_id:
+            _log_conversation_reference("Thread reference for checkpointing: %s", nat_context_conversation_id)
         else:
-            nat_context_conversation_id = Context.get().conversation_id
-            if not nat_context_conversation_id:
-                nat_context_conversation_id = str(uuid.uuid4())
-                _log_conversation_reference(
-                    "No conversation-id header; generated thread reference: %s",
-                    nat_context_conversation_id,
-                )
-            else:
-                _log_conversation_reference("Thread reference for checkpointing: %s", nat_context_conversation_id)
+            _log_conversation_reference(
+                "No conversation-id header; generated thread reference: %s",
+                nat_context_conversation_id,
+            )
 
         from aiq_agent.auth import get_current_principal
 
@@ -790,5 +789,21 @@ async def chat_deepresearcher_agent(config: ChatDeepResearcherConfig, builder: B
             threading.Thread(target=exit_after_response, daemon=False).start()
 
         return response
+
+    async def _run(query: object) -> ChatResearcherResponse:
+        import sys
+        import uuid
+
+        context = Context.get()
+        nat_context_conversation_id = (
+            str(uuid.uuid4()) if "--input" in sys.argv or not context.conversation_id else context.conversation_id
+        )
+
+        return await run_workflow(
+            workflow_id,
+            lambda: _run_impl(query, nat_context_conversation_id),
+            session_id=nat_context_conversation_id,
+            input_value=query,
+        )
 
     yield FunctionInfo.from_fn(_run, description="Chat deep researcher with intent routing and escalation.")

@@ -21,14 +21,14 @@ from langchain_core.messages import HumanMessage
 from pydantic import Field
 
 from aiq_agent.common import LLMProvider
-from aiq_agent.common import VerboseTraceCallback
 from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
-from aiq_agent.common import is_verbose
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay.bootstrap import ensure_started as _ensure_relay_started
+from aiq_agent.relay.config import RelayConfig
 from nat.builder.builder import Builder
 from nat.builder.framework_enum import LLMFrameworkEnum
 from nat.builder.function_info import FunctionInfo
@@ -59,6 +59,10 @@ class ShallowResearchAgentConfig(FunctionBaseConfig, name="shallow_research_agen
     )
     max_llm_turns: int = Field(default=10, description="Maximum number of LLM turns")
     max_tool_iterations: int = Field(default=5, description="Maximum tool-calling iterations before forcing synthesis")
+    enforce_citations: bool = Field(
+        default=False,
+        description="Fail instead of returning a generated answer when citation integrity cannot be preserved.",
+    )
     verbose: bool = Field(default=False, description="Whether to enable verbose logging")
 
 
@@ -95,8 +99,7 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
     provider = LLMProvider()
     provider.set_default(llm)
 
-    verbose = is_verbose(config.verbose)
-    callbacks = [VerboseTraceCallback()] if verbose else []
+    callbacks: list = []
 
     # No shared agent is built here: it is (re)built per request inside _run, since
     # the active tool set depends on the request's data_sources and the per-user MCP
@@ -178,6 +181,7 @@ async def shallow_research_agent(config: ShallowResearchAgentConfig, builder: Bu
                     tools=selected_tools,
                     max_llm_turns=config.max_llm_turns,
                     max_tool_iterations=config.max_tool_iterations,
+                    enforce_citations=config.enforce_citations,
                     callbacks=callbacks,
                 )
 
@@ -205,12 +209,13 @@ class ShallowResearchWorkflowConfig(FunctionBaseConfig, name="shallow_research_w
     for the shallow_research_agent. Use this as the workflow for evaluation.
     """
 
-    pass
+    relay: RelayConfig = Field(default_factory=RelayConfig, description="NeMo Relay plugins and export destinations")
 
 
 @register_function(config_type=ShallowResearchWorkflowConfig, framework_wrappers=[LLMFrameworkEnum.LANGCHAIN])
 async def shallow_research_workflow(config: ShallowResearchWorkflowConfig, builder: Builder):
     """Wrapper workflow that accepts string queries for evaluation."""
+    await _ensure_relay_started(config.relay)
     shallow_research_agent_fn = await builder.get_function("shallow_research_agent")
     workflow_id = config.name or config.type
 

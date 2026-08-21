@@ -41,6 +41,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from dataclasses import field
 from enum import StrEnum
+from html import escape
 from html import unescape
 from urllib.parse import parse_qs
 from urllib.parse import unquote
@@ -670,17 +671,24 @@ def _extract_title_for_url(content: str, url: str) -> str | None:
     text block.  This prevents a single block containing multiple search
     results from assigning the first result's title to every URL.
     """
+    # Connector renderers escape URL attributes. Match that exact spelling in
+    # the trusted structure while retaining the decoded URL as source identity.
+    escaped_url = escape(url, quote=True)
+
     # Find the block of text containing this URL (split by --- or double newlines)
     blocks = re.split(r"\n\n---\n\n|\n\n\n", content)
     for block in blocks:
-        if url not in block:
+        block_url = escaped_url if escaped_url in block else url
+        if block_url not in block:
             continue
-        url_pos = block.index(url)
+        url_pos = block.index(block_url)
         best_title: str | None = None
         best_distance = float("inf")
-        for pattern in _TITLE_NEAR_URL_PATTERNS:
+        for pattern_index, pattern in enumerate(_TITLE_NEAR_URL_PATTERNS):
             for title_match in pattern.finditer(block):
                 title = title_match.group(1).strip()
+                if pattern_index == 0:
+                    title = unescape(title)
                 if not title or title == url:
                     continue
                 # Prefer titles that appear before (and closest to) the URL

@@ -10,10 +10,6 @@ general:
       console:
         _type: console
         level: INFO
-    # tracing:
-    #   langsmith: # Optional: LangSmith tracing - requires langsmith API key. Set using `export LANGSMITH_API_KEY=<your-langsmith-api-key>`
-    #     _type: langsmith
-    #     project: nvidia-aiq
 
 llms:
   nemotron_lightning_intent_llm:
@@ -38,7 +34,7 @@ llms:
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
     top_p: 0.7
-    max_tokens: 8192
+    max_tokens: 32768
     num_retries: 5
     parallel_tool_calls: false
     chat_template_kwargs:
@@ -133,7 +129,6 @@ functions:
     # exclude_tools: []
     max_turns: 3
     log_response_max_chars: 2000
-    verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent
@@ -161,3 +156,15 @@ workflow:
   enable_escalation: true
   enable_clarifier: true
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
+  # Uncomment to export Relay traces to a local Phoenix instance.
+  # relay:
+  #   observability:
+  #     opentelemetry:
+  #       enabled: true
+  #       endpoints:
+  #         - type: openinference
+  #           endpoint: ${RELAY_OTEL_ENDPOINT:-http://localhost:6006/v1/traces}
+  #           service_name: aiq-relay
+  #           resource_attributes:
+  #             openinference.project.name: aiq-relay
+  #             deployment.environment: development

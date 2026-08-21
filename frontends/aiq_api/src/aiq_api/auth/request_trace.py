@@ -31,10 +31,14 @@ def get_request_trace_tags() -> dict[str, str]:
 
 @contextmanager
 def request_trace_tag_context(tags: dict[str, str]):
-    """Bind request trace tags while NAT emits spans for this request."""
+    """Bind request trace tags and Relay privacy while telemetry is emitted."""
+    from aiq_agent.relay.privacy import request_privacy_context
+    from aiq_agent.relay.privacy import request_privacy_from_tags
+
     token = _current_request_trace_tags.set(dict(tags))
     try:
-        yield
+        with request_privacy_context(request_privacy_from_tags(tags)):
+            yield
     finally:
         _current_request_trace_tags.reset(token)
 

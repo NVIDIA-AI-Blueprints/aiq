@@ -7,10 +7,6 @@ general:
       console:
         _type: console
         level: INFO
-    tracing:
-      weave:
-        _type: weave
-        project: "nvidia-aiq/AIQ_v2_deepsearch_qa"
   use_uvloop: true
 
 llms:
@@ -64,7 +60,6 @@ functions:
 
 workflow:
   _type: deep_research_workflow
-
 eval:
   general:
     output_dir: frontends/benchmarks/deepsearch_qa/results

@@ -16,6 +16,7 @@
 """Tests for citation verification module."""
 
 import logging
+from html import escape
 
 import pytest
 
@@ -438,6 +439,21 @@ class TestGenericUrlExtractor:
         entries = extract_sources_from_tool_result("tavily_web_search", content)
         assert len(entries) == 1
         assert entries[0].url == "https://example.com/article"
+
+    def test_escaped_document_url_and_title_round_trip(self):
+        url = 'https://example.com/search?q="quoted"&next=<unsafe>&close=</Document>'
+        title = 'Research & "Roadmap" <2026> </title>'
+        content = (
+            f'<Document href="{escape(url, quote=True)}">\n'
+            f"<title>\n{escape(title, quote=True)}\n</title>\n"
+            "Evidence\n</Document>"
+        )
+
+        entries = extract_sources_from_tool_result("tavily_web_search", content)
+
+        assert len(entries) == 1
+        assert entries[0].url == url
+        assert entries[0].title == title
 
     def test_multiple_urls_deduplicated(self):
         content = (

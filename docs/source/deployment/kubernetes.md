@@ -279,9 +279,6 @@ For complete examples with NGC-specific flags, refer to `deploy/helm/README.md` 
 | `NIMBLE_API_KEY` | Nimble API key for web search |
 | `SERPER_API_KEY` | Serper API key for Google search |
 | `JINA_API_KEY` | Jina API key |
-| `WANDB_API_KEY` | Weights & Biases API key |
-| `NVIDIA_INFERENCE_API_KEY` | Alternative inference key (defaults to `NVIDIA_API_KEY`) |
-| `INFERENCE_NVIDIA_API_KEY` | Alternative inference key (defaults to `NVIDIA_API_KEY`) |
 
 ### Updating secrets
 

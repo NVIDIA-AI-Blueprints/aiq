@@ -34,6 +34,7 @@ from pydantic import ConfigDict
 from pydantic import Field
 
 from aiq_agent.common.citation_verification import is_non_citable_status_output
+from aiq_agent.relay import ainvoke_tool_with_relay
 
 from ..resource_limits import DEFAULT_MAX_CONSECUTIVE_SOURCE_TOOL_FAILURES
 
@@ -273,7 +274,7 @@ def _make_batch_source_tool(
                 async with limiter.limit():
                     await _ensure_source_tool_circuit_closed()
                     try:
-                        result = await original_tool.ainvoke({input_field_name: query})
+                        result = await ainvoke_tool_with_relay(original_tool, {input_field_name: query})
                     except SourceToolCircuitOpen:
                         raise
                     except Exception:  # noqa: BLE001 - represented as per-item failure for the LLM
@@ -315,7 +316,7 @@ def _make_throttled_source_tool(
         async with limiter.limit():
             await _ensure_source_tool_circuit_closed()
             try:
-                result = await original_tool.ainvoke(kwargs)
+                result = await ainvoke_tool_with_relay(original_tool, kwargs)
             except SourceToolCircuitOpen:
                 raise
             except Exception:

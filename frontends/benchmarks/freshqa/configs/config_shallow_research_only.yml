@@ -7,10 +7,6 @@ general:
       console:
         _type: console
         level: INFO
-    tracing:
-      weave:
-        _type: weave
-        project: "AIQ_v2_freshqa"
 
 llms:
   # Known limitation: Build-hosted Lightning can intermittently produce citation-incomplete shallow drafts.
@@ -57,7 +53,6 @@ functions:
 
 workflow:
   _type: shallow_research_workflow
-
 eval:
   general:
     workflow_alias: "freshqa_eval_shallow_research_only"

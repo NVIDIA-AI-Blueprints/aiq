@@ -106,6 +106,7 @@ async def test_registration_passes_headless_mode_to_agent():
         gsf_text_to_sql_call_limit=6,
         python_call_limit=7,
         finalization_model_call_limit=28,
+        verbose=True,
     )
 
     registration = data_science_register.data_science_agent.__wrapped__(config, builder)
@@ -124,6 +125,9 @@ async def test_registration_passes_headless_mode_to_agent():
         assert agent_cls.call_args.kwargs["gsf_text_to_sql_call_limit"] == 6
         assert agent_cls.call_args.kwargs["python_call_limit"] == 7
         assert agent_cls.call_args.kwargs["finalization_model_call_limit"] == 28
+        callbacks = agent_cls.call_args.kwargs["callbacks"]
+        assert len(callbacks) == 1
+        assert isinstance(callbacks[0], data_science_register.VerboseTraceCallback)
     finally:
         await registration.aclose()
         reset_registry()

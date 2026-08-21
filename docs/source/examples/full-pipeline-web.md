@@ -32,12 +32,6 @@ general:
       console:
         _type: console
         level: INFO
-    # Uncomment for tracing:
-    # tracing:
-    #   phoenix:
-    #     _type: phoenix
-    #     endpoint: http://localhost:6006/v1/traces
-    #     project: dev
 
   # ---------------------------------------------------------------------------
   # Front-end: AI-Q API plugin
@@ -182,7 +176,6 @@ functions:
       - knowledge_search
     max_turns: 3                  # Max clarification rounds
     log_response_max_chars: 2000
-    verbose: true
 
   # -------------------------------------------------------------------------
   # Shallow research agent

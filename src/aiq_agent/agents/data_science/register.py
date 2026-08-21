@@ -19,7 +19,6 @@ from aiq_agent.common import _create_chat_response
 from aiq_agent.common import all_mapped_tools_filtered_out
 from aiq_agent.common import filter_tools_by_sources
 from aiq_agent.common import get_all_tool_refs
-from aiq_agent.common import is_verbose
 from aiq_agent.common import validate_research_source_configuration
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.logging_utils import log_content_metadata
@@ -119,7 +118,7 @@ async def data_science_agent(config: DataScienceAgentConfig, builder: Builder):
     validate_research_source_configuration(None, "data science", tools)
 
     llm = await builder.get_llm(config.llm, wrapper_type=LLMFrameworkEnum.LANGCHAIN)
-    callbacks = (VerboseTraceCallback(),) if is_verbose(config.verbose) else ()
+    callbacks = (VerboseTraceCallback(),) if config.verbose else ()
 
     async def _run(state: DataScienceAgentState) -> DataScienceAgentState:
         from contextlib import AsyncExitStack

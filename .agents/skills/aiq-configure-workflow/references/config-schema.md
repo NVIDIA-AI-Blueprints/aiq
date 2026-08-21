@@ -26,8 +26,6 @@ uv run python .agents/skills/aiq-configure-workflow/scripts/validate_config.py <
 - No `data_source_registry`
 - `requires_auth: true` on a source (confirm MCP/OAuth wiring)
 - `use_async_deep_research: true` without `general.front_end`
-- LangSmith tracing without `LANGCHAIN_API_KEY`
-- Weave tracing without `WANDB_API_KEY`
 
 ## Env checklist
 

@@ -37,7 +37,7 @@ while [[ $# -gt 0 ]]; do
             echo ""
             echo "Options:"
             echo "  --config_file PATH  Config file (default: configs/config_cli_default.yml)"
-            echo "  -v, --verbose       Enable verbose tracing for all agents"
+            echo "  -v, --verbose       Show detailed console logs"
             echo "  -h, --help          Show this help"
             echo ""
             echo "Available configs in configs/:"
@@ -66,10 +66,6 @@ else
 fi
 
 export AIQ_DEV_ENV=cli
-
-if [ "$CLI_VERBOSE" = "true" ]; then
-    export AIQ_VERBOSE=true
-fi
 
 echo "============================================"
 echo "  AI-Q Blueprint - CLI Mode"

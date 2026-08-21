@@ -16,6 +16,7 @@
 """Tests for deep researcher graph and middleware factory helpers."""
 
 from unittest.mock import MagicMock
+from unittest.mock import NonCallableMagicMock
 from unittest.mock import patch
 
 from deepagents.middleware.filesystem import _apply_permissions_to_ls_results
@@ -500,7 +501,7 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     researcher_agent = MagicMock()
     researcher_model = MagicMock()
     shared_middleware = [MagicMock(name="shared_middleware")]
-    backend = MagicMock()
+    backend = NonCallableMagicMock()
 
     with (
         patch(
@@ -537,3 +538,4 @@ def test_researcher_runnable_uses_rendered_prompt_and_runtime_middleware():
     assert "StructuredResponseTextFallbackMiddleware" in middleware_names
     assert "ToolVisibilityMiddleware" in middleware_names
     assert kwargs["middleware"][-2] is shared_middleware[0]
+    assert middleware_names[0] == "NemoRelayMiddleware"

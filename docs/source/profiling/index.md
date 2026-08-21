@@ -142,31 +142,34 @@ Declare prices under `tokenomics.pricing`:
 tokenomics:
   pricing:
     models:
-      "azure/openai/gpt-5.2":
-        input_per_1m_tokens: 2.50
-        output_per_1m_tokens: 10.00
-      # Illustrative market-equivalent rates; verify current provider pricing.
       "nvidia/nemotron-3-ultra-550b-a55b":
-        input_per_1m_tokens: 0.60
-        output_per_1m_tokens: 3.60
+        # NVIDIA-hosted access for this example; not self-hosting cost.
+        input_per_1m_tokens: 0.00
+        output_per_1m_tokens: 0.00
     tools:
-      # Key "web_search" matches "advanced_web_search_tool" via substring lookup
-      "web_search":
+      # Tavily pay-as-you-go: $0.008/credit; basic uses one credit and
+      # advanced uses two. Use your plan's effective credit rate instead.
+      "web_search_tool":
+        cost_per_call: 0.008
+      "advanced_web_search_tool":
         cost_per_call: 0.016
+      # Default Serper Starter tier: $50 / 50,000 successful queries.
+      # Change this when using another tier or paper-search provider.
       "paper_search":
-        cost_per_call: 0.0003
-    # Fallback for any model not listed above.
-    # Set to null to raise an error on unknown models instead.
-    default:
-      input_per_1m_tokens: 1.00
-      output_per_1m_tokens: 4.00
+        cost_per_call: 0.001
 ```
 
 You can optionally set `eval.general.output_dir` in that same file so the report’s default output path matches your eval artifacts directory (refer to `config_tokenomics_pricing.yml` in the bench configs).
 
-**Model name lookup** uses exact match first, then substring match, then the `default`. A key of `"gpt-5.2"` matches a trace model name of `"azure/openai/gpt-5.2"` because the key is a substring of the full name.
+**Model name lookup** uses exact match first, then substring match, then the
+`default`. Prefer the exact provider model identifier emitted in the Relay
+trace so similarly named deployments do not share prices accidentally.
 
-**Tool name lookup** follows the same rule. A key of `"web_search"` matches `"advanced_web_search_tool"` because `"web_search"` is a substring of the tool name. Unknown tools default to $0 — no error is raised, so you only need to configure tools that have a real per-call cost.
+**Tool name lookup** follows the same rule, with exact matches taking priority.
+Keep wrapper and provider-facing tool names distinct so one external request is
+not charged twice. Unknown and internal tools default to $0. Provider-backed
+tools such as paper search must use the effective per-request price for the
+configured provider and subscription plan.
 
 **`cached_input_per_1m_tokens`** is optional. When omitted, cached tokens are billed at the full input rate (no discount). Set it when your model provider charges a reduced rate for KV-cache hits.
 
@@ -176,7 +179,7 @@ After `nat eval` completes, run:
 
 ```bash
 PYTHONPATH=src python -m aiq_agent.tokenomics.report \
-  --trace  frontends/benchmarks/deepresearch_bench/results/all_requests_profiler_traces.json \
+  --trace relay/aiq-relay.atof.jsonl \
   --config frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pricing.yml
 ```
 
@@ -241,23 +244,12 @@ Full per-query table: cost, ISL, OSL, cached tokens, ISL:OSL ratio, LLM call cou
 
 ### Subagent Phase Attribution
 
-The Deep Research Agent has an orchestrator, an optional source router, a planner, parallel researcher workers, and
-a writer. The current adapter in `src/aiq_agent/tokenomics/nat_adapter.py` builds timing windows for `task`
-invocations whose `subagent_type` it can parse. It maps `planner-agent` windows to `planner-phase` and every other
-parsed task subagent to `researcher-phase`. It associates an `LLM_END` with a window using the call's completion
-timestamp; calls outside task windows fall into `orchestrator-phase`.
-
-This does not align completely with the current runtime. The optional `source-router-agent`, `planner-agent`, and
-`writer-agent` are delegated through `task()`, so source-router and writer calls are normally folded into
-`researcher-phase`. Researcher workers are invoked directly by `run_research_batch` rather than through individual
-`task()` calls, so their calls can instead appear in `orchestrator-phase`. The researcher bucket is therefore a
-mixed task-subagent bucket, and the orchestrator bucket is partly an **unattributed/default bucket**; neither proves
-which role's model performed the work.
-
-Phase charts are consequently best-effort diagnostics, not correct per-role cost accounting for the current runtime.
-Overall token and cost totals remain useful independently of that distribution, subject to the completeness of the
-trace and pricing configuration. Native role metadata on each LLM step, or adapter support for every current
-execution path, is required before the phase split can be treated as authoritative.
+The adapter in `src/aiq_agent/tokenomics/atof_adapter.py` reads Relay ATOF
+JSONL and follows scope `parent_uuid` ancestry. Calls nested below real
+`planner-agent` and `researcher-agent` scopes are attributed to those phases;
+all remaining calls use the orchestrator bucket. Parallel researcher tasks use
+isolated Relay asyncio contexts, so they retain correct parentage without
+timing-window inference.
 
 ### Python API
 
@@ -272,7 +264,7 @@ with open("frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pri
 
 pricing = PricingRegistry.from_dict(config["tokenomics"]["pricing"])
 profiles = parse_trace(
-    "frontends/benchmarks/deepresearch_bench/results/all_requests_profiler_traces.json",
+    "relay/aiq-relay.atof.jsonl",
     pricing,
 )
 

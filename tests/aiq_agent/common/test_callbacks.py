@@ -16,54 +16,13 @@
 """Tests for callback handlers and logging utilities."""
 
 import logging
-import os
 from unittest.mock import MagicMock
-from unittest.mock import patch
 
 import pytest
 
 from aiq_agent.common.callbacks import ResearchLogger
 from aiq_agent.common.callbacks import VerboseTraceCallback
-from aiq_agent.common.callbacks import is_verbose_enabled
 from aiq_agent.common.logging_utils import log_content_metadata
-
-
-class TestIsVerboseEnabled:
-    """Tests for the is_verbose_enabled function."""
-
-    def test_verbose_enabled_true(self):
-        """Test is_verbose_enabled returns True for enabled values."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "1"}):
-            assert is_verbose_enabled() is True
-
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "true"}):
-            assert is_verbose_enabled() is True
-
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "yes"}):
-            assert is_verbose_enabled() is True
-
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "TRUE"}):
-            assert is_verbose_enabled() is True
-
-    def test_verbose_disabled(self):
-        """Test is_verbose_enabled returns False for disabled/empty values."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "0"}):
-            assert is_verbose_enabled() is False
-
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "false"}):
-            assert is_verbose_enabled() is False
-
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "no"}):
-            assert is_verbose_enabled() is False
-
-        with patch.dict(os.environ, {"AIQ_VERBOSE": ""}):
-            assert is_verbose_enabled() is False
-
-    def test_verbose_unset(self):
-        """Test is_verbose_enabled returns False when env var is not set."""
-        with patch.dict(os.environ, clear=True):
-            os.environ.pop("AIQ_VERBOSE", None)
-            assert is_verbose_enabled() is False
 
 
 class TestResearchLogger:
@@ -82,11 +41,10 @@ class TestResearchLogger:
         logger_non_verbose = ResearchLogger(mock_logger, verbose=False)
         assert logger_non_verbose.verbose is False
 
-    def test_research_logger_init_from_env(self, mock_logger):
-        """Test ResearchLogger initialization from environment variable."""
-        with patch.dict(os.environ, {"AIQ_VERBOSE": "true"}):
-            logger = ResearchLogger(mock_logger)
-            assert logger.verbose is True
+    def test_research_logger_defaults_to_non_verbose(self, mock_logger, monkeypatch):
+        """Research logging does not consult a process-global verbosity switch."""
+        monkeypatch.setenv("AIQ_VERBOSE", "true")
+        assert ResearchLogger(mock_logger).verbose is False
 
     def test_section_logs_info(self, mock_logger):
         """Test section method logs at info level."""

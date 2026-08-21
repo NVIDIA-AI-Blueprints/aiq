@@ -56,6 +56,7 @@ from langchain_core.tools import BaseTool
 from langgraph.graph import StateGraph
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
+from nemo_relay.integrations.langchain import NemoRelayMiddleware
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import LLMRole
@@ -64,6 +65,8 @@ from aiq_agent.common import get_latest_user_query
 from aiq_agent.common import load_prompt
 from aiq_agent.common import render_prompt_template
 from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay import ainvoke_with_relay
+from aiq_agent.relay import run_agent
 
 from .models import ClarificationResponse
 from .models import ClarifierAgentState
@@ -156,7 +159,6 @@ class ClarifierAgent:
         user_prompt_callback: Callable[[str], Awaitable[str]],
         max_turns: int = 3,
         log_response_max_chars: int = 2000,
-        verbose: bool = False,
         callbacks: list[Any] | None = None,
     ) -> None:
         """
@@ -172,7 +174,6 @@ class ClarifierAgent:
                 automatically completing clarification. Defaults to 3.
             log_response_max_chars: Maximum characters to log from LLM responses.
                 Used for debugging. Defaults to 2000.
-            verbose: Whether to enable detailed logging. Defaults to False.
             callbacks: Optional list of LangChain callback handlers for
                 tracing and logging.
         """
@@ -181,7 +182,6 @@ class ClarifierAgent:
         self.user_prompt_callback = user_prompt_callback
         self.max_turns = max_turns
         self.log_response_max_chars = log_response_max_chars
-        self.verbose = verbose
         self.callbacks = callbacks or []
 
         self.system_prompt = self._load_default_prompt()
@@ -520,7 +520,7 @@ class ClarifierAgent:
                 logger.info("Adding JSON reminder after tool results")
                 messages.append(HumanMessage(content=JSON_REMINDER_AFTER_TOOLS))
 
-            response = await bound_llm.ainvoke(messages)
+            response = await ainvoke_with_relay(bound_llm, messages, callbacks=self.callbacks)
 
             # Search-before-clarify (issue #234): on the first turn, if the model
             # asks for clarification without searching, nudge it once (guidance as
@@ -541,7 +541,7 @@ class ClarifierAgent:
                 logger.info("Clarifier: model skipped search before clarifying; injecting guidance and retrying once")
                 retry_system = SystemMessage(content=f"{rendered_system_prompt}\n\n{FORCE_SEARCH_GUIDANCE}")
                 retry_messages = [retry_system, *messages[1:], response]
-                retry_response = await bound_llm.ainvoke(retry_messages)
+                retry_response = await ainvoke_with_relay(bound_llm, retry_messages, callbacks=self.callbacks)
                 return {"messages": [retry_response]}
 
             return {"messages": [response]}
@@ -633,7 +633,8 @@ class ClarifierAgent:
             return "ask_for_clarification"
 
         graph.add_node("agent", agent_node)
-        graph.add_node("tools", ToolNode(self.tools))
+        relay_middleware = NemoRelayMiddleware()
+        graph.add_node("tools", ToolNode(self.tools, awrap_tool_call=relay_middleware.awrap_tool_call))
         graph.add_node("ask_for_clarification", ask_clarification)
 
         graph.set_entry_point("agent")
@@ -666,7 +667,11 @@ class ClarifierAgent:
         logger.info("Clarifier: Starting (max %d turns)", self.max_turns)
         query = get_latest_user_query(state.messages)
         logger.info("User query: %s", log_content_metadata(query or ""))
-        result = await self._graph.ainvoke(state, config={"callbacks": self.callbacks})
+
+        async def _invoke_graph() -> dict[str, Any]:
+            return await self._graph.ainvoke(state, config={"callbacks": self.callbacks})
+
+        result = await run_agent("clarifier_agent", _invoke_graph, input_value=state)
         final_state = ClarifierAgentState.model_validate(result)
         return ClarifierResult(clarifier_log=final_state.clarifier_log)
 

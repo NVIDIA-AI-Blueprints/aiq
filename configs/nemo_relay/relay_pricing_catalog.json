@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "provider": "nvidia",
+      "model_id": "nvidia/nemotron-3-ultra-550b-a55b",
+      "aliases": [],
+      "currency": "USD",
+      "unit": "per_token",
+      "rates": {
+        "input_per_million": 0.0,
+        "output_per_million": 0.0,
+        "cache_read_per_million": 0.0
+      },
+      "prompt_cache": {
+        "read_accounting": "included_in_prompt_tokens"
+      },
+      "pricing_as_of": "2026-08-18",
+      "pricing_source": "NVIDIA-hosted API access used by this AI-Q profile; zero is access-path-specific, not a self-hosting cost estimate"
+    },
+    {
+      "provider": "nvidia",
+      "model_id": "nvidia/nemotron-3.5-lightning-30b-a3b",
+      "aliases": [],
+      "currency": "USD",
+      "unit": "per_token",
+      "rates": {
+        "input_per_million": 0.0,
+        "output_per_million": 0.0,
+        "cache_read_per_million": 0.0
+      },
+      "prompt_cache": {
+        "read_accounting": "included_in_prompt_tokens"
+      },
+      "pricing_as_of": "2026-08-18",
+      "pricing_source": "NVIDIA-hosted API access used by this AI-Q profile; zero is access-path-specific, not a self-hosting cost estimate"
+    }
+  ]
+}

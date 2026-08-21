@@ -10,10 +10,6 @@ general:
       console:
         _type: console
         level: INFO
-    # tracing:
-    #   langsmith: # Optional: LangSmith tracing - requires langsmith API key. Set using `export LANGSMITH_API_KEY=<your-langsmith-api-key>`
-    #     _type: langsmith
-    #     project: nvidia-aiq
 
   front_end:
     _type: aiq_api
@@ -220,12 +216,10 @@ functions:
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
       - web_search_tool
-    verbose: true
     domain_catalog_path: configs/domain_catalogs/deep_research_domain_catalog.yml
     skills: deep_research_skills
     sandbox: deep_research_sandbox
 
 workflow:
   _type: deep_research_workflow
-  verbose: true
   use_async_deep_research: true

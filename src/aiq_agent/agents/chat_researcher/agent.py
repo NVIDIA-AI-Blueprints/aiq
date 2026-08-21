@@ -48,6 +48,7 @@ from aiq_agent.common import get_latest_user_query
 from aiq_agent.common.citation_verification import EmptySourceRegistryError
 from aiq_agent.common.logging_utils import log_content_metadata
 from aiq_agent.common.logging_utils import log_identifier_ref
+from aiq_agent.relay import run_agent
 
 try:
     from aiq_api.auth.errors import AuthError as _AuthError
@@ -175,7 +176,15 @@ class ChatResearcherAgent:
 
         async def intent_classifier_node(state: ChatResearcherState) -> dict[str, Any]:
             try:
-                return await self.intent_classifier_fn(state)
+                return await run_agent(
+                    "intent_classifier",
+                    lambda: self.intent_classifier_fn(state),
+                    input_value={
+                        "message_count": len(state.messages),
+                        "data_source_count": len(state.data_sources or []),
+                        "has_active_report": bool(state.active_report_job_id),
+                    },
+                )
             except Exception as error:
                 logger.warning("Intent routing failed (error_type=%s)", type(error).__name__)
                 return {
@@ -655,7 +664,29 @@ class ChatResearcherAgent:
         if messages:
             query = messages[-1].content
             logger.info("Query: %s", log_content_metadata(query or ""))
-        result = await self._graph.ainvoke(input_state, config=graph_config)
+
+        async def _invoke_graph() -> dict[str, Any]:
+            effective_config = dict(graph_config or {})
+            return await self._graph.ainvoke(input_state, config=effective_config)
+
+        input_data_sources = (
+            input_state.get("data_sources") if isinstance(input_state, dict) else input_state.data_sources
+        )
+        relay_input_metadata = {
+            "message_count": len(messages),
+            "data_source_count": len(input_data_sources or []),
+            "has_active_report": bool(
+                input_state.get("active_report_job_id")
+                if isinstance(input_state, dict)
+                else input_state.active_report_job_id
+            ),
+        }
+        result = await run_agent(
+            "chat_deepresearcher_agent",
+            _invoke_graph,
+            session_id=thread_id,
+            input_value=relay_input_metadata,
+        )
 
         logger.info("ChatResearcherAgent: Workflow complete")
 
