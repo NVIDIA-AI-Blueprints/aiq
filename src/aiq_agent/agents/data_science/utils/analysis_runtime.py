@@ -107,19 +107,24 @@ def register_gsf_result(*, question: str, database_name: str | None, payload: di
     ]
     if not column_names and payload["rows"] and isinstance(payload["rows"][0], dict):
         column_names = [str(name) for name in payload["rows"][0]]
-    state.gsf_results.append(
-        {
-            "ref": reference,
-            "question": question,
-            "database_name": database_name,
-            "request_id": payload.get("request_id"),
-            "row_count": len(payload["rows"]),
-            "columns": column_names,
-            "truncated": bool(payload.get("truncated", False)),
-            "path": str(result_path),
-        }
-    )
-    _write_manifest(state)
+    result = {
+        "ref": reference,
+        "question": question,
+        "database_name": database_name,
+        "request_id": payload.get("request_id"),
+        "row_count": len(payload["rows"]),
+        "columns": column_names,
+        "truncated": bool(payload.get("truncated", False)),
+        "path": str(result_path),
+    }
+    state.gsf_results.append(result)
+    if not _write_manifest(state):
+        state.gsf_results.remove(result)
+        try:
+            result_path.unlink(missing_ok=True)
+        except OSError:
+            logger.exception("Failed to remove an unregistered request-local GSF result")
+        return None
     return reference
 
 

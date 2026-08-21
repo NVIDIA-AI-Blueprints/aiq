@@ -263,12 +263,13 @@ def validate(path: str) -> int:
         errors.append("`workflow:` must be a mapping.")
     else:
         wf_type = workflow.get("_type")
-        if wf_type not in WORKFLOW_TYPES:
+        if not isinstance(wf_type, str) or wf_type not in WORKFLOW_TYPES:
             allowed = ", ".join(sorted(WORKFLOW_TYPES))
             errors.append(f"workflow._type must be one of {allowed} (got {wf_type!r}).")
-        for function_name in REQUIRED_WORKFLOW_FUNCTIONS.get(wf_type, ()):
-            if function_name not in declared_functions:
-                errors.append(f"workflow requires function '{function_name}' under functions: (missing).")
+        if isinstance(wf_type, str):
+            for function_name in REQUIRED_WORKFLOW_FUNCTIONS.get(wf_type, ()):
+                if function_name not in declared_functions:
+                    errors.append(f"workflow requires function '{function_name}' under functions: (missing).")
         hybrid_research_agent = workflow.get("hybrid_research_agent")
         if hybrid_research_agent is not None and not isinstance(hybrid_research_agent, str):
             errors.append("workflow.hybrid_research_agent must be a string function name when configured.")

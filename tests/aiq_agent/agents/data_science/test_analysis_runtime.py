@@ -15,7 +15,7 @@ from aiq_agent.agents.data_science.utils.analysis_runtime import register_gsf_re
 
 
 @pytest.mark.asyncio
-async def test_manifest_write_failure_is_nonfatal_and_keeps_in_memory_results(
+async def test_manifest_write_failure_does_not_advertise_unusable_result(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     original_replace = Path.replace
@@ -36,9 +36,9 @@ async def test_manifest_write_failure_is_nonfatal_and_keeps_in_memory_results(
             payload={"rows": [{"value": 7}]},
         )
 
-        assert reference == "gsf_1"
-        assert state.gsf_results[0]["ref"] == "gsf_1"
-        assert (state.root / "gsf_1.json").is_file()
+        assert reference is None
+        assert state.gsf_results == []
+        assert list(state.root.glob("gsf_*.json")) == []
         assert not state.manifest_path.exists()
     finally:
         await end_analysis_run(token)

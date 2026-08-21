@@ -6,6 +6,7 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
 import yaml
 
 _VALIDATOR_PATH = (
@@ -71,3 +72,23 @@ def test_chat_workflow_requires_declared_hybrid_adapter(tmp_path, capsys):
     output = capsys.readouterr().out
     assert "workflow.hybrid_research_agent references function 'misspelled_hybrid_adapter'" in output
     assert "configure a data_science_hybrid_adapter function" in output
+
+
+@pytest.mark.parametrize(
+    "workflow_type",
+    [
+        ["data_science_workflow"],
+        {"name": "data_science_workflow"},
+    ],
+)
+def test_workflow_type_must_be_a_string(tmp_path, capsys, workflow_type):
+    path = _write_config(
+        tmp_path,
+        {
+            "functions": {},
+            "workflow": {"_type": workflow_type},
+        },
+    )
+
+    assert _VALIDATOR.validate(str(path)) == 1
+    assert "workflow._type must be one of" in capsys.readouterr().out
