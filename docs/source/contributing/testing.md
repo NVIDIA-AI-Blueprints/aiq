@@ -17,7 +17,7 @@ uv sync --project mcp --extra dev
 uv run --project mcp --extra dev pytest mcp/tests
 ```
 
-Use mocks for external services; mark slow/integration tests with `@pytest.mark.slow` / `@pytest.mark.integration` as needed.
+Use mocks for external services; mark tests that require external services with `@pytest.mark.integration` as needed.
 
 Refer to each benchmark's README for details. The [Customization guide](../customization/index.md) has a short section on adding eval harnesses.
 

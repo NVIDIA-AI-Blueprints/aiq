@@ -231,10 +231,6 @@ The most detailed tab. All statistics are over individual LLM call observations 
 
 Latency/cost joint analysis: latency vs cost per query scatter, TPS vs ISL scatter, effective cost per 1K output tokens by model, and a model efficiency bubble chart (x = p90 latency, y = cost/1K output tokens, bubble size = call count). Bottom-left on the bubble chart is the ideal operating point.
 
-#### Pricing
-
-Configured input and output prices as bar charts, plus a full LLM pricing table and a tool pricing table.
-
 #### Per-Query
 
 Full per-query table: cost, ISL, OSL, cached tokens, ISL:OSL ratio, LLM call count, workflow duration, and the question text. Useful for identifying which specific queries drove unusual cost or latency.

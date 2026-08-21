@@ -114,8 +114,8 @@ may repeat package installation, and it remains an upstream metadata limitation
 until a compatible adapter release is published. Do not move an unreleased
 adapter into the AI-Q lockfile or hide the conflict with a dependency override.
 Until that release exists, `pip check` reports the adapter's declared
-DeepAgents-range conflict; this PR must not describe that metadata state as
-clean even though the tested adapter surface works with AI-Q's locked runtime.
+DeepAgents-range conflict; this reported conflict is expected and does not
+indicate a broken install; the tested adapter surface works with AI-Q's locked runtime.
 
 AI-Q currently requires and defaults to OpenShell `0.0.88`. It retains the
 policy-revision and request-label capabilities AI-Q requires, adds explicit
