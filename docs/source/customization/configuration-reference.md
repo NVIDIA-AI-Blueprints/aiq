@@ -428,7 +428,7 @@ functions:
 
 ### `shallow_research_agent`
 
-Fast, single-pass research agent that produces citation-backed answers in one tool-calling loop.
+Fast, single-pass research agent that attempts to produce citation-backed answers in one tool-calling loop.
 
 ```yaml
 functions:
@@ -440,6 +440,7 @@ functions:
       - knowledge_search
     max_llm_turns: 10
     max_tool_iterations: 5
+    enforce_citations: false
     verbose: true
 ```
 
@@ -449,6 +450,7 @@ functions:
 | `tools` | `list[str]` | `[]` | Search tools available to the agent. |
 | `max_llm_turns` | `int` | `10` | Maximum number of LLM turns (includes both reasoning and tool-calling steps). |
 | `max_tool_iterations` | `int` | `5` | Maximum tool-calling iterations before forcing synthesis. |
+| `enforce_citations` | `bool` | `false` | Fail the run when citation integrity cannot be preserved. When `false`, AI-Q returns the generated answer after sanitization instead of failing solely on the citation contract. |
 | `verbose` | `bool` | `false` | Enable verbose logging. |
 
 ### `deep_research_agent`
@@ -567,8 +569,8 @@ workflow:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `_type` | `str` | **required** | Workflow type. Use `chat_deepresearcher_agent` for the full pipeline. |
-| `enable_escalation` | `bool` | `true` | Allow the intent classifier to route queries to deep research. When `false`, all research queries use shallow research only. |
-| `enable_clarifier` | `bool` | `true` | Run the clarifier agent before deep research to gather user requirements. |
+| `enable_escalation` | `bool` | `false` | Allow the intent classifier to route queries to deep research. When `false`, all research queries use shallow research only. Every shipped `chat_deepresearcher_agent` profile sets this to `true`. |
+| `enable_clarifier` | `bool` | `false` | Run the clarifier agent before deep research to gather user requirements. Most shipped `chat_deepresearcher_agent` profiles set this to `true`. |
 | `use_async_deep_research` | `bool` | `false` | Submit deep research as an async background job (requires [Dask](https://www.dask.org/) scheduler). |
 | `max_history` | `int` | `20` | Maximum number of messages to keep in conversation history before trimming. |
 | `verbose` | `bool` | `false` | Enable verbose logging. |

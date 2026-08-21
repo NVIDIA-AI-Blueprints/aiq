@@ -70,7 +70,7 @@ Results are written to `frontends/benchmarks/deepsearch_qa/results` (or the `out
 
 - [DeepSearchQA Dataset](https://www.kaggle.com/datasets/deepmind/deepsearchqa)
 - [DeepSearchQA Starter Code](https://www.kaggle.com/code/andrewmingwang/deepsearchqa-starter-code)
-- [NeMo Agent Toolkit Evaluation Framework](https://github.com/NVIDIA/GenerativeAIExamples)
+- [NeMo Agent Toolkit Evaluation documentation](https://docs.nvidia.com/nemo/agent-toolkit/latest/improve-workflows/evaluate.html)
 
 ---
 

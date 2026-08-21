@@ -18,6 +18,8 @@ BREV_GETTING_STARTED_NOTEBOOK = REPO_ROOT / "docs/notebooks/0_Getting_Started_wi
 ULTRA_MODEL = "nvidia/nemotron-3-ultra-550b-a55b"
 LIGHTNING_MODEL = "nvidia/nemotron-3.5-lightning-30b-a3b"
 BUILD_BASE_URL = "https://integrate.api.nvidia.com/v1"
+DEFAULT_LIGHTNING_AGENT_MAX_TOKENS = 32768
+BENCHMARK_LIGHTNING_AGENT_MAX_TOKENS = 8192
 
 CONFIG_GLOBS = (
     ".agents/skills/aiq-configure-workflow/assets/config-scaffold.yml",
@@ -95,6 +97,7 @@ def test_default_profiles_use_role_appropriate_models(config_path: Path):
     config = _load_config(config_path)
     functions = config.get("functions", {})
     is_frontier_profile = config_path.name == "config_frontier_models.yml"
+    is_benchmark_profile = REPO_ROOT / "frontends" / "benchmarks" in config_path.parents
 
     for function in functions.values():
         if not isinstance(function, dict):
@@ -124,7 +127,10 @@ def test_default_profiles_use_role_appropriate_models(config_path: Path):
             assert config["llms"][alias]["api_key"] == "${NVIDIA_API_KEY}"
             assert config["llms"][alias]["temperature"] == 0.2
             assert config["llms"][alias]["top_p"] == 0.7
-            assert config["llms"][alias]["max_tokens"] == 8192
+            expected_max_tokens = (
+                BENCHMARK_LIGHTNING_AGENT_MAX_TOKENS if is_benchmark_profile else DEFAULT_LIGHTNING_AGENT_MAX_TOKENS
+            )
+            assert config["llms"][alias]["max_tokens"] == expected_max_tokens
             assert not config["llms"][alias]["parallel_tool_calls"]
             assert _thinking_enabled(config, alias)
         elif not is_frontier_profile and function_type == "clarifier_agent":

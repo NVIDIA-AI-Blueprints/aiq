@@ -45,7 +45,7 @@ Common issues and solutions for the AI-Q blueprint.
 
 ## Nemotron Hosted Endpoint Availability
 
-Nemotron 3.5 Lightning (`nvidia/nemotron-3.5-lightning-30b-a3b`) and Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AIQ, but their NVIDIA-hosted endpoints can have limited availability during high demand. During peak periods you may observe:
+Nemotron 3.5 Lightning (`nvidia/nemotron-3.5-lightning-30b-a3b`) and Nemotron 3 Ultra (`nvidia/nemotron-3-ultra-550b-a55b`) are compatible and tested with AI-Q, but their NVIDIA-hosted endpoints can have limited availability during high demand. During peak periods you may observe:
 
 - Elevated latency or timeouts on LLM inference calls
 - HTTP 429 (rate-limited) or 503 (service unavailable) responses from the Build API
@@ -60,7 +60,7 @@ For production and staging deployments that require consistent throughput and lo
 - [Self-host Nemotron 3.5 Lightning 30B A3B](https://build.nvidia.com/nvidia/nemotron-3.5-lightning-30b-a3b?nim=self-hosted) for the default intent and shallow-research roles
 - [Self-host Nemotron 3 Ultra 550B A55B](https://build.nvidia.com/nvidia/nemotron-3-ultra-550b-a55b?nim=self-hosted) for the default clarification and deep-research roles
 
-Once your self-hosted endpoint is running, update the corresponding `base_url` in your config to point at it. AIQ's configuration validator currently requires `NVIDIA_API_KEY` for every `_type: nim` profile, even when a local NIM does not enforce client authentication. Set a non-secret placeholder for the local deployment before starting AIQ:
+Once your self-hosted endpoint is running, update the corresponding `base_url` in your config to point at it. AI-Q's configuration validator currently requires `NVIDIA_API_KEY` for every `_type: nim` profile, even when a local NIM does not enforce client authentication. Set a non-secret placeholder for the local deployment before starting AI-Q:
 
 ```bash
 export NVIDIA_API_KEY=local-nim

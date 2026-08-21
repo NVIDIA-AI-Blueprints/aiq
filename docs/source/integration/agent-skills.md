@@ -131,6 +131,7 @@ skills point into `skills/`; the maintainer skills point into `.agents/skills/`:
 .claude/skills/aiq-prepare-pr -> ../../.agents/skills/aiq-prepare-pr
 .claude/skills/aiq-customize-prompts-models -> ../../.agents/skills/aiq-customize-prompts-models
 .claude/skills/aiq-maintain-ci -> ../../.agents/skills/aiq-maintain-ci
+.claude/skills/aiq-configure-workflow -> ../../.agents/skills/aiq-configure-workflow
 ```
 
 To recreate the consumer-skill repo-local install manually:

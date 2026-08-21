@@ -182,7 +182,7 @@ aws iam put-role-policy \
   --policy-document file://aiq-permissions-policy.json
 ```
 
-Capture the role ARN — it goes into the Pod Identity association in Task 6.
+Capture the role ARN — it goes into the Pod Identity association in [Associate the role with the AIQ service account](#associate-the-role-with-the-aiq-service-account).
 
 ```bash
 aws iam get-role --role-name aiq-opensearch-role --query 'Role.Arn' --output text
