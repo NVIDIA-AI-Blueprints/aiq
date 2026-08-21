@@ -37,6 +37,7 @@ classifiers = [
     "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+    "aiq-agent",
     "fastapi>=0.100.0",
     "dask[distributed]>=2024.1.0",
     "sqlalchemy>=2.0.0",

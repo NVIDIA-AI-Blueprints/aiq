@@ -46,7 +46,7 @@ class PricingRegistryConfig(BaseModel):
     """
     Pricing table read from the ``tokenomics.pricing`` section of the eval
     config YAML.  ``models`` is keyed by the exact model name that appears in
-    NAT traces (e.g. ``"azure/openai/gpt-5.2"``).  ``default`` is used as a
+    Relay traces (e.g. ``"nvidia/nemotron-3-ultra-550b-a55b"``). ``default`` is used as a
     fallback when no model key matches.  ``tools`` is keyed by tool name as it
     appears in the trace.
     """
@@ -98,7 +98,7 @@ class PricingRegistry:
     Model lookup order:
     1. Exact match on ``model_name``.
     2. Substring match — useful for versioned or provider-prefixed names
-       (e.g. ``"azure/openai/gpt-5.2"`` matches key ``"gpt-5.2"``).
+       (e.g. ``"nvidia/nemotron-3-ultra-550b-a55b"`` matches key ``"nemotron-3-ultra"``).
     3. ``default`` price, if configured.
     4. :class:`KeyError`.
 

@@ -49,6 +49,9 @@ from aiq_agent.common.citation_verification import get_session_registry
 from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import verify_citations
 from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay import ainvoke_with_relay
+from aiq_agent.relay import run_agent
+from aiq_agent.relay.runtime import awrap_tool_call_with_relay
 
 from ...common import LLMProvider
 from ...common import LLMRole
@@ -360,8 +363,10 @@ class ShallowResearcherAgent:
 
         try:
             response = await asyncio.wait_for(
-                self._get_llm().ainvoke(
+                ainvoke_with_relay(
+                    self._get_llm(),
                     [repair_system, *messages, repair_request],
+                    callbacks=self.callbacks,
                     config=repair_config,
                 ),
                 timeout=self.citation_repair_timeout,
@@ -435,13 +440,23 @@ class ShallowResearcherAgent:
                     )
 
                     full_messages = [system_message] + processed_history + [synthesis_anchor]
-                    response = await self._get_llm().ainvoke(full_messages, config=draft_config)
+                    response = await ainvoke_with_relay(
+                        self._get_llm(),
+                        full_messages,
+                        callbacks=self.callbacks,
+                        config=draft_config,
+                    )
                     return {"messages": [response], "tool_iterations": iterations}
 
                 llm = self._get_llm()
                 llm_with_tools = llm.bind_tools(self.tools) if self.tools else llm
                 full_messages = [system_message] + processed_history
-                response = await llm_with_tools.ainvoke(full_messages, config=draft_config)
+                response = await ainvoke_with_relay(
+                    llm_with_tools,
+                    full_messages,
+                    callbacks=self.callbacks,
+                    config=draft_config,
+                )
 
                 if self.tools and iterations == 0 and not getattr(response, "tool_calls", None):
                     logger.warning("Shallow researcher returned an answer before collecting evidence; retrying once")
@@ -452,8 +467,10 @@ class ShallowResearcherAgent:
                         )
                     )
                     retry_llm = llm.bind_tools(self.tools, parallel_tool_calls=False)
-                    response = await retry_llm.ainvoke(
+                    response = await ainvoke_with_relay(
+                        retry_llm,
                         full_messages + [response, tool_required],
+                        callbacks=self.callbacks,
                         config=draft_config,
                     )
                     retry_tool_calls = getattr(response, "tool_calls", None) or []
@@ -483,7 +500,7 @@ class ShallowResearcherAgent:
 
         builder.set_entry_point("agent")
 
-        tool_node = ToolNode(self.tools)
+        tool_node = ToolNode(self.tools, awrap_tool_call=awrap_tool_call_with_relay)
 
         # Per-agent allowlist mirrors the deep researcher: only tools this
         # agent was loaded with are candidates for source capture. The
@@ -572,9 +589,12 @@ class ShallowResearcherAgent:
 
         recursion_limit = (self.max_llm_turns * 2) + 10
         config = {"recursion_limit": recursion_limit}
-        if self.callbacks:
+
+        async def _invoke_graph() -> dict[str, Any]:
             config["callbacks"] = self.callbacks
-        result = await self._graph.ainvoke(state, config=config)
+            return await self._graph.ainvoke(state, config=config)
+
+        result = await run_agent("shallow_research_agent", _invoke_graph, input_value=state)
 
         # Post-process: verify citations against source registry
         validated_result = dict(result)

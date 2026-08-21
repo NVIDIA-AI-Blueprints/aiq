@@ -26,6 +26,17 @@ class FakeWriterLLM:
         return AIMessage(content=self.content)
 
 
+class ConfigAwareFakeWriterLLM(FakeWriterLLM):
+    def __init__(self, content: str = "# Revised Report\n\nUpdated body.") -> None:
+        super().__init__(content)
+        self.seen_config = None
+
+    async def ainvoke(self, messages, config=None):
+        self.seen_messages = messages
+        self.seen_config = config
+        return AIMessage(content=self.content)
+
+
 @pytest.mark.asyncio
 async def test_report_rewriter_uses_parent_report_context_and_emits_output_file():
     from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
@@ -76,6 +87,58 @@ async def test_rewrite_report_core_returns_revised_markdown_and_renders_prompt()
     rendered_prompt = writer_llm.seen_messages[0].content
     assert "# Parent" in rendered_prompt
     assert "Add a Messi-Ronaldo joke under the title." in rendered_prompt
+
+
+@pytest.mark.asyncio
+async def test_rewrite_report_forwards_callbacks_to_relay_managed_llm_call():
+    from aiq_agent.agents.report_rewriter.agent import rewrite_report
+
+    callbacks = [MagicMock()]
+    writer_llm = ConfigAwareFakeWriterLLM()
+
+    await rewrite_report(
+        llm=writer_llm,
+        original_report="# Parent\n\nBody.",
+        edit_instruction="Make it clearer.",
+        callbacks=callbacks,
+    )
+
+    assert writer_llm.seen_config["callbacks"] == callbacks
+
+
+@pytest.mark.asyncio
+async def test_report_rewriter_keeps_relay_output_serializable_while_propagating_status(monkeypatch):
+    from aiq_agent.agents.report_rewriter import agent as report_rewriter_module
+    from aiq_agent.agents.report_rewriter.agent import ReportRewriterAgent
+    from aiq_agent.agents.report_rewriter.models import ReportRewriterAgentState
+
+    relay_output = None
+
+    async def capture_run_agent(name, operation, *, input_value=None):
+        nonlocal relay_output
+        assert name == "report_rewriter_agent"
+        assert input_value is not None
+        relay_output = await operation()
+        return relay_output
+
+    monkeypatch.setattr(report_rewriter_module, "run_agent", capture_run_agent)
+    provider = LLMProvider()
+    provider.configure(LLMRole.REPORT_WRITER, FakeWriterLLM())
+    agent = ReportRewriterAgent(llm_provider=provider, tools=[])
+    state = ReportRewriterAgentState(
+        messages=[HumanMessage(content="Make it clearer.")],
+        files={
+            "/shared/original_report.md": "# Parent Report\n\nUnverified body.",
+            "/shared/parent_report_context.json": json.dumps(
+                {"citation_verification_status": {"status": "unverified", "reason": "no_sources"}}
+            ),
+        },
+    )
+
+    result = await agent.run(state)
+
+    assert relay_output == "# Revised Report\n\nUpdated body."
+    assert result.citation_verification_status == {"status": "unverified", "reason": "no_sources"}
 
 
 @pytest.mark.asyncio

@@ -1,16 +1,17 @@
 # AIQ Tokenomics
 
-Post-eval analysis module for the Deep Research Agent. Parses a NAT profiler trace, attributes costs and token counts to workflow phases (Orchestrator / Planner / Researcher), and renders a self-contained interactive HTML report.
+Post-eval analysis module for the Deep Research Agent. Parses NeMo Relay ATOF JSONL, attributes costs and token counts to workflow phases (Orchestrator / Planner / Researcher), and renders a self-contained interactive HTML report.
 
 ---
 
 ## Background
 
-### The subagent attribution problem
+### Subagent attribution
 
-The workflow is registered as `deep_research_agent`, and NAT still emits `FUNCTION_START` / `FUNCTION_END` for **tools** (e.g. search). Planner and Researcher subagents are inline LangGraph graphs inside the **`task`** tool: they do not appear as their own `FUNCTION_*` scopes, and traces from this stack usually have no per-step metadata (such as `function_ancestry`) that identifies subagent phase.
-
-This module uses **timing-window attribution**: every `task` TOOL_START/END pair brackets one subagent run and carries `subagent_type` in the tool input. Each `LLM_END` is classified using its **`event_timestamp`** (completion time): if it falls inside a task window, that phase applies; otherwise orchestrator. Overlapping researcher windows (parallel invocations) all yield `researcher-phase` — correct phase even when the specific instance is ambiguous.
+The adapter follows Relay `parent_uuid` ancestry. LLM calls below real
+`planner-agent` and `researcher-agent` scopes are attributed directly to those
+phases; other calls are attributed to the orchestrator. No timing-window
+inference or NAT callback renaming is required.
 
 ---
 
@@ -20,7 +21,7 @@ This module uses **timing-window attribution**: every `task` TOOL_START/END pair
 src/aiq_agent/tokenomics/
 ├── pricing.py       # PricingRegistry — maps model names to per-token prices
 ├── profile.py       # RequestProfile, PhaseStats — structured data classes
-├── nat_adapter.py   # parse_trace() — NAT JSON → list[RequestProfile]
+├── atof_adapter.py  # parse_trace() — Relay ATOF JSONL → list[RequestProfile]
 └── report.py        # generate_report() — builds and renders HTML dashboard
 ```
 
@@ -37,37 +38,37 @@ Pricing lives in a YAML file under `tokenomics.pricing`. Prices are in **USD per
 tokenomics:
   pricing:
     models:
-      # Illustrative market-equivalent rates; verify current provider pricing.
       "nvidia/nemotron-3-ultra-550b-a55b":
-        input_per_1m_tokens: 0.60
-        output_per_1m_tokens: 3.60
+        # NVIDIA-hosted access for this example; not self-hosting cost.
+        input_per_1m_tokens: 0.00
+        output_per_1m_tokens: 0.00
     tools:
-      # Tool name lookup is substring-based: "web_search" matches "advanced_web_search_tool"
-      # and "tavily_search" because the key is a substring of those names.
-      "web_search":
+      # Tavily pay-as-you-go rates. Monthly plans have a lower effective rate.
+      "web_search_tool":
+        cost_per_call: 0.008
+      "advanced_web_search_tool":
         cost_per_call: 0.016
+      # Serper Starter; change for the selected tier/provider.
       "paper_search":
-        cost_per_call: 0.0003
-    # Fallback for any model not explicitly listed.
-    # Set to null to raise an error on unknown models instead.
-    default:
-      input_per_1m_tokens: 1.00
-      output_per_1m_tokens: 4.00
+        cost_per_call: 0.001
 ```
 
 Model name lookup is: exact match → substring match → default. This means a key of `"nemotron-3-ultra"` will match a trace model name of `"nvidia/nemotron-3-ultra-550b-a55b"`.
 
-Tool name lookup follows the same substring rule. Unknown tools default to $0/call — no error is raised, so you can configure only the costly tools and omit free internal ones.
+Tool name lookup tries exact names before substring matching. Unknown tools
+default to $0/call, so free internal tools can be omitted. Configure only the
+provider-facing tool scope to avoid charging both a wrapper and its underlying
+API call.
 
 ---
 
 ## Generating a report
 
-Run after `nat eval` completes. The trace file is written to the `output_dir` configured in the eval config.
+Run after a Relay-instrumented workflow completes. The default ATOF sink writes `relay/aiq-relay.atof.jsonl`.
 
 ```bash
 PYTHONPATH=src python -m aiq_agent.tokenomics.report \
-    --trace  frontends/benchmarks/deepresearch_bench/results/all_requests_profiler_traces.json \
+    --trace relay/aiq-relay.atof.jsonl \
     --config frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pricing.yml \
     [--output path/to/report.html]
 ```
@@ -137,7 +138,7 @@ with open("frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pri
 pricing = PricingRegistry.from_dict(config["tokenomics"]["pricing"])
 
 # Parse trace → one RequestProfile per query
-profiles = parse_trace("results/all_requests_profiler_traces.json", pricing)
+profiles = parse_trace("relay/aiq-relay.atof.jsonl", pricing)
 
 for prof in profiles:
     print(f"Query {prof.request_index}: ${prof.total_cost_usd:.4f}, "

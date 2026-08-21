@@ -1,6 +1,6 @@
 ---
 name: aiq-configure-workflow
-description: Use when composing, adapting, or validating an AI-Q workflow YAML under configs/ — selecting a shipped profile, enabling tools and data_source_registry sources, wiring agents and the chat_deepresearcher_agent workflow, configuring general.telemetry (Phoenix, LangSmith, Weave, OTEL) and general.front_end aiq_api settings, and pre-flighting cross-references before deploy or serve. Hand off deploy to aiq-deploy, live research to aiq-research, prompt/model edits to aiq-customize-prompts-models, and new source code to aiq-add-tool or aiq-add-data-source.
+description: Use when composing, adapting, or validating an AI-Q workflow YAML under configs/ — selecting a shipped profile, enabling tools and data_source_registry sources, wiring agents and the chat_deepresearcher_agent workflow, configuring NeMo Relay observability and general.front_end aiq_api settings, and pre-flighting cross-references before deploy or serve. Hand off deploy to aiq-deploy, live research to aiq-research, prompt/model edits to aiq-customize-prompts-models, and new source code to aiq-add-tool or aiq-add-data-source.
 license: Apache-2.0
 compatibility: Claude Code, Codex, Cursor, OpenCode, and Agent Skills-compatible tools.
 metadata:

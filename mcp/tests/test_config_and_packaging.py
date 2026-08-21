@@ -80,13 +80,12 @@ def test_public_mcp_config_preserves_reference_orchestration_choices() -> None:
         "web_search_tool",
     }
     assert functions["intent_classifier"]["_type"] == "intent_classifier"
-    assert functions["clarifier_agent"] == {
-        "_type": "clarifier_agent",
-        "llm": "nemotron_ultra_llm",
-        "max_turns": 3,
-        "log_response_max_chars": 2000,
-        "verbose": True,
-    }
+    clarifier = functions["clarifier_agent"]
+    assert clarifier["_type"] == "clarifier_agent"
+    assert clarifier["llm"] == "nemotron_ultra_llm"
+    assert clarifier["max_turns"] == 3
+    assert clarifier["log_response_max_chars"] == 2000
+    assert "verbose" not in clarifier
     assert functions["shallow_research_agent"]["exclude_tools"] == ["advanced_web_search_tool"]
     assert functions["deep_research_agent"]["exclude_tools"] == ["web_search_tool"]
 
@@ -105,8 +104,8 @@ def test_public_mcp_config_uses_only_public_models_sources_and_environment_names
     config = yaml.safe_load(_CONFIG_PATH.read_text())
     text = _CONFIG_PATH.read_text().lower()
 
-    assert {entry["_type"] for entry in config["llms"].values()} == {"nim"}
     assert {entry["base_url"] for entry in config["llms"].values()} == {"https://integrate.api.nvidia.com/v1"}
+    assert all(entry["model_name"].startswith("nvidia/") for entry in config["llms"].values())
     assert config["functions"]["web_search_tool"]["_type"] == "tavily_web_search"
     assert config["functions"]["advanced_web_search_tool"]["_type"] == "tavily_web_search"
     assert "nvidia_api_key" in text
@@ -167,6 +166,9 @@ def test_root_workspace_excludes_the_independent_mcp_project() -> None:
                     "en_core_web_lg-3.8.0/en_core_web_lg-3.8.0-py3-none-any.whl"
                 )
             }
+            continue
+        if "git" in source:
+            assert package["name"] == "nemo-relay"
             continue
         editable = source.get("editable")
         assert isinstance(editable, str)

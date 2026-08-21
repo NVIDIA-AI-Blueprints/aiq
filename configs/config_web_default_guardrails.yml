@@ -50,7 +50,7 @@ llms:
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
     top_p: 0.7
-    max_tokens: 8192
+    max_tokens: 32768
     num_retries: 5
     parallel_tool_calls: false
     chat_template_kwargs:
@@ -232,21 +232,18 @@ functions:
   intent_classifier:
     _type: intent_classifier
     llm: nemotron_lightning_intent_llm
-    verbose: true
 
   clarifier_agent:
     _type: clarifier_agent
     llm: nemotron_ultra_llm
     max_turns: 3
     log_response_max_chars: 2000
-    verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent
     llm: nemotron_lightning_agent_llm
     exclude_tools:
       - advanced_web_search_tool
-    verbose: true
     max_llm_turns: 10
     max_tool_iterations: 5
 
@@ -259,11 +256,9 @@ functions:
     writer_llm: nemotron_ultra_writer_llm
     exclude_tools:
       - web_search_tool
-    verbose: true
 
 workflow:
   _type: chat_deepresearcher_agent
-  verbose: true
   enable_escalation: true
   enable_clarifier: true
   use_async_deep_research: true

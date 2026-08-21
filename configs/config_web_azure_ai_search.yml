@@ -10,10 +10,6 @@ general:
       console:
         _type: console
         level: INFO
-    # tracing:
-    #   langsmith: # Optional: LangSmith tracing - requires langsmith API key. Set using `export LANGSMITH_API_KEY=<your-langsmith-api-key>`
-    #     _type: langsmith
-    #     project: nvidia-aiq
 
   front_end:
     _type: aiq_api
@@ -69,7 +65,7 @@ llms:
     api_key: ${NVIDIA_API_KEY}
     temperature: 0.2
     top_p: 0.7
-    max_tokens: 8192
+    max_tokens: 32768
     num_retries: 5
     parallel_tool_calls: false
     chat_template_kwargs:
@@ -196,7 +192,6 @@ functions:
     llm: nemotron_lightning_intent_llm
     # tools: omitted -> inherits all from data_source_registry
     # exclude_tools: []
-    verbose: true
 
   clarifier_agent:
     _type: clarifier_agent
@@ -207,7 +202,6 @@ functions:
     max_turns: 3
     enable_plan_approval: true
     log_response_max_chars: 2000
-    verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent
@@ -215,7 +209,6 @@ functions:
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:                     # Remove advanced variant; shallow uses web_search_tool
       - advanced_web_search_tool
-    verbose: true
     max_llm_turns: 10
     max_tool_iterations: 5
 
@@ -230,11 +223,9 @@ functions:
     # tools: omitted -> inherits all from data_source_registry
     exclude_tools:                     # Remove basic variant; deep uses advanced_web_search_tool
       - web_search_tool
-    verbose: true
 
 workflow:
   _type: chat_deepresearcher_agent
-  verbose: true
   enable_escalation: true
   enable_clarifier: true
   use_async_deep_research: true

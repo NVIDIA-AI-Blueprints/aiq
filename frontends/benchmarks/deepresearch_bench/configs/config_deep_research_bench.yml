@@ -7,14 +7,6 @@ general:
       console:
         _type: console
         level: INFO
-    # tracing:
-      # phoenix:
-      #   _type: phoenix
-      #   endpoint: http://localhost:6006/v1/traces
-      #   project: dev
-      # weave:
-      #   _type: weave
-      #   project: "nvidia-aiq/AIQ_v2_deepresearch_bench"
   use_uvloop: true
 
 llms:
@@ -67,7 +59,6 @@ functions:
 
 workflow:
   _type: deep_research_workflow
-
 eval:
   general:
     workflow_alias: "aiq-deepresearcher"

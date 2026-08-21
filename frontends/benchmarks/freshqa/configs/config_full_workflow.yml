@@ -93,7 +93,6 @@ functions:
       - web_search_tool
     max_llm_turns: 10
     max_tool_iterations: 5
-    verbose: true
 
   deep_research_agent:
     _type: deep_research_agent
@@ -109,10 +108,8 @@ functions:
 workflow:
   _type: chat_deepresearcher_agent
   enable_escalation: true
-  verbose: true
   tools:
     - web_search_tool
-
 eval:
   general:
     workflow_alias: "freshqa_eval_full_workflow_with_intent_classifier_and_depth_router"

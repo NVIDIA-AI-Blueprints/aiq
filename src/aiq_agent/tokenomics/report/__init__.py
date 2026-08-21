@@ -14,20 +14,20 @@
 # limitations under the License.
 
 """
-Generate a self-contained tokenomics HTML report from a NAT profiler trace.
+Generate a self-contained tokenomics HTML report from Relay ATOF JSONL.
 
 Single-run
 ----------
 python -m aiq_agent.tokenomics.report \\
-    --trace  results/all_requests_profiler_traces.json \\
+    --trace relay/aiq-relay.atof.jsonl \\
     --config configs/config_tokenomics_pricing.yml \\
     [--output results/tokenomics_report.html]
 
 Comparison (two or more runs)
 ------------------------------
 python -m aiq_agent.tokenomics.report \\
-    --trace results/run_a/all_requests_profiler_traces.json \\
-    --trace results/run_b/all_requests_profiler_traces.json \\
+    --trace results/run_a/aiq-relay.atof.jsonl \\
+    --trace results/run_b/aiq-relay.atof.jsonl \\
     --config configs/config_tokenomics_pricing.yml
 
 Passing ``--trace`` more than once activates comparison mode: every tab
@@ -42,7 +42,7 @@ from pathlib import Path
 
 import yaml
 
-from ..nat_adapter import parse_trace
+from ..atof_adapter import parse_trace
 from ..pricing import PricingRegistry
 from ._report_builders import _build_comparison_data
 from ._report_builders import _build_report_data
@@ -61,7 +61,7 @@ def generate_report(
     Parameters
     ----------
     trace_path:
-        Path to a single ``all_requests_profiler_traces.json``, or a list of
+        Path to a single Relay ATOF JSONL file, or a list of
         paths for comparison mode.  When more than one path is provided every
         tab (Overview, Cost, Latency, Tokens, Efficiency, Per-Query) shows
         A-vs-B comparison charts instead of single-run visualisations.

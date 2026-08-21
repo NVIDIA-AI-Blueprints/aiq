@@ -45,7 +45,7 @@ All containerized deployments run the same three services:
 
 - **[Async Job Content Encryption](./content-encryption.md)** -- Configure encryption at rest for async final reports and selected artifact event content, including Vault Transit and static-key modes.
 
-- **[Observability](./observability.md)** -- Tracing and monitoring with Phoenix, LangSmith, Weave, and OpenTelemetry.
+- **[Observability](./observability.md)** -- NeMo Relay logging, ATOF traces, Phoenix OTEL export, redaction, and cost data.
 
 - **[Production Considerations](./production.md)** -- Guidance on managed databases, horizontal scaling, security hardening, monitoring, and resource requirements.
 

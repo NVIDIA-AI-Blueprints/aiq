@@ -41,10 +41,11 @@ dependencies = [
     "nvidia-nat-profiler==1.8.0",
     "nvidia-nat-redis==1.8.0",
     "nvidia-nat-security[guardrails]==1.8.0",
-    "deepagents>=0.6.5",
+    "nemo-relay[deepagents,langchain,langgraph]>=0.8,<0.9",
+    "deepagents>=0.7.4,<0.8",
     "langgraph-checkpoint-postgres>=3.0.0",
     "langgraph-checkpoint-sqlite>=2.0.0",
-    "langchain-modal==0.0.5",
+    "langchain-modal==0.0.6",
     "psycopg[binary]>=3.0.0",
     "asyncpg>=0.29.0",
     "aiosqlite>=0.19.0",
@@ -273,6 +274,7 @@ you-com = { workspace = true }
 duckduckgo-news-search = { workspace = true }
 polymarket-prediction-market = { workspace = true }
 knowledge-layer = { workspace = true }
+nemo-relay = { git = "https://github.com/NVIDIA/NeMo-Relay.git", rev = "ffb24817442bac99212da0971b13bdad5bc4d84d" }  # pragma: allowlist secret
 aiq-api = { workspace = true }
 aiq-research-cli = { workspace = true }
 aiq-debug = { workspace = true }

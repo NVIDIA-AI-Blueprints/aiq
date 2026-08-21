@@ -56,11 +56,6 @@ general:
       console:
         _type: console
         level: INFO          # DEBUG, INFO, WARNING, ERROR
-    tracing:
-      phoenix:               # Optional: Phoenix observability
-        _type: phoenix
-        endpoint: http://localhost:6006/v1/traces
-        project: dev
   front_end:                 # Only for web/API mode
     _type: aiq_api
     runner_class: aiq_api.plugin.AIQAPIWorker
@@ -79,13 +74,13 @@ general:
 | `use_uvloop` | `bool` | `false` | Enable uvloop for improved async I/O performance. Recommended for web mode. |
 | `telemetry.logging.console._type` | `str` | `console` | Logging backend type. |
 | `telemetry.logging.console.level` | `str` | `INFO` | Log level: `DEBUG`, `INFO`, `WARNING`, `ERROR`. |
-| `telemetry.tracing` | `object` | -- | Optional tracing configuration (Phoenix, OpenTelemetry). |
 | `front_end._type` | `str` | -- | Front-end type. Use `aiq_api` for the web API server. Omit for CLI mode. |
 | `front_end.db_url` | `str` | `sqlite+aiosqlite:///./jobs.db` | Database URL for async job persistence. |
 | `front_end.expiry_seconds` | `int` | `86400` | How long completed jobs remain in the database (seconds). |
 | `front_end.cors` | `object` | -- | CORS settings for the API server. |
 
-For `aiq_api`, request tag enrichment for NAT-exported spans is configured via
+Tracing is configured through `workflow.relay`, not `general.telemetry`.
+For `aiq_api`, request tag enrichment for Relay-exported spans is configured via
 environment variables rather than YAML fields. Refer to `frontends/aiq_api/README.md`
 and the [Observability](../deployment/observability.md) guide for:
 
@@ -390,7 +385,6 @@ functions:
     tools:
       - web_search_tool
       - paper_search_tool
-    verbose: true
     llm_timeout: 90
 ```
 
@@ -398,7 +392,6 @@ functions:
 |-----------|------|---------|-------------|
 | `llm` | `str` | **required** | Reference to an LLM defined in `llms` section. |
 | `tools` | `list[str]` | `[]` | Tool references passed to the intent prompt for tool-awareness. |
-| `verbose` | `bool` | `false` | Enable verbose logging with trace callbacks. |
 | `llm_timeout` | `float` | `90` | Timeout in seconds for the intent classification LLM call. |
 
 ### `clarifier_agent`
@@ -414,7 +407,6 @@ functions:
       - web_search_tool
     max_turns: 3
     log_response_max_chars: 2000
-    verbose: true
 ```
 
 | Parameter | Type | Default | Description |
@@ -424,7 +416,6 @@ functions:
 | `exclude_tools` | `list[str]` | `[]` | Tool names to exclude when inheriting from the data source registry. |
 | `max_turns` | `int` | `3` | Maximum number of clarification Q&A turns before auto-completing. |
 | `log_response_max_chars` | `int` | `2000` | Maximum characters to log from LLM responses. |
-| `verbose` | `bool` | `false` | Enable verbose logging. |
 
 ### `shallow_research_agent`
 
@@ -497,7 +488,6 @@ functions:
       max_todo_items: 20
       max_todo_item_chars: 2048
       max_total_todo_chars: 10000
-    verbose: true
 ```
 
 | Parameter | Type | Default | Description |
@@ -519,7 +509,6 @@ functions:
 | `max_concurrent_source_tool_calls` | `int` | `5` | Shared cap on concurrent source-tool calls across all researcher workers in the run. |
 | `max_source_tool_batch_size` | `int` | `4` | Maximum concrete inputs accepted by a batch-capable source-tool wrapper in one call. |
 | `resource_limits` | object | See below | Non-disableable per-job request, graph, state, and provider-call ceilings. Values may be reduced but cannot exceed the defaults. |
-| `verbose` | `bool` | `true` | Enable verbose logging. |
 
 `resource_limits` is enforced in both synchronous and async-job construction:
 
@@ -574,9 +563,31 @@ workflow:
   enable_clarifier: true
   use_async_deep_research: true
   max_history: 20
-  verbose: true
   checkpoint_db: ${AIQ_CHECKPOINT_DB:-./checkpoints.db}
+  relay:
+    logging: true
+    observability:
+      enable_full_payloads: true
+      atof: {enabled: true, output_directory: ./relay, filename: aiq-relay.atof.jsonl, mode: append}
+      opentelemetry:
+        enabled: false
+        endpoints:
+          - type: openinference
+            endpoint: "${RELAY_OTEL_ENDPOINT:-http://localhost:6006/v1/traces}"
+            service_name: aiq-relay
+            resource_attributes: {openinference.project.name: aiq-relay}
+    redaction:
+      enabled: true
+      request_privacy_attributes: [data, category_profile]
 ```
+
+The default pricing source list is empty, so default configs omit the pricing
+block and do not load a catalog. The dedicated
+`configs/nemo_relay/config_web_default_with_pricing.yml` example loads
+deployment-specific rates from `configs/nemo_relay/relay_pricing_catalog.json`.
+Its zero-dollar Nemotron entries describe the NVIDIA-hosted access path used by
+the example; they are not estimates for self-hosted infrastructure. Review the
+catalog when the provider offer or deployment changes.
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -585,8 +596,11 @@ workflow:
 | `enable_clarifier` | `bool` | `true` | Run the clarifier agent before deep research to gather user requirements. |
 | `use_async_deep_research` | `bool` | `false` | Submit deep research as an async background job (requires [Dask](https://www.dask.org/) scheduler). |
 | `max_history` | `int` | `20` | Maximum number of messages to keep in conversation history before trimming. |
-| `verbose` | `bool` | `false` | Enable verbose logging. |
 | `checkpoint_db` | `str` | `./checkpoints.db` | SQLite path or PostgreSQL DSN for persistent conversation checkpoints. |
+| `relay` | `object` | enabled defaults | NeMo Relay logging, Observability v3 ATOF/OTEL destinations, PII redaction, and pricing sources. Relay instrumentation itself has no workflow disable switch. See [Observability with NeMo Relay](../deployment/observability.md). |
+
+Relay configuration is strict: unknown nested fields and invalid OTLP endpoint
+URLs fail workflow validation instead of being silently ignored.
 
 > **Note:** `interactive_auth` is a YAML-level field consumed by the CLI entry point (`start_cli.sh` / `aiq-research`), not a Pydantic field on `ChatDeepResearcherConfig`. It can be set in YAML config files but is not part of the workflow config class.
 
@@ -689,7 +703,6 @@ functions:
     tools:
       - web_search_tool
     max_turns: 3
-    verbose: true
 
   shallow_research_agent:              # Fast single-pass research
     _type: shallow_research_agent

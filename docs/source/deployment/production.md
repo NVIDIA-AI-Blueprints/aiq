@@ -364,10 +364,12 @@ Set `LOG_LEVEL=DEBUG` for verbose output during troubleshooting. Use `LOG_LEVEL=
 
 ### Tracing
 
-The backend supports OpenTelemetry-compatible tracing. See [Observability](./observability.md) for setup guides covering Phoenix, LangSmith, Weave, and the OTEL Collector with privacy redaction.
+The backend exports NeMo Relay traces to OpenTelemetry-compatible destinations.
+See [Observability](./observability.md) for ATOF, Phoenix OTEL, pricing, and
+privacy-redaction guidance.
 
 If you are deploying the `aiq_api` front-end and want request correlation on
-NAT-exported spans, set the relevant environment variables at deploy time rather
+Relay-exported spans, set the relevant environment variables at deploy time rather
 than hardcoding them in code:
 
 - `AIQ_TRACE_USER_IDENTITY_MODE`

@@ -1026,14 +1026,33 @@ class TestToolNameSanitizationMiddleware:
 
     @pytest.mark.asyncio
     async def test_awrap_model_call_sanitizes_tool_calls(self, middleware):
-        """Integration: middleware sanitizes tool_calls in AIMessage."""
+        """Sanitize tool names without dropping provider, usage, or response metadata."""
         from langchain.agents.middleware.types import ModelResponse
 
+        response_metadata = {"model_name": "nvidia/nemotron-3-ultra-550b-a55b", "finish_reason": "tool_calls"}
+        usage_metadata = {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120}
+        expected_response_metadata = dict(response_metadata)
+        expected_usage_metadata = dict(usage_metadata)
         ai_msg = AIMessage(
             content="",
+            additional_kwargs={
+                "tool_calls": [
+                    {
+                        "id": "tc1",
+                        "type": "function",
+                        "function": {
+                            "name": "advanced_web_search_tool<|channel|>commentary",
+                            "arguments": '{"question":"test"}',
+                        },
+                    }
+                ],
+                "provider_field": "preserve-me",
+            },
+            response_metadata=response_metadata,
             tool_calls=[
                 {"name": "advanced_web_search_tool<|channel|>commentary", "args": {"question": "test"}, "id": "tc1"},
             ],
+            usage_metadata=usage_metadata,
         )
         mock_response = ModelResponse(result=[ai_msg])
         mock_handler = AsyncMock(return_value=mock_response)
@@ -1041,7 +1060,12 @@ class TestToolNameSanitizationMiddleware:
 
         result = await middleware.awrap_model_call(mock_request, mock_handler)
 
-        assert result.result[0].tool_calls[0]["name"] == "advanced_web_search_tool"
+        message = result.result[0]
+        assert message.tool_calls[0]["name"] == "advanced_web_search_tool"
+        assert message.additional_kwargs["tool_calls"][0]["function"]["name"] == "advanced_web_search_tool"
+        assert message.additional_kwargs["provider_field"] == "preserve-me"
+        assert message.response_metadata == expected_response_metadata
+        assert message.usage_metadata == expected_usage_metadata
 
     @pytest.mark.asyncio
     async def test_awrap_model_call_no_tool_calls_passthrough(self, middleware):

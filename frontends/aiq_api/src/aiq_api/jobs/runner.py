@@ -32,6 +32,8 @@ import threading
 import uuid
 from collections.abc import Awaitable
 from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import field
 from typing import TYPE_CHECKING
 from typing import Any
 
@@ -65,6 +67,17 @@ _DEEP_RESEARCH_AGENT_KWARGS = frozenset(
 )
 _CONFIGURABLE_AGENT_KWARGS = frozenset({"config", "job_id"})
 _JOB_SCOPED_AGENT_KWARGS = frozenset({"job_id"})
+_SHALLOW_RESEARCH_AGENT_KWARGS = frozenset({"max_tool_iterations", "enforce_citations"})
+
+
+@dataclass(frozen=True)
+class JobTraceCorrelation:
+    """Serializable correlation from a submitting request to an independent job trace."""
+
+    session_id: str | None = None
+    submission_trace_id: str | None = None
+    submission_span_id: str | None = None
+    request_trace_tags: dict[str, str] = field(default_factory=dict)
 
 
 def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset[str]) -> bool:
@@ -85,25 +98,6 @@ def _constructor_accepts_explicit_kwargs(agent_cls: type, kwarg_names: frozenset
         if param.kind in (inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD)
     }
     return kwarg_names.issubset(accepted_kwargs)
-
-
-def _normalize_trace_id(trace_id: int | str | None) -> int | None:
-    """Convert trace ID to integer format.
-
-    Args:
-        trace_id: Trace ID as int, hex string, or None.
-
-    Returns:
-        Integer trace ID or None.
-    """
-    if trace_id is None:
-        return None
-    if isinstance(trace_id, int):
-        return trace_id
-    try:
-        return int(trace_id, 16)
-    except ValueError:
-        return int(trace_id)
 
 
 class CancellationMonitor:
@@ -192,6 +186,23 @@ HEARTBEAT_INTERVAL_SECONDS = 30
 # well under GHOST_JOB_TIMEOUT_SECONDS so a live worker refreshes several times
 # before the reaper's timeout.
 LEASE_REFRESH_INTERVAL_SECONDS = 60
+RELAY_STARTUP_TIMEOUT_SECONDS = 30
+
+
+async def _ensure_relay_started_for_job(relay_config: Any, job_id: str) -> None:
+    """Start Relay without allowing observability initialization to stall a job."""
+    from aiq_agent.relay.bootstrap import ensure_started
+
+    try:
+        await asyncio.wait_for(ensure_started(relay_config), timeout=RELAY_STARTUP_TIMEOUT_SECONDS)
+    except Exception as exc:
+        logger.warning("Relay startup failed for job %s (error_type=%s)", job_id, type(exc).__name__)
+
+
+def _resolve_job_relay_config(config: Any, function_config: Any) -> Any:
+    """Prefer workflow Relay settings for a separately executed async agent."""
+    workflow_config = getattr(config, "workflow", None)
+    return getattr(workflow_config, "relay", None) or getattr(function_config, "relay", None)
 
 
 def _db_now_expr(db_url: str) -> str:
@@ -601,13 +612,7 @@ async def run_agent_job(
     input_text: str,
     agent_class_path: str,
     agent_config_name: str,
-    parent_span_id: str | None = None,
-    parent_function_id: str | None = None,
-    parent_function_name: str | None = None,
-    parent_workflow_run_id: str | None = None,
-    parent_workflow_trace_id: int | str | None = None,
-    parent_conversation_id: str | None = None,
-    request_trace_tags: dict[str, str] | None = None,
+    trace_correlation: JobTraceCorrelation | None = None,
     available_documents: list[dict] | None = None,
     data_sources: list[str] | None = None,
     auth_token: str | None = None,
@@ -624,7 +629,7 @@ async def run_agent_job(
     - Uses NAT's JobStore for status tracking
     - Monitors for cancellation requests and gracefully terminates the agent
     - Exports telemetry to Phoenix/OpenTelemetry via NAT's ExporterManager
-    - Propagates trace context from parent workflow for nested spans
+    - Starts an independent trace correlated to the submitting request and session
 
     Args:
         configure_logging: Whether to set up logging in the worker.
@@ -636,13 +641,7 @@ async def run_agent_job(
         input_text: User input/query to run.
         agent_class_path: Full module path to agent class.
         agent_config_name: NAT config function name for the agent.
-        parent_span_id: Parent span ID for trace continuity (from caller context).
-        parent_function_id: Parent function ID for span hierarchy.
-        parent_function_name: Parent function name for span metadata.
-        parent_workflow_run_id: Parent workflow run ID for trace grouping.
-        parent_workflow_trace_id: Parent trace ID (int or hex string) for trace continuity.
-        parent_conversation_id: Conversation ID for session grouping in Phoenix.
-        request_trace_tags: Request trace tags captured at async submission time.
+        trace_correlation: Session and submission identifiers used to correlate this independent job trace.
         available_documents: Optional list of document dicts with file_name and summary.
         data_sources: Optional list of allowed data sources to enforce in the worker.
         auth_token: Optional auth token propagated from the HTTP request for
@@ -656,6 +655,8 @@ async def run_agent_job(
             via /v1/auth/mcp/{id}/connect.
         admission_token: Opaque deep-research fencing token captured at submit time.
     """
+
+    trace_correlation = trace_correlation or JobTraceCorrelation()
 
     # Propagate auth token into the current async task's context so tools
     # can retrieve it via get_auth_token(). Uses a ContextVar so concurrent
@@ -674,8 +675,6 @@ async def run_agent_job(
 
     install_request_trace_span_injection()
 
-    from aiq_agent.common import VerboseTraceCallback
-    from aiq_agent.common import is_verbose
     from nat.builder.framework_enum import LLMFrameworkEnum
     from nat.builder.workflow_builder import WorkflowBuilder
     from nat.front_ends.fastapi.async_jobs.job_store import JobStatus
@@ -787,7 +786,7 @@ async def run_agent_job(
         from nat.builder.context import ContextState
 
         context_state = ContextState.get()
-        _conversation_id_reset = context_state.conversation_id.set(parent_conversation_id)
+        _conversation_id_reset = context_state.conversation_id.set(trace_correlation.session_id)
         # Always shadow the inherited identity, including for ownerless jobs,
         # so a reused worker context cannot expose a prior owner's MCP tokens.
         _user_id_reset = context_state.user_id.set(owner_user_id)
@@ -796,6 +795,9 @@ async def run_agent_job(
             await _attach_middleware_to_function(builder, config, agent_config_name)
 
             fn_config = builder.get_function_config(agent_config_name)
+            relay_config = _resolve_job_relay_config(config, fn_config)
+            if relay_config is not None:
+                await _ensure_relay_started_for_job(relay_config, job_id)
             if getattr(fn_config, "type", None) == "deep_research_agent":
                 from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
                 from aiq_agent.agents.deep_researcher.register import resolve_deep_research_runtime_config
@@ -835,18 +837,16 @@ async def run_agent_job(
             from nat.observability.exporter_manager import ExporterManager
             from nat.utils.reactive.subject import Subject
 
-            from .telemetry import AgentLifecycleTelemetryCallback
-            from .telemetry import aiq_langchain_profiler_context
-
             telemetry_exporters = {
                 name: configured.instance for name, configured in builder._telemetry_exporters.items()
             }
             exporter_manager = ExporterManager.from_exporters(telemetry_exporters)
 
-            # Initialize context state with trace propagation from parent
+            # A durable background job is an independent trace. The submitting
+            # request is retained only as correlation metadata.
             context_state.workflow_run_id.set(job_id)
 
-            workflow_trace_id = _normalize_trace_id(parent_workflow_trace_id) or uuid.uuid4().int
+            workflow_trace_id = uuid.uuid4().int
             context_state.workflow_trace_id.set(workflow_trace_id)
 
             # Event stream for exporters to subscribe to
@@ -862,8 +862,6 @@ async def run_agent_job(
                 InvocationNode(
                     function_name=workflow_span_name,
                     function_id=job_id,
-                    parent_id=parent_function_id,
-                    parent_name=parent_function_name,
                 )
             )
 
@@ -873,36 +871,16 @@ async def run_agent_job(
                 provided_metadata={
                     "workflow_run_id": job_id,
                     "workflow_trace_id": f"{workflow_trace_id:032x}",
-                    "conversation_id": parent_conversation_id,
+                    "conversation_id": trace_correlation.session_id,
                     "agent": agent_class_path,
-                    "parent_workflow_run_id": parent_workflow_run_id,
-                    "parent_workflow_name": parent_function_name,
+                    "submission_trace_id": trace_correlation.submission_trace_id,
+                    "submission_span_id": trace_correlation.submission_span_id,
                 }
             )
 
             # Run with telemetry - exporter must start before pushing events
-            with request_trace_tag_context(request_trace_tags or {}):
+            with request_trace_tag_context(trace_correlation.request_trace_tags):
                 async with exporter_manager.start(context_state=context_state):
-                    # Link to parent span if provided (for nested trace continuity)
-                    parent_metadata: TraceMetadata | None = None
-                    if parent_span_id and parent_span_id != "root":
-                        parent_metadata = TraceMetadata(
-                            provided_metadata={
-                                "workflow_run_id": parent_workflow_run_id,
-                                "workflow_trace_id": f"{workflow_trace_id:032x}",
-                                "conversation_id": parent_conversation_id,
-                                "workflow_name": parent_function_name,
-                            }
-                        )
-                        context.intermediate_step_manager.push_intermediate_step(
-                            IntermediateStepPayload(
-                                UUID=parent_span_id,
-                                event_type=IntermediateStepType.SPAN_START,
-                                name=parent_function_name or "parent_workflow",
-                                metadata=parent_metadata,
-                            )
-                        )
-
                     # Push WORKFLOW_START first so LLM/tool events become children
                     context.intermediate_step_manager.push_intermediate_step(
                         IntermediateStepPayload(
@@ -914,14 +892,10 @@ async def run_agent_job(
                         )
                     )
 
-                    agent_telemetry_callback = AgentLifecycleTelemetryCallback(context.intermediate_step_manager)
-
-                    verbose = is_verbose(getattr(fn_config, "verbose", False))
-                    callbacks = [VerboseTraceCallback()] if verbose else []
+                    callbacks: list[Any] = []
 
                     raw_event_store = EventStore(db_url, job_id, content_cipher=job_output_cipher)
                     event_store = BatchingEventStore(raw_event_store)
-                    callbacks.append(agent_telemetry_callback)
                     callbacks.append(AgentEventCallback(event_store))
 
                     # Resolve per-user MCP source tools for the job owner (Context.user_id
@@ -947,7 +921,6 @@ async def run_agent_job(
                             llm=llm,
                             tools=agent_tools,
                             fn_config=fn_config,
-                            verbose=verbose,
                             callbacks=callbacks,
                             job_id=job_id,
                             # Artifact harvesting rides 284's job store + event stream: the same db_url
@@ -961,10 +934,10 @@ async def run_agent_job(
                         # agents without a sandbox runtime; close()/terminate() are then no-ops.
                         sandbox_runtime = getattr(agent, "deepagents_runtime", None)
 
-                        # Replace NAT's inherited profiler for this invocation rather than adding a
-                        # second callback with duplicate LangChain run IDs.
-                        with aiq_langchain_profiler_context():
-                            result = await _run_agent(
+                        from aiq_agent.relay import run_workflow as run_relay_workflow
+
+                        async def _execute_agent() -> Any:
+                            return await _run_agent(
                                 agent=agent,
                                 input_text=input_text,
                                 builder=builder,
@@ -978,6 +951,20 @@ async def run_agent_job(
                                 initial_files=initial_files,
                             )
 
+                        result = await run_relay_workflow(
+                            f"async_{agent_config_name.removesuffix('_agent')}_job",
+                            _execute_agent,
+                            session_id=trace_correlation.session_id,
+                            input_value=input_text,
+                            metadata={
+                                "aiq.execution.mode": "async",
+                                "aiq.job.id": job_id,
+                                "aiq.agent.type": agent_config_name,
+                                "aiq.submission.trace_id": trace_correlation.submission_trace_id,
+                                "aiq.submission.span_id": trace_correlation.submission_span_id,
+                            },
+                        )
+
                     # Emit WORKFLOW_END event for Phoenix
                     context.intermediate_step_manager.push_intermediate_step(
                         IntermediateStepPayload(
@@ -988,16 +975,6 @@ async def run_agent_job(
                             data=StreamEventData(output=_extract_result(result)),
                         )
                     )
-
-                    if parent_metadata:
-                        context.intermediate_step_manager.push_intermediate_step(
-                            IntermediateStepPayload(
-                                UUID=parent_span_id,
-                                event_type=IntermediateStepType.SPAN_END,
-                                name=parent_function_name or "parent_workflow",
-                                metadata=parent_metadata,
-                            )
-                        )
 
                     # Signal event stream completion
                     event_stream.on_complete()
@@ -1244,7 +1221,6 @@ def _create_agent_instance(
     llm,
     tools: list,
     fn_config,
-    verbose: bool,
     callbacks: list,
     job_id: str | None = None,
     artifact_db_url: str | None = None,
@@ -1257,10 +1233,12 @@ def _create_agent_instance(
     1. DeepResearcherAgent explicit config pattern
     2. llm_provider + tools + config/job_id pattern
     3. llm_provider + tools + job_id pattern
-    4. llm_provider + tools pattern
-    5. llm + tools pattern (simpler agents)
+    4. ShallowResearcherAgent config pattern
+    5. llm_provider + tools pattern
+    6. llm + tools pattern (simpler agents)
     """
     from aiq_agent.agents.deep_researcher.register import DeepResearchAgentConfig
+    from aiq_agent.agents.shallow_researcher.register import ShallowResearchAgentConfig
 
     if isinstance(fn_config, DeepResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
         agent_cls, _DEEP_RESEARCH_AGENT_KWARGS
@@ -1268,7 +1246,6 @@ def _create_agent_instance(
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            verbose=verbose,
             callbacks=callbacks,
             domain_catalog_path=fn_config.domain_catalog_path,
             enable_source_router=fn_config.enable_source_router,
@@ -1289,7 +1266,6 @@ def _create_agent_instance(
             return agent_cls(
                 llm_provider=llm_provider,
                 tools=tools,
-                verbose=verbose,
                 callbacks=callbacks,
                 config=fn_config,
                 job_id=job_id,
@@ -1302,31 +1278,28 @@ def _create_agent_instance(
             return agent_cls(
                 llm_provider=llm_provider,
                 tools=tools,
-                verbose=verbose,
                 callbacks=callbacks,
                 job_id=job_id,
             )
         except TypeError:
             pass
 
-    # Try original deep_researcher pattern (llm_provider + tools + verbose)
-    try:
+    if isinstance(fn_config, ShallowResearchAgentConfig) and _constructor_accepts_explicit_kwargs(
+        agent_cls, _SHALLOW_RESEARCH_AGENT_KWARGS
+    ):
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            verbose=verbose,
+            max_tool_iterations=fn_config.max_tool_iterations,
+            enforce_citations=fn_config.enforce_citations,
             callbacks=callbacks,
         )
-    except TypeError:
-        pass
 
-    # Try llm_provider + tools pattern (ShallowResearcherAgent style)
+    # Try the common llm_provider + tools pattern.
     try:
         return agent_cls(
             llm_provider=llm_provider,
             tools=tools,
-            max_tool_iterations=getattr(fn_config, "max_tool_iterations", 5),
-            enforce_citations=getattr(fn_config, "enforce_citations", False),
             callbacks=callbacks,
         )
     except TypeError:
