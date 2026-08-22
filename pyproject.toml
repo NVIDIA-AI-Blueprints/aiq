@@ -29,7 +29,7 @@ package-dir = {"" = "src"}
 
 [project]
 name = "aiq-agent"
-version = "2.2.0"
+version = "2.2.1"
 description = "NVIDIA AI-Q Blueprint - An enterprise-grade agent for intelligent research assistance"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"

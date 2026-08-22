@@ -31,7 +31,7 @@ HELM_README_PATH = REPO_ROOT / "deploy" / "helm" / "README.md"
 KUBERNETES_DOCS_PATH = REPO_ROOT / "docs" / "source" / "deployment" / "kubernetes.md"
 OPENSEARCH_VALUES_PATH = REPO_ROOT / "deploy" / "helm" / "examples" / "aws-opensearch-serverless-values.yaml"
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
-EXPECTED_RELEASE_VERSION = "2.2.0"
+EXPECTED_RELEASE_VERSION = "2.2.1"
 EXPECTED_CHILD_CHART_VERSION = "0.0.5"
 
 
