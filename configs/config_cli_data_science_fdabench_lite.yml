@@ -15,7 +15,7 @@ general:
 llms:
   data_science_llm:
     _type: openai
-    model_name: ${AIQ_DATA_SCIENCE_MODEL:-nvidia/zai-org/glm-5.1}
+    model_name: ${AIQ_DATA_SCIENCE_MODEL}
     base_url: ${AIQ_INFERENCE_BASE_URL}
     api_key: ${INFERENCE_NVIDIA_API_KEY}
     temperature: 0.2
@@ -30,7 +30,7 @@ function_groups:
     auth:
       mode: password
       email: ${GSF_EMAIL}
-      password: GSF_PASSWORD  # pragma: allowlist secret
+      password: ${GSF_PASSWORD}
     include:
       - catalog_search
       - text_to_sql

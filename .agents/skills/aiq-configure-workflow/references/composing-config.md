@@ -184,7 +184,7 @@ and feature guides under `docs/source/customization/`.
 ```yaml
 workflow:
   _type: chat_deepresearcher_agent
-  # hybrid_research_agent: data_science_hybrid_adapter
+  hybrid_research_agent: data_science_hybrid_adapter
   enable_escalation: true       # false → shallow only
   enable_clarifier: true
   use_async_deep_research: true   # needs general.front_end

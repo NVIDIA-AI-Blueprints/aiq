@@ -249,6 +249,7 @@ dev = [
     { name = "aiq-debug", editable = "../frontends/debug" },
     { name = "aiq-gsf", editable = "../sources/gsf" },
     { name = "aiq-research-cli", editable = "../frontends/cli" },
+    { name = "aiq-stateful-python", editable = "../sources/stateful_python" },
     { name = "dask", extras = ["distributed"], specifier = ">=2024.1.0" },
     { name = "duckduckgo-news-search", editable = "../sources/duckduckgo_news_search" },
     { name = "exa-web-search", editable = "../sources/exa_web_search" },

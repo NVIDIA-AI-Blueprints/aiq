@@ -553,7 +553,7 @@ functions:
 | `gsf_catalog_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on actual GSF catalog calls. Minimum `1`; exact cache hits do not count. |
 | `gsf_text_to_sql_call_limit` | `int` or `None` | `None` | Optional request-local hard limit on actual GSF text-to-SQL calls. Minimum `1`; exact cache hits do not count. |
 | `gsf_cache_repeated_calls` | `bool` | `true` | Reuse exact repeated GSF tool calls within one agent request. Cache state never crosses requests. |
-| `python_call_limit` | `int` or `None` | `None` | Optional request-local call ceiling for the persistent scientific Python kernel. |
+| `python_call_limit` | `int` or `None` | `None` | Optional request-local call ceiling for stateless scientific Python execution. |
 | `finalization_model_call_limit` | `int` or `None` | derived | Model-call count at which tools are disabled and a no-tool synthesis turn is forced before recursion exhaustion. |
 | `recursion_limit` | `int` | `64` | Hard LangGraph step limit for one adaptive run. Minimum `4`. |
 | `verbose` | `bool` | `false` | Enable verbose tracing. |
@@ -875,7 +875,7 @@ only the additional sections you need.
 | `configs/config_cli_default.yml` | CLI | Chat pipeline with Tavily web search and clarification. No knowledge backend. Paper search is present only as a commented opt-in. |
 | `configs/config_cli_data_science.yml` | Direct DS Agent CLI | GSF catalog/text-to-SQL, Foundational RAG knowledge retrieval, and Tavily web search without the top-level router. |
 | `configs/config_cli_data_science_fdabench_lite.yml` | Direct DS Agent evaluation | Headless FDABench-Lite DS ReAct profile with GSF, Foundational RAG, Tavily, choice-label output, and request-local GSF budgets. |
-| `configs/config_cli_data_science_fdabench_lite_python.yml` | Direct DS Agent evaluation | Same FDABench-Lite profile plus a blocked-network, per-request OpenShell scientific Python kernel and exact GSF-result bridge. |
+| `configs/config_cli_data_science_fdabench_lite_python.yml` | Direct DS Agent evaluation | Same FDABench-Lite profile plus blocked-network, stateless OpenShell scientific Python execution and an exact GSF-result bridge. |
 | `configs/config_web_default_llamaindex.yml` | Web API | Default chat pipeline with LlamaIndex/ChromaDB knowledge retrieval and Tavily. Paper search is commented out. |
 | `configs/config_web_azure_ai_search.yml` | Web API | Azure AI Search knowledge retrieval and web search |
 | `configs/config_web_frag.yml` | Web API / Helm base | Foundational RAG plus Tavily. Requires separately deployed RAG query and ingestion services. Paper search is commented out. |

@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-# FDABench-Lite DS ReAct profile with a request-scoped OpenShell Python kernel.
+# FDABench-Lite DS ReAct profile with request-scoped OpenShell Python execution.
 # GSF remains the only structured-data access path; Python receives exact GSF
 # rows through request-local receipt helpers and performs derived analysis in a
 # fresh, blocked-network sandbox that is deleted after each task.
@@ -16,7 +16,7 @@ general:
 llms:
   data_science_llm:
     _type: openai
-    model_name: ${AIQ_DATA_SCIENCE_MODEL:-nvidia/zai-org/glm-5.1}
+    model_name: ${AIQ_DATA_SCIENCE_MODEL}
     base_url: ${AIQ_INFERENCE_BASE_URL}
     api_key: ${INFERENCE_NVIDIA_API_KEY}
     temperature: 0.2
@@ -31,7 +31,7 @@ function_groups:
     auth:
       mode: password
       email: ${GSF_EMAIL}
-      password: GSF_PASSWORD  # pragma: allowlist secret
+      password: ${GSF_PASSWORD}
     include:
       - catalog_search
       - text_to_sql
