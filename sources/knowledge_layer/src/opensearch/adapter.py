@@ -1244,7 +1244,6 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
         summary = summarize_document(
             text_content,
             self.summary_llm,
-            file_name=file_name,
             input_max_chars=SUMMARY_MAX_INPUT_CHARS,
         )
         return summary[:500] if summary else None

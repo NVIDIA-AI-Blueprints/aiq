@@ -31,7 +31,6 @@ class TestSummarizeDocument:
         result = summarize_document(
             "  Important research findings beyond the limit  ",
             llm,
-            file_name="findings.pdf",
             input_max_chars=18,
         )
 
@@ -39,17 +38,8 @@ class TestSummarizeDocument:
         llm.invoke.assert_called_once_with(
             "Summarize this uploaded document in one concise sentence for a research assistant. "
             "Focus on the document's topic and likely usefulness.\n\n"
-            "Document Name: findings.pdf\n\n"
             "Content Excerpt:\nImportant research"
         )
-
-    def test_uses_unknown_filename_and_string_response(self):
-        """Use a default filename and support LLMs that return strings."""
-        llm = MagicMock()
-        llm.invoke.return_value = "  A summary returned as text.  "
-
-        assert summarize_document("Document content", llm) == "A summary returned as text."
-        assert "Document Name: unknown" in llm.invoke.call_args.args[0]
 
     def test_returns_none_for_empty_llm_response(self):
         """Treat empty LLM output as no available summary."""
@@ -63,4 +53,4 @@ class TestSummarizeDocument:
         llm = MagicMock()
         llm.invoke.side_effect = RuntimeError("LLM unavailable")
 
-        assert summarize_document("Document content", llm, file_name="report.pdf") is None
+        assert summarize_document("Document content", llm) is None

@@ -1358,7 +1358,6 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                             summarize_document,
                             combined,
                             self.summary_llm,
-                            file_name=file_name,
                             input_max_chars=SUMMARY_MAX_INPUT_CHARS,
                         )
 
@@ -1558,9 +1557,7 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
         """Generate summary using NVIDIA NIM if enabled."""
         if not self.generate_summary_enabled:
             return None
-        return summarize_document(
-            text_content, self.summary_llm, file_name=file_name, input_max_chars=SUMMARY_MAX_INPUT_CHARS
-        )
+        return summarize_document(text_content, self.summary_llm, input_max_chars=SUMMARY_MAX_INPUT_CHARS)
 
     async def health_check(self) -> bool:
         """In-process ingestor - always healthy if code is running."""

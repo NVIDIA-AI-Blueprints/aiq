@@ -1098,7 +1098,6 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
                 summarize_document(
                     "\n".join(texts),
                     self._summary_llm,
-                    file_name=file_name,
                     input_max_chars=_SUMMARY_MAX_CHARS,
                 )
                 if self.cfg.generate_summary

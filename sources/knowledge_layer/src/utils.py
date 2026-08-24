@@ -27,7 +27,6 @@ def summarize_document(
     text: str,
     llm: Any,
     *,
-    file_name: str | None = None,
     input_max_chars: int = INPUT_MAX_CHARS,
 ) -> str | None:
     """Generate a one-sentence document summary using the configured LangChain LLM."""
@@ -36,11 +35,9 @@ def summarize_document(
     text = text.strip()[:input_max_chars]
     if not text:
         return None
-    file_name = file_name or "unknown"
     prompt = (
         "Summarize this uploaded document in one concise sentence for a research assistant. "
         "Focus on the document's topic and likely usefulness.\n\n"
-        f"Document Name: {file_name}\n\n"
         f"Content Excerpt:\n{text}"
     )
     try:
@@ -49,8 +46,8 @@ def summarize_document(
         if not summary:
             return None
         summary = summary.strip()
-        logger.debug(f"Summary generated for {file_name}", stacklevel=2)
+        logger.debug("Summary generated", stacklevel=2)
         return summary or None
-    except Exception as e:
-        logger.warning(f"Summary via LLM failed for {file_name}: {e}", stacklevel=2)
+    except Exception:
+        logger.warning("Summary via LLM failed", stacklevel=2)
         return None
