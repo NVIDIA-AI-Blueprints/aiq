@@ -43,9 +43,9 @@ def summarize_document(
     try:
         response = llm.invoke(prompt)
         summary = getattr(response, "content", None) or str(response)
+        summary = summary.strip() if summary else None
         if not summary:
             return None
-        summary = summary.strip()
         logger.debug("Summary generated", stacklevel=2)
         return summary or None
     except Exception:
