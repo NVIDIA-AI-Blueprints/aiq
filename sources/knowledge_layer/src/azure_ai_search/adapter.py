@@ -80,6 +80,7 @@ _RECORD_FILE = "file"
 _RECORD_CHUNK = "chunk"
 _COLLECTION_ACTIVE = "active"
 _COLLECTION_DELETING = "deleting"
+_DEFAULT_SUMMARY = "No summary available"
 
 COLLECTION_TTL_HOURS = float(os.environ.get("AIQ_COLLECTION_TTL_HOURS", "24"))
 TTL_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("AIQ_TTL_CLEANUP_INTERVAL_SECONDS", "3600"))
@@ -1282,8 +1283,8 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         if snapshot and (collection := self._get_collection_manifest(snapshot.collection_name)):
             if collection.get("status") == _COLLECTION_ACTIVE:
                 self._write_file_manifest(snapshot, summary=summary)
-                if snapshot.status == FileStatus.SUCCESS and summary:
-                    register_summary(snapshot.collection_name, snapshot.file_name, summary)
+                if snapshot.status == FileStatus.SUCCESS:
+                    register_summary(snapshot.collection_name, snapshot.file_name, summary or _DEFAULT_SUMMARY)
 
     @staticmethod
     def _cleanup_paths(paths: list[str]) -> None:
@@ -1395,8 +1396,7 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
         with self._jobs_lock:
             self._deleted_collections.add(name)
             self._files = {file_id: info for file_id, info in self._files.items() if info.collection_name != name}
-        if self.cfg.generate_summary:
-            clear_collection_summaries(name)
+        clear_collection_summaries(name)
         return True
 
     def list_collections(self) -> list[CollectionInfo]:
@@ -1477,17 +1477,17 @@ class AzureAISearchIngestor(TTLCleanupMixin, _AzureIndexMixin, BaseIngestor):
             stable_reads=_CONSISTENCY_STABLE_READS,
         )
 
-        if self.cfg.generate_summary:
-            remaining = [
-                item
-                for item in self.list_files(collection_name)
-                if item.file_name == info.file_name and item.status == FileStatus.SUCCESS
-            ]
-            newest = max(remaining, key=lambda item: item.ingested_at or datetime.min.replace(tzinfo=UTC), default=None)
-            if newest and (summary := newest.metadata.get("summary")):
-                register_summary(collection_name, info.file_name, str(summary))
-            else:
-                unregister_summary(collection_name, info.file_name)
+        remaining = [
+            item
+            for item in self.list_files(collection_name)
+            if item.file_name == info.file_name and item.status == FileStatus.SUCCESS
+        ]
+        newest = max(remaining, key=lambda item: item.ingested_at or datetime.min.replace(tzinfo=UTC), default=None)
+        if newest:
+            summary = newest.metadata.get("summary", _DEFAULT_SUMMARY)
+            register_summary(collection_name, info.file_name, str(summary))
+        else:
+            unregister_summary(collection_name, info.file_name)
         self._update_collection_timestamp(collection_name)
         with self._jobs_lock:
             self._deleted_files.add((collection_name, file_id))

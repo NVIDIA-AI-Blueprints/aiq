@@ -51,6 +51,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from aiq_agent.knowledge import register_summary
+from aiq_agent.knowledge import unregister_summary
 from aiq_agent.knowledge.base import BaseIngestor
 from aiq_agent.knowledge.base import BaseRetriever
 from aiq_agent.knowledge.base import TTLCleanupMixin
@@ -115,6 +117,7 @@ TTL_CLEANUP_INTERVAL_SECONDS = int(os.environ.get("AIQ_TTL_CLEANUP_INTERVAL_SECO
 
 # Document summarization settings
 SUMMARY_MAX_INPUT_CHARS = 4000  # ~1000 tokens input
+_DEFAULT_SUMMARY = "No summary available"
 
 
 def _get_nvidia_api_key() -> str:
@@ -1066,8 +1069,6 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                             self._files.pop(tid, None)
                     logger.info(f"Removed {len(tracking_ids_to_remove)} tracking entries for file {file_name}")
 
-                    from aiq_agent.knowledge import unregister_summary
-
                     unregister_summary(collection_name, file_name)
                     return True
                 results = {"ids": matching_ids}
@@ -1082,8 +1083,6 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                         self._files.pop(tid, None)
 
             # Remove from centralized summary registry
-            from aiq_agent.knowledge import unregister_summary
-
             unregister_summary(collection_name, file_name)
 
             return True
@@ -1474,13 +1473,10 @@ class LlamaIndexIngestor(TTLCleanupMixin, BaseIngestor):
                         )
                     else:
                         self._update_file_status(job, i, FileStatus.SUCCESS, chunks_created=chunks_created)
-                    # Store summary in FileInfo and centralized registry
-                    if summary:
                         # Register in centralized summary registry (backend-agnostic)
-                        from aiq_agent.knowledge import register_summary
-
-                        register_summary(collection_name, file_name, summary)
-
+                        register_summary(collection_name, file_name, summary or _DEFAULT_SUMMARY)
+                    # Store summary in FileInfo
+                    if summary:
                         # Also store in local FileInfo for backwards compatibility
                         file_id = config.get("file_id")
                         if file_id and file_id in self._files:

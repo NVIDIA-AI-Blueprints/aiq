@@ -37,6 +37,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from aiq_agent.knowledge import register_summary
+from aiq_agent.knowledge import unregister_summary
 from aiq_agent.knowledge.base import BaseIngestor
 from aiq_agent.knowledge.base import BaseRetriever
 from aiq_agent.knowledge.base import TTLCleanupMixin
@@ -99,6 +101,8 @@ SUMMARY_MAX_INPUT_CHARS = 4000
 DEFAULT_BULK_BATCH_SIZE = 100
 DEFAULT_EMBEDDING_BATCH_SIZE = 16
 SUPPORTED_TEXT_EXTENSIONS = {".txt", ".md", ".csv", ".json", ".yaml", ".yml", ".log"}
+
+_DEFAULT_SUMMARY = "No summary available"
 
 # Adapter-owned `_meta` fields that caller-supplied collection metadata must never overwrite.
 # Overwriting `backend` hides the index from list_collections(); overwriting `collection_name`
@@ -865,14 +869,13 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                     chunks_created=int(item.get("chunks_created", 0)),
                     error=item.get("error_message"),
                 )
-                summary = item.get("summary")
-                if summary:
-                    from aiq_agent.knowledge import register_summary
-
-                    register_summary(job.collection_name, detail.file_name, summary)
-                    tracked = self._files.get(detail.file_id)
-                    if tracked:
-                        tracked.metadata["summary"] = summary
+                if status == FileStatus.SUCCESS:
+                    summary = item.get("summary")
+                    register_summary(job.collection_name, detail.file_name, summary or _DEFAULT_SUMMARY)
+                    if summary:
+                        tracked = self._files.get(detail.file_id)
+                        if tracked:
+                            tracked.metadata["summary"] = summary
 
             failed_count = sum(1 for detail in job.file_details if detail.status == FileStatus.FAILED)
             job.processed_files = job.total_files
@@ -1065,8 +1068,6 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                             self._files.pop(tracked_id, None)
                         elif tracked_id == file_id:
                             self._files.pop(tracked_id, None)
-
-                from aiq_agent.knowledge import unregister_summary
 
                 unregister_summary(collection_name, resolved_name)
                 self._update_collection_timestamp(collection_name)
@@ -1299,15 +1300,14 @@ class OpenSearchIngestor(TTLCleanupMixin, _OpenSearchConfigMixin, BaseIngestor):
                     total_chunks += chunks_created
                     self._mark_file(job, i, FileStatus.SUCCESS, chunks_created=chunks_created)
 
+                    summary = None
                     if self.generate_summary_enabled:
                         summary = self.generate_summary(summary_text, file_name)
                         if summary:
-                            from aiq_agent.knowledge import register_summary
-
-                            register_summary(collection_name, file_name, summary)
                             with self._lock:
                                 if file_id in self._files:
                                     self._files[file_id].metadata["summary"] = summary
+                    register_summary(collection_name, file_name, summary or _DEFAULT_SUMMARY)
 
                 except Exception as e:
                     logger.exception("OpenSearch ingestion failed for %s", file_path)

@@ -877,12 +877,18 @@ def test_ttl_cleanup_deletes_only_expired_opensearch_session_indexes():
     assert "aiq-ttl-unrelated" in fake_client.indexes
 
 
-def test_dask_ingestion_submits_bytes_payload_and_updates_job(tmp_path):
+def test_dask_ingestion_submits_bytes_payload_updates_job_and_registers_placeholder(tmp_path, monkeypatch):
     """Test that dask ingestion submits bytes payload and updates job."""
     fake_dask = FakeDaskClient()
     fake_client = FakeOpenSearchClient()
+    registered = []
     test_file = tmp_path / "dask.txt"
     test_file.write_text("distributed opensearch ingestion", encoding="utf-8")
+    monkeypatch.setattr(
+        opensearch_adapter,
+        "register_summary",
+        lambda collection, file_name, summary: registered.append((collection, file_name, summary)),
+    )
     ingestor = OpenSearchIngestor(
         {
             "ingestion_mode": "dask",
@@ -921,6 +927,7 @@ def test_dask_ingestion_submits_bytes_payload_and_updates_job(tmp_path):
     assert status is not None
     assert status.status == FileStatus.SUCCESS
     assert status.chunk_count == 1
+    assert registered == [("docs", "dask.txt", "No summary available")]
 
 
 def test_worker_config_excludes_credentials():

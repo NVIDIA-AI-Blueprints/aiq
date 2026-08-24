@@ -1365,10 +1365,10 @@ def test_file_summary_clears_only_after_confirmed_delete(monkeypatch):
     assert cleared == []
 
 
-def test_summary_cleanup_is_skipped_when_summaries_are_disabled(monkeypatch):
+def test_summary_cleanup_is_called_when_summaries_are_disabled(monkeypatch):
     ingestor, _client = _ingestor()
     ingestor.create_collection("docs")
-    _write_file_manifest(ingestor, "file-1")
+    _write_file_manifest(ingestor, "file-1", file_name="report.pdf")
     cleared = []
     monkeypatch.setattr(
         azure_adapter,
@@ -1379,7 +1379,45 @@ def test_summary_cleanup_is_skipped_when_summaries_are_disabled(monkeypatch):
 
     assert ingestor.delete_file("file-1", "docs")
     assert ingestor.delete_collection("docs")
-    assert cleared == []
+    assert cleared == [("docs", "report.pdf"), ("docs",)]
+
+
+def test_successful_file_without_generated_summary_registers_placeholder(monkeypatch):
+    ingestor, _client = _ingestor()
+    ingestor.create_collection("docs")
+    file_info = azure_adapter.FileInfo(
+        file_id="file-1",
+        file_name="report.pdf",
+        collection_name="docs",
+        status=FileStatus.INGESTING,
+    )
+    job = azure_adapter.IngestionJobStatus(
+        job_id="job-1",
+        status=JobState.PROCESSING,
+        submitted_at=datetime.now(UTC),
+        total_files=1,
+        collection_name="docs",
+        backend="azure_ai_search",
+        file_details=[azure_adapter.FileProgress(file_id="file-1", file_name="report.pdf")],
+    )
+    ingestor._files[file_info.file_id] = file_info
+    ingestor._jobs[job.job_id] = job
+    registered = []
+    monkeypatch.setattr(
+        azure_adapter,
+        "register_summary",
+        lambda collection, file_name, summary: registered.append((collection, file_name, summary)),
+    )
+
+    ingestor._update_file_progress(
+        job.job_id,
+        0,
+        status=FileStatus.SUCCESS,
+        chunks_created=1,
+        ingested_at=datetime.now(UTC),
+    )
+
+    assert registered == [("docs", "report.pdf", "No summary available")]
 
 
 def test_deleting_newest_duplicate_restores_previous_summary(monkeypatch):
