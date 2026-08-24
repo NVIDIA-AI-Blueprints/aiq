@@ -39,6 +39,9 @@ uv audit --preview-features audit-command,json-output \
 uv audit --preview-features audit-command,json-output \
   --project mcp --frozen --no-dev --no-default-groups \
   --ignore-until-fixed GHSA-f4j7-r4q5-qw2c \
+  --ignore-until-fixed GHSA-2wm9-hf6c-p5cr \
+  --ignore-until-fixed GHSA-36p7-vc44-83pf \
+  --ignore-until-fixed GHSA-xph7-9rjv-w5fr \
   --output-format json >/dev/null
 ```
 
@@ -56,13 +59,16 @@ gate.
 
 ## No-fix vulnerability exception
 
-One canonical exception is accepted only while the advisory service reports no
-fixed release. The `--ignore-until-fixed` form automatically turns the
+The following exceptions are accepted only while the advisory service reports
+no fixed release. The `--ignore-until-fixed` form automatically turns an
 exception back into a failure when a fix becomes available.
 
 | Advisory | Transitive package | MCP reachability and compensating control |
 |----------|--------------------|--------------------------------------------|
 | `GHSA-f4j7-r4q5-qw2c` | ChromaDB | Present through the optional knowledge-layer backend. `config_mcp.yml` has no knowledge-retrieval function and the MCP application does not mount the Chroma server API named by the advisory. |
+| `GHSA-2wm9-hf6c-p5cr` | ChromaDB | Requires an authenticated Chroma API user. The MCP profile has no knowledge-retrieval function and does not expose or mount the Chroma server API. |
+| `GHSA-36p7-vc44-83pf` | ChromaDB | Requires an authenticated Chroma API user with collection-update permission. The MCP profile has no knowledge-retrieval function and does not expose or mount the Chroma server API. |
+| `GHSA-xph7-9rjv-w5fr` | ChromaDB | Applies to ChromaDB's `SimpleRBACAuthorizationProvider`. The MCP profile has no knowledge-retrieval function and does not expose or mount the Chroma server API. |
 
 The exact public function allowlist is enforced by
 `mcp/tests/test_config_and_packaging.py`. Removing this transitive package
