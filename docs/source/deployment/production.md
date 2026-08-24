@@ -199,15 +199,15 @@ production artifact storage.
 
 ### Horizontal Backend Scaling
 
-The backend is stateless apart from database connections, so it can be horizontally scaled behind a load balancer.
+The shipped Docker Compose topology supports one backend instance. Do not use
+Compose service scaling for production because the stack does not provide the
+required backend load balancer or shared scheduler topology.
 
-**Docker Compose:** Run multiple backend containers by scaling the service and using a reverse proxy (such as Traefik or NGINX) in front:
+For production horizontal scaling, deploy with Helm and set
+`aiq.apps.backend.replicas` or the `aiq.apps.backend.autoscaling` values. Refer
+to [Kubernetes and Helm](./kubernetes.md) for the supported deployment path.
 
-```bash
-docker compose --env-file ../.env -f docker-compose.yaml up -d --scale aiq-agent=3
-```
-
-Note that each scaled instance starts its own embedded Dask scheduler and worker.
+Each backend replica starts its own embedded Dask scheduler and worker.
 The shipped container entrypoint always creates that embedded cluster. A deployment
 that uses a shared Dask cluster must provide a custom entrypoint (for example,
 starting `/app/deploy/start_web.py` directly), set
@@ -364,10 +364,12 @@ Set `LOG_LEVEL=DEBUG` for verbose output during troubleshooting. Use `LOG_LEVEL=
 
 ### Tracing
 
-The backend supports OpenTelemetry-compatible tracing. See [Observability](./observability.md) for setup guides covering Phoenix, LangSmith, Weave, and the OTEL Collector with privacy redaction.
+The backend exports NeMo Relay traces to OpenTelemetry-compatible destinations.
+See [Observability](./observability.md) for ATOF, Phoenix OTEL, pricing, and
+privacy-redaction guidance.
 
 If you are deploying the `aiq_api` front-end and want request correlation on
-NAT-exported spans, set the relevant environment variables at deploy time rather
+Relay-exported spans, set the relevant environment variables at deploy time rather
 than hardcoding them in code:
 
 - `AIQ_TRACE_USER_IDENTITY_MODE`

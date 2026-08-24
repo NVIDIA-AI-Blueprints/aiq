@@ -22,14 +22,14 @@ import argparse
 from . import generate_report
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Generate a tokenomics HTML report from a NAT profiler trace.")
+    parser = argparse.ArgumentParser(description="Generate a tokenomics HTML report from Relay ATOF JSONL.")
     parser.add_argument(
         "--trace",
         required=True,
         action="append",
         metavar="TRACE",
         help=(
-            "Path to all_requests_profiler_traces.json.  "
+            "Path to a Relay ATOF JSONL file.  "
             "Repeat the flag to compare multiple runs (e.g. --trace run_a/traces.json --trace run_b/traces.json)."
         ),
     )

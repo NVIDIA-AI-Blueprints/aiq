@@ -18,11 +18,16 @@ _BUNDLED_FILE_ONLY = _NAMESPACE["_BUNDLED_FILE_ONLY"]
 _DIRECT_RUNTIME_DEPENDENCIES = _NAMESPACE["_DIRECT_RUNTIME_DEPENDENCIES"]
 _PLATFORM_EXCLUDED = _NAMESPACE["_PLATFORM_EXCLUDED"]
 _WEAK_COPYLEFT = _NAMESPACE["_WEAK_COPYLEFT"]
+_APPROVED_GIT_SOURCES = _NAMESPACE["_APPROVED_GIT_SOURCES"]
 _evidence_fingerprint = _NAMESPACE["_evidence_fingerprint"]
 validate_inventory = _NAMESPACE["validate_inventory"]
 validate_sbom = _NAMESPACE["validate_sbom"]
 validate_lock_sources = _NAMESPACE["validate_lock_sources"]
 _MCP_LOCK_PATH = _NAMESPACE["_MCP_LOCK_PATH"]
+
+_TEST_RELAY_GIT_SOURCE = "https://github.com/NVIDIA/NeMo-Relay.git?rev=test-revision#test-revision"
+_TEST_RELAY_VCS_QUALIFIER = "vcs_url=https://github.com/NVIDIA/NeMo-Relay.git%3Frev%3Dtest-revision%23test-revision"
+_TEST_RELAY_PURL = f"pkg:pypi/nemo-relay@0.8.0?{_TEST_RELAY_VCS_QUALIFIER}"
 
 
 def _row(name: str, version: str = "1.0", **overrides: Any) -> dict[str, Any]:
@@ -193,6 +198,67 @@ def test_sbom_contract_accepts_the_exact_approved_local_component_set() -> None:
     }
 
     validate_sbom(sbom)
+
+
+def test_sbom_contract_accepts_exact_approved_vcs_qualified_purl(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(_APPROVED_GIT_SOURCES, ("nemo-relay", "0.8.0"), _TEST_RELAY_GIT_SOURCE)
+    sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "metadata": {"component": {"name": "aiq-mcp-server", "version": "0.1.0"}},
+        "components": [
+            {"name": "aiq-agent", "version": "2.2.0"},
+            {"name": "knowledge-layer", "version": "1.0.0"},
+            {"name": "tavily-web-search", "version": "1.0.0"},
+            {
+                "name": "nemo-relay",
+                "version": "0.8.0",
+                "purl": _TEST_RELAY_PURL,
+            },
+        ],
+    }
+
+    validate_sbom(sbom)
+
+
+@pytest.mark.parametrize(
+    "purl",
+    [
+        pytest.param(
+            "pkg:pypi/nemo-relay@0.8.0?vcs_url=https://github.com/NVIDIA/NeMo-Relay.git%3Frev%3Dwrong%23wrong",
+            id="different-revision",
+        ),
+        pytest.param(
+            "pkg:pypi/asyncpg@0.31.0?vcs_url=https://github.com/MagicStack/asyncpg.git%3Frev%3Dabc%23abc",
+            id="unapproved-package",
+        ),
+        pytest.param(
+            f"{_TEST_RELAY_PURL}&subdirectory=python",
+            id="extra-qualifier",
+        ),
+        pytest.param(
+            f"{_TEST_RELAY_PURL}&{_TEST_RELAY_VCS_QUALIFIER}",
+            id="duplicate-vcs-qualifier",
+        ),
+    ],
+)
+def test_sbom_contract_rejects_unapproved_vcs_qualified_purl(purl: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(_APPROVED_GIT_SOURCES, ("nemo-relay", "0.8.0"), _TEST_RELAY_GIT_SOURCE)
+    name, version = ("asyncpg", "0.31.0") if "asyncpg" in purl else ("nemo-relay", "0.8.0")
+    sbom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "metadata": {"component": {"name": "aiq-mcp-server", "version": "0.1.0"}},
+        "components": [
+            {"name": "aiq-agent", "version": "2.2.0"},
+            {"name": "knowledge-layer", "version": "1.0.0"},
+            {"name": "tavily-web-search", "version": "1.0.0"},
+            {"name": name, "version": version, "purl": purl},
+        ],
+    }
+
+    with pytest.raises(ValueError, match="dependency is not from the public PyPI source contract"):
+        validate_sbom(sbom)
 
 
 def test_sbom_contract_requires_every_approved_local_component() -> None:

@@ -48,12 +48,6 @@ general:
       console:
         _type: console
         level: INFO
-    # Optional: trace to local Phoenix for debugging
-    # tracing:
-    #   phoenix:
-    #     _type: phoenix
-    #     endpoint: http://localhost:6006/v1/traces
-    #     project: local-dev
 
 # ===========================================================================
 # LLMs - pointing to local NIM containers
@@ -118,7 +112,6 @@ functions:
       - web_search_tool
     max_turns: 3
     log_response_max_chars: 2000
-    verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent

@@ -16,6 +16,7 @@
 """Tests for the you_contents NAT tool registration."""
 
 import asyncio
+import xml.etree.ElementTree as ET
 from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
@@ -25,6 +26,24 @@ from pydantic import ValidationError
 from you_com.register import ContentsFormat
 from you_com.register import YouContentsToolConfig
 from you_com.register import you_contents
+
+ADVERSARIAL_URL = 'https://example.com/pa\x00th?q="quoted"&next=<unsafe>&close=</Document>'
+ADVERSARIAL_TITLE = 'Research\x00 & "Roadmap" <2026> </title>'
+ADVERSARIAL_CONTENT = 'Evidence\x00 & "claims" <external> </Document> </title>'
+SANITIZED_URL = 'https://example.com/path?q="quoted"&next=<unsafe>&close=</Document>'
+SANITIZED_TITLE = 'Research & "Roadmap" <2026> </title>'
+SANITIZED_CONTENT = 'Evidence & "claims" <external> </Document> </title>'
+
+
+def _parse_document(output: str) -> tuple[ET.Element, ET.Element]:
+    assert output.count("<Document ") == 1
+    assert output.count("</Document>") == 1
+    assert output.count("<title>") == 1
+    assert output.count("</title>") == 1
+    root = ET.fromstring(output)
+    title = root.find("title")
+    assert title is not None
+    return root, title
 
 
 def _make_doc(url: str, title: str, page_content: str = "") -> MagicMock:
@@ -88,6 +107,20 @@ class TestYouContentsStub:
 
 
 class TestYouContentsLive:
+    async def test_structurally_escapes_provider_fields(self, mock_contents, monkeypatch):
+        monkeypatch.setenv("YDC_API_KEY", "test-key")
+
+        async with you_contents(YouContentsToolConfig(), MagicMock()) as info:
+            mock_contents["tool"].api_wrapper.contents_async.return_value = [
+                _make_doc(ADVERSARIAL_URL, ADVERSARIAL_TITLE, ADVERSARIAL_CONTENT)
+            ]
+            output = await info.single_fn([ADVERSARIAL_URL])
+
+        document, title = _parse_document(output)
+        assert document.attrib["href"] == SANITIZED_URL
+        assert (title.text or "").strip("\n") == SANITIZED_TITLE
+        assert (title.tail or "").strip("\n") == SANITIZED_CONTENT
+
     async def test_config_api_key_used(self, mock_contents, monkeypatch):
         config = YouContentsToolConfig(api_key=SecretStr("key-from-config"))
         builder = MagicMock()
@@ -140,7 +173,8 @@ class TestYouContentsLive:
 
     async def test_401_returns_friendly_message(self, mock_contents, monkeypatch):
         monkeypatch.setenv("YDC_API_KEY", "test-key")
-        monkeypatch.setattr("you_com.register.asyncio.sleep", AsyncMock())
+        sleep = AsyncMock()
+        monkeypatch.setattr("you_com.register.asyncio.sleep", sleep)
         config = YouContentsToolConfig(max_retries=2)
         builder = MagicMock()
 
@@ -149,6 +183,8 @@ class TestYouContentsLive:
             out = await info.single_fn(["https://example.com"])
 
         assert "401" in out
+        assert mock_contents["tool"].api_wrapper.contents_async.call_count == 1
+        sleep.assert_not_awaited()
 
     async def test_timeout_applied(self, mock_contents, monkeypatch):
         monkeypatch.setenv("YDC_API_KEY", "test-key")

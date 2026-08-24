@@ -228,9 +228,14 @@ Each skill should be a directory with a `SKILL.md` file:
 
 ```text
 src/aiq_agent/agents/deep_researcher/skills/
-`-- my-skill/
-    `-- SKILL.md
+`-- research/
+    `-- my-skill/
+        `-- SKILL.md
 ```
+
+The required hierarchy is `skills/<collection>/<skill>/SKILL.md`. The
+collection directory is the public name assigned to an agent in
+`deep_research_skills.agents`.
 
 At minimum, `SKILL.md` needs frontmatter with a stable `name` and a clear `description`:
 
@@ -262,14 +267,18 @@ Skill descriptions matter because DeepAgents uses the frontmatter description to
 
 To add a built-in AI-Q deep research skill:
 
-1. Create a new directory under `src/aiq_agent/agents/deep_researcher/skills/`.
+1. Create `src/aiq_agent/agents/deep_researcher/skills/<collection>/<skill>/`.
 2. Add a `SKILL.md` file with frontmatter and workflow instructions.
 3. Put optional helper scripts, references, or templates inside the same skill directory.
 4. Reference any helper files from `SKILL.md` so the agent knows when to read or run them.
 5. Keep workflow instructions generic enough to handle variations of the task, but concrete enough to force required tool calls.
 6. Run with `configs/config_domain_routing_and_skills.yml` and test a query that should trigger the new skill.
 
-No config change is required for additional built-in skills inside an enabled collection. AI-Q collects available skill directories at runtime and exposes them to DeepAgents through an internal `/skills/` source.
+A skill added to a collection that is already assigned to the target agent needs
+no config change. For a new collection, add the collection name to the target
+agent under `deep_research_skills.agents`. AI-Q collects the assigned skill
+directories at runtime and exposes them to DeepAgents through an internal
+`/skills/` source.
 
 ## Notes and Limitations
 

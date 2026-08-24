@@ -27,6 +27,7 @@ from langchain_core.messages import HumanMessage
 from langchain_core.messages import SystemMessage
 from langchain_core.messages import ToolMessage
 from langchain_core.tools import tool
+from nemo_relay.integrations.langchain import NemoRelayMiddleware
 
 from aiq_agent.agents.clarifier.agent import DEFAULT_CLARIFICATION_PROMPT
 from aiq_agent.agents.clarifier.agent import FORCE_SEARCH_GUIDANCE
@@ -88,7 +89,6 @@ class TestClarifierAgentInit:
         assert agent.user_prompt_callback == mock_user_callback
         assert agent.max_turns == 3
         assert agent.log_response_max_chars == 2000
-        assert agent.verbose is False
         assert agent.callbacks == []
         assert agent.system_prompt is not None
 
@@ -122,16 +122,6 @@ class TestClarifierAgentInit:
         )
 
         assert agent.callbacks == [mock_callback]
-
-    def test_init_with_verbose(self, mock_llm_provider, mock_user_callback):
-        """Test initialization with verbose mode."""
-        agent = ClarifierAgent(
-            llm_provider=mock_llm_provider,
-            user_prompt_callback=mock_user_callback,
-            verbose=True,
-        )
-
-        assert agent.verbose is True
 
     def test_graph_property(self, mock_llm_provider, mock_user_callback):
         """Test graph property returns compiled graph."""
@@ -692,6 +682,40 @@ class TestClarifierForceSearch:
         # searched voluntarily, so the nudge path must never have fired.
         for call in mock_llm.ainvoke.call_args_list:
             assert not any(FORCE_SEARCH_GUIDANCE in str(m.content) for m in call.args[0])
+
+    @pytest.mark.asyncio
+    async def test_tool_node_uses_relay_middleware(self, mock_llm_provider, mock_llm, monkeypatch):
+        """Application-owned ToolNode executions pass through Relay's maintained hook."""
+        observed_tool_names: list[str] = []
+
+        async def observe_tool_call(self, request, handler):
+            observed_tool_names.append(request.tool_call["name"])
+            return await handler(request)
+
+        monkeypatch.setattr(NemoRelayMiddleware, "awrap_tool_call", observe_tool_call)
+        mock_llm.ainvoke = AsyncMock(
+            side_effect=[
+                AIMessage(
+                    content="",
+                    tool_calls=[{"name": "web_search_tool", "args": {"query": "AI"}, "id": "call_1"}],
+                ),
+                AIMessage(
+                    content=ClarificationResponse(
+                        needs_clarification=False,
+                        clarification_question=None,
+                    ).model_dump_json()
+                ),
+            ]
+        )
+        agent = ClarifierAgent(
+            llm_provider=mock_llm_provider,
+            tools=[web_search_tool],
+            user_prompt_callback=AsyncMock(),
+        )
+
+        await agent.run(ClarifierAgentState(messages=[HumanMessage(content="Research AI")]))
+
+        assert observed_tool_names == ["web_search_tool"]
 
     @pytest.mark.asyncio
     async def test_force_search_guidance_not_in_state_messages(self, mock_llm_provider, mock_llm):

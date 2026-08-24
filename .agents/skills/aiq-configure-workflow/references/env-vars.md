@@ -31,15 +31,13 @@ Canonical references:
 | `SEARCHAPI_API_KEY` | SearchAPI paper search |
 | `RAG_SERVER_URL`, `RAG_INGEST_URL` | Foundational RAG profiles |
 
-## Web API, auth, and tracing
+## Web API, auth, and Relay correlation
 
 | Variable | When needed |
 |----------|-------------|
 | `REQUIRE_AUTH` | Enforce API authentication. Requires validator registration. |
-| `AIQ_TRACE_USER_IDENTITY_MODE`, `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET` | User identity tagging for NAT spans. |
-| `AIQ_TRACE_CLIENT_ID_MODE`, `AIQ_TRACE_CLIENT_ID_HMAC_SECRET`, `AIQ_TRACE_CLIENT_IP_HEADERS` | Client tagging for NAT spans. |
-| `LANGCHAIN_TRACING_V2`, `LANGCHAIN_API_KEY`, `LANGCHAIN_PROJECT` | LangSmith tracing. |
-| `WANDB_API_KEY` | Weave tracing. |
+| `AIQ_TRACE_USER_IDENTITY_MODE`, `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET` | User identity tagging for Relay-exported spans. |
+| `AIQ_TRACE_CLIENT_ID_MODE`, `AIQ_TRACE_CLIENT_ID_HMAC_SECRET`, `AIQ_TRACE_CLIENT_IP_HEADERS` | Client tagging for Relay-exported spans. |
 
 ## Sandbox and artifact storage
 

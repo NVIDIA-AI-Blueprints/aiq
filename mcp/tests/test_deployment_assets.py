@@ -219,6 +219,7 @@ def test_release_dockerfile_is_public_reproducible_and_non_root() -> None:
     assert text.count("FROM ${PYTHON_IMAGE}") == 2
     assert "AS builder" in text
     assert "AS release" in text
+    assert "        git \\\n" in _dockerfile_stage(text, "builder")
     assert "uv sync" in text
     assert "--project /app/mcp" in text
     assert "--frozen" in text

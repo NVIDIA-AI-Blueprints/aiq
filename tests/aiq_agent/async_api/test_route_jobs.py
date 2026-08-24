@@ -71,6 +71,9 @@ async def job_report_app(monkeypatch, tmp_path):
 
     monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
     monkeypatch.setattr(jobs_routes, "_reap_ghost_jobs", AsyncMock())
+    monkeypatch.setattr(jobs_routes, "_is_readable_regular_file", MagicMock(return_value=True))
+    monkeypatch.setattr(jobs_routes, "_bootstrap_async_job_storage", AsyncMock())
+    monkeypatch.setattr(jobs_routes, "_probe_async_job_readiness", AsyncMock(return_value=None))
     monkeypatch.setattr(event_store.EventStore, "_ensure_table_exists", MagicMock())
 
     # Mock the worker FastApiFrontEndPluginWorker object.

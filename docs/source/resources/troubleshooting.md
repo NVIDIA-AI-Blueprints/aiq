@@ -34,7 +34,7 @@ Common issues and solutions for the AI-Q blueprint.
 
 | Issue | Cause | Fix |
 |-------|-------|-----|
-| Agent hangs on deep research | LLM timeout or rate limit | Set `verbose: true` in config to see progress; check LLM API availability and rate limits |
+| Agent hangs on deep research | LLM timeout or rate limit | Inspect Relay logs/traces and check LLM API availability and rate limits |
 | HTTP 429 or 503 on deep research | Nemotron hosted endpoint availability | Retry after a short delay, reduce concurrency, or follow the [self-hosting guidance](#nemotron-hosted-endpoint-availability) for consistent throughput |
 | Intermittent shallow-research failure with Nemotron 3.5 Lightning on NVIDIA API Catalog | The hosted serving profile can produce citation-incomplete or malformed final drafts | Use Nemotron Ultra for the shallow role, or use a validated self-hosted Lightning serving profile; see [Nemotron 3.5 Lightning on NVIDIA API Catalog](#nemotron-35-lightning-on-nvidia-api-catalog) |
 | Shallow research returns generic answers | Insufficient tool calls | Increase `max_tool_iterations` (default: 5) |
@@ -159,34 +159,40 @@ Docker Compose deployments on the VM handle container-to-host port mapping autom
 
 ## Debugging Tips
 
-### Enable Verbose Logging
+### Inspect Relay Logging
 
 ```yaml
 # In your config YAML
 workflow:
   _type: chat_deepresearcher_agent
-  verbose: true
+  relay:
+    logging: true
 ```
 
-Or through CLI: `./scripts/start_cli.sh --verbose`
+### Phoenix Tracing Through Relay
 
-### Phoenix Tracing
-
-For full setup instructions covering Phoenix, LangSmith, and other tracing backends, see [Observability](../deployment/observability.md).
+For full setup and trace-reading instructions, see [Observability with NeMo Relay](../deployment/observability.md).
 
 Start a Phoenix server and enable tracing in config:
 
 ```yaml
-general:
-  telemetry:
-    tracing:
-      phoenix:
-        _type: phoenix
-        endpoint: http://localhost:6006/v1/traces
-        project: dev
+workflow:
+  relay:
+    observability:
+      opentelemetry:
+        enabled: true
+        endpoints:
+          - type: openinference
+            endpoint: ${RELAY_OTEL_ENDPOINT:-http://localhost:6006/v1/traces}
+            resource_attributes:
+              openinference.project.name: aiq-relay
 ```
 
 Then open [http://localhost:6006](http://localhost:6006) to inspect traces, token usage, and latency.
+Set `RELAY_OTEL_ENDPOINT` to use a remote Phoenix or collector endpoint; local Phoenix is the default.
+If the trace is missing, also inspect the project configured in
+`~/.config/nemo-relay/plugins.toml`; Relay can discover an existing user-level
+Phoenix destination.
 
 ### Check Registered Components
 

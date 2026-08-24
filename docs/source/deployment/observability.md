@@ -3,308 +3,371 @@ SPDX-FileCopyrightText: Copyright (c) 2025-2026, NVIDIA CORPORATION & AFFILIATES
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Observability
+# Observability with NeMo Relay
 
-The AI-Q blueprint supports multiple observability backends for tracing agent execution, LLM calls, tool invocations, and token usage. Choose the backend that best fits your workflow. For more details on available backends, refer to the [NVIDIA Agent Toolkit observability documentation](https://docs.nvidia.com/nemo/agent-toolkit/latest/run-workflows/observe/observe.html).
+AI-Q uses [NeMo Relay](https://docs.nvidia.com/nemo/relay) as its observability runtime.
 
-| Backend | Best For | Setup |
-|---------|----------|-------|
-| [Phoenix](#phoenix) | Local development, trace visualization | Run Phoenix server, add YAML config |
-| [LangSmith](#langsmith) | LLM evaluation, prompt optimization, team collaboration | Set environment variables |
-| [Weights & Biases Weave](#weights--biases-weave) | Experiment tracking, model monitoring | Set environment variables |
-| [OpenTelemetry Collector](#opentelemetry-collector) | Production infrastructure, enterprise redaction | YAML config with OTEL endpoint |
-| [Verbose Logging](#verbose-logging) | Quick debugging, no external services | CLI flag or YAML config |
+Relay gives AI-Q users four complementary views:
 
-## Async Deep Research Trace Hierarchy
+- **Developer logs** show agent, LLM, and tool activity in the terminal.
+- **ATOF JSONL** provides a durable, machine-readable event stream for debugging
+  and post-processing.
+- **OpenTelemetry (OTEL)** exports the same scope tree to backends such as
+  Phoenix.
+- **Pricing enrichment** attaches model cost data when a configured catalog
+  matches the observed model.
 
-NAT-exported traces from the async job runner preserve the DeepAgents execution
-hierarchy instead of flattening named agents beside their task and model spans. The root
-workflow span uses the configured function name. A `task` tool is labeled with its
-subagent type, and each outer DeepAgents chain receives a distinct named-agent span:
+Logging, ATOF export, full observability payloads, and redaction are enabled by
+default. OTEL export is opt-in so a default AI-Q installation does not attempt
+to contact an observability server. Pricing is enabled with no catalog sources;
+token usage is still recorded, but monetary cost is not estimated until you
+configure prices.
 
-```text
-deep_research_agent
-├── task: planner-agent
-│   └── planner-agent
-│       └── model
-└── run_research_batch
-    ├── researcher-agent
-    │   └── model
-    └── researcher-agent
-        └── model
-```
+## Installation
 
-Parallel researchers remain separate children of the shared batch span. Structural
-agent spans include `agent_id`, `agent_name`, and `span_role=agent`; start metadata also
-records the LangChain parent run ID, and an error close records only the exception class
-as `error_type`. These structural spans deliberately omit LangGraph input/output state so
-they do not duplicate prompts or results. LLM and tool spans can still contain application
-content, so configure the selected exporter's redaction controls for the deployment's
-privacy requirements.
-
-This hierarchy describes NAT-exported async-job telemetry. Third-party tracing SDKs that
-instrument LangChain directly can present a different tree.
-
-## Phoenix
-
-[Phoenix](https://docs.arize.com/phoenix) provides a local UI for visualizing traces, inspecting LLM calls, and analyzing token usage and latency. It is the recommended backend for local development.
-
-### Setup
-
-1. Start Phoenix in an isolated `uvx` environment. This installs `arize-phoenix` outside the AI-Q project environment
-   on the first run:
-
-   ```bash
-   uvx --from arize-phoenix phoenix serve
-   ```
-
-   This launches the Phoenix UI at [http://localhost:6006](http://localhost:6006).
-
-2. Enable Phoenix tracing in your YAML config:
-
-   ```yaml
-   general:
-     telemetry:
-       tracing:
-         phoenix:
-           _type: phoenix
-           endpoint: http://localhost:6006/v1/traces
-           project: dev
-   ```
-
-   The `project` field groups traces under a named project in the Phoenix UI.
-
-### What You Can Inspect
-
-- **Traces** -- Full agent execution trees showing orchestrator routing, tool calls, and LLM interactions.
-- **Token usage** -- Per-call input/output token counts and costs.
-- **Latency** -- Time spent in each step of the agent pipeline.
-- **Tool calls** -- Arguments passed to and results returned from search tools, RAG retrieval, and other data sources.
-
-## LangSmith
-
-[LangSmith](https://smith.langchain.com/) provides cloud-hosted tracing, evaluation datasets, and prompt optimization for LangChain-based applications. It works automatically through the LangChain integration -- no YAML config changes are needed.
-
-### Setup
-
-1. Create an account at [smith.langchain.com](https://smith.langchain.com/) and generate an API key.
-
-2. Set the following environment variables in `deploy/.env`:
-
-   ```bash
-   LANGCHAIN_TRACING_V2=true
-   LANGCHAIN_API_KEY=lsv2-...
-   LANGCHAIN_PROJECT=aiq-research
-   ```
-
-   The `LANGCHAIN_PROJECT` variable groups traces under a named project. If omitted, traces go to the `default` project.
-
-3. Start the application as usual. All LangChain and LangGraph operations are traced automatically. No YAML config changes are required -- the LangChain SDK detects these environment variables at startup.
-
-### What You Can Inspect
-
-- **Trace trees** -- Visualize the full agent execution including orchestrator decisions, tool calls, and LLM interactions.
-- **LLM calls** -- Input prompts, output completions, token counts, and latency for every model call.
-- **Evaluation** -- Build datasets from traced runs and evaluate agent quality over time.
-
-## Weights & Biases Weave
-
-[Weave](https://wandb.ai/site/weave) provides experiment tracking and trace logging integrated with the Weights & Biases platform. NAT includes Weave support via the `weave` extra (`nvidia-nat[weave]`), which is already installed in this project.
-
-### Setup
-
-1. Create a [Weights & Biases](https://wandb.ai/) account if you do not have one.
-
-2. Set the API key in `deploy/.env`:
-
-   ```bash
-   WANDB_API_KEY=your-wandb-api-key
-   ```
-
-   Alternatively, authenticate interactively:
-
-   ```bash
-   wandb login
-   ```
-
-3. Enable Weave tracing in your YAML config:
-
-   ```yaml
-   general:
-     telemetry:
-       tracing:
-         weave:
-           _type: weave
-           project: aiq-research
-   ```
-
-### Configuration Reference
-
-The Weave exporter supports PII redaction and custom trace attributes:
-
-```yaml
-general:
-  telemetry:
-    tracing:
-      weave:
-        _type: weave
-        project: aiq-research
-        verbose: false
-        redact_pii: true
-        redact_pii_fields:
-          - CREDIT_CARD
-          - EMAIL_ADDRESS
-          - PHONE_NUMBER
-        redact_keys:
-          - api_key
-          - authorization
-        attributes:
-          environment: development
-          team: research
-```
-
-| Field | Description |
-|-------|-------------|
-| `project` | The W&B project name. |
-| `verbose` | Enable verbose logging for the Weave exporter. |
-| `redact_pii` | Automatically redact PII from traces using Presidio. |
-| `redact_pii_fields` | Custom PII entity types to redact (e.g., `CREDIT_CARD`, `EMAIL_ADDRESS`). Only used when `redact_pii` is `true`. |
-| `redact_keys` | Additional keys to redact beyond the defaults (`api_key`, `auth_headers`, `authorization`). |
-| `attributes` | Custom attributes to include in all trace spans. |
-
-### What You Can Inspect
-
-- **Trace timelines** -- Agent execution flows with timing breakdowns.
-- **Model calls** -- Inputs, outputs, and metadata for each LLM invocation.
-- **Experiment comparison** -- Compare traces across different configurations or model versions.
-
-## OpenTelemetry Collector
-
-For production environments, the AI-Q blueprint provides a custom OpenTelemetry exporter (`otelcollector_redaction`) that forwards spans to any OTEL-compatible collector (Jaeger, Grafana Tempo, Datadog, etc.) with built-in privacy redaction.
-
-### Setup
-
-Add the exporter to your YAML config:
-
-```yaml
-general:
-  telemetry:
-    tracing:
-      otel:
-        _type: otelcollector_redaction
-        endpoint: http://your-otel-collector:4318/v1/traces
-        project: aiq-research
-        resource_attributes:
-          deployment.environment: production
-          service.version: "1.0.0"
-```
-
-### Privacy Redaction
-
-The `otelcollector_redaction` exporter can automatically redact sensitive data from trace spans before they leave the application. This is useful for enterprise environments where LLM inputs and outputs may contain PII or confidential information.
-
-```yaml
-general:
-  telemetry:
-    tracing:
-      otel:
-        _type: otelcollector_redaction
-        endpoint: http://your-otel-collector:4318/v1/traces
-        project: aiq-research
-        redaction_enabled: true
-        redaction_attributes:
-          - input.value
-          - output.value
-          - nat.metadata
-        force_redaction: false
-        redaction_tag: redacted
-```
-
-| Field | Description |
-|-------|-------------|
-| `endpoint` | The OTEL collector URL to send spans to (e.g., `http://your-otel-collector:4318/v1/traces`). |
-| `project` | Logical project name attached to all exported spans. |
-| `redaction_enabled` | Enable or disable redaction processing. |
-| `redaction_attributes` | Span attributes to redact (defaults to `input.value`, `output.value`, `nat.metadata`). |
-| `force_redaction` | Always redact, regardless of header conditions. |
-| `redaction_tag` | Tag added to spans when redaction is applied. |
-| `redaction_headers` | Request headers checked to determine whether to redact. |
-| `resource_attributes` | Custom OTEL resource attributes attached to all spans. |
-
-### Request Tags on NAT Spans
-
-When the `aiq_api` auth middleware is enabled, NAT-exported workflow spans can
-include low-cardinality request tags plus optional pseudonymous identity tags.
-These tags are propagated across HTTP requests, WebSocket workflows, and async
-job execution.
-
-Always-on NAT span tags:
-
-- `nat.aiq.caller.type` -- resolved caller type from auth middleware
-- `nat.aiq.auth.transport` -- `bearer`, `cookie`, or `none`
-- `nat.aiq.auth.verified` -- whether the request resolved to a verified principal
-- `nat.aiq.access.channel` -- inferred request channel or trusted explicit access-channel header
-
-Optional pseudonymous tags:
-
-- `nat.enduser.id`, `nat.aiq.user.id`, `nat.aiq.auth.type` -- controlled by `AIQ_TRACE_USER_IDENTITY_MODE`
-- `nat.aiq.user.email`, `nat.aiq.user.name` -- added only in `full` mode
-- `nat.aiq.client.id` -- controlled by `AIQ_TRACE_CLIENT_ID_MODE=ip`
-
-Environment variables:
-
-- `AIQ_TRACE_USER_IDENTITY_MODE=none|id|full`
-- `AIQ_TRACE_USER_IDENTITY_HMAC_SECRET=<secret>`
-- `AIQ_TRACE_CLIENT_ID_MODE=none|ip`
-- `AIQ_TRACE_CLIENT_ID_HMAC_SECRET=<secret>`
-- `AIQ_TRACE_CLIENT_IP_HEADERS=x-real-ip,x-forwarded-for`
-
-The `id` and `ip` modes emit HMAC-derived pseudonymous identifiers rather than
-raw subjects or raw IP addresses.
-
-### Batch Configuration
-
-The exporter supports standard OTEL batch settings:
-
-```yaml
-general:
-  telemetry:
-    tracing:
-      otel:
-        _type: otelcollector_redaction
-        endpoint: http://your-otel-collector:4318/v1/traces
-        batch_size: 512
-        flush_interval: 5000
-        max_queue_size: 2048
-        drop_on_overflow: false
-        shutdown_timeout: 30000
-```
-
-## Verbose Logging
-
-For quick debugging without any external services, enable the built-in `VerboseTraceCallback` logger. This callback
-records execution metadata directly to the console without printing raw prompts, tool arguments, tool results, or
-model responses. This metadata-only guarantee applies only to `VerboseTraceCallback`. Phoenix and other exporters,
-enabled source adapters, and external providers can still receive or retain raw prompts, tool arguments, tool results,
-and model responses; configure and audit their redaction, retention, and access controls independently.
-
-### Enable via CLI
+NeMo Relay and the LangChain, LangGraph, and Deep Agents integrations are
+installed with AI-Q:
 
 ```bash
-./scripts/start_cli.sh --verbose
+./scripts/setup.sh
 ```
 
-### Enable via YAML Config
+For an existing development checkout, synchronize the environment:
+
+```bash
+uv sync
+```
+
+Verify the installed version:
+
+```bash
+uv run python -c 'from importlib.metadata import version; print(version("nemo-relay"))'
+```
+
+AI-Q supports the Relay version range pinned in `pyproject.toml`.
+
+## Configuration walkthrough
+
+Relay is configured under the top-level AI-Q workflow:
 
 ```yaml
 workflow:
   _type: chat_deepresearcher_agent
-  verbose: true
+  relay:
+    logging: true
+    observability:
+      enable_full_payloads: true
+      atof:
+        enabled: true
+        output_directory: ./relay
+        filename: aiq-relay.atof.jsonl
+        mode: append
+      opentelemetry:
+        enabled: false
+    redaction:
+      enabled: true
 ```
 
-### What Gets Logged
+Most users can omit this block and use the defaults. Add only the settings that
+you intend to change.
 
-- Chain starts and completions (orchestrator routing, agent handoffs)
-- LLM invocation metadata, such as model and message counts when available
-- Tool names and execution metadata
-- Content lengths and redaction markers instead of raw request or response content
+| Setting | Default | Purpose |
+|---|---:|---|
+| `logging` | `true` | Register AI-Q's Relay console subscriber. |
+| `observability.enable_full_payloads` | `true` | Preserve supported inputs, outputs, metadata, and annotated usage for sanitization and export. |
+| `observability.atof.enabled` | `true` | Write Relay events to ATOF JSONL. |
+| `observability.atof.mode` | `append` | Preserve events across turns and async jobs. Use `overwrite` only for a single isolated run. |
+| `observability.opentelemetry.enabled` | `false` | Export Relay scopes over OTEL when explicitly enabled. |
+| `redaction.enabled` | `true` | Sanitize supported sensitive values before logs and exporters receive them. |
+| `pricing.sources` | `[]` | Model pricing catalogs used to enrich Relay usage. |
+
+Relay configuration is strict. Unknown fields, invalid endpoint URLs, and an
+invalid source shape fail workflow validation instead of being ignored.
+
+### Change the ATOF output path
+
+Set `output_directory` and `filename` independently:
+
+```yaml
+workflow:
+  relay:
+    observability:
+      atof:
+        enabled: true
+        output_directory: ./observability/traces
+        filename: aiq-development.atof.jsonl
+        mode: append
+```
+
+Relative directories are resolved from the working directory where AI-Q is
+started. Use an absolute directory for containers, services, or async workers
+when their working directories might differ:
+
+```yaml
+output_directory: /var/lib/aiq/relay
+```
+
+The resulting file is
+`/var/lib/aiq/relay/aiq-development.atof.jsonl`. Ensure every worker can write
+to the directory. Keep `mode: append` when multiple user turns or async jobs
+share a file; choose a unique filename instead of `overwrite` when you need
+per-run isolation.
+
+## Inspect ATOF traces
+
+By default, AI-Q appends events to:
+
+```text
+relay/aiq-relay.atof.jsonl
+```
+
+Each line is one JSON event. Use `jq` to inspect it:
+
+```bash
+# Follow new events while AI-Q runs.
+tail -f relay/aiq-relay.atof.jsonl | jq -c .
+
+# Count scope starts by category.
+jq -s '
+  [.[] | select(.kind == "scope" and .scope_category == "start")]
+  | group_by(.category)
+  | map({category: .[0].category, count: length})
+' relay/aiq-relay.atof.jsonl
+
+# Show LLM usage recorded on completed LLM scopes.
+jq -c '
+  select(.category == "llm" and .scope_category == "end")
+  | {
+      model: .category_profile.annotated_response.model,
+      usage: .category_profile.annotated_response.usage,
+      status: .metadata["otel.status_code"]
+    }
+' relay/aiq-relay.atof.jsonl
+
+# Find scopes that do not have exactly one start and one end.
+jq -s '
+  [.[] | select(.kind == "scope")]
+  | sort_by(.uuid)
+  | group_by(.uuid)
+  | map({
+      uuid: .[0].uuid,
+      name: .[0].name,
+      starts: map(select(.scope_category == "start")) | length,
+      ends: map(select(.scope_category == "end")) | length
+    })
+  | map(select(.starts != 1 or .ends != 1))
+' relay/aiq-relay.atof.jsonl
+```
+
+An empty final result from the balance check means every recorded scope closed
+exactly once. ATOF `mode: append` is important for web and async-job testing:
+multiple worker processes can initialize exporters, and `overwrite` can replace
+events written by an earlier job.
+
+## Relay logging subscriber
+
+AI-Q registers a process-wide Relay subscriber when `workflow.relay.logging` is
+enabled. It reads the sanitized Relay lifecycle stream and renders developer logs:
+
+```text
+[Chain Start] shallow_research_agent
+[AGENT] model-name
+[Tool Calls] 1 tool(s) requested
+  → web_search_tool
+[Tokens] prompt=1882, completion=42, model=model-name
+[Tool Start] web_search_tool
+[Tool Result] chars=8472 ref=sha256:...
+[Chain End] shallow_research_agent
+```
+
+The subscriber does not instrument the workflow itself. Relay's maintained
+framework integrations and AI-Q's semantic agent/tool scopes produce events;
+the subscriber only formats those events. This keeps console logging aligned
+with ATOF and OTEL rather than maintaining a second callback-based trace.
+
+Raw prompts, responses, tool arguments, and tool results are not printed.
+Instead, the subscriber logs sizes and stable content references after Relay
+redaction. Set the normal console log level under `general.telemetry.logging`.
+
+## Export Relay traces to Phoenix
+
+[Phoenix](https://docs.arize.com/phoenix) provides a local UI for inspecting the
+Relay hierarchy, latency, model inputs and outputs, tool calls, token usage, and
+errors.
+
+Start Phoenix:
+
+```bash
+uvx --from arize-phoenix phoenix serve
+```
+
+Phoenix is available at [http://localhost:6006](http://localhost:6006). OTEL is
+commented out in the default AI-Q configs. Uncomment or add this Relay block:
+
+```yaml
+workflow:
+  relay:
+    observability:
+      opentelemetry:
+        enabled: true
+        endpoints:
+          - type: openinference
+            endpoint: http://localhost:6006/v1/traces
+            service_name: aiq-relay
+            resource_attributes:
+              openinference.project.name: aiq-relay
+              deployment.environment: development
+```
+
+The `openinference` projection gives Phoenix semantic LLM, agent, and tool span
+attributes and the corresponding UI icons. `openinference.project.name`
+selects the Phoenix project. Use a distinct project name for each AI-Q
+environment that you want to compare independently.
+
+Relay also supports `full` and `gen_ai` OTEL projections. Use `full` when the
+destination needs the richest Relay-native attributes, and `gen_ai` when the
+destination expects OpenTelemetry GenAI semantic conventions. Phoenix users
+should normally use `openinference`.
+
+### Troubleshoot missing Phoenix traces
+
+If a trace does not appear in the expected Phoenix project:
+
+1. Check that Phoenix is listening at the configured endpoint.
+2. Confirm `opentelemetry.enabled: true` and inspect the AI-Q log for export
+   errors.
+3. Look in Phoenix's `default` project and any project configured globally on
+   the machine.
+4. Inspect `~/.config/nemo-relay/plugins.toml`. NeMo Relay automatically
+   discovers user-level plugin configuration. If Relay was already configured
+   for another application or coding agent, that exporter can send the AI-Q
+   trace to its globally configured Phoenix project instead of the project you
+   are currently viewing.
+5. Compare the Phoenix trace with the local ATOF file. If ATOF contains the
+   scopes, instrumentation worked and the remaining issue is OTEL destination,
+   project selection, export, or batching.
+
+Keep personal Relay configuration when it is needed by other applications.
+Use an AI-Q-specific project in the workflow configuration and account for all
+discovered exporters when validating where telemetry is sent.
+
+## Read AI-Q traces
+
+AI-Q creates one root trace for each user turn. Multiple turns in the same
+conversation have different trace IDs and share the Phoenix `session.id`, so
+the session view groups them without merging their execution trees.
+
+An async deep-research job runs in a separate Relay trace because it executes
+outside the request task, often in another Dask worker process. Job metadata
+links the background trace to the submitted job and originating request.
+
+A typical deep-research trace is structured as follows:
+
+```text
+<workflow>
+└── chat_deepresearcher_agent
+    ├── intent_classifier
+    │   └── LLM
+    ├── clarifier_agent
+    │   ├── LLM
+    │   └── tool
+    └── deep_research_agent
+        ├── planner-agent
+        │   └── LLM
+        ├── researcher-agent
+        │   ├── LLM
+        │   └── tool
+        └── writer-agent
+            └── LLM
+```
+
+Use the tree in this order:
+
+1. Start at the root and check its terminal status and duration.
+2. Find the slowest agent, LLM, or tool child.
+3. Inspect LLM spans for model, token usage, response status, and sanitized
+   input/output attributes.
+4. Inspect tool spans for tool name, duration, sanitized arguments/results, and
+   errors.
+5. For parallel researchers, compare sibling spans rather than adding their
+   wall-clock durations.
+6. For a failed async job, search by `aiq.job.id` and confirm the root scope has
+   one start, one end, and an `ERROR` terminal status.
+
+Internal graph-routing nodes are represented as decision metadata/events where
+possible rather than noisy agent spans. Framework-generated names can still
+appear when the underlying integration exposes a real execution boundary.
+
+## Redaction and privacy
+
+Relay redaction runs before the AI-Q logging subscriber, ATOF sink, and OTEL
+exporter. The default detectors cover common credentials and personal data.
+AI-Q can also request privacy-mode sanitization for supported `data` and
+`category_profile` payloads through request privacy context.
+
+Redaction reduces accidental disclosure; it is not a substitute for auditing
+the destination's access controls, retention, and data policy. Validate every
+configured exported attribute with synthetic sensitive values before enabling
+full payloads in a production environment.
+
+## Pricing and cost analysis
+
+Default AI-Q configs omit the Relay pricing block. The resulting empty source
+list records token usage without claiming a monetary cost. Pricing depends on
+the provider, deployment, contract, region, cache policy, and date.
+
+Use the dedicated example when you want model cost enrichment:
+
+```bash
+nat serve \
+  --config_file configs/nemo_relay/config_web_default_with_pricing.yml \
+  --port 8000
+```
+
+That config loads `configs/nemo_relay/relay_pricing_catalog.json`:
+
+```yaml
+pricing:
+  enabled: true
+  sources:
+    - type: file
+      path: configs/nemo_relay/relay_pricing_catalog.json
+```
+
+Relay matches the observed provider/model name against the catalog and adds
+cost information to the annotated LLM usage. Review and date every rate before
+using it operationally. A zero-dollar hosted API rate does not mean that a
+self-hosted deployment has no infrastructure cost.
+
+Relay's pricing catalog covers model usage. AI-Q's tokenomics report also
+supports per-call prices for external tools such as web search. After a run,
+generate the report with:
+
+```bash
+PYTHONPATH=src python -m aiq_agent.tokenomics.report \
+  --trace relay/aiq-relay.atof.jsonl \
+  --config frontends/benchmarks/deepresearch_bench/configs/config_tokenomics_pricing.yml
+```
+
+The report uses Relay-attributed model cost when present and the report pricing
+configuration as a fallback. It also calculates configured tool API charges
+and writes a self-contained HTML report. See [Profiling and Cost
+Analysis](../profiling/index.md) for report fields, phase attribution, and
+pricing maintenance.
+
+## Validate the configuration
+
+Validate an edited workflow before starting AI-Q:
+
+```bash
+uv run python .agents/skills/aiq-configure-workflow/scripts/validate_config.py \
+  configs/config_web_default_llamaindex.yml
+```
+
+Then start AI-Q, run one shallow turn and one deep-research job, and verify all
+three views that you enabled:
+
+- console logs show agent, LLM, and tool lifecycle activity;
+- ATOF contains balanced scopes and annotated LLM usage;
+- Phoenix shows the expected project, per-turn traces, shared session grouping,
+  and an independent async-job trace.

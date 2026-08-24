@@ -226,6 +226,40 @@ class TestChatResearcherAgent:
         assert "private provider detail" not in caplog.text
 
     @pytest.mark.asyncio
+    async def test_typed_intent_failure_terminates_without_downstream_nodes(self):
+        calls: list[str] = []
+
+        async def failed_classifier(_state):
+            return {
+                "user_intent": IntentResult(intent="meta", target="meta", raw=None),
+                "messages": [AIMessage(content="Please try again.")],
+                "workflow_outcome": WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR),
+            }
+
+        async def unexpected_downstream(*_args, **_kwargs):
+            calls.append("downstream")
+            raise AssertionError("terminal intent failure must not invoke downstream nodes")
+
+        agent = ChatResearcherAgent(
+            intent_classifier_fn=failed_classifier,
+            shallow_research_fn=unexpected_downstream,
+            deep_research_fn=unexpected_downstream,
+            clarifier_fn=unexpected_downstream,
+            report_ask_fn=unexpected_downstream,
+            report_edit_fn=unexpected_downstream,
+            hybrid_research_fn=unexpected_downstream,
+        )
+
+        result = await agent.run(
+            ChatResearcherState(messages=[HumanMessage(content="Research this")]),
+            thread_id="test-typed-intent-failure",
+        )
+
+        assert calls == []
+        assert result["messages"][-1].content == "Please try again."
+        assert result["workflow_outcome"] == WorkflowFailure(error=RESEARCH_WORKFLOW_FAILURE_ERROR)
+
+    @pytest.mark.asyncio
     async def test_run_shallow_research_flow(
         self,
         mock_intent_classifier,

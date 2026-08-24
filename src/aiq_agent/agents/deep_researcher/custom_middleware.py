@@ -877,10 +877,23 @@ class ToolNameSanitizationMiddleware(AgentMiddleware):
                 new_tool_calls = []
                 for tc in msg.tool_calls:
                     new_tool_calls.append({**tc, "name": self._sanitize_tool_name(tc["name"])})
-                new_msg = AIMessage(
-                    content=msg.content,
-                    tool_calls=new_tool_calls,
-                    id=msg.id,
+                additional_kwargs = dict(msg.additional_kwargs)
+                raw_tool_calls = additional_kwargs.get("tool_calls")
+                if isinstance(raw_tool_calls, list):
+                    sanitized_raw_tool_calls = []
+                    for raw_tool_call in raw_tool_calls:
+                        if not isinstance(raw_tool_call, dict) or not isinstance(raw_tool_call.get("function"), dict):
+                            sanitized_raw_tool_calls.append(raw_tool_call)
+                            continue
+                        function = dict(raw_tool_call["function"])
+                        function["name"] = self._sanitize_tool_name(str(function.get("name") or ""))
+                        sanitized_raw_tool_calls.append({**raw_tool_call, "function": function})
+                    additional_kwargs["tool_calls"] = sanitized_raw_tool_calls
+                new_msg = msg.model_copy(
+                    update={
+                        "additional_kwargs": additional_kwargs,
+                        "tool_calls": new_tool_calls,
+                    }
                 )
                 new_result.append(new_msg)
             else:

@@ -52,6 +52,7 @@ Test coverage:
         - Routes registered when infrastructure available
 """
 
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 
 import pytest
@@ -191,8 +192,8 @@ class TestRegisterRoutes:
     """Tests for the register_routes function."""
 
     @pytest.mark.asyncio
-    async def test_routes_not_registered_without_dask(self):
-        """Test that routes are not registered when Dask is not available."""
+    async def test_guarded_submit_registered_without_dask(self):
+        """Test that exactly one guarded submit route exists without Dask."""
         from aiq_api.routes.jobs import register_job_routes
 
         mock_app = MagicMock()
@@ -204,12 +205,10 @@ class TestRegisterRoutes:
 
         await register_job_routes(mock_app, mock_builder, mock_worker)
 
-        # Async job submission/control routes require Dask + a job store and must
-        # NOT be registered. The always-on control-plane routes (data sources,
-        # agent list, and per-user MCP auth status/connect/callback) are still
-        # registered regardless of Dask availability.
+        # The guarded submit route preserves request validation/auth precedence;
+        # the remaining async job routes still require Dask + a job store.
         post_paths = [c.args[0] for c in mock_app.post.call_args_list if c.args]
-        assert "/v1/jobs/async/submit" not in post_paths
+        assert post_paths.count("/v1/jobs/async/submit") == 1
         assert "/v1/auth/mcp/{source_id}/connect" in post_paths
         get_paths = [c.args[0] for c in mock_app.get.call_args_list if c.args]
         assert "/v1/jobs/async/agents" in get_paths
@@ -218,8 +217,8 @@ class TestRegisterRoutes:
         assert "/v1/auth/mcp/{source_id}/callback" in get_paths
 
     @pytest.mark.asyncio
-    async def test_routes_not_registered_without_job_store(self):
-        """Test that routes are not registered without job store."""
+    async def test_guarded_submit_registered_without_job_store(self):
+        """Test that exactly one guarded submit route exists without a JobStore."""
         from aiq_api.routes.jobs import register_job_routes
 
         mock_app = MagicMock()
@@ -231,12 +230,10 @@ class TestRegisterRoutes:
 
         await register_job_routes(mock_app, mock_builder, mock_worker)
 
-        # Async job submission/control routes require Dask + a job store and must
-        # NOT be registered. The always-on control-plane routes (data sources,
-        # agent list, and per-user MCP auth status/connect/callback) are still
-        # registered regardless of Dask availability.
+        # The guarded submit route preserves request validation/auth precedence;
+        # the remaining async job routes still require Dask + a job store.
         post_paths = [c.args[0] for c in mock_app.post.call_args_list if c.args]
-        assert "/v1/jobs/async/submit" not in post_paths
+        assert post_paths.count("/v1/jobs/async/submit") == 1
         assert "/v1/auth/mcp/{source_id}/connect" in post_paths
         get_paths = [c.args[0] for c in mock_app.get.call_args_list if c.args]
         assert "/v1/jobs/async/agents" in get_paths
@@ -245,9 +242,15 @@ class TestRegisterRoutes:
         assert "/v1/auth/mcp/{source_id}/callback" in get_paths
 
     @pytest.mark.asyncio
-    async def test_routes_registered_with_dask(self):
+    async def test_routes_registered_with_dask(self, monkeypatch, tmp_path):
         """Test that routes are registered when Dask is available."""
-        from aiq_api.routes.jobs import register_job_routes
+        import aiq_api.routes.jobs as jobs_routes
+
+        config_path = tmp_path / "config.yml"
+        config_path.write_text("functions: {}\n", encoding="utf-8")
+        monkeypatch.setattr(jobs_routes, "_bootstrap_async_job_storage", AsyncMock())
+        monkeypatch.setattr(jobs_routes, "_reap_ghost_jobs", AsyncMock())
+        monkeypatch.setattr(jobs_routes, "_start_periodic_cleanup", MagicMock())
 
         mock_app = MagicMock()
         mock_builder = MagicMock()
@@ -257,15 +260,19 @@ class TestRegisterRoutes:
         mock_worker._job_store = MagicMock()
         mock_worker._scheduler_address = "tcp://localhost:8786"
         mock_worker._db_url = "sqlite:///./test.db"
-        mock_worker._config_file_path = "/path/to/config.yml"
+        mock_worker._config_file_path = str(config_path)
         mock_worker._log_level = 20
         mock_worker._use_dask_threads = False
         mock_worker._front_end_config = MagicMock(expiry_seconds=86400)
 
-        await register_job_routes(mock_app, mock_builder, mock_worker)
+        await jobs_routes.register_job_routes(mock_app, mock_builder, mock_worker)
 
-        assert mock_app.post.call_count >= 2
-        assert mock_app.get.call_count >= 6
+        post_paths = [c.args[0] for c in mock_app.post.call_args_list if c.args]
+        get_paths = [c.args[0] for c in mock_app.get.call_args_list if c.args]
+        assert post_paths.count("/v1/jobs/async/submit") == 1
+        assert "/v1/jobs/async/job/{job_id}/report/edit" in post_paths
+        assert "/v1/jobs/async/job/{job_id}" in get_paths
+        assert "/v1/jobs/async/job/{job_id}/stream" in get_paths
 
 
 class TestArtifactHelpers:

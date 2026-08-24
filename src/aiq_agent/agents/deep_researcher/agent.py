@@ -26,6 +26,7 @@ from typing import Any
 from uuid import uuid4
 
 from langchain_core.tools import BaseTool
+from nemo_relay.integrations.deepagents import NemoRelayDeepAgentsCallbackHandler
 
 from aiq_agent.common import LLMProvider
 from aiq_agent.common import load_prompt
@@ -37,6 +38,7 @@ from aiq_agent.common.citation_verification import sanitize_report
 from aiq_agent.common.citation_verification import source_entries_from_parent_context
 from aiq_agent.common.citation_verification import verify_citations
 from aiq_agent.common.logging_utils import log_content_metadata
+from aiq_agent.relay import run_agent
 
 from .custom_middleware import FinalReportCommitTracker
 from .custom_middleware import SourceRegistryMiddleware
@@ -75,7 +77,6 @@ class DeepResearcherAgent:
         llm_provider: LLMProvider,
         tools: Sequence[BaseTool] | None = None,
         *,
-        verbose: bool = True,
         callbacks: list[Any] | None = None,
         domain_catalog_path: str | None = None,
         enable_source_router: bool = True,
@@ -97,7 +98,6 @@ class DeepResearcherAgent:
         Args:
             llm_provider: LLMProvider for role-based LLM access.
             tools: Optional sequence of LangChain tools for research.
-            verbose: Enable detailed logging.
             callbacks: Optional list of callbacks.
             domain_catalog_path: Optional YAML/JSON domain catalog path for source-router-agent.
             enable_source_router: Enable the advisory source-router-agent before planning.
@@ -114,7 +114,6 @@ class DeepResearcherAgent:
         """
         self.llm_provider = llm_provider
         self.tools = list(tools) if tools else []
-        self.verbose = verbose
         self.callbacks = callbacks or []
         self.max_research_concurrency = max_research_concurrency
         self.max_researcher_model_calls = max_researcher_model_calls
@@ -315,9 +314,19 @@ class DeepResearcherAgent:
             execution_timeout = asyncio.timeout(self.resource_limits.max_execution_seconds)
             try:
                 async with execution_timeout:
-                    result = await agent.ainvoke(
-                        state,
-                        config={"callbacks": self.callbacks} if self.callbacks else None,
+
+                    async def _invoke_orchestrator() -> Any:
+                        callbacks = [*self.callbacks, NemoRelayDeepAgentsCallbackHandler()]
+                        return await agent.ainvoke(state, config={"callbacks": callbacks})
+
+                    result = await run_agent(
+                        "deep_research_agent",
+                        _invoke_orchestrator,
+                        input_value={
+                            "message_count": len(messages),
+                            "query_character_count": len(query),
+                            "file_count": len(state.files),
+                        },
                     )
             except TimeoutError as exc:
                 # An inner provider/tool may raise TimeoutError for its own operation.

@@ -14,10 +14,6 @@ general:
       console:
         _type: console
         level: INFO
-    # tracing:
-    #   langsmith: # Optional: LangSmith tracing - requires langsmith API key. Set using `export LANGSMITH_API_KEY=<your-langsmith-api-key>`
-    #     _type: langsmith
-    #     project: nvidia-aiq
 
   front_end:
     _type: aiq_api
@@ -132,7 +128,6 @@ functions:
   intent_classifier:
     _type: intent_classifier
     llm: gpt_luna_intent_llm
-    verbose: true
     tools:
       - web_search_tool
       # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
@@ -146,12 +141,10 @@ functions:
       - knowledge_search
     max_turns: 3
     log_response_max_chars: 2000
-    verbose: true
 
   shallow_research_agent:
     _type: shallow_research_agent
     llm: gpt_luna_shallow_llm
-    verbose: true
     tools:
       - web_search_tool
       - knowledge_search
@@ -166,7 +159,6 @@ functions:
     researcher_llm: gpt_luna_agent_llm
     planner_llm: gpt_sol_agent_llm
     writer_llm: gpt_sol_writer_llm
-    verbose: true
     tools:
       # - paper_search_tool  # Uncomment if SERPER_API_KEY is set
       - advanced_web_search_tool
@@ -175,7 +167,6 @@ functions:
 
 workflow:
   _type: chat_deepresearcher_agent
-  verbose: true
   enable_escalation: true
   enable_clarifier: true
   use_async_deep_research: true

@@ -19,6 +19,7 @@ SPDX-License-Identifier: Apache-2.0
 
 ```bash
 export TAVILY_API_KEY=your_key              # For web search
+export SERPER_API_KEY=your_key              # For Google Scholar paper search
 export NVIDIA_API_KEY=your_key              # For agent execution (integrate.api.nvidia.com)
 export OPENAI_API_KEY=your_key              # For frontier model in config (optional)
 ```
@@ -58,9 +59,12 @@ python frontends/benchmarks/deepresearch_bench/scripts/export_drb_jsonl.py --inp
 Follow instructions in the [Deep Research Bench Github Repository](https://github.com/Ayanami0730/deep_research_bench/tree/main) to run evaluation and obtain scores.
 
 
-## Optional: Phoenix Tracing
+## Optional: Relay and Phoenix Tracing
 
-If your config enables Phoenix tracing, start the Phoenix server before running `nat eval`.
+AI-Q evaluation uses the same NeMo Relay observability path as interactive and
+async workflows. ATOF is enabled by default. To visualize the evaluation in
+Phoenix, enable the Relay OpenInference OTEL endpoint in the evaluated workflow
+and start Phoenix before running `nat eval`.
 
 Start server (separate terminal):
 
@@ -68,26 +72,25 @@ Start server (separate terminal):
 uvx --from arize-phoenix phoenix serve
 ```
 
-## W&B Tracking
-
-Evaluation runs are tracked using [Weights & Biases Weave - deep-researcher-v2 project](https://wandb.ai/nvidia-aiq/deep-researcher-v2/weave) for experiment tracking and observability.
-
-### Configuration
-
-Enable W&B tracking in your config file under `general.telemetry.tracing`:
-
 ```yaml
-general:
-  telemetry:
-    tracing:
-      weave:
-        _type: weave
-        project: "deep-researcher-v2"
+workflow:
+  relay:
+    observability:
+      opentelemetry:
+        enabled: true
+        endpoints:
+          - type: openinference
+            endpoint: http://localhost:6006/v1/traces
+            resource_attributes:
+              openinference.project.name: aiq-deepresearch-bench
 
 eval:
   general:
     workflow_alias: "aiq-deepresearch-v2-baseline"
 ```
+
+See [Observability with NeMo Relay](../../deployment/observability.md) for ATOF
+inspection, trace interpretation, project selection, and cost reporting.
 
 ### workflow_alias
 
