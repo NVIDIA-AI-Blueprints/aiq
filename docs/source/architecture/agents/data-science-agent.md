@@ -146,6 +146,9 @@ curl -X POST http://localhost:8000/v1/jobs/async/submit \
 
 # Reconnect at any time, including after a page refresh
 curl -N http://localhost:8000/v1/jobs/async/job/<job_id>/stream
+
+# Or resume from the last event a client already received
+curl -N http://localhost:8000/v1/jobs/async/job/<job_id>/stream/<last_event_id>
 ```
 
 Serve the web profile, which adds the `aiq_api` front end:
