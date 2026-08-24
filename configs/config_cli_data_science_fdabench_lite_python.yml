@@ -31,7 +31,7 @@ function_groups:
     auth:
       mode: password
       email: ${GSF_EMAIL}
-      password: GSF_PASSWORD
+      password: GSF_PASSWORD  # pragma: allowlist secret
     include:
       - catalog_search
       - text_to_sql
