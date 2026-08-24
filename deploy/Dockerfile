@@ -84,6 +84,7 @@ RUN uv sync --frozen --extra pii --extra s3
 RUN uv pip install --no-sources --no-deps -e . \
     && uv pip install --no-deps -e ./sources/google_scholar_paper_search \
     && uv pip install --no-deps -e ./sources/tavily_web_search \
+    && uv pip install --no-deps -e ./sources/tavily_web_fetch \
     && uv pip install --no-deps -e ./sources/exa_web_search \
     && uv pip install --no-deps -e ./sources/nimble_web_search \
     && uv pip install --no-deps -e "./sources/knowledge_layer[all]" \

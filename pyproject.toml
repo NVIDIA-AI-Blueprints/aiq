@@ -227,6 +227,7 @@ dev = [
     "aiq-gsf",
     "google-scholar-paper-search",
     "tavily-web-search",
+    "tavily-web-fetch",
     "exa-web-search",
     "nimble-web-search",
     "you-com",
@@ -277,6 +278,7 @@ aiq-agent = { workspace = true }
 aiq-gsf = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
+tavily-web-fetch = { workspace = true }
 exa-web-search = { workspace = true }
 nimble-web-search = { workspace = true }
 you-com = { workspace = true }

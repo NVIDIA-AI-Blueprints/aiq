@@ -173,6 +173,45 @@ functions:
 | `max_content_length` | `int` | `None` | Truncate each result's content to this many characters. Reduces token usage. |
 | `api_base_url` | `str` | `None` | Optional custom or proxy-compatible Tavily API base URL. A non-empty value is passed to the Tavily client; `None` uses the client's default endpoint. |
 
+### `tavily_web_fetch`
+
+Opens pages you already have the URL for, through the [Tavily](https://tavily.com/) Extract API.
+Search tools find candidate pages; this tool reads one. It is not wired into any shipped config -- add the function
+block and reference it from a `data_source_registry` source (or an agent's `tools` list) to enable it.
+
+This tool returns full page content rather than provider-reranked excerpts, so it carries more untrusted third-party
+text than search. Review the security model in `sources/tavily_web_fetch/README.md` and the
+[untrusted web content](../deployment/production.md#untrusted-web-content) guidance before enabling it.
+
+```yaml
+functions:
+  fetch_url_tool:
+    _type: tavily_web_fetch
+    max_urls_per_call: 4
+    max_chars_per_page: 10000
+    max_chars_per_call: 24000
+    extract_depth: advanced
+
+  data_sources:
+    _type: data_source_registry
+    sources:
+      - id: web_search
+        name: "Web Search"
+        description: "Search the web for real-time information, and open specific pages."
+        tools:
+          - web_search_tool
+          - fetch_url_tool
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `max_urls_per_call` | `int` | `4` | Maximum URLs accepted in a single call. |
+| `max_chars_per_page` | `int` | `10000` | Maximum characters shown per page. A prompt-context budget, not a download limit: pages are extracted in full and then windowed. |
+| `max_chars_per_call` | `int` | `24000` | Maximum characters shown across all URLs in one call, spent in request order. |
+| `extract_depth` | `str` | `"advanced"` | Tavily extraction depth: `basic` or `advanced`. |
+| `timeout_seconds` | `int` | `30` | Per-call extraction timeout in seconds. |
+| `api_key` | `str` | `None` | Tavily API key. Falls back to the `TAVILY_API_KEY` environment variable. |
+
 ### `exa_web_search`
 
 Web search powered by the [Exa API](https://exa.ai/) via `langchain-exa`.

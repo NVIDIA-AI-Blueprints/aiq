@@ -47,6 +47,7 @@ The builder stage handles all compilation and package installation:
    - Root workspace package (`aiq-agent`) using `uv pip install --no-sources --no-deps -e .`; `--no-sources` keeps workspace source overrides from coupling this image to packages that are intentionally absent from its build context.
    - `sources/google_scholar_paper_search` -- Google Scholar search
    - `sources/tavily_web_search` -- Tavily web search
+   - `sources/tavily_web_fetch` -- Web page fetch by URL (Tavily Extract)
    - `sources/exa_web_search` -- Exa web search
    - `sources/nimble_web_search` -- Nimble web search
    - `sources/knowledge_layer[all]` -- Knowledge layer with all extras

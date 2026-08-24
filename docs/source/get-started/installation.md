@@ -102,6 +102,7 @@ uv pip install -e ./frontends/aiq_api      # Unified API server (includes debug)
 
 # Data sources (pick what you need)
 uv pip install -e ./sources/tavily_web_search
+uv pip install -e ./sources/tavily_web_fetch
 uv pip install -e ./sources/exa_web_search
 uv pip install -e ./sources/nimble_web_search
 uv pip install -e ./sources/you_com
