@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Register a request-scoped OpenShell Python kernel as a NAT function."""
+"""Register request-scoped stateless OpenShell Python as a NAT function."""
 
 from pydantic import ConfigDict
 from pydantic import Field
@@ -15,12 +15,12 @@ from nat.cli.register_workflow import register_function
 from nat.data_models.component_ref import FunctionRef
 from nat.data_models.function import FunctionBaseConfig
 
-from .session import OpenShellPythonSession
-from .session import PythonSessionLimits
+from .session import OpenShellPythonRunner
+from .session import PythonRunnerLimits
 
 
 class StatefulPythonConfig(FunctionBaseConfig, name="stateful_python"):
-    """Configuration for one persistent OpenShell Python kernel per DS request."""
+    """Configuration for isolated Python scripts in one OpenShell sandbox per DS request."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -41,7 +41,7 @@ class StatefulPythonConfig(FunctionBaseConfig, name="stateful_python"):
 
 @register_function(config_type=StatefulPythonConfig)
 async def stateful_python(tool_config: StatefulPythonConfig, builder: Builder):
-    """Build one model-facing Python tool backed only by request-owned OpenShell sandboxes."""
+    """Build a stateless Python tool backed only by request-owned OpenShell sandboxes."""
 
     sandbox_config = builder.get_function_config(tool_config.sandbox)
     if not isinstance(sandbox_config, DeepResearchSandboxConfig):
@@ -55,7 +55,7 @@ async def stateful_python(tool_config: StatefulPythonConfig, builder: Builder):
     if sandbox_config.existing_sandbox_name or sandbox_config.sandbox_name or sandbox_config.allow_shared_sandbox:
         raise ValueError("stateful_python requires a fresh per-request OpenShell sandbox")
 
-    limits = PythonSessionLimits(
+    limits = PythonRunnerLimits(
         wall_timeout_seconds=tool_config.wall_timeout_seconds,
         max_code_chars=tool_config.max_code_chars,
         max_output_chars=tool_config.max_output_chars,
@@ -68,14 +68,13 @@ async def stateful_python(tool_config: StatefulPythonConfig, builder: Builder):
     )
 
     async def _run(code: str) -> str:
-        """Execute Python in the persistent analysis kernel for this request.
+        """Execute one self-contained Python script in a fresh namespace.
 
-        Variables, imports, DataFrames, and fitted objects persist across calls
-        inside one policy-bound OpenShell sandbox that is deleted after the request.
-        NumPy (`np`), pandas (`pd`), SciPy (`scipy`, `stats`), scikit-learn
-        (`sklearn`), and statsmodels (`sm`) are preloaded. Successful agent-level
-        GSF results are available through `list_gsf_results()`, `gsf_result(ref)`,
-        `gsf_rows(ref)`, `gsf_sql(ref)`, and `gsf_latest()`.
+        Variables do not persist across calls. NumPy (`np`), pandas (`pd`), SciPy
+        (`scipy`, `stats`), scikit-learn (`sklearn`), and statsmodels (`sm`) are
+        preloaded every time. Successful agent-level GSF results remain available
+        through `list_gsf_results()`, `gsf_result(ref)`, `gsf_rows(ref)`,
+        `gsf_sql(ref)`, and `gsf_latest()` in every invocation.
 
         This is an analysis tool, not a data-access tool. It has no configured GSF
         client, source SQL connection, or benchmark database. Call GSF with the
@@ -85,19 +84,19 @@ async def stateful_python(tool_config: StatefulPythonConfig, builder: Builder):
         run_state = get_analysis_run()
         if run_state is None:
             return '{"status":"error","error":"analysis_runtime_unavailable"}'
-        session = run_state.resources.get("stateful_python")
-        if session is None:
+        runner = run_state.resources.get("stateful_python")
+        if runner is None:
             runtime = DeepAgentsRuntime(
                 sandbox=sandbox_config,
                 job_id=f"data-science-python-{run_state.run_id}",
             )
-            session = OpenShellPythonSession(
+            runner = OpenShellPythonRunner(
                 runtime=runtime,
                 host_manifest_path=run_state.manifest_path,
                 host_evidence_root=run_state.root,
                 limits=limits,
             )
-            run_state.resources["stateful_python"] = session
-        return await session.execute(code)
+            run_state.resources["stateful_python"] = runner
+        return await runner.execute(code)
 
     yield FunctionInfo.from_fn(_run, description=_run.__doc__)

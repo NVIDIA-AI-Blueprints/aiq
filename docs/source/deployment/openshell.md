@@ -217,10 +217,12 @@ export AIQ_DS_OPENSHELL_POLICY_FILE="$PWD/configs/openshell/generated/aiq-ds-pyt
 
 `stateful_python` accepts no host-process backend and rejects OpenShell configs
 that enable network access or attach to a shared sandbox. It uploads only its
-version-matched kernel transport and bounded request-local GSF receipt JSON.
-The worker applies hard Unix limits for memory, cumulative CPU time, process
-count, open files, and output-file size before model-authored code runs. The
-request's terminal cleanup deletes the whole sandbox and its process tree.
+version-matched one-shot runner, model-authored script request, and bounded
+request-local GSF receipt JSON. It re-uploads the authoritative receipts before
+every script. Each fresh Python process receives hard Unix limits for memory,
+CPU time, process count, open files, and output-file size before model-authored
+code runs. The request's terminal cleanup deletes the whole sandbox and its
+process tree.
 The macOS `best_effort` setup remains a functional demo only; production
 acceptance still requires Linux with hard Landlock.
 

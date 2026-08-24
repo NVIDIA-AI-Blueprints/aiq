@@ -82,7 +82,7 @@ class DataScienceAgentConfig(FunctionBaseConfig, name="data_science_agent"):
     python_call_limit: int | None = Field(
         default=None,
         ge=1,
-        description="Optional request-local hard limit for persistent Python analysis calls.",
+        description="Optional request-local hard limit for sandboxed Python analysis calls.",
     )
     finalization_model_call_limit: int | None = Field(
         default=None,

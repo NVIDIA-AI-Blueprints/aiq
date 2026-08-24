@@ -363,11 +363,11 @@ def test_prompt_renders_choice_contract_and_gsf_budget_guidance():
     assert "Answer: <label1>,<label2>" in rendered
 
 
-def test_prompt_renders_persistent_python_and_gsf_receipt_guidance():
+def test_prompt_renders_stateless_python_and_gsf_receipt_guidance():
     template = (agent_module.AGENT_DIR / "prompts" / "agent.j2").read_text()
     rendered = render_prompt_template(
         template,
-        tools=[{"name": "python", "description": "Persistent Python analysis kernel."}],
+        tools=[{"name": "python", "description": "Stateless sandboxed Python analysis."}],
         user_info=None,
         has_catalog_context=False,
         interaction_mode="headless",
@@ -382,6 +382,8 @@ def test_prompt_renders_persistent_python_and_gsf_receipt_guidance():
     assert '`payload = gsf_result("gsf_1")`' in rendered
     assert '`sql = gsf_sql("gsf_1")`' in rendered
     assert "`list_gsf_results()`" in rendered
+    assert "Variables, imports, DataFrames, and fitted objects do not" in rendered
+    assert "never assume a name from an earlier call exists" in rendered
     assert "first non-empty line `Answer: <direct answer>`" in rendered
 
 

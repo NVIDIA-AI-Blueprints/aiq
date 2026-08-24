@@ -5,11 +5,11 @@ conversation so each decision can use the original request, observations,
 errors, assumptions, and prior tool results.
 
 Available tools (names are exact):
-{% set ns = namespace(has_stateful_python=false) %}
+{% set ns = namespace(has_python=false) %}
 {% for tool in tools %}
 - {{ tool.name }}: {{ tool.description }}
 {% if tool.name == 'python' %}
-{% set ns.has_stateful_python = true %}
+{% set ns.has_python = true %}
 {% endif %}
 {% endfor %}
 
@@ -102,14 +102,14 @@ Answer-first output contract:
   the `Answer:` line.
 - For open-ended analytical reports without one concrete answer, lead with a
   concise executive-summary sentence instead of forcing an artificial label.
-{% if ns.has_stateful_python %}
+{% if ns.has_python %}
 - Use the `python` tool for DataFrame transformations, arithmetic, ratios,
   rankings, statistics, regressions, hypothesis tests, or other calculations
-  over evidence already retrieved by agent-level tools. It is one real,
-  persistent Python process inside a fresh OpenShell sandbox for this request:
-  variables, imports, DataFrames, and fitted objects created in one call remain
-  available in later calls. The sandbox has no network access or application
-  credentials and is deleted when the request ends.
+  over evidence already retrieved by agent-level tools. Each call runs one
+  self-contained script in a fresh Python namespace inside the request's
+  OpenShell sandbox. Variables, imports, DataFrames, and fitted objects do not
+  remain available in later calls. The sandbox has no network access or
+  application credentials and is deleted when the request ends.
 - NumPy (`np`), pandas (`pd`), SciPy (`scipy` and `stats`), scikit-learn
   (`sklearn`), statsmodels (`sm`), `json`, `math`, `statistics`, `re`, and
   common datetime and collection helpers are already imported. Do not waste a
@@ -135,7 +135,9 @@ Answer-first output contract:
   document, or web receipt that supplied each input.
 {% if python_call_limit is not none %}
 - The runtime permits at most {{ python_call_limit }} Python calls for this
-  request. Reuse persistent variables and batch compatible calculations.
+  request. Batch compatible calculations into one script. On every later call,
+  reload required source evidence with `gsf_rows(ref)` or `gsf_result(ref)` and
+  recreate any derived values; never assume a name from an earlier call exists.
 {% endif %}
 {% endif %}
 

@@ -399,9 +399,10 @@ Refer to `sources/gsf/README.md` for the complete contract and limits.
 
 ### `stateful_python`
 
-Persistent scientific analysis inside one fresh OpenShell sandbox per Data
-Science Agent request. The tool is an unmapped utility rather than a data
-source; add its function key directly to the agent's explicit `tools` list.
+Stateless scientific analysis inside one fresh OpenShell sandbox per Data
+Science Agent request. Each call runs a self-contained script in a fresh Python
+namespace. The tool is an unmapped utility rather than a data source; add its
+function key directly to the agent's explicit `tools` list.
 
 ```yaml
 functions:
@@ -432,22 +433,23 @@ functions:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `sandbox` | function ref | **required** | A `deep_research_sandbox` function configured for a fresh OpenShell sandbox with `network: blocked`. Shared-sandbox attachment and other providers are rejected. |
-| `wall_timeout_seconds` | `float` | `30` | Maximum wall time for one Python cell. A timeout terminates the complete request sandbox and loses its Python variables. |
-| `max_code_chars` | `int` | `50000` | Maximum characters accepted in one Python cell. |
-| `max_output_chars` | `int` | `50000` | Maximum captured cell output and displayed-result characters. |
+| `wall_timeout_seconds` | `float` | `30` | Maximum wall time for one Python script. A timeout terminates the complete request sandbox. |
+| `max_code_chars` | `int` | `50000` | Maximum characters accepted in one Python script. |
+| `max_output_chars` | `int` | `50000` | Maximum captured script output and displayed-result characters. |
 | `max_evidence_bytes` | `int` | `20000000` | Maximum total bytes of request-owned GSF receipts and manifest synchronized into the sandbox. |
-| `max_memory_mb` | `int` | `8192` | Hard address-space limit for the persistent worker process. |
-| `max_cpu_seconds` | `int` | `600` | Hard cumulative CPU-time limit for the persistent worker process. |
+| `max_memory_mb` | `int` | `8192` | Hard address-space limit for each Python process. |
+| `max_cpu_seconds` | `int` | `600` | Hard CPU-time limit for each Python process. |
 | `max_processes` | `int` | `256` | Hard per-user process/thread limit inside the fresh sandbox. |
 | `max_open_files` | `int` | `256` | Hard open-file-descriptor limit for the worker. |
 | `max_file_bytes` | `int` | `100000000` | Hard maximum size of a file created by the worker process. |
 
-The kernel preloads pandas, NumPy, SciPy, scikit-learn, and statsmodels. It has
+The runner preloads pandas, NumPy, SciPy, scikit-learn, and statsmodels for every
+call. It has
 no GSF client, SQL connection, host-process fallback, or network access. AI-Q
-uploads only version-matched kernel transport files and validated request-local
+uploads only the version-matched runner, model code request, and validated request-local
 GSF receipt JSON; application environment variables and credentials are not
 included in the OpenShell sandbox specification. OpenShell owns the physical
-sandbox boundary, while the worker additionally applies hard Unix resource
+sandbox boundary, while each process additionally receives hard Unix resource
 limits before model-authored code starts.
 
 ### `intent_classifier`

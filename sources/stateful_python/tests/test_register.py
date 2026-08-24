@@ -23,19 +23,19 @@ def _builder_with(sandbox: object) -> MagicMock:
 
 
 @pytest.mark.asyncio
-async def test_registration_creates_one_openshell_session_per_analysis_run() -> None:
+async def test_registration_creates_one_openshell_runner_per_analysis_run() -> None:
     config = register_module.StatefulPythonConfig(sandbox="ds_python_sandbox", wall_timeout_seconds=60)
     builder = _builder_with(DeepResearchSandboxConfig(provider="openshell", network="blocked"))
     registration = register_module.stateful_python.__wrapped__(config, builder)
     function_info = await anext(registration)
     token = begin_analysis_run()
-    session = MagicMock()
-    session.execute = AsyncMock(return_value='{"status":"ok","result":"2"}')
-    session.aclose = AsyncMock()
+    runner = MagicMock()
+    runner.execute = AsyncMock(return_value='{"status":"ok","result":"2"}')
+    runner.aclose = AsyncMock()
     try:
         with (
             patch.object(register_module, "DeepAgentsRuntime") as runtime_cls,
-            patch.object(register_module, "OpenShellPythonSession", return_value=session) as session_cls,
+            patch.object(register_module, "OpenShellPythonRunner", return_value=runner) as runner_cls,
         ):
             first = await function_info.single_fn("1 + 1")
             second = await function_info.single_fn("2 + 2")
@@ -48,13 +48,13 @@ async def test_registration_creates_one_openshell_session_per_analysis_run() -> 
     runtime_cls.assert_called_once()
     assert runtime_cls.call_args.kwargs["sandbox"].provider == "openshell"
     assert runtime_cls.call_args.kwargs["job_id"].startswith("data-science-python-")
-    session_cls.assert_called_once()
-    assert session_cls.call_args.kwargs["limits"].max_memory_mb == 8_192
-    assert session_cls.call_args.kwargs["limits"].max_cpu_seconds == 600
-    assert session.execute.await_count == 2
-    session.execute.assert_any_await("1 + 1")
-    session.execute.assert_any_await("2 + 2")
-    session.aclose.assert_awaited_once()
+    runner_cls.assert_called_once()
+    assert runner_cls.call_args.kwargs["limits"].max_memory_mb == 8_192
+    assert runner_cls.call_args.kwargs["limits"].max_cpu_seconds == 600
+    assert runner.execute.await_count == 2
+    runner.execute.assert_any_await("1 + 1")
+    runner.execute.assert_any_await("2 + 2")
+    runner.aclose.assert_awaited_once()
 
 
 @pytest.mark.parametrize(

@@ -29,9 +29,9 @@ The agent receives tools through NeMo Agent Toolkit references and the
 - `gsf__text_to_sql` generates validated SQL and returns bounded rows from GSF.
 - `knowledge_search` uses the configured AI-Q knowledge backend.
 - `web_search_tool` uses the configured AI-Q web-search provider.
-- `python`, when configured through `stateful_python`, provides one persistent
-  scientific Python kernel in a fresh OpenShell sandbox per request. It is also
-  a non-citable utility.
+- `python`, when configured through `stateful_python`, runs self-contained
+  scientific Python scripts in a fresh OpenShell sandbox per request. It is
+  also a non-citable utility.
 
 An empty `tools` list inherits every registry tool. A non-empty list is an
 explicit override, and `exclude_tools` can remove exact runtime tool names.
@@ -68,21 +68,23 @@ one broad catalog-discovery pass, consolidated analytical requests, and bounded
 repair rules. Limits are opt-in so the general direct profile remains tunable.
 
 For analyses that require pandas, NumPy, SciPy, scikit-learn, or statsmodels,
-the `stateful_python` NAT function keeps a real Python process alive in a fresh,
-attested OpenShell sandbox for the entire DS request. The model sees a single
-`python(code)` tool and does not manage sandbox or workspace identifiers. Every
-successful GSF text-to-SQL response is persisted under a stable request-local
-reference (`gsf_1`, `gsf_2`, and so on), then copied into the sandbox through a
-bounded manifest whose paths are rewritten to sandbox-local files. The kernel
-exposes
+the `stateful_python` NAT function launches a fresh, bounded Python process for
+each tool call inside one attested OpenShell sandbox owned by the DS request.
+Variables do not persist, so every call must be a self-contained script. The
+model sees a single `python(code)` tool and does not manage sandbox or workspace
+identifiers. Every successful GSF text-to-SQL response is persisted under a
+stable request-local reference (`gsf_1`, `gsf_2`, and so on). Before every
+script, AI-Q copies the complete authoritative receipt set into the sandbox
+through a bounded manifest whose paths are rewritten to sandbox-local files.
+The trusted runner exposes
 `list_gsf_results()`, `gsf_result(ref)`, `gsf_rows(ref)`, `gsf_sql(ref)`, and
 `gsf_latest()`, so analysis consumes exact rows rather than copying values from
-the conversation. The kernel has no configured source-database or GSF client;
+the conversation. The runner has no configured source-database or GSF client;
 all retrieval remains an agent-level GSF operation. Network access is blocked,
 application credentials are never included in the sandbox specification, and
 normal completion, failure, timeout, or cancellation deletes the request-owned
-sandbox. Hard worker limits bound address space, cumulative CPU, process count,
-open files, and file size. No host-process execution backend is available.
+sandbox. Hard per-script limits bound address space, CPU, process count, open
+files, and file size. No host-process execution backend is available.
 
 The DS runtime also reserves a final model call before the LangGraph recursion
 boundary. When that reserve begins, tools are removed and the model must
@@ -170,7 +172,7 @@ researcher or top-level router:
   Foundational RAG, and Tavily.
 - `configs/config_cli_data_science_fdabench_lite_python.yml` keeps the same
   model, source tools, GSF limits, and response contract, and adds only the
-  OpenShell scientific Python kernel with exact GSF-result helpers.
+  stateless OpenShell scientific Python runner with exact GSF-result helpers.
 
 Both profiles are headless and set `response_mode: fdabench_choice`. When a task
 contains labeled choices, the prompt evaluates every option and emits an
@@ -187,7 +189,7 @@ override the profile defaults of two and six actual calls, respectively. Exact
 request-local cache hits do not consume those budgets.
 `AIQ_DS_PYTHON_CALL_LIMIT`, `AIQ_DS_PYTHON_TIMEOUT_SECONDS`,
 `AIQ_DS_PYTHON_MAX_EVIDENCE_BYTES`, `AIQ_DS_PYTHON_MAX_MEMORY_MB`, and
-`AIQ_DS_PYTHON_MAX_CPU_SECONDS` tune the persistent analysis runtime;
+`AIQ_DS_PYTHON_MAX_CPU_SECONDS` tune the sandboxed analysis runtime;
 `AIQ_DS_FINALIZATION_MODEL_CALL_LIMIT` tunes the reserved finalization turn. The
 Python profile additionally requires a configured OpenShell gateway, the
 scientific Python image, and an offline policy selected through

@@ -11,7 +11,7 @@ where = ["src"]
 [project]
 name = "aiq-stateful-python"
 version = "0.1.0"
-description = "Request-scoped persistent Python analysis kernel for NVIDIA AI-Q"
+description = "Request-scoped stateless Python analysis in OpenShell for NVIDIA AI-Q"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
 license = {text = "Apache-2.0"}
