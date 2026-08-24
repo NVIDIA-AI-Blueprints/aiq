@@ -387,7 +387,7 @@ function_groups:
     auth:
       mode: password
       email: ${GSF_EMAIL}
-      password: ${GSF_PASSWORD}
+      password: GSF_PASSWORD
     include:
       - catalog_search
       - text_to_sql
@@ -395,6 +395,8 @@ function_groups:
 
 Omit `auth` in an authenticated AI-Q deployment to forward the current user's
 bearer token. Password mode is intended for local development and evaluation.
+The `password` field names the environment variable containing the secret; it
+does not contain or interpolate the secret itself.
 Refer to `sources/gsf/README.md` for the complete contract and limits.
 
 ### `stateful_python`
