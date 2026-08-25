@@ -46,6 +46,7 @@ from aiq_agent.common.citation_verification import is_non_citable_status_output
 from aiq_agent.common.logging_utils import log_content_metadata
 
 from .models import ResearchNotes
+from .models import ResearchPlan
 from .resource_limits import DeepResearchResourceLimits
 from .resource_limits import StateBudgetLedger
 
@@ -132,9 +133,32 @@ class StructuredResponseTextFallbackMiddleware(AgentMiddleware):
         if not isinstance(message, AIMessage) or message.tool_calls or not isinstance(message.content, str):
             return response
         try:
-            structured = self.schema.model_validate_json(message.content)
-        except ValidationError:
+            payload = json.loads(message.content)
+        except (TypeError, json.JSONDecodeError):
             return response
+        try:
+            structured = self.schema.model_validate(payload)
+        except ValidationError:
+            if self.schema is not ResearchPlan or not isinstance(payload, dict):
+                return response
+            constraints = payload.get("constraints")
+            if not isinstance(constraints, list):
+                return response
+            normalized_constraints = []
+            normalized = False
+            for constraint in constraints:
+                if isinstance(constraint, dict) and "verification" in constraint:
+                    constraint = {key: value for key, value in constraint.items() if key != "verification"}
+                    normalized = True
+                normalized_constraints.append(constraint)
+            if not normalized:
+                return response
+            normalized_payload = {**payload, "constraints": normalized_constraints}
+            try:
+                structured = self.schema.model_validate(normalized_payload)
+            except ValidationError:
+                return response
+            logger.warning("Discarded unsupported ResearchPlan constraint verification fields")
         logger.info("Recovered %s from schema-valid JSON message content", self.schema.__name__)
         return ModelResponse(result=response.result, structured_response=structured)
 

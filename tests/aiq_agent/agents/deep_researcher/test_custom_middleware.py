@@ -52,6 +52,7 @@ from aiq_agent.agents.deep_researcher.custom_middleware import TodoSuppressionMi
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolNameSanitizationMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolRetryMiddleware
 from aiq_agent.agents.deep_researcher.custom_middleware import ToolVisibilityMiddleware
+from aiq_agent.agents.deep_researcher.models import ResearchPlan
 from aiq_agent.agents.deep_researcher.models import SourceRoutingPlan
 from aiq_agent.agents.deep_researcher.resource_limits import DeepResearchResourceLimits
 from aiq_agent.agents.deep_researcher.resource_limits import StateBudgetLedger
@@ -82,6 +83,60 @@ class TestStructuredResponseTextFallbackMiddleware:
             "fallback_sources": [],
             "planner_guidance": "Use web search.",
         }
+
+    @staticmethod
+    def _research_plan() -> dict[str, object]:
+        return {
+            "task_analysis": {
+                "user_intent": "Compare networks",
+                "explicit_requirements": [],
+                "implicit_requirements": [],
+                "out_of_scope": [],
+                "language": "English",
+            },
+            "answer_strategy": {
+                "answer_type": "comparison",
+                "title": "Network comparison",
+                "required_components": [
+                    {
+                        "id": "comparison",
+                        "name": "Comparison",
+                        "description": "Compare the networks",
+                    }
+                ],
+            },
+            "constraints": [
+                {
+                    "category": "format",
+                    "constraint": "Return two bullets",
+                    "rationale": "Requested by the user",
+                    "verification": "Count two bullets",
+                }
+            ],
+            "queries": [
+                {
+                    "query": "Compare official specifications",
+                    "subqueries": [],
+                    "preferred_tools": ["advanced_web_search_tool"],
+                    "fallback_tools": [],
+                    "target_components": ["comparison"],
+                    "rationale": "Gather evidence",
+                }
+            ],
+        }
+
+    def test_normalizes_model_added_research_plan_verification_field(self, caplog) -> None:
+        payload = self._research_plan()
+        response = ModelResponse(result=[AIMessage(content=json.dumps(payload))])
+        middleware = StructuredResponseTextFallbackMiddleware(ResearchPlan)
+
+        with caplog.at_level(logging.WARNING):
+            result = middleware._promote(response)
+
+        expected = json.loads(json.dumps(payload))
+        del expected["constraints"][0]["verification"]
+        assert result.structured_response == ResearchPlan.model_validate(expected)
+        assert "Discarded unsupported ResearchPlan constraint verification fields" in caplog.text
 
     def test_promotes_exact_schema_valid_json_in_agent(self) -> None:
         payload = self._routing()
