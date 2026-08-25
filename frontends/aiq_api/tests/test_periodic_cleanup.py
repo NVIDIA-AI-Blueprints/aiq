@@ -23,6 +23,7 @@ import types
 from datetime import UTC
 from datetime import datetime
 from datetime import timedelta
+from unittest.mock import AsyncMock
 from unittest.mock import MagicMock
 from unittest.mock import patch
 
@@ -327,6 +328,65 @@ class TestCleanupOldEventsLoop:
 
         assert call_count >= 3, "Should have continued past the error"
 
+    @pytest.mark.asyncio
+    async def test_runs_job_cleanup_locally_without_dask_task(self):
+        """Job expiry should run in the API process without occupying a Dask worker."""
+        from aiq_api.routes.jobs import _cleanup_old_events_loop
+
+        mock_job_store = MagicMock()
+
+        async def mock_job_cleanup():
+            return 0
+
+        mock_job_store.cleanup_expired_jobs.side_effect = mock_job_cleanup
+
+        async def mock_event_cleanup(*_args):
+            return None
+
+        with patch("aiq_api.routes.jobs._run_event_cleanup", side_effect=mock_event_cleanup):
+            task = asyncio.create_task(
+                _cleanup_old_events_loop(
+                    db_url="sqlite+aiosqlite:///test.db",
+                    retention_seconds=3600,
+                    interval_seconds=9999,
+                    job_store=mock_job_store,
+                )
+            )
+            await asyncio.sleep(0.05)
+            task.cancel()
+            await task
+
+        mock_job_store.cleanup_expired_jobs.assert_called_once_with()
+        mock_job_store.dask_client.submit.assert_not_called()
+
+
+class TestRunJobCleanup:
+    """Tests for PostgreSQL cleanup leader election."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("lock_acquired", "expected_result"), [(True, 3), (False, None)])
+    async def test_only_lock_holder_expires_jobs(self, lock_acquired, expected_result):
+        from aiq_api.routes.jobs import _run_job_cleanup
+
+        job_store = MagicMock()
+        job_store.cleanup_expired_jobs = AsyncMock(return_value=3)
+
+        lock_result = MagicMock()
+        lock_result.scalar.return_value = lock_acquired
+        lock_session = MagicMock()
+        lock_session.execute = AsyncMock(return_value=lock_result)
+        session_context = MagicMock()
+        session_context.__aenter__ = AsyncMock(return_value=lock_session)
+        session_context.__aexit__ = AsyncMock(return_value=None)
+        job_store.session.return_value = session_context
+
+        assert await _run_job_cleanup(job_store, is_postgres=True) == expected_result
+
+        if lock_acquired:
+            job_store.cleanup_expired_jobs.assert_awaited_once_with()
+        else:
+            job_store.cleanup_expired_jobs.assert_not_awaited()
+
 
 # =========================================================================
 # _start_periodic_cleanup (orchestration)
@@ -336,112 +396,60 @@ class TestCleanupOldEventsLoop:
 class TestStartPeriodicCleanup:
     """Tests for _start_periodic_cleanup orchestration function."""
 
-    def test_submits_dask_cleanup_task(self):
-        """Should submit NAT's periodic_cleanup to Dask."""
-        from aiq_api.routes.jobs import _start_periodic_cleanup
+    def test_starts_one_local_cleanup_task_without_dask_submission(self):
+        """Housekeeping should not reserve a worker in the shared Dask pool."""
+        import aiq_api.routes.jobs as jobs_module
 
+        jobs_module._cleanup_task = None
         mock_job_store = MagicMock()
-        mock_future = MagicMock()
-        mock_job_store.dask_client.submit.return_value = mock_future
+        cleanup_coroutine = object()
+        mock_loop = MagicMock(return_value=cleanup_coroutine)
 
-        with patch("aiq_api.routes.jobs.asyncio.create_task"):
-            with patch("dask.distributed.fire_and_forget") as mock_faf:
-                _start_periodic_cleanup(
-                    job_store=mock_job_store,
-                    scheduler_address="tcp://localhost:8786",
-                    db_url="sqlite:///test.db",
-                    expiry_seconds=3600,
-                    log_level=20,
-                    use_threads=False,
-                )
-
-        mock_job_store.dask_client.submit.assert_called_once()
-        call_kwargs = mock_job_store.dask_client.submit.call_args[1]
-        assert call_kwargs["scheduler_address"] == "tcp://localhost:8786"
-        assert call_kwargs["db_url"] == "sqlite:///test.db"
-        assert call_kwargs["sleep_time_sec"] == 1800  # 3600 // 2
-        mock_faf.assert_called_once_with(mock_future)
-
-    def test_starts_event_cleanup_task(self):
-        """Should start a local asyncio task for event cleanup."""
-        from aiq_api.routes.jobs import _start_periodic_cleanup
-
-        mock_job_store = MagicMock()
-        mock_job_store.dask_client.submit.return_value = MagicMock()
-
-        with patch("aiq_api.routes.jobs.asyncio.create_task") as mock_create_task:
-            with patch("dask.distributed.fire_and_forget"):
-                _start_periodic_cleanup(
-                    job_store=mock_job_store,
-                    scheduler_address="tcp://localhost:8786",
-                    db_url="sqlite:///test.db",
-                    expiry_seconds=7200,
-                    log_level=20,
-                    use_threads=False,
-                )
-
-        mock_create_task.assert_called_once()
-
-    def test_cleanup_interval_clamped_max(self):
-        """Cleanup interval should be clamped to 3600s max."""
-        from aiq_api.routes.jobs import _start_periodic_cleanup
-
-        mock_job_store = MagicMock()
-        mock_job_store.dask_client.submit.return_value = MagicMock()
-
-        with patch("aiq_api.routes.jobs.asyncio.create_task"):
-            with patch("dask.distributed.fire_and_forget"):
-                _start_periodic_cleanup(
-                    job_store=mock_job_store,
-                    scheduler_address="tcp://localhost:8786",
-                    db_url="sqlite:///test.db",
-                    expiry_seconds=604800,  # 7 days
-                    log_level=20,
-                    use_threads=False,
-                )
-
-        call_kwargs = mock_job_store.dask_client.submit.call_args[1]
-        assert call_kwargs["sleep_time_sec"] == 3600
-
-    def test_cleanup_interval_clamped_min(self):
-        """Cleanup interval should be at least 60s."""
-        from aiq_api.routes.jobs import _start_periodic_cleanup
-
-        mock_job_store = MagicMock()
-        mock_job_store.dask_client.submit.return_value = MagicMock()
-
-        with patch("aiq_api.routes.jobs.asyncio.create_task"):
-            with patch("dask.distributed.fire_and_forget"):
-                _start_periodic_cleanup(
-                    job_store=mock_job_store,
-                    scheduler_address="tcp://localhost:8786",
-                    db_url="sqlite:///test.db",
-                    expiry_seconds=60,
-                    log_level=20,
-                    use_threads=False,
-                )
-
-        call_kwargs = mock_job_store.dask_client.submit.call_args[1]
-        assert call_kwargs["sleep_time_sec"] == 60
-
-    def test_dask_submit_failure_doesnt_block_event_cleanup(self):
-        """If Dask submit fails, event cleanup should still start."""
-        from aiq_api.routes.jobs import _start_periodic_cleanup
-
-        mock_job_store = MagicMock()
-        mock_job_store.dask_client.submit.side_effect = RuntimeError("Dask unavailable")
-
-        with patch("aiq_api.routes.jobs.asyncio.create_task") as mock_create_task:
-            _start_periodic_cleanup(
+        with (
+            patch("aiq_api.routes.jobs._cleanup_old_events_loop", new=mock_loop),
+            patch("aiq_api.routes.jobs.asyncio.create_task") as mock_create_task,
+        ):
+            jobs_module._start_periodic_cleanup(
                 job_store=mock_job_store,
-                scheduler_address="tcp://localhost:8786",
                 db_url="sqlite:///test.db",
                 expiry_seconds=3600,
-                log_level=20,
-                use_threads=False,
             )
 
-        mock_create_task.assert_called_once()
+        mock_loop.assert_called_once_with(
+            "sqlite:///test.db",
+            3600,
+            1800,
+            job_store=mock_job_store,
+        )
+        mock_create_task.assert_called_once_with(cleanup_coroutine)
+        mock_job_store.dask_client.submit.assert_not_called()
+
+    @pytest.mark.parametrize(
+        ("expiry_seconds", "expected_interval"),
+        [
+            (604800, 3600),
+            (60, 60),
+        ],
+    )
+    def test_cleanup_interval_is_clamped(self, expiry_seconds, expected_interval):
+        """Local cleanup interval should remain between one minute and one hour."""
+        import aiq_api.routes.jobs as jobs_module
+
+        jobs_module._cleanup_task = None
+        mock_job_store = MagicMock()
+        mock_loop = MagicMock(return_value=object())
+
+        with (
+            patch("aiq_api.routes.jobs._cleanup_old_events_loop", new=mock_loop),
+            patch("aiq_api.routes.jobs.asyncio.create_task"),
+        ):
+            jobs_module._start_periodic_cleanup(
+                job_store=mock_job_store,
+                db_url="sqlite:///test.db",
+                expiry_seconds=expiry_seconds,
+            )
+
+        assert mock_loop.call_args.args[2] == expected_interval
 
 
 # =========================================================================
