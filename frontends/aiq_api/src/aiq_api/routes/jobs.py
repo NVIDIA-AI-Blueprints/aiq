@@ -1650,8 +1650,8 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
 
     loop = asyncio.get_running_loop()
 
-    def _do_cleanup() -> tuple[int, int, int]:
-        """Delete expired events/jobs/access rows synchronously; return removal counts."""
+    def _do_cleanup() -> tuple[int, int, int, int]:
+        """Delete expired retained data synchronously; return removal counts."""
         from sqlalchemy import text
 
         engine = EventStore._get_or_create_sync_engine(db_url)
@@ -1666,7 +1666,7 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
                     {"lock_id": _PG_ADVISORY_LOCK_ID},
                 ).scalar()
                 if not locked:
-                    return (0, 0, 0)
+                    return (0, 0, 0, 0)
 
             # 1. Time-based: delete events older than retention period
             if is_postgres:
@@ -1690,23 +1690,24 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
             expired_deleted = expired_result.rowcount
             access_deleted = cleanup_job_access(db_url, conn=conn)
 
+            # Artifact retention shares the job expiry boundary. Keep it inside
+            # the leader's advisory-lock transaction so non-leader replicas
+            # cannot run the same destructive cleanup concurrently.
+            artifacts_deleted = 0
+            try:
+                from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
+
+                artifacts_deleted = build_artifact_store(db_url).cleanup_old_artifacts(retention_seconds)
+            except Exception as e:  # noqa: BLE001 - retention is best-effort
+                logger.debug("Artifact cleanup skipped: %s", e)
+
             conn.commit()
-            return (time_deleted, expired_deleted, access_deleted)
+            return (time_deleted, expired_deleted, access_deleted, artifacts_deleted)
 
-    time_deleted, expired_deleted, access_deleted = await loop.run_in_executor(None, _do_cleanup)
+    time_deleted, expired_deleted, access_deleted, artifacts_deleted = await loop.run_in_executor(None, _do_cleanup)
 
-    # Artifact retention shares the job expiry boundary (best-effort; the artifacts
-    # table only exists when artifact capture has been used).
-    try:
-        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
-
-        artifacts_deleted = await loop.run_in_executor(
-            None, lambda: build_artifact_store(db_url).cleanup_old_artifacts(retention_seconds)
-        )
-        if artifacts_deleted:
-            logger.info("Artifact cleanup: %d old artifacts removed", artifacts_deleted)
-    except Exception as e:  # noqa: BLE001 - retention is best-effort
-        logger.debug("Artifact cleanup skipped: %s", e)
+    if artifacts_deleted:
+        logger.info("Artifact cleanup: %d old artifacts removed", artifacts_deleted)
 
     if time_deleted > 0 or expired_deleted > 0 or access_deleted > 0:
         logger.info(

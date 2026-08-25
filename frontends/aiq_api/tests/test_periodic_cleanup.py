@@ -253,6 +253,34 @@ class TestRunEventCleanup:
         assert len(EventStore.get_events(db_url, "expired-job")) == 0
         assert len(EventStore.get_events(db_url, "live-job")) == 1
 
+    @pytest.mark.asyncio
+    async def test_postgres_non_leader_skips_artifact_cleanup(self):
+        """Only the advisory-lock holder may delete retained artifacts."""
+        from aiq_api.routes.jobs import _run_event_cleanup
+
+        lock_result = MagicMock()
+        lock_result.scalar.return_value = False
+        connection = MagicMock()
+        connection.execute.return_value = lock_result
+        engine = MagicMock()
+        engine.connect.return_value.__enter__.return_value = connection
+
+        with (
+            patch(
+                "aiq_api.jobs.event_store.EventStore._get_or_create_sync_engine",
+                return_value=engine,
+            ),
+            patch("aiq_agent.agents.deep_researcher.sandbox.artifacts.build_artifact_store") as mock_artifact_store,
+        ):
+            await _run_event_cleanup(
+                "postgresql+asyncpg://example.invalid/jobs",
+                retention_seconds=3600,
+                is_postgres=True,
+            )
+
+        mock_artifact_store.assert_not_called()
+        connection.commit.assert_not_called()
+
 
 # =========================================================================
 # _cleanup_old_events_loop (background task)
