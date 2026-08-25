@@ -125,18 +125,15 @@ class TestStructuredResponseTextFallbackMiddleware:
             ],
         }
 
-    def test_normalizes_model_added_research_plan_verification_field(self, caplog) -> None:
+    def test_promotes_research_plan_with_constraint_verification(self) -> None:
         payload = self._research_plan()
         response = ModelResponse(result=[AIMessage(content=json.dumps(payload))])
         middleware = StructuredResponseTextFallbackMiddleware(ResearchPlan)
 
-        with caplog.at_level(logging.WARNING):
-            result = middleware._promote(response)
+        result = middleware._promote(response)
 
-        expected = json.loads(json.dumps(payload))
-        del expected["constraints"][0]["verification"]
-        assert result.structured_response == ResearchPlan.model_validate(expected)
-        assert "Discarded unsupported ResearchPlan constraint verification fields" in caplog.text
+        assert result.structured_response == ResearchPlan.model_validate(payload)
+        assert result.structured_response.constraints[0].verification == "Count two bullets"
 
     def test_promotes_exact_schema_valid_json_in_agent(self) -> None:
         payload = self._routing()
