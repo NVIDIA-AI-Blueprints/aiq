@@ -163,6 +163,28 @@ Async jobs run in a worker that reloads the config file, so
 `NAT_DASK_SCHEDULER_ADDRESS` must be set. Without them the submit route is
 replaced by a guarded stub that returns 503.
 
+### Routing from the chat UI
+
+`configs/config_web_data_science_hybrid.yml` wires the agent into the chat
+router so a browser request can reach it. Three pieces are required together:
+
+- `intent_classifier` must use `_type: context_aware_intent_router`. The plain
+  `intent_classifier` has no `hybrid_research` route, so DS is unreachable
+  without this regardless of the rest.
+- `data_science_hybrid_adapter` must be defined with an `agent` reference.
+- `workflow.hybrid_research_agent` must point at that adapter.
+
+The router probes the GSF catalog on each research request. A request carrying
+an explicit `database_name` always takes the Hybrid path; an unscoped request
+takes it only when catalog coverage clears `catalog_confidence_threshold`,
+otherwise it falls back to shallow or deep. That threshold is deployment
+specific and needs tuning against real catalog content.
+
+When a submitter is configured the router submits DS as an async job and
+returns a `job_escalation` message carrying the job id, which the web UI
+consumes exactly as it does a deep-research job. Without a submitter — the
+synchronous CLI, which has no job store — the hybrid route still runs inline.
+
 ### Behavior differences from a synchronous run
 
 - **Interaction mode is forced to `headless`.** A worker has no channel back to
