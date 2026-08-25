@@ -598,6 +598,8 @@ def test_shared_formatter_retains_source_and_citation_lines():
 
     assert "Source: report.pdf" in formatted
     assert "Citation: report.pdf, p.3" in formatted
+    assert "Relevance Score: 0.00" in formatted
+    assert "Vector Distance:" not in formatted
 
 
 @pytest.mark.asyncio

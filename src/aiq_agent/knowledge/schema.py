@@ -65,6 +65,14 @@ class Chunk(BaseModel):
         description="The main text. If this is a visual/table, this MUST be the summary or caption.",
     )
     score: float = Field(0.0, ge=0.0, le=1.0, description="Similarity score (0.0 to 1.0).")
+    distance: float | None = Field(
+        None,
+        allow_inf_nan=False,
+        description=(
+            "Optional finite backend-native vector distance; lower values are closer, there is no fixed range, and "
+            "values are not necessarily comparable across backends or metrics."
+        ),
+    )
 
     # --- 2. Strict Citation Contract (For UI Reliability) ---
     file_name: str = Field(..., description="Original filename (for example, 'Q3_Report.pdf').")

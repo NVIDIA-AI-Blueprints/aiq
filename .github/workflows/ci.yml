@@ -163,6 +163,76 @@ jobs:
             mcp-htmlcov/
           retention-days: 7
 
+  nemo-retriever-local-install:
+    name: Embedded NRL integration (${{ matrix.os-label }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            os-label: linux-x64
+          - runner: windows-latest
+            os-label: windows-x64
+          # Match NeMo Retriever's own Apple Silicon library-mode CI lane.
+          - runner: macos-26
+            os-label: macos-arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v4
+        with:
+          enable-cache: true
+          version: "0.11.26"
+          cache-dependency-glob: environments/nemo_retriever_local/uv.lock
+
+      - name: Validate and install isolated lock
+        shell: bash
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/aiq-nemo-retriever-local-venv
+        run: |
+          set -euo pipefail
+          uv lock --project environments/nemo_retriever_local --check
+          uv sync --project environments/nemo_retriever_local --frozen --no-default-groups --group test
+
+      - name: Test embedded LanceDB and native server lifecycle
+        shell: bash
+        env:
+          UV_PROJECT_ENVIRONMENT: ${{ runner.temp }}/aiq-nemo-retriever-local-venv
+        run: |
+          set -euo pipefail
+          uv run --project environments/nemo_retriever_local --frozen --no-sync python - <<'PY'
+          import tempfile
+
+          import ray
+
+          from knowledge_layer.nemo_retriever._local_client import _load_nrl_bindings
+          from knowledge_layer.nemo_retriever.local_adapter import NemoRetrieverLocalIngestor
+
+          assert ray.is_initialized() is False
+          bindings = _load_nrl_bindings()
+          with tempfile.TemporaryDirectory() as data_dir:
+              ingestor = NemoRetrieverLocalIngestor(
+                  {"data_dir": data_dir, "scope": "ci", "profile": "fast-text", "_bindings": bindings}
+              )
+              ingestor.close()
+          assert ray.is_initialized() is False
+          PY
+          uv run --project environments/nemo_retriever_local --frozen --no-sync \
+            python -m pytest -q \
+              tests/knowledge_layer_tests/test_nemo_retriever_local_adapter.py \
+              tests/knowledge_layer_tests/test_nemo_retriever_local_integration.py
+
   helm-lint:
     name: Helm Lint
     runs-on: ubuntu-latest
