@@ -75,6 +75,29 @@ def test_chat_workflow_requires_declared_hybrid_adapter(tmp_path, capsys):
 
 
 @pytest.mark.parametrize(
+    "hybrid_research_agent",
+    [
+        ["data_science_hybrid_adapter"],
+        {"name": "data_science_hybrid_adapter"},
+    ],
+)
+def test_hybrid_research_agent_must_be_a_string(tmp_path, capsys, hybrid_research_agent):
+    path = _write_config(
+        tmp_path,
+        {
+            "functions": {},
+            "workflow": {
+                "_type": "chat_deepresearcher_agent",
+                "hybrid_research_agent": hybrid_research_agent,
+            },
+        },
+    )
+
+    assert _VALIDATOR.validate(str(path)) == 1
+    assert "workflow.hybrid_research_agent must be a string function name" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
     "workflow_type",
     [
         ["data_science_workflow"],
