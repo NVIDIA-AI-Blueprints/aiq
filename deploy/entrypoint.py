@@ -174,6 +174,14 @@ def main() -> int:
             raise SystemExit("NAT_DASK_SCHEDULER_ADDRESS must include a valid host and port") from exc
         if not parsed_scheduler_address.hostname or not parsed_scheduler_port:
             raise SystemExit("NAT_DASK_SCHEDULER_ADDRESS must include a valid host and port")
+        if (
+            parsed_scheduler_address.username is not None
+            or parsed_scheduler_address.password is not None
+            or parsed_scheduler_address.path
+            or parsed_scheduler_address.query
+            or parsed_scheduler_address.fragment
+        ):
+            raise SystemExit("NAT_DASK_SCHEDULER_ADDRESS must not include userinfo, path, query, or fragment")
         print("============================================", flush=True)
         print("NVIDIA NeMo Agent toolkit - Shared Dask Mode", flush=True)
         print("============================================", flush=True)

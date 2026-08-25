@@ -158,6 +158,32 @@ def test_external_scheduler_rejects_incomplete_tls_address(monkeypatch, schedule
     run_web_server.assert_not_called()
 
 
+@pytest.mark.parametrize(
+    "scheduler_address",
+    (
+        "tls://user@scheduler:8786",
+        "tls://user:password@scheduler:8786",
+        "tls://scheduler:8786/path",
+        "tls://scheduler:8786?option=value",
+        "tls://scheduler:8786#fragment",
+    ),
+)
+def test_external_scheduler_rejects_additional_url_components(monkeypatch, scheduler_address: str) -> None:
+    entrypoint = _load_entrypoint()
+    wait_for_scheduler = MagicMock()
+    run_web_server = MagicMock()
+    monkeypatch.setattr(entrypoint.sys, "argv", ["entrypoint.py"])
+    monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", scheduler_address)
+    monkeypatch.setattr(entrypoint, "_wait_for_scheduler", wait_for_scheduler)
+    monkeypatch.setattr(entrypoint, "_run_web_server", run_web_server)
+
+    with pytest.raises(SystemExit, match="must not include userinfo, path, query, or fragment"):
+        entrypoint.main()
+
+    wait_for_scheduler.assert_not_called()
+    run_web_server.assert_not_called()
+
+
 def test_worker_startup_failure_cleans_up_scheduler(monkeypatch) -> None:
     entrypoint = _load_entrypoint()
     scheduler_proc = MagicMock()
