@@ -9,8 +9,8 @@ from unittest.mock import patch
 
 import pytest
 from pydantic import ValidationError
-from stateful_python import register as register_module
 
+from aiq_agent.agents.data_science.sandboxed_python import register as register_module
 from aiq_agent.agents.data_science.utils.analysis_runtime import begin_analysis_run
 from aiq_agent.agents.data_science.utils.analysis_runtime import end_analysis_run
 from aiq_agent.agents.deep_researcher.deepagents_runtime import DeepResearchSandboxConfig
@@ -24,9 +24,9 @@ def _builder_with(sandbox: object) -> MagicMock:
 
 @pytest.mark.asyncio
 async def test_registration_creates_one_openshell_runner_per_analysis_run() -> None:
-    config = register_module.StatefulPythonConfig(sandbox="ds_python_sandbox", wall_timeout_seconds=60)
+    config = register_module.SandboxedPythonConfig(sandbox="ds_python_sandbox", wall_timeout_seconds=60)
     builder = _builder_with(DeepResearchSandboxConfig(provider="openshell", network="blocked"))
-    registration = register_module.stateful_python.__wrapped__(config, builder)
+    registration = register_module.sandboxed_python.__wrapped__(config, builder)
     function_info = await anext(registration)
     token = begin_analysis_run()
     runner = MagicMock()
@@ -81,8 +81,8 @@ async def test_registration_rejects_nonisolated_sandbox_configuration(
     sandbox: DeepResearchSandboxConfig,
     message: str,
 ) -> None:
-    config = register_module.StatefulPythonConfig(sandbox="ds_python_sandbox")
-    registration = register_module.stateful_python.__wrapped__(config, _builder_with(sandbox))
+    config = register_module.SandboxedPythonConfig(sandbox="ds_python_sandbox")
+    registration = register_module.sandboxed_python.__wrapped__(config, _builder_with(sandbox))
 
     with pytest.raises(ValueError, match=message):
         await anext(registration)
@@ -90,8 +90,8 @@ async def test_registration_rejects_nonisolated_sandbox_configuration(
 
 @pytest.mark.asyncio
 async def test_registration_rejects_non_sandbox_configuration() -> None:
-    config = register_module.StatefulPythonConfig(sandbox="ds_python_sandbox")
-    registration = register_module.stateful_python.__wrapped__(config, _builder_with(object()))
+    config = register_module.SandboxedPythonConfig(sandbox="ds_python_sandbox")
+    registration = register_module.sandboxed_python.__wrapped__(config, _builder_with(object()))
 
     with pytest.raises(TypeError, match="DeepResearchSandboxConfig"):
         await anext(registration)
@@ -99,4 +99,4 @@ async def test_registration_rejects_non_sandbox_configuration() -> None:
 
 def test_configuration_has_no_local_backend_switch() -> None:
     with pytest.raises(ValidationError, match="backend"):
-        register_module.StatefulPythonConfig(sandbox="ds_python_sandbox", backend="local")
+        register_module.SandboxedPythonConfig(sandbox="ds_python_sandbox", backend="local")

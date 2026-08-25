@@ -68,6 +68,13 @@ pii = [
 s3 = [
     "boto3>=1.35.0,<2",
 ]
+sandboxed-python-test = [
+    "numpy>=2.0",
+    "pandas>=2.0",
+    "scikit-learn>=1.5",
+    "scipy>=1.13",
+    "statsmodels>=0.14",
+]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
@@ -218,7 +225,6 @@ dev = [
     "dask[distributed]>=2024.1.0",
     # Workspace packages for testing
     "aiq-gsf",
-    "aiq-stateful-python",
     "google-scholar-paper-search",
     "tavily-web-search",
     "exa-web-search",
@@ -269,7 +275,6 @@ exclude = ["mcp"]
 [tool.uv.sources]
 aiq-agent = { workspace = true }
 aiq-gsf = { workspace = true }
-aiq-stateful-python = { workspace = true }
 google-scholar-paper-search = { workspace = true }
 tavily-web-search = { workspace = true }
 exa-web-search = { workspace = true }

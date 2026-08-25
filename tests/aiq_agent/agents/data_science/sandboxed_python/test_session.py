@@ -11,10 +11,11 @@ from pathlib import Path
 import pytest
 from deepagents.backends.protocol import ExecuteResponse
 from deepagents.backends.protocol import FileUploadResponse
-from stateful_python import runner
-from stateful_python.session import OpenShellPythonRunner
-from stateful_python.session import PythonRunnerLimits
-from stateful_python.session import _runner_command
+
+from aiq_agent.agents.data_science.sandboxed_python import runner
+from aiq_agent.agents.data_science.sandboxed_python.session import OpenShellPythonRunner
+from aiq_agent.agents.data_science.sandboxed_python.session import PythonRunnerLimits
+from aiq_agent.agents.data_science.sandboxed_python.session import _runner_command
 
 
 class _FakeBackend:

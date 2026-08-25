@@ -29,7 +29,7 @@ The agent receives tools through NeMo Agent Toolkit references and the
 - `gsf__text_to_sql` generates validated SQL and returns bounded rows from GSF.
 - `knowledge_search` uses the configured AI-Q knowledge backend.
 - `web_search_tool` uses the configured AI-Q web-search provider.
-- `python`, when configured through `stateful_python`, runs self-contained
+- `python`, when configured through `sandboxed_python`, runs self-contained
   scientific Python scripts in a fresh OpenShell sandbox per request. It is
   also a non-citable utility.
 
@@ -68,7 +68,7 @@ one broad catalog-discovery pass, consolidated analytical requests, and bounded
 repair rules. Limits are opt-in so the general direct profile remains tunable.
 
 For analyses that require pandas, NumPy, SciPy, scikit-learn, or statsmodels,
-the `stateful_python` NAT function launches a fresh, bounded Python process for
+the `sandboxed_python` NAT function launches a fresh, bounded Python process for
 each tool call inside one attested OpenShell sandbox owned by the DS request.
 Variables do not persist, so every call must be a self-contained script. The
 model sees a single `python(code)` tool and does not manage sandbox or workspace

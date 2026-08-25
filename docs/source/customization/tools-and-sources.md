@@ -43,7 +43,7 @@ The `GET /v1/data_sources` API endpoint returns these entries, which the UI rend
 
 Tools not listed in any data source entry (e.g., utility tools like "think") are always included regardless of filtering. Passing an explicit empty list (`data_sources: []`) -- in the WebSocket chat payload or in a `POST /v1/jobs/async/submit` body -- disables data-source tools while leaving those unmapped utility tools available.
 
-The opt-in `stateful_python` function is the full scientific-analysis utility.
+The opt-in `sandboxed_python` function is the full scientific-analysis utility.
 It runs every call as a self-contained script with a fresh namespace in one
 request-owned OpenShell sandbox, preloads pandas, NumPy, SciPy, scikit-learn,
 and statsmodels, and exposes exact GSF-result helpers every time. Configure its

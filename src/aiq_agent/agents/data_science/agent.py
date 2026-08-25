@@ -30,6 +30,7 @@ from aiq_agent.common import load_prompt
 from aiq_agent.common import reset_session_registry
 from aiq_agent.common import sanitize_report
 from aiq_agent.common import set_session_registry
+from aiq_agent.common.citation_verification import verify_citations
 
 from .messages import is_clarification_request
 from .messages import message_text
@@ -48,7 +49,9 @@ from .utils.gsf_guardrails import end_gsf_run
 from .utils.gsf_guardrails import summarize_gsf_run
 from .utils.prompt import build_prompt_middleware
 from .utils.reporting import capture_data_sources
+from .utils.reporting import citation_repair_instruction
 from .utils.reporting import finalize_data_science_messages
+from .utils.reporting import has_citation_integrity
 
 AGENT_DIR = Path(__file__).parent
 logger = logging.getLogger(__name__)
@@ -63,6 +66,7 @@ _HEADLESS_TERMINAL_RESPONSE = (
     "discovery and one bounded synthesis retry. The available evidence did not support a safe assumption."
 )
 _CHOICE_REPAIR_MESSAGE_NAME = "aiq_choice_format_repair"
+_CITATION_REPAIR_MESSAGE_NAME = "aiq_citation_integrity_repair"
 _EMPTY_RESPONSE_RETRY_MESSAGE_NAME = "aiq_empty_response_synthesis_retry"
 _EMPTY_RESPONSE_RETRY_INSTRUCTION = (
     "Your previous final response contained no visible answer. Return the best supported final answer to the "
@@ -77,6 +81,12 @@ _PRELOADED_CATALOG_TOOL = "aiq__preloaded_catalog_context"
 _PRELOADED_CATALOG_MESSAGE_NAME = "aiq_preloaded_catalog_context"
 _MAX_CATALOG_ITEMS = 50
 _MAX_CATALOG_TEXT_CHARS = 512
+
+
+def _is_terminal_status_response(message: Any) -> bool:
+    """Return whether an uncited response is a fixed, non-evidentiary terminal status."""
+
+    return message_text(message).strip() in {_HEADLESS_TERMINAL_RESPONSE, _EMPTY_RESPONSE_TERMINAL}
 
 
 def _bounded_catalog_text(value: str) -> str:
@@ -387,7 +397,40 @@ class DataScienceAgent:
                 # Preserve the exact leading Answer line required by the benchmark.
                 # The model still supplies rationale and sources after the blank line.
                 messages = result_messages
+            elif result_messages and _is_terminal_status_response(result_messages[-1]):
+                messages = result_messages
             else:
+                sources = registry.all_sources()
+                if sources and result_messages:
+                    content = message_text(result_messages[-1])
+                    verification = verify_citations(content, registry, reference_sources=sources)
+                    if not has_citation_integrity(verification.verified_report, verification):
+                        repair_instruction = citation_repair_instruction(sources)
+                        run_state = get_analysis_run()
+                        if run_state is not None:
+                            run_state.force_finalization = True
+                            run_state.finalization_instruction = repair_instruction
+                        repair_id = str(uuid4())
+                        repair_result = await self.graph.ainvoke(
+                            {
+                                "messages": [
+                                    *result_messages,
+                                    HumanMessage(
+                                        content=repair_instruction,
+                                        id=repair_id,
+                                        name=_CITATION_REPAIR_MESSAGE_NAME,
+                                    ),
+                                ]
+                            },
+                            config=invoke_config,
+                            context=runtime_context,
+                        )
+                        result_messages = [
+                            message
+                            for message in repair_result["messages"]
+                            if getattr(message, "id", None) != repair_id
+                            and getattr(message, "name", None) != _CITATION_REPAIR_MESSAGE_NAME
+                        ]
                 messages = finalize_data_science_messages(
                     result_messages,
                     registry=registry,

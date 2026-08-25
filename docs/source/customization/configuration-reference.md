@@ -399,7 +399,7 @@ The `password` field names the environment variable containing the secret; it
 does not contain or interpolate the secret itself.
 Refer to `sources/gsf/README.md` for the complete contract and limits.
 
-### `stateful_python`
+### `sandboxed_python`
 
 Stateless scientific analysis inside one fresh OpenShell sandbox per Data
 Science Agent request. Each call runs a self-contained script in a fresh Python
@@ -419,7 +419,7 @@ functions:
     attest: true
 
   python:
-    _type: stateful_python
+    _type: sandboxed_python
     sandbox: ds_python_sandbox
     wall_timeout_seconds: 60
     max_code_chars: 50000

@@ -3,7 +3,8 @@
 
 """Stateless request-scoped OpenShell Python analysis for AI-Q."""
 
+from .register import SandboxedPythonConfig
 from .session import OpenShellPythonRunner
 from .session import PythonRunnerLimits
 
-__all__ = ["OpenShellPythonRunner", "PythonRunnerLimits"]
+__all__ = ["OpenShellPythonRunner", "PythonRunnerLimits", "SandboxedPythonConfig"]

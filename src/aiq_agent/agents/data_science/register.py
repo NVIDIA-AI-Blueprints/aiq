@@ -34,8 +34,19 @@ from nat.data_models.function import FunctionBaseConfig
 
 from .agent import DataScienceAgent
 from .models import DataScienceAgentState
+from .sandboxed_python import SandboxedPythonConfig
 
 logger = logging.getLogger(__name__)
+
+__all__ = [
+    "DataScienceAgentConfig",
+    "DataScienceHybridAdapterConfig",
+    "DataScienceWorkflowConfig",
+    "SandboxedPythonConfig",
+    "data_science_agent",
+    "data_science_hybrid_adapter",
+    "data_science_workflow",
+]
 
 
 class DataScienceAgentConfig(FunctionBaseConfig, name="data_science_agent"):

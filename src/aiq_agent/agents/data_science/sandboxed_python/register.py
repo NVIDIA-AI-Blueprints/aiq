@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026, NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Register request-scoped stateless OpenShell Python as a NAT function."""
+"""Register request-scoped sandboxed Python as a NAT function."""
 
 from pydantic import ConfigDict
 from pydantic import Field
@@ -19,7 +19,7 @@ from .session import OpenShellPythonRunner
 from .session import PythonRunnerLimits
 
 
-class StatefulPythonConfig(FunctionBaseConfig, name="stateful_python"):
+class SandboxedPythonConfig(FunctionBaseConfig, name="sandboxed_python"):
     """Configuration for isolated Python scripts in one OpenShell sandbox per DS request."""
 
     model_config = ConfigDict(extra="forbid")
@@ -39,8 +39,8 @@ class StatefulPythonConfig(FunctionBaseConfig, name="stateful_python"):
     max_file_bytes: int = Field(default=100_000_000, ge=1_000_000, le=1_000_000_000)
 
 
-@register_function(config_type=StatefulPythonConfig)
-async def stateful_python(tool_config: StatefulPythonConfig, builder: Builder):
+@register_function(config_type=SandboxedPythonConfig)
+async def sandboxed_python(tool_config: SandboxedPythonConfig, builder: Builder):
     """Build a stateless Python tool backed only by request-owned OpenShell sandboxes."""
 
     sandbox_config = builder.get_function_config(tool_config.sandbox)
@@ -49,11 +49,11 @@ async def stateful_python(tool_config: StatefulPythonConfig, builder: Builder):
             f"{tool_config.sandbox!r} must reference DeepResearchSandboxConfig, got {type(sandbox_config).__name__}"
         )
     if sandbox_config.provider.lower() != "openshell":
-        raise ValueError("stateful_python requires an OpenShell sandbox provider")
+        raise ValueError("sandboxed_python requires an OpenShell sandbox provider")
     if sandbox_config.network_mode != "blocked":
-        raise ValueError("stateful_python requires network: blocked")
+        raise ValueError("sandboxed_python requires network: blocked")
     if sandbox_config.existing_sandbox_name or sandbox_config.sandbox_name or sandbox_config.allow_shared_sandbox:
-        raise ValueError("stateful_python requires a fresh per-request OpenShell sandbox")
+        raise ValueError("sandboxed_python requires a fresh per-request OpenShell sandbox")
 
     limits = PythonRunnerLimits(
         wall_timeout_seconds=tool_config.wall_timeout_seconds,
@@ -84,7 +84,7 @@ async def stateful_python(tool_config: StatefulPythonConfig, builder: Builder):
         run_state = get_analysis_run()
         if run_state is None:
             return '{"status":"error","error":"analysis_runtime_unavailable"}'
-        runner = run_state.resources.get("stateful_python")
+        runner = run_state.resources.get("sandboxed_python")
         if runner is None:
             runtime = DeepAgentsRuntime(
                 sandbox=sandbox_config,
@@ -96,7 +96,7 @@ async def stateful_python(tool_config: StatefulPythonConfig, builder: Builder):
                 host_evidence_root=run_state.root,
                 limits=limits,
             )
-            run_state.resources["stateful_python"] = runner
+            run_state.resources["sandboxed_python"] = runner
         return await runner.execute(code)
 
     yield FunctionInfo.from_fn(_run, description=_run.__doc__)

@@ -95,7 +95,7 @@ functions:
     require_hard_landlock: ${AIQ_OPENSHELL_REQUIRE_HARD_LANDLOCK:-true}
 
   python:
-    _type: stateful_python
+    _type: sandboxed_python
     sandbox: ds_python_sandbox
     wall_timeout_seconds: ${AIQ_DS_PYTHON_TIMEOUT_SECONDS:-60}
     max_code_chars: 50000
