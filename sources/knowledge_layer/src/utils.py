@@ -32,9 +32,9 @@ def summarize_document(
     """Generate a one-sentence document summary using the configured LangChain LLM."""
     if llm is None:
         return None
-    if input_max_chars and input_max_chars < 0:
-        raise ValueError("input_max_chars must be non-negative")
-    text = text.strip()[:input_max_chars].strip() if input_max_chars else text.strip()
+    if input_max_chars and input_max_chars < 1:
+        raise ValueError("input_max_chars must be greater than 0")
+    text = text.strip()[:input_max_chars].strip() if input_max_chars is not None else text.strip()
     if not text:
         return None
     prompt = (
