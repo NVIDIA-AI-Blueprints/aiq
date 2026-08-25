@@ -104,6 +104,27 @@ async def test_aiq_plugin_leaves_external_dask_scheduler_path_untouched(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_aiq_plugin_uses_external_dask_scheduler_from_environment(monkeypatch):
+    import dask.distributed as dask_distributed
+
+    scheduler_address = "tls://scheduler.example:8786"
+    monkeypatch.setenv("NAT_DASK_SCHEDULER_ADDRESS", scheduler_address)
+    local_cluster_factory = MagicMock()
+    monkeypatch.setattr(dask_distributed, "LocalCluster", local_cluster_factory)
+
+    async def run_nat_front_end(self):
+        assert self.front_end_config.scheduler_address == scheduler_address
+        assert dask_distributed.LocalCluster is local_cluster_factory
+
+    monkeypatch.setattr(FastApiFrontEndPlugin, "run", run_nat_front_end)
+
+    await _make_api_plugin().run()
+
+    local_cluster_factory.assert_not_called()
+    assert dask_distributed.LocalCluster is local_cluster_factory
+
+
+@pytest.mark.asyncio
 async def test_aiq_plugin_restores_local_cluster_factory_when_startup_fails(monkeypatch):
     import dask.distributed as dask_distributed
 
