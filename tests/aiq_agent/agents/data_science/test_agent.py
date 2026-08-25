@@ -676,7 +676,7 @@ async def test_run_allows_an_unselected_source_list(monkeypatch):
             name="gsf__text_to_sql",
             tool_call_id="call-1",
         ),
-        AIMessage(content="One row was returned."),
+        AIMessage(content="One row was returned [1].\n\n## Sources\n- [1] gsf__text_to_sql request gsf-1"),
     ]
     graph = MagicMock()
     graph.ainvoke = AsyncMock(return_value={"messages": grounded})

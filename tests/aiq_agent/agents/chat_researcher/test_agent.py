@@ -1399,7 +1399,10 @@ class TestHybridResearchAsyncSubmission:
     ):
         import json
 
-        async def submit_hybrid(_state):
+        submitted = {}
+
+        async def submit_hybrid(state):
+            submitted["state"] = state
             return "ds-job-1"
 
         async def fail_if_called(_state):
@@ -1423,6 +1426,9 @@ class TestHybridResearchAsyncSubmission:
             "kind": "data_science",
             "job_id": "ds-job-1",
         }
+        # The submitted state must carry the turn's own question, not the thread's first
+        # message, so the worker analyzes what the user actually asked.
+        assert submitted["state"].messages[-1].content == "Which state has the most orders?"
 
     @pytest.mark.asyncio
     async def test_runs_inline_when_no_submitter_is_configured(

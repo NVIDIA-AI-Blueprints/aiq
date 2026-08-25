@@ -268,6 +268,14 @@ def _tool_config_uses_sandbox(builder: Any, fn_config: Any) -> bool:
     too, mirroring how the worker resolves tools.
     """
     tool_refs = getattr(fn_config, "tools", None) or get_all_tool_refs()
+    # exclude_tools holds exact runtime tool names while tool_refs holds function and
+    # group references. These coincide for plain-function tools, which is every tool
+    # that owns a sandbox today (stateful_python, registered under its function name).
+    # A group reference such as `gsf` would not match a child name such as
+    # `gsf__text_to_sql`, but no function group owns a sandbox. Matching exactly here
+    # keeps this off the async builder.get_tools() path on every submit; if a group
+    # ever owns a sandbox, resolve runtime names instead. Erring toward "uses a
+    # sandbox" only over-applies an opt-in cap rather than letting one escape it.
     excluded = set(getattr(fn_config, "exclude_tools", None) or [])
     for tool_ref in tool_refs:
         if tool_ref in excluded:
