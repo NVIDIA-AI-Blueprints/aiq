@@ -162,7 +162,7 @@ def test_external_scheduler_rejects_incomplete_tls_address(monkeypatch, schedule
     "scheduler_address",
     (
         "tls://user@scheduler:8786",
-        "tls://user:password@scheduler:8786",
+        "tls://user:password@scheduler:8786",  # pragma: allowlist secret
         "tls://scheduler:8786/path",
         "tls://scheduler:8786?option=value",
         "tls://scheduler:8786#fragment",
