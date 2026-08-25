@@ -254,6 +254,67 @@ class TestRunEventCleanup:
         assert len(EventStore.get_events(db_url, "live-job")) == 1
 
     @pytest.mark.asyncio
+    async def test_sqlite_removes_expired_artifacts_after_event_cleanup(self, db_url):
+        """SQLite releases event writes before artifact retention uses a second connection."""
+        from sqlalchemy import text
+
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import Artifact
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import ArtifactKind
+        from aiq_agent.agents.deep_researcher.sandbox.artifacts import build_artifact_store
+        from aiq_api.routes.jobs import _run_event_cleanup
+
+        event_store = EventStore(db_url, job_id="old-job")
+        event_store.store({"type": "test", "data": {}})
+        _backdate_events(db_url, hours=2, job_id="old-job")
+        _create_expired_job(db_url, "expired-other-job")
+
+        artifact_store = build_artifact_store(db_url)
+        stored = artifact_store.put(
+            Artifact(
+                artifact_id="art_" + "a" * 32,
+                job_id="old-job",
+                kind=ArtifactKind.TEXT,
+                mime_type="text/plain",
+                filename="result.txt",
+                sandbox_path="/tmp/artifacts/result.txt",
+                storage_uri="",
+                sha256="b" * 64,
+                size_bytes=6,
+            ),
+            b"result",
+        )
+        with artifact_store._engine.connect() as conn:
+            conn.execute(
+                text("UPDATE artifacts SET created_at = datetime('now', '-2 seconds') WHERE artifact_id = :id"),
+                {"id": stored.artifact_id},
+            )
+            conn.commit()
+
+        await _run_event_cleanup(db_url, retention_seconds=1, is_postgres=False)
+
+        assert artifact_store.get(stored.job_id, stored.artifact_id) is None
+
+    @pytest.mark.asyncio
+    async def test_artifact_cleanup_error_does_not_log_endpoint(self, db_url, caplog):
+        """Artifact retention failures expose the exception type, not configured endpoints."""
+        from aiq_api.routes.jobs import _run_event_cleanup
+
+        _create_expired_job(db_url, "expired-job")
+        EventStore(db_url, job_id="active-job").store({"type": "test", "data": {}})
+        artifact_store = MagicMock()
+        artifact_store.cleanup_old_artifacts.side_effect = RuntimeError("https://secret-artifacts.internal")
+        caplog.set_level("DEBUG", logger="aiq_api.routes.jobs")
+
+        with patch(
+            "aiq_agent.agents.deep_researcher.sandbox.artifacts.build_artifact_store",
+            return_value=artifact_store,
+        ):
+            await _run_event_cleanup(db_url, retention_seconds=3600, is_postgres=False)
+
+        assert "RuntimeError" in caplog.text
+        assert "secret-artifacts.internal" not in caplog.text
+
+    @pytest.mark.asyncio
     async def test_postgres_non_leader_skips_artifact_cleanup(self):
         """Only the advisory-lock holder may delete retained artifacts."""
         from aiq_api.routes.jobs import _run_event_cleanup

@@ -1690,6 +1690,11 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
             expired_deleted = expired_result.rowcount
             access_deleted = cleanup_job_access(db_url, conn=conn)
 
+            # SQLite permits one writer at a time. Artifact cleanup uses its own
+            # connection, so release this connection's write lock first.
+            if not is_postgres:
+                conn.commit()
+
             # Artifact retention shares the job expiry boundary. Keep it inside
             # the leader's advisory-lock transaction so non-leader replicas
             # cannot run the same destructive cleanup concurrently.
@@ -1699,9 +1704,10 @@ async def _run_event_cleanup(db_url: str, retention_seconds: int, is_postgres: b
 
                 artifacts_deleted = build_artifact_store(db_url).cleanup_old_artifacts(retention_seconds)
             except Exception as e:  # noqa: BLE001 - retention is best-effort
-                logger.debug("Artifact cleanup skipped: %s", e)
+                logger.debug("Artifact cleanup skipped (%s)", type(e).__name__)
 
-            conn.commit()
+            if is_postgres:
+                conn.commit()
             return (time_deleted, expired_deleted, access_deleted, artifacts_deleted)
 
     time_deleted, expired_deleted, access_deleted, artifacts_deleted = await loop.run_in_executor(None, _do_cleanup)
