@@ -440,6 +440,66 @@ def test_prompt_renders_choice_contract_and_gsf_budget_guidance():
     assert "Answer: <label1>,<label2>" in rendered
 
 
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "## Multiple-choice task",
+        "Select all correct options.",
+        "Select all that apply.",
+        "Choose all applicable answers.",
+        "Check all relevant statements.",
+        "One or more options may be correct.",
+        "Multiple answers may be correct.",
+        "More than one response may be correct.",
+    ],
+)
+def test_choice_contract_recognizes_multiple_selection_wording(instruction):
+    messages = [HumanMessage(content=f"{instruction}\nA. Alpha\nB. Beta\nC. Gamma")]
+
+    assert agent_module._choice_contract(messages) == (["A", "B", "C"], True)
+
+
+@pytest.mark.parametrize(
+    "instruction",
+    [
+        "## Single-choice task",
+        "Select exactly one correct option.",
+        "Choose one answer.",
+        "Only one response is correct.",
+        "One correct statement is listed below.",
+    ],
+)
+def test_choice_contract_preserves_single_selection_wording(instruction):
+    messages = [HumanMessage(content=f"{instruction}\nA. Alpha\nB. Beta\nC. Gamma")]
+
+    assert agent_module._choice_contract(messages) == (["A", "B", "C"], False)
+
+
+def test_select_all_that_apply_accepts_multiple_answer_labels():
+    messages = [HumanMessage(content="Select all that apply.\nA. Alpha\nB. Beta\nC. Gamma")]
+    labels, multiple = agent_module._choice_contract(messages) or ([], False)
+
+    assert agent_module._has_valid_choice_line("Answer: A,C", labels, multiple=multiple)
+
+
+@pytest.mark.asyncio
+async def test_valid_select_all_that_apply_answer_does_not_trigger_format_repair(monkeypatch):
+    original = [HumanMessage(content="Select all that apply.\nA. Alpha\nB. Beta\nC. Gamma")]
+    graph = MagicMock()
+    graph.ainvoke = AsyncMock(return_value={"messages": [*original, AIMessage(content="Answer: A,C")]})
+    agent = _agent(
+        graph,
+        monkeypatch,
+        interaction_mode="headless",
+        response_mode="fdabench_choice",
+    )
+
+    result = await agent.run(DataScienceAgentState(messages=original))
+
+    graph.ainvoke.assert_awaited_once()
+    assert result.messages[-1].content == "Answer: A,C"
+
+
 def test_prompt_renders_stateless_python_and_gsf_receipt_guidance():
     template = (agent_module.AGENT_DIR / "prompts" / "agent.j2").read_text()
     rendered = render_prompt_template(

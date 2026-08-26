@@ -5,6 +5,10 @@
 # GSF remains the only structured-data access path; Python receives exact GSF
 # rows through request-local receipt helpers and performs derived analysis in a
 # fresh, blocked-network sandbox that is deleted after each task.
+# Required: AIQ_DATA_SCIENCE_MODEL, INFERENCE_NVIDIA_API_KEY,
+# AIQ_INFERENCE_BASE_URL, TAVILY_API_KEY, GSF_BASE_URL, GSF_EMAIL,
+# GSF_PASSWORD, RAG_SERVER_URL, COLLECTION_NAME, AIQ_DS_OPENSHELL_IMAGE,
+# AIQ_DS_OPENSHELL_POLICY_FILE.
 
 general:
   telemetry:

@@ -81,6 +81,22 @@ _PRELOADED_CATALOG_TOOL = "aiq__preloaded_catalog_context"
 _PRELOADED_CATALOG_MESSAGE_NAME = "aiq_preloaded_catalog_context"
 _MAX_CATALOG_ITEMS = 50
 _MAX_CATALOG_TEXT_CHARS = 512
+_MULTIPLE_CHOICE_PATTERNS = (
+    r"\bmultiple[- ]choice\b",
+    r"\bmulti(?:ple)?[- ]select\b",
+    r"\b(?:select|choose|check|mark)\s+all\b",
+    r"\ball\s+(?:correct|applicable)\s+(?:answers?|choices?|options?|responses?|statements?)\b",
+    r"\bone\s+or\s+more\s+(?:answers?|choices?|options?|responses?|statements?)\b",
+    r"\bmultiple\s+(?:answers?|choices?|options?|responses?|statements?)\b",
+    r"\bmore\s+than\s+one\s+(?:answer|choice|option|response|statement)\b",
+)
+_SINGLE_CHOICE_PATTERNS = (
+    r"\bsingle[- ]choice\b",
+    r"\b(?:select|choose)\s+exactly\s+one\b",
+    r"\b(?:select|choose)\s+one\s+(?:answer|choice|option|response|statement)\b",
+    r"\b(?:only|exactly)\s+one\s+(?:answer|choice|option|response|statement)\b",
+    r"\bone\s+correct\s+(?:answer|choice|option|response|statement)\b",
+)
 
 
 def _is_terminal_status_response(message: Any) -> bool:
@@ -146,10 +162,11 @@ def _choice_contract(messages: Sequence[Any]) -> tuple[list[str], bool] | None:
     latest = next((message_text(message) for message in reversed(messages) if isinstance(message, HumanMessage)), "")
     labels = list(dict.fromkeys(match.upper() for match in re.findall(r"(?im)^\s*([A-Z])\s*(?:[.)]|:)\s+\S", latest)))
     lowered = latest.lower()
-    choice_markers = ("single-choice", "multiple-choice", "select exactly", "select all")
-    if len(labels) < 2 or not any(token in lowered for token in choice_markers):
+    multiple = any(re.search(pattern, lowered) for pattern in _MULTIPLE_CHOICE_PATTERNS)
+    single = any(re.search(pattern, lowered) for pattern in _SINGLE_CHOICE_PATTERNS)
+    if len(labels) < 2 or not (multiple or single):
         return None
-    return labels, "multiple-choice" in lowered or "select all correct" in lowered
+    return labels, multiple
 
 
 def _has_valid_choice_line(content: str, labels: Sequence[str], *, multiple: bool) -> bool:

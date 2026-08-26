@@ -4,6 +4,9 @@
 # Direct, non-interactive DS ReAct profile for FDABench-Lite. The benchmark
 # adapter must include the task database name and any labeled choices in the
 # user request. Endpoint URLs and credentials are supplied only through env.
+# Required: AIQ_DATA_SCIENCE_MODEL, INFERENCE_NVIDIA_API_KEY,
+# AIQ_INFERENCE_BASE_URL, TAVILY_API_KEY, GSF_BASE_URL, GSF_EMAIL,
+# GSF_PASSWORD, RAG_SERVER_URL, COLLECTION_NAME.
 
 general:
   telemetry:

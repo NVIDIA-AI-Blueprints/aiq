@@ -95,6 +95,7 @@ malformed leading `Answer:` line receives one no-tool format-repair call.
 
 Copy `deploy/.env.example` to `deploy/.env` and set:
 
+- `AIQ_DATA_SCIENCE_MODEL`
 - `INFERENCE_NVIDIA_API_KEY`
 - `AIQ_INFERENCE_BASE_URL`
 - `TAVILY_API_KEY`
@@ -181,9 +182,10 @@ without choices still receive the standard analytical report. The benchmark
 adapter must include the target database name and complete answer choices in the
 user request.
 
-Required benchmark variables are `INFERENCE_NVIDIA_API_KEY`,
-`AIQ_INFERENCE_BASE_URL`, `GSF_BASE_URL`, `GSF_EMAIL`, `GSF_PASSWORD`,
-`RAG_SERVER_URL`, `COLLECTION_NAME`, and `TAVILY_API_KEY`. Optional
+Required benchmark variables are `AIQ_DATA_SCIENCE_MODEL`,
+`INFERENCE_NVIDIA_API_KEY`, `AIQ_INFERENCE_BASE_URL`, `GSF_BASE_URL`,
+`GSF_EMAIL`, `GSF_PASSWORD`, `RAG_SERVER_URL`, `COLLECTION_NAME`, and
+`TAVILY_API_KEY`. Optional
 `AIQ_DS_GSF_CATALOG_CALL_LIMIT` and `AIQ_DS_GSF_TEXT_TO_SQL_CALL_LIMIT`
 override the profile defaults of two and six actual calls, respectively. Exact
 request-local cache hits do not consume those budgets.

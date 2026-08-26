@@ -4,7 +4,7 @@
 # Direct local Data Science Agent profile. This bypasses the top-level AI-Q
 # router until the data-science route is integrated.
 #
-# Required: INFERENCE_NVIDIA_API_KEY, AIQ_INFERENCE_BASE_URL,
+# Required: AIQ_DATA_SCIENCE_MODEL, INFERENCE_NVIDIA_API_KEY, AIQ_INFERENCE_BASE_URL,
 # TAVILY_API_KEY, GSF_BASE_URL, GSF_EMAIL, GSF_PASSWORD, RAG_SERVER_URL,
 # COLLECTION_NAME.
 
