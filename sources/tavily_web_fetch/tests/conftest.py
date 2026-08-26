@@ -42,3 +42,11 @@ def _reset_module_state(monkeypatch):
 
     monkeypatch.setattr(register, "_missing_key_warned", False)
     monkeypatch.setattr(register, "_parser_registered", False)
+
+    # Building the tool appends to a module-global registry that nothing removes from. Swapping in
+    # a copy keeps registrations from one test leaking into the rest of the session.
+    try:
+        from aiq_agent.common import citation_verification
+    except ImportError:  # pragma: no cover - package used outside an AI-Q install
+        return
+    monkeypatch.setattr(citation_verification, "_PARSER_REGISTRY", list(citation_verification._PARSER_REGISTRY))

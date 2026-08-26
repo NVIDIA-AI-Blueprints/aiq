@@ -23,6 +23,7 @@ import asyncio
 import logging
 import os
 import re
+from typing import Literal
 from urllib.parse import urlparse
 
 from pydantic import BaseModel
@@ -110,7 +111,7 @@ class TavilyWebFetchToolConfig(FunctionBaseConfig, name="tavily_web_fetch"):
         ge=WRAP_WIDTH,
         description="Maximum characters shown across all URLs in one call, spent in request order.",
     )
-    extract_depth: str = Field(
+    extract_depth: Literal["basic", "advanced"] = Field(
         default="advanced",
         description="Tavily extraction depth: 'basic' or 'advanced'.",
     )
@@ -126,7 +127,7 @@ def _validate_url(candidate: str) -> tuple[str, str]:
 
     parsed = urlparse(text)
     # Check the scheme first so non-web schemes receive an explicit refusal rather than search guidance.
-    if parsed.scheme and parsed.scheme not in ("http", "https", "www"):
+    if parsed.scheme and parsed.scheme not in ("http", "https"):
         return "", (
             f"Only http:// and https:// URLs can be opened (got '{parsed.scheme}://'). This tool reads web pages only."
         )
@@ -309,7 +310,8 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
             normalized, reason = _validate_url(candidate)
             if reason:
                 pages[candidate] = FetchedPage(url=candidate, status="failed", reason=reason)
-            else:
+            # A URL repeated in one call would otherwise be extracted, billed, and rendered twice.
+            elif normalized not in valid:
                 valid.append(normalized)
 
         if valid:
@@ -356,10 +358,16 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
         sections: list[str] = []
         remaining = tool_config.max_chars_per_call
         any_success = False
+        rendered: set[str] = set()
         for candidate in requested:
             page = pages.get(candidate) or pages.get((candidate or "").strip())
             if page is None:  # pragma: no cover - every requested URL receives a result above
                 continue
+            # A URL repeated in one call has a single result. Rendering it again would spend the
+            # call budget on content the model already has in this same output.
+            if page.url in rendered:
+                continue
+            rendered.add(page.url)
             if page.status == "failed":
                 sections.append(render_page_section(page, None))
                 continue

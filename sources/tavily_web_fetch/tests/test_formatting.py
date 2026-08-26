@@ -52,6 +52,12 @@ class TestSelectWindow:
         second = select_window(text, max_chars=50, start_line=first.next_start_line)
         assert second.first_line == first.last_line + 1
 
+    def test_start_line_one_is_honored_over_a_query(self):
+        # 1 is a legitimate resume value from the truncation note; only the 0 default means the
+        # caller gave no start line, so a query must not recenter the window away from the head.
+        window = select_window(_numbered(300), max_chars=50, query="line 200", start_line=1)
+        assert window.first_line == 1
+
     def test_start_line_takes_precedence_over_query(self):
         window = select_window(_numbered(300), max_chars=50, query="line 200", start_line=10)
         assert window.first_line == 10

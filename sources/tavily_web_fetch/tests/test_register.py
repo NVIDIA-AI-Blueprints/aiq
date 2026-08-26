@@ -40,7 +40,7 @@ async def _call(config, fake, urls, **kwargs):
 
 
 class TestMissingKey:
-    async def test_stub_returns_an_error_string_and_never_raises(self, monkeypatch):
+    async def test_stub_returns_an_error_string_and_never_raises(self, monkeypatch, fake_tavily):
         monkeypatch.delenv("TAVILY_API_KEY", raising=False)
         async with tavily_web_fetch(TavilyWebFetchToolConfig(), None) as info:
             out = await info.single_fn(FetchUrlInput(urls=[URL_A]))
@@ -50,9 +50,9 @@ class TestMissingKey:
     async def test_api_key_from_config_populates_the_environment(self, monkeypatch, fake_tavily):
         monkeypatch.delenv("TAVILY_API_KEY", raising=False)
         fake_tavily.ainvoke.return_value = {"results": [extract_result(URL_A)]}
-        config = TavilyWebFetchToolConfig(api_key=SecretStr("sk-from-config"))
+        config = TavilyWebFetchToolConfig(api_key=SecretStr("sk-from-config"))  # pragma: allowlist secret
         await _call(config, fake_tavily, [URL_A])
-        assert os.environ.get("TAVILY_API_KEY") == "sk-from-config"
+        assert os.environ.get("TAVILY_API_KEY") == "sk-from-config"  # pragma: allowlist secret
 
 
 class TestInputValidation:
@@ -200,6 +200,13 @@ class TestResultShape:
         out = await _call(config, fake_tavily, [URL_A, URL_B])
         assert 'status="skipped"' in out
         assert out.index(URL_A) < out.index(URL_B)
+
+    async def test_a_repeated_url_is_fetched_and_shown_once(self, fake_tavily):
+        # Repeating a URL must not cost a second extraction or a second helping of the call budget.
+        fake_tavily.ainvoke.return_value = {"results": [extract_result(URL_A, raw_content="ONLY-ONCE")]}
+        out = await _call(TavilyWebFetchToolConfig(), fake_tavily, [URL_A, URL_A])
+        assert fake_tavily.ainvoke.await_args.args[0]["urls"] == [URL_A]
+        assert out.count("ONLY-ONCE") == 1
 
     async def test_sections_follow_the_requested_order(self, fake_tavily):
         fake_tavily.ainvoke.return_value = {"results": [extract_result(URL_B), extract_result(URL_A)]}

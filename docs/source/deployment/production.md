@@ -347,7 +347,7 @@ injected text does not have to be visible to a human reader.
 
 AI-Q does not make the outbound request. Extraction is performed by the configured provider, so
 URL and network policy are inherited from that provider rather than enforced by AI-Q. AI-Q
-validates the URL scheme only; there is no domain allowlist.
+validates the URL scheme and network location only; there is no domain allowlist.
 
 The tool is read-only and returns text, so exposure depends on what else the same agent can
 reach. Enabling it alongside private or sensitive data sources raises the risk that a successful

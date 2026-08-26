@@ -23,6 +23,10 @@ from __future__ import annotations
 import html
 import re
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aiq_agent.common.citation_verification import SourceEntry
 
 # Anchored to a line start because every marker this module writes begins one. Page bodies are
 # neutralized, so this is defence in depth rather than the primary guard.
@@ -183,7 +187,9 @@ def select_window(text: str, *, max_chars: int, query: str = "", start_line: int
     total_chars = len(text)
 
     matched_on = ""
-    if start_line and start_line > 1:
+    # Only the default 0 means "no start line given". A caller that passes 1 is explicitly asking
+    # for the head of the page, so a query must not recenter the window away from it.
+    if start_line >= 1:
         start_index = min(start_line - 1, total_lines - 1)
     elif query:
         match_index, matched_on = _best_match_line(lines, query)
@@ -269,7 +275,9 @@ def _section(url: str, title: str, status: str, body: str) -> str:
 
 def render_page_section(page: FetchedPage, window: Window | None) -> str:
     """Render one fetched page section."""
-    if page.status == "failed":
+    # A missing window is only expected for a failed page; treating it as one keeps a future caller
+    # from reaching _number_lines with None.
+    if page.status == "failed" or window is None:
         return _section(page.url, "", "failed", page.reason)
     caution = f"{page.reason}\n" if page.reason else ""
     return _section(
@@ -291,7 +299,7 @@ def render_skipped_section(page: FetchedPage, *, max_chars_per_call: int) -> str
     )
 
 
-def parse_fetched_pages(content: str, tool_name: str) -> list | None:
+def parse_fetched_pages(content: str, tool_name: str) -> list[SourceEntry] | None:
     """Return citable, successfully fetched pages, or ``None`` if this output is not ours.
 
     Identity comes from the preamble this module always writes first, not from the tool name: the
