@@ -49,6 +49,13 @@ logger = logging.getLogger(__name__)
 _missing_key_warned = False
 _parser_registered = False
 
+# One entry per live instance of this tool. NAT hands each build its builder, whose function table
+# maps every YAML key in the workflow to the config it was built from. That mapping comes from the
+# operator's file and never from tool output, so it is the one ownership signal retrieved page
+# content cannot forge. A list rather than a single builder because one process can build several
+# workflows; entries are dropped when the function they belong to is torn down.
+_owning_builders: list[Builder] = []
+
 _SOFT_404_MARKERS = (
     "page not found",
     "404 not found",
@@ -189,8 +196,46 @@ def _exact_key(url: str) -> str:
 
 
 def _relaxed_key(url: str) -> str:
-    """Return a comparison key that also ignores a trailing slash."""
-    return _exact_key(url).rstrip("/")
+    """Return a comparison key that also ignores one trailing slash on the path.
+
+    Stripping slashes off the whole URL would reach into the query and fragment, where a slash is
+    an ordinary character: it would make ``?redirect=/`` and ``?redirect=`` the same key, and the
+    fallback would then serve one request the other's content. Only the path is relaxed, and only
+    by a single slash, so ``/a//`` and ``/a/`` stay distinct too.
+    """
+    parsed = urlparse(_exact_key(url))
+    path = parsed.path[:-1] if parsed.path.endswith("/") else parsed.path
+    return parsed._replace(path=path).geturl()
+
+
+def _instance_is_ours(tool_name: str) -> bool:
+    """Return whether ``tool_name`` is a YAML key built from this tool's config.
+
+    The name is unavailable while this package is being built -- NAT assigns it after the build
+    function returns -- but it is available by the time a parser runs, which is what makes this
+    check possible at all. Anything unknown is treated as not ours.
+    """
+    for owner in _owning_builders:
+        try:
+            config = owner.get_function_config(tool_name)
+        except Exception:  # noqa: BLE001 - an unresolvable name simply is not ours
+            continue
+        if isinstance(config, TavilyWebFetchToolConfig):
+            return True
+    return False
+
+
+def _parse_owned_pages(content: str, tool_name: str) -> list | None:
+    """Parse fetched pages only for output produced by one of this tool's own instances.
+
+    Content alone cannot establish ownership: the preamble ``parse_fetched_pages`` looks for is a
+    published constant, so any tool that emitted it first would have its output claimed and its
+    real sources discarded. The name check is the authorization boundary; the preamble check
+    inside ``parse_fetched_pages`` remains as a second gate on the output's shape.
+    """
+    if not _instance_is_ours(tool_name):
+        return None
+    return parse_fetched_pages(content, tool_name)
 
 
 async def _extract(tool, urls: list[str], *, extract_depth: str, timeout_seconds: int) -> tuple[list[dict], str]:
@@ -245,17 +290,17 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
         return
 
     # Replace the generic URL scraper so outbound links do not become sources the agent never read.
-    # The matcher accepts every name because the callable name is the operator's YAML key, which
-    # NAT applies only after this build function runs; ownership is therefore decided by content.
-    # ``parse_fetched_pages`` claims output only when it opens with this tool's preamble and
-    # returns None otherwise, so another tool's results fall through to the next parser or the
-    # generic extractor with their own sources intact.
+    # The matcher accepts every name because the dispatcher lowercases it before matching, while a
+    # function-table lookup needs the key exactly as written; ``_parse_owned_pages`` therefore does
+    # the ownership check itself, against the unmodified name the dispatcher passes the parser.
+    # Every other tool's output is declined with None and falls through to the next parser or the
+    # generic extractor with its own sources intact.
     global _parser_registered
     if not _parser_registered:
         try:
             from aiq_agent.common.citation_verification import register_source_parser
 
-            register_source_parser(lambda _name: True, parse_fetched_pages)
+            register_source_parser(lambda _name: True, _parse_owned_pages)
             _parser_registered = True
         except ImportError:  # pragma: no cover - package used outside an AI-Q install
             logger.debug("aiq_agent not importable; skipping source-parser registration")
@@ -392,8 +437,16 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
 
         return render_result(sections)
 
-    yield FunctionInfo.from_fn(
-        _fetch_url,
-        input_schema=FetchUrlInput,
-        description=_fetch_url.__doc__,
-    )
+    # Scoped to this function's lifetime so a torn-down workflow stops vouching for its names, and
+    # so a process that builds several workflows can resolve the names of all of them.
+    if builder is not None:
+        _owning_builders.append(builder)
+    try:
+        yield FunctionInfo.from_fn(
+            _fetch_url,
+            input_schema=FetchUrlInput,
+            description=_fetch_url.__doc__,
+        )
+    finally:
+        if builder is not None and builder in _owning_builders:
+            _owning_builders.remove(builder)

@@ -179,8 +179,9 @@ Opens pages you already have the URL for, through the [Tavily](https://tavily.co
 Search tools find candidate pages; this tool reads one. It is not wired into any shipped config -- add the function
 block and reference it from a `data_source_registry` source (or an agent's `tools` list) to enable it.
 
-This tool returns full page content rather than provider-reranked excerpts, so it carries more untrusted third-party
-text than search. Review the security model in `sources/tavily_web_fetch/README.md` and the
+This tool extracts each page in full and returns a bounded window of it, rather than the provider-reranked excerpts
+search returns, so it carries more untrusted third-party text than search. Review the security model in
+`sources/tavily_web_fetch/README.md` and the
 [untrusted web content](../deployment/production.md#untrusted-web-content) guidance before enabling it.
 
 ```yaml

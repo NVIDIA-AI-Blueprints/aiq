@@ -112,8 +112,10 @@ Tool output labels retrieved content as untrusted, wraps each page in a `<fetche
 with HTML-escaped attributes, and numbers every line. This follows the standard practice of
 segregating and identifying external content: it keeps a clear boundary between instructions and
 retrieved data, and gives the model explicit provenance. Of the sources this tool contributes, only
-pages it actually read can be cited: its citation parser claims a result only when the result opens
-with the preamble above, and within that result only successfully fetched pages are registered.
+pages it actually read can be cited. Its citation parser claims a result only when the tool that
+produced it resolves, through the workflow's own configuration, to an instance of this tool -- a
+signal retrieved page content cannot influence -- and within that result only successfully fetched
+pages are registered.
 
 **These are prompt-level and bookkeeping measures, not an enforcement boundary.** They raise the
 cost of an attack; they do not prevent one.

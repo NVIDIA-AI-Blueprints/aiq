@@ -302,10 +302,13 @@ def render_skipped_section(page: FetchedPage, *, max_chars_per_call: int) -> str
 def parse_fetched_pages(content: str, tool_name: str) -> list[SourceEntry] | None:
     """Return citable, successfully fetched pages, or ``None`` if this output is not ours.
 
-    Identity comes from the preamble this module always writes first, not from the tool name: the
-    callable name is the operator's YAML key, which is not available when this parser is
-    registered. Testing for the section marker instead would be too loose -- another tool quoting
-    the marker in a search snippet would have its output claimed, and its own sources discarded.
+    This is a shape check, not an authorization check. The preamble it looks for is a published
+    constant, so it establishes only that the content was rendered by this module -- not that the
+    tool which produced it was one of ours. ``register._parse_owned_pages`` settles ownership
+    first, by resolving the tool name against NAT's function table; this check then guards against
+    an owned instance being handed output it did not render. Testing for the section marker
+    instead would be looser still, since a search snippet may quote it.
+
     Returning ``None`` declines the content so another parser, or the generic URL fallback,
     handles it.
     """
