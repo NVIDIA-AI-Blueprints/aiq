@@ -173,9 +173,23 @@ def _page_from_result(requested: str, result: dict) -> FetchedPage:
     return FetchedPage(url=requested, final_url=final_url, title=title, text=text, status="ok")
 
 
-def _normalize(url: str) -> str:
-    """Return a URL comparison key tolerant of trailing slashes."""
-    return url.strip().rstrip("/")
+def _exact_key(url: str) -> str:
+    """Return a strict comparison key for one URL.
+
+    Scheme and host are case-insensitive per RFC 3986, so lowercasing them lets a provider that
+    echoes a normalized host still match the request. Path, query, and fragment keep their case
+    because they address distinct resources.
+    """
+    text = url.strip()
+    parsed = urlparse(text)
+    if not parsed.scheme or not parsed.netloc:
+        return text
+    return parsed._replace(scheme=parsed.scheme.lower(), netloc=parsed.netloc.lower()).geturl()
+
+
+def _relaxed_key(url: str) -> str:
+    """Return a comparison key that also ignores a trailing slash."""
+    return _exact_key(url).rstrip("/")
 
 
 async def _extract(tool, urls: list[str], *, extract_depth: str, timeout_seconds: int) -> tuple[list[dict], str]:
@@ -230,10 +244,11 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
         return
 
     # Replace the generic URL scraper so outbound links do not become sources the agent never read.
-    # Match on our own output marker rather than the tool name: the callable name is the operator's
-    # YAML key, which NAT applies after this build function runs, so a name-based matcher would
-    # never fire. ``parse_fetched_pages`` returns None for output that is not ours, which lets the
-    # registry fall through to the next parser or the generic extractor.
+    # The matcher accepts every name because the callable name is the operator's YAML key, which
+    # NAT applies only after this build function runs; ownership is therefore decided by content.
+    # ``parse_fetched_pages`` claims output only when it opens with this tool's preamble and
+    # returns None otherwise, so another tool's results fall through to the next parser or the
+    # generic extractor with their own sources intact.
     global _parser_registered
     if not _parser_registered:
         try:
@@ -304,9 +319,26 @@ async def tavily_web_fetch(tool_config: TavilyWebFetchToolConfig, builder: Build
                 extract_depth=tool_config.extract_depth,
                 timeout_seconds=tool_config.timeout_seconds,
             )
-            by_url = {_normalize(str(item.get("url", ""))): item for item in results if isinstance(item, dict)}
+            entries = [item for item in results if isinstance(item, dict)]
+            by_exact = {_exact_key(str(item.get("url", ""))): item for item in entries}
+
+            # A relaxed key is only safe to use when it identifies one result and one requested
+            # URL. Two requests differing solely by a trailing slash share a relaxed key, and
+            # letting either borrow the other's result would cite content it never returned.
+            relaxed_results: dict[str, list[dict]] = {}
+            for item in entries:
+                relaxed_results.setdefault(_relaxed_key(str(item.get("url", ""))), []).append(item)
+            relaxed_requests: dict[str, set[str]] = {}
             for url in valid:
-                match = by_url.get(_normalize(url))
+                relaxed_requests.setdefault(_relaxed_key(url), set()).add(_exact_key(url))
+
+            for url in valid:
+                match = by_exact.get(_exact_key(url))
+                if match is None:
+                    relaxed = _relaxed_key(url)
+                    candidates = relaxed_results.get(relaxed, [])
+                    if len(candidates) == 1 and len(relaxed_requests[relaxed]) == 1:
+                        match = candidates[0]
                 if match is not None:
                     pages[url] = _page_from_result(url, match)
                 elif error:

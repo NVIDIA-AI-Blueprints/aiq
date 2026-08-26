@@ -24,7 +24,9 @@ import html
 import re
 from dataclasses import dataclass
 
-_OPEN_RE = re.compile(r'<fetched_page url="([^"]*)" title="([^"]*)" status="([a-z]+)">')
+# Anchored to a line start because every marker this module writes begins one. Page bodies are
+# neutralized, so this is defence in depth rather than the primary guard.
+_OPEN_RE = re.compile(r'^<fetched_page url="([^"]*)" title="([^"]*)" status="([a-z]+)">', re.MULTILINE)
 
 # Retrieved text may contain our own section marker, by accident (a page documenting this format)
 # or by design (a page forging a source the agent never read). Neutralizing it at ingestion keeps
@@ -292,11 +294,14 @@ def render_skipped_section(page: FetchedPage, *, max_chars_per_call: int) -> str
 def parse_fetched_pages(content: str, tool_name: str) -> list | None:
     """Return citable, successfully fetched pages, or ``None`` if this output is not ours.
 
-    Identity comes from the section marker rather than the tool name: the callable name is the
-    operator's YAML key, which is not available when this parser is registered. Returning ``None``
-    declines the content so another parser, or the generic URL fallback, handles it.
+    Identity comes from the preamble this module always writes first, not from the tool name: the
+    callable name is the operator's YAML key, which is not available when this parser is
+    registered. Testing for the section marker instead would be too loose -- another tool quoting
+    the marker in a search snippet would have its output claimed, and its own sources discarded.
+    Returning ``None`` declines the content so another parser, or the generic URL fallback,
+    handles it.
     """
-    if "<fetched_page " not in content:
+    if not content.lstrip().startswith(_PREAMBLE):
         return None
 
     try:

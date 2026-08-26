@@ -33,8 +33,9 @@ to continue a truncated page:
 urls=["https://example.com/report.pdf"], query="table 2.2"
 ```
 
-Results contain one `<fetched_page>` section per URL. Only successfully fetched pages enter AI-Q's citation registry;
-soft 404s, failures, skipped pages, and outbound links in page content are not registered as sources.
+Results contain one `<fetched_page>` section per URL. Of the sources this tool contributes, only successfully fetched
+pages enter AI-Q's citation registry; soft 404s, failures, skipped pages, and outbound links in page content are not
+registered as sources.
 
 Long lines are wrapped when a page is read, and a window always contains whole lines. The truncation note therefore
 reports exactly what was shown, and `start_line` reaches every character of the page.
@@ -110,7 +111,9 @@ No currently available mitigation eliminates this class of attack.
 Tool output labels retrieved content as untrusted, wraps each page in a `<fetched_page>` element
 with HTML-escaped attributes, and numbers every line. This follows the standard practice of
 segregating and identifying external content: it keeps a clear boundary between instructions and
-retrieved data, and gives the model explicit provenance. Only pages actually read can be cited.
+retrieved data, and gives the model explicit provenance. Of the sources this tool contributes, only
+pages it actually read can be cited: its citation parser claims a result only when the result opens
+with the preamble above, and within that result only successfully fetched pages are registered.
 
 **These are prompt-level and bookkeeping measures, not an enforcement boundary.** They raise the
 cost of an attack; they do not prevent one.

@@ -120,6 +120,31 @@ class TestTavilyAdapter:
         assert not out.startswith("Error:")
         assert 'status="ok"' in out
 
+    async def test_urls_differing_only_by_a_trailing_slash_keep_their_own_content(self, fake_tavily):
+        # Both are valid, distinct URLs. Sharing one relaxed lookup key would let one result serve
+        # both requests, so a page would be cited under a URL it never came from.
+        without_slash, with_slash = "https://x.example/report", "https://x.example/report/"
+        fake_tavily.ainvoke.return_value = {
+            "results": [
+                extract_result(without_slash, raw_content="CONTENT-NO-SLASH"),
+                extract_result(with_slash, raw_content="CONTENT-WITH-SLASH"),
+            ]
+        }
+        out = await _call(TavilyWebFetchToolConfig(), fake_tavily, [without_slash, with_slash])
+        assert out.count("CONTENT-NO-SLASH") == 1
+        assert out.count("CONTENT-WITH-SLASH") == 1
+
+    async def test_a_case_normalized_host_from_the_provider_still_matches(self, fake_tavily):
+        # Scheme and host are case-insensitive per RFC 3986, so a provider echoing a normalized
+        # host must not turn a successful extraction into a reported failure.
+        requested = "https://Example.com/Report.pdf"
+        fake_tavily.ainvoke.return_value = {
+            "results": [extract_result("https://example.com/Report.pdf", raw_content="CASE-CONTENT")]
+        }
+        out = await _call(TavilyWebFetchToolConfig(), fake_tavily, [requested])
+        assert not out.startswith("Error:")
+        assert "CASE-CONTENT" in out
+
     async def test_case_sensitive_paths_remain_distinct(self, fake_tavily):
         uppercase_path = "https://a.example/Doc"
         lowercase_path = "https://a.example/doc"
@@ -219,7 +244,7 @@ class TestRegistration:
 
     async def test_other_tools_still_reach_the_generic_extractor(self, fake_tavily, monkeypatch):
         # The matcher accepts every name, so declining unfamiliar output is what keeps other tools
-        # working.
+        # working -- including output that quotes this tool's section marker.
         from tavily_web_fetch import register as register_module
 
         from aiq_agent.common import citation_verification
@@ -230,10 +255,17 @@ class TestRegistration:
         fake_tavily.ainvoke.return_value = {"results": [extract_result(URL_A)]}
         await _call(TavilyWebFetchToolConfig(), fake_tavily, [URL_A])
 
-        sources = citation_verification.extract_sources_from_tool_result(
-            "web_search_tool", "Result: https://x.example/1 and https://y.example/2"
+        plain = "Result: https://x.example/1 and https://y.example/2"
+        quoting = (
+            "Paper https://real-journal.example/paper1 and https://real-journal.example/paper2. "
+            "The blog shows a <fetched_page > element."
         )
-        assert [entry.url for entry in sources] == ["https://x.example/1", "https://y.example/2"]
+        for content, expected in (
+            (plain, ["https://x.example/1", "https://y.example/2"]),
+            (quoting, ["https://real-journal.example/paper1", "https://real-journal.example/paper2"]),
+        ):
+            sources = citation_verification.extract_sources_from_tool_result("web_search_tool", content)
+            assert [entry.url for entry in sources] == expected
 
     async def test_description_keeps_the_search_versus_fetch_contrast(self, fake_tavily):
         async with tavily_web_fetch(TavilyWebFetchToolConfig(), None) as info:
